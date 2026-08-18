@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Banknote } from 'lucide-react';
-import { Modal, StyledInput, DetailDrawer, useToast } from '../../components/ui';
+import { Modal, StyledInput, DetailDrawer, Select, useToast } from '../../components/ui';
 import { useCreatePayable, useTransitionPayable, useBillingPayables, useDisbursePayable } from '../../hooks/useBilling';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
@@ -15,11 +15,6 @@ const STATUS_COLOR: Record<AssayerPayableStatus, string> = {
   PENDING: 'var(--warning)', APPROVED: 'var(--accent)', PAID: 'var(--success)', DISPUTED: 'var(--danger)', ON_HOLD: 'var(--text-muted)',
 };
 
-
-const selStyle: React.CSSProperties = {
-  padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)',
-  borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', width: '100%',
-};
 
 export const CreatePayableModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
   const { toast } = useToast();
@@ -62,10 +57,13 @@ export const CreatePayableModal: React.FC<{ onClose: () => void }> = ({ onClose 
         <button type="submit" disabled={create.isPending} className="btn btn-primary">{create.isPending ? 'Creating...' : 'Create Payable'}</button>
       </>
     }>
-      <select value={form.assayerId} onChange={(e) => setForm((f) => ({ ...f, assayerId: e.target.value }))} style={selStyle}>
-        <option value="">Select assayer…</option>
-        {assayers.map((a) => <option key={a.id} value={a.id}>{a.displayName ?? a.name}</option>)}
-      </select>
+      <Select
+        value={form.assayerId}
+        onChange={(v) => setForm((f) => ({ ...f, assayerId: v }))}
+        placeholder="Select assayer…"
+        options={assayers.map((a) => ({ value: a.id, label: a.displayName ?? a.name }))}
+        style={{ width: '100%' }}
+      />
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
         <StyledInput placeholder="Base amount *" type="number" value={form.baseAmount} onChange={(e) => setForm((f) => ({ ...f, baseAmount: e.target.value }))} style={{ width: '100%' }} />
         <StyledInput placeholder="Travel amount" type="number" value={form.travelAmount} onChange={(e) => setForm((f) => ({ ...f, travelAmount: e.target.value }))} style={{ width: '100%' }} />
@@ -142,10 +140,12 @@ export const PayableDetailDrawer: React.FC<{ payableId: string; onClose: () => v
       footer={
         allowed.length > 0 && (
           <div style={{ display: 'flex', gap: 8, width: '100%', justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-            <select value={next} onChange={(e) => setNext(e.target.value as AssayerPayableStatus)} style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)' }}>
-              <option value="">Transition…</option>
-              {allowed.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
+            <Select
+              value={next}
+              onChange={(v) => setNext(v as AssayerPayableStatus)}
+              placeholder="Transition…"
+              options={allowed.map((s) => ({ value: s, label: s }))}
+            />
             <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="reason" style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', width: 120 }} />
             <button onClick={doTransition} disabled={!next || transition.isPending} className="btn btn-primary">Apply</button>
           </div>
@@ -159,9 +159,12 @@ export const PayableDetailDrawer: React.FC<{ payableId: string; onClose: () => v
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8, marginBottom: 8 }}>
             <StyledInput placeholder="Payment reference *" value={payRef} onChange={(e) => setPayRef(e.target.value)} style={{ width: '100%' }} />
-            <select value={payMethod} onChange={(e) => setPayMethod(e.target.value as PaymentMethod)} style={selStyle}>
-              {['BANK_TRANSFER', 'NEFT', 'RTGS', 'UPI', 'CHEQUE', 'OTHER'].map((m) => <option key={m} value={m}>{m}</option>)}
-            </select>
+            <Select
+              value={payMethod}
+              onChange={(v) => setPayMethod(v as PaymentMethod)}
+              options={['BANK_TRANSFER', 'NEFT', 'RTGS', 'UPI', 'CHEQUE', 'OTHER'].map((m) => ({ value: m, label: m }))}
+              style={{ width: '100%' }}
+            />
           </div>
           <div style={{ display: 'flex', gap: 8 }}>
             <StyledInput placeholder={`Amount (blank = full ${money(outstanding)})`} type="number" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} style={{ flex: 1 }} />

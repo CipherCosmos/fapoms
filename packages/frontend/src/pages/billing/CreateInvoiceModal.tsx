@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { FileText } from 'lucide-react';
-import { Modal, StyledInput, useToast } from '../../components/ui';
+import { Modal, StyledInput, Select, useToast } from '../../components/ui';
 import { useCreateBillingInvoice } from '../../hooks/useBilling';
 import { useClientsList } from '../../hooks/useClients';
 import { api } from '../../services/api';
@@ -58,11 +58,6 @@ export const CreateInvoiceModal: React.FC<{ onClose: () => void }> = ({ onClose 
     } catch (err: any) { toast({ type: 'error', title: 'Failed to create invoice', message: userMessage(err) }); }
   };
 
-  const selStyle: React.CSSProperties = {
-    padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)',
-    borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', width: '100%',
-  };
-
   return (
     <Modal open onClose={onClose} title={<><FileText size={18} /> Create Invoice</>} width="620px" maxHeight="90vh" asForm onSubmit={handleSubmit} footer={
       <>
@@ -71,13 +66,19 @@ export const CreateInvoiceModal: React.FC<{ onClose: () => void }> = ({ onClose 
         <button type="submit" disabled={create.isPending} className="btn btn-primary">{create.isPending ? 'Creating...' : 'Create Invoice'}</button>
       </>
     }>
-      <select value={clientId} onChange={(e) => { setClientId(e.target.value); loadEntries(e.target.value); }} style={selStyle}>
-        <option value="">Select client…</option>
-        {clientOptions.map((c) => <option key={c.id} value={c.id}>{c.displayName ?? c.name}</option>)}
-      </select>
-      <select value={type} onChange={(e) => setType(e.target.value as InvoiceType)} style={selStyle}>
-        {TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-      </select>
+      <Select
+        value={clientId}
+        onChange={(v) => { setClientId(v); loadEntries(v); }}
+        placeholder="Select client…"
+        options={clientOptions.map((c) => ({ value: c.id, label: c.displayName ?? c.name }))}
+        style={{ width: '100%' }}
+      />
+      <Select
+        value={type}
+        onChange={(v) => setType(v as InvoiceType)}
+        options={TYPES.map((t) => ({ value: t, label: t }))}
+        style={{ width: '100%' }}
+      />
 
       <div>
         <label style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>

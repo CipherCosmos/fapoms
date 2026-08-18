@@ -5,6 +5,7 @@ import { formatRupees as money } from '@fapoms/shared';
 import { useAssayerStatement } from '../../hooks/useBilling';
 import { api } from '../../services/api';
 import type { AssayerStatement } from '../../services/billing';
+import { Select } from '../../components/ui';
 
 /**
  * Assayer statement — what an assayer has earned, been paid, and is still owed.
@@ -60,11 +61,14 @@ export const AssayerStatementPage: React.FC = () => {
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Find an assayer…"
             style={{ padding: '7px 10px 7px 28px', fontSize: 12.5, background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 8, color: 'var(--text-primary)', minWidth: 220 }} />
         </div>
-        <select value={assayerId} onChange={(e) => setAssayer(e.target.value)}
-          style={{ padding: '7px 11px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 8, color: 'var(--text-primary)', fontSize: 13, minWidth: 240 }}>
-          <option value="">Choose an assayer…</option>
-          {filtered.map((a) => <option key={a.id} value={a.id}>{a.displayName} · {a.assayerCode}</option>)}
-        </select>
+        <Select
+          value={assayerId}
+          onChange={setAssayer}
+          placeholder="Choose an assayer…"
+          options={filtered.map((a) => ({ value: a.id, label: `${a.displayName} · ${a.assayerCode}` }))}
+          compact
+          style={{ minWidth: 240 }}
+        />
       </div>
 
       {!assayerId && <div style={{ ...card, color: 'var(--text-muted)', fontSize: 13 }}>Pick an assayer to see their statement.</div>}

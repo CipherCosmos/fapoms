@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { Check, FileSpreadsheet, Layers } from 'lucide-react';
+import { Check, Layers } from 'lucide-react';
 import { SystemRole } from '@fapoms/shared';
-import { DataTable, Column, Modal, StatusBadge, useToast } from '../components/ui';
+import { DataTable, Column, Modal, StatusBadge, Select, useToast } from '../components/ui';
 import { useCurrentRoles, hasAnyRole } from '../hooks/useCurrentRoles';
 import { ProjectOption } from '../services/planning';
 import { api } from '../services/api';
@@ -29,7 +29,9 @@ const RECORDS_PAGE_SIZE = 50;
  * control, not a report. Approval is limited to the roles the backend allows; everyone else
  * sees the history read-only.
  */
-export const CustomerMasterVersions: React.FC<{ embedded?: boolean }> = ({ embedded = false }) => {
+// Always rendered inside <Documents/>, never routed standalone — the `embedded=false` branch this
+// used to carry (its own page title/padding) was unreachable and has been removed.
+export const CustomerMasterVersions: React.FC = () => {
   const { toast } = useToast();
   const { scopeParams, scopeKey } = useScope();
   const roles = useCurrentRoles();
@@ -181,7 +183,7 @@ export const CustomerMasterVersions: React.FC<{ embedded?: boolean }> = ({ embed
   const totalRecordPages = Math.max(1, Math.ceil(recordsTotal / RECORDS_PAGE_SIZE));
 
   return (
-    <div style={{ padding: embedded ? 0 : '20px 24px' }}>
+    <div style={{ padding: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
         {scopeMismatch && (
           // The picker below chose a project the header has fixed differently. The request carries
@@ -191,27 +193,17 @@ export const CustomerMasterVersions: React.FC<{ embedded?: boolean }> = ({ embed
             Showing the project from your scope filter; the selection here disagrees with it.
           </div>
         )}
-        {embedded ? <div /> : (
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <FileSpreadsheet size={22} style={{ color: 'var(--accent)' }} />
-            <div>
-              <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>Customer Master</h1>
-              <p style={{ margin: '4px 0 0', color: 'var(--text-muted)', fontSize: 13 }}>
-                Version history and approval. A version must be approved before its branch PDFs generate.
-              </p>
-            </div>
-          </div>
-        )}
-        <select
+        <div />
+        <Select
           value={projectId}
-          onChange={(e) => setProjectId(e.target.value)}
-          style={{ padding: '8px 12px', borderRadius: 8, border: '1px solid var(--border, #d1d5db)', background: 'var(--bg-surface, #fff)', color: 'inherit', fontSize: 13, minWidth: 240, maxWidth: '100%' }}
-        >
-          {projects.length === 0 && <option value="">No projects</option>}
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>{p.name} ({p.projectNumber})</option>
-          ))}
-        </select>
+          onChange={setProjectId}
+          options={
+            projects.length === 0
+              ? [{ value: '', label: 'No projects' }]
+              : projects.map((p) => ({ value: p.id, label: `${p.name} (${p.projectNumber})` }))
+          }
+          style={{ minWidth: 240, maxWidth: '100%' }}
+        />
       </div>
 
       {!canApprove && (

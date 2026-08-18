@@ -9,6 +9,7 @@ import {
   deskRole, deskCard, deskLabel, fmtWhen,
   PagedQueue, PacketRow, TeamMember,
 } from './deskRoles';
+import { Select } from '../../components/ui';
 
 /**
  * The packet queue: every returned audit packet, as a server-paginated table.
@@ -130,12 +131,16 @@ export const PacketsQueue: React.FC = () => {
             style={{ background: 'transparent', border: 'none', outline: 'none', color: 'inherit', fontSize: '12.5px', width: '190px' }} />
         </span>
         {isHead && (
-          <select value={assignee} onChange={(e) => { setAssignee(e.target.value); setPage(1); }}
-            style={{ padding: '6px 10px', fontSize: '12px', borderRadius: '8px', background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)' }}>
-            <option value="">Everyone</option>
-            <option value="unassigned">Unassigned</option>
-            {team.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
+          <Select
+            compact
+            value={assignee}
+            onChange={(v) => { setAssignee(v); setPage(1); }}
+            options={[
+              { value: '', label: 'Everyone' },
+              { value: 'unassigned', label: 'Unassigned' },
+              ...team.map((t) => ({ value: t.id, label: t.name })),
+            ]}
+          />
         )}
       </div>
 
@@ -171,11 +176,14 @@ export const PacketsQueue: React.FC = () => {
                   <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{fmtWhen(d.receivedAt)}</td>
                   <td style={{ padding: '9px 14px', whiteSpace: 'nowrap' }}>
                     {d.lane === 'unassigned' && isHead ? (
-                      <select defaultValue="" disabled={busy === d.id} onChange={(e) => assign(d.id, e.target.value)}
-                        style={{ padding: '5px 9px', fontSize: '11.5px', fontWeight: 600, borderRadius: '6px', background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)' }}>
-                        <option value="">Assign to…</option>
-                        {team.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-                      </select>
+                      <Select
+                        compact
+                        value=""
+                        disabled={busy === d.id}
+                        onChange={(v) => assign(d.id, v)}
+                        placeholder="Assign to…"
+                        options={team.map((t) => ({ value: t.id, label: t.name }))}
+                      />
                     ) : (
                       <span style={{ color: d.assigneeName ? 'inherit' : 'var(--text-muted)' }}>{d.assigneeName ?? '—'}</span>
                     )}

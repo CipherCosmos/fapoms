@@ -13,7 +13,7 @@ import {
 } from '@fapoms/shared';
 import { api } from '../services/api';
 import { userMessage } from '../services/errors';
-import { Modal, AlertBanner } from '../components/ui';
+import { Modal, AlertBanner, Select } from '../components/ui';
 import { useCurrentRoles, canManageTransportRates } from '../hooks/useCurrentRoles';
 
 /**
@@ -179,6 +179,10 @@ export const TransportCosts: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    if (form.scopeType !== 'NATIONAL' && !form.scopeValue) {
+      setError(`Choose a ${form.scopeType === 'REGION' ? 'region' : 'state'} for this rate's scope.`);
+      return;
+    }
     const body: Record<string, unknown> = {
       mode: form.mode,
       scopeType: form.scopeType,
@@ -280,25 +284,24 @@ export const TransportCosts: React.FC = () => {
           </label>
           <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
             State
-            <select
-              value={estState} onChange={(e) => setEstState(e.target.value)}
-              style={{ minWidth: '180px', padding: '8px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px' }}
-            >
-              <option value="">Any / not specified</option>
-              {CANONICAL_STATE_NAMES.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
+            <Select
+              value={estState} onChange={setEstState}
+              placeholder="Any / not specified"
+              options={CANONICAL_STATE_NAMES.map((s) => ({ value: s, label: s }))}
+              style={{ minWidth: '180px' }}
+            />
           </label>
           <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
             Region (used when no state)
-            <select
-              value={estRegion} onChange={(e) => setEstRegion(e.target.value)}
-              disabled={!!estState}
-              title={estState ? 'The region follows the chosen state' : undefined}
-              style={{ minWidth: '140px', padding: '8px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px', opacity: estState ? 0.5 : 1 }}
-            >
-              <option value="">—</option>
-              {REGION_ORDER.map((r) => <option key={r} value={r}>{REGION_LABELS[r]}</option>)}
-            </select>
+            <span title={estState ? 'The region follows the chosen state' : undefined} style={{ display: 'contents' }}>
+              <Select
+                value={estRegion} onChange={setEstRegion}
+                disabled={!!estState}
+                placeholder="—"
+                options={REGION_ORDER.map((r) => ({ value: r, label: REGION_LABELS[r] }))}
+                style={{ minWidth: '140px' }}
+              />
+            </span>
           </label>
         </div>
 
@@ -448,40 +451,38 @@ export const TransportCosts: React.FC = () => {
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
               <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
                 Mode of transport
-                <select value={form.mode} onChange={(e) => set({ mode: e.target.value })} required
-                  style={{ padding: '8px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px' }}>
-                  {TRAVEL_MODE_ORDER.map((m) => <option key={m} value={m}>{travelModeLabel(m)}</option>)}
-                </select>
+                <Select value={form.mode} onChange={(v) => set({ mode: v })}
+                  options={TRAVEL_MODE_ORDER.map((m) => ({ value: m, label: travelModeLabel(m) }))}
+                />
               </label>
               <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
                 Applies to
-                <select value={form.scopeType} onChange={(e) => set({ scopeType: e.target.value as TransportRate['scopeType'], scopeValue: '' })}
-                  style={{ padding: '8px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px' }}>
-                  <option value="NATIONAL">Whole country</option>
-                  <option value="REGION">One region</option>
-                  <option value="STATE">One state</option>
-                </select>
+                <Select value={form.scopeType} onChange={(v) => set({ scopeType: v as TransportRate['scopeType'], scopeValue: '' })}
+                  options={[
+                    { value: 'NATIONAL', label: 'Whole country' },
+                    { value: 'REGION', label: 'One region' },
+                    { value: 'STATE', label: 'One state' },
+                  ]}
+                />
               </label>
             </div>
 
             {form.scopeType === 'REGION' && (
               <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
                 Region
-                <select value={form.scopeValue} onChange={(e) => set({ scopeValue: e.target.value })} required
-                  style={{ padding: '8px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px' }}>
-                  <option value="">Select region…</option>
-                  {REGION_ORDER.map((r) => <option key={r} value={r}>{REGION_LABELS[r]}</option>)}
-                </select>
+                <Select value={form.scopeValue} onChange={(v) => set({ scopeValue: v })}
+                  placeholder="Select region…"
+                  options={REGION_ORDER.map((r) => ({ value: r, label: REGION_LABELS[r] }))}
+                />
               </label>
             )}
             {form.scopeType === 'STATE' && (
               <label style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '11px', color: 'var(--text-muted)' }}>
                 State
-                <select value={form.scopeValue} onChange={(e) => set({ scopeValue: e.target.value })} required
-                  style={{ padding: '8px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px' }}>
-                  <option value="">Select state…</option>
-                  {CANONICAL_STATE_NAMES.map((s) => <option key={s} value={s}>{s}</option>)}
-                </select>
+                <Select value={form.scopeValue} onChange={(v) => set({ scopeValue: v })}
+                  placeholder="Select state…"
+                  options={CANONICAL_STATE_NAMES.map((s) => ({ value: s, label: s }))}
+                />
               </label>
             )}
 

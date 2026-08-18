@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Save, ArrowLeftRight, MessageSquarePlus, CreditCard, ArrowRight, Plus, SlidersHorizontal } from 'lucide-react';
-import { StatusBadge, useToast } from '../../components/ui';
+import { StatusBadge, Select, useToast } from '../../components/ui';
 import {
   useClientBilling,
   useClientBillingHistory,
@@ -136,12 +136,13 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
         {allowedTargets.length > 0 ? (
           <form onSubmit={handleTransition} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <select value={targetStatus} onChange={(e) => setTargetStatus(e.target.value)} style={{ ...inputStyle, width: 'auto', flex: 1, minWidth: 160 }}>
-                <option value="">-- Move to... --</option>
-                {allowedTargets.map((s) => (
-                  <option key={s} value={s}>{billingStatusLabel(s)}</option>
-                ))}
-              </select>
+              <Select
+                value={targetStatus}
+                onChange={setTargetStatus}
+                options={allowedTargets.map((s) => ({ value: s, label: billingStatusLabel(s) }))}
+                placeholder="-- Move to... --"
+                style={{ flex: 1, minWidth: 160 }}
+              />
               <button type="submit" disabled={!targetStatus || transition.isPending} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                 <ArrowLeftRight size={14} /> {transition.isPending ? 'Updating...' : 'Transition'}
               </button>

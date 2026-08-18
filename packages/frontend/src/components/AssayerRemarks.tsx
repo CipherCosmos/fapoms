@@ -7,6 +7,7 @@ import { api } from '../services/api';
 import { userMessage } from '../services/errors';
 import { queryKeys } from '../hooks/queryKeys';
 import { hasAnyRole, useCurrentRoles, useCurrentUserId } from '../hooks/useCurrentRoles';
+import { Select } from './ui';
 
 /**
  * Staff remarks about one assayer: the list, the summary the recommendation engine scores from,
@@ -210,9 +211,13 @@ export const AssayerRemarks: React.FC<{
                 </button>
               );
             })}
-            <select value={category} onChange={(e) => setCategory(e.target.value as Category)} style={{ ...inputStyle, marginLeft: 'auto' }}>
-              {CATEGORIES.map((c) => <option key={c} value={c}>{CATEGORY_LABEL[c]}</option>)}
-            </select>
+            <Select
+              value={category}
+              onChange={(v) => setCategory(v as Category)}
+              options={CATEGORIES.map((c) => ({ value: c, label: CATEGORY_LABEL[c] }))}
+              compact={compact}
+              style={{ marginLeft: 'auto', background: 'var(--bg-page)' }}
+            />
           </div>
           <div style={{ display: 'flex', gap: '6px' }}>
             <input value={text} onChange={(e) => setText(e.target.value)} maxLength={1000}

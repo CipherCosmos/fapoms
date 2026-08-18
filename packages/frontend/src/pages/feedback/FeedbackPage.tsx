@@ -15,6 +15,7 @@ import { FeedbackProperties } from './FeedbackProperties';
 import { FeedbackThreadPanel } from './FeedbackThreadPanel';
 import { FeedbackLauncher } from './FeedbackLauncher';
 import { getThread } from '../../services/feedback';
+import { Select } from '../../components/ui';
 
 import { FEEDBACK_STATUS_LABELS } from '@fapoms/shared';
 const PAGE_SIZE = 25;
@@ -243,10 +244,12 @@ const TeamView: React.FC<{ selectedId: string | null; setSelectedId: (id: string
               <Search size={13} style={{ color: 'var(--text-muted)' }} />
               <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search…" style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', color: 'inherit', fontSize: '12px' }} />
             </div>
-            <select value={category} onChange={(e) => setCategory(e.target.value as FeedbackCategory | '')} style={{ padding: '5px 7px', fontSize: '11.5px', borderRadius: '7px', background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)' }}>
-              <option value="">All types</option>
-              {Object.values(FeedbackCategory).map((c) => <option key={c} value={c}>{CATEGORY[c].label}</option>)}
-            </select>
+            <Select
+              compact
+              value={category}
+              onChange={(v) => setCategory(v as FeedbackCategory | '')}
+              options={[{ value: '', label: 'All types' }, ...Object.values(FeedbackCategory).map((c) => ({ value: c, label: CATEGORY[c].label }))]}
+            />
             <button onClick={() => setMineOnly(mineOnly === 'me' ? '' : 'me')} style={{
               padding: '5px 10px', borderRadius: '7px', fontSize: '11.5px', fontWeight: 600, cursor: 'pointer',
               background: mineOnly === 'me' ? 'var(--accent-soft)' : 'var(--bg-surface)',

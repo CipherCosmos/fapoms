@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Save, ShieldCheck, SlidersHorizontal, Upload, UserCheck, UserX } from 'lucide-react';
-import { useToast } from '../../components/ui';
+import { Select, useToast } from '../../components/ui';
 import { useClientDetail, useUpdateClient } from '../../hooks/useClients';
 import { AssayerMultiSelect } from './AssayerMultiSelect';
 import { userMessage } from '../../services/errors';
@@ -147,10 +147,13 @@ export const ConfigurationPanel: React.FC<{ clientId: string }> = ({ clientId })
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
           <label style={labelStyle}>
             Service Level
-            <select style={inputStyle} value={serviceLevel} onChange={(e) => setServiceLevel(e.target.value)}>
-              <option value="">None</option>
-              {SERVICE_LEVELS.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
+            <Select
+              value={serviceLevel}
+              onChange={setServiceLevel}
+              options={SERVICE_LEVELS.map((s) => ({ value: s, label: s }))}
+              placeholder="None"
+              style={{ width: '100%' }}
+            />
           </label>
           <label style={labelStyle}>
             Max Response Time (hours)

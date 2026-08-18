@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { Bell, Mail, RotateCcw, Save, Eye, FileText, Info } from 'lucide-react';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
-import { Modal, AlertBanner, useToast } from '../../components/ui';
+import { Modal, AlertBanner, useToast, Select } from '../../components/ui';
 import { useCurrentRoles, canAdministerNotifications } from '../../hooks/useCurrentRoles';
 
 /**
@@ -213,10 +213,11 @@ export const NotificationAdmin: React.FC = () => {
               placeholder="Search events…"
               style={{ ...input, width: '240px' }}
             />
-            <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)} style={{ ...input, width: 'auto' }}>
-              <option value="ALL">All categories</option>
-              {(catalog?.categories ?? []).map((c) => <option key={c} value={c}>{c}</option>)}
-            </select>
+            <Select
+              value={categoryFilter}
+              onChange={setCategoryFilter}
+              options={[{ value: 'ALL', label: 'All categories' }, ...(catalog?.categories ?? []).map((c) => ({ value: c, label: c }))]}
+            />
             <div style={{ marginLeft: 'auto', fontSize: '11px', color: 'var(--text-muted)' }}>
               {counts.emailing} emailing · {counts.customised} customised · {counts.disabled} off
             </div>
@@ -479,9 +480,12 @@ const TemplateEditor: React.FC<{
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
           <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
             Priority
-            <select value={priority} onChange={(e) => setPriority(e.target.value)} style={{ ...input, marginTop: '4px' }}>
-              {priorities.map((p) => <option key={p} value={p}>{p}</option>)}
-            </select>
+            <Select
+              value={priority}
+              onChange={setPriority}
+              options={priorities.map((p) => ({ value: p, label: p }))}
+              style={{ ...input, marginTop: '4px' }}
+            />
           </label>
           <label style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
             Why this was changed

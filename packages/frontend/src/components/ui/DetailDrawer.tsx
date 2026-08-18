@@ -11,6 +11,7 @@ export const DetailDrawer: React.FC<{
   children: React.ReactNode;
 }> = ({ open, onClose, title, subtitle, footer, width = 560, children }) => {
   const panelRef = React.useRef<HTMLDivElement>(null);
+  const titleId = React.useId();
 
   // See Modal.tsx: onClose is an inline arrow at the call site, so depending on it re-runs this
   // focus-management effect on every keystroke and throws the cursor out of any input in the
@@ -27,6 +28,22 @@ export const DetailDrawer: React.FC<{
       if (e.key === 'Escape') {
         e.stopPropagation();
         onCloseRef.current();
+        return;
+      }
+      if (e.key === 'Tab' && panelRef.current) {
+        const focusables = panelRef.current.querySelectorAll<HTMLElement>(
+          'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+        );
+        if (focusables.length === 0) return;
+        const first = focusables[0];
+        const last = focusables[focusables.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first.focus();
+        }
       }
     };
     document.addEventListener('keydown', onKeyDown);
@@ -54,8 +71,11 @@ export const DetailDrawer: React.FC<{
         }}
       />
       <div
+        ref={panelRef}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
+        aria-labelledby={title !== undefined ? titleId : undefined}
         style={{
           position: 'fixed',
           top: 0,
@@ -70,13 +90,9 @@ export const DetailDrawer: React.FC<{
           display: 'flex',
           flexDirection: 'column',
           animation: 'drawerIn 0.2s ease-out',
+          outline: 'none',
         }}
       >
-      <div
-        ref={panelRef}
-        tabIndex={-1}
-        style={{ outline: 'none' }}
-      />
       <style>{`@keyframes drawerIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
       {title !== undefined && (
         <div
@@ -91,7 +107,7 @@ export const DetailDrawer: React.FC<{
           }}
         >
           <div style={{ minWidth: 0 }}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>{title}</div>
+            <div id={titleId} style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)' }}>{title}</div>
             {subtitle && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{subtitle}</div>}
           </div>
           <button

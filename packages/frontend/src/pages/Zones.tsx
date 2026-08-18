@@ -5,7 +5,7 @@ import { INDIAN_STATES } from '@fapoms/shared';
 import { api } from '../services/api';
 import { useClientOptions } from '../hooks/useClients';
 import { userMessage } from '../services/errors';
-import { Modal, AlertBanner } from '../components/ui';
+import { Modal, AlertBanner, Select } from '../components/ui';
 import { useCurrentRoles, canManageZones, canDeleteZones } from '../hooks/useCurrentRoles';
 
 interface Zone {
@@ -232,11 +232,13 @@ export const Zones: React.FC = () => {
               <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
                 Client Scope (Optional){editingId ? ' — set at creation, not editable here' : ''}
               </label>
-              <select value={clientId} onChange={(e) => setClientId(e.target.value)} disabled={!!editingId}
-                style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px', opacity: editingId ? 0.6 : 1 }}>
-                <option value="">🌐 All Clients</option>
-                {clients.map((c: any) => <option key={c.id} value={c.id}>🏦 {c.name || c.code}</option>)}
-              </select>
+              <Select
+                value={clientId}
+                onChange={setClientId}
+                disabled={!!editingId}
+                options={[{ value: '', label: '🌐 All Clients' }, ...clients.map((c: any) => ({ value: c.id, label: `🏦 ${c.name || c.code}` }))]}
+                style={{ width: '100%' }}
+              />
             </div>
 
             <div>

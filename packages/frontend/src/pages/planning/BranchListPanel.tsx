@@ -135,7 +135,15 @@ export const BranchListPanel: React.FC<{
             : `⏳ ${branchStatusLabel(pb.status)}`;
 
           return (
-            <div key={pb.id} onClick={() => onSelectBranch(pb.id)}
+            <div key={pb.id} role="button" tabIndex={0}
+              onClick={() => onSelectBranch(pb.id)}
+              onKeyDown={(e) => {
+                // Only when the row itself is the focus target — the bulk checkbox inside it
+                // already owns Space for its own toggle, and this must not also select the row.
+                if (e.target !== e.currentTarget) return;
+                if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectBranch(pb.id); }
+              }}
+              aria-pressed={isSelected}
               style={{
                 padding: '10px 12px', cursor: 'pointer', borderRadius: '8px', marginBottom: '6px',
                 background: isSelected ? 'rgba(216,174,71,0.25)' : isDone ? 'var(--status-active-bg)' : isAssigned ? 'rgba(216,174,71,0.06)' : 'var(--bg-surface-2)',

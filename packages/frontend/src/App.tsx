@@ -1,5 +1,5 @@
 import React, { useState, useEffect, Suspense } from 'react';
-import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom';
+import { Routes, Route, Navigate, Outlet, useNavigate, useLocation } from 'react-router-dom';
 import { defaultRouteForRoles } from './config/route-permissions';
 import { SystemRole } from '@fapoms/shared';
 import { Login } from './pages/Login';
@@ -310,57 +310,67 @@ export const App: React.FC = () => {
               : <PostLoginRedirect fallback={defaultRouteForRoles(userRoles)} />
           }
         />
-        <Route path="/dashboard" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Dashboard /></ProtectedRoute>} />
-        <Route path="/executive-map" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><ExecutiveMap /></ProtectedRoute>} />
-        <Route path="/projects" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Projects /></ProtectedRoute>} />
-        <Route path="/branches" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Branches /></ProtectedRoute>} />
-        <Route path="/planning" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><PlanningWorkspace /></ProtectedRoute>} />
-        <Route path="/assignments" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Assignments /></ProtectedRoute>} />
-        <Route path="/scheduling" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Scheduling /></ProtectedRoute>} />
-        <Route path="/documents" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Documents /></ProtectedRoute>} />
-        <Route path="/data-entry" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><DataEntryLayout /></ProtectedRoute>}>
-          <Route index element={<DataEntryOverview />} />
-          <Route path="packets" element={<PacketsQueue />} />
-          <Route path="reviews" element={<ReviewsQueue />} />
-          <Route path="case/:branchId" element={<DataEntryCasePage />} />
-          <Route path="clarifications" element={<ClarificationsPage />} />
+        {/*
+          One ProtectedRoute guards every authenticated screen below, the same pathless-layout
+          pattern /data-entry and /hr already used one level down for their own child routes.
+          ProtectedRoute reads location.pathname itself (not a route-specific prop), so it works
+          identically whether it wraps one page directly or an <Outlet /> — this used to be
+          pasted onto all 27 routes individually, which meant every new route had to remember
+          to add it by hand.
+        */}
+        <Route element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Outlet /></ProtectedRoute>}>
+          <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/executive-map" element={<ExecutiveMap />} />
+          <Route path="/projects" element={<Projects />} />
+          <Route path="/branches" element={<Branches />} />
+          <Route path="/planning" element={<PlanningWorkspace />} />
+          <Route path="/assignments" element={<Assignments />} />
+          <Route path="/scheduling" element={<Scheduling />} />
+          <Route path="/documents" element={<Documents />} />
+          <Route path="/data-entry" element={<DataEntryLayout />}>
+            <Route index element={<DataEntryOverview />} />
+            <Route path="packets" element={<PacketsQueue />} />
+            <Route path="reviews" element={<ReviewsQueue />} />
+            <Route path="case/:branchId" element={<DataEntryCasePage />} />
+            <Route path="clarifications" element={<ClarificationsPage />} />
+          </Route>
+          <Route path="/users" element={<Users />} />
+          {/* HR is a section, not a page: each concern has its own URL under the shared shell. */}
+          <Route path="/hr" element={<HrLayout />}>
+            <Route index element={<HrOverviewPage />} />
+            <Route path="roster" element={<HrRosterPage />} />
+            <Route path="onboarding" element={<HrOnboardingPage />} />
+            <Route path="records" element={<HrRecordsPage />} />
+            <Route path="compliance" element={<HrCompliancePage />} />
+            <Route path="capability" element={<HrCapabilityPage />} />
+            <Route path="documents" element={<HrDocumentsPage />} />
+            <Route path="pay" element={<HrPayPage />} />
+            <Route path="deployment" element={<HrDeploymentPage />} />
+            <Route path="utilisation" element={<HrUtilisationPage />} />
+            <Route path="activity" element={<HrActivityPage />} />
+          </Route>
+          <Route path="/clients" element={<Clients />} />
+          <Route path="/billing" element={<Billing />} />
+          <Route path="/billing/ledger" element={<LedgerPage />} />
+          <Route path="/billing/settings" element={<ClientBillingSettingsPage />} />
+          <Route path="/billing/statement" element={<AssayerStatementPage />} />
+          <Route path="/admin/rule-bypass" element={<RuleBypassPanel />} />
+          <Route path="/rules" element={<Rules />} />
+          <Route path="/holidays" element={<Holidays />} />
+          <Route path="/transport-costs" element={<TransportCosts />} />
+          <Route path="/admin/notifications" element={<NotificationAdmin />} />
+          <Route path="/admin/settings" element={<PlatformSettings />} />
+          <Route path="/zones" element={<Zones />} />
+          <Route path="/inbox" element={<OperationsInbox />} />
+          <Route path="/notifications" element={<Notifications />} />
+          <Route path="/feedback" element={<FeedbackPage />} />
+          <Route path="/settings" element={<Settings />} />
         </Route>
         {/* Validation is now part of the merged data-entry board. */}
         <Route path="/validation" element={<Navigate to="/data-entry" replace />} />
-        <Route path="/users" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Users /></ProtectedRoute>} />
-        {/* HR is a section, not a page: each concern has its own URL under the shared shell. */}
-        <Route path="/hr" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><HrLayout /></ProtectedRoute>}>
-          <Route index element={<HrOverviewPage />} />
-          <Route path="roster" element={<HrRosterPage />} />
-          <Route path="onboarding" element={<HrOnboardingPage />} />
-          <Route path="records" element={<HrRecordsPage />} />
-          <Route path="compliance" element={<HrCompliancePage />} />
-          <Route path="capability" element={<HrCapabilityPage />} />
-          <Route path="documents" element={<HrDocumentsPage />} />
-          <Route path="pay" element={<HrPayPage />} />
-          <Route path="deployment" element={<HrDeploymentPage />} />
-          <Route path="utilisation" element={<HrUtilisationPage />} />
-          <Route path="activity" element={<HrActivityPage />} />
-        </Route>
         {/* The roster now lives inside the workforce console; keep the old path working. */}
         <Route path="/assayers" element={<Navigate to="/hr/roster" replace />} />
-        <Route path="/clients" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Clients /></ProtectedRoute>} />
-        <Route path="/billing" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Billing /></ProtectedRoute>} />
-        <Route path="/billing/ledger" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><LedgerPage /></ProtectedRoute>} />
-        <Route path="/billing/settings" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><ClientBillingSettingsPage /></ProtectedRoute>} />
-        <Route path="/billing/statement" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><AssayerStatementPage /></ProtectedRoute>} />
-        <Route path="/admin/rule-bypass" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><RuleBypassPanel /></ProtectedRoute>} />
-        <Route path="/rules" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Rules /></ProtectedRoute>} />
-        <Route path="/holidays" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Holidays /></ProtectedRoute>} />
-        <Route path="/transport-costs" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><TransportCosts /></ProtectedRoute>} />
-        <Route path="/admin/notifications" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><NotificationAdmin /></ProtectedRoute>} />
-        <Route path="/admin/settings" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><PlatformSettings /></ProtectedRoute>} />
-        <Route path="/zones" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Zones /></ProtectedRoute>} />
-        <Route path="/inbox" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><OperationsInbox /></ProtectedRoute>} />
-        <Route path="/notifications" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Notifications /></ProtectedRoute>} />
-        <Route path="/feedback" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><FeedbackPage /></ProtectedRoute>} />
-        <Route path="/settings" element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Settings /></ProtectedRoute>} />
-        
+
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
       </Suspense>

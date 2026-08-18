@@ -6,6 +6,7 @@ import { connectSocket, getSocket } from '../../services/socket';
 import { callManager } from '../../services/call.service';
 import type { RegionCapture, Region } from './PdfRegionViewer';
 import { userMessage } from '../../services/errors';
+import { fmtWhen } from '../../utils/dates';
 
 /**
  * One clarification thread: messages, composer, resolve.
@@ -39,9 +40,6 @@ interface Props {
   onResolved?: () => void;
   onChanged?: () => void;
 }
-
-const fmtWhen = (d: string) =>
-  new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
 
 // Crop/attachment URLs are stored as `/api/v1/validation-queries/attachment/<encodedKey>`, whose
 // download route is @Public but demands a short-lived signed token — so a bare <img>/<a> 401s.

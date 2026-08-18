@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Building2, Plus, ExternalLink, ArrowLeftRight, RefreshCw, Pencil, Trash2 } from 'lucide-react';
-import { SearchInput, FilterSelect, DataTable, Pagination, DetailDrawer, StatusBadge, Modal } from '../components/ui';
+import { SearchInput, FilterSelect, DataTable, Pagination, DetailDrawer, StatusBadge, Modal, Select } from '../components/ui';
 import { useClientsList } from '../hooks/useClients';
 import type { Column } from '../components/ui';
 import type { Client } from '@fapoms/shared';
@@ -290,11 +290,13 @@ const Clients: React.FC = () => {
           {bulkTargets.length > 0 ? (
             <>
               <ArrowLeftRight size={13} style={{ color: 'var(--text-muted)' }} />
-              <select value={bulkTarget} onChange={(e) => setBulkTarget(e.target.value)}
-                style={{ padding: '6px 10px', fontSize: '12px', borderRadius: '6px', background: 'var(--bg-page)', color: 'inherit', border: '1px solid var(--border-color)' }}>
-                <option value="">Move all to…</option>
-                {bulkTargets.map((t) => <option key={t} value={t}>{clientLifecycleLabel(t)}</option>)}
-              </select>
+              <Select
+                value={bulkTarget}
+                onChange={setBulkTarget}
+                options={bulkTargets.map((t) => ({ value: t, label: clientLifecycleLabel(t) }))}
+                placeholder="Move all to…"
+                compact
+              />
               <button onClick={runBulkTransition} disabled={!bulkTarget || bulkBusy} className="btn btn-primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
                 {bulkBusy ? 'Applying…' : 'Apply'}
               </button>

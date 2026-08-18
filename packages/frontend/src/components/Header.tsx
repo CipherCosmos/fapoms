@@ -6,6 +6,7 @@ import { SystemRole } from '@fapoms/shared';
 import { NotificationDropdown } from './NotificationDropdown';
 import { FeedbackLauncher } from '../pages/feedback/FeedbackLauncher';
 import { MenuToggle } from './ui/MenuToggle';
+import { Select } from './ui/Select';
 import { useSocketConnection } from '../hooks/useSocketConnection';
 import { useScope } from '../context/ScopeContext';
 import { GlobalSearch } from './GlobalSearch';
@@ -51,7 +52,7 @@ const BREADCRUMBS: { prefix: string; category: string; label: string }[] = [
   { prefix: '/notifications', category: 'My Account', label: 'Notifications' },
 ];
 
-/** One row of the scope panel. A native select — the list can run to 30+ states. */
+/** One row of the scope panel. The state list alone can run to 30+ entries — searchable. */
 const ScopeSelect: React.FC<{
   label: string;
   value: string;
@@ -61,28 +62,20 @@ const ScopeSelect: React.FC<{
 }> = ({ label, value, allLabel, options, onChange }) => (
   <label style={{ display: 'grid', gridTemplateColumns: '52px 1fr', alignItems: 'center', gap: '8px' }}>
     <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-muted)' }}>{label}</span>
-    <select
+    <Select
       value={value}
-      onChange={(e) => onChange(e.target.value)}
+      onChange={onChange}
       disabled={options.length === 0}
+      options={[{ value: 'ALL', label: allLabel }, ...options]}
+      compact
       style={{
         width: '100%',
-        padding: '5px 8px',
-        fontSize: '12px',
         fontWeight: value !== 'ALL' ? 700 : 500,
-        borderRadius: 'var(--radius-sm)',
         background: 'var(--bg-surface-2)',
         color: value !== 'ALL' ? 'var(--accent-primary)' : 'var(--text-primary)',
         border: `1px solid ${value !== 'ALL' ? 'var(--accent-primary)' : 'var(--border-color)'}`,
-        cursor: options.length === 0 ? 'not-allowed' : 'pointer',
-        outline: 'none',
       }}
-    >
-      <option value="ALL">{allLabel}</option>
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>{o.label}</option>
-      ))}
-    </select>
+    />
   </label>
 );
 
@@ -95,7 +88,9 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
     options, region, clientId, zoneId, state,
     availableStates, availableZones, setScope, resetScope, activeCount, applies,
   } = useScope();
-  const [profileHover, setProfileHover] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const profileAnchorRef = useRef<HTMLDivElement>(null);
+  const profileMenuRef = useRef<HTMLDivElement>(null);
   const [filterDropdownOpen, setFilterDropdownOpen] = useState(false);
   const [projectSearch, setProjectSearch] = useState('');
 
@@ -141,6 +136,28 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
       document.removeEventListener('keydown', onKey);
     };
   }, [filterDropdownOpen]);
+
+  useEffect(() => {
+    if (!profileMenuOpen) return;
+    const onPointerDown = (e: MouseEvent) => {
+      const target = e.target as Node;
+      if (
+        !profileAnchorRef.current?.contains(target) &&
+        !profileMenuRef.current?.contains(target)
+      ) {
+        setProfileMenuOpen(false);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setProfileMenuOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [profileMenuOpen]);
 
   const filteredProjects = projects.filter((p) => {
     const q = projectSearch.toLowerCase().trim();
@@ -471,13 +488,14 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
         <FeedbackLauncher />
         <NotificationDropdown />
 
-        {/* Profile Avatar Hover Menu */}
-        <div
-          style={{ position: 'relative' }}
-          onMouseEnter={() => setProfileHover(true)}
-          onMouseLeave={() => setProfileHover(false)}
-        >
-          <div
+        {/* Profile / account menu */}
+        <div style={{ position: 'relative' }} ref={profileAnchorRef}>
+          <button
+            type="button"
+            onClick={() => setProfileMenuOpen((o) => !o)}
+            aria-haspopup="menu"
+            aria-expanded={profileMenuOpen}
+            aria-label={`Account menu — ${user?.displayName || 'User Profile'}`}
             style={{
               width: '32px',
               height: '32px',
@@ -491,15 +509,18 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
               fontWeight: 700,
               color: 'var(--accent)',
               cursor: 'pointer',
+              padding: 0,
             }}
             title={user?.displayName || 'User Profile'}
           >
             {initials}
-          </div>
+          </button>
 
-          {/* Hover Menu Card */}
-          {profileHover && (
+          {profileMenuOpen && (
             <div
+              ref={profileMenuRef}
+              role="menu"
+              aria-label="Account menu"
               style={{
                 position: 'absolute',
                 right: 0,
@@ -528,8 +549,9 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
 
               {/* Menu Actions */}
               <button
+                role="menuitem"
                 onClick={() => {
-                  setProfileHover(false);
+                  setProfileMenuOpen(false);
                   navigate('/settings');
                 }}
                 style={{
@@ -556,8 +578,9 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
 
               {onLogout && (
                 <button
+                  role="menuitem"
                   onClick={() => {
-                    setProfileHover(false);
+                    setProfileMenuOpen(false);
                     onLogout();
                   }}
                   style={{

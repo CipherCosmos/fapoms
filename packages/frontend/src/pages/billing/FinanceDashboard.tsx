@@ -1,7 +1,8 @@
 import React from 'react';
 import { ArrowDownLeft, ArrowUpRight, AlertTriangle, FileText, CheckCircle2, Clock } from 'lucide-react';
-import { useFinanceDashboard } from '../../hooks/useBilling';
+import { useFinanceDashboard, useBillingDashboard } from '../../hooks/useBilling';
 import type { BillingAging } from '../../services/billing';
+import type { BillingLevel } from '@fapoms/shared';
 
 // Aggregates: a bucket with nothing in it is ₹0, not an unknown amount.
 import { moneyTotal as money } from '../../utils/money';
@@ -16,8 +17,18 @@ import { moneyExact } from '../../utils/money';
  * The figures reconcile because there is now one billing engine behind them; they
  * previously came from three modules that disagreed.
  */
-export const FinanceDashboard: React.FC<{ onNavigate?: (tab: string) => void }> = ({ onNavigate }) => {
+const levelColor: Record<BillingLevel, string> = {
+  CLIENT: 'var(--accent)',
+  PROJECT: 'var(--accent)',
+  ASSIGNMENT: 'var(--warning)',
+};
+
+export const FinanceDashboard: React.FC<{ onNavigate?: (tab: string) => void; clientId?: string }> = ({ onNavigate, clientId }) => {
   const { data, isLoading, error } = useFinanceDashboard();
+  // By-client-tier breakdown and invoices-issued count — the two figures the old
+  // "Overview" tab showed that this dashboard didn't, folded in here instead of
+  // keeping a second, separately-fetched screen answering the same question.
+  const byLevel = useBillingDashboard(clientId);
 
   if (isLoading) return <Panel>Loading finance position…</Panel>;
   if (error) return <Panel tone="error">Could not load the finance dashboard.</Panel>;
@@ -120,6 +131,9 @@ export const FinanceDashboard: React.FC<{ onNavigate?: (tab: string) => void }> 
             sub={`${money(profitability.netRevenue)} revenue − ${money(profitability.assayerCost)} cost`}
             color={profitability.margin < 0 ? 'var(--danger)' : 'var(--success)'}
           />
+          {byLevel.data && (
+            <Big label="Invoices issued" value={String(byLevel.data.invoices.issued)} sub="Total invoices on record" color="var(--accent)" />
+          )}
         </div>
       </div>
 
@@ -182,6 +196,22 @@ export const FinanceDashboard: React.FC<{ onNavigate?: (tab: string) => void }> 
               Rates come from each client’s contract, not a hardcoded default.
             </div>
           </Card>
+
+          {byLevel.data && (
+            <Card title="By client tier" accent="var(--accent)">
+              {(Object.keys(byLevel.data.byLevel) as BillingLevel[]).map((lvl) => {
+                const d = byLevel.data!.byLevel[lvl];
+                return (
+                  <Line
+                    key={lvl}
+                    label={<span style={{ color: levelColor[lvl], fontWeight: 700 }}>{lvl}</span>}
+                    value={`${money(d.billed)} billed`}
+                    hint={`${money(d.paid)} paid · ${money(d.outstanding)} outstanding`}
+                  />
+                );
+              })}
+            </Card>
+          )}
         </div>
       </div>
     </div>

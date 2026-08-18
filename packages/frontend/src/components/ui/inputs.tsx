@@ -1,5 +1,6 @@
 import React from 'react';
 import { Search } from 'lucide-react';
+import { Select } from './Select';
 
 /**
  * Shared styled text input. The inline input styling (var(--bg-primary),
@@ -73,28 +74,7 @@ export const FilterSelect: React.FC<{
   style?: React.CSSProperties;
   compact?: boolean;
 }> = ({ value, onChange, options, label, style, compact = false }) => {
-  const select = (
-    <select
-      value={value}
-      onChange={(e) => onChange(e.target.value)}
-      style={{
-        padding: compact ? '7px 10px' : '8px 12px',
-        fontSize: compact ? '12px' : '13px',
-        background: 'var(--bg-input)',
-        border: '1px solid var(--border-color)',
-        borderRadius: 'var(--radius-sm)',
-        color: 'var(--text-primary)',
-        cursor: 'pointer',
-        ...style,
-      }}
-    >
-      {options.map((o) => (
-        <option key={o.value} value={o.value}>
-          {o.label}
-        </option>
-      ))}
-    </select>
-  );
+  const select = <Select value={value} onChange={onChange} options={options} compact={compact} style={style} />;
   if (label === undefined) return select;
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>

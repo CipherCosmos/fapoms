@@ -12,6 +12,7 @@ import { useScope, withScope } from '../context/ScopeContext';
 import { useUrlSelection } from '../hooks/useUrlSelection';
 import { formatRupees as money } from '@fapoms/shared';
 import { useExcelExport } from '../hooks/useExcelExport';
+import { Select } from '../components/ui';
 
 interface BranchPoint {
   id: string; projectBranchId: string; name: string; branchCode: string | null;
@@ -145,11 +146,11 @@ export const ExecutiveMap: React.FC = () => {
           </p>
         </div>
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <select value={clientId} onChange={(e) => { setClientId(e.target.value); setSelectedState(null); }}
-            style={{ padding: '7px 11px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 12.5 }}>
-            <option value="">All clients</option>
-            {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
+          <Select
+            value={clientId}
+            onChange={(v) => { setClientId(v); setSelectedState(null); }}
+            options={[{ value: '', label: 'All clients' }, ...clients.map((c) => ({ value: c.id, label: c.name }))]}
+          />
           <button onClick={load} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
             <RefreshCw size={14} className={loading ? 'spin' : ''} /> Refresh
           </button>

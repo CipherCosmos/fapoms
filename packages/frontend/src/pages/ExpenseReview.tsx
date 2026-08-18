@@ -18,7 +18,10 @@ import { TravelEvidence } from '../components/TravelEvidence';
  * Assayers raise claims from the mobile app; this is where they get approved or rejected. A
  * rejection requires a reason (the backend enforces it too), so the assayer always knows why.
  */
-export const ExpenseReview: React.FC<{ embedded?: boolean }> = ({ embedded = false }) => {
+// Always rendered inside <Billing/>'s Expenses tab, never routed standalone — the
+// `embedded=false` branch this used to carry (its own page title) was unreachable and has
+// been removed.
+export const ExpenseReview: React.FC = () => {
   const { toast } = useToast();
   const [claims, setClaims] = useState<ExpenseClaim[]>([]);
   const [loading, setLoading] = useState(true);
@@ -190,16 +193,9 @@ export const ExpenseReview: React.FC<{ embedded?: boolean }> = ({ embedded = fal
   ];
 
   return (
-    <div style={{ padding: embedded ? 0 : '20px 24px' }}>
+    <div style={{ padding: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
-        {embedded ? <div /> : (
-          <div>
-            <h1 style={{ fontSize: 20, fontWeight: 700, margin: 0 }}>Expense Review</h1>
-            <p style={{ margin: '4px 0 0', color: 'var(--text-muted)', fontSize: 13 }}>
-              Reimbursement claims raised by field assayers, awaiting a decision.
-            </p>
-          </div>
-        )}
+        <div />
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{claims.length} pending</div>

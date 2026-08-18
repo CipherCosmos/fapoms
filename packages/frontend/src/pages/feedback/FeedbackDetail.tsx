@@ -9,6 +9,7 @@ import {
 import { userMessage } from '../../services/errors';
 import { CATEGORY, SEVERITY, STATUS, Badge, fmtDay, label } from './feedbackUi';
 import { FeedbackThreadPanel } from './FeedbackThreadPanel';
+import { Select } from '../../components/ui';
 
 interface Props {
   threadId: string;
@@ -17,11 +18,6 @@ interface Props {
   onChanged?: () => void;
   onOpenThread?: (id: string) => void;
 }
-
-const selectStyle: React.CSSProperties = {
-  padding: '5px 8px', fontSize: '12px', fontWeight: 600, borderRadius: '7px',
-  background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)', outline: 'none', cursor: 'pointer',
-};
 
 export const FeedbackDetail: React.FC<Props> = ({ threadId, isTeam, assignees, onChanged, onOpenThread }) => {
   const [thread, setThread] = useState<FeedbackThread | null>(null);
@@ -137,23 +133,34 @@ export const FeedbackDetail: React.FC<Props> = ({ threadId, isTeam, assignees, o
             )}
 
             <div style={{ marginTop: '10px', display: 'flex', flexWrap: 'wrap', gap: '8px', alignItems: 'center' }}>
-              <select style={selectStyle} value={thread.status} disabled={busy}
-                onChange={(e) => patch(() => triageFeedback(thread.id, { status: e.target.value as FeedbackStatus }))}>
-                {Object.values(FeedbackStatus).map((s) => <option key={s} value={s}>{STATUS[s].label}</option>)}
-              </select>
-              <select style={selectStyle} value={thread.severity} disabled={busy}
-                onChange={(e) => patch(() => triageFeedback(thread.id, { severity: e.target.value as FeedbackSeverity }))}>
-                {Object.values(FeedbackSeverity).map((s) => <option key={s} value={s}>{SEVERITY[s].label}</option>)}
-              </select>
-              <select style={selectStyle} value={thread.category} disabled={busy}
-                onChange={(e) => patch(() => triageFeedback(thread.id, { category: e.target.value as FeedbackCategory }))}>
-                {Object.values(FeedbackCategory).map((c) => <option key={c} value={c}>{CATEGORY[c].label}</option>)}
-              </select>
-              <select style={selectStyle} value={thread.assignedToUserId ?? ''} disabled={busy}
-                onChange={(e) => patch(() => triageFeedback(thread.id, { assignedToUserId: e.target.value || null }))}>
-                <option value="">Unassigned</option>
-                {assignees.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-              </select>
+              <Select
+                compact
+                value={thread.status}
+                disabled={busy}
+                onChange={(v) => patch(() => triageFeedback(thread.id, { status: v as FeedbackStatus }))}
+                options={Object.values(FeedbackStatus).map((s) => ({ value: s, label: STATUS[s].label }))}
+              />
+              <Select
+                compact
+                value={thread.severity}
+                disabled={busy}
+                onChange={(v) => patch(() => triageFeedback(thread.id, { severity: v as FeedbackSeverity }))}
+                options={Object.values(FeedbackSeverity).map((s) => ({ value: s, label: SEVERITY[s].label }))}
+              />
+              <Select
+                compact
+                value={thread.category}
+                disabled={busy}
+                onChange={(v) => patch(() => triageFeedback(thread.id, { category: v as FeedbackCategory }))}
+                options={Object.values(FeedbackCategory).map((c) => ({ value: c, label: CATEGORY[c].label }))}
+              />
+              <Select
+                compact
+                value={thread.assignedToUserId ?? ''}
+                disabled={busy}
+                onChange={(v) => patch(() => triageFeedback(thread.id, { assignedToUserId: v || null }))}
+                options={[{ value: '', label: 'Unassigned' }, ...assignees.map((a) => ({ value: a.id, label: a.name }))]}
+              />
               {thread.status === FeedbackStatus.RESOLVED || thread.status === FeedbackStatus.CLOSED ? (
                 <button className="btn btn-secondary" disabled={busy} onClick={() => patch(() => reopenFeedback(thread.id))} style={{ fontSize: '12px', padding: '5px 10px', display: 'flex', gap: '5px', alignItems: 'center' }}>
                   <RotateCcw size={13} /> Reopen

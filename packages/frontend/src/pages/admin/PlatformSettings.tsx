@@ -7,7 +7,7 @@ import {
 import { Link } from 'react-router-dom';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
-import { useToast } from '../../components/ui';
+import { useToast, Select } from '../../components/ui';
 import {
   SectionCard, SettingRow, Toggle, Pill, controlStyle,
 } from '../../components/ui/settings';
@@ -182,9 +182,13 @@ export const PlatformSettings: React.FC = () => {
 
     if (s.type === 'select') {
       return (
-        <select value={value ?? ''} disabled={disabled} style={controlStyle} onChange={(e) => save(s, e.target.value)}>
-          {(s.options ?? []).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
+        <Select
+          value={value ?? ''}
+          disabled={disabled}
+          style={controlStyle}
+          onChange={(v) => save(s, v)}
+          options={(s.options ?? []).map((o) => ({ value: o.value, label: o.label }))}
+        />
       );
     }
 

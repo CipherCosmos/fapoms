@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ShieldCheck, ShieldAlert, ShieldQuestion, Plus, Search, Check, X, Trash2 } from 'lucide-react';
 import { api } from '../../services/api';
+import { Select } from '../../components/ui';
 import { card, label, Empty, ExpiryChip, fmtDate } from './hr-ui';
 import { useCurrentRoles, canManageAssayers } from '../../hooks/useCurrentRoles';
 import { SystemRole } from '@fapoms/shared';
@@ -257,10 +258,11 @@ const AddDocumentForm: React.FC<{ busy: boolean; onAdd: (type: string, number: s
 
   return (
     <div style={{ display: 'flex', gap: '8px', marginTop: '14px', flexWrap: 'wrap', alignItems: 'center', borderTop: '1px solid var(--border-hair)', paddingTop: '14px' }}>
-      <select value={type} onChange={(e) => setType(e.target.value)}
-        style={{ padding: '7px 10px', fontSize: '12.5px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: '8px', color: 'var(--text-primary)' }}>
-        {DOC_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
-      </select>
+      <Select
+        value={type}
+        onChange={setType}
+        options={DOC_TYPES.map((t) => ({ value: t, label: t.replace(/_/g, ' ') }))}
+      />
       <input value={number} onChange={(e) => setNumber(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submit()}
         placeholder="Document number" style={{ flex: '1 1 180px', padding: '7px 10px', fontSize: '12.5px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: '8px', color: 'var(--text-primary)', fontFamily: 'monospace' }} />
       <input type="date" value={expiry} onChange={(e) => setExpiry(e.target.value)} title="Expiry date (optional)"

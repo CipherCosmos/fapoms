@@ -5,7 +5,7 @@ import { INDIAN_STATES } from '@fapoms/shared';
 import { api } from '../services/api';
 import { useClientOptions } from '../hooks/useClients';
 import { userMessage } from '../services/errors';
-import { StatusBadge, Modal, AlertBanner } from '../components/ui';
+import { StatusBadge, Modal, AlertBanner, Select } from '../components/ui';
 import { useCurrentRoles, canManageHolidays } from '../hooks/useCurrentRoles';
 
 interface Holiday {
@@ -197,16 +197,14 @@ export const Holidays: React.FC = () => {
               <List size={14} />
             </button>
           </div>
-          <select
+          <Select
             value={clientFilter}
-            onChange={(e) => setClientFilter(e.target.value)}
-            style={{ padding: '8px 12px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px' }}
-          >
-            <option value="ALL">🏦 All Clients (Global Scope)</option>
-            {clients.map((c: any) => (
-              <option key={c.id} value={c.id}>🏦 Client: {c.name || c.code}</option>
-            ))}
-          </select>
+            onChange={setClientFilter}
+            options={[
+              { value: 'ALL', label: '🏦 All Clients (Global Scope)' },
+              ...clients.map((c: any) => ({ value: c.id, label: `🏦 Client: ${c.name || c.code}` })),
+            ]}
+          />
           {canManage && (
             <button onClick={() => handleOpenCreate()} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 14px' }}>
               <Plus size={14} /> Add Holiday
@@ -351,11 +349,15 @@ export const Holidays: React.FC = () => {
           <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div>
               <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Client Scope (Optional)</label>
-              <select value={clientId} onChange={(e) => setClientId(e.target.value)}
-                style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px' }}>
-                <option value="">🌐 All Clients (Global Holiday Calendar)</option>
-                {clients.map((c: any) => <option key={c.id} value={c.id}>🏦 Specific Client: {c.name || c.code}</option>)}
-              </select>
+              <Select
+                value={clientId}
+                onChange={setClientId}
+                options={[
+                  { value: '', label: '🌐 All Clients (Global Holiday Calendar)' },
+                  ...clients.map((c: any) => ({ value: c.id, label: `🏦 Specific Client: ${c.name || c.code}` })),
+                ]}
+                style={{ width: '100%' }}
+              />
             </div>
 
             <div>
@@ -372,10 +374,12 @@ export const Holidays: React.FC = () => {
               </div>
               <div>
                 <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>Category Type</label>
-                <select value={type} onChange={(e) => setType(e.target.value as Holiday['type'])}
-                  style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px' }}>
-                  {HOLIDAY_TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
-                </select>
+                <Select
+                  value={type}
+                  onChange={(v) => setType(v as Holiday['type'])}
+                  options={HOLIDAY_TYPES.map((t) => ({ value: t.value, label: t.label }))}
+                  style={{ width: '100%' }}
+                />
               </div>
             </div>
 

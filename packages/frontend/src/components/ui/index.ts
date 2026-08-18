@@ -2,6 +2,8 @@ export { StatusBadge } from './StatusBadge';
 export { Modal } from './Modal';
 export { KpiCard } from './KpiCard';
 export { StyledInput, SearchInput, FilterSelect } from './inputs';
+export { Select } from './Select';
+export type { SelectOption } from './Select';
 export { AlertBanner } from './AlertBanner';
 export { PrimaryButton, UploadExcelControls } from './buttons';
 export { DataTable } from './DataTable';

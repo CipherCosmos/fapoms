@@ -8,11 +8,9 @@ import { FEEDBACK_CATEGORY_LABELS, FEEDBACK_STATUS_LABELS } from '@fapoms/shared
  * translucent fills over token backgrounds so they hold in every theme.
  */
 
-export const fmtWhen = (d: string | null): string =>
-  d ? new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
-
-export const fmtDay = (d: string | null): string =>
-  d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
+// Re-exported (fmtDay under its existing name here) so this module's call sites don't need
+// touching — the one definition now lives in utils/dates.ts, same as hr-ui.tsx's fmtDate/fmtWhen.
+export { fmtWhen, fmtDate as fmtDay } from '../../utils/dates';
 
 type Chip = { label: string; bg: string; fg: string };
 

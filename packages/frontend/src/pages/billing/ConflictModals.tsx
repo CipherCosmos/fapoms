@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { AlertTriangle } from 'lucide-react';
-import { Modal, StyledInput, DetailDrawer, useToast } from '../../components/ui';
+import { Modal, StyledInput, DetailDrawer, Select, useToast } from '../../components/ui';
 import { useRaiseConflict, useResolveConflict, useBillingEntries, useBillingConflicts } from '../../hooks/useBilling';
 import {
   BillingConflictSeverity, BillingConflictStatus, BillingConflictAction,
@@ -48,11 +48,6 @@ export const RaiseConflictModal: React.FC<{ onClose: () => void }> = ({ onClose 
     } catch (err: any) { toast({ type: 'error', title: 'Failed to raise conflict', message: userMessage(err) }); }
   };
 
-  const selStyle: React.CSSProperties = {
-    padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)',
-    borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', width: '100%',
-  };
-
   return (
     <Modal open onClose={onClose} title={<><AlertTriangle size={18} /> Raise Billing Conflict</>} width="600px" maxHeight="90vh" asForm onSubmit={handleSubmit} footer={
       <>
@@ -61,12 +56,18 @@ export const RaiseConflictModal: React.FC<{ onClose: () => void }> = ({ onClose 
       </>
     }>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12 }}>
-        <select value={severity} onChange={(e) => setSeverity(e.target.value as BillingConflictSeverity)} style={selStyle}>
-          {SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
-        <select value={entityType} onChange={(e) => setEntityType(e.target.value as BillingEntityType)} style={selStyle}>
-          {ENTITY_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-        </select>
+        <Select
+          value={severity}
+          onChange={(v) => setSeverity(v as BillingConflictSeverity)}
+          options={SEVERITIES.map((s) => ({ value: s, label: s }))}
+          style={{ width: '100%' }}
+        />
+        <Select
+          value={entityType}
+          onChange={(v) => setEntityType(v as BillingEntityType)}
+          options={ENTITY_TYPES.map((t) => ({ value: t, label: t }))}
+          style={{ width: '100%' }}
+        />
       </div>
 
       <div>
@@ -117,11 +118,6 @@ export const ConflictDetailDrawer: React.FC<{ conflictId: string; onClose: () =>
     </div>
   );
 
-  const selStyle: React.CSSProperties = {
-    padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)',
-    borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', width: '100%',
-  };
-
   return (
     <DetailDrawer
       open onClose={onClose} width={560}
@@ -148,12 +144,18 @@ export const ConflictDetailDrawer: React.FC<{ conflictId: string; onClose: () =>
       {c.status === BillingConflictStatus.OPEN && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--bg-tertiary)', padding: 12, borderRadius: 'var(--radius-sm)' }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8 }}>
-            <select value={action} onChange={(e) => setAction(e.target.value as BillingConflictAction)} style={selStyle}>
-              {ACTIONS.map((a) => <option key={a} value={a}>{a}</option>)}
-            </select>
-            <select value={status} onChange={(e) => setStatus(e.target.value as BillingConflictStatus)} style={selStyle}>
-              {RESOLVE_STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
+            <Select
+              value={action}
+              onChange={(v) => setAction(v as BillingConflictAction)}
+              options={ACTIONS.map((a) => ({ value: a, label: a }))}
+              style={{ width: '100%' }}
+            />
+            <Select
+              value={status}
+              onChange={(v) => setStatus(v as BillingConflictStatus)}
+              options={RESOLVE_STATUSES.map((s) => ({ value: s, label: s }))}
+              style={{ width: '100%' }}
+            />
           </div>
           <StyledInput placeholder="Resolution note *" value={note} onChange={(e) => setNote(e.target.value)} style={{ width: '100%' }} />
         </div>

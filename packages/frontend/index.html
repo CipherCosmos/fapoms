@@ -35,15 +35,11 @@
               var bg = BASE_BG[base] || BASE_BG.noir;
               var link = ensureContrast(a, bg, 4.5);
               var strong = ensureContrast(shade(a, 0.72), bg, 4.5);
-              var hover = ensureContrast(shade(a, 0.8), bg, 4.5);
-              var hover2 = ensureContrast(shade(a, 1.28), bg, 4.5);
               var ink = bestInk(a);
               root.style.setProperty('--accent', link);
               root.style.setProperty('--accent-strong', strong);
               root.style.setProperty('--accent-primary', link);
-              root.style.setProperty('--accent-primary-hover', hover);
               root.style.setProperty('--accent-secondary', link);
-              root.style.setProperty('--accent-secondary-hover', hover2);
               root.style.setProperty('--btn-bg', a);
               root.style.setProperty('--btn-text', ink);
             }

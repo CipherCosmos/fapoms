@@ -289,16 +289,16 @@ export const Dashboard: React.FC = () => {
                   <div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>Nothing in the queue.</div>
                 ) : (
                   <DonutChart
-                    segments={validationSegments.map((s) => ({ ...s, onClick: () => navigate('/validation') }))}
+                    segments={validationSegments.map((s) => ({ ...s, onClick: () => navigate('/data-entry') }))}
                     centerLabel="Open cases" centerValue={String(data.validation.pending + data.validation.inReview + data.validation.needsCorrection)}
                   />
                 )}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12, flex: 1, minWidth: 180 }}>
                   <Stat icon={<Inbox size={15} />} label="Assigned to you" value={String(data.validation.assignedToMe)}
-                        sub="cases where you are the reviewer" color="var(--accent)" onClick={() => navigate('/validation')} />
+                        sub="cases where you are the reviewer" color="var(--accent)" onClick={() => navigate('/data-entry')} />
                   <Stat icon={<AlertTriangle size={15} />} label="Open clarifications" value={String(data.validation.openQueries)}
                         sub={data.validation.overdueQueries > 0 ? `${data.validation.overdueQueries} past deadline` : 'none overdue'}
-                        color={data.validation.overdueQueries ? 'var(--danger)' : 'var(--success)'} onClick={() => navigate('/validation')} />
+                        color={data.validation.overdueQueries ? 'var(--danger)' : 'var(--success)'} onClick={() => navigate('/data-entry')} />
                 </div>
               </div>
             </div>
@@ -313,7 +313,7 @@ export const Dashboard: React.FC = () => {
                   <SectionLabel>Assayer capacity</SectionLabel>
                   <div className="glass-card" style={{ padding: 16, display: 'flex', justifyContent: 'center' }}>
                     <DonutChart
-                      segments={capacitySegments.map((s) => ({ ...s, onClick: () => navigate('/assayers') }))}
+                      segments={capacitySegments.map((s) => ({ ...s, onClick: () => navigate('/hr/roster') }))}
                       centerLabel="capacity / day" centerValue={String(data.capacity.dailyCapacity)}
                     />
                   </div>
@@ -353,7 +353,7 @@ export const Dashboard: React.FC = () => {
             <div className="glass-card" style={{ padding: 14, display: 'flex', flexDirection: 'column', gap: 12 }}>
               {data.projects.length === 0 && <div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>No active projects.</div>}
               {data.projects.map((p) => (
-                <div key={p.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/planning?projectId=${p.id}`)}>
+                <button type="button" key={p.id} style={{ display: 'block', width: '100%', textAlign: 'left', font: 'inherit', background: 'none', border: 'none', padding: 0, cursor: 'pointer' }} onClick={() => navigate(`/planning?projectId=${p.id}`)}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 10, flexWrap: 'wrap' }}>
                     <span style={{ fontSize: 13, fontWeight: 700 }}>
                       {p.name} <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontFamily: 'monospace', fontSize: 11 }}>{p.projectNumber}</span>
@@ -371,7 +371,7 @@ export const Dashboard: React.FC = () => {
                     <span>{p.audited} audited</span>
                     {p.unplanned > 0 && <span style={{ color: 'var(--warning)' }}>{p.unplanned} not yet planned</span>}
                   </div>
-                </div>
+                </button>
               ))}
             </div>
           </div>

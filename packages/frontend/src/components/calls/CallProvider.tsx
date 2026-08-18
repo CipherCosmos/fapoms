@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useSyncExternalStore } from 'react';
 import { Phone, PhoneOff, Mic, MicOff, Volume2, BellOff, Bell, AlertTriangle, X } from 'lucide-react';
 import { callManager, CallState } from '../../services/call.service';
+import { Select } from '../ui';
 
 /**
  * Global call UI, mounted once at the app root so an incoming call rings on
@@ -132,20 +133,16 @@ const InCallBar: React.FC<{ state: CallState }> = ({ state }) => {
       {!ringing && state.outputDevices.length > 0 && (
         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
           <Volume2 size={14} style={{ color: 'var(--text-muted)' }} />
-          <select
-            value={state.activeOutputId ?? ''}
-            onChange={(e) => callManager.setOutputDevice(e.target.value)}
-            title="Audio output device"
-            style={{
-              fontSize: '11px', maxWidth: 120, background: 'var(--bg-input)', color: 'inherit',
-              border: '1px solid var(--border-color)', borderRadius: '7px', padding: '4px 6px',
-            }}
-          >
-            {state.activeOutputId === null && <option value="" disabled>Speaker</option>}
-            {state.outputDevices.map((d) => (
-              <option key={d.deviceId} value={d.deviceId}>{d.label}</option>
-            ))}
-          </select>
+          <span title="Audio output device" style={{ display: 'contents' }}>
+            <Select
+              value={state.activeOutputId ?? ''}
+              onChange={(v) => callManager.setOutputDevice(v)}
+              placeholder="Speaker"
+              options={state.outputDevices.map((d) => ({ value: d.deviceId, label: d.label }))}
+              compact
+              style={{ maxWidth: 120 }}
+            />
+          </span>
         </span>
       )}
 

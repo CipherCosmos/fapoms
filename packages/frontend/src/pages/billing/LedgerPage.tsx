@@ -4,6 +4,7 @@ import { formatRupees as money } from '@fapoms/shared';
 import { useSearchParams, Link } from 'react-router-dom';
 import { useEntityLedger, useBillingClients } from '../../hooks/useBilling';
 import type { EntityLedger } from '../../services/billing';
+import { Select } from '../../components/ui';
 
 /**
  * The ledger — the complete money picture for any one client, project, branch, assayer or
@@ -37,14 +38,21 @@ export const LedgerPage: React.FC = () => {
       </div>
       <div style={{ ...card, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
         <BookOpen size={16} style={{ color: 'var(--accent)' }} />
-        <select value={entityType} onChange={(e) => setEntityType(e.target.value as EntityType)} style={selectStyle}>
-          {ENTITY_TYPES.map((t) => <option key={t} value={t}>{t[0].toUpperCase() + t.slice(1)}</option>)}
-        </select>
+        <Select
+          value={entityType}
+          onChange={(v) => setEntityType(v as EntityType)}
+          options={ENTITY_TYPES.map((t) => ({ value: t, label: t[0].toUpperCase() + t.slice(1) }))}
+          compact
+        />
         {entityType === 'client' ? (
-          <select value={entityId} onChange={(e) => setEntityId(e.target.value)} style={{ ...selectStyle, minWidth: 240 }}>
-            <option value="">Choose a client…</option>
-            {clients.data?.map((c) => <option key={c.clientId} value={c.clientId}>{c.clientName}</option>)}
-          </select>
+          <Select
+            value={entityId}
+            onChange={setEntityId}
+            placeholder="Choose a client…"
+            options={(clients.data ?? []).map((c) => ({ value: c.clientId, label: c.clientName }))}
+            compact
+            style={{ minWidth: 240 }}
+          />
         ) : (
           <div style={{ position: 'relative', flex: '1 1 260px', minWidth: 0 }}>
             <Search size={13} style={{ position: 'absolute', left: 9, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />

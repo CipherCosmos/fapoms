@@ -16,7 +16,7 @@ export const KpiCard: React.FC<{
   onClick?: () => void;
   layout?: 'value-first' | 'label-first';
   style?: React.CSSProperties;
-}> = ({ icon, iconBg = 'rgba(216, 174, 71, 0.14)', iconColor = 'var(--accent)', label, value, valueColor, onClick, layout = 'value-first', style }) => {
+}> = ({ icon, iconBg = 'color-mix(in srgb, var(--accent) 14%, transparent)', iconColor = 'var(--accent)', label, value, valueColor, onClick, layout = 'value-first', style }) => {
   const box = (
     <div
       className="glass-card"

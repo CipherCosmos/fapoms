@@ -10,7 +10,7 @@ import { AssayerLifecycleStatus, assayerLifecyclePath } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { connectSocket } from '../../services/socket';
-import { UploadExcelControls } from '../../components/ui';
+import { Select, UploadExcelControls } from '../../components/ui';
 import { useSearchParams } from 'react-router-dom';
 import { useCurrentRoles, canManageAssayers } from '../../hooks/useCurrentRoles';
 import { useExcelExport } from '../../hooks/useExcelExport';
@@ -18,6 +18,8 @@ import { CreateAssayerModal, EditAssayerModal } from './AssayerForms';
 import type { Assayer } from './assayer-shared';
 import { STATUS_COLORS } from './assayer-shared';
 import { AssayerDetailDrawer } from './AssayerDetailDrawer';
+import { fmtDate } from '../../utils/dates';
+import { queryKeys } from '../../hooks/queryKeys';
 
 /**
  * The workforce roster.
@@ -85,9 +87,6 @@ function missingFields(a: Assayer): string[] {
     return v === null || v === undefined || String(v).trim() === '';
   }).map((f) => f.label);
 }
-
-const fmtDate = (d?: string | null) =>
-  d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
 
 /** Tenure in whole months, or null when the joining date was never captured. */
 function tenureMonths(a: Assayer): number | null {
@@ -177,17 +176,19 @@ export const AssayerRoster: React.FC = () => {
    */
   const refresh = useCallback(() => {
     load();
-    queryClient.invalidateQueries({ queryKey: ['hr', 'workforce'] });
+    queryClient.invalidateQueries({ queryKey: queryKeys.hr.workforce });
   }, [load, queryClient]);
 
   // Lifecycle changes can come from anywhere — a bulk action here, an admin
   // elsewhere, a backend job. Keep the roster live rather than stale until reload.
   useEffect(() => {
     const socket = connectSocket();
+    // The backend publishes domain events under `event.constructor.name`, which carries an
+    // `Event` suffix (see assayer.service.ts) — these listeners silently never fired without it.
     const events = [
-      'AssayerActivated', 'AssayerSuspended', 'AssayerDeactivated', 'AssayerOnLeave',
-      'AssayerResigned', 'AssayerTerminated', 'AssayerArchived',
-      'AssayerDocumentVerificationStarted', 'AssayerBackgroundCheckInitiated', 'AssayerTrainingStarted',
+      'AssayerActivatedEvent', 'AssayerSuspendedEvent', 'AssayerDeactivatedEvent', 'AssayerOnLeaveEvent',
+      'AssayerResignedEvent', 'AssayerTerminatedEvent', 'AssayerArchivedEvent',
+      'AssayerDocumentVerificationStartedEvent', 'AssayerBackgroundCheckInitiatedEvent', 'AssayerTrainingStartedEvent',
     ];
     events.forEach((e) => socket?.on(e, load));
     return () => { events.forEach((e) => socket?.off(e, load)); };
@@ -505,8 +506,8 @@ export const AssayerRoster: React.FC = () => {
 
       {showFilters && (
         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', padding: '10px 12px', borderRadius: '8px', background: 'var(--bg-surface-2)' }}>
-          <Select label="State" value={stateFilter} onChange={setStateFilter} options={states} />
-          <Select label="Lifecycle" value={statusFilter} onChange={setStatusFilter} options={statuses} />
+          <RosterFilterSelect label="State" value={stateFilter} onChange={setStateFilter} options={states} />
+          <RosterFilterSelect label="Lifecycle" value={statusFilter} onChange={setStatusFilter} options={statuses} />
           {(stateFilter !== 'ALL' || statusFilter !== 'ALL' || search) && (
             <button
               onClick={() => { setStateFilter('ALL'); setStatusFilter('ALL'); setSearch(''); }}
@@ -528,14 +529,13 @@ export const AssayerRoster: React.FC = () => {
           <strong style={{ fontSize: '13px' }}>{selected.length} selected</strong>
           <ArrowRightLeft size={13} style={{ color: 'var(--text-muted)' }} />
           {bulkOptions.length > 0 ? (
-            <select
+            <Select
               value={bulkTarget}
-              onChange={(e) => setBulkTarget(e.target.value)}
-              style={{ padding: '6px 10px', fontSize: '12px', borderRadius: '6px', background: 'var(--bg-page)', color: 'inherit', border: '1px solid var(--border-color)' }}
-            >
-              <option value="">Move all to…</option>
-              {bulkOptions.map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
-            </select>
+              onChange={setBulkTarget}
+              options={bulkOptions.map((t) => ({ value: t, label: t.replace(/_/g, ' ') }))}
+              placeholder="Move all to…"
+              compact
+            />
           ) : (
             <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
               No stage is reachable from the selected rows.
@@ -757,19 +757,18 @@ const IconBtn: React.FC<{ title: string; onClick: () => void; tone?: string; chi
   </button>
 );
 
-const Select: React.FC<{ label: string; value: string; onChange: (v: string) => void; options: string[] }> = ({
+const RosterFilterSelect: React.FC<{ label: string; value: string; onChange: (v: string) => void; options: string[] }> = ({
   label, value, onChange, options,
 }) => (
   <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
     <span style={{ fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)' }}>{label}</span>
-    <select
+    <Select
       value={value}
-      onChange={(e) => onChange(e.target.value)}
-      style={{ padding: '6px 10px', fontSize: '12px', borderRadius: '6px', minWidth: '150px', background: 'var(--bg-page)', color: 'inherit', border: '1px solid var(--border-color)' }}
-    >
-      <option value="ALL">All</option>
-      {options.map((o) => <option key={o} value={o}>{o.replace(/_/g, ' ')}</option>)}
-    </select>
+      onChange={onChange}
+      options={[{ value: 'ALL', label: 'All' }, ...options.map((o) => ({ value: o, label: o.replace(/_/g, ' ') }))]}
+      compact
+      style={{ minWidth: '150px' }}
+    />
   </label>
 );
 

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { DetailDrawer, StyledInput, useToast } from '../../components/ui';
+import { DetailDrawer, StyledInput, Select, useToast } from '../../components/ui';
 import { useBillingInvoice, useTransitionBillingInvoice, useRecordBillingPayment } from '../../hooks/useBilling';
 import { INVOICE_TRANSITIONS, PaymentMethod } from '@fapoms/shared';
 import type { InvoiceStatus } from '@fapoms/shared';
@@ -69,10 +69,12 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, width: '100%', justifyContent: 'flex-end' }}>
           {next.length > 0 && (
             <>
-              <select value={nextStatus} onChange={(e) => setNextStatus(e.target.value as InvoiceStatus)} style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)' }}>
-                <option value="">Transition…</option>
-                {next.map((s) => <option key={s} value={s}>{s}</option>)}
-              </select>
+              <Select
+                value={nextStatus}
+                onChange={(v) => setNextStatus(v as InvoiceStatus)}
+                placeholder="Transition…"
+                options={next.map((s) => ({ value: s, label: s }))}
+              />
               <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="reason" style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', width: 120 }} />
               <button onClick={doTransition} disabled={!nextStatus || transition.isPending} className="btn btn-primary">Apply</button>
             </>
@@ -86,9 +88,11 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
       {payOpen && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--bg-tertiary)', padding: 12, borderRadius: 'var(--radius-sm)' }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8 }}>
-            <select value={method} onChange={(e) => setMethod(e.target.value as PaymentMethod)} style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)' }}>
-              {METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
-            </select>
+            <Select
+              value={method}
+              onChange={(v) => setMethod(v as PaymentMethod)}
+              options={METHODS.map((m) => ({ value: m, label: m }))}
+            />
             <StyledInput placeholder="Payment reference *" value={reference} onChange={(e) => setReference(e.target.value)} />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8 }}>

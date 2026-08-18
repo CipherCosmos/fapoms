@@ -163,7 +163,7 @@ const ToastCard: React.FC<{ t: ToastRecord; paused: boolean; onDismiss: () => vo
         aria-label="Dismiss notification"
         style={{
           flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          width: 22, height: 22, padding: 0, marginTop: -1,
+          width: 28, height: 28, padding: 0, marginTop: -3, marginRight: -3,
           background: 'transparent', border: 'none', borderRadius: 'var(--radius-sm)',
           color: 'var(--text-muted)', cursor: 'pointer',
         }}

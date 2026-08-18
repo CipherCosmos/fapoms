@@ -93,14 +93,6 @@ export function missingCriticalFields(a: Pick<Assayer, (typeof CRITICAL_FIELDS)[
   });
 }
 
-/** en-IN date, em-dash for unknown — the app-wide convention for a bare date. */
-export const fmtDate = (d?: string | null) =>
-  d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
-
-/** en-IN date + time, em-dash for unknown — used wherever a "when" is shown. */
-export const fmtWhen = (d?: string | null) =>
-  d ? new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
-
 /** Rupees with an em-dash for empty, matching the workforce screens. */
 export { money } from '../../utils/money';
 

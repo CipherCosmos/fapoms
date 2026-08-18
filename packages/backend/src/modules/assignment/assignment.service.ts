@@ -2333,29 +2333,43 @@ export class AssignmentService {
 
   private async computeDashboardSummary(scope?: Partial<GlobalScope>): Promise<any> {
     /**
-     * Both breakdowns from one pass over the table.
+     * Four breakdowns from one pass over the table.
      *
      * These were two `getRawMany()` calls awaited one after the other — the same rows, the same
      * filters and the same joins, read twice, sequentially, to group by two different columns.
      * Over a 200,000-row assignment book that was ~29 ms of full scan each, and it grows linearly
      * with the history: the tiles sit above the assignment list on a screen every operator opens.
      *
-     * Grouping by both columns at once is one scan. The result is a cross-tab of at most
-     * (statuses × SLA states) rows — a couple of dozen — which folds into the two totals below in
-     * memory. Nothing about the numbers changes.
+     * `branchStatus` and `priority` joined the same pass for the same reason `Assignments.tsx`'s
+     * KPI row used to fire: the desk's "Active"/"Closed" tiles filter by the *branch's* status
+     * and "Escalated" filters by assignment priority — neither derivable from `statusCounts`
+     * alone — so the frontend was re-deriving them with 6 separate `?page=1&limit=1` full-table
+     * COUNT queries against the paginated list endpoint on every load and scope change, on top of
+     * this endpoint it never called. One grouped scan answers all four.
+     *
+     * Grouping by all four columns at once is still one scan. The result is a cross-tab of at
+     * most (statuses × SLA states × branch states × priorities) rows — a few hundred at the
+     * outside, since only combinations that actually occur produce a row — which folds into the
+     * four totals below in memory. Nothing about the individual numbers changes.
      */
     const qb = this.assignmentRepository
       .createQueryBuilder('assignment')
       .select('assignment.status', 'status')
       .addSelect('assignment.slaStatus', 'slaStatus')
+      .addSelect('assignment.priority', 'priority')
+      .addSelect('spb.status', 'branchStatus')
       .addSelect('COUNT(assignment.id)', 'count')
       .where('assignment.isActive = :isActive', { isActive: true })
       .groupBy('assignment.status')
-      .addGroupBy('assignment.slaStatus');
+      .addGroupBy('assignment.slaStatus')
+      .addGroupBy('assignment.priority')
+      .addGroupBy('spb.status')
+      // left, not inner: an assignment with no project branch (projectBranchId is nullable)
+      // must still be counted in status/SLA/priority — it simply contributes a null branchStatus.
+      .leftJoin('assignment.projectBranch', 'spb');
 
     if (needsBranchJoin(scope)) {
-      // innerJoin, not innerJoinAndSelect: the branch is only here to be filtered on.
-      qb.innerJoin('assignment.projectBranch', 'spb').innerJoin('spb.branch', 'sbranch');
+      qb.innerJoin('spb.branch', 'sbranch');
       applyBranchScope(qb, scope, { branch: 'sbranch', project: 'spb' });
     }
     if (scope?.projectId) {
@@ -2366,16 +2380,26 @@ export class AssignmentService {
 
     const summary: Record<string, number> = {};
     const slaSummary: Record<string, number> = {};
+    const prioritySummary: Record<string, number> = {};
+    const branchStatusSummary: Record<string, number> = {};
+    let total = 0;
     for (const row of rows) {
       const n = Number(row.count);
-      // A null SLA status is still an assignment; it just contributes to the status total only.
+      total += n;
+      // A null SLA status, priority or branch status is still an assignment; it just contributes
+      // to the status total only.
       if (row.status != null) summary[row.status] = (summary[row.status] ?? 0) + n;
       if (row.slaStatus != null) slaSummary[row.slaStatus] = (slaSummary[row.slaStatus] ?? 0) + n;
+      if (row.priority != null) prioritySummary[row.priority] = (prioritySummary[row.priority] ?? 0) + n;
+      if (row.branchStatus != null) branchStatusSummary[row.branchStatus] = (branchStatusSummary[row.branchStatus] ?? 0) + n;
     }
 
     return {
+      total,
       statusCounts: summary,
       slaCounts: slaSummary,
+      priorityCounts: prioritySummary,
+      branchStatusCounts: branchStatusSummary,
     };
   }
 

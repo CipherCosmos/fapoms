@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import { api } from '../services/api';
+import { queryKeys } from './queryKeys';
 
 export interface HrAction {
   severity: 'critical' | 'high' | 'medium' | 'low';
@@ -64,7 +65,7 @@ export interface HrWorkforceOverview {
 
 export function useHrWorkforce() {
   return useQuery({
-    queryKey: ['hr', 'workforce'],
+    queryKey: queryKeys.hr.workforce,
     queryFn: () => api.request<HrWorkforceOverview>('/hr/workforce'),
     staleTime: 60_000,
   });

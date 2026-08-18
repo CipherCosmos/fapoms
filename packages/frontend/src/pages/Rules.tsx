@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Trash2, Edit2, Shield, Sliders, AlertTriangle, Info } from 'lucide-react';
 import { api } from '../services/api';
 import { useClientOptions } from '../hooks/useClients';
-import { StatusBadge, Modal, SearchInput, FilterSelect, PrimaryButton } from '../components/ui';
+import { StatusBadge, Modal, SearchInput, FilterSelect, PrimaryButton, Select } from '../components/ui';
 import { useCurrentRoles, canManageRules, canDeleteRules } from '../hooks/useCurrentRoles';
 
 /**
@@ -135,6 +135,12 @@ export const Rules: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // The target select is no longer a native <select required>, which used to block submission
+    // via the browser's own constraint validation — that guarantee has to be re-asserted here now.
+    if (form.scope !== 'GLOBAL' && !form.targetId) {
+      setErr(`Choose a ${form.scope === 'CLIENT' ? 'client' : 'branch'} for this rule's scope.`);
+      return;
+    }
     setSubmitting(true);
     setErr(null);
     try {
@@ -301,18 +307,24 @@ export const Rules: React.FC = () => {
 
             {form.scope === 'CLIENT' && (
               <Field label="Client">
-                <select required value={form.targetId} onChange={(e) => setForm({ ...form, targetId: e.target.value })} style={inputStyle}>
-                  <option value="">Select a client…</option>
-                  {clients.map((c: any) => <option key={c.id} value={c.id}>{c.name || c.clientCode}</option>)}
-                </select>
+                <Select
+                  value={form.targetId}
+                  onChange={(v) => setForm({ ...form, targetId: v })}
+                  options={clients.map((c: any) => ({ value: c.id, label: c.name || c.clientCode }))}
+                  placeholder="Select a client…"
+                  style={inputStyle}
+                />
               </Field>
             )}
             {form.scope === 'BRANCH' && (
               <Field label="Branch">
-                <select required value={form.targetId} onChange={(e) => setForm({ ...form, targetId: e.target.value })} style={inputStyle}>
-                  <option value="">Select a branch…</option>
-                  {branches.map((b: any) => <option key={b.id} value={b.id}>{b.name} {b.branchCode ? `(${b.branchCode})` : ''}</option>)}
-                </select>
+                <Select
+                  value={form.targetId}
+                  onChange={(v) => setForm({ ...form, targetId: v })}
+                  options={branches.map((b: any) => ({ value: b.id, label: `${b.name} ${b.branchCode ? `(${b.branchCode})` : ''}` }))}
+                  placeholder="Select a branch…"
+                  style={inputStyle}
+                />
               </Field>
             )}
 

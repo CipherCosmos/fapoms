@@ -79,7 +79,7 @@ export const SearchOverlay: React.FC = () => {
   if (!open) return null;
 
   return (
-    <div style={{
+    <div role="dialog" aria-modal="true" aria-label="Search" style={{
       position: 'fixed', inset: 0, zIndex: 99999,
       display: 'flex', alignItems: 'flex-start', justifyContent: 'center',
       paddingTop: '12vh',
@@ -100,6 +100,11 @@ export const SearchOverlay: React.FC = () => {
           <input
             ref={inputRef}
             type="text"
+            role="combobox"
+            aria-expanded={!!query}
+            aria-controls="global-search-listbox"
+            aria-autocomplete="list"
+            aria-activedescendant={selectedIdx >= 0 ? `global-search-option-${selectedIdx}` : undefined}
             placeholder="Search branches, assayers, projects, clients, assignments..."
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -120,7 +125,7 @@ export const SearchOverlay: React.FC = () => {
 
         {/* Results */}
         {query && (
-          <div ref={listRef} style={{ maxHeight: '420px', overflowY: 'auto', padding: '4px 0' }}>
+          <div ref={listRef} id="global-search-listbox" role="listbox" aria-label="Search results" style={{ maxHeight: '420px', overflowY: 'auto', padding: '4px 0' }}>
             {!results ? (
               <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
                 <div style={{ fontSize: '28px', marginBottom: '8px', opacity: 0.3 }}>🔍</div>
@@ -192,8 +197,8 @@ function renderGroup(
         const idx = startIdx + i;
         const isSelected = idx === selectedIdx;
         return (
-          <div key={item.id} onClick={() => onSelect(type, item.id)}
-            onMouseEnter={() => {}}
+          <div key={item.id} id={`global-search-option-${idx}`} role="option" aria-selected={isSelected}
+            onClick={() => onSelect(type, item.id)}
             style={{
               display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 20px', cursor: 'pointer',
               background: isSelected ? 'var(--status-pending-bg)' : 'transparent',
@@ -229,7 +234,8 @@ function renderAssignments(
         const idx = startIdx + i;
         const isSelected = idx === selectedIdx;
         return (
-          <div key={item.id} onClick={() => onSelect('assignments', item.id)}
+          <div key={item.id} id={`global-search-option-${idx}`} role="option" aria-selected={isSelected}
+            onClick={() => onSelect('assignments', item.id)}
             style={{
               display: 'flex', alignItems: 'center', gap: '12px', padding: '8px 20px', cursor: 'pointer',
               background: isSelected ? 'var(--status-pending-bg)' : 'transparent',

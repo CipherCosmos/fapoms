@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Compass, Check, X, AlertTriangle, CheckCircle, Search, Star, Briefcase, MapPin, Phone, Mail, Award, Clock, DollarSign, Calendar, TrendingUp, Building2, Route, Users, Layers } from 'lucide-react';
+import { Compass, Check, X, AlertTriangle, CheckCircle, Search, Star, Briefcase, MapPin, Phone, Mail, Award, Clock, DollarSign, Calendar, TrendingUp, Building2, Route, Users, Layers, Smartphone, Package, Car, Flame, BarChart3, Zap, ClipboardList, Send, Bus, Download, Eye, MessageCircle, Map as MapIcon, Home, Hourglass } from 'lucide-react';
 import { ProjectBranchStatus, formatDateOnly, formatRouteDistance, formatTravelTime, type RouteSource } from '@fapoms/shared';
 import { branchStatusLabel, BRANCH_COVERED_STATUSES, localDateKey, todayDateKey } from '../utils/statusLabels';
 import { api } from '../services/api';
@@ -11,7 +11,7 @@ import { useScope, withScope, scopeConflict } from '../context/ScopeContext';
 import { useUrlSelection } from '../hooks/useUrlSelection';
 import { InteractivePlanningMap } from '../components/InteractivePlanningMap';
 import { BranchHistoryDrawer } from './planning/BranchHistoryDrawer';
-import { useToast, Modal } from '../components/ui';
+import { useToast, Modal, Select } from '../components/ui';
 import { ScoreBreakdown } from './planning/ScoreBreakdown';
 import { AssayerRemarks, fmtSignedMean, type RemarkSummary } from '../components/AssayerRemarks';
 import { ExcludedCandidatesPanel } from './planning/ExcludedCandidatesPanel';
@@ -346,7 +346,6 @@ export const PlanningWorkspace: React.FC = () => {
   const queryClient = useQueryClient();
 
   const { toast } = useToast();
-  const navigate = useNavigate();
   /**
    * The project is url-backed both ways now.
    *
@@ -504,6 +503,14 @@ export const PlanningWorkspace: React.FC = () => {
   const [unableModal, setUnableModal] = useState<{ ids: string[]; label: string } | null>(null);
   const [unableReason, setUnableReason] = useState('');
   const [unableSubmitting, setUnableSubmitting] = useState(false);
+  // Escape closes this dialog, matching every other overlay in the app — it had no keyboard
+  // dismissal at all, only the backdrop click (itself guarded so a submit-in-flight can't be lost).
+  useEffect(() => {
+    if (!unableModal) return;
+    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape' && !unableSubmitting) setUnableModal(null); };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, [unableModal, unableSubmitting]);
 
   // ── Server reads ────────────────────────────────────────────────────────────────
   /**
@@ -1416,10 +1423,7 @@ export const PlanningWorkspace: React.FC = () => {
   };
 
   const s = (sel: string, set: (v: string) => void, opts: { value: string; label: string }[]) => (
-    <select value={sel} onChange={e => set(e.target.value)}
-      style={{ padding: '7px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px', cursor: 'pointer' }}>
-      {opts.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-    </select>
+    <Select value={sel} onChange={set} options={opts} compact style={{ background: 'var(--bg-primary)' }} />
   );
 
   /**
@@ -1660,11 +1664,12 @@ export const PlanningWorkspace: React.FC = () => {
                 const negative = ['NO_ANSWER', 'DECLINED', 'WRONG_NUMBER'].includes(lc.outcome);
                 return (
                   <div style={{
+                    display: 'flex', alignItems: 'center', gap: '4px',
                     fontSize: '10.5px', fontWeight: 600, padding: '4px 8px', borderRadius: 'var(--radius-sm)',
                     background: negative ? 'var(--status-cancelled-bg)' : 'var(--status-pending-bg)',
                     color: negative ? 'var(--danger)' : 'var(--warning)',
                   }}>
-                    ☎ {lc.outcome.replace(/_/g, ' ').toLowerCase()} · {when}
+                    <Phone size={10} /> {lc.outcome.replace(/_/g, ' ').toLowerCase()} · {when}
                     {lc.negotiatedFee != null && ` · ₹${lc.negotiatedFee.toLocaleString()}`}
                   </div>
                 );
@@ -1674,8 +1679,8 @@ export const PlanningWorkspace: React.FC = () => {
                   <div style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', display: 'flex', alignItems: 'center', gap: '6px' }}>
                     {c.displayName}
                     {c.pendingOnThisBranch && (
-                      <span title="This assayer already has a pending offer on this branch awaiting their response" style={{ fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '6px', background: 'var(--status-pending-bg)', color: 'var(--warning)', whiteSpace: 'nowrap', flexShrink: 0 }}>
-                        ⏳ Pending Response
+                      <span title="This assayer already has a pending offer on this branch awaiting their response" style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '6px', background: 'var(--status-pending-bg)', color: 'var(--warning)', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                        <Hourglass size={9} /> Pending Response
                       </span>
                     )}
                   </div>
@@ -1708,8 +1713,8 @@ export const PlanningWorkspace: React.FC = () => {
                       and no other distance signal at all. It now says which rule it is answering.
                     */}
                     {slaEnabled && c.distanceKm !== null && (
-                      <span title={`Client independence rule: an assayer must be at least ${slaRadius} km from the branch they audit.`} style={{ fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: c.distanceKm >= slaRadius ? 'var(--status-active-bg)' : 'var(--status-cancelled-bg)', color: c.distanceKm >= slaRadius ? 'var(--success)' : 'var(--danger)' }}>
-                        {c.distanceKm >= slaRadius ? `✓ independent (>${slaRadius}km)` : `✗ too close (<${slaRadius}km)`}
+                      <span title={`Client independence rule: an assayer must be at least ${slaRadius} km from the branch they audit.`} style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: c.distanceKm >= slaRadius ? 'var(--status-active-bg)' : 'var(--status-cancelled-bg)', color: c.distanceKm >= slaRadius ? 'var(--success)' : 'var(--danger)' }}>
+                        {c.distanceKm >= slaRadius ? <><Check size={9} /> independent (&gt;{slaRadius}km)</> : <><X size={9} /> too close (&lt;{slaRadius}km)</>}
                       </span>
                     )}
                     {/*
@@ -1722,8 +1727,8 @@ export const PlanningWorkspace: React.FC = () => {
                       and it is why someone can be recommended here and absent from the map.
                     */}
                     {c.distanceKm !== null && c.distanceKm > searchRadiusKm && (
-                      <span title={`Beyond the ${searchRadiusKm} km search radius, so this assayer is not drawn on the map. Still listed because no one closer may be available — ranked accordingly.`} style={{ fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: 'var(--status-pending-bg)', color: 'var(--warning)' }}>
-                        ⚠ outside {searchRadiusKm}km · not on map
+                      <span title={`Beyond the ${searchRadiusKm} km search radius, so this assayer is not drawn on the map. Still listed because no one closer may be available — ranked accordingly.`} style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: 'var(--status-pending-bg)', color: 'var(--warning)' }}>
+                        <AlertTriangle size={9} /> outside {searchRadiusKm}km · not on map
                       </span>
                     )}
                   </div>
@@ -1737,14 +1742,14 @@ export const PlanningWorkspace: React.FC = () => {
                   because ops asked to see past the clash — so the clash is stated here, on the
                   row they will click, rather than left to be discovered after dispatch. */}
               {c.dateConflict && (
-                <div style={{ fontSize: '10.5px', fontWeight: 600, padding: '4px 8px', borderRadius: 'var(--radius-sm)', background: 'var(--status-pending-bg)', color: 'var(--warning)' }}>
-                  ⚠ Not free on {scheduledAuditDate} — {c.dateConflict} Pick another date before offering.
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10.5px', fontWeight: 600, padding: '4px 8px', borderRadius: 'var(--radius-sm)', background: 'var(--status-pending-bg)', color: 'var(--warning)' }}>
+                  <AlertTriangle size={10} /> Not free on {scheduledAuditDate} — {c.dateConflict} Pick another date before offering.
                 </div>
               )}
 
               <div style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', gap: '8px', background: 'var(--bg-surface-2)', padding: '6px 8px', borderRadius: '4px' }}>
-                <span>📞 {c.phone}</span>
-                <span>📍 {c.city}, {c.state}</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Phone size={10} /> {c.phone}</span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><MapPin size={10} /> {c.city}, {c.state}</span>
                 <span>Base: {c.baseFee != null ? `₹${c.baseFee}` : '—'}</span>
               </div>
 
@@ -1757,8 +1762,8 @@ export const PlanningWorkspace: React.FC = () => {
                 return (
                   <button type="button" onClick={() => loadAssayerDetail(c.id)}
                     title={latest ? `Latest (${latest.category.toLowerCase()}, ${latest.authorRole?.replace(/_/g, ' ').toLowerCase() ?? 'staff'}): "${latest.text.length > 140 ? `${latest.text.slice(0, 137)}…` : latest.text}" — click for all remarks` : 'Click for remarks'}
-                    style={{ alignSelf: 'flex-start', fontSize: '10.5px', fontWeight: 600, padding: '3px 8px', borderRadius: 'var(--radius-sm)', background: tone.bg, color: tone.fg, border: 'none', cursor: 'pointer' }}>
-                    💬 {c.remarkSummary.count} remark{c.remarkSummary.count === 1 ? '' : 's'} · avg {fmtSignedMean(m)}
+                    style={{ alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '10.5px', fontWeight: 600, padding: '3px 8px', borderRadius: 'var(--radius-sm)', background: tone.bg, color: tone.fg, border: 'none', cursor: 'pointer' }}>
+                    <MessageCircle size={10} /> {c.remarkSummary.count} remark{c.remarkSummary.count === 1 ? '' : 's'} · avg {fmtSignedMean(m)}
                   </button>
                 );
               })()}
@@ -1777,7 +1782,7 @@ export const PlanningWorkspace: React.FC = () => {
                   }
                 }}
                   className="btn btn-secondary" style={{ padding: '6px', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', background: selectedCandidateForMap?.id === c.id ? 'rgba(216,174,71,0.2)' : 'var(--bg-primary)', borderColor: selectedCandidateForMap?.id === c.id ? 'var(--accent-secondary)' : 'var(--border-color)', color: selectedCandidateForMap?.id === c.id ? 'var(--accent-secondary)' : 'var(--text-primary)' }}>
-                  👁️ Map
+                  <Eye size={12} /> Map
                 </button>
                 <button onClick={async () => {
                   if (layout.startsWith('two-col')) {
@@ -1847,21 +1852,23 @@ export const PlanningWorkspace: React.FC = () => {
                 {/* Logging a call that did NOT end in an assignment is the more valuable half:
                     an unanswered call leaves no other trace, so without this the next operator
                     (or the same one tomorrow) rediscovers it by dialling again. */}
-                <select
+                <Select
                   value=""
-                  onChange={(e) => {
-                    if (!e.target.value) return;
-                    recordCall(c.id, e.target.value as any, undefined, 'Logged from candidate list');
-                    e.target.value = '';
+                  onChange={(v) => {
+                    if (!v) return;
+                    recordCall(c.id, v as any, undefined, 'Logged from candidate list');
                   }}
-                  title="Record a call that did not result in an assignment"
-                  style={{ gridColumn: '1 / -1', padding: '5px 8px', fontSize: '10.5px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)', cursor: 'pointer' }}>
-                  <option value="">Log call outcome…</option>
-                  <option value="NO_ANSWER">No answer</option>
-                  <option value="CALLBACK_REQUESTED">Asked to call back</option>
-                  <option value="DECLINED">Declined the work</option>
-                  <option value="WRONG_NUMBER">Wrong number</option>
-                </select>
+                  options={[
+                    { value: 'NO_ANSWER', label: 'No answer' },
+                    { value: 'CALLBACK_REQUESTED', label: 'Asked to call back' },
+                    { value: 'DECLINED', label: 'Declined the work' },
+                    { value: 'WRONG_NUMBER', label: 'Wrong number' },
+                  ]}
+                  placeholder="Log call outcome…"
+                  aria-label="Record a call that did not result in an assignment"
+                  compact
+                  style={{ gridColumn: '1 / -1', color: 'var(--text-secondary)' }}
+                />
 
                 <button onClick={async () => {
                   const selectedPb = branches.find(b => b.id === selectedBranchId);
@@ -1881,14 +1888,16 @@ export const PlanningWorkspace: React.FC = () => {
                     setMessage({ type: 'error', text: err.message || 'Direct dispatch failed' });
                   }
                 }}
-                  className="btn btn-secondary" style={{ padding: '7px 10px', fontSize: '11px', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', background: 'var(--status-active-bg)', color: 'var(--status-active)', borderColor: 'var(--status-active-bg)' }}>
-                  📲 Direct App Invite
+                  className="btn btn-secondary"
+                  title="Dispatches immediately with no fee captured — use Call & Assign for a priced offer"
+                  style={{ padding: '7px 10px', fontSize: '11px', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                  <Smartphone size={12} /> Direct App Invite
                 </button>
               </div>
 
               {optimizedSummary && routePoints && selectedCandidate?.id === c.id && (
                 <div style={{ padding: '8px 10px', background: 'rgba(216,174,71,0.05)', border: '1px dashed rgba(216,174,71,0.3)', borderRadius: 'var(--radius-sm)', fontSize: '11px', color: 'var(--accent-secondary)', display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                  <div><b>🗺️ Optimized Route Details:</b></div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><MapIcon size={11} /> <b>Optimized Route Details:</b></div>
                   <div>• Distance: {optimizedSummary.totalDistanceKm} km</div>
                   <div>• Est. Travel Time: {optimizedSummary.totalDurationMinutes} minutes</div>
                   {/* Server-quoted, against this client's contracted rate. This line used to
@@ -1972,28 +1981,24 @@ export const PlanningWorkspace: React.FC = () => {
         {/* Left: Workspace Title & Project Dropdown */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <span style={{ fontSize: '13px', fontWeight: 800, color: 'var(--accent)', letterSpacing: '0.5px' }}>
-              📍 STAGE 1: ASSAYER MATCHING
+            <span style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '13px', fontWeight: 800, color: 'var(--accent)', letterSpacing: '0.5px' }}>
+              <MapPin size={13} /> STAGE 1: ASSAYER MATCHING
             </span>
           </div>
-          <select
+          <Select
             value={selectedProjectId}
-            onChange={e => setSelectedProjectId(e.target.value)}
+            onChange={setSelectedProjectId}
+            options={projects.map(p => ({ value: p.id, label: `${p.name} (${p.projectNumber})` }))}
+            menuWidth={320}
             style={{
-              padding: '5px 10px',
-              background: 'var(--bg-input)',
               border: '1px solid rgba(216,174,71,0.35)',
               borderRadius: '6px',
-              color: 'var(--text-primary)',
               fontSize: '12px',
               fontWeight: 700,
-              outline: 'none',
-              cursor: 'pointer',
               maxWidth: '220px',
+              padding: '5px 10px',
             }}
-          >
-            {projects.map(p => <option key={p.id} value={p.id}>{p.name} ({p.projectNumber})</option>)}
-          </select>
+          />
           {selectedProjectId && (
             <button
               onClick={() => setShowCoveragePlan(true)}
@@ -2006,19 +2011,19 @@ export const PlanningWorkspace: React.FC = () => {
           )}
         </div>
 
-        {/* Center: Stage Pipeline Switcher */}
+        {/* Center: Stage Pipeline Switcher — real links, so keyboard/middle-click/new-tab all work. */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'var(--bg-surface-2)', padding: '3px 6px', borderRadius: '16px', border: '1px solid var(--border-hair)' }}>
-          <div onClick={() => navigate('/planning')} style={{ padding: '3px 10px', background: 'var(--accent)', borderRadius: '12px', color: 'var(--on-accent)', fontSize: '11px', fontWeight: 800, cursor: 'pointer' }}>
+          <Link to="/planning" style={{ padding: '3px 10px', background: 'var(--accent)', borderRadius: '12px', color: 'var(--on-accent)', fontSize: '11px', fontWeight: 800, textDecoration: 'none' }}>
             Stage 1: Match Assayers
-          </div>
+          </Link>
           <span style={{ color: 'var(--text-secondary)', fontSize: '10px' }}>➔</span>
-          <div onClick={() => navigate('/scheduling')} style={{ padding: '3px 10px', color: 'var(--text-muted)', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}>
+          <Link to="/scheduling" style={{ padding: '3px 10px', color: 'var(--text-muted)', fontSize: '11px', fontWeight: 600, textDecoration: 'none' }}>
             Stage 2: Dispatch
-          </div>
+          </Link>
           <span style={{ color: 'var(--text-secondary)', fontSize: '10px' }}>➔</span>
-          <div onClick={() => navigate('/assignments')} style={{ padding: '3px 10px', color: 'var(--text-muted)', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}>
+          <Link to="/assignments" style={{ padding: '3px 10px', color: 'var(--text-muted)', fontSize: '11px', fontWeight: 600, textDecoration: 'none' }}>
             Stage 3: Execution
-          </div>
+          </Link>
         </div>
 
         {/* Right: Key Metrics & Report Export */}
@@ -2049,7 +2054,7 @@ export const PlanningWorkspace: React.FC = () => {
               gap: '4px',
             }}
           >
-            📥 Excel Report
+            <Download size={12} /> Excel Report
           </button>
         </div>
       </div>
@@ -2106,7 +2111,7 @@ export const PlanningWorkspace: React.FC = () => {
             ['two-col-branch-map', 'Branch + Map'],
             ['three-col', '3 Column'],
             ['map-only', 'Map Only'],
-            ['day-plans', '📋 Day Plans']
+            ['day-plans', 'Day Plans']
           ].map(([k, lbl]) => (
             <button
               key={k}
@@ -2457,7 +2462,7 @@ export const PlanningWorkspace: React.FC = () => {
           title={counterOfferAssignmentId ? "Counter the assayer's fee" : 'Confirm Assignment'}
           width="580px" asForm
           onSubmit={counterOfferAssignmentId ? handleSubmitCounterOffer : handleConfirmAssignment}
-          bodyStyle={{ padding: '24px' }} footer={
+          footer={
           <>
             <button type="button" onClick={() => setShowNegotiationModal(false)} className="btn btn-secondary">Cancel</button>
             <button type="submit" className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -2552,8 +2557,8 @@ export const PlanningWorkspace: React.FC = () => {
                 modal computes nothing. */}
             {feeQuote?.travelSource === 'TRANSPORT_RATE_CARD' && feeQuote.transport?.recommended && (
               <div style={{ marginTop: '12px', padding: '10px 12px', background: 'rgba(216,174,71,0.06)', border: '1px dashed rgba(216,174,71,0.35)', borderRadius: 'var(--radius-sm)', fontSize: '11px', color: 'var(--text-secondary)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                <div style={{ fontWeight: 700, color: 'var(--text-primary)' }}>
-                  🚌 Recommended fee includes ₹{feeQuote.travelFee.toLocaleString()} travel — {feeQuote.transport.recommended.modeLabel}, round trip
+                <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontWeight: 700, color: 'var(--text-primary)' }}>
+                  <Bus size={12} /> Recommended fee includes ₹{feeQuote.travelFee.toLocaleString()} travel — {feeQuote.transport.recommended.modeLabel}, round trip
                   {feeQuote.transport.distanceKm ? ` (~${Math.round(feeQuote.transport.distanceKm)} km each way)` : ''}
                 </div>
                 {feeQuote.transport.options.length > 1 && (
@@ -2584,8 +2589,8 @@ export const PlanningWorkspace: React.FC = () => {
               <div style={{ padding: '10px 12px', background: assignDirectly ? 'var(--status-active-bg)' : 'var(--bg-surface-2)', borderRadius: 'var(--radius-sm)', border: `1px solid ${assignDirectly ? 'var(--success)' : 'var(--border-color)'}`, display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <input type="checkbox" id="assignDirectlyToggle" checked={assignDirectly} onChange={e => setAssignDirectly(e.target.checked)} style={{ width: '16px', height: '16px', cursor: 'pointer' }} />
                 <label htmlFor="assignDirectlyToggle" style={{ fontSize: '12px', color: 'var(--text-primary)', cursor: 'pointer', userSelect: 'none' }}>
-                  <span style={{ fontWeight: 700, color: assignDirectly ? 'var(--success)' : 'var(--warning)' }}>
-                    {assignDirectly ? '✅ Assign directly — agreed on this call: ' : '📨 Send as an offer: '}
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 700, color: assignDirectly ? 'var(--success)' : 'var(--warning)' }}>
+                    {assignDirectly ? <><CheckCircle size={12} /> Assign directly — agreed on this call: </> : <><Send size={12} /> Send as an offer: </>}
                   </span>
                   <span style={{ color: 'var(--text-secondary)' }}>
                     {assignDirectly
@@ -2597,8 +2602,8 @@ export const PlanningWorkspace: React.FC = () => {
               <div style={{ padding: '10px 12px', background: 'var(--bg-surface-2)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', gap: '10px' }}>
                 <input type="checkbox" id="autoDispatchToggle" checked={autoDispatch} onChange={e => setAutoDispatch(e.target.checked)} style={{ width: '16px', height: '16px', cursor: 'pointer' }} />
                 <label htmlFor="autoDispatchToggle" style={{ fontSize: '12px', color: 'var(--text-primary)', cursor: 'pointer', userSelect: 'none' }}>
-                  <span style={{ fontWeight: 700, color: autoDispatch ? 'var(--success)' : 'var(--warning)' }}>
-                    {autoDispatch ? '⚡ Fast-Track Direct Lock: ' : '📋 Send to Unscheduled Queue: '}
+                  <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontWeight: 700, color: autoDispatch ? 'var(--success)' : 'var(--warning)' }}>
+                    {autoDispatch ? <><Zap size={12} /> Fast-Track Direct Lock: </> : <><ClipboardList size={12} /> Send to Unscheduled Queue: </>}
                   </span>
                   <span style={{ color: 'var(--text-secondary)' }}>
                     {autoDispatch
@@ -2866,10 +2871,14 @@ export const PlanningWorkspace: React.FC = () => {
                 Min Radius Filter
               </label>
               {slaEnabled && (
-                <select value={slaRadius} onChange={(e) => setSlaRadius(Number(e.target.value))}
-                  style={{ fontSize: '10px', padding: '2px 5px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--warning)', outline: 'none', cursor: 'pointer' }}>
-                  {[25, 50, 100, 150, 200, 300, 500].map(v => <option key={v} value={v}>{v}km</option>)}
-                </select>
+                <Select
+                  value={String(slaRadius)}
+                  onChange={(v) => setSlaRadius(Number(v))}
+                  options={[25, 50, 100, 150, 200, 300, 500].map(v => ({ value: String(v), label: `${v}km` }))}
+                  searchable={false}
+                  menuWidth={90}
+                  style={{ fontSize: '10px', padding: '2px 5px', background: 'var(--bg-primary)', borderRadius: '4px', color: 'var(--warning)' }}
+                />
               )}
               <button onClick={() => loadDayPlans()} disabled={isLoadingDayPlans}
                 className="btn btn-primary" style={{ padding: '6px 14px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '5px' }}>
@@ -2988,7 +2997,7 @@ export const PlanningWorkspace: React.FC = () => {
               {/* Unclustered branches warning */}
               {dayPlanData.unclusteredBranches.length > 0 && (
                 <div style={{ background: 'var(--status-pending-bg)', border: '1px solid var(--status-pending-bg)', borderRadius: 'var(--radius-md)', padding: '10px 14px', marginBottom: '12px' }}>
-                  <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--warning)', marginBottom: '6px' }}>⚠️ {dayPlanData.unclusteredBranches.length} Branch(es) Could Not Be Clustered</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px', fontWeight: 600, color: 'var(--warning)', marginBottom: '6px' }}><AlertTriangle size={12} /> {dayPlanData.unclusteredBranches.length} Branch(es) Could Not Be Clustered</div>
                   {dayPlanData.unclusteredBranches.map((b, i) => (
                     <div key={i} style={{ fontSize: '11px', color: 'var(--text-secondary)', marginBottom: '2px' }}>• {b.branchName}: {b.reason}</div>
                   ))}
@@ -3017,8 +3026,8 @@ export const PlanningWorkspace: React.FC = () => {
                         )}
                         <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}><Clock size={11} /> {cluster.totalEstimatedAuditHours}h audit</span>
                         <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}><MapPin size={11} /> {cluster.radiusKm.toFixed(0)}km radius</span>
-                        <span style={{ fontSize: '11px', fontWeight: 600, color: cluster.feasibleForOneDay ? 'var(--status-active)' : 'var(--danger)' }}>
-                          {cluster.feasibleForOneDay ? '✅ Fits 1 day' : '❌ Exceeds capacity'}
+                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '11px', fontWeight: 600, color: cluster.feasibleForOneDay ? 'var(--status-active)' : 'var(--danger)' }}>
+                          {cluster.feasibleForOneDay ? <><CheckCircle size={11} /> Fits 1 day</> : <><X size={11} /> Exceeds capacity</>}
                         </span>
                         {bestPlan && (
                           <span style={{ fontSize: '11px', color: 'var(--warning)', fontWeight: 600 }}>
@@ -3155,20 +3164,20 @@ export const PlanningWorkspace: React.FC = () => {
                                   {[
                                     // Packets and idle time lead: they answer "is this day worth
                                     // buying", which branch/hour counts alone don't.
-                                    ...(plan.totalPackets > 0 ? [{ label: 'Packets', val: String(plan.totalPackets), icon: '📦', warn: false }] : []),
-                                    ...(plan.costPerPacket != null ? [{ label: 'Cost / Packet', val: `₹${plan.costPerPacket.toLocaleString()}`, icon: '💰', warn: false }] : []),
+                                    ...(plan.totalPackets > 0 ? [{ label: 'Packets', val: String(plan.totalPackets), icon: <Package size={10} />, warn: false }] : []),
+                                    ...(plan.costPerPacket != null ? [{ label: 'Cost / Packet', val: `₹${plan.costPerPacket.toLocaleString()}`, icon: <DollarSign size={10} />, warn: false }] : []),
                                     // Idle time is the cost of a badly-packed day, so it's called
                                     // out in amber once it passes roughly a quarter of the day.
-                                    { label: 'Idle (paid)', val: `${plan.idleHours}h`, icon: plan.idleHours >= 3 ? '⚠️' : '✅', warn: plan.idleHours >= 3 },
-                                    { label: 'Branches', val: String(plan.totalBranches), icon: '🏢', warn: false },
-                                    { label: 'Audit Time', val: `${plan.totalAuditHours}h`, icon: '⏱️', warn: false },
-                                    { label: 'Travel', val: `${plan.totalTravelKm.toFixed(0)}km / ${plan.totalTravelMinutes.toFixed(0)}min`, icon: '🚗', warn: false },
-                                    { label: 'Total Day', val: `${plan.totalDayHours.toFixed(1)}h`, icon: '📅', warn: false },
-                                    { label: 'Day Window', val: `${plan.dayStartTime} → ${plan.dayEndTime}`, icon: '🕐', warn: false },
-                                    { label: 'Utilization', val: `${plan.utilizationPercent}%`, icon: plan.utilizationPercent >= 70 ? '🔥' : '📊', warn: false },
+                                    { label: 'Idle (paid)', val: `${plan.idleHours}h`, icon: plan.idleHours >= 3 ? <AlertTriangle size={10} /> : <CheckCircle size={10} />, warn: plan.idleHours >= 3 },
+                                    { label: 'Branches', val: String(plan.totalBranches), icon: <Building2 size={10} />, warn: false },
+                                    { label: 'Audit Time', val: `${plan.totalAuditHours}h`, icon: <Clock size={10} />, warn: false },
+                                    { label: 'Travel', val: `${plan.totalTravelKm.toFixed(0)}km / ${plan.totalTravelMinutes.toFixed(0)}min`, icon: <Car size={10} />, warn: false },
+                                    { label: 'Total Day', val: `${plan.totalDayHours.toFixed(1)}h`, icon: <Calendar size={10} />, warn: false },
+                                    { label: 'Day Window', val: `${plan.dayStartTime} → ${plan.dayEndTime}`, icon: <Clock size={10} />, warn: false },
+                                    { label: 'Utilization', val: `${plan.utilizationPercent}%`, icon: plan.utilizationPercent >= 70 ? <Flame size={10} /> : <BarChart3 size={10} />, warn: false },
                                   ].map((m, mi) => (
                                     <div key={mi} style={{ background: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', padding: '6px 10px' }}>
-                                      <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' as const }}>{m.icon} {m.label}</div>
+                                      <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase' as const, display: 'flex', alignItems: 'center', gap: '3px' }}>{m.icon} {m.label}</div>
                                       <div style={{ fontSize: '13px', fontWeight: 600, color: m.warn ? 'var(--warning)' : 'var(--text-primary)', marginTop: '2px' }}>{m.val}</div>
                                     </div>
                                   ))}
@@ -3177,7 +3186,7 @@ export const PlanningWorkspace: React.FC = () => {
                                 {/* Cost Breakdown */}
                                 <div style={{ display: 'flex', gap: '12px', marginBottom: '12px', padding: '8px 12px', background: 'rgba(216,174,71,0.04)', border: '1px dashed rgba(216,174,71,0.2)', borderRadius: 'var(--radius-sm)' }}>
                                   <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
-                                    <span style={{ fontWeight: 600 }}>💰 Cost:</span>{' '}
+                                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontWeight: 600 }}><DollarSign size={11} /> Cost:</span>{' '}
                                     Base ₹{plan.estimatedBaseFee.toLocaleString()} + Travel ₹{plan.estimatedTravelFee.toLocaleString()} ={' '}
                                     <span style={{ fontWeight: 700, color: 'var(--warning)' }}>₹{plan.estimatedTotalCost.toLocaleString()}</span>
                                   </div>
@@ -3224,10 +3233,10 @@ export const PlanningWorkspace: React.FC = () => {
                                             <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>({stop.branchCode})</span>
                                           </div>
                                           <div style={{ fontSize: '10px', color: 'var(--text-secondary)', display: 'flex', gap: '12px', marginTop: '2px' }}>
-                                            <span>🕐 Arrive {stop.estimatedArrival} → Depart {stop.estimatedDeparture}</span>
-                                            <span>⏱️ Audit: {stop.estimatedAuditHours}h</span>
+                                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Clock size={10} /> Arrive {stop.estimatedArrival} → Depart {stop.estimatedDeparture}</span>
+                                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Clock size={10} /> Audit: {stop.estimatedAuditHours}h</span>
                                             {stop.travelFromPreviousKm > 0 && (
-                                              <span>🚗 Travel: {stop.travelFromPreviousKm}km ({stop.travelFromPreviousMinutes}min)</span>
+                                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Car size={10} /> Travel: {stop.travelFromPreviousKm}km ({stop.travelFromPreviousMinutes}min)</span>
                                             )}
                                           </div>
                                         </div>
@@ -3238,7 +3247,7 @@ export const PlanningWorkspace: React.FC = () => {
                                       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', width: '20px' }}>
                                         <div style={{ width: '10px', height: '10px', borderRadius: '50%', background: 'var(--warning)', flexShrink: 0 }} />
                                       </div>
-                                      <div style={{ fontSize: '11px', color: 'var(--warning)', fontWeight: 600 }}>🏠 Return Home by {plan.dayEndTime}</div>
+                                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--warning)', fontWeight: 600 }}><Home size={11} /> Return Home by {plan.dayEndTime}</div>
                                     </div>
                                   </div>
                                 </div>
@@ -3279,8 +3288,9 @@ export const PlanningWorkspace: React.FC = () => {
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '16px' }}
           onClick={() => !unableSubmitting && setUnableModal(null)}>
           <div onClick={(e) => e.stopPropagation()}
+            role="dialog" aria-modal="true" aria-labelledby="unable-modal-title"
             style={{ width: 'min(460px, 100%)', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '18px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)' }}>Mark unable to cover</div>
+            <div id="unable-modal-title" style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)' }}>Mark unable to cover</div>
             <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
               Recorded against <b>{unableModal.label}</b> and reported to the client. Be specific
               (e.g. "No certified assayer within 150km for the SLA window").

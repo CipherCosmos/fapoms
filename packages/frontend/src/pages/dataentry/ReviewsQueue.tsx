@@ -6,6 +6,7 @@ import { api } from '../../services/api';
 import { useCurrentRoles } from '../../hooks/useCurrentRoles';
 import { userMessage } from '../../services/errors';
 import { deskRole, deskCard, deskLabel, CaseListRow, TeamMember } from './deskRoles';
+import { Select } from '../../components/ui';
 
 /**
  * The review queue: validation cases as a server-paginated table.
@@ -226,11 +227,15 @@ export const ReviewsQueue: React.FC = () => {
                   </td>
                   <td style={{ padding: '9px 14px', whiteSpace: 'nowrap' }}>
                     {isHead && c.status === 'HUMAN_REVIEW' ? (
-                      <select value={c.reviewerId ?? ''} disabled={busy === c.id} onChange={(e) => route(c.id, e.target.value)}
-                        style={{ padding: '5px 9px', fontSize: '11.5px', fontWeight: 600, borderRadius: '6px', background: 'var(--bg-input)', color: 'inherit', border: `1px solid ${c.reviewerId ? 'var(--border-color)' : 'var(--warning)'}` }}>
-                        <option value="">{c.reviewerId ? 'Re-route…' : 'Route to…'}</option>
-                        {reviewers.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-                      </select>
+                      <Select
+                        compact
+                        value={c.reviewerId ?? ''}
+                        disabled={busy === c.id}
+                        onChange={(v) => route(c.id, v)}
+                        placeholder={c.reviewerId ? 'Re-route…' : 'Route to…'}
+                        options={reviewers.map((v) => ({ value: v.id, label: v.name }))}
+                        style={c.reviewerId ? undefined : { border: '1px solid var(--warning)' }}
+                      />
                     ) : c.reviewerName ? (
                       <span>{c.reviewerName}</span>
                     ) : (

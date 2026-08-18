@@ -315,39 +315,43 @@ export const Assignments: React.FC = () => {
   const total = mainData?.meta?.pagination?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
-  // ── Lightweight KPI counts — cheap limit=1 requests reusing the same
-  // paginated endpoint purely for its `meta.pagination.total`, rather than
-  // recomputing counts by filtering whatever single page happens to be loaded.
-  const useCount = (params: string) => useQuery({
+  // ── KPI counts — one grouped aggregate instead of 6 separate `?page=1&limit=1`
+  // full-table COUNT requests against the paginated list endpoint. Each of those
+  // used to cost its own full scan under the same filters/joins as the list query,
+  // fired again on every scope change; this is one cached, cross-tabbed query the
+  // backend already built (`assignment.service.ts#computeDashboardSummary`) and
+  // nothing in the frontend was calling.
+  interface AssignmentDashboardSummary {
+    total: number;
+    statusCounts: Record<string, number>;
+    priorityCounts: Record<string, number>;
+    branchStatusCounts: Record<string, number>;
+  }
+  const summaryQ = useQuery({
     // The KPI tiles must move with the list beneath them, or the operator sees a count that
     // contradicts the rows on screen.
-    queryKey: [...queryKeys.assignments.count(params), scopeKey],
-    queryFn: () => api.request<{ meta: { pagination: { total: number } } }>(
-      `/assignments?page=1&limit=1&${params}&${scopeQuery}`,
-      { withMeta: true },
-    ),
+    queryKey: [...queryKeys.assignments.summary, scopeKey],
+    queryFn: () => api.request<AssignmentDashboardSummary>(`/assignments/dashboard/summary?${scopeQuery}`),
     staleTime: 15_000,
   });
-  const grandTotalQ = useCount('');
-  const activeCountQ = useCount(`projectBranchStatus=${ACTIVE_STATUSES}`);
-  const closedCountQ = useCount(`projectBranchStatus=CLOSED`);
-  const cancelledCountQ = useCount(`status=${TERMINAL_FILTER}`);
+  const statusCounts = summaryQ.data?.statusCounts ?? {};
+  const priorityCounts = summaryQ.data?.priorityCounts ?? {};
+  const branchStatusCounts = summaryQ.data?.branchStatusCounts ?? {};
+  const sumOf = (counts: Record<string, number>, keys: string[]) =>
+    keys.reduce((s, k) => s + (counts[k] ?? 0), 0);
+  const activeCount = sumOf(branchStatusCounts, ACTIVE_STATUSES.split(','));
+  const closedCount = branchStatusCounts.CLOSED ?? 0;
+  const cancelledCount = sumOf(statusCounts, TERMINAL_FILTER.split(','));
   // "Needs attention" split into its two very different situations: PENDING = waiting on the
   // assayer's answer (chase or wait), REJECTED = declined/auto-declined and needs a REPLACEMENT
   // (act now). One combined "54" hid which of the two the desk actually had to do.
-  const pendingCountQ = useCount('status=PENDING');
-  const rejectedCountQ = useCount('status=REJECTED');
-  const escalatedCountQ = useCount(`priority=${ESCALATED_FILTER}`);
-  const activeCount = activeCountQ.data?.meta?.pagination?.total ?? 0;
-  const closedCount = closedCountQ.data?.meta?.pagination?.total ?? 0;
-  const cancelledCount = cancelledCountQ.data?.meta?.pagination?.total ?? 0;
-  const pendingCount = pendingCountQ.data?.meta?.pagination?.total ?? 0;
-  const rejectedCount = rejectedCountQ.data?.meta?.pagination?.total ?? 0;
-  const escalatedCount = escalatedCountQ.data?.meta?.pagination?.total ?? 0;
-  // Queried directly rather than summing the tiles below. The tiles overlap (an escalated
-  // assignment is also active) and don't cover everything, so summing them under-reported
-  // the total and disagreed with the dashboard.
-  const totalCount = grandTotalQ.data?.meta?.pagination?.total ?? 0;
+  const pendingCount = statusCounts.PENDING ?? 0;
+  const rejectedCount = statusCounts.REJECTED ?? 0;
+  const escalatedCount = priorityCounts[ESCALATED_FILTER] ?? 0;
+  // From the same aggregate rather than summing the tiles above. The tiles overlap (an
+  // escalated assignment is also active) and don't cover everything, so summing them
+  // under-reported the total and disagreed with the dashboard.
+  const totalCount = summaryQ.data?.total ?? 0;
 
   // The desk's queue of problems the field has flagged (branch closed, access denied, safety…).
   // This endpoint existed with no UI at all — an assayer could report an issue from the field and

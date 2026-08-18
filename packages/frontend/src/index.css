@@ -118,15 +118,11 @@
   --bg-secondary: #FFF5EC;
   --bg-tertiary:  var(--bg-surface-2);
   --bg-glass:     rgba(255, 250, 245, 0.85);
-  --bg-glass-hover: #FDF0E4;
   --border-color: var(--border-hair);
   --border-color-hover: rgba(28, 18, 7, 0.22);
   --accent-primary: var(--accent);
-  --accent-primary-hover: var(--accent-strong);
   --accent-secondary: var(--flame-500);
-  --accent-secondary-hover: var(--flame-600);
   --gradient-neon: var(--flame-gradient);
-  --gradient-dark: linear-gradient(180deg, #FDF0E4 0%, var(--flame-cream) 100%);
   --gradient-card: linear-gradient(145deg, rgba(255, 255, 255, 0.92) 0%, rgba(253, 240, 228, 0.85) 100%);
   --card-bg:      var(--bg-surface);
   --card-blur:    var(--surface-blur);
@@ -184,15 +180,11 @@
   --bg-secondary: #EEF0F4;
   --bg-tertiary:  var(--bg-surface-2);
   --bg-glass:     rgba(246, 247, 249, 0.85);
-  --bg-glass-hover: #ECEFF2;
   --border-color: var(--border-hair);
   --border-color-hover: rgba(20, 30, 45, 0.24);
   --accent-primary: var(--accent);
-  --accent-primary-hover: var(--accent-strong);
   --accent-secondary: var(--gold-700);
-  --accent-secondary-hover: var(--gold-100);
   --gradient-neon: var(--gold-gradient);
-  --gradient-dark: linear-gradient(180deg, #ECEFF2 0%, #F6F7F9 100%);
   --gradient-card: linear-gradient(145deg, rgba(255, 255, 255, 0.9) 0%, rgba(236, 239, 242, 0.85) 100%);
   --card-bg:      var(--bg-surface);
   --card-blur:    var(--surface-blur);
@@ -248,15 +240,11 @@
   --bg-secondary: #F3EBD8;
   --bg-tertiary:  var(--bg-surface-2);
   --bg-glass:     rgba(251, 246, 237, 0.88);
-  --bg-glass-hover: #F0E6D2;
   --border-color: var(--border-hair);
   --border-color-hover: rgba(30, 20, 10, 0.28);
   --accent-primary: var(--accent);
-  --accent-primary-hover: var(--accent-strong);
   --accent-secondary: var(--gold-700);
-  --accent-secondary-hover: var(--gold-100);
   --gradient-neon: var(--gold-gradient);
-  --gradient-dark: linear-gradient(180deg, #F0E6D2 0%, #FBF6ED 100%);
   --gradient-card: linear-gradient(145deg, rgba(255, 253, 248, 0.92) 0%, rgba(240, 230, 210, 0.88) 100%);
   --card-bg:      var(--bg-surface);
   --card-blur:    var(--surface-blur);
@@ -325,15 +313,11 @@
   --bg-secondary: #1A1410;
   --bg-tertiary:  var(--bg-surface-2);
   --bg-glass:     rgba(20, 16, 12, 0.75);
-  --bg-glass-hover: var(--bg-surface-2);
   --border-color: var(--border-hair);
   --border-color-hover: rgba(255, 236, 220, 0.20);
   --accent-primary: var(--accent);
-  --accent-primary-hover: var(--accent-strong);
   --accent-secondary: var(--flame-500);
-  --accent-secondary-hover: var(--flame-400);
   --gradient-neon: var(--flame-gradient);
-  --gradient-dark: linear-gradient(180deg, #1F1813 0%, #14100C 100%);
   --gradient-card: linear-gradient(145deg, rgba(42, 33, 26, 0.85) 0%, rgba(31, 24, 19, 0.85) 100%);
   --card-bg:      var(--bg-surface);
   --card-blur:    var(--surface-blur);
@@ -389,15 +373,11 @@
   --bg-secondary: #191C22;
   --bg-tertiary:  var(--bg-surface-2);
   --bg-glass:     rgba(20, 22, 26, 0.75);
-  --bg-glass-hover: var(--bg-surface-2);
   --border-color: var(--border-hair);
   --border-color-hover: rgba(255, 255, 255, 0.18);
   --accent-primary: var(--accent);
-  --accent-primary-hover: var(--accent-strong);
   --accent-secondary: var(--accent);
-  --accent-secondary-hover: var(--accent-strong);
   --gradient-neon: var(--gold-gradient);
-  --gradient-dark: linear-gradient(180deg, #262B32 0%, #14161A 100%);
   --gradient-card: linear-gradient(145deg, rgba(38, 43, 50, 0.85) 0%, rgba(29, 33, 39, 0.85) 100%);
   --card-bg:      var(--bg-surface);
   --card-blur:    var(--surface-blur);
@@ -453,15 +433,11 @@
   --bg-secondary: #101117;
   --bg-tertiary:  var(--bg-surface-2);
   --bg-glass:     rgba(12, 13, 17, 0.78);
-  --bg-glass-hover: var(--bg-surface-2);
   --border-color: var(--border-hair);
   --border-color-hover: rgba(255, 255, 255, 0.20);
   --accent-primary: var(--accent);
-  --accent-primary-hover: var(--accent-strong);
   --accent-secondary: var(--accent);
-  --accent-secondary-hover: var(--accent-strong);
   --gradient-neon: var(--gold-gradient);
-  --gradient-dark: linear-gradient(180deg, #1E2028 0%, #0C0D11 100%);
   --gradient-card: linear-gradient(145deg, rgba(30, 32, 40, 0.9) 0%, rgba(21, 22, 28, 0.9) 100%);
   --card-bg:      var(--bg-surface);
   --card-blur:    var(--surface-blur);
@@ -517,15 +493,11 @@
   --bg-secondary: rgba(10, 10, 10, 0.45);
   --bg-tertiary:  var(--bg-surface-2);
   --bg-glass:     rgba(8, 8, 8, 0.55);
-  --bg-glass-hover: var(--bg-surface-2);
   --border-color: var(--border-hair);
   --border-color-hover: rgba(255, 255, 255, 0.22);
   --accent-primary: var(--accent);
-  --accent-primary-hover: var(--accent-strong);
   --accent-secondary: var(--gold-400);
-  --accent-secondary-hover: var(--gold-100);
   --gradient-neon: var(--gold-gradient);
-  --gradient-dark: linear-gradient(180deg, #1A1A1A 0%, #050505 100%);
   --gradient-card: linear-gradient(145deg, rgba(34, 34, 34, 0.6) 0%, rgba(18, 18, 18, 0.4) 100%);
   --card-bg:      var(--bg-surface);
   --card-blur:    26px;
@@ -582,15 +554,11 @@
   --bg-secondary: #080808;
   --bg-tertiary:  var(--bg-surface-2);
   --bg-glass:     rgba(0, 0, 0, 0.78);
-  --bg-glass-hover: var(--bg-surface-2);
   --border-color: var(--border-hair);
   --border-color-hover: rgba(255, 255, 255, 0.24);
   --accent-primary: var(--accent);
-  --accent-primary-hover: var(--accent-strong);
   --accent-secondary: #E0E0E0;
-  --accent-secondary-hover: #FFFFFF;
   --gradient-neon: linear-gradient(180deg, #FFFFFF 0%, #E0E0E0 55%, #B0B0B0 100%);
-  --gradient-dark: linear-gradient(180deg, #1C1C1C 0%, #000000 100%);
   --gradient-card: linear-gradient(145deg, rgba(28, 28, 28, 0.92) 0%, rgba(17, 17, 17, 0.92) 100%);
   --card-bg:      var(--bg-surface);
   --card-blur:    var(--surface-blur);
@@ -646,15 +614,11 @@
   --bg-secondary: #F7F7F9;
   --bg-tertiary:  var(--bg-surface-2);
   --bg-glass:     rgba(255, 255, 255, 0.88);
-  --bg-glass-hover: #F1F1F3;
   --border-color: var(--border-hair);
   --border-color-hover: rgba(10, 10, 12, 0.24);
   --accent-primary: var(--accent);
-  --accent-primary-hover: var(--accent-strong);
   --accent-secondary: #3C3C44;
-  --accent-secondary-hover: #111113;
   --gradient-neon: linear-gradient(180deg, #FFFFFF 0%, #E4E4E8 55%, #B9B9C2 100%);
-  --gradient-dark: linear-gradient(180deg, #F1F1F3 0%, #FFFFFF 100%);
   --gradient-card: linear-gradient(145deg, rgba(255, 255, 255, 0.95) 0%, rgba(241, 241, 243, 0.9) 100%);
   --card-bg:      var(--bg-surface);
   --card-blur:    var(--surface-blur);
@@ -714,15 +678,11 @@
   --bg-secondary: rgba(255, 255, 255, 0.34);
   --bg-tertiary:  var(--bg-surface-2);
   --bg-glass:     rgba(255, 255, 255, 0.5);
-  --bg-glass-hover: rgba(255, 255, 255, 0.42);
   --border-color: var(--border-hair);
   --border-color-hover: rgba(255, 255, 255, 0.62);
   --accent-primary: var(--accent);
-  --accent-primary-hover: var(--accent-strong);
   --accent-secondary: var(--gold-700);
-  --accent-secondary-hover: var(--gold-100);
   --gradient-neon: var(--gold-gradient);
-  --gradient-dark: linear-gradient(180deg, #F4EEE2 0%, #E7E0D2 100%);
   --gradient-card: linear-gradient(145deg, rgba(255, 255, 255, 0.72) 0%, rgba(255, 255, 255, 0.36) 100%);
   --card-bg:      var(--bg-surface);
   --card-blur:    26px;
@@ -779,15 +739,11 @@
   --bg-secondary: rgba(40, 34, 50, 0.32);
   --bg-tertiary:  var(--bg-surface-2);
   --bg-glass:     rgba(30, 26, 40, 0.55);
-  --bg-glass-hover: var(--bg-surface-2);
   --border-color: var(--border-hair);
   --border-color-hover: rgba(255, 255, 255, 0.30);
   --accent-primary: var(--accent);
-  --accent-primary-hover: var(--accent-strong);
   --accent-secondary: var(--accent);
-  --accent-secondary-hover: var(--accent-strong);
   --gradient-neon: var(--gold-gradient);
-  --gradient-dark: linear-gradient(180deg, #2A2436 0%, #14121A 100%);
   --gradient-card: linear-gradient(145deg, rgba(72, 62, 90, 0.6) 0%, rgba(40, 34, 50, 0.42) 100%);
   --card-bg:      var(--bg-surface);
   --card-blur:    28px;
@@ -844,13 +800,10 @@
   --bg-secondary: rgba(32, 26, 36, 0.36);
   --bg-tertiary:  var(--bg-surface-2);
   --bg-glass:     rgba(24, 20, 28, 0.58);
-  --bg-glass-hover: var(--bg-surface-2);
   --border-color: var(--border-hair);
   --border-color-hover: rgba(245, 158, 11, 0.45);
   --accent-primary: var(--accent);
-  --accent-primary-hover: var(--accent-strong);
   --accent-secondary: var(--accent);
-  --accent-secondary-hover: var(--accent-strong);
   --gradient-neon: linear-gradient(135deg, #F59E0B 0%, #D97706 100%);
   --card-bg:      var(--bg-surface);
   --card-blur:    30px;
@@ -894,13 +847,10 @@
   --bg-secondary: rgba(20, 26, 46, 0.36);
   --bg-tertiary:  var(--bg-surface-2);
   --bg-glass:     rgba(15, 20, 36, 0.58);
-  --bg-glass-hover: var(--bg-surface-2);
   --border-color: var(--border-hair);
   --border-color-hover: rgba(0, 240, 255, 0.50);
   --accent-primary: var(--accent);
-  --accent-primary-hover: var(--accent-strong);
   --accent-secondary: var(--accent);
-  --accent-secondary-hover: var(--accent-strong);
   --gradient-neon: linear-gradient(135deg, #00F0FF 0%, #3B82F6 100%);
   --card-bg:      var(--bg-surface);
   --card-blur:    30px;
@@ -944,13 +894,10 @@
   --bg-secondary: rgba(18, 42, 36, 0.36);
   --bg-tertiary:  var(--bg-surface-2);
   --bg-glass:     rgba(14, 34, 28, 0.58);
-  --bg-glass-hover: var(--bg-surface-2);
   --border-color: var(--border-hair);
   --border-color-hover: rgba(16, 185, 129, 0.45);
   --accent-primary: var(--accent);
-  --accent-primary-hover: var(--accent-strong);
   --accent-secondary: var(--accent);
-  --accent-secondary-hover: var(--accent-strong);
   --gradient-neon: linear-gradient(135deg, #10B981 0%, #059669 100%);
   --card-bg:      var(--bg-surface);
   --card-blur:    30px;
@@ -994,13 +941,10 @@
   --bg-secondary: rgba(36, 24, 56, 0.36);
   --bg-tertiary:  var(--bg-surface-2);
   --bg-glass:     rgba(28, 18, 44, 0.58);
-  --bg-glass-hover: var(--bg-surface-2);
   --border-color: var(--border-hair);
   --border-color-hover: rgba(168, 85, 247, 0.45);
   --accent-primary: var(--accent);
-  --accent-primary-hover: var(--accent-strong);
   --accent-secondary: var(--accent);
-  --accent-secondary-hover: var(--accent-strong);
   --gradient-neon: linear-gradient(135deg, #A855F7 0%, #7C3AED 100%);
   --card-bg:      var(--bg-surface);
   --card-blur:    30px;
@@ -1044,13 +988,10 @@
   --bg-secondary: rgba(16, 36, 64, 0.36);
   --bg-tertiary:  var(--bg-surface-2);
   --bg-glass:     rgba(12, 28, 50, 0.58);
-  --bg-glass-hover: var(--bg-surface-2);
   --border-color: var(--border-hair);
   --border-color-hover: rgba(59, 130, 246, 0.48);
   --accent-primary: var(--accent);
-  --accent-primary-hover: var(--accent-strong);
   --accent-secondary: var(--accent);
-  --accent-secondary-hover: var(--accent-strong);
   --gradient-neon: linear-gradient(135deg, #3B82F6 0%, #1D4ED8 100%);
   --card-bg:      var(--bg-surface);
   --card-blur:    30px;
@@ -1094,13 +1035,10 @@
   --bg-secondary: #181B22;
   --bg-tertiary:  var(--bg-surface-2);
   --bg-glass:     rgba(24, 27, 34, 0.9);
-  --bg-glass-hover: var(--bg-surface-2);
   --border-color: var(--border-hair);
   --border-color-hover: rgba(56, 189, 248, 0.4);
   --accent-primary: var(--accent);
-  --accent-primary-hover: var(--accent-strong);
   --accent-secondary: var(--accent);
-  --accent-secondary-hover: var(--accent-strong);
   --gradient-neon: linear-gradient(135deg, #38BDF8 0%, #0284C7 100%);
   --card-bg:      var(--bg-surface);
   --card-blur:    0px;
@@ -1134,13 +1072,10 @@
   --bg-secondary: #F1F5F9;
   --bg-tertiary:  var(--bg-surface-2);
   --bg-glass:     rgba(255, 255, 255, 0.9);
-  --bg-glass-hover: #E2E8F0;
   --border-color: var(--border-hair);
   --border-color-hover: #CBD5E1;
   --accent-primary: var(--accent);
-  --accent-primary-hover: var(--accent-strong);
   --accent-secondary: var(--accent);
-  --accent-secondary-hover: var(--accent-strong);
   --gradient-neon: linear-gradient(135deg, #2563EB 0%, #1D4ED8 100%);
   --card-bg:      var(--bg-surface);
   --card-blur:    0px;
@@ -1171,13 +1106,10 @@
   --bg-secondary: #FFF1F2;
   --bg-tertiary:  var(--bg-surface-2);
   --bg-glass:     rgba(255, 255, 255, 0.9);
-  --bg-glass-hover: #FCE7F3;
   --border-color: var(--border-hair);
   --border-color-hover: #FECDD3;
   --accent-primary: var(--accent);
-  --accent-primary-hover: var(--accent-strong);
   --accent-secondary: var(--accent);
-  --accent-secondary-hover: var(--accent-strong);
   --gradient-neon: linear-gradient(135deg, #E11D48 0%, #BE123C 100%);
   --card-bg:      var(--bg-surface);
   --card-blur:    0px;
@@ -1816,4 +1748,10 @@ html, body {
 }
 .tab-pane {
   animation: tabPaneIn 0.18s ease;
+}
+
+/* Dropdown menu entrance — the <Select> component's portaled option panel. */
+@keyframes fapoms-select-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to   { opacity: 1; transform: none; }
 }

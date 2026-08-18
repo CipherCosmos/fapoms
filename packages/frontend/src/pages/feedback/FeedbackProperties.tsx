@@ -5,6 +5,7 @@ import { FeedbackCategory, FeedbackSeverity, FeedbackStatus } from '@fapoms/shar
 import { triageFeedback, resolveFeedback, reopenFeedback, voteFeedback, type FeedbackThread } from '../../services/feedback';
 import { userMessage } from '../../services/errors';
 import { CATEGORY, SEVERITY, STATUS, Badge, fmtDay, label } from './feedbackUi';
+import { Select } from '../../components/ui';
 
 /**
  * The right-hand properties rail for one feedback item on the team desk.
@@ -21,10 +22,6 @@ interface Props {
   onOpenThread?: (id: string) => void;
 }
 
-const selectStyle: React.CSSProperties = {
-  width: '100%', padding: '7px 9px', fontSize: '12.5px', fontWeight: 600, borderRadius: '8px',
-  background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)', outline: 'none', cursor: 'pointer',
-};
 const fieldLabel: React.CSSProperties = { ...label, display: 'block', marginBottom: '5px' };
 
 export const FeedbackProperties: React.FC<Props> = ({ thread, assignees, onChanged, onOpenThread }) => {
@@ -81,30 +78,45 @@ export const FeedbackProperties: React.FC<Props> = ({ thread, assignees, onChang
       <div style={{ display: 'flex', flexDirection: 'column', gap: '11px' }}>
         <div>
           <span style={fieldLabel}>Status</span>
-          <select style={selectStyle} value={thread.status} disabled={busy} onChange={(e) => patch(() => triageFeedback(thread.id, { status: e.target.value as FeedbackStatus }))}>
-            {Object.values(FeedbackStatus).map((s) => <option key={s} value={s}>{STATUS[s].label}</option>)}
-          </select>
+          <Select
+            value={thread.status}
+            disabled={busy}
+            onChange={(v) => patch(() => triageFeedback(thread.id, { status: v as FeedbackStatus }))}
+            options={Object.values(FeedbackStatus).map((s) => ({ value: s, label: STATUS[s].label }))}
+            style={{ width: '100%' }}
+          />
         </div>
         <div style={{ display: 'flex', gap: '8px' }}>
           <div style={{ flex: 1 }}>
             <span style={fieldLabel}>Severity</span>
-            <select style={selectStyle} value={thread.severity} disabled={busy} onChange={(e) => patch(() => triageFeedback(thread.id, { severity: e.target.value as FeedbackSeverity }))}>
-              {Object.values(FeedbackSeverity).map((s) => <option key={s} value={s}>{SEVERITY[s].label}</option>)}
-            </select>
+            <Select
+              value={thread.severity}
+              disabled={busy}
+              onChange={(v) => patch(() => triageFeedback(thread.id, { severity: v as FeedbackSeverity }))}
+              options={Object.values(FeedbackSeverity).map((s) => ({ value: s, label: SEVERITY[s].label }))}
+              style={{ width: '100%' }}
+            />
           </div>
           <div style={{ flex: 1 }}>
             <span style={fieldLabel}>Type</span>
-            <select style={selectStyle} value={thread.category} disabled={busy} onChange={(e) => patch(() => triageFeedback(thread.id, { category: e.target.value as FeedbackCategory }))}>
-              {Object.values(FeedbackCategory).map((c) => <option key={c} value={c}>{CATEGORY[c].label}</option>)}
-            </select>
+            <Select
+              value={thread.category}
+              disabled={busy}
+              onChange={(v) => patch(() => triageFeedback(thread.id, { category: v as FeedbackCategory }))}
+              options={Object.values(FeedbackCategory).map((c) => ({ value: c, label: CATEGORY[c].label }))}
+              style={{ width: '100%' }}
+            />
           </div>
         </div>
         <div>
           <span style={fieldLabel}>Assigned to</span>
-          <select style={selectStyle} value={thread.assignedToUserId ?? ''} disabled={busy} onChange={(e) => patch(() => triageFeedback(thread.id, { assignedToUserId: e.target.value || null }))}>
-            <option value="">Unassigned</option>
-            {assignees.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-          </select>
+          <Select
+            value={thread.assignedToUserId ?? ''}
+            disabled={busy}
+            onChange={(v) => patch(() => triageFeedback(thread.id, { assignedToUserId: v || null }))}
+            options={[{ value: '', label: 'Unassigned' }, ...assignees.map((a) => ({ value: a.id, label: a.name }))]}
+            style={{ width: '100%' }}
+          />
         </div>
         {settled ? (
           <button className="btn btn-secondary" disabled={busy} onClick={() => patch(() => reopenFeedback(thread.id))} style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}>

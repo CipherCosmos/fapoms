@@ -21,7 +21,7 @@ import { api } from '../services/api';
 import { useScope, withScope } from '../context/ScopeContext';
 import { userMessage } from '../services/errors';
 import { connectSocket } from '../services/socket';
-import { StatusBadge, Modal, SearchInput, FilterSelect, AlertBanner, PrimaryButton, UploadExcelControls } from '../components/ui';
+import { StatusBadge, Modal, SearchInput, FilterSelect, AlertBanner, PrimaryButton, UploadExcelControls, Select } from '../components/ui';
 import { localDateKey } from '../utils/statusLabels';
 import { useCurrentRoles, canManageProjects, canDeleteProjects } from '../hooks/useCurrentRoles';
 
@@ -653,17 +653,23 @@ export const Projects: React.FC = () => {
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Client *</label>
-            <select value={form.clientId} onChange={(e) => setForm(f => ({ ...f, clientId: e.target.value }))} required style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }}>
-              <option value="">Select client...</option>
-              {clients.map(c => (<option key={c.id} value={c.id}>{c.name} ({c.clientCode})</option>))}
-            </select>
+            <Select
+              value={form.clientId}
+              onChange={(v) => setForm(f => ({ ...f, clientId: v }))}
+              options={clients.map(c => ({ value: c.id, label: `${c.name} (${c.clientCode})` }))}
+              placeholder="Select client..."
+              style={{ width: '100%' }}
+            />
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Priority *</label>
-            <select value={form.priority} onChange={(e) => setForm(f => ({ ...f, priority: e.target.value as Priority }))} required style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }}>
-              {Object.values(Priority).map(p => (<option key={p} value={p}>{p}</option>))}
-            </select>
+            <Select
+              value={form.priority}
+              onChange={(v) => setForm(f => ({ ...f, priority: v as Priority }))}
+              options={Object.values(Priority).map(p => ({ value: p, label: p }))}
+              style={{ width: '100%' }}
+            />
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>

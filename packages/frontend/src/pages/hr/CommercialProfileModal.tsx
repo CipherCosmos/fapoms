@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Modal, useToast } from '../../components/ui';
+import { Modal, Select, useToast } from '../../components/ui';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 
@@ -116,9 +116,12 @@ export const CommercialProfileModal: React.FC<{
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px', marginTop: '12px' }}>
         <div>
           <label style={label}>Currency</label>
-          <select value={form.currency || 'INR'} onChange={(e) => setForm({ ...form, currency: e.target.value })} style={input}>
-            {CURRENCIES.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
+          <Select
+            value={form.currency || 'INR'}
+            onChange={(v) => setForm({ ...form, currency: v })}
+            options={CURRENCIES.map((c) => ({ value: c, label: c }))}
+            style={{ width: '100%' }}
+          />
         </div>
         <div>
           <label style={label}>Start date</label>

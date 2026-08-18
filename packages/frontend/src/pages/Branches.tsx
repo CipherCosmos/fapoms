@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useUrlSelection } from '../hooks/useUrlSelection';
 import { Upload, Building2, Globe, ShieldAlert, Activity, Plus, Edit2, Trash2, Phone, FileText, User, Filter, ChevronDown, Map, X } from 'lucide-react';
-import { SearchInput, FilterSelect, StatusBadge, AlertBanner, Modal, useToast } from '../components/ui';
+import { SearchInput, FilterSelect, StatusBadge, AlertBanner, Modal, Select, useToast } from '../components/ui';
 import { api } from '../services/api';
 import { GeoPrecisionBadge, geoNeedsFixing } from '../components/GeoPrecisionBadge';
 import { PinCoordinateControl } from '../components/PinCoordinateControl';
@@ -324,10 +324,10 @@ export const Branches: React.FC = () => {
           <div className="glass-card" style={{ padding: '14px 16px', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
               <label style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Client</label>
-              <select value={selectedClientId} onChange={(e) => setSelectedClientId(e.target.value)}
-                style={{ padding: '6px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', fontSize: '13px', outline: 'none', minWidth: '160px' }}>
-                {clients.map(c => <option key={c.id} value={c.id}>{c.name} ({c.clientCode})</option>)}
-              </select>
+              <Select value={selectedClientId} onChange={setSelectedClientId}
+                options={clients.map(c => ({ value: c.id, label: `${c.name} (${c.clientCode})` }))}
+                style={{ minWidth: '160px' }}
+              />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
               <label style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Excel Import</label>
@@ -633,11 +633,11 @@ const BranchFormModal: React.FC<{
     <div key={key} style={opts?.full ? { gridColumn: '1 / -1' } : {}}>
       <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '3px', fontWeight: 500 }}>{label}{opts?.required && ' *'}</label>
       {opts?.options ? (
-        <select value={form[key]} onChange={(e) => set(key)(e.target.value)} required={opts?.required}
-          style={{ width: '100%', padding: '7px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px' }}>
-          <option value="">Select...</option>
-          {opts.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
+        <Select value={form[key]} onChange={set(key)}
+          placeholder="Select..."
+          options={opts.options}
+          style={{ width: '100%' }}
+        />
       ) : (
         <input type={opts?.type || 'text'} value={form[key]} onChange={(e) => set(key)(e.target.value)} required={opts?.required} placeholder={opts?.placeholder}
           style={{ width: '100%', padding: '7px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px' }} />
@@ -646,7 +646,15 @@ const BranchFormModal: React.FC<{
   );
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault(); setSubmitting(true);
+    e.preventDefault();
+    // Client and State used to be <select required>, blocked from submitting empty by the
+    // browser's own constraint validation — the custom dropdown doesn't participate in that,
+    // so the check is re-asserted explicitly here.
+    if (!form.clientId || !form.state) {
+      toast({ type: 'error', title: 'Missing required field', message: `${!form.clientId ? 'Client' : 'State'} must be set.` });
+      return;
+    }
+    setSubmitting(true);
     try {
       const body: any = {
         branchCode: form.branchCode, name: form.name, address: form.address,

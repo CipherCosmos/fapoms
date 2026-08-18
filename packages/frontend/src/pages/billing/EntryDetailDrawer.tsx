@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { DetailDrawer, useToast } from '../../components/ui';
+import { DetailDrawer, Select, useToast } from '../../components/ui';
 import { useBillingEntry, useTransitionBillingEntry, useAdjustBillingEntry, useSplitBillingEntry, useBillingHistory } from '../../hooks/useBilling';
 import { BILLING_STATE_TRANSITIONS } from '@fapoms/shared';
 import type { BillingState } from '@fapoms/shared';
@@ -117,10 +117,12 @@ export const EntryDetailDrawer: React.FC<{ entryId: string; onClose: () => void 
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, width: '100%', justifyContent: 'flex-end' }}>
           {nextStates.length > 0 && (
             <>
-              <select value={selectedNext} onChange={(e) => setSelectedNext(e.target.value as BillingState)} style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)' }}>
-                <option value="">Transition…</option>
-                {nextStates.map((s) => <option key={s} value={s}>{s}</option>)}
-              </select>
+              <Select
+                value={selectedNext}
+                onChange={(v) => setSelectedNext(v as BillingState)}
+                placeholder="Transition…"
+                options={nextStates.map((s) => ({ value: s, label: s }))}
+              />
               <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="reason (optional)" style={{ padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', width: 140 }} />
               <button onClick={doTransition} disabled={!selectedNext || transition.isPending} className="btn btn-primary">Apply</button>
             </>

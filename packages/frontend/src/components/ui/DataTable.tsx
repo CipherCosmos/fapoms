@@ -52,27 +52,34 @@ export const DataTable = <T,>({
                 <input type="checkbox" checked={allSelected} onChange={(e) => onSelectAll?.(e.target.checked)} style={{ cursor: 'pointer' }} />
               </th>
             )}
-            {columns.map((c) => (
-              <th
-                key={c.key}
-                onClick={c.sortValue && onSort ? () => onSort(c.key) : undefined}
-                style={{
-                  textAlign: c.align ?? 'left',
-                  cursor: c.sortValue && onSort ? 'pointer' : 'default',
-                  userSelect: 'none',
-                  whiteSpace: 'nowrap',
-                }}
-              >
-                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                  {c.header}
-                  {c.sortValue && onSort && sortKey === c.key && (
-                    <span style={{ fontSize: 10, color: 'var(--accent-primary)' }}>
-                      {sortOrder === 'asc' ? '▲' : '▼'}
-                    </span>
+            {columns.map((c) => {
+              const sortable = !!(c.sortValue && onSort);
+              const isSorted = sortable && sortKey === c.key;
+              return (
+                <th
+                  key={c.key}
+                  aria-sort={isSorted ? (sortOrder === 'asc' ? 'ascending' : 'descending') : sortable ? 'none' : undefined}
+                  style={{ textAlign: c.align ?? 'left', whiteSpace: 'nowrap' }}
+                >
+                  {sortable ? (
+                    <button
+                      type="button"
+                      onClick={() => onSort!(c.key)}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: 4, cursor: 'pointer', userSelect: 'none', background: 'none', border: 'none', padding: 0, font: 'inherit', color: 'inherit' }}
+                    >
+                      {c.header}
+                      {isSorted && (
+                        <span style={{ fontSize: 10, color: 'var(--accent-primary)' }}>
+                          {sortOrder === 'asc' ? '▲' : '▼'}
+                        </span>
+                      )}
+                    </button>
+                  ) : (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>{c.header}</span>
                   )}
-                </span>
-              </th>
-            ))}
+                </th>
+              );
+            })}
           </tr>
         </thead>
         <tbody>
@@ -96,6 +103,14 @@ export const DataTable = <T,>({
                 <tr
                   key={id}
                   onClick={onRowClick ? () => onRowClick(row) : undefined}
+                  {...(onRowClick ? {
+                    role: 'button' as const,
+                    tabIndex: 0,
+                    onKeyDown: (e: React.KeyboardEvent) => {
+                      if (e.target !== e.currentTarget) return;
+                      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onRowClick(row); }
+                    },
+                  } : {})}
                   style={{ cursor: onRowClick ? 'pointer' : 'default', background: isSel ? 'var(--status-pending-bg)' : undefined }}
                 >
                   {selectable && (

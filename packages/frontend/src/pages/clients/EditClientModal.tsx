@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Building2 } from 'lucide-react';
-import { Modal, StyledInput, useToast } from '../../components/ui';
+import { Modal, StyledInput, Select, useToast } from '../../components/ui';
 import { useUpdateClient } from '../../hooks/useClients';
 import type { Client } from '@fapoms/shared';
 import { ClientType, Priority } from '@fapoms/shared';
@@ -65,18 +65,6 @@ export const EditClientModal: React.FC<{ client: Client; onClose: () => void }> 
     }
   };
 
-  const selectStyle: React.CSSProperties = {
-    padding: '8px 12px',
-    background: 'var(--bg-input)',
-    border: '1px solid var(--border-color)',
-    borderRadius: 'var(--radius-sm)',
-    color: 'var(--text-primary)',
-    outline: 'none',
-    width: '100%',
-    height: '37px',
-    fontSize: '13px',
-  };
-
   return (
     <Modal open onClose={onClose} title={<><Building2 size={18} style={{ marginRight: 6 }} /> Edit Client — {client.clientCode}</>} width="560px" asForm onSubmit={handleSubmit} footer={
       <>
@@ -105,15 +93,21 @@ export const EditClientModal: React.FC<{ client: Client; onClose: () => void }> 
             </div>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               <Label text="Client Type" />
-              <select value={form.clientType} onChange={(e) => set('clientType', e.target.value)} style={selectStyle}>
-                {CLIENT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
-              </select>
+              <Select
+                value={form.clientType}
+                onChange={(v) => set('clientType', v)}
+                options={CLIENT_TYPES.map((t) => ({ value: t, label: t }))}
+                style={{ width: '100%' }}
+              />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               <Label text="Priority" />
-              <select value={form.priority} onChange={(e) => set('priority', e.target.value)} style={selectStyle}>
-                {PRIORITIES.map((p) => <option key={p} value={p}>{p}</option>)}
-              </select>
+              <Select
+                value={form.priority}
+                onChange={(v) => set('priority', v)}
+                options={PRIORITIES.map((p) => ({ value: p, label: p }))}
+                style={{ width: '100%' }}
+              />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               <Label text="Website" />

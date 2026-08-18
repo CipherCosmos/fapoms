@@ -43,11 +43,12 @@ export const FIELD_LABELS: Record<string, string> = {
   joining_date: 'Joining date', emergency_contact_phone: 'Emergency contact',
 };
 
-export const fmtDate = (d?: string | null) =>
-  d ? new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '—';
-
-export const fmtWhen = (d?: string | null) =>
-  d ? new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
+// Imported (rather than a pure re-export) because this file also uses fmtWhen itself below;
+// re-exported so the 5 pages already importing these from here don't need touching — the one
+// definition now lives in utils/dates.ts, same treatment utils/money.ts already got (see
+// assayer-shared.ts, which does the same for `money`).
+import { fmtDate, fmtWhen } from '../../utils/dates';
+export { fmtDate, fmtWhen };
 
 /** A number with a caption, and optionally a tone when it represents a problem. */
 export const Stat: React.FC<{ value: React.ReactNode; caption: string; tone?: string; hint?: string }> = ({

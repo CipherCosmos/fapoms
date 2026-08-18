@@ -46,6 +46,7 @@ export const Modal: React.FC<{
   bodyStyle,
 }) => {
   const panelRef = React.useRef<HTMLDivElement>(null);
+  const titleId = React.useId();
 
   // Never let the panel grow wider than the viewport (minus a small gutter) on
   // narrow screens. Works whether `width` is a number (px) or a CSS string.
@@ -103,8 +104,6 @@ export const Modal: React.FC<{
 
   const container = (
     <div
-      role="dialog"
-      aria-modal="true"
       style={{
         position: 'fixed',
         top: 0,
@@ -124,24 +123,27 @@ export const Modal: React.FC<{
       <div
         ref={panelRef}
         tabIndex={-1}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={title !== undefined ? titleId : undefined}
         className="glass-card modal-panel"
         onClick={(e) => e.stopPropagation()}
-        style={{ width: panelWidth, maxWidth: '100%', maxHeight: maxHeight ?? 'calc(100vh - 24px)', height, outline: 'none', display: 'flex', flexDirection: 'column', gap: '14px', padding: '20px', ...bodyStyle }}
+        style={{ width: panelWidth, maxWidth: '100%', maxHeight: maxHeight ?? 'calc(100vh - 24px)', height, outline: 'none', display: 'flex', flexDirection: 'column', gap: '14px', padding: '20px' }}
       >
         {title !== undefined && (
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0 }}>
-            <h4 style={{ fontSize: '15px', fontWeight: 700, margin: 0 }}>{title}</h4>
+            <h4 id={titleId} style={{ fontSize: '15px', fontWeight: 700, margin: 0 }}>{title}</h4>
             <button
               type="button"
               onClick={onClose}
               aria-label="Close"
-              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', padding: 0 }}
+              style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, padding: 0, flexShrink: 0 }}
             >
               {closeIcon ?? <X size={18} />}
             </button>
           </div>
         )}
-        <div className={bodyClassName} style={{ display: 'flex', flexDirection: 'column', gap: '14px', minHeight: 0, flex: 1, overflowY: 'auto' }}>
+        <div className={bodyClassName} style={{ display: 'flex', flexDirection: 'column', gap: '14px', minHeight: 0, flex: 1, overflowY: 'auto', ...bodyStyle }}>
           {children}
         </div>
         {footer && (

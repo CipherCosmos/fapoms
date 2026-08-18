@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Modal, useToast } from '../../components/ui';
+import { Modal, Select, useToast } from '../../components/ui';
 import { useTransitionLifecycle } from '../../hooks/useClients';
 import { clientLifecycleLabel } from '../../utils/statusLabels';
 import { ClientLifecycleStatus } from '@fapoms/shared';
@@ -67,10 +67,12 @@ export const LifecycleModal: React.FC<{
         {clientName} — Current: <b style={{ color: colorMap[currentStatus] }}>{clientLifecycleLabel(currentStatus)}</b>
       </p>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-        <select value={targetLifecycle} onChange={(e) => setTargetLifecycle(e.target.value)} style={{ padding: 10, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }}>
-          <option value="">-- Select target status --</option>
-          {options.map((s) => <option key={s} value={s}>{clientLifecycleLabel(s)}</option>)}
-        </select>
+        <Select
+          value={targetLifecycle}
+          onChange={setTargetLifecycle}
+          options={options.map((s) => ({ value: s, label: clientLifecycleLabel(s) }))}
+          placeholder="-- Select target status --"
+        />
         <input type="text" placeholder="Reason (optional)" value={reason} onChange={(e) => setReason(e.target.value)} style={{ padding: 10, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }} />
       </div>
     </Modal>

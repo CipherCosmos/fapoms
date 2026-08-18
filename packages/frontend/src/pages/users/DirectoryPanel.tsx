@@ -3,7 +3,7 @@ import { Shield, ToggleLeft, ToggleRight, UserPlus, Users as UsersIcon, UserChec
 import { REGION_ORDER, REGION_LABELS, Region } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
-import { SearchInput, FilterSelect, AlertBanner, PrimaryButton, Modal, DetailDrawer } from '../../components/ui';
+import { SearchInput, FilterSelect, AlertBanner, PrimaryButton, Modal, DetailDrawer, Select } from '../../components/ui';
 import { useCurrentUserId } from '../../hooks/useCurrentRoles';
 import { UserActivityList } from './ActivityFeed';
 
@@ -316,12 +316,16 @@ export const DirectoryPanel: React.FC = () => {
             }}>
               <strong style={{ fontSize: '13px' }}>{selectedIds.size} selected</strong>
               <ToggleRight size={13} style={{ color: 'var(--text-muted)' }} />
-              <select value={bulkStatus} onChange={(e) => setBulkStatus(e.target.value as any)}
-                style={{ padding: '6px 10px', fontSize: '12px', borderRadius: '6px', background: 'var(--bg-page)', color: 'inherit', border: '1px solid var(--border-color)' }}>
-                <option value="">Set status…</option>
-                <option value="ACTIVE">Activate</option>
-                <option value="SUSPENDED">Suspend</option>
-              </select>
+              <Select
+                value={bulkStatus}
+                onChange={(v) => setBulkStatus(v as any)}
+                options={[
+                  { value: 'ACTIVE', label: 'Activate' },
+                  { value: 'SUSPENDED', label: 'Suspend' },
+                ]}
+                placeholder="Set status…"
+                compact
+              />
               <button onClick={runBulkStatus} disabled={!bulkStatus || bulkBusy} className="btn btn-primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
                 {bulkBusy ? 'Applying…' : 'Apply'}
               </button>

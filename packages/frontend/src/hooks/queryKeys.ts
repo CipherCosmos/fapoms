@@ -7,7 +7,6 @@ export const queryKeys = {
   assignments: {
     all: ['assignments'] as const,
     list: (page: number, filter?: string) => ['assignments', 'list', page, filter ?? 'ALL'] as const,
-    count: (filter: string) => ['assignments', 'count', filter] as const,
     /**
      * The whole KPI row of the assignments desk, from one server aggregate.
      *
@@ -124,6 +123,15 @@ export const queryKeys = {
   assayers: {
     all: ['assayers'] as const,
     mapRoster: ['assayers', 'map-roster'] as const,
+  },
+  /**
+   * The workforce roster. `useHrWorkforce.ts` and `AssayerRoster.tsx` used to each type the
+   * literal `['hr', 'workforce']` by hand — they agreed only because two people typed the same
+   * four characters, not because either referenced a shared constant.
+   */
+  hr: {
+    all: ['hr'] as const,
+    workforce: ['hr', 'workforce'] as const,
   },
   documents: {
     all: ['documents'] as const,

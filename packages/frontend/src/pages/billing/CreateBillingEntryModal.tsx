@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Receipt } from 'lucide-react';
-import { Modal, StyledInput, useToast } from '../../components/ui';
+import { Modal, StyledInput, Select, useToast } from '../../components/ui';
 import { useCreateBillingEntry } from '../../hooks/useBilling';
 import { useClientsList } from '../../hooks/useClients';
 import { api } from '../../services/api';
@@ -109,10 +109,6 @@ export const CreateBillingEntryModal: React.FC<{ onClose: () => void }> = ({ onC
   };
 
   const inputProps = { style: { width: '100%' } };
-  const selStyle: React.CSSProperties = {
-    padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)',
-    borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', width: '100%',
-  };
 
   return (
     <Modal open onClose={onClose} title={<><Receipt size={18} /> Create Billing Entry</>} width="620px" maxHeight="90vh" asForm onSubmit={handleSubmit} footer={
@@ -124,30 +120,42 @@ export const CreateBillingEntryModal: React.FC<{ onClose: () => void }> = ({ onC
       </>
     }>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, overflowY: 'auto' }}>
-        <select value={form.level} onChange={(e) => set('level', e.target.value as BillingLevel)} style={selStyle}>
-          {LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}
-        </select>
-        <select value={form.initialState} onChange={(e) => set('initialState', e.target.value as BillingState)} style={selStyle}>
-          {INITIAL_STATES.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
+        <Select
+          value={form.level}
+          onChange={(v) => set('level', v as BillingLevel)}
+          options={LEVELS.map((l) => ({ value: l, label: l }))}
+          style={{ width: '100%' }}
+        />
+        <Select
+          value={form.initialState}
+          onChange={(v) => set('initialState', v as BillingState)}
+          options={INITIAL_STATES.map((s) => ({ value: s, label: s }))}
+          style={{ width: '100%' }}
+        />
 
         <label style={{ gridColumn: '1 / -1', fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
           Client *
         </label>
-        <select value={form.clientId} onChange={(e) => set('clientId', e.target.value)} style={{ ...selStyle, gridColumn: '1 / -1' }}>
-          <option value="">Select client…</option>
-          {clientOptions.map((c) => <option key={c.id} value={c.id}>{c.displayName ?? c.name}</option>)}
-        </select>
+        <Select
+          value={form.clientId}
+          onChange={(v) => set('clientId', v)}
+          placeholder="Select client…"
+          options={clientOptions.map((c) => ({ value: c.id, label: c.displayName ?? c.name }))}
+          style={{ width: '100%', gridColumn: '1 / -1' }}
+        />
 
         {form.level === BillingLevel.PROJECT && (
           <>
             <label style={{ gridColumn: '1 / -1', fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
               Project *
             </label>
-            <select value={form.projectId} onChange={(e) => set('projectId', e.target.value)} style={{ ...selStyle, gridColumn: '1 / -1' }}>
-              <option value="">Select project…</option>
-              {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
+            <Select
+              value={form.projectId}
+              onChange={(v) => set('projectId', v)}
+              placeholder="Select project…"
+              options={projects.map((p) => ({ value: p.id, label: p.name }))}
+              style={{ width: '100%', gridColumn: '1 / -1' }}
+            />
           </>
         )}
 
@@ -156,16 +164,22 @@ export const CreateBillingEntryModal: React.FC<{ onClose: () => void }> = ({ onC
             <label style={{ gridColumn: '1 / -1', fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
               Assayer *
             </label>
-            <select value={form.assayerId} onChange={(e) => set('assayerId', e.target.value)} style={{ ...selStyle, gridColumn: '1 / -1' }}>
-              <option value="">Select assayer…</option>
-              {assayers.map((a) => <option key={a.id} value={a.id}>{a.displayName ?? a.name}</option>)}
-            </select>
+            <Select
+              value={form.assayerId}
+              onChange={(v) => set('assayerId', v)}
+              placeholder="Select assayer…"
+              options={assayers.map((a) => ({ value: a.id, label: a.displayName ?? a.name }))}
+              style={{ width: '100%', gridColumn: '1 / -1' }}
+            />
           </>
         )}
 
-        <select value={form.pricingModel} onChange={(e) => set('pricingModel', e.target.value as BillingPricingModel)} style={selStyle}>
-          {PRICING.map((p) => <option key={p} value={p}>{p}</option>)}
-        </select>
+        <Select
+          value={form.pricingModel}
+          onChange={(v) => set('pricingModel', v as BillingPricingModel)}
+          options={PRICING.map((p) => ({ value: p, label: p }))}
+          style={{ width: '100%' }}
+        />
         <StyledInput {...inputProps} placeholder="Rate" type="number" value={form.rate} onChange={(e) => set('rate', e.target.value)} />
         <StyledInput {...inputProps} placeholder="Quantity" type="number" value={form.quantity} onChange={(e) => set('quantity', e.target.value)} />
         <StyledInput {...inputProps} placeholder="GST % (blank = client contract)" type="number" value={form.taxRate} onChange={(e) => set('taxRate', e.target.value)} />

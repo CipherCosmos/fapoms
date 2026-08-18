@@ -6,11 +6,13 @@ import {
 import { nextAssayerLifecycleStates, AssayerLifecycleStatus } from '@fapoms/shared';
 
 import { api } from '../../services/api';
+import { Select } from '../../components/ui';
 import type { Assayer } from './assayer-shared';
 import {
-  STATUS_COLORS, fmtDate, fmtWhen, money, missingCriticalFields,
+  STATUS_COLORS, money, missingCriticalFields,
   fieldLabelStyle as label,
 } from './assayer-shared';
+import { fmtDate, fmtWhen } from '../../utils/dates';
 import { userMessage } from '../../services/errors';
 import { CommercialProfileModal, type CommercialProfile } from './CommercialProfileModal';
 import { AssayerRemarks } from '../../components/AssayerRemarks';
@@ -253,11 +255,12 @@ export const AssayerDetailDrawer: React.FC<{
                         <ArrowRightLeft size={11} /> Move to next stage
                       </div>
                       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                        <select value={target} onChange={(e) => setTarget(e.target.value)}
-                          style={{ padding: '7px 10px', fontSize: '12px', borderRadius: '6px', background: 'var(--bg-page)', color: 'inherit', border: '1px solid var(--border-color)' }}>
-                          <option value="">Choose…</option>
-                          {transitions.map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
-                        </select>
+                        <Select
+                          value={target}
+                          onChange={setTarget}
+                          options={transitions.map((t) => ({ value: t, label: t.replace(/_/g, ' ') }))}
+                          placeholder="Choose…"
+                        />
                         <input value={reason} onChange={(e) => setReason(e.target.value)}
                           placeholder={reasonRequired ? 'Why? — goes on their record' : 'Reason (optional)'}
                           style={{ flex: 1, minWidth: '160px', padding: '7px 10px', fontSize: '12px', borderRadius: '6px', background: 'var(--bg-page)', color: 'inherit', border: `1px solid ${reasonRequired && !reason.trim() ? 'var(--warning)' : 'var(--border-color)'}` }} />

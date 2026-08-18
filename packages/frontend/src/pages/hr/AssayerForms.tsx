@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { User, MapPin, Briefcase, Award, CreditCard, Clock, Phone, X, CheckCircle, Edit2, AlertTriangle } from 'lucide-react';
 import { INDIAN_STATES, todayDateKey } from '@fapoms/shared';
 import { api } from '../../services/api';
-import { Modal, useToast } from '../../components/ui';
+import { Modal, Select, useToast } from '../../components/ui';
 import { Autocomplete } from '../../components/ui/Autocomplete';
 import type { Assayer } from './assayer-shared';
 import { STATUS_COLORS } from './assayer-shared';
@@ -19,7 +19,6 @@ import { fetchWithTimeout } from '../../services/http';
 
 const labelStyle = { display: 'block', fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px' };
 const formFieldStyle = { padding: '10px 12px', background: 'var(--bg-page)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', width: '100%', boxSizing: 'border-box' as const, outline: 'none', fontSize: '13px' };
-const formSelectStyle = { padding: '10px 12px', background: 'var(--bg-page)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', width: '100%', boxSizing: 'border-box' as const, outline: 'none', cursor: 'pointer', fontSize: '13px' };
 
 const FIELD_TEXTAREA = new Set(['address', 'notes']);
 const FIELD_MONO = new Set(['assayerCode', 'employeeCode', 'employeeId', 'panNumber', 'bankAccountNumber', 'ifscCode']);
@@ -192,10 +191,13 @@ const renderFormField = (field: FieldDef, form: Record<string, string>, setForm:
         {field.label}{field.required && <span style={{ color: 'var(--danger)', marginLeft: '2px' }}>*</span>}
       </label>
       {field.options ? (
-        <select value={val} onChange={(e) => setForm({ ...form, [field.key]: e.target.value })} required={field.required} style={formSelectStyle}>
-          <option value="">-- Select {field.label.replace(' *', '')} --</option>
-          {field.options.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
+        <Select
+          value={val}
+          onChange={(v) => setForm({ ...form, [field.key]: v })}
+          options={field.options.map(o => ({ value: o.value, label: o.label }))}
+          placeholder={`-- Select ${field.label.replace(' *', '')} --`}
+          style={{ width: '100%' }}
+        />
       ) : GEO_AUTO_FIELDS.has(field.key) ? (
         <Autocomplete
           value={val}
@@ -296,6 +298,14 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    // The select-backed required fields (State) used to be blocked from submitting empty by the
+    // browser's own <select required> constraint validation; the custom dropdown doesn't
+    // participate in that, so the check is re-asserted explicitly here.
+    const missingRequired = CREATE_FIELDS.filter((f) => f.required && f.options && !form[f.key]?.trim());
+    if (missingRequired.length > 0) {
+      toast({ type: 'error', title: 'Missing required field', message: `${missingRequired.map((f) => f.label).join(', ')} must be set.` });
+      return;
+    }
     setSubmitting(true);
     try {
       await checkAddressConsistency(form.pincode || '', form.state || '', form.district || '');
@@ -570,13 +580,12 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
 
             <div>
               <label style={labelStyle}>State <span style={{ color: 'var(--danger)' }}>*</span></label>
-              <select
+              <Select
                 value={form.state || 'Delhi'}
-                onChange={(e) => { setForm({ ...form, state: e.target.value }); checkAddressConsistency(form.pincode || '', e.target.value, form.district); }}
-                style={formSelectStyle}
-              >
-                {INDIAN_STATES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-              </select>
+                onChange={(v) => { setForm({ ...form, state: v }); checkAddressConsistency(form.pincode || '', v, form.district); }}
+                options={INDIAN_STATES.map(s => ({ value: s.value, label: s.label }))}
+                style={{ width: '100%' }}
+              />
             </div>
 
             {addrError && (
@@ -587,13 +596,12 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
 
             <div>
               <label style={labelStyle}>Employment Type</label>
-              <select
+              <Select
                 value={form.employmentType || 'FULL_TIME'}
-                onChange={(e) => setForm({ ...form, employmentType: e.target.value })}
-                style={formSelectStyle}
-              >
-                {EMPLOYMENT_TYPES.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-              </select>
+                onChange={(v) => setForm({ ...form, employmentType: v })}
+                options={EMPLOYMENT_TYPES.map(o => ({ value: o.value, label: o.label }))}
+                style={{ width: '100%' }}
+              />
             </div>
           </div>
         </>

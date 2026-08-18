@@ -63,12 +63,12 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
   };
 
   const trigger = (
-    <div onClick={() => setCollapsed(!collapsed)}
-      style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, color: 'var(--text-primary)', cursor: 'pointer', userSelect: 'none', padding: '6px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', fontSize: '12px', whiteSpace: 'nowrap' }}>
+    <button type="button" onClick={() => setCollapsed(!collapsed)} aria-expanded={!collapsed}
+      style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, color: 'var(--text-primary)', cursor: 'pointer', userSelect: 'none', padding: '6px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', fontSize: '12px', whiteSpace: 'nowrap', font: 'inherit' }}>
       <Layers size={14} style={{ color: 'var(--accent-primary)' }} />
       <span>Map Controls</span>
       <ChevronDown size={12} />
-    </div>
+    </button>
   );
 
   const panelContent = () => (
@@ -103,11 +103,11 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', borderTop: '1px solid var(--border-hair)', paddingTop: '8px' }}>
-        <div onClick={() => setFiltersOpen(!filtersOpen)}
-          style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', userSelect: 'none', color: 'var(--text-muted)', fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+        <button type="button" onClick={() => setFiltersOpen(!filtersOpen)} aria-expanded={filtersOpen}
+          style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', userSelect: 'none', color: 'var(--text-muted)', fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', background: 'none', border: 'none', padding: 0, width: '100%', font: 'inherit' }}>
           <span>Search &amp; Filters</span>
           <span style={{ marginLeft: 'auto' }}>{filtersOpen ? '−' : '+'}</span>
-        </div>
+        </button>
         {filtersOpen && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
             <input type="text" placeholder="Search branch name..." value={searchQuery}
@@ -244,12 +244,12 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
       fontSize: '12px', width: collapsed ? 'auto' : '220px',
       transition: 'all 0.2s', padding: collapsed ? '8px 12px' : '12px 16px',
     }}>
-      <div onClick={() => setCollapsed(!collapsed)}
-        style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, color: 'var(--text-primary)', cursor: 'pointer', userSelect: 'none' }}>
+      <button type="button" onClick={() => setCollapsed(!collapsed)} aria-expanded={!collapsed}
+        style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 600, color: 'var(--text-primary)', cursor: 'pointer', userSelect: 'none', background: 'none', border: 'none', padding: 0, width: '100%', font: 'inherit' }}>
         <Layers size={14} style={{ color: 'var(--accent-primary)' }} />
         <span>{collapsed ? 'Map Controls' : 'Map Settings & Layers'}</span>
         {collapsed ? <ChevronDown size={12} style={{ marginLeft: '6px' }} /> : <ChevronUp size={12} style={{ marginLeft: 'auto' }} />}
-      </div>
+      </button>
       {!collapsed && panelContent()}
     </div>
   );

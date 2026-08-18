@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useScope, withScope } from '../context/ScopeContext';
 import { useNavigate } from 'react-router-dom';
@@ -542,6 +542,17 @@ const ReassignDrawer: React.FC<{
 }> = ({ item, onClose, onOffered }) => {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // onClose is an inline arrow at the call site, so it's a new reference every render — held in
+  // a ref, as Modal.tsx/DetailDrawer.tsx do, so this effect only attaches the listener once.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') onCloseRef.current(); };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, []);
+
   const { data, isLoading } = useQuery({
     queryKey: ['inbox-recommendations', item.branchId, item.scheduledDate],
     // A replacement steps into the ORIGINAL audit date, so candidates are ranked for that
@@ -576,10 +587,11 @@ const ReassignDrawer: React.FC<{
   return (
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', justifyContent: 'flex-end', zIndex: 1000 }} onClick={onClose}>
       <div onClick={(e) => e.stopPropagation()}
+        role="dialog" aria-modal="true" aria-labelledby="reassign-drawer-title"
         style={{ width: 'min(420px, 100%)', height: '100%', overflowY: 'auto', background: 'var(--bg-primary)', borderLeft: '1px solid var(--border-color)', padding: '18px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px' }}>
           <div>
-            <div style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)' }}>Find a replacement</div>
+            <div id="reassign-drawer-title" style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)' }}>Find a replacement</div>
             <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>
               {item.branchName}{item.branchCity ? ` · ${item.branchCity}` : ''} — the engine's ranked candidates. One click sends the offer.
             </div>

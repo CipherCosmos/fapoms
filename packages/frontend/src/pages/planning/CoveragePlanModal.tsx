@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { X, Loader2, CheckCircle2, AlertTriangle, Rocket } from 'lucide-react';
 import {
   getCoveragePlanPreview,
@@ -76,6 +76,19 @@ export const CoveragePlanModal: React.FC<{
 
   useEffect(() => { void loadPreview(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [projectId]);
 
+  // onClose is an inline arrow at the call site (a new reference every render of the parent, the
+  // busiest-re-rendering page in the app) — held in a ref, as Modal.tsx/DetailDrawer.tsx do, so
+  // this effect only runs once rather than tearing down and re-adding the listener constantly.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onCloseRef.current();
+    };
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, []);
+
   const run = async (
     phase: 'generate' | 'approve' | 'deploy',
     fn: () => Promise<void>,
@@ -117,10 +130,11 @@ export const CoveragePlanModal: React.FC<{
     <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '16px' }}
       onClick={onClose}>
       <div onClick={(e) => e.stopPropagation()}
+        role="dialog" aria-modal="true" aria-labelledby="coverage-plan-title"
         style={{ width: 'min(680px, 100%)', maxHeight: '90vh', overflowY: 'auto', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px' }}>
           <div>
-            <div style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-primary)' }}>Coverage Plan — {projectName}</div>
+            <div id="coverage-plan-title" style={{ fontSize: '16px', fontWeight: 800, color: 'var(--text-primary)' }}>Coverage Plan — {projectName}</div>
             <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>
               Generate → approve → deploy the whole project's assignments in one flow.
             </div>

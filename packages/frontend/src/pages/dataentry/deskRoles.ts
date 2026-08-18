@@ -39,5 +39,4 @@ export const deskLabel: React.CSSProperties = {
   letterSpacing: '0.05em', color: 'var(--text-muted)',
 };
 
-export const fmtWhen = (d?: string | null) =>
-  d ? new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
+export { fmtWhen } from '../../utils/dates';

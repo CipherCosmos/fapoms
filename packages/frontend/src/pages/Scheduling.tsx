@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { 
+import {
   CalendarDays, RefreshCw, Calendar, CheckCircle2,
   Plus, Download, ChevronLeft, ChevronRight,
-  X, Sun, Landmark, Umbrella, Filter, List, Grid, ArrowRight
+  X, Sun, Landmark, Umbrella, Filter, List, Grid, ArrowRight,
+  MapPin, User, Check
 } from 'lucide-react';
 import { ScheduleStatus, SystemRole, formatRupees } from '@fapoms/shared';
 import { useCurrentRoles, hasAnyRole } from '../hooks/useCurrentRoles';
@@ -14,7 +15,7 @@ import { userMessage } from '../services/errors';
 import { queryClient } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
 import { useScope, withScope } from '../context/ScopeContext';
-import { Modal, FilterSelect, AlertBanner } from '../components/ui';
+import { Modal, FilterSelect, AlertBanner, Select } from '../components/ui';
 
 import { assignmentFee, assignmentFeeValue } from '../utils/money';
 interface Schedule {
@@ -101,6 +102,7 @@ export const Scheduling: React.FC = () => {
    * Consumed once and then cleared from the URL, because it describes an intent ("schedule this")
    * rather than a state worth restoring — leaving it would reopen the modal on every refresh.
    */
+  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   useEffect(() => {
     const wanted = searchParams.get('assignmentId');
@@ -419,13 +421,13 @@ export const Scheduling: React.FC = () => {
           {/* Filter Dropdown */}
           <FilterSelect value={statusFilter} onChange={setStatusFilter} label={<Filter size={14} style={{ color: 'var(--text-muted)' }} />} compact options={[
             { value: 'ALL', label: 'All Schedules' },
-            { value: 'ONGOING', label: '⚡ Ongoing (Today)' },
-            { value: 'UPCOMING', label: '📅 Upcoming' },
-            { value: 'COMPLETED', label: '✓ Completed' },
-            { value: 'CONFIRMED', label: '✅ Confirmed' },
-            { value: 'RESCHEDULED', label: '🔄 Rescheduled' },
-            { value: 'TENTATIVE', label: '⏳ Tentative' },
-            { value: 'HISTORICAL', label: '📜 History Log' },
+            { value: 'ONGOING', label: 'Ongoing (Today)' },
+            { value: 'UPCOMING', label: 'Upcoming' },
+            { value: 'COMPLETED', label: 'Completed' },
+            { value: 'CONFIRMED', label: 'Confirmed' },
+            { value: 'RESCHEDULED', label: 'Rescheduled' },
+            { value: 'TENTATIVE', label: 'Tentative' },
+            { value: 'HISTORICAL', label: 'History Log' },
           ]} style={{ background: 'none', border: '1px solid var(--border-color)' }} />
 
           {/* View Toggle */}
@@ -445,7 +447,7 @@ export const Scheduling: React.FC = () => {
           </button>
           )}
 
-          <button onClick={() => window.location.href = '/assignments'} className="btn btn-secondary" style={{ padding: '6px 10px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+          <button onClick={() => navigate('/assignments')} className="btn btn-secondary" style={{ padding: '6px 10px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
             Stage 3: Field Execution <ArrowRight size={12} />
           </button>
         </div>
@@ -543,9 +545,9 @@ export const Scheduling: React.FC = () => {
                     <span style={{ fontSize: '10px', color: 'var(--warning)', fontWeight: 700 }}>₹{a.proposedFee}</span>
                   </div>
                   <div style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between' }}>
-                    <span>📍 {a.projectBranch?.branch?.city}, {a.projectBranch?.branch?.state}</span>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><MapPin size={9} /> {a.projectBranch?.branch?.city}, {a.projectBranch?.branch?.state}</span>
                   </div>
-                  <div style={{ fontSize: '10px', color: 'var(--accent)', fontWeight: 600 }}>👤 {a.assayer?.displayName}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '3px', fontSize: '10px', color: 'var(--accent)', fontWeight: 600 }}><User size={9} /> {a.assayer?.displayName}</div>
                   <button onClick={() => handleQuickScheduleFromQueue(a.id)}
                     className="btn btn-secondary" style={{ marginTop: '4px', width: '100%', padding: '4px', fontSize: '10px', background: 'rgba(216,174,71,0.15)', borderColor: 'rgba(216,174,71,0.3)', color: 'var(--accent)', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
                     <Calendar size={11} /> Quick Schedule
@@ -604,7 +606,10 @@ export const Scheduling: React.FC = () => {
                   const isHoliday = dayHolidays.length > 0 || isSunday || isAltSaturday;
 
                   return (
-                    <div key={day} onClick={() => setSelectedDate(dateStr)}
+                    <div key={day} role="button" tabIndex={0}
+                      onClick={() => setSelectedDate(dateStr)}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedDate(dateStr); } }}
+                      aria-label={`${day}${hasSchedules ? `, ${daySchedules.length} scheduled` : ''}${isHoliday ? ', holiday' : ''}`}
                       style={{ padding: '6px', cursor: 'pointer', borderRadius: '6px', minHeight: '60px', position: 'relative',
                         background: isSelected ? 'rgba(216,174,71,0.25)' : isHoliday ? 'var(--status-cancelled-bg)' : isToday ? 'rgba(216,174,71,0.06)' : 'var(--bg-surface-2)',
                         border: isSelected ? '1px solid var(--accent)' : isHoliday ? '1px solid var(--status-cancelled-bg)' : isToday ? '1px solid rgba(216,174,71,0.2)' : '1px solid var(--bg-surface-2)',
@@ -620,10 +625,10 @@ export const Scheduling: React.FC = () => {
                       {hasSchedules && (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
                           {daySchedules.slice(0, 2).map(s => (
-                            <div key={s.id} onClick={(e) => { e.stopPropagation(); setSelectedSchId(s.id); }}
-                              style={{ padding: '2px 4px', borderRadius: '3px', background: STATUS_COLORS[s.status] ? `${STATUS_COLORS[s.status]}25` : 'rgba(216,174,71,0.2)', borderLeft: `2px solid ${STATUS_COLORS[s.status] || 'var(--accent)'}`, fontSize: '9px', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            <button key={s.id} type="button" onClick={(e) => { e.stopPropagation(); setSelectedSchId(s.id); }}
+                              style={{ display: 'block', width: '100%', textAlign: 'left', font: 'inherit', border: 'none', padding: '2px 4px', borderRadius: '3px', background: STATUS_COLORS[s.status] ? `${STATUS_COLORS[s.status]}25` : 'rgba(216,174,71,0.2)', borderLeft: `2px solid ${STATUS_COLORS[s.status] || 'var(--accent)'}`, fontSize: '9px', color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}>
                               {s.assignment?.projectBranch?.branch?.name || s.assayer?.displayName}
-                            </div>
+                            </button>
                           ))}
                           {daySchedules.length > 2 && (
                             <span
@@ -665,8 +670,8 @@ export const Scheduling: React.FC = () => {
                   const fee = assignmentFeeValue(sch.assignment);
                   const branch = sch.assignment?.projectBranch?.branch;
                   return (
-                  <div key={sch.id} onClick={() => { setSelectedSchId(sch.id); setSelectedDate(localDateKey(sch.scheduledDate)); }}
-                    style={{ padding: '10px 14px', borderRadius: '8px', marginBottom: '6px', background: selectedSchId === sch.id ? 'rgba(216,174,71,0.2)' : 'var(--bg-surface-2)', border: selectedSchId === sch.id ? '1px solid var(--accent)' : '1px solid var(--border-hair)', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
+                  <button type="button" key={sch.id} onClick={() => { setSelectedSchId(sch.id); setSelectedDate(localDateKey(sch.scheduledDate)); }}
+                    style={{ width: '100%', textAlign: 'left', font: 'inherit', padding: '10px 14px', borderRadius: '8px', marginBottom: '6px', background: selectedSchId === sch.id ? 'rgba(216,174,71,0.2)' : 'var(--bg-surface-2)', border: selectedSchId === sch.id ? '1px solid var(--accent)' : '1px solid var(--border-hair)', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
                     <div style={{ minWidth: 0 }}>
                       <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>
                         {branch?.name || 'Branch Audit'}
@@ -692,7 +697,7 @@ export const Scheduling: React.FC = () => {
                         {scheduleStatusLabel(sch.status)}
                       </span>
                     </div>
-                  </div>
+                  </button>
                   );
                 })
               )}
@@ -753,8 +758,8 @@ export const Scheduling: React.FC = () => {
               </div>
             ) : (
               dateSchedules.map(sch => (
-                <div key={sch.id} onClick={() => setSelectedSchId(selectedSchId === sch.id ? null : sch.id)}
-                  style={{ padding: '8px 10px', cursor: 'pointer', borderRadius: '6px', marginBottom: '4px',
+                <button type="button" key={sch.id} onClick={() => setSelectedSchId(selectedSchId === sch.id ? null : sch.id)}
+                  style={{ display: 'block', width: '100%', textAlign: 'left', font: 'inherit', padding: '8px 10px', cursor: 'pointer', borderRadius: '6px', marginBottom: '4px',
                     background: selectedSchId === sch.id ? 'rgba(216,174,71,0.25)' : 'var(--bg-surface-2)',
                     borderLeft: selectedSchId === sch.id ? '3px solid var(--accent)' : '3px solid transparent',
                     border: selectedSchId === sch.id ? '1px solid rgba(216,174,71,0.4)' : '1px solid var(--bg-surface-2)' }}>
@@ -762,8 +767,8 @@ export const Scheduling: React.FC = () => {
                     <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>{sch.assignment?.projectBranch?.branch?.name}</div>
                     <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '3px', background: (STATUS_COLORS[sch.status] || 'var(--accent)') + '20', color: STATUS_COLORS[sch.status] || 'var(--accent)', fontWeight: 700 }}>{scheduleStatusLabel(sch.status)}</span>
                   </div>
-                  <div style={{ fontSize: '10px', color: 'var(--accent)', marginTop: '2px' }}>👤 {sch.assayer?.displayName}</div>
-                </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '3px', fontSize: '10px', color: 'var(--accent)', marginTop: '2px' }}><User size={9} /> {sch.assayer?.displayName}</div>
+                </button>
               ))
             )}
 
@@ -785,8 +790,8 @@ export const Scheduling: React.FC = () => {
                   {canManageSchedules &&
                     selectedSch.status !== ScheduleStatus.COMPLETED &&
                     !['AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'].includes((selectedSch.assignment?.projectBranch as any)?.status) && (
-                      <button onClick={() => handleTransition(selectedSch.id, ScheduleStatus.COMPLETED)} disabled={transitioningId != null} className="btn btn-primary" style={{ flex: 1, padding: '4px', fontSize: '10px', background: 'var(--success)', borderColor: 'var(--success)' }}>
-                        {transitioningId === selectedSch.id ? 'Saving…' : '✓ Complete'}
+                      <button onClick={() => handleTransition(selectedSch.id, ScheduleStatus.COMPLETED)} disabled={transitioningId != null} className="btn btn-primary" style={{ flex: 1, padding: '4px', fontSize: '10px', background: 'var(--success)', borderColor: 'var(--success)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
+                        {transitioningId === selectedSch.id ? 'Saving…' : <><Check size={11} /> Complete</>}
                       </button>
                   )}
                 </div>
@@ -889,19 +894,20 @@ export const Scheduling: React.FC = () => {
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Assignment *</label>
-            <select value={selectedAssignmentId} onChange={e => {
-              setSelectedAssignmentId(e.target.value);
-              const sel = scopedAssignments.find(a => a.id === e.target.value);
-              if (sel?.assayerId && scheduleDate) loadAssayerWorkload(sel.assayerId, scheduleDate);
-            }} required
-              style={{ width: '100%', padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '12px' }}>
-              <option value="">— Select Confirmed Offer —</option>
-              {scopedAssignments.map(a => (
-                <option key={a.id} value={a.id}>
-                  {a.assignmentNumber} — {a.projectBranch?.branch?.name} ({a.assayer?.displayName})
-                </option>
-              ))}
-            </select>
+            <Select
+              value={selectedAssignmentId}
+              onChange={(v) => {
+                setSelectedAssignmentId(v);
+                const sel = scopedAssignments.find(a => a.id === v);
+                if (sel?.assayerId && scheduleDate) loadAssayerWorkload(sel.assayerId, scheduleDate);
+              }}
+              options={scopedAssignments.map(a => ({
+                value: a.id,
+                label: `${a.assignmentNumber} — ${a.projectBranch?.branch?.name} (${a.assayer?.displayName})`,
+              }))}
+              placeholder="— Select Confirmed Offer —"
+              style={{ width: '100%' }}
+            />
             {assayerWorkload && (() => {
               /**
                * The ceiling comes from the server with the count.

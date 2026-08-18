@@ -1,4 +1,5 @@
 import React from 'react';
+import { Select } from './Select';
 
 export const Pagination: React.FC<{
   page: number;
@@ -47,23 +48,12 @@ export const Pagination: React.FC<{
           {from}–{to} of {total}
         </span>
         {onPageSizeChange && (
-          <select
-            value={pageSize}
-            onChange={(e) => onPageSizeChange(Number(e.target.value))}
-            style={{
-              padding: '6px 8px',
-              fontSize: 12,
-              background: 'var(--bg-input)',
-              border: '1px solid var(--border-color)',
-              borderRadius: 'var(--radius-sm)',
-              color: 'var(--text-primary)',
-              outline: 'none',
-            }}
-          >
-            {[10, 25, 50, 100].map((s) => (
-              <option key={s} value={s}>{s} / page</option>
-            ))}
-          </select>
+          <Select
+            value={String(pageSize)}
+            onChange={(v) => onPageSizeChange(Number(v))}
+            options={[10, 25, 50, 100].map((s) => ({ value: String(s), label: `${s} / page` }))}
+            compact
+          />
         )}
       </div>
     </div>

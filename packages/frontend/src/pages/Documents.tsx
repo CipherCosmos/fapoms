@@ -6,7 +6,7 @@ import { DocumentModelLegend } from './documents/DocumentModelLegend';
 import { DailyRunPanel } from './documents/DailyRunPanel';
 import { CustomerMasterVersions } from './CustomerMasterVersions';
 import { RefreshCw } from 'lucide-react';
-import { AlertBanner } from '../components/ui';
+import { AlertBanner, Select } from '../components/ui';
 import { connectSocket, getSocket } from '../services/socket';
 import { fetchWithTimeout } from '../services/http';
 import { api } from '../services/api';
@@ -325,14 +325,17 @@ export const Documents: React.FC = () => {
               Customer Master
             </button>
             {view === 'daily' && projects.length > 1 && (
-              <select value={projectId} onChange={(e) => setProjectId(e.target.value)}
-                style={{ padding: '6px 10px', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 12, marginLeft: 4 }}>
-                {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-              </select>
+              <Select
+                compact
+                value={projectId}
+                onChange={setProjectId}
+                options={projects.map((p) => ({ value: p.id, label: p.name }))}
+                style={{ marginLeft: 4 }}
+              />
             )}
           </div>
           {view === 'versions' ? (
-            <CustomerMasterVersions embedded />
+            <CustomerMasterVersions />
           ) : view === 'daily' ? (
             <DailyRunPanel
               projectId={projectId}

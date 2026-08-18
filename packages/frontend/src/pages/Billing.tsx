@@ -2,7 +2,6 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Plus, AlertTriangle, Banknote, FileText, RefreshCw, FileSpreadsheet } from 'lucide-react';
 import {
-  useBillingDashboard,
   useBillingEntries,
   useBillingInvoices,
   useBillingPayables,
@@ -36,7 +35,7 @@ import { CreateInvoiceModal } from './billing/CreateInvoiceModal';
 import { InvoiceDetailDrawer } from './billing/InvoiceDetailDrawer';
 import { CreatePayableModal, PayableDetailDrawer } from './billing/PayableModals';
 import { RaiseConflictModal, ConflictDetailDrawer } from './billing/ConflictModals';
-import { useToast } from '../components/ui';
+import { Select, useToast } from '../components/ui';
 import { userMessage } from '../services/errors';
 import { useExcelExport } from '../hooks/useExcelExport';
 import { formatRupees as money } from '@fapoms/shared';
@@ -45,7 +44,7 @@ import { ExpenseReview } from './ExpenseReview';
 import { useCurrentRoles, hasAnyRole } from '../hooks/useCurrentRoles';
 
 
-type Tab = 'finance' | 'overview' | 'hierarchy' | 'entries' | 'invoices' | 'payables' | 'conflicts' | 'history' | 'expenses';
+type Tab = 'finance' | 'hierarchy' | 'entries' | 'invoices' | 'payables' | 'conflicts' | 'history' | 'expenses';
 
 /** The tables that take a page window, and so need a cursor of their own. */
 type PagedTab = 'entries' | 'invoices' | 'payables' | 'history';
@@ -58,70 +57,79 @@ type PagedTab = 'entries' | 'invoices' | 'payables' | 'history';
  */
 const CONFLICT_LIST_CAP = 200;
 
+// Every hex literal below used to be a fixed color, locked to the default theme
+// regardless of which of the app's 19 themes was active. Each is now the semantic
+// token that already carried the same meaning elsewhere in the app — gold/"in
+// draft or awaiting a decision" -> --accent, orange/"in progress" -> --warning,
+// red/"blocked or reversed" -> --danger, green/"cleared" -> --success,
+// gray/"parked, nothing pending" -> --text-muted — so these pills now repaint
+// correctly under every theme instead of only the one they were written against.
 const STATE_BADGE: Record<BillingState, string> = {
   NOT_BILLABLE: 'var(--text-muted)',
   PENDING_BILLING: 'var(--text-secondary)',
-  READY_FOR_BILLING: '#d8ae47',
-  DRAFT: '#d8ae47',
-  SUBMITTED: '#b8791f',
-  UNDER_REVIEW: '#d8ae47',
-  REJECTED: '#b14444',
-  APPROVED: '#3f7d53',
-  INVOICED: '#3f7d53',
-  PARTIALLY_PAID: '#b8791f',
-  PAID: '#3f7d53',
-  ON_HOLD: '#7c6e59',
-  DISPUTED: '#b14444',
-  CANCELLED: '#7c6e59',
-  ADJUSTED: '#b14444',
+  READY_FOR_BILLING: 'var(--accent)',
+  DRAFT: 'var(--accent)',
+  SUBMITTED: 'var(--warning)',
+  UNDER_REVIEW: 'var(--accent)',
+  REJECTED: 'var(--danger)',
+  APPROVED: 'var(--success)',
+  INVOICED: 'var(--success)',
+  PARTIALLY_PAID: 'var(--warning)',
+  PAID: 'var(--success)',
+  ON_HOLD: 'var(--text-muted)',
+  DISPUTED: 'var(--danger)',
+  CANCELLED: 'var(--text-muted)',
+  ADJUSTED: 'var(--danger)',
 };
 
 const PAY_STATE_BADGE: Record<PaymentState, string> = {
   UNPAID: 'var(--text-secondary)',
-  PARTIALLY_PAID: '#b8791f',
-  PAID: '#3f7d53',
-  REVERSED: '#b14444',
+  PARTIALLY_PAID: 'var(--warning)',
+  PAID: 'var(--success)',
+  REVERSED: 'var(--danger)',
 };
 
 const INV_BADGE: Record<InvoiceStatus, string> = {
-  DRAFT: '#d8ae47',
-  ISSUED: '#d8ae47',
-  PARTIALLY_PAID: '#b8791f',
-  PAID: '#3f7d53',
-  DISPUTED: '#b14444',
-  CANCELLED: '#7c6e59',
-  VOID: '#7c6e59',
+  DRAFT: 'var(--accent)',
+  ISSUED: 'var(--accent)',
+  PARTIALLY_PAID: 'var(--warning)',
+  PAID: 'var(--success)',
+  DISPUTED: 'var(--danger)',
+  CANCELLED: 'var(--text-muted)',
+  VOID: 'var(--text-muted)',
 };
 
 const PAYABLE_BADGE: Record<AssayerPayableStatus, string> = {
-  PENDING: '#b8791f',
-  APPROVED: '#d8ae47',
-  PAID: '#3f7d53',
-  DISPUTED: '#b14444',
-  ON_HOLD: '#7c6e59',
+  PENDING: 'var(--warning)',
+  APPROVED: 'var(--accent)',
+  PAID: 'var(--success)',
+  DISPUTED: 'var(--danger)',
+  ON_HOLD: 'var(--text-muted)',
 };
 
 const CONFLICT_BADGE: Record<BillingConflictSeverity, string> = {
-  INFO: '#d8ae47',
-  WARNING: '#b8791f',
-  CRITICAL: '#b14444',
+  INFO: 'var(--accent)',
+  WARNING: 'var(--warning)',
+  CRITICAL: 'var(--danger)',
 };
 
 const CONFLICT_STATUS_BADGE: Record<BillingConflictStatus, string> = {
-  OPEN: '#b8791f',
-  RESOLVED: '#3f7d53',
-  MERGED: '#3f7d53',
-  SEPARATED: '#d8ae47',
-  REASSIGNED: '#d8ae47',
-  OVERRIDDEN: '#d8ae47',
-  REJECTED: '#b14444',
-  ON_HOLD: '#7c6e59',
+  OPEN: 'var(--warning)',
+  RESOLVED: 'var(--success)',
+  MERGED: 'var(--success)',
+  SEPARATED: 'var(--accent)',
+  REASSIGNED: 'var(--accent)',
+  OVERRIDDEN: 'var(--accent)',
+  REJECTED: 'var(--danger)',
+  ON_HOLD: 'var(--text-muted)',
 };
 
 const Badge: React.FC<{ color: string; children: React.ReactNode }> = ({ color, children }) => (
   <span style={{
     display: 'inline-block', padding: '2px 8px', borderRadius: 'var(--radius-sm)',
-    background: `${color}22`, color, fontSize: '11px', fontWeight: 600, whiteSpace: 'nowrap',
+    // `color` is a CSS var() reference now, not a hex literal — string-concatenating an
+    // alpha suffix onto it (the old `${color}22`) would no longer parse as a color.
+    background: `color-mix(in srgb, ${color} 13%, transparent)`, color, fontSize: '11px', fontWeight: 600, whiteSpace: 'nowrap',
   }}>{children}</span>
 );
 
@@ -129,13 +137,6 @@ const Card: React.FC<{ title?: string; children: React.ReactNode; style?: React.
   <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '18px', ...style }}>
     {title && <h3 style={{ fontSize: '14px', fontWeight: 600, margin: '0 0 14px', color: 'var(--text-primary)' }}>{title}</h3>}
     {children}
-  </div>
-);
-
-const MoneyStat: React.FC<{ label: string; value: string; color?: string }> = ({ label, value, color = 'var(--text-primary)' }) => (
-  <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '16px 18px', flex: 1, minWidth: 150 }}>
-    <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.6px', color: 'var(--text-muted)', fontWeight: 600 }}>{label}</div>
-    <div style={{ fontSize: '22px', fontWeight: 700, color, marginTop: 6, fontFamily: 'var(--font-display)' }}>{value}</div>
   </div>
 );
 
@@ -164,7 +165,7 @@ export const Billing: React.FC = () => {
     SystemRole.OPERATIONS_MANAGER,
     SystemRole.FINANCE_MANAGER,
   ]);
-  const VALID_TABS: Tab[] = ['finance', 'overview', 'hierarchy', 'entries', 'invoices', 'payables', 'conflicts', 'history', 'expenses'];
+  const VALID_TABS: Tab[] = ['finance', 'hierarchy', 'entries', 'invoices', 'payables', 'conflicts', 'history', 'expenses'];
   const tab = (VALID_TABS.includes(params.get('tab') as Tab) ? params.get('tab') : 'finance') as Tab;
   const setTab = (t: Tab) => {
     const next = new URLSearchParams(params);
@@ -248,13 +249,12 @@ export const Billing: React.FC = () => {
    * leaves it alone. Landing on Finance now costs the client list plus the finance summary
    * instead of eight requests, and each tab thereafter costs exactly one, cached for 30s.
    *
-   * Two of these stay ungated on purpose:
-   *  - `clients` feeds the client <select> above the tab strip, which is always on screen;
-   *  - `dashboard` is read only by Overview. Finance has its own consolidated query inside
-   *    <FinanceDashboard/> and no other tab touches `dashboard.data`.
+   * One of these stays ungated on purpose: `clients` feeds the client <select> above the tab
+   * strip, which is always on screen. The old `dashboard` query (Overview-only) is gone —
+   * its two unique figures (by-client-tier, invoices issued) now live inside
+   * <FinanceDashboard/>, which fetches them itself.
    */
   const clients = useBillingClients();
-  const dashboard = useBillingDashboard(clientId || undefined, { enabled: tab === 'overview' });
   // The entries query also backs the bulk-selection bar (`selectedEntries` -> reachable states,
   // merge eligibility), but every one of those is rendered inside the Entries tab and there is no
   // way to select a row from anywhere else, so tab-gating it costs no behaviour.
@@ -271,9 +271,9 @@ export const Billing: React.FC = () => {
   const history = useBillingHistory({ ...scope, page: pages.history, limit: BILLING_PAGE_SIZE }, { enabled: tab === 'history' });
 
   const levelColor: Record<BillingLevel, string> = {
-    CLIENT: '#d8ae47',
-    PROJECT: '#d8ae47',
-    ASSIGNMENT: '#b8791f',
+    CLIENT: 'var(--accent)',
+    PROJECT: 'var(--accent)',
+    ASSIGNMENT: 'var(--warning)',
   };
   const pricingModel: Record<BillingPricingModel, string> = {
     FLAT_RATE: 'Flat', PER_ASSIGNMENT: 'Per Assignment', PER_BRANCH: 'Per Branch',
@@ -381,18 +381,19 @@ export const Billing: React.FC = () => {
           always asked per client ("what does SBI owe us?"), not across the book. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
         <label style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 600 }}>Client:</label>
-        <select
+        <Select
           value={clientId}
-          onChange={(e) => setClientId(e.target.value)}
-          style={{ padding: '7px 11px', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 13, minWidth: 240 }}
-        >
-          <option value="">All clients</option>
-          {clients.data?.map((c) => (
-            <option key={c.clientId} value={c.clientId}>
-              {c.clientName}{Number(c.entryCount) > 0 ? ` (${c.entryCount} lines)` : ''}
-            </option>
-          ))}
-        </select>
+          onChange={setClientId}
+          options={[
+            { value: '', label: 'All clients' },
+            ...(clients.data ?? []).map((c) => ({
+              value: c.clientId,
+              label: `${c.clientName}${Number(c.entryCount) > 0 ? ` (${c.entryCount} lines)` : ''}`,
+            })),
+          ]}
+          compact
+          style={{ minWidth: 240 }}
+        />
         {clientId && (() => {
           const c = clients.data?.find((x) => x.clientId === clientId);
           return c ? (
@@ -405,7 +406,6 @@ export const Billing: React.FC = () => {
 
       <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
         <TabButton active={tab === 'finance'} onClick={() => setTab('finance')}>Finance</TabButton>
-        <TabButton active={tab === 'overview'} onClick={() => setTab('overview')}>Overview</TabButton>
         <TabButton active={tab === 'hierarchy'} onClick={() => setTab('hierarchy')}>Client → Projects → Assignments</TabButton>
         <TabButton active={tab === 'entries'} onClick={() => setTab('entries')}>Entries</TabButton>
         <TabButton active={tab === 'invoices'} onClick={() => setTab('invoices')}>Invoices</TabButton>
@@ -422,63 +422,8 @@ export const Billing: React.FC = () => {
           style={{ padding: '7px 13px', fontSize: 13, fontWeight: 600, borderRadius: 8, textDecoration: 'none', color: 'var(--accent)', border: '1px solid var(--border-color)' }}>Rate cards →</Link>
       </div>
 
-      {tab === 'overview' && (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          {dashboard.isLoading && <div style={{ color: 'var(--text-muted)' }}>Loading dashboard…</div>}
-          {dashboard.data && (
-            <>
-              <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap' }}>
-                <MoneyStat label="Billed" value={`${money(dashboard.data.totals.billed)}`} color="var(--accent)" />
-                <MoneyStat label="Paid" value={`${money(dashboard.data.totals.paid)}`} color="var(--success)" />
-                <MoneyStat label="Outstanding" value={`${money(dashboard.data.totals.outstanding)}`} color="var(--warning)" />
-                <MoneyStat label="Unbilled Revenue" value={`${money(dashboard.data.totals.unbilledRevenue ?? dashboard.data.totals.pending)}`} color="var(--accent)" />
-                <MoneyStat label="Disputed" value={`${money(dashboard.data.totals.disputed)}`} color="var(--danger)" />
-              </div>
-              {/* Revenue vs what we owe assayers — the cost-per-audit question this
-                  platform exists to answer, which billing could not previously show. */}
-              <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap' }}>
-                <MoneyStat label="Net Revenue" value={`${money(dashboard.data.totals.revenue)}`} color="var(--accent)" />
-                <MoneyStat label="Assayer Cost" value={`${money(dashboard.data.totals.assayerCost)}`} color="var(--warning)" />
-                <MoneyStat
-                  label="Margin"
-                  value={`${money(dashboard.data.totals.margin)}${dashboard.data.totals.marginPct != null ? ` (${dashboard.data.totals.marginPct}%)` : ''}`}
-                  color={(dashboard.data.totals.margin ?? 0) < 0 ? 'var(--danger)' : 'var(--success)'}
-                />
-              </div>
-              <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap' }}>
-                <MoneyStat label="Invoices Issued" value={String(dashboard.data.invoices.issued)} color="var(--accent)" />
-                <MoneyStat label="Open Conflicts" value={String(dashboard.data.openConflicts)} color={dashboard.data.openConflicts > 0 ? 'var(--danger)' : 'var(--success)'} />
-              </div>
-              <Card title="By Level">
-                <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  {(Object.keys(dashboard.data.byLevel) as BillingLevel[]).map((lvl) => {
-                    const d = dashboard.data!.byLevel[lvl];
-                    return (
-                      <div key={lvl} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <Badge color={levelColor[lvl]}>{lvl}</Badge>
-                        <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-                          {money(d.billed)} billed · {money(d.paid)} paid · {money(d.outstanding)} outstanding
-                        </span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </Card>
-              <Card title="Assayer Payables">
-                <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap' }}>
-                  <MoneyStat label="Pending" value={`${money(dashboard.data.payable.pending)}`} color="var(--warning)" />
-                  <MoneyStat label="Approved" value={`${money(dashboard.data.payable.approved)}`} color="var(--accent)" />
-                  <MoneyStat label="Paid" value={`${money(dashboard.data.payable.paid)}`} color="var(--success)" />
-                  <MoneyStat label="Disputed" value={`${money(dashboard.data.payable.disputed)}`} color="var(--danger)" />
-                </div>
-              </Card>
-            </>
-          )}
-        </div>
-      )}
-
-      {tab === 'finance' && <FinanceDashboard onNavigate={(t) => setTab(t as Tab)} />}
-      {tab === 'expenses' && canReviewExpenses && <ExpenseReview embedded />}
+      {tab === 'finance' && <FinanceDashboard onNavigate={(t) => setTab(t as Tab)} clientId={clientId || undefined} />}
+      {tab === 'expenses' && canReviewExpenses && <ExpenseReview />}
 
       {tab === 'hierarchy' && <ClientHierarchyPanel clientId={clientId || null} />}
 
@@ -486,11 +431,15 @@ export const Billing: React.FC = () => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
             <label style={{ fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 600 }}>Filter level:</label>
-            <select value={level} onChange={(e) => setLevel(e.target.value as BillingLevel | '')}
-              style={{ padding: '6px 10px', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: '13px' }}>
-              <option value="">All levels</option>
-              {(Object.keys(BillingLevel) as BillingLevel[]).map((l) => <option key={l} value={l}>{l}</option>)}
-            </select>
+            <Select
+              value={level}
+              onChange={(v) => setLevel(v as BillingLevel | '')}
+              options={[
+                { value: '', label: 'All levels' },
+                ...(Object.keys(BillingLevel) as BillingLevel[]).map((l) => ({ value: l, label: l })),
+              ]}
+              compact
+            />
           </div>
           {/* "Billed for" replaces a column set that showed no client, project or
               branch at all — the first thing anyone needs to identify a money line. */}
@@ -503,11 +452,13 @@ export const Billing: React.FC = () => {
               <strong style={{ fontSize: '13px' }}>{selectedEntryIds.size} selected</strong>
               {bulkTargets.length > 0 ? (
                 <>
-                  <select value={bulkTarget} onChange={(e) => setBulkTarget(e.target.value as BillingState | '')}
-                    style={{ padding: '6px 10px', fontSize: '12px', borderRadius: '6px', background: 'var(--bg-page)', color: 'inherit', border: '1px solid var(--border-color)' }}>
-                    <option value="">Move all to…</option>
-                    {bulkTargets.map((t) => <option key={t} value={t}>{t.replace(/_/g, ' ')}</option>)}
-                  </select>
+                  <Select
+                    value={bulkTarget}
+                    onChange={(v) => setBulkTarget(v as BillingState | '')}
+                    placeholder="Move all to…"
+                    options={bulkTargets.map((t) => ({ value: t, label: t.replace(/_/g, ' ') }))}
+                    compact
+                  />
                   <button onClick={runBulkTransition} disabled={!bulkTarget || bulkBusy} className="btn btn-primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
                     {bulkBusy ? 'Applying…' : 'Apply'}
                   </button>
