@@ -84,3 +84,8 @@ packages/shared/src/*.d.ts
 # it showed up as a change on every machine and produced a merge conflict in a file no human has
 # ever read.
 *.tsbuildinfo
+
+# Points EAS Build at the local release keystore (an absolute, machine-specific path) so a
+# cloud build is signed with the same key as a local `./gradlew assembleRelease` — committing
+# it would both leak that path and go stale the moment anyone builds from a different machine.
+packages/mobile/credentials.json

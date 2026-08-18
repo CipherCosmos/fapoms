@@ -27,6 +27,14 @@
         "distribution": "store"
       },
       "channel": "production"
+    },
+    "production-apk": {
+      "extends": "production",
+      "distribution": "internal",
+      "credentialsSource": "local",
+      "android": {
+        "buildType": "apk"
+      }
     }
   },
   "submit": {
