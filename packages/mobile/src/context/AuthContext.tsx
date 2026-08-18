@@ -74,49 +74,66 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [locked, setLocked] = useState<boolean>(false);
   const backgroundedAt = useRef<number | null>(null);
 
+  /**
+   * Boot auth is decided from the keystore alone — never blocked on a network round trip.
+   *
+   * This used to `await validateSession()` (up to a 5s request) before revealing anything, so
+   * every cold start paid that latency even when the token was perfectly fine, and on a branch
+   * with no signal the app never got past the spinner at all — an assayer standing in a vault
+   * with a saved session could not open the app to see yesterday's schedule. The stored token
+   * is sufficient to resume the UI immediately: `AssignmentContext` already paints the last
+   * cached assignments the moment `isAuthenticated` flips, so the assayer sees their real last
+   * state (not a blank screen, not a stranger's) whether or not the network answers.
+   *
+   * Server validation still happens — just after the UI is already usable, and it can only ever
+   * *downgrade* a session (an explicit 401/403 rejection), never hold up showing one.
+   */
   const initSession = useCallback(async () => {
     setAuthenticating(true);
     // Awaited: reading the OS keystore is async, so this is the point at which the app
-    // learns whether a session survived the last launch.
+    // learns whether a session survived the last launch. Typically single-digit milliseconds —
+    // nothing here touches the network.
     const session = await MobileApiService.restoreSession();
     if (session && session.token) {
-      /**
-       * Keeps the session unless the server actually rejected it.
-       *
-       * `unreachable` means we could not ask — a permission dialog pausing the app, or no
-       * signal at the branch. Signing someone out for that is both wrong and expensive: they
-       * are standing in a bank vault and now need their password to carry on.
-       */
-      const verdict = await MobileApiService.validateSession();
-      if (verdict !== 'invalid') {
-        // Locked before the session is exposed, not after — the schedule, branch addresses and
-        // customer counts must not paint behind the prompt even for a frame.
-        if (getPreference('biometrics') && (await biometricsUsable())) {
-          setLocked(true);
-        }
-        setIsAuthenticated(true);
-        setUser({
-          id: session.userId || MobileApiService.getCurrentUserId() || '',
-          name: session.userName || MobileApiService.getCurrentUserName() || 'Assayer',
-          /**
-           * Carried through the restore, not just set at sign-in.
-           *
-           * Rebuilding the user here without it left the flag `undefined`, so the "choose your
-           * own password" gate never rendered on a restored session — and restarting the app was
-           * enough to walk past a requirement that exists precisely because the current password
-           * is one an administrator issued and therefore already knows.
-           */
-          mustChangePassword: MobileApiService.mustChangePassword,
-        });
-      } else {
-        setIsAuthenticated(false);
-        setUser(null);
+      // Locked before the session is exposed, not after — the schedule, branch addresses and
+      // customer counts must not paint behind the prompt even for a frame.
+      if (getPreference('biometrics') && (await biometricsUsable())) {
+        setLocked(true);
       }
+      setIsAuthenticated(true);
+      setUser({
+        id: session.userId || MobileApiService.getCurrentUserId() || '',
+        name: session.userName || MobileApiService.getCurrentUserName() || 'Assayer',
+        /**
+         * Carried through the restore, not just set at sign-in.
+         *
+         * Rebuilding the user here without it left the flag `undefined`, so the "choose your
+         * own password" gate never rendered on a restored session — and restarting the app was
+         * enough to walk past a requirement that exists precisely because the current password
+         * is one an administrator issued and therefore already knows.
+         */
+        mustChangePassword: MobileApiService.mustChangePassword,
+      });
+      setAuthenticating(false);
+
+      // Background revalidation. `unreachable` (no signal, a permission dialog pausing the
+      // app) changes nothing — see validateSession's own comment on why that must not sign
+      // anyone out. Only an explicit rejection ends the session, and only once the server has
+      // actually had the chance to say so.
+      MobileApiService.validateSession().then((verdict) => {
+        if (verdict === 'invalid') {
+          setIsAuthenticated(false);
+          setUser(null);
+          setLocked(false);
+        } else if (verdict === 'valid') {
+          setUser((prev) => (prev ? { ...prev, mustChangePassword: MobileApiService.mustChangePassword } : prev));
+        }
+      });
     } else {
       setIsAuthenticated(false);
       setUser(null);
+      setAuthenticating(false);
     }
-    setAuthenticating(false);
   }, []);
 
   useEffect(() => {

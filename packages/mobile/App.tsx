@@ -22,6 +22,7 @@ import { AssignmentProvider, useAssignments } from './src/context/AssignmentCont
 // UI Shell
 import { TopBar, TabDock, TabType, DOCK_CLEARANCE } from './src/components/ui/AppShell';
 import { AmbientGlow, AppText, Button, Icon, Tappable } from './src/components/ui/primitives';
+import { BrandLoadingScreen } from './src/components/ui/BrandMark';
 import { FeedbackProvider, useFeedback } from './src/components/ui/Feedback';
 
 // Screens
@@ -472,12 +473,15 @@ function AppMain() {
     return () => sub.remove();
   }, [paperwork.assignment, paperwork.close, selectedTab]);
 
+  /*
+   * `authenticating` should now only ever be true for the time it takes to read the OS
+   * keystore — AuthContext's boot check no longer waits on the network (see its own comment).
+   * A bare spinner on a blank background read as the app being stuck even when it wasn't; the
+   * brand mark makes the same brief moment look intentional, and gives it something to sit on
+   * if a very slow device or a Metro bundle load makes it last longer than usual.
+   */
   if (authenticating) {
-    return (
-      <View style={{ flex: 1, backgroundColor: theme.colors.bg, justifyContent: 'center', alignItems: 'center' }}>
-        <ActivityIndicator size="large" color={theme.colors.primary} />
-      </View>
-    );
+    return <BrandLoadingScreen />;
   }
 
   if (!isAuthenticated) {
