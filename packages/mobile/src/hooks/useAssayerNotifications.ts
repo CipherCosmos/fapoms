@@ -29,6 +29,8 @@ export interface AssayerNotifications {
   load: () => Promise<void>;
   /** Mark one read, optimistically. */
   markRead: (id: string) => void;
+  /** Mark one unread, optimistically — the swipe gesture's reverse action. */
+  markUnread: (id: string) => void;
   /** Mark every unread one read, optimistically. No-op when there is nothing unread. */
   markAllRead: () => void;
 }
@@ -129,6 +131,23 @@ export function useAssayerNotifications(options: {
       .catch(revert);
   }, []);
 
+  /** The reverse of `markRead` — swipe-to-unread. Same optimistic-then-revert discipline. */
+  const markUnread = useCallback((id: string) => {
+    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: false } : n)));
+    setUnreadCount((c) => c + 1);
+
+    const revert = () => {
+      setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)));
+      setUnreadCount((c) => Math.max(0, c - 1));
+    };
+
+    MobileApiService.markNotificationUnread(id)
+      .then((ok) => {
+        if (!ok) revert();
+      })
+      .catch(revert);
+  }, []);
+
   /**
    * Clear the whole unread list, with the same optimistic-then-revert discipline as `markRead`.
    *
@@ -206,5 +225,5 @@ export function useAssayerNotifications(options: {
     );
   }, [isAuthenticated, load]);
 
-  return { notifications, unreadCount, load, markRead, markAllRead };
+  return { notifications, unreadCount, load, markRead, markUnread, markAllRead };
 }

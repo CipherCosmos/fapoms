@@ -3,6 +3,7 @@ import { View, Modal, ScrollView } from 'react-native';
 import { AppNotification } from '../types/mobile-app';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Card, EmptyState, Icon, IconButton, Divider, Tappable } from './ui/primitives';
+import { SwipeableRow } from './ui/SwipeableRow';
 
 interface NotificationsModalProps {
   visible: boolean;
@@ -10,6 +11,8 @@ interface NotificationsModalProps {
   unreadCount: number;
   onClose: () => void;
   onMarkRead: (id: string) => void;
+  /** Swipe-left action. Optional so existing callers keep compiling. */
+  onMarkUnread?: (id: string) => void;
   onTapNotification: (notification: AppNotification) => void;
   /** Clear the whole unread list. Optional so existing callers keep compiling. */
   onMarkAllRead?: () => void;
@@ -76,6 +79,7 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
   unreadCount,
   onClose,
   onMarkRead,
+  onMarkUnread,
   onTapNotification,
   onMarkAllRead,
 }) => {
@@ -120,15 +124,16 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
           ) : (
             <ScrollView style={{ flexGrow: 0 }}>
               <View style={{ gap: t.space.sm }}>
-                {notifications.map((n) => (
-                  <Tappable
-                    key={n.id}
-                    accessibilityLabel={n.title}
-                    onPress={() => {
-                      if (!n.isRead) onMarkRead(n.id);
-                      onTapNotification(n);
-                    }}
-                  >
+                {notifications.map((n) => {
+                  /**
+                   * One row, one swipe action, always the opposite of its current state — swipe
+                   * an unread item to mark it read without opening it (triaging a long list one
+                   * flick at a time), swipe a read one back to unread (a bank-branch interrupt
+                   * you saw but need to return to later). `onMarkUnread` is optional so a caller
+                   * that hasn't wired the reverse action yet still renders a working list — the
+                   * swipe distance just resolves to whichever half exists.
+                   */
+                  const row = (
                     <Card level={1} padded={false}>
                       <View style={{ flexDirection: 'row' }}>
                         <View style={{ width: 4, backgroundColor: n.isRead ? 'transparent' : t.colors.accent }} />
@@ -148,8 +153,34 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
                         </View>
                       </View>
                     </Card>
-                  </Tappable>
-                ))}
+                  );
+
+                  return (
+                    <SwipeableRow
+                      key={n.id}
+                      leftAction={
+                        n.isRead && onMarkUnread
+                          ? { icon: 'mail-unread-outline', label: 'Unread', color: t.colors.accent, onTrigger: () => onMarkUnread(n.id) }
+                          : undefined
+                      }
+                      rightAction={
+                        !n.isRead
+                          ? { icon: 'checkmark-done-outline', label: 'Read', color: t.colors.success ?? t.colors.primary, onTrigger: () => onMarkRead(n.id) }
+                          : undefined
+                      }
+                    >
+                      <Tappable
+                        accessibilityLabel={n.title}
+                        onPress={() => {
+                          if (!n.isRead) onMarkRead(n.id);
+                          onTapNotification(n);
+                        }}
+                      >
+                        {row}
+                      </Tappable>
+                    </SwipeableRow>
+                  );
+                })}
               </View>
             </ScrollView>
           )}

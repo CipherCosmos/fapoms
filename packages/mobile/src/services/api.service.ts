@@ -1695,6 +1695,18 @@ export class MobileApiService {
     }
   }
 
+  /** The reverse — swipe-to-unread on the notification list. */
+  static async markNotificationUnread(notificationId: string): Promise<boolean> {
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/notifications/${notificationId}/unread`, {
+        method: 'POST',
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
   /**
    * Clear the whole unread list in one call.
    *

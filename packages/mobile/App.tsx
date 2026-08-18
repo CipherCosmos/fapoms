@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { SafeAreaView, ScrollView, View, ActivityIndicator, Alert, StatusBar, RefreshControl, Text, BackHandler, AppState, KeyboardAvoidingView, Platform } from 'react-native';
+import { SafeAreaView, ScrollView, View, ActivityIndicator, Alert, StatusBar, RefreshControl, Text, BackHandler, AppState, KeyboardAvoidingView, Platform, PanResponder } from 'react-native';
+import * as haptics from './src/lib/haptics';
 import { AssayerAssignment, AppNotification, AssayerExpense, ExpenseSummary, AssayerStatement } from './src/types/mobile-app';
 import { MobileApiService, initApiBaseUrl } from './src/services/api.service';
 import { uploadScannedAuditPacket } from './src/services/audit-packet-upload';
@@ -148,6 +149,7 @@ function AppMain() {
     unreadCount: unreadNotifCount,
     load: loadNotifications,
     markRead: markNotificationRead,
+    markUnread: markNotificationUnread,
     markAllRead: markAllNotificationsRead,
   } = useAssayerNotifications({ isAuthenticated, onTap: handleNotificationTap });
 
@@ -435,6 +437,14 @@ function AppMain() {
    */
   const scrollRef = useRef<ScrollView>(null);
 
+  /**
+   * Swipe left/right anywhere in the content area to move between tabs — the same order the
+   * dock renders them in, so a swipe always agrees with which direction its own icon sits.
+   */
+  const TAB_ORDER: TabType[] = ['HOME', 'SCHEDULE', 'QUERIES', 'EARNINGS', 'MY_PROFILE'];
+  const selectedTabRef = useRef(selectedTab);
+  selectedTabRef.current = selectedTab;
+
   const handleSelectTab = useCallback((tab: TabType) => {
     paperwork.close();
     setSelectedTab(tab);
@@ -446,6 +456,39 @@ function AppMain() {
   useEffect(() => {
     scrollRef.current?.scrollTo({ y: 0, animated: false });
   }, [selectedTab, paperwork.assignment]);
+
+  /**
+   * The swipe itself. Attached to a wrapper around the content ScrollView, not the ScrollView
+   * itself: `onMoveShouldSetPanResponderCapture` only claims the gesture once a drag is clearly
+   * more horizontal than vertical (`|dx| > |dy| * 1.5`, past a small dead zone), so a normal
+   * vertical scroll through a long schedule is never intercepted — only a deliberate sideways
+   * flick is. Direction is content-follows-finger: a swipe LEFT (negative dx) advances to the
+   * NEXT tab, matching how a page-turn / carousel reads, mirroring `TabDock`'s left-to-right
+   * order rather than being reversed from it.
+   *
+   * Disabled while paperwork is open (`openPaperwork`, defined below where the content decides
+   * what to render) — that view is a drill-in, not one of the five tabs, and a stray swipe while
+   * filling in an audit form should not silently navigate away from it.
+   */
+  const tabSwipeEnabledRef = useRef(true);
+  const tabSwipeResponder = useRef(
+    PanResponder.create({
+      onMoveShouldSetPanResponderCapture: (_, gesture) =>
+        tabSwipeEnabledRef.current &&
+        Math.abs(gesture.dx) > 24 &&
+        Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.5,
+      onPanResponderRelease: (_, gesture) => {
+        if (!tabSwipeEnabledRef.current) return;
+        const order = TAB_ORDER;
+        const i = order.indexOf(selectedTabRef.current);
+        if (i === -1) return;
+        const next = gesture.dx < 0 ? order[i + 1] : order[i - 1];
+        if (!next) return; // Already at the first/last tab — nothing to swipe past.
+        haptics.select();
+        handleSelectTab(next);
+      },
+    })
+  ).current;
 
   /**
    * Android hardware/gesture back, resolved in one place.
@@ -555,6 +598,7 @@ function AppMain() {
   // Bound once so the detail branch below reads without re-asserting it: a property access
   // does not narrow the way a binding does.
   const openPaperwork = paperwork.assignment;
+  tabSwipeEnabledRef.current = !openPaperwork;
 
   const scanner = overlay.current('scanner');
   const queryChat = overlay.current('queryChat');
@@ -586,6 +630,7 @@ function AppMain() {
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        {...tabSwipeResponder.panHandlers}
       >
       <ScrollView
         ref={scrollRef}
@@ -813,6 +858,7 @@ function AppMain() {
           unreadCount={unreadNotifCount}
           onClose={overlay.close}
           onMarkRead={markNotificationRead}
+          onMarkUnread={markNotificationUnread}
           onMarkAllRead={markAllNotificationsRead}
           onTapNotification={(n) => {
             overlay.close();

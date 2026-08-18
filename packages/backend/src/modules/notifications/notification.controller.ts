@@ -115,6 +115,14 @@ export class NotificationController {
     return { success: true, data: notif };
   }
 
+  @Post(':id/unread')
+  @AnyAuthenticated()
+  @ApiOperation({ summary: 'Mark one of your own notifications as unread' })
+  async markAsUnread(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+    const notif = await this.notificationService.markAsUnread(id, req.user.id);
+    return { success: true, data: notif };
+  }
+
   @Post('read-all')
   @AnyAuthenticated()
   @ApiOperation({ summary: 'Mark every one of your unread notifications as read' })

@@ -261,6 +261,32 @@ export class NotificationService {
     return this.notificationRepository.save(notif);
   }
 
+  /**
+   * The reverse of `markAsRead` — lets a recipient put a notification back into their unread
+   * list (e.g. a swipe gesture on the handset for "I've seen this but need to act on it
+   * later"). `readAt` is cleared rather than left stamped with a read time that no longer
+   * describes the notification's current state.
+   */
+  async markAsUnread(id: string, recipientId: string): Promise<NotificationEntity> {
+    const notif = await this.notificationRepository.findOne({
+      where: [
+        { id, userId: recipientId, isActive: true },
+        { id, assayerId: recipientId, isActive: true },
+      ],
+    });
+
+    if (!notif) {
+      throw new NotFoundException(`Notification ${id} not found.`);
+    }
+
+    notif.isRead = false;
+    notif.status = NotificationStatus.SENT;
+    notif.readAt = null;
+    notif.updatedBy = recipientId;
+
+    return this.notificationRepository.save(notif);
+  }
+
   /** For the "mark all read" action — one write rather than N round trips from the UI. */
   async markAllAsRead(recipientId: string): Promise<number> {
     const result = await this.notificationRepository
