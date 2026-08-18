@@ -148,7 +148,7 @@ git reset --hard -q origin/main
 # it the tail of a different file mid-run. `mv` is atomic and leaves the running process on its
 # original inode; the new version takes effect at the next tick, two minutes later.
 # ---------------------------------------------------------------------------------------------
-for f in auto-deploy.sh backup.sh restore.sh; do
+for f in auto-deploy.sh backup.sh restore.sh publish-apk.sh; do
   SRC="$REPO/deploy/$f"; DST=~/apps/fapoms-ops/"$f"
   if [ -f "$SRC" ] && ! cmp -s "$SRC" "$DST"; then
     install -m 755 "$SRC" "$DST.new" && mv -f "$DST.new" "$DST"
