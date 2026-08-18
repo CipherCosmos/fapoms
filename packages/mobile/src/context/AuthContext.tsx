@@ -187,8 +187,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setUser((prev) => (prev ? { ...prev, mustChangePassword: false } : prev));
   };
 
+  /**
+   * `authenticating` is deliberately NOT touched by an interactive sign-in attempt.
+   *
+   * App.tsx swaps the whole screen for a bare spinner while `authenticating` is true — correct
+   * for the one-time boot-time session restore, where there is no form to preserve yet. But this
+   * flag used to be raised on every login/biometric attempt too, which unmounted LoginScreen for
+   * the duration of the request and remounted a fresh one on failure: the assayer's code,
+   * password, and the error message itself were wiped by a component remount that had nothing to
+   * do with their input. The inline spinner already built into LoginScreen's Sign In button
+   * (`authenticating` prop, driven by its own `internalLoading`) is what should show progress
+   * here — it does not require unmounting the form underneath it.
+   */
   const login = async (u: string, p: string) => {
-    setAuthenticating(true);
     const res = await MobileApiService.login(u, p);
     if (res.success && res.user) {
       setIsAuthenticated(true);
@@ -198,15 +209,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         assayerCode: res.user.assayerCode,
         mustChangePassword: !!res.user.mustChangePassword,
       });
-      setAuthenticating(false);
       return { success: true };
     }
-    setAuthenticating(false);
     return { success: false, error: res.error || 'Authentication failed' };
   };
 
   const biometricLogin = async () => {
-    setAuthenticating(true);
     try {
       const hasHardware = await LocalAuthentication.hasHardwareAsync().catch(() => false);
       const isEnrolled = await LocalAuthentication.isEnrolledAsync().catch(() => false);
@@ -218,7 +226,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           cancelLabel: 'Cancel',
         });
         if (!authResult.success) {
-          setAuthenticating(false);
           return {
             success: false,
             error: authResult.error === 'user_cancel' ? 'Biometric scan cancelled' : 'Biometric verification failed.',
@@ -237,7 +244,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           name: res.user.name || res.user.displayName || res.user.username || 'Assayer',
           assayerCode: res.user.assayerCode || '',
         });
-        setAuthenticating(false);
         return { success: true };
       }
 
@@ -257,10 +263,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
        * expense claim and query answer from any device holding the APK was recorded against
        * that person. For evidence in a bank collateral audit, that destroys chain of custody.
        */
-      setAuthenticating(false);
       return { success: false, error: res.error || 'Please sign in with your Assayer Code and password.' };
     } catch (err: any) {
-      setAuthenticating(false);
       return { success: false, error: err?.message || 'Biometric login failed.' };
     }
   };
