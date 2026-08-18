@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, TextInput, TextStyle, Modal, Alert } from 'react-native';
+import { View, TextInput, TextStyle, Modal, Alert, Dimensions } from 'react-native';
 import { useTheme, ThemePreference } from '../theme/ThemeProvider';
 import {
-  AppText, Avatar, Badge, Button, Card, CollapsibleSection, GroupedRow, GroupedSection, GroupedSwitch,
+  AppText, Avatar, Badge, Button, Card, GroupedRow, GroupedSection, GroupedSwitch,
   Icon, IconName, StatStrip, StatTile, Tappable,
 } from '../components/ui/primitives';
+import { SubScreen, useStackNav } from '../components/ui/SimpleStack';
 import { ChangePasswordScreen } from './ChangePasswordScreen';
 import { useLocation } from '../context/LocationContext';
 import { formatRupees as money } from '@fapoms/shared';
@@ -254,6 +255,13 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const t = useTheme();
   const [tab, setTab] = useState<SectionKey>('PROFILE');
 
+  // Every settings group used to expand in place (CollapsibleSection). Zerodha/Apple-style
+  // professional apps instead push each group to its own screen — a row on the list, a full
+  // screen behind it. `useStackNav` is a one-level-deep push stack (see SimpleStack.tsx for why
+  // this isn't react-navigation): `push('contact')` opens the Contact sub-screen, `pop()` (or the
+  // sub-screen's own back chevron / hardware back / edge swipe) returns to the row list.
+  const stackNav = useStackNav();
+
   /**
    * Device settings, seeded from the persisted store rather than from the profile object.
    *
@@ -346,8 +354,14 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 
   const serverHost = getApiBaseUrl().replace(/^https?:\/\//, '').replace(/\/api\/v1$/, '');
 
+  const SCREEN_H = Dimensions.get('window').height;
+
   return (
-    <View style={{ gap: t.space.xl }}>
+    // `position: relative` + an explicit min-height gives the pushed SubScreens (each absolutely
+    // positioned, see SimpleStack.tsx) a sized ancestor to anchor to — without it "position:
+    // absolute; top:0; bottom:0" has nothing to be relative to inside App.tsx's outer ScrollView,
+    // whose content height is intrinsic rather than fixed.
+    <View style={{ gap: t.space.xl, position: 'relative', minHeight: SCREEN_H }}>
       {/*
         Identity, and what is stopping this record from being usable.
 
@@ -442,104 +456,50 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       </View>
 
       {tab === 'PROFILE' && (
-        <>
-          <CollapsibleSection title="Contact" summary="Phone and email">
-            <Card level={1} style={{ gap: t.space.lg }}>
-              <FieldInput label="Phone" value={profile.phone} onChange={(v) => onUpdateProfileField('phone', v)} keyboardType="phone-pad" placeholder="+91…" />
-              <FieldInput label="Alternate phone" value={profile.alternatePhone} onChange={(v) => onUpdateProfileField('alternatePhone', v)} keyboardType="phone-pad" />
-            </Card>
-          </CollapsibleSection>
-
-          <CollapsibleSection title="Address" summary="Where you are based">
-            <Card level={1} style={{ gap: t.space.lg }}>
-              <FieldInput label="Address" value={profile.address} onChange={(v) => onUpdateProfileField('address', v)} autoCapitalize="words" />
-              <View style={{ flexDirection: 'row', gap: t.space.md }}>
-                <View style={{ flex: 1 }}>
-                  <FieldInput label="City" value={profile.city} onChange={(v) => onUpdateProfileField('city', v)} autoCapitalize="words" />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <FieldInput label="Pincode" value={profile.pincode} onChange={(v) => onUpdateProfileField('pincode', v)} keyboardType="numeric" />
-                </View>
-              </View>
-              <View style={{ flexDirection: 'row', gap: t.space.md }}>
-                <View style={{ flex: 1 }}>
-                  <FieldInput label="District" value={profile.district} onChange={(v) => onUpdateProfileField('district', v)} autoCapitalize="words" />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <FieldInput label="State" value={profile.state} onChange={(v) => onUpdateProfileField('state', v)} autoCapitalize="words" />
-                </View>
-              </View>
-            </Card>
-          </CollapsibleSection>
-
-          <CollapsibleSection title="Emergency contact" summary="Who to call if something happens on site">
-            <Card level={1} style={{ gap: t.space.lg }}>
-              <FieldInput label="Name" value={profile.emergencyName} onChange={(v) => onUpdateProfileField('emergencyName', v)} autoCapitalize="words" />
-              <View style={{ flexDirection: 'row', gap: t.space.md }}>
-                <View style={{ flex: 1 }}>
-                  <FieldInput label="Phone" value={profile.emergencyPhone} onChange={(v) => onUpdateProfileField('emergencyPhone', v)} keyboardType="phone-pad" />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <FieldInput label="Relation" value={profile.emergencyRelation} onChange={(v) => onUpdateProfileField('emergencyRelation', v)} autoCapitalize="words" />
-                </View>
-              </View>
-            </Card>
-          </CollapsibleSection>
-        </>
+        <GroupedSection>
+          <GroupedRow
+            icon="call-outline" tone="primary" label="Contact"
+            hint={profile.phone || 'Add your phone number'}
+            onPress={() => stackNav.push('contact')} chevron
+          />
+          <GroupedRow
+            icon="home-outline" tone="accent" label="Address"
+            hint={[profile.city, profile.state].filter(Boolean).join(', ') || 'Where you are based'}
+            onPress={() => stackNav.push('address')} chevron
+          />
+          <GroupedRow
+            icon="medkit-outline" tone="danger" label="Emergency contact"
+            hint={profile.emergencyName ? `${profile.emergencyName}${profile.emergencyPhone ? ` · ${profile.emergencyPhone}` : ''}` : 'Who to call if something happens on site'}
+            onPress={() => stackNav.push('emergency')} chevron
+          />
+        </GroupedSection>
       )}
 
       {tab === 'WORK' && (
-        <>
-          <CollapsibleSection title="Availability" defaultOpen>
-            {/* Self-service time off. The scheduler already honours leave, so this is what
-                keeps offers away while the assayer is out — no HR round-trip. */}
-            <GroupedSection>
-              <SettingRow
-                icon="calendar-outline"
-                tone="primary"
-                label="Set your time off"
-                hint="Mark days you're unavailable — you won't be offered audits then."
-                onPress={onOpenAvailability}
-                accessibilityLabel="Set your time off"
-                chevron
-              />
-            </GroupedSection>
-          </CollapsibleSection>
-
-          <CollapsibleSection title="Capability" summary="Skills and languages on your record">
-            <Card level={1} style={{ gap: t.space.lg }}>
-              <FieldInput label="Skills" value={profile.skills} onChange={(v) => onUpdateProfileField('skills', v)} placeholder="Gold assaying, purity testing" />
-              <FieldInput label="Languages" value={profile.languages} onChange={(v) => onUpdateProfileField('languages', v)} placeholder="English, Hindi" />
-              <FieldInput label="Experience (years)" value={String(profile.experienceYears ?? '')} onChange={(v) => onUpdateProfileField('experienceYears', Number(v) || 0)} keyboardType="numeric" />
-            </Card>
-          </CollapsibleSection>
-
-          <CollapsibleSection title="Capacity" summary="How much work you can take">
-            <Card level={1} style={{ gap: t.space.lg }}>
-              <View style={{ flexDirection: 'row', gap: t.space.md }}>
-                <View style={{ flex: 1 }}>
-                  <FieldInput label="Max per day" value={String(profile.maxDailyWorkload ?? '')} onChange={() => {}} lockedReason="Set by operations — it decides how much work you can be offered." />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <FieldInput label="Max per week" value={String(profile.maxWeeklyWorkload ?? '')} onChange={() => {}} lockedReason="Set by operations, alongside your daily limit." />
-                </View>
-              </View>
-              <FieldInput label="Preferred travel radius (km)" value={String(profile.preferredRadius ?? '')} onChange={(v) => onUpdateProfileField('preferredRadius', Number(v) || 0)} keyboardType="numeric" />
-              <FieldInput label="Preferred regions" value={profile.preferredRegions} onChange={(v) => onUpdateProfileField('preferredRegions', v)} autoCapitalize="words" />
-            </Card>
-          </CollapsibleSection>
-
-          <CollapsibleSection title="Payment details" summary="Bank account and PAN">
-            <Card level={1} style={{ gap: t.space.lg }}>
-              <AppText variant="caption" tone="faint">
-                Held by HR for payouts and statutory filing. Changes are reviewed before they take effect.
-              </AppText>
-              <FieldInput label="PAN" value={profile.panNumber} onChange={() => {}} lockedReason="Held by HR. Contact your HR coordinator to correct this." />
-              <FieldInput label="Bank account" value={profile.bankAccountNumber} onChange={() => {}} lockedReason="Payment details are changed by HR only, so a payout cannot be redirected from a handset." />
-              <FieldInput label="IFSC" value={profile.ifscCode} onChange={() => {}} lockedReason="Changed by HR alongside your bank account." />
-            </Card>
-          </CollapsibleSection>
-        </>
+        <GroupedSection>
+          {/* Self-service time off opens straight into the calendar overlay — there's nothing
+              else to show behind this row, so it stays a direct action rather than a push. */}
+          <GroupedRow
+            icon="calendar-outline" tone="primary" label="Availability"
+            hint="Mark days you're unavailable — you won't be offered audits then."
+            onPress={onOpenAvailability} accessibilityLabel="Set your time off" chevron
+          />
+          <GroupedRow
+            icon="ribbon-outline" tone="accent" label="Capability"
+            hint={`${profile.skills ? profile.skills.split(',').filter((s) => s.trim()).length : 0} skills · ${profile.languages ? profile.languages.split(',').filter((s) => s.trim()).length : 0} languages`}
+            onPress={() => stackNav.push('capability')} chevron
+          />
+          <GroupedRow
+            icon="speedometer-outline" tone="info" label="Capacity"
+            hint="How much work you can take"
+            onPress={() => stackNav.push('capacity')} chevron
+          />
+          <GroupedRow
+            icon="card-outline" tone="success" label="Payment details"
+            hint="Bank account and PAN"
+            onPress={() => stackNav.push('payment')} chevron
+          />
+        </GroupedSection>
       )}
 
       {/* Performance figures, all derived from counts the backend genuinely returns.
@@ -556,240 +516,38 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       )}
 
       {tab === 'APP' && (
-        <>
-          <CollapsibleSection title="Appearance" summary="Theme and display">
-            <Card level={1} style={{ gap: t.space.md }}>
-              <SettingRow
-                icon="color-palette-outline"
-                tone="primary"
-                label="Theme"
-                hint="Follow your phone's setting, or pin the app to one mode."
-              />
-              <View style={{ flexDirection: 'row', gap: t.space.sm }}>
-                {THEME_OPTIONS.map((o) => {
-                  const active = t.preference === o.key;
-                  return (
-                    <Tappable
-                      key={o.key}
-                      style={{ flex: 1 }}
-                      accessibilityRole="button"
-                      accessibilityLabel={`${o.label} theme${active ? ', selected' : ''}`}
-                      // ThemeProvider persists the choice itself (device preference store),
-                      // so there is nothing else to keep in step. This previously also wrote
-                      // an `appTheme` field on the profile object that nothing ever read.
-                      onPress={() => t.setPreference(o.key)}
-                    >
-                      <View style={{
-                        alignItems: 'center', gap: 6, paddingVertical: t.space.lg, borderRadius: t.radius.md,
-                        backgroundColor: active ? t.colors.primarySoft : t.colors.bg,
-                        borderWidth: 1.5, borderColor: active ? t.colors.primary : t.colors.border,
-                      }}>
-                        <Icon name={o.icon} size={20} color={active ? t.colors.primary : t.colors.textFaint} />
-                        <AppText variant="caption" tone={active ? 'primary' : 'faint'}>{o.label}</AppText>
-                      </View>
-                    </Tappable>
-                  );
-                })}
-              </View>
-            </Card>
-          </CollapsibleSection>
-
-          <CollapsibleSection title="Notifications" defaultOpen>
-            <GroupedSection>
-              {/* Registers or removes this handset's push token on the server. Delivery is
-                  decided server-side, so unregistering is the only thing that genuinely stops
-                  pushes — the old switch set a state field nothing read or persisted. */}
-              <ToggleRow
-                icon="notifications-outline"
-                tone="primary"
-                label="Push notifications"
-                hint={pushBusy ? 'Updating this device with the server…' : 'New assignments, clarifications and payment updates'}
-                value={pushEnabled}
-                onChange={async (v) => {
-                  setPushBusy(true);
-                  try {
-                    const ok = v ? !!(await registerForPushNotificationsAsync()) : await unregisterPushNotificationsAsync();
-                    // Only reflect the switch if the server actually accepted the change,
-                    // so it never shows "on" while this device is unregistered.
-                    if (ok) { setPushEnabled(v); await setDevicePreference('pushEnabled', v); }
-                  } finally {
-                    setPushBusy(false);
-                  }
-                }}
-              />
-
-              {/* Per-category control, so the notifications that matter most to a field
-                  worker can stay on while the rest are muted. Only shown while push is on —
-                  with the device unregistered these have nothing to act on. */}
-              {pushEnabled && (
-                <View style={{ paddingTop: t.space.xs, paddingBottom: t.space.xs, paddingLeft: t.space.lg }}>
-                  <AppText variant="overline" tone="faint" style={{ paddingLeft: 29 + t.space.md, marginBottom: t.space.xs }}>WHICH ALERTS</AppText>
-                  {notifPrefsLoading ? (
-                    <AppText variant="caption" tone="faint" style={{ paddingLeft: 29 + t.space.md }}>Loading your alert preferences…</AppText>
-                  ) : notifPrefs.length === 0 ? (
-                    <AppText variant="caption" tone="faint" style={{ paddingLeft: 29 + t.space.md }}>Alert preferences unavailable offline.</AppText>
-                  ) : (
-                    notifPrefs.map((pref) => (
-                      <SubToggle
-                        key={pref.category}
-                        label={CATEGORY_LABELS[pref.category]?.label ?? pref.category}
-                        hint={savingCategory === pref.category ? 'Saving…' : CATEGORY_LABELS[pref.category]?.hint}
-                        value={pref.push}
-                        onChange={(v) => toggleCategory(pref.category, v)}
-                      />
-                    ))
-                  )}
-                </View>
-              )}
-              <ToggleRow
-                icon="volume-medium-outline"
-                tone="accent"
-                label="Sound alerts"
-                hint="Play a chime when a notification arrives"
-                value={soundAlerts}
-                onChange={async (v) => { setSoundAlerts(v); await setDevicePreference('soundAlerts', v); }}
-              />
-            </GroupedSection>
-          </CollapsibleSection>
-
-          <CollapsibleSection title="Location & Recommendations" summary="Live location sharing">
-            <GroupedSection>
-              <ToggleRow
-                icon="navigate-outline"
-                tone="info"
-                label="Share live location"
-                hint="Off by default. When on, your current position — not your home address — is used to rank you for nearby audits, like ride-hailing apps."
-                value={liveTrackingEnabled}
-                onChange={async (v) => { await setLiveTrackingEnabled(v); }}
-              />
-            </GroupedSection>
-            {!liveTrackingReady && (
-              <AppText variant="caption" tone="faint" style={{ marginTop: t.space.sm, marginLeft: t.space.lg }}>Syncing your sharing preference…</AppText>
-            )}
-            {liveTrackingEnabled && (
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: t.space.sm, marginLeft: t.space.lg }}>
-                <Icon name="radio" size={13} color={t.colors.success} />
-                <AppText variant="caption" tone="success">Live position active — recommendations use where you are now</AppText>
-              </View>
-            )}
-          </CollapsibleSection>
-
-          <CollapsibleSection title="Security & Biometrics" defaultOpen>
-            <GroupedSection>
-              {/*
-                Changing your own password had no route in the app at all. The screen existed and
-                was complete, but it rendered only when `mustChangePassword` was set — that is,
-                after an administrator forced a reset. An assayer who simply wanted to change a
-                password they had shared, or suspected was known, could not: their only option was
-                to phone HR and ask to be locked out of their own account first.
-              */}
-              <SettingRow
-                icon="key-outline"
-                tone="neutral"
-                label="Change password"
-                hint="Update the password you sign in with"
-                chevron
-                onPress={() => setChangePasswordVisible(true)}
-              />
-              {/* Controls the lock over a restored session, and whether the sign-in screen
-                  offers the biometric option. Persisted to the device, so it survives a
-                  restart. */}
-              <ToggleRow
-                icon="finger-print-outline"
-                tone="success"
-                label="Biometric Lock"
-                hint="Require your fingerprint or face to open Orbit, and after two minutes away from the app"
-                value={biometrics}
-                onChange={async (v) => { setBiometrics(v); await setDevicePreference('biometrics', v); }}
-              />
-              {/*
-                Reports what the handset actually has. This row rendered a hardcoded "ACTIVE"
-                badge and the words "Biometric hardware ready" on every device — including one
-                with no sensor, or a sensor with no fingerprint enrolled, where the lock cannot
-                engage at all. It told the assayer their session was protected when it was not.
-              */}
-              <SettingRow
-                icon="hardware-chip-outline"
-                tone={sensor === 'ready' ? 'success' : 'neutral'}
-                label="Hardware sensor"
-                hint={
-                  sensor === 'ready'
-                    ? 'Fingerprint or face recognition enrolled on this device'
-                    : sensor === 'not-enrolled'
-                      ? 'Sensor present, but no fingerprint or face is enrolled. Add one in your phone settings.'
-                      : sensor === 'none'
-                        ? 'This device has no biometric sensor. Sign in with your password.'
-                        : 'Checking…'
-                }
-                trailing={
-                  <Badge
-                    label={sensor === 'ready' ? 'READY' : sensor === 'checking' ? '…' : 'UNAVAILABLE'}
-                    tone={sensor === 'ready' ? 'success' : 'neutral'}
-                    icon={sensor === 'ready' ? 'shield-checkmark-outline' : 'alert-circle-outline'}
-                  />
-                }
-              />
-            </GroupedSection>
-          </CollapsibleSection>
-
-          <CollapsibleSection title="Accreditation & License" summary="Certifications and their expiry">
-            <GroupedSection
-              footnote="Authorised for precious metal purity testing, gold ornament packet sealing, and bank collateral audits."
-            >
-              {/*
-                Shows the assayer's own licence number, or says it is missing.
-                This was hardcoded to `CERT-GOLD-AS0127-2026` — one specific person's
-                number, displayed to every user beside a green VERIFIED badge, while a
-                real `licenseNo` field sat unused in profile state. Anyone without an
-                accreditation on file appeared fully certified for bank collateral work.
-              */}
-              <SettingRow
-                icon="ribbon-outline"
-                tone="primary"
-                label="BIS / NABL Certified Assayer"
-                hint={profile.licenseNo ? `License No: ${profile.licenseNo}` : 'No licence number on file'}
-                trailing={profile.licenseNo ? <Badge label="VERIFIED" tone="success" /> : <Badge label="NOT ON FILE" tone="warning" />}
-              />
-            </GroupedSection>
-          </CollapsibleSection>
-
-          <CollapsibleSection title="Connection" summary="Which server this app talks to">
-            <GroupedSection>
-              <SettingRow
-                icon="server-outline"
-                tone="accent"
-                label="Server"
-                hint={serverHost}
-                trailing={
-                  conn === 'checking' ? (
-                    <Badge label="CHECKING" tone="neutral" icon="sync-outline" />
-                  ) : conn === 'online' ? (
-                    <Badge label="ONLINE" tone="success" icon="cloud-done-outline" />
-                  ) : (
-                    <Badge label="OFFLINE" tone="danger" icon="cloud-offline-outline" />
-                  )
-                }
-              />
-            </GroupedSection>
-            <Button
-              label={conn === 'checking' ? 'Checking…' : 'Check connection'}
-              icon="refresh-outline"
-              variant="neutral"
-              size="sm"
-              loading={conn === 'checking'}
-              onPress={() => { void checkConnection(); }}
-              style={{ marginTop: t.space.md }}
-            />
-          </CollapsibleSection>
-
-          {/*
-            An "Operations Desk & Hotline" card sat here with "Ops Hotline" and "Emergency SOS"
-            buttons. Neither had an onPress — they were painted controls. In a field app the
-            emergency button is the one thing that must never be decorative, so it is removed
-            rather than left looking available. Queries to the desk go through the thread on
-            the assignment itself, which is a real channel with a record.
-          */}
-        </>
+        <GroupedSection>
+          <GroupedRow
+            icon="color-palette-outline" tone="primary" label="Appearance"
+            hint={THEME_OPTIONS.find((o) => o.key === t.preference)?.label ?? 'Theme'}
+            onPress={() => stackNav.push('appearance')} chevron
+          />
+          <GroupedRow
+            icon="notifications-outline" tone="accent" label="Notifications"
+            hint={pushBusy ? 'Updating this device with the server…' : pushEnabled ? 'Push notifications on' : 'Push notifications off'}
+            onPress={() => stackNav.push('notifications')} chevron
+          />
+          <GroupedRow
+            icon="navigate-outline" tone="info" label="Location & Recommendations"
+            hint={liveTrackingEnabled ? 'Live location sharing on' : 'Live location sharing off'}
+            onPress={() => stackNav.push('location')} chevron
+          />
+          <GroupedRow
+            icon="finger-print-outline" tone="success" label="Security & Biometrics"
+            hint={biometrics ? 'Biometric lock on' : 'Password and biometric lock'}
+            onPress={() => stackNav.push('security')} chevron
+          />
+          <GroupedRow
+            icon="ribbon-outline" tone="primary" label="Accreditation & License"
+            hint={profile.licenseNo ? `License No: ${profile.licenseNo}` : 'No licence number on file'}
+            onPress={() => stackNav.push('accreditation')} chevron
+          />
+          <GroupedRow
+            icon="server-outline" tone="accent" label="Connection"
+            hint={serverHost}
+            onPress={() => stackNav.push('connection')} chevron
+          />
+        </GroupedSection>
       )}
 
       {/* Only on the tabs that hold editable fields. On Stats and Settings it was a primary
@@ -808,19 +566,17 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       {/* Help & Feedback: the assayer's two-way channel to the product team — report a
           bug, ask for something, or ask a question, and follow the replies in thread. */}
       {onOpenFeedback && (
-        <CollapsibleSection title="Help & Feedback" defaultOpen>
-          <GroupedSection>
-            <SettingRow
-              icon="chatbox-ellipses-outline"
-              tone="primary"
-              label="Send feedback"
-              hint="Report a bug, suggest an improvement, or ask the product team a question"
-              onPress={onOpenFeedback}
-              accessibilityLabel="Open feedback and support"
-              chevron
-            />
-          </GroupedSection>
-        </CollapsibleSection>
+        <GroupedSection title="Help & Feedback">
+          <SettingRow
+            icon="chatbox-ellipses-outline"
+            tone="primary"
+            label="Send feedback"
+            hint="Report a bug, suggest an improvement, or ask the product team a question"
+            onPress={onOpenFeedback}
+            accessibilityLabel="Open feedback and support"
+            chevron
+          />
+        </GroupedSection>
       )}
 
       {/* Session: the destructive action lives alone at the very bottom, in danger tone,
@@ -829,28 +585,26 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           mis-tap on a moving handset (or a thumb sliding past the row above it) threw an
           assayer out mid-audit with no way back except re-entering their password. */}
       {onLogout && (
-        <CollapsibleSection title="Session" defaultOpen>
-          <GroupedSection>
-            <SettingRow
-              icon="log-out-outline"
-              tone="danger"
-              label="Sign out"
-              hint="You'll need your password to sign back in"
-              onPress={() => {
-                Alert.alert(
-                  'Sign out of Orbit?',
-                  "You'll need your password to sign back in.",
-                  [
-                    { text: 'Cancel', style: 'cancel' },
-                    { text: 'Sign out', style: 'destructive', onPress: onLogout },
-                  ],
-                );
-              }}
-              accessibilityLabel="Sign out of Orbit"
-              chevron
-            />
-          </GroupedSection>
-        </CollapsibleSection>
+        <GroupedSection title="Session">
+          <SettingRow
+            icon="log-out-outline"
+            tone="danger"
+            label="Sign out"
+            hint="You'll need your password to sign back in"
+            onPress={() => {
+              Alert.alert(
+                'Sign out of Orbit?',
+                "You'll need your password to sign back in.",
+                [
+                  { text: 'Cancel', style: 'cancel' },
+                  { text: 'Sign out', style: 'destructive', onPress: onLogout },
+                ],
+              );
+            }}
+            accessibilityLabel="Sign out of Orbit"
+            chevron
+          />
+        </GroupedSection>
       )}
 
       <View style={{ alignItems: 'center', paddingVertical: t.space.sm, gap: 2 }}>
@@ -868,6 +622,304 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           Orbit Field Assayer • {versionLine()}
         </AppText>
       </View>
+
+      {/*
+        The pushed sub-screens. Every one used to be a `CollapsibleSection` expanding in place;
+        the content inside each `<SubScreen>` below is unchanged from what used to live inside the
+        matching section — only the container changed, from an inline accordion to a screen you
+        navigate to and back from, the pattern Apple Settings and Zerodha Console both use.
+        Rendered unconditionally so each keeps its `active` prop and the mount/unmount is owned by
+        SubScreen's own slide animation rather than by this list.
+      */}
+      <SubScreen active={stackNav.current === 'contact'} title="Contact" onBack={stackNav.pop}>
+        <View style={{ padding: t.space.lg, gap: t.space.lg }}>
+          <Card level={1} style={{ gap: t.space.lg }}>
+            <FieldInput label="Phone" value={profile.phone} onChange={(v) => onUpdateProfileField('phone', v)} keyboardType="phone-pad" placeholder="+91…" />
+            <FieldInput label="Alternate phone" value={profile.alternatePhone} onChange={(v) => onUpdateProfileField('alternatePhone', v)} keyboardType="phone-pad" />
+          </Card>
+        </View>
+      </SubScreen>
+
+      <SubScreen active={stackNav.current === 'address'} title="Address" onBack={stackNav.pop}>
+        <View style={{ padding: t.space.lg, gap: t.space.lg }}>
+          <Card level={1} style={{ gap: t.space.lg }}>
+            <FieldInput label="Address" value={profile.address} onChange={(v) => onUpdateProfileField('address', v)} autoCapitalize="words" />
+            <View style={{ flexDirection: 'row', gap: t.space.md }}>
+              <View style={{ flex: 1 }}>
+                <FieldInput label="City" value={profile.city} onChange={(v) => onUpdateProfileField('city', v)} autoCapitalize="words" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <FieldInput label="Pincode" value={profile.pincode} onChange={(v) => onUpdateProfileField('pincode', v)} keyboardType="numeric" />
+              </View>
+            </View>
+            <View style={{ flexDirection: 'row', gap: t.space.md }}>
+              <View style={{ flex: 1 }}>
+                <FieldInput label="District" value={profile.district} onChange={(v) => onUpdateProfileField('district', v)} autoCapitalize="words" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <FieldInput label="State" value={profile.state} onChange={(v) => onUpdateProfileField('state', v)} autoCapitalize="words" />
+              </View>
+            </View>
+          </Card>
+        </View>
+      </SubScreen>
+
+      <SubScreen active={stackNav.current === 'emergency'} title="Emergency contact" onBack={stackNav.pop}>
+        <View style={{ padding: t.space.lg, gap: t.space.lg }}>
+          <Card level={1} style={{ gap: t.space.lg }}>
+            <FieldInput label="Name" value={profile.emergencyName} onChange={(v) => onUpdateProfileField('emergencyName', v)} autoCapitalize="words" />
+            <View style={{ flexDirection: 'row', gap: t.space.md }}>
+              <View style={{ flex: 1 }}>
+                <FieldInput label="Phone" value={profile.emergencyPhone} onChange={(v) => onUpdateProfileField('emergencyPhone', v)} keyboardType="phone-pad" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <FieldInput label="Relation" value={profile.emergencyRelation} onChange={(v) => onUpdateProfileField('emergencyRelation', v)} autoCapitalize="words" />
+              </View>
+            </View>
+          </Card>
+        </View>
+      </SubScreen>
+
+      <SubScreen active={stackNav.current === 'capability'} title="Capability" onBack={stackNav.pop}>
+        <View style={{ padding: t.space.lg, gap: t.space.lg }}>
+          <Card level={1} style={{ gap: t.space.lg }}>
+            <FieldInput label="Skills" value={profile.skills} onChange={(v) => onUpdateProfileField('skills', v)} placeholder="Gold assaying, purity testing" />
+            <FieldInput label="Languages" value={profile.languages} onChange={(v) => onUpdateProfileField('languages', v)} placeholder="English, Hindi" />
+            <FieldInput label="Experience (years)" value={String(profile.experienceYears ?? '')} onChange={(v) => onUpdateProfileField('experienceYears', Number(v) || 0)} keyboardType="numeric" />
+          </Card>
+        </View>
+      </SubScreen>
+
+      <SubScreen active={stackNav.current === 'capacity'} title="Capacity" onBack={stackNav.pop}>
+        <View style={{ padding: t.space.lg, gap: t.space.lg }}>
+          <Card level={1} style={{ gap: t.space.lg }}>
+            <View style={{ flexDirection: 'row', gap: t.space.md }}>
+              <View style={{ flex: 1 }}>
+                <FieldInput label="Max per day" value={String(profile.maxDailyWorkload ?? '')} onChange={() => {}} lockedReason="Set by operations — it decides how much work you can be offered." />
+              </View>
+              <View style={{ flex: 1 }}>
+                <FieldInput label="Max per week" value={String(profile.maxWeeklyWorkload ?? '')} onChange={() => {}} lockedReason="Set by operations, alongside your daily limit." />
+              </View>
+            </View>
+            <FieldInput label="Preferred travel radius (km)" value={String(profile.preferredRadius ?? '')} onChange={(v) => onUpdateProfileField('preferredRadius', Number(v) || 0)} keyboardType="numeric" />
+            <FieldInput label="Preferred regions" value={profile.preferredRegions} onChange={(v) => onUpdateProfileField('preferredRegions', v)} autoCapitalize="words" />
+          </Card>
+        </View>
+      </SubScreen>
+
+      <SubScreen active={stackNav.current === 'payment'} title="Payment details" onBack={stackNav.pop}>
+        <View style={{ padding: t.space.lg, gap: t.space.lg }}>
+          <Card level={1} style={{ gap: t.space.lg }}>
+            <AppText variant="caption" tone="faint">
+              Held by HR for payouts and statutory filing. Changes are reviewed before they take effect.
+            </AppText>
+            <FieldInput label="PAN" value={profile.panNumber} onChange={() => {}} lockedReason="Held by HR. Contact your HR coordinator to correct this." />
+            <FieldInput label="Bank account" value={profile.bankAccountNumber} onChange={() => {}} lockedReason="Payment details are changed by HR only, so a payout cannot be redirected from a handset." />
+            <FieldInput label="IFSC" value={profile.ifscCode} onChange={() => {}} lockedReason="Changed by HR alongside your bank account." />
+          </Card>
+        </View>
+      </SubScreen>
+
+      <SubScreen active={stackNav.current === 'appearance'} title="Appearance" onBack={stackNav.pop}>
+        <View style={{ padding: t.space.lg, gap: t.space.lg }}>
+          <Card level={1} style={{ gap: t.space.md }}>
+            <SettingRow
+              icon="color-palette-outline"
+              tone="primary"
+              label="Theme"
+              hint="Follow your phone's setting, or pin the app to one mode."
+            />
+            <View style={{ flexDirection: 'row', gap: t.space.sm }}>
+              {THEME_OPTIONS.map((o) => {
+                const active = t.preference === o.key;
+                return (
+                  <Tappable
+                    key={o.key}
+                    style={{ flex: 1 }}
+                    accessibilityRole="button"
+                    accessibilityLabel={`${o.label} theme${active ? ', selected' : ''}`}
+                    onPress={() => t.setPreference(o.key)}
+                  >
+                    <View style={{
+                      alignItems: 'center', gap: 6, paddingVertical: t.space.lg, borderRadius: t.radius.md,
+                      backgroundColor: active ? t.colors.primarySoft : t.colors.bg,
+                      borderWidth: 1.5, borderColor: active ? t.colors.primary : t.colors.border,
+                    }}>
+                      <Icon name={o.icon} size={20} color={active ? t.colors.primary : t.colors.textFaint} />
+                      <AppText variant="caption" tone={active ? 'primary' : 'faint'}>{o.label}</AppText>
+                    </View>
+                  </Tappable>
+                );
+              })}
+            </View>
+          </Card>
+        </View>
+      </SubScreen>
+
+      <SubScreen active={stackNav.current === 'notifications'} title="Notifications" onBack={stackNav.pop}>
+        <View style={{ padding: t.space.lg, gap: t.space.lg }}>
+          <GroupedSection>
+            <ToggleRow
+              icon="notifications-outline"
+              tone="primary"
+              label="Push notifications"
+              hint={pushBusy ? 'Updating this device with the server…' : 'New assignments, clarifications and payment updates'}
+              value={pushEnabled}
+              onChange={async (v) => {
+                setPushBusy(true);
+                try {
+                  const ok = v ? !!(await registerForPushNotificationsAsync()) : await unregisterPushNotificationsAsync();
+                  if (ok) { setPushEnabled(v); await setDevicePreference('pushEnabled', v); }
+                } finally {
+                  setPushBusy(false);
+                }
+              }}
+            />
+            {pushEnabled && (
+              <View style={{ paddingTop: t.space.xs, paddingBottom: t.space.xs, paddingLeft: t.space.lg }}>
+                <AppText variant="overline" tone="faint" style={{ paddingLeft: 29 + t.space.md, marginBottom: t.space.xs }}>WHICH ALERTS</AppText>
+                {notifPrefsLoading ? (
+                  <AppText variant="caption" tone="faint" style={{ paddingLeft: 29 + t.space.md }}>Loading your alert preferences…</AppText>
+                ) : notifPrefs.length === 0 ? (
+                  <AppText variant="caption" tone="faint" style={{ paddingLeft: 29 + t.space.md }}>Alert preferences unavailable offline.</AppText>
+                ) : (
+                  notifPrefs.map((pref) => (
+                    <SubToggle
+                      key={pref.category}
+                      label={CATEGORY_LABELS[pref.category]?.label ?? pref.category}
+                      hint={savingCategory === pref.category ? 'Saving…' : CATEGORY_LABELS[pref.category]?.hint}
+                      value={pref.push}
+                      onChange={(v) => toggleCategory(pref.category, v)}
+                    />
+                  ))
+                )}
+              </View>
+            )}
+            <ToggleRow
+              icon="volume-medium-outline"
+              tone="accent"
+              label="Sound alerts"
+              hint="Play a chime when a notification arrives"
+              value={soundAlerts}
+              onChange={async (v) => { setSoundAlerts(v); await setDevicePreference('soundAlerts', v); }}
+            />
+          </GroupedSection>
+        </View>
+      </SubScreen>
+
+      <SubScreen active={stackNav.current === 'location'} title="Location & Recommendations" onBack={stackNav.pop}>
+        <View style={{ padding: t.space.lg, gap: t.space.lg }}>
+          <GroupedSection>
+            <ToggleRow
+              icon="navigate-outline"
+              tone="info"
+              label="Share live location"
+              hint="Off by default. When on, your current position — not your home address — is used to rank you for nearby audits, like ride-hailing apps."
+              value={liveTrackingEnabled}
+              onChange={async (v) => { await setLiveTrackingEnabled(v); }}
+            />
+          </GroupedSection>
+          {!liveTrackingReady && (
+            <AppText variant="caption" tone="faint" style={{ marginLeft: t.space.lg }}>Syncing your sharing preference…</AppText>
+          )}
+          {liveTrackingEnabled && (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginLeft: t.space.lg }}>
+              <Icon name="radio" size={13} color={t.colors.success} />
+              <AppText variant="caption" tone="success">Live position active — recommendations use where you are now</AppText>
+            </View>
+          )}
+        </View>
+      </SubScreen>
+
+      <SubScreen active={stackNav.current === 'security'} title="Security & Biometrics" onBack={stackNav.pop}>
+        <View style={{ padding: t.space.lg, gap: t.space.lg }}>
+          <GroupedSection>
+            <SettingRow
+              icon="key-outline"
+              tone="neutral"
+              label="Change password"
+              hint="Update the password you sign in with"
+              chevron
+              onPress={() => setChangePasswordVisible(true)}
+            />
+            <ToggleRow
+              icon="finger-print-outline"
+              tone="success"
+              label="Biometric Lock"
+              hint="Require your fingerprint or face to open Orbit, and after two minutes away from the app"
+              value={biometrics}
+              onChange={async (v) => { setBiometrics(v); await setDevicePreference('biometrics', v); }}
+            />
+            <SettingRow
+              icon="hardware-chip-outline"
+              tone={sensor === 'ready' ? 'success' : 'neutral'}
+              label="Hardware sensor"
+              hint={
+                sensor === 'ready'
+                  ? 'Fingerprint or face recognition enrolled on this device'
+                  : sensor === 'not-enrolled'
+                    ? 'Sensor present, but no fingerprint or face is enrolled. Add one in your phone settings.'
+                    : sensor === 'none'
+                      ? 'This device has no biometric sensor. Sign in with your password.'
+                      : 'Checking…'
+              }
+              trailing={
+                <Badge
+                  label={sensor === 'ready' ? 'READY' : sensor === 'checking' ? '…' : 'UNAVAILABLE'}
+                  tone={sensor === 'ready' ? 'success' : 'neutral'}
+                  icon={sensor === 'ready' ? 'shield-checkmark-outline' : 'alert-circle-outline'}
+                />
+              }
+            />
+          </GroupedSection>
+        </View>
+      </SubScreen>
+
+      <SubScreen active={stackNav.current === 'accreditation'} title="Accreditation & License" onBack={stackNav.pop}>
+        <View style={{ padding: t.space.lg, gap: t.space.lg }}>
+          <GroupedSection
+            footnote="Authorised for precious metal purity testing, gold ornament packet sealing, and bank collateral audits."
+          >
+            <SettingRow
+              icon="ribbon-outline"
+              tone="primary"
+              label="BIS / NABL Certified Assayer"
+              hint={profile.licenseNo ? `License No: ${profile.licenseNo}` : 'No licence number on file'}
+              trailing={profile.licenseNo ? <Badge label="VERIFIED" tone="success" /> : <Badge label="NOT ON FILE" tone="warning" />}
+            />
+          </GroupedSection>
+        </View>
+      </SubScreen>
+
+      <SubScreen active={stackNav.current === 'connection'} title="Connection" onBack={stackNav.pop}>
+        <View style={{ padding: t.space.lg, gap: t.space.lg }}>
+          <GroupedSection>
+            <SettingRow
+              icon="server-outline"
+              tone="accent"
+              label="Server"
+              hint={serverHost}
+              trailing={
+                conn === 'checking' ? (
+                  <Badge label="CHECKING" tone="neutral" icon="sync-outline" />
+                ) : conn === 'online' ? (
+                  <Badge label="ONLINE" tone="success" icon="cloud-done-outline" />
+                ) : (
+                  <Badge label="OFFLINE" tone="danger" icon="cloud-offline-outline" />
+                )
+              }
+            />
+          </GroupedSection>
+          <Button
+            label={conn === 'checking' ? 'Checking…' : 'Check connection'}
+            icon="refresh-outline"
+            variant="neutral"
+            size="sm"
+            loading={conn === 'checking'}
+            onPress={() => { void checkConnection(); }}
+          />
+        </View>
+      </SubScreen>
 
       {/*
         The same screen the forced-reset flow uses, presented as a sheet.
