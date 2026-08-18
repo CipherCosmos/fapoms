@@ -301,13 +301,16 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
             </View>
 
             {errorMsg ? (
+              // No border — a tinted fill alone is enough signal, and matches the restrained
+              // (borderless) error treatment ChangePasswordScreen uses for the same alert role.
+              // A hard danger-coloured outline around a form field's own error box read as a
+              // second, competing warning stacked on the red icon and text already inside it.
               <View
                 accessibilityRole="alert"
                 accessibilityLiveRegion="assertive"
                 style={{
                   flexDirection: 'row', alignItems: 'center', gap: t.space.sm,
                   backgroundColor: t.colors.dangerSoft, padding: t.space.md, borderRadius: t.radius.md,
-                  borderWidth: 1, borderColor: t.colors.danger,
                 }}
               >
                 <Icon name="alert-circle" size={16} color={t.colors.danger} />

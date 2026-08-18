@@ -221,15 +221,18 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
             payables.slice(0, 8).map((p, i) => {
               const state = PAYABLE_STATE[p.status as AssayerPayableStatus]
                 ?? { label: String(p.status), tone: 'neutral' as Tone };
-              const amountTone: Tone = state.tone === 'success' ? 'success'
-                : state.tone === 'danger' ? 'danger' : 'warning';
               return (
                 <FadeIn key={p.id} delay={Math.min(i, 6) * 40}>
                   <Card level={1} style={{ gap: t.space.sm }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
-                      {/* Amount leads — it is what the row is about. */}
+                      {/* Amount leads — it is what the row is about. Colour lives on the
+                          Badge alone now: a payable's status was previously repeated as the
+                          amount's own colour (green/amber/red), which meant every figure on
+                          the screen fought for attention instead of only the ones that
+                          actually needed it — the same restraint Apple's Wallet keeps
+                          between a transaction's amount and its status pill. */}
                       <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
-                        <AppText variant="h3" tone={amountTone}>{money(p.totalAmount)}</AppText>
+                        <AppText variant="h3">{money(p.totalAmount)}</AppText>
                         <AppText variant="caption" tone="faint" numberOfLines={1}>
                           {p.payableNumber} · {pastDay(p.createdAt)}
                         </AppText>
@@ -265,7 +268,9 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
             <FadeIn key={pm.id} delay={Math.min(i, 6) * 40}>
               <Card level={1} style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
                 <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
-                  <AppText variant="bodyStrong" tone="success">{money(pm.amount)}</AppText>
+                  {/* "Paid" is already said once, by the badge — colouring the amount too
+                      just repeats it in a louder voice. */}
+                  <AppText variant="bodyStrong">{money(pm.amount)}</AppText>
                   <AppText variant="caption" tone="faint" numberOfLines={1}>
                     {pm.paymentReference} · {pm.method}
                   </AppText>
@@ -293,10 +298,10 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
             <FadeIn key={exp.id ?? i} delay={Math.min(i, 6) * 40}>
               <Card level={1} style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
                 <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
-                  <AppText
-                    variant="bodyStrong"
-                    tone={CLAIM_TONE[exp.status] === 'success' ? 'success' : CLAIM_TONE[exp.status] === 'danger' ? 'danger' : 'default'}
-                  >
+                  {/* The status Badge on the right already carries approved/pending/rejected —
+                      painting the amount the same colour a second time was the noisy part of
+                      this row; a claim's rupee figure is a fact, not a verdict. */}
+                  <AppText variant="bodyStrong">
                     {money(exp.amount)}
                   </AppText>
                   <AppText variant="caption" tone="faint" numberOfLines={1}>
@@ -330,7 +335,7 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
                   {/* An assignment with no fee on it is unpriced, not free — say so rather
                       than rendering a zero or fabricated amount against someone's pay. */}
                   {hasResolvedFee(a)
-                    ? <AppText variant="bodyStrong" tone="success">{money(getAssignmentTotalFee(a))}</AppText>
+                    ? <AppText variant="bodyStrong">{money(getAssignmentTotalFee(a))}</AppText>
                     : <AppText variant="small" tone="muted">Fee not set</AppText>}
                   <AppText variant="caption" tone="faint" numberOfLines={1}>
                     {a.branchName} · {a.scheduledDate ? pastDay(a.scheduledDate) : '—'}

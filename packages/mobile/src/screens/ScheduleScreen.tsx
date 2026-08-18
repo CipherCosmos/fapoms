@@ -188,6 +188,13 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
 
   return (
     <View style={{ gap: t.space.lg }} {...swipeSegments.panHandlers}>
+      {/* Large-title treatment, matching Home's greeting and Profile's name — the shared TopBar
+          only ever shows the assayer's identity, never a per-screen title, so without this the
+          route plan opened straight onto a segmented control with nothing above it naming the
+          screen. Apple's own Mail/Reminders put the big title directly above their filter
+          control, which is the same shape as Segmented here. */}
+      <AppText variant="largeTitle">Schedule</AppText>
+
       <Segmented
         value={tab}
         onChange={(k) => setTab(k as 'ACTIVE' | 'DONE')}

@@ -2,7 +2,7 @@ import React from 'react';
 import { View } from 'react-native';
 import { AssayerAssignment, ValidationQuery } from '../types/mobile-app';
 import { useTheme } from '../theme/ThemeProvider';
-import { AppText, Avatar, Badge, Card, EmptyState, FadeIn, Icon, Segmented, Tappable } from '../components/ui/primitives';
+import { AppText, Badge, EmptyState, FadeIn, GroupedRow, GroupedSection, Segmented } from '../components/ui/primitives';
 import { calendarDayDiff } from '../utils/dates';
 import { useSwipeSegments } from '../hooks/useSwipeSegments';
 
@@ -34,14 +34,25 @@ function waitingFor(iso: string | undefined): { label: string; tone: 'neutral' |
   return { label: 'Just now', tone: 'neutral' };
 }
 
+/** GroupedRow's hint has no line clamp (unlike the old per-row Card, which clamped the
+ *  preview at 2 lines), so a long question is cut here rather than left to wrap the row
+ *  to an unpredictable height inside the shared grouped-list container. */
+function truncate(text: string, max: number): string {
+  const trimmed = text.trim();
+  return trimmed.length > max ? `${trimmed.slice(0, max - 1).trimEnd()}…` : trimmed;
+}
+
 /**
  * Clarifications raised by the data entry desk about audits you submitted.
  *
- * Redesigned as an inbox: every row reads like a conversation — who asked,
- * what they asked (two-line preview), and how long it has been waiting on you.
- * Open threads sit on top with an unread dot and an aging badge; resolved
- * threads collapse into a muted history strip below, because they are records,
- * not work.
+ * Presented as a single Apple-style grouped list — the same container/inset-divider
+ * shape as ProfileScreen's settings — because this is exactly that shape of content:
+ * an icon identifying the thread's state, a title (branch), a one-line preview of the
+ * question, and a trailing badge for how urgent it is, the way Messages.app lists a
+ * conversation. It used to be a stack of individually-bordered Cards with a gap
+ * between every one; a thread list reads as a single scannable inbox, not a deck of
+ * separate cards, once state and wait-time are conveyed by an icon tint + badge
+ * instead of a whole card's worth of chrome per row.
  */
 export const QueriesScreen: React.FC<QueriesScreenProps> = ({ assignments, onOpenQueryChat }) => {
   const t = useTheme();
@@ -74,10 +85,10 @@ export const QueriesScreen: React.FC<QueriesScreenProps> = ({ assignments, onOpe
   const shownOpen = openThreads;
   const showResolved = tab === 'ALL';
 
-  const META: Record<ThreadState, { label: string; tone: 'danger' | 'warning' | 'success' }> = {
-    NEEDS_YOU: { label: 'Needs your reply', tone: 'danger' },
-    WAITING_DESK: { label: 'With the desk', tone: 'warning' },
-    RESOLVED: { label: 'Resolved', tone: 'success' },
+  const META: Record<ThreadState, { label: string; tone: 'danger' | 'warning' | 'success'; icon: string }> = {
+    NEEDS_YOU: { label: 'Needs your reply', tone: 'danger', icon: 'chatbubble-ellipses-outline' },
+    WAITING_DESK: { label: 'With the desk', tone: 'warning', icon: 'hourglass-outline' },
+    RESOLVED: { label: 'Resolved', tone: 'success', icon: 'checkmark-circle-outline' },
   };
 
   const nothingToShow = shownOpen.length === 0 && (!showResolved || resolvedThreads.length === 0);
@@ -111,130 +122,68 @@ export const QueriesScreen: React.FC<QueriesScreenProps> = ({ assignments, onOpe
             />
           )}
 
-          {shownOpen.map((a, i) => {
-            const state = stateOf(a);
-            const meta = META[state];
-            const q = previewOf(a);
-            const wait = state === 'NEEDS_YOU' ? waitingFor(q?.createdAt) : null;
-            const count = (a.queries || []).length;
-            const rowLabel = `${a.branchName}, ${meta.label.toLowerCase()}${wait ? `, ${wait.label.toLowerCase()}` : ''}, ${count === 1 ? '1 question' : `${count} questions`}`;
-            return (
-              <FadeIn key={a.id} delay={Math.min(i, 6) * 45}>
-                {/* Card's own onPress wraps in a Tappable with no accessibility props exposed, so
-                    the whole thread row — the primary action of this screen — announced as an
-                    unlabelled button to a screen reader. Wrapping it here instead of passing
-                    onPress to Card gives it a real spoken label without touching the primitive. */}
-                <Tappable
-                  onPress={() => onOpenQueryChat(a)}
-                  scaleTo={0.985}
-                  accessibilityRole="button"
-                  accessibilityLabel={rowLabel}
-                >
-                <Card level={1} style={{ gap: t.space.md }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
-                    {/* Unread-style dot: lit while the thread is on the assayer. */}
-                    <View
-                      style={{
-                        width: 8, height: 8, borderRadius: 4,
-                        backgroundColor: state === 'NEEDS_YOU' ? t.colors.danger : 'transparent',
-                      }}
-                    />
-                    <Avatar name={q?.validatorName || a.branchName} size={40} />
-                    <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-                      <AppText variant="h3" numberOfLines={1}>{a.branchName}</AppText>
-                      <AppText variant="caption" tone="faint" numberOfLines={1}>
-                        {[a.bankName, a.branchCode].filter(Boolean).join(' · ') || '—'}
-                      </AppText>
-                    </View>
-                    {wait ? (
-                      <Badge label={wait.label} tone={wait.tone} icon="time-outline" />
-                    ) : (
-                      <Badge label={meta.label} tone={meta.tone} dot />
-                    )}
-                  </View>
-
-                  {q && (
-                    <View
-                      style={{
-                        backgroundColor: t.colors.surfaceAlt,
-                        borderRadius: t.radius.md,
-                        borderWidth: 1,
-                        borderColor: t.colors.border,
-                        padding: t.space.md,
-                        gap: 4,
-                      }}
-                    >
-                      <AppText variant="body" numberOfLines={2}>{q.queryText}</AppText>
-                      <AppText variant="caption" tone="faint" numberOfLines={1}>
-                        {[q.validatorName, q.customerName].filter(Boolean).join(' · about ')}
-                      </AppText>
-                    </View>
-                  )}
-
-                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <AppText variant="caption" tone="muted">
-                      {count === 1 ? '1 question' : `${count} questions`}
-                      {wait ? '' : ` · ${meta.label.toLowerCase()}`}
-                    </AppText>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                      <AppText variant="caption" tone={state === 'NEEDS_YOU' ? 'primary' : 'muted'}>
-                        {state === 'NEEDS_YOU' ? 'Reply' : 'Open thread'}
-                      </AppText>
-                      <Icon
-                        name="chevron-forward"
-                        size={14}
-                        color={state === 'NEEDS_YOU' ? t.colors.primary : t.colors.textMuted}
-                      />
-                    </View>
-                  </View>
-                </Card>
-                </Tappable>
-              </FadeIn>
-            );
-          })}
-
-          {/* Resolved threads: history, not work — muted, compact, below the fold. */}
-          {showResolved && resolvedThreads.length > 0 && (
-            <View style={{ gap: t.space.sm }}>
-              <View style={{ paddingHorizontal: t.space.xs, paddingTop: t.space.sm }}>
-                <AppText variant="overline" tone="faint">
-                  {`RESOLVED · ${resolvedThreads.length}`}
-                </AppText>
-              </View>
-              {resolvedThreads.map((a, i) => {
-                const q = previewOf(a);
-                const count = (a.queries || []).length;
-                return (
-                  <FadeIn key={a.id} delay={Math.min(i, 6) * 35}>
-                    <Tappable
+          {shownOpen.length > 0 && (
+            <FadeIn>
+              <GroupedSection>
+                {shownOpen.map((a) => {
+                  const state = stateOf(a);
+                  const meta = META[state];
+                  const q = previewOf(a);
+                  const wait = state === 'NEEDS_YOU' ? waitingFor(q?.createdAt) : null;
+                  const count = (a.queries || []).length;
+                  const countLabel = count === 1 ? '1 question' : `${count} questions`;
+                  const rowLabel = `${a.branchName}, ${meta.label.toLowerCase()}${wait ? `, ${wait.label.toLowerCase()}` : ''}, ${countLabel}`;
+                  return (
+                    <GroupedRow
+                      key={a.id}
+                      icon={meta.icon}
+                      tone={state === 'NEEDS_YOU' ? 'danger' : 'warning'}
+                      label={a.branchName}
+                      hint={q ? truncate(q.queryText, 64) : [a.bankName, a.branchCode].filter(Boolean).join(' · ') || undefined}
+                      value={countLabel}
+                      trailing={
+                        wait ? (
+                          <Badge label={wait.label} tone={wait.tone} icon="time-outline" />
+                        ) : (
+                          <Badge label={meta.label} tone={meta.tone} dot />
+                        )
+                      }
                       onPress={() => onOpenQueryChat(a)}
-                      scaleTo={0.985}
-                      accessibilityRole="button"
-                      accessibilityLabel={`${a.branchName}, resolved, ${count === 1 ? '1 question' : `${count} questions`}`}
-                    >
-                      <View
-                        style={{
-                          flexDirection: 'row', alignItems: 'center', gap: t.space.md,
-                          backgroundColor: t.colors.surface, borderRadius: t.radius.lg,
-                          borderWidth: 1, borderColor: t.colors.border,
-                          paddingHorizontal: t.space.lg, paddingVertical: t.space.md,
-                        }}
-                      >
-                        <Icon name="checkmark-circle" size={18} color={t.colors.success} />
-                        <View style={{ flex: 1, minWidth: 0, gap: 1 }}>
-                          <AppText variant="bodyStrong" tone="muted" numberOfLines={1}>{a.branchName}</AppText>
-                          <AppText variant="caption" tone="faint" numberOfLines={1}>
-                            {q?.queryText || [a.bankName, a.branchCode].filter(Boolean).join(' · ') || '—'}
-                          </AppText>
-                        </View>
-                        <AppText variant="caption" tone="faint">{count}</AppText>
-                        <Icon name="chevron-forward" size={14} color={t.colors.textFaint} />
-                      </View>
-                    </Tappable>
-                  </FadeIn>
-                );
-              })}
-            </View>
+                      accessibilityLabel={rowLabel}
+                      chevron
+                    />
+                  );
+                })}
+              </GroupedSection>
+            </FadeIn>
+          )}
+
+          {/* Resolved threads: history, not work — same grouped-list shape, but a distinct,
+              muted group under its own "Resolved" header so it reads as settled record rather
+              than more of the pile above that still needs a reply. */}
+          {showResolved && resolvedThreads.length > 0 && (
+            <FadeIn>
+              <GroupedSection title={`Resolved · ${resolvedThreads.length}`}>
+                {resolvedThreads.map((a) => {
+                  const q = previewOf(a);
+                  const count = (a.queries || []).length;
+                  const countLabel = count === 1 ? '1 question' : `${count} questions`;
+                  return (
+                    <GroupedRow
+                      key={a.id}
+                      icon="checkmark-circle-outline"
+                      tone="success"
+                      label={a.branchName}
+                      hint={q?.queryText ? truncate(q.queryText, 64) : [a.bankName, a.branchCode].filter(Boolean).join(' · ') || undefined}
+                      value={countLabel}
+                      onPress={() => onOpenQueryChat(a)}
+                      accessibilityLabel={`${a.branchName}, resolved, ${countLabel}`}
+                      chevron
+                    />
+                  );
+                })}
+              </GroupedSection>
+            </FadeIn>
           )}
         </>
       )}

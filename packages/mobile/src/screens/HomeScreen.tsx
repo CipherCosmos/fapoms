@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { View } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
-import { AppText, Badge, Button, Card, EmptyState, Icon, Section, Tappable } from '../components/ui/primitives';
+import { AppText, Badge, Button, Card, EmptyState, GroupedRow, GroupedSection, Icon, Section, Tappable } from '../components/ui/primitives';
 import { AssignmentStatus, assignmentStatusLabel, formatRupees as money, formatDateOnly } from '@fapoms/shared';
 import { assignmentStatusTone } from '../utils/statusTone';
 import { relativeDay, RelativeDay } from '../utils/dates';
@@ -223,30 +223,48 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           ) : undefined
         }
       >
-        <Card level={1} style={{ gap: t.space.md }}>
-          <SummaryRow
+        {/*
+          These four are exactly what GroupedRow/GroupedSection exist for — navigable or
+          informational option rows, not a stat or an assignment. The old markup was a Card
+          with a bespoke SummaryRow per line, each drawing its own full-bleed divider; that
+          is precisely the "stack of separately-bordered rows" pattern ProfileScreen's grouped
+          list replaced. One rounded container with inset hairlines reads as a single unit
+          instead of four unrelated boxes stacked with gaps.
+        */}
+        <GroupedSection>
+          <GroupedRow
             icon="calendar-outline"
+            tone="primary"
             label="Scheduled today"
             value={String(todays.length)}
             onPress={onSeeSchedule}
+            chevron
+            accessibilityLabel={`Scheduled today: ${todays.length}`}
           />
-          <SummaryRow
+          <GroupedRow
             icon="help-circle-outline"
+            tone={openQueries > 0 ? 'warning' : 'neutral'}
             label="Open queries"
             value={String(openQueries)}
-            tone={openQueries > 0 ? 'warning' : undefined}
             onPress={onSeeQueries}
+            chevron
+            accessibilityLabel={`Open queries: ${openQueries}`}
           />
-          <SummaryRow icon="wallet-outline" label="Balance due to you" value={money(runningBalance)} />
+          <GroupedRow
+            icon="wallet-outline"
+            tone="accent"
+            label="Balance due to you"
+            value={money(runningBalance)}
+          />
           {expenseSummary.pending > 0 && (
-            <SummaryRow
+            <GroupedRow
               icon="receipt-outline"
+              tone="info"
               label="Claims awaiting approval"
               value={money(expenseSummary.pending)}
-              tone="info"
             />
           )}
-        </Card>
+        </GroupedSection>
       </Section>
 
       <StatsScreen
@@ -439,34 +457,3 @@ const Meta: React.FC<{ icon: string; label: string }> = ({ icon, label }) => {
   );
 };
 
-const SummaryRow: React.FC<{
-  icon: string;
-  label: string;
-  value: string;
-  tone?: 'warning' | 'info';
-  onPress?: () => void;
-}> = ({ icon, label, value, tone, onPress }) => {
-  const t = useTheme();
-  const body = (
-    // A bare icon+text row was under 44dp tall — comfortable for a careful tap, not for a
-    // gloved thumb on a phone held one-handed outdoors. The vertical padding gives every row
-    // (tappable or not) a consistent minimum height without changing the visual rhythm inside
-    // the card, since Card already supplies its own outer padding.
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md, paddingVertical: t.space.xs, minHeight: 44 }}>
-      <Icon name={icon} size={18} color={tone ? t.colors[tone] : t.colors.textFaint} />
-      <AppText variant="body" style={{ flex: 1 }}>
-        {label}
-      </AppText>
-      <AppText variant="bodyStrong" tone={tone === 'warning' ? 'warning' : undefined}>
-        {value}
-      </AppText>
-      {onPress ? <Icon name="chevron-forward" size={16} color={t.colors.textFaint} /> : null}
-    </View>
-  );
-
-  return onPress ? (
-    <Tappable onPress={onPress} accessibilityRole="button" accessibilityLabel={`${label}: ${value}`}>
-      {body}
-    </Tappable>
-  ) : body;
-};

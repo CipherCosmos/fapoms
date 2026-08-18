@@ -93,24 +93,31 @@ export const LockScreen: React.FC<LockScreenProps> = ({ name, onUnlock, onSignOu
         gap: t.space['2xl'],
       }}
     >
+      {/* Soft primary-tinted circle rather than a plain-bordered one — the same auth-gate
+          affordance ChangePasswordScreen gives its header icon, so the two screens that stand
+          between a device and the app read as one family. The pulse is now on scale as well as
+          opacity: a flat fade read as the icon merely dimming, where a faint breathing motion
+          reads as "listening for your fingerprint" the way the OS's own prompt does. */}
       <Animated.View
         style={{
-          width: 96,
-          height: 96,
-          borderRadius: 48,
+          width: 104,
+          height: 104,
+          borderRadius: 52,
           alignItems: 'center',
           justifyContent: 'center',
-          backgroundColor: t.colors.surface,
-          borderWidth: 1,
-          borderColor: t.colors.border,
-          opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.55, 1] }),
+          backgroundColor: t.colors.primarySoft,
+          opacity: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.6, 1] }),
+          transform: [{ scale: pulse.interpolate({ inputRange: [0, 1], outputRange: [0.96, 1] }) }],
         }}
       >
-        <Icon name="finger-print" size={44} color={t.colors.primary} />
+        <Icon name="finger-print" size={46} color={t.colors.primary} />
       </Animated.View>
 
-      <View style={{ alignItems: 'center', gap: t.space.xs }}>
-        <AppText variant="h2">Locked</AppText>
+      <View style={{ alignItems: 'center', gap: t.space.sm }}>
+        {/* Large-title weight, matching the hero treatment ProfileScreen and
+            ChangePasswordScreen give their own headers — a lock gate is the first thing an
+            assayer sees on every cold open, and deserves the same presence as those. */}
+        <AppText variant="largeTitle" style={{ letterSpacing: -0.5 }}>Locked</AppText>
         <AppText variant="small" tone="muted" style={{ textAlign: 'center' }}>
           Signed in as {name}
         </AppText>

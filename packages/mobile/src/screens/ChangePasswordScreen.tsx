@@ -64,12 +64,15 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
   const differsFromCurrent = newPassword.length > 0 && newPassword !== currentPassword;
   const matches = confirmPassword.length > 0 && newPassword === confirmPassword;
 
+  // Radius matches LoginScreen's field treatment (radius.lg) rather than the tighter radius.md
+  // used for the dense profile-editor inputs — this screen is a one-task auth form, not a list
+  // of settings fields, so it gets the more spacious, "premium" rounding of the sign-in screen.
   const inputWrap = (isFocused: boolean) => ({
     flexDirection: 'row' as const,
     alignItems: 'center' as const,
     gap: t.space.md,
     backgroundColor: t.colors.bg,
-    borderRadius: t.radius.md,
+    borderRadius: t.radius.lg,
     borderWidth: 1.5,
     borderColor: isFocused ? t.colors.primary : t.colors.border,
     paddingHorizontal: t.space.lg,
@@ -131,12 +134,22 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <ScrollView
-        contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', padding: t.space.xl, gap: t.space.xl }}
+        contentContainerStyle={{ flexGrow: 1, justifyContent: 'center', padding: t.space.xl, gap: t.space['2xl'] }}
         keyboardShouldPersistTaps="handled"
       >
-        <View style={{ alignItems: 'center', gap: t.space.sm }}>
-          <Icon name="lock-closed" size={34} color={t.colors.primary} />
-          <AppText variant="h2" style={{ textAlign: 'center' }}>
+        <View style={{ alignItems: 'center', gap: t.space.md }}>
+          {/* Soft-tinted circle rather than a bare glyph — the same auth-gate affordance
+              LockScreen uses for its fingerprint icon, so the two screens that guard entry
+              to the app read as one family instead of each inventing its own header. */}
+          <View style={{
+            width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center',
+            backgroundColor: t.colors.primarySoft,
+          }}>
+            <Icon name="lock-closed" size={30} color={t.colors.primary} />
+          </View>
+          {/* Large-title weight — the same scale ProfileScreen gives its own name header —
+              rather than h2, so a one-task form gets the same hero treatment a full screen does. */}
+          <AppText variant="largeTitle" style={{ textAlign: 'center', letterSpacing: -0.5 }}>
             {onCancel ? 'Change your password' : 'Choose your own password'}
           </AppText>
           <AppText variant="small" tone="muted" style={{ textAlign: 'center' }}>
@@ -146,7 +159,7 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
           </AppText>
         </View>
 
-        <Card level={2} style={{ gap: t.space.lg, padding: t.space.xl }}>
+        <Card level={2} style={{ gap: t.space.lg, padding: t.space.xl, borderRadius: t.radius['2xl'] }}>
           <View style={{ gap: t.space.sm }}>
             <AppText variant="overline" tone="faint">CURRENT PASSWORD</AppText>
             <View style={inputWrap(focused === 'cur')}>
@@ -252,6 +265,8 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
           <Button label={busy ? 'Saving…' : 'Set password'} onPress={submit} loading={busy} size="lg" full />
         </Card>
 
+        {/* The secondary exit stays a plain ghost button — quiet relative to the primary
+            "Set password" action above, never competing with it for the eye. */}
         {onCancel ? (
           <Button label="Cancel" variant="ghost" onPress={onCancel} full />
         ) : (
