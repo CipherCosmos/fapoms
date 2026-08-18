@@ -54,6 +54,18 @@ jobs:
     # `get-build` sets build_id only when a matching build exists. No build_id = native change.
     if: ${{ needs.compatible_build.outputs.build_id != '' }}
     type: update
+    hooks:
+      # `@fapoms/shared`'s entry point is compiled output under dist/, which is gitignored, so on
+      # a fresh worker it does not exist and Metro cannot bundle a package whose `main` points at
+      # nothing. This is the same failure the APK build hit (and fixed via
+      # eas-build-post-install in package.json) — but that hook is the BUILD lifecycle; the
+      # update job has its own, and the first workflow run failed at exactly this point.
+      # Reproduced locally by removing dist/ and running `expo export`: identical error. Compiling
+      # shared right after install, before the bundle, is the fix — the same one, in the
+      # equivalent hook.
+      after_install_node_modules:
+        - name: Build @fapoms/shared (Metro bundles from its compiled dist)
+          run: cd ../shared && npm run build
     params:
       # The channel the installed APKs listen on. See the header — NOT the git branch.
       branch: production
