@@ -152,8 +152,10 @@ export const Tappable: React.FC<{
   accessibilityRole?: 'button' | 'link' | 'switch';
   /** Override the default 8px touch expansion for small controls that need a larger tap area. */
   hitSlop?: number | { top?: number; bottom?: number; left?: number; right?: number };
+  /** Passed through for controls (e.g. GroupedSwitch) that need to announce checked/expanded state. */
+  accessibilityState?: { checked?: boolean; disabled?: boolean; expanded?: boolean; selected?: boolean };
   children: React.ReactNode;
-}> = ({ onPress, disabled, style, scaleTo, accessibilityLabel, accessibilityRole, hitSlop, children }) => {
+}> = ({ onPress, disabled, style, scaleTo, accessibilityLabel, accessibilityRole, hitSlop, accessibilityState, children }) => {
   const t = useTheme();
   const scale = useRef(new Animated.Value(1)).current;
   const to = scaleTo ?? t.motion.pressScale;
@@ -165,6 +167,7 @@ export const Tappable: React.FC<{
     <Pressable
       accessibilityLabel={accessibilityLabel}
       accessibilityRole={accessibilityRole}
+      accessibilityState={accessibilityState}
       onPress={onPress}
       disabled={disabled}
       onPressIn={() => !disabled && animate(to)}
@@ -708,4 +711,197 @@ export const ProgressBar: React.FC<{ value: number; tone?: BadgeTone }> = ({ val
 export const Divider: React.FC<{ spacing?: number }> = ({ spacing }) => {
   const t = useTheme();
   return <View style={{ height: 1, backgroundColor: t.colors.border, marginVertical: spacing ?? t.space.md }} />;
+};
+
+// ─────────────────────────────────────────────────────────── Apple-style grouped lists
+//
+// Settings/Contacts/Health on iOS share one signature: rows that belong together sit inside a
+// SINGLE rounded container, divided by hairlines that start after the leading icon rather than
+// full-bleed — not a stack of individually-bordered cards. `GroupedSection` is the container +
+// small-caps header; `GroupedRow` is one row inside it. The divider is drawn by the section
+// itself (via GroupedRow's own bottom hairline suppressed on the last child) so callers never
+// have to remember to add/omit a <Divider> by hand — the old ProfileScreen pattern of a Card
+// full of manually-placed <Divider spacing={...}/> between rows is exactly the seam this removes.
+
+type GroupedTone = 'primary' | 'accent' | 'success' | 'warning' | 'danger' | 'info' | 'neutral';
+
+/** The leading tinted square icon badge — every row's category color lives here. */
+export const GroupedIconTile: React.FC<{ icon: IconName; tone?: GroupedTone; size?: number }> = ({
+  icon, tone = 'neutral', size = 29,
+}) => {
+  const t = useTheme();
+  const tones: Record<GroupedTone, { bg: string; fg: string }> = {
+    primary: { bg: t.colors.primarySoft, fg: t.colors.primary },
+    accent: { bg: t.colors.accentSoft, fg: t.colors.accent },
+    success: { bg: t.colors.successSoft, fg: t.colors.success },
+    warning: { bg: t.colors.warningSoft, fg: t.colors.warning },
+    danger: { bg: t.colors.dangerSoft, fg: t.colors.danger },
+    info: { bg: t.colors.infoSoft, fg: t.colors.info },
+    neutral: { bg: t.colors.surfacePress, fg: t.colors.textMuted },
+  };
+  const c = tones[tone];
+  return (
+    <View style={{
+      width: size, height: size, borderRadius: t.radius.sm,
+      backgroundColor: c.bg, alignItems: 'center', justifyContent: 'center',
+    }}>
+      <Icon name={icon} size={Math.round(size * 0.56)} color={c.fg} />
+    </View>
+  );
+};
+
+/**
+ * A native-shaped switch, hand-built rather than `react-native's <Switch>`.
+ *
+ * The platform `<Switch>` renders its own OS chrome — Material on Android — which is exactly
+ * wrong for an app whose whole point here is to *look* like iOS regardless of platform. This
+ * draws the pill track (51×31) and circular thumb (27) directly from theme tokens so it matches
+ * on both platforms, with a spring-animated thumb slide for the same tactile feel as the rest of
+ * the app's controls (see Tappable, Segmented).
+ */
+export const GroupedSwitch: React.FC<{
+  value: boolean;
+  onChange: (v: boolean) => void;
+  accessibilityLabel?: string;
+  disabled?: boolean;
+}> = ({ value, onChange, accessibilityLabel, disabled }) => {
+  const t = useTheme();
+  const TRACK_W = 51;
+  const TRACK_H = 31;
+  const THUMB = 27;
+  const PAD = 2;
+  const x = useRef(new Animated.Value(value ? 1 : 0)).current;
+
+  useEffect(() => {
+    Animated.spring(x, { toValue: value ? 1 : 0, ...t.motion.spring }).start();
+  }, [value, x, t.motion.spring]);
+
+  return (
+    <Tappable
+      onPress={disabled ? undefined : () => { haptics.select(); onChange(!value); }}
+      disabled={disabled}
+      accessibilityRole="switch"
+      accessibilityLabel={accessibilityLabel}
+      accessibilityState={{ checked: value, disabled: !!disabled }}
+      scaleTo={0.94}
+    >
+      <View style={{
+        width: TRACK_W, height: TRACK_H, borderRadius: TRACK_H / 2,
+        backgroundColor: value ? t.colors.primary : t.colors.surfacePress,
+        borderWidth: 1, borderColor: value ? t.colors.primary : t.colors.borderStrong,
+        justifyContent: 'center',
+      }}>
+        <Animated.View style={{
+          width: THUMB, height: THUMB, borderRadius: THUMB / 2,
+          backgroundColor: value ? t.colors.onPrimary : t.colors.text,
+          transform: [{ translateX: x.interpolate({ inputRange: [0, 1], outputRange: [PAD, TRACK_W - THUMB - PAD] }) }],
+          ...(t.elevation(1) as object),
+        }} />
+      </View>
+    </Tappable>
+  );
+};
+
+/** One row inside a `GroupedSection`. Never used standalone — its hairline divider is owned by
+ *  the parent so the last row in a group never draws a trailing line. */
+export const GroupedRow: React.FC<{
+  icon?: IconName;
+  tone?: GroupedTone;
+  label: string;
+  hint?: string;
+  /** A muted value shown before the chevron/switch, e.g. the current setting. */
+  value?: string;
+  trailing?: React.ReactNode;
+  onPress?: () => void;
+  chevron?: boolean;
+  accessibilityLabel?: string;
+  /** Internal: whether to draw the inset hairline beneath this row. Set by GroupedSection. */
+  _showDivider?: boolean;
+}> = ({ icon, tone = 'neutral', label, hint, value, trailing, onPress, chevron, accessibilityLabel, _showDivider }) => {
+  const t = useTheme();
+  // Divider starts after the icon tile, matching Apple's inset-hairline signature — a full-bleed
+  // line under every row is what makes a list read as a plain table instead of a grouped list.
+  const insetLeft = icon ? 29 + t.space.md : t.space.lg;
+
+  const body = (
+    <View>
+      <View style={{
+        flexDirection: 'row', alignItems: 'center', gap: t.space.md,
+        paddingVertical: t.space.md, paddingHorizontal: t.space.lg, minHeight: 44,
+      }}>
+        {icon && <GroupedIconTile icon={icon} tone={tone} />}
+        <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+          <AppText variant="body" tone={tone === 'danger' ? 'danger' : 'default'}>{label}</AppText>
+          {hint ? <AppText variant="caption" tone="faint">{hint}</AppText> : null}
+        </View>
+        {value ? <AppText variant="body" tone="muted" numberOfLines={1} style={{ maxWidth: 140 }}>{value}</AppText> : null}
+        {trailing}
+        {chevron && <Icon name="chevron-forward" size={16} color={t.colors.textFaint} />}
+      </View>
+      {_showDivider && (
+        <View style={{ height: 1, backgroundColor: t.colors.border, marginLeft: insetLeft }} />
+      )}
+    </View>
+  );
+
+  return onPress ? (
+    <Tappable onPress={onPress} scaleTo={0.99} accessibilityRole="button" accessibilityLabel={accessibilityLabel ?? label}>
+      {body}
+    </Tappable>
+  ) : body;
+};
+
+/**
+ * The rounded container + small-caps header that turns a run of `GroupedRow`s into an Apple-
+ * style grouped list. Dividers between rows are inserted here (via `_showDivider`) rather than
+ * left to each row, so a caller can never accidentally leave a trailing line under the last row
+ * or forget one between two — the single most common way a hand-rolled version of this drifts
+ * from the real thing.
+ */
+export const GroupedSection: React.FC<{
+  title?: string;
+  /** Small note under the header, e.g. "Held by HR for payouts". */
+  footnote?: string;
+  style?: StyleProp<ViewStyle>;
+  children: React.ReactNode;
+}> = ({ title, footnote, style, children }) => {
+  const t = useTheme();
+  const rows = React.Children.toArray(children).filter(Boolean);
+
+  return (
+    <View style={style}>
+      {title ? (
+        // Generous top margin, tighter bottom margin — Apple's headers sit closer to the group
+        // they label than to the group above them, which is what makes scanning a long settings
+        // screen feel like reading paragraphs rather than one unbroken list.
+        <AppText
+          variant="overline"
+          tone="faint"
+          style={{ marginTop: t.space.xl, marginBottom: t.space.sm, marginLeft: t.space.lg, letterSpacing: 0.6 }}
+        >
+          {title.toUpperCase()}
+        </AppText>
+      ) : null}
+      <View style={{
+        backgroundColor: t.colors.surface,
+        borderRadius: t.radius.groupedInset,
+        borderWidth: 1,
+        borderColor: t.colors.border,
+        overflow: 'hidden',
+      }}>
+        {rows.map((child, i) => {
+          if (!React.isValidElement(child)) return child;
+          return React.cloneElement(child as React.ReactElement<any>, {
+            key: (child as any).key ?? i,
+            _showDivider: i < rows.length - 1,
+          });
+        })}
+      </View>
+      {footnote ? (
+        <AppText variant="caption" tone="faint" style={{ marginTop: t.space.sm, marginLeft: t.space.lg }}>
+          {footnote}
+        </AppText>
+      ) : null}
+    </View>
+  );
 };

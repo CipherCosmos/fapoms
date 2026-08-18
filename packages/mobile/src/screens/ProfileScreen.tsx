@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, TextInput, Switch, TextStyle, Modal, Alert } from 'react-native';
+import { View, TextInput, TextStyle, Modal, Alert } from 'react-native';
 import { useTheme, ThemePreference } from '../theme/ThemeProvider';
 import {
-  AppText, Avatar, Badge, Button, Card, CollapsibleSection, Divider, Icon, IconName, StatStrip, StatTile, Tappable,
+  AppText, Avatar, Badge, Button, Card, CollapsibleSection, GroupedRow, GroupedSection, GroupedSwitch,
+  Icon, IconName, StatStrip, StatTile, Tappable,
 } from '../components/ui/primitives';
 import { ChangePasswordScreen } from './ChangePasswordScreen';
 import { useLocation } from '../context/LocationContext';
@@ -100,23 +101,11 @@ type SectionKey = 'PROFILE' | 'WORK' | 'STATS' | 'APP';
 // a TextInput that means the keyboard cursor is thrown out after each keystroke (the same
 // remount bug fixed app-wide in the modal/drawer inputs). Hoisted, identity is stable.
 
-/** The leading tinted square that anchors every settings row — the iOS-Settings glyph tile. */
-const IconTile: React.FC<{ icon: IconName; bg: string; fg: string }> = ({ icon, bg, fg }) => (
-  <View style={{
-    width: 32, height: 32, borderRadius: 8,
-    backgroundColor: bg, alignItems: 'center', justifyContent: 'center',
-  }}>
-    <Icon name={icon} size={17} color={fg} />
-  </View>
-);
-
 type RowTone = 'primary' | 'accent' | 'success' | 'warning' | 'danger' | 'info' | 'neutral';
 
-/**
- * A settings row: leading icon tile, label + optional hint, trailing control
- * (a value, a chevron, a Switch — whatever `trailing` renders). Tappable when
- * `onPress` is given, plain otherwise.
- */
+/** Row helper kept for call-site compatibility with the old local component — now a thin pass-
+ *  through to the shared GroupedRow primitive (icon badge, inset divider owned by the parent
+ *  GroupedSection) instead of a screen-local, separately-bordered row. */
 const SettingRow: React.FC<{
   icon: IconName;
   tone?: RowTone;
@@ -126,39 +115,9 @@ const SettingRow: React.FC<{
   onPress?: () => void;
   accessibilityLabel?: string;
   chevron?: boolean;
-}> = ({ icon, tone = 'neutral', label, hint, trailing, onPress, accessibilityLabel, chevron }) => {
-  const t = useTheme();
-  const tones: Record<RowTone, { bg: string; fg: string }> = {
-    primary: { bg: t.colors.primarySoft, fg: t.colors.primary },
-    accent: { bg: t.colors.accentSoft, fg: t.colors.accent },
-    success: { bg: t.colors.successSoft, fg: t.colors.success },
-    warning: { bg: t.colors.warningSoft, fg: t.colors.warning },
-    danger: { bg: t.colors.dangerSoft, fg: t.colors.danger },
-    info: { bg: t.colors.infoSoft, fg: t.colors.info },
-    neutral: { bg: t.colors.surfacePress, fg: t.colors.textMuted },
-  };
-  const c = tones[tone];
+}> = (props) => <GroupedRow {...props} />;
 
-  const body = (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md, paddingVertical: t.space.sm }}>
-      <IconTile icon={icon} bg={c.bg} fg={c.fg} />
-      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-        <AppText variant="body" tone={tone === 'danger' ? 'danger' : 'default'}>{label}</AppText>
-        {hint ? <AppText variant="caption" tone="faint">{hint}</AppText> : null}
-      </View>
-      {trailing}
-      {chevron && <Icon name="chevron-forward" size={16} color={t.colors.textFaint} />}
-    </View>
-  );
-
-  return onPress ? (
-    <Tappable onPress={onPress} accessibilityRole="button" accessibilityLabel={accessibilityLabel ?? label}>
-      {body}
-    </Tappable>
-  ) : body;
-};
-
-/** A SettingRow whose trailing control is a Switch. */
+/** A SettingRow whose trailing control is the shared iOS-shaped GroupedSwitch. */
 const ToggleRow: React.FC<{
   icon: IconName;
   tone?: RowTone;
@@ -166,45 +125,32 @@ const ToggleRow: React.FC<{
   hint?: string;
   value: boolean;
   onChange: (v: boolean) => void;
-}> = ({ icon, tone, label, hint, value, onChange }) => {
-  const t = useTheme();
-  return (
-    <SettingRow
-      icon={icon}
-      tone={tone}
-      label={label}
-      hint={hint}
-      trailing={
-        <Switch
-          value={!!value}
-          onValueChange={onChange}
-          accessibilityLabel={label}
-          trackColor={{ false: t.colors.surfacePress, true: t.colors.primarySoft }}
-          thumbColor={value ? t.colors.primary : t.colors.textFaint}
-        />
-      }
-    />
-  );
-};
+}> = ({ icon, tone, label, hint, value, onChange }) => (
+  <GroupedRow
+    icon={icon}
+    tone={tone}
+    label={label}
+    hint={hint}
+    trailing={<GroupedSwitch value={!!value} onChange={onChange} accessibilityLabel={label} />}
+  />
+);
 
-/** A compact indented toggle for per-category alerts, sitting under the master push row. */
+/** A compact indented toggle for per-category alerts, sitting under the master push row — no
+ *  icon badge of its own so it reads as nested under the row above it, still inside the same
+ *  grouped container and sharing its inset dividers. */
 const SubToggle: React.FC<{ label: string; hint?: string; value: boolean; onChange: (v: boolean) => void }> = ({
   label, hint, value, onChange,
 }) => {
   const t = useTheme();
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md, paddingVertical: t.space.sm, paddingLeft: 32 + t.space.md }}>
-      <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
-        <AppText variant="small">{label}</AppText>
-        {hint ? <AppText variant="caption" tone="faint">{hint}</AppText> : null}
+    <View>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md, paddingVertical: t.space.sm, paddingHorizontal: t.space.lg, paddingLeft: 29 + t.space.md + t.space.lg }}>
+        <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+          <AppText variant="small">{label}</AppText>
+          {hint ? <AppText variant="caption" tone="faint">{hint}</AppText> : null}
+        </View>
+        <GroupedSwitch value={!!value} onChange={onChange} accessibilityLabel={label} />
       </View>
-      <Switch
-        value={!!value}
-        onValueChange={onChange}
-        accessibilityLabel={label}
-        trackColor={{ false: t.colors.surfacePress, true: t.colors.primarySoft }}
-        thumbColor={value ? t.colors.primary : t.colors.textFaint}
-      />
     </View>
   );
 };
@@ -413,7 +359,10 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.lg }}>
           <Avatar name={assayerName || 'Assayer'} size={72} />
           <View style={{ flex: 1, minWidth: 0, gap: 6 }}>
-            <AppText variant="h1" numberOfLines={1}>{assayerName || 'Field Assayer'}</AppText>
+            {/* Large-title weight, not h1 — Apple's Settings/Contacts headers show your name at
+                the same scale as a screen's own title, not as a subordinate label under the
+                avatar. */}
+            <AppText variant="largeTitle" numberOfLines={1} style={{ letterSpacing: -0.5 }}>{assayerName || 'Field Assayer'}</AppText>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.xs, alignItems: 'center' }}>
               {(assayerCode || profile.assayerCode) ? (
                 <Badge label={assayerCode || profile.assayerCode} tone="primary" icon="id-card-outline" />
@@ -542,9 +491,9 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       {tab === 'WORK' && (
         <>
           <CollapsibleSection title="Availability" defaultOpen>
-            <Card level={1}>
-              {/* Self-service time off. The scheduler already honours leave, so this is what
-                  keeps offers away while the assayer is out — no HR round-trip. */}
+            {/* Self-service time off. The scheduler already honours leave, so this is what
+                keeps offers away while the assayer is out — no HR round-trip. */}
+            <GroupedSection>
               <SettingRow
                 icon="calendar-outline"
                 tone="primary"
@@ -554,7 +503,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                 accessibilityLabel="Set your time off"
                 chevron
               />
-            </Card>
+            </GroupedSection>
           </CollapsibleSection>
 
           <CollapsibleSection title="Capability" summary="Skills and languages on your record">
@@ -646,7 +595,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           </CollapsibleSection>
 
           <CollapsibleSection title="Notifications" defaultOpen>
-            <Card level={1}>
+            <GroupedSection>
               {/* Registers or removes this handset's push token on the server. Delivery is
                   decided server-side, so unregistering is the only thing that genuinely stops
                   pushes — the old switch set a state field nothing read or persisted. */}
@@ -673,12 +622,12 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   worker can stay on while the rest are muted. Only shown while push is on —
                   with the device unregistered these have nothing to act on. */}
               {pushEnabled && (
-                <View style={{ marginTop: t.space.xs, gap: t.space.xs }}>
-                  <AppText variant="overline" tone="faint" style={{ paddingLeft: 32 + t.space.md }}>WHICH ALERTS</AppText>
+                <View style={{ paddingTop: t.space.xs, paddingBottom: t.space.xs, paddingLeft: t.space.lg }}>
+                  <AppText variant="overline" tone="faint" style={{ paddingLeft: 29 + t.space.md, marginBottom: t.space.xs }}>WHICH ALERTS</AppText>
                   {notifPrefsLoading ? (
-                    <AppText variant="caption" tone="faint" style={{ paddingLeft: 32 + t.space.md }}>Loading your alert preferences…</AppText>
+                    <AppText variant="caption" tone="faint" style={{ paddingLeft: 29 + t.space.md }}>Loading your alert preferences…</AppText>
                   ) : notifPrefs.length === 0 ? (
-                    <AppText variant="caption" tone="faint" style={{ paddingLeft: 32 + t.space.md }}>Alert preferences unavailable offline.</AppText>
+                    <AppText variant="caption" tone="faint" style={{ paddingLeft: 29 + t.space.md }}>Alert preferences unavailable offline.</AppText>
                   ) : (
                     notifPrefs.map((pref) => (
                       <SubToggle
@@ -692,7 +641,6 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   )}
                 </View>
               )}
-              <Divider spacing={t.space.xs} />
               <ToggleRow
                 icon="volume-medium-outline"
                 tone="accent"
@@ -701,11 +649,11 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                 value={soundAlerts}
                 onChange={async (v) => { setSoundAlerts(v); await setDevicePreference('soundAlerts', v); }}
               />
-            </Card>
+            </GroupedSection>
           </CollapsibleSection>
 
           <CollapsibleSection title="Location & Recommendations" summary="Live location sharing">
-            <Card level={1}>
+            <GroupedSection>
               <ToggleRow
                 icon="navigate-outline"
                 tone="info"
@@ -714,20 +662,20 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                 value={liveTrackingEnabled}
                 onChange={async (v) => { await setLiveTrackingEnabled(v); }}
               />
-              {!liveTrackingReady && (
-                <AppText variant="caption" tone="faint" style={{ marginTop: 4, paddingLeft: 32 + t.space.md }}>Syncing your sharing preference…</AppText>
-              )}
-              {liveTrackingEnabled && (
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4, paddingLeft: 32 + t.space.md }}>
-                  <Icon name="radio" size={13} color={t.colors.success} />
-                  <AppText variant="caption" tone="success">Live position active — recommendations use where you are now</AppText>
-                </View>
-              )}
-            </Card>
+            </GroupedSection>
+            {!liveTrackingReady && (
+              <AppText variant="caption" tone="faint" style={{ marginTop: t.space.sm, marginLeft: t.space.lg }}>Syncing your sharing preference…</AppText>
+            )}
+            {liveTrackingEnabled && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: t.space.sm, marginLeft: t.space.lg }}>
+                <Icon name="radio" size={13} color={t.colors.success} />
+                <AppText variant="caption" tone="success">Live position active — recommendations use where you are now</AppText>
+              </View>
+            )}
           </CollapsibleSection>
 
           <CollapsibleSection title="Security & Biometrics" defaultOpen>
-            <Card level={1}>
+            <GroupedSection>
               {/*
                 Changing your own password had no route in the app at all. The screen existed and
                 was complete, but it rendered only when `mustChangePassword` was set — that is,
@@ -743,7 +691,6 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                 chevron
                 onPress={() => setChangePasswordVisible(true)}
               />
-              <Divider spacing={t.space.xs} />
               {/* Controls the lock over a restored session, and whether the sign-in screen
                   offers the biometric option. Persisted to the device, so it survives a
                   restart. */}
@@ -755,7 +702,6 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                 value={biometrics}
                 onChange={async (v) => { setBiometrics(v); await setDevicePreference('biometrics', v); }}
               />
-              <Divider spacing={t.space.xs} />
               {/*
                 Reports what the handset actually has. This row rendered a hardcoded "ACTIVE"
                 badge and the words "Biometric hardware ready" on every device — including one
@@ -783,11 +729,13 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   />
                 }
               />
-            </Card>
+            </GroupedSection>
           </CollapsibleSection>
 
           <CollapsibleSection title="Accreditation & License" summary="Certifications and their expiry">
-            <Card level={1} style={{ gap: t.space.sm }}>
+            <GroupedSection
+              footnote="Authorised for precious metal purity testing, gold ornament packet sealing, and bank collateral audits."
+            >
               {/*
                 Shows the assayer's own licence number, or says it is missing.
                 This was hardcoded to `CERT-GOLD-AS0127-2026` — one specific person's
@@ -802,14 +750,11 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                 hint={profile.licenseNo ? `License No: ${profile.licenseNo}` : 'No licence number on file'}
                 trailing={profile.licenseNo ? <Badge label="VERIFIED" tone="success" /> : <Badge label="NOT ON FILE" tone="warning" />}
               />
-              <AppText variant="caption" tone="muted">
-                Authorised for precious metal purity testing, gold ornament packet sealing, and bank collateral audits.
-              </AppText>
-            </Card>
+            </GroupedSection>
           </CollapsibleSection>
 
           <CollapsibleSection title="Connection" summary="Which server this app talks to">
-            <Card level={1} style={{ gap: t.space.md }}>
+            <GroupedSection>
               <SettingRow
                 icon="server-outline"
                 tone="accent"
@@ -825,16 +770,16 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                   )
                 }
               />
-              <Divider spacing={t.space.xs} />
-              <Button
-                label={conn === 'checking' ? 'Checking…' : 'Check connection'}
-                icon="refresh-outline"
-                variant="neutral"
-                size="sm"
-                loading={conn === 'checking'}
-                onPress={() => { void checkConnection(); }}
-              />
-            </Card>
+            </GroupedSection>
+            <Button
+              label={conn === 'checking' ? 'Checking…' : 'Check connection'}
+              icon="refresh-outline"
+              variant="neutral"
+              size="sm"
+              loading={conn === 'checking'}
+              onPress={() => { void checkConnection(); }}
+              style={{ marginTop: t.space.md }}
+            />
           </CollapsibleSection>
 
           {/*
@@ -864,7 +809,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           bug, ask for something, or ask a question, and follow the replies in thread. */}
       {onOpenFeedback && (
         <CollapsibleSection title="Help & Feedback" defaultOpen>
-          <Card level={1}>
+          <GroupedSection>
             <SettingRow
               icon="chatbox-ellipses-outline"
               tone="primary"
@@ -874,7 +819,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
               accessibilityLabel="Open feedback and support"
               chevron
             />
-          </Card>
+          </GroupedSection>
         </CollapsibleSection>
       )}
 
@@ -885,7 +830,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           assayer out mid-audit with no way back except re-entering their password. */}
       {onLogout && (
         <CollapsibleSection title="Session" defaultOpen>
-          <Card level={1}>
+          <GroupedSection>
             <SettingRow
               icon="log-out-outline"
               tone="danger"
@@ -904,7 +849,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
               accessibilityLabel="Sign out of Orbit"
               chevron
             />
-          </Card>
+          </GroupedSection>
         </CollapsibleSection>
       )}
 

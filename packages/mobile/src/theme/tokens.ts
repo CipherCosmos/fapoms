@@ -169,6 +169,11 @@ export const radius = {
   xl: 20,
   '2xl': 28,
   pill: 999,
+  /** Apple grouped-list container corner (Settings.app uses ~14pt at the standard scale). A
+      dedicated name rather than reusing `lg`/`xl` because this one shape — the rounded card that
+      holds a whole group of rows — needs to change independently of card/button rounding
+      elsewhere if the two ever diverge. */
+  groupedInset: 14,
 } as const;
 
 /**
