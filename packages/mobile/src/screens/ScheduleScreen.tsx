@@ -8,6 +8,9 @@ import { AppText, Badge, Button, Card, Divider, EmptyState, FadeIn, Icon, Segmen
 import { formatRupees as money, assignmentStatusLabel, isAssignmentTerminal, formatDateOnly, travelModeLabel } from '@fapoms/shared';
 import { assignmentStatusTone } from '../utils/statusTone';
 import { dayGroupHeader, dayKey, relativeDay } from '../utils/dates';
+import { useSwipeSegments } from '../hooks/useSwipeSegments';
+
+const SCHEDULE_TABS = ['ACTIVE', 'DONE'] as const;
 
 interface ScheduleScreenProps {
   assignments: AssayerAssignment[];
@@ -181,8 +184,10 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, assignments]);
 
+  const swipeSegments = useSwipeSegments(SCHEDULE_TABS, tab, setTab);
+
   return (
-    <View style={{ gap: t.space.lg }}>
+    <View style={{ gap: t.space.lg }} {...swipeSegments.panHandlers}>
       <Segmented
         value={tab}
         onChange={(k) => setTab(k as 'ACTIVE' | 'DONE')}

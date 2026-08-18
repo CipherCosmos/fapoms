@@ -459,12 +459,19 @@ function AppMain() {
 
   /**
    * The swipe itself. Attached to a wrapper around the content ScrollView, not the ScrollView
-   * itself: `onMoveShouldSetPanResponderCapture` only claims the gesture once a drag is clearly
-   * more horizontal than vertical (`|dx| > |dy| * 1.5`, past a small dead zone), so a normal
-   * vertical scroll through a long schedule is never intercepted — only a deliberate sideways
-   * flick is. Direction is content-follows-finger: a swipe LEFT (negative dx) advances to the
-   * NEXT tab, matching how a page-turn / carousel reads, mirroring `TabDock`'s left-to-right
-   * order rather than being reversed from it.
+   * itself. `onMoveShouldSetPanResponder` (NOT the `...Capture` variant) only claims the gesture
+   * once a drag is clearly more horizontal than vertical (`|dx| > |dy| * 1.5`, past a small dead
+   * zone) — and, critically, only after any nested control has had first refusal. The capture
+   * variant fires top-down before a single child gets asked, which meant a screen with its own
+   * sub-tabs (ScheduleScreen's Active/History `Segmented`, QueriesScreen's Open/Resolved) could
+   * never win a swipe gesture over the app-level dock: this always intercepted it first, so a
+   * swipe on those screens jumped between HOME/SCHEDULE/QUERIES/etc. instead of doing anything
+   * useful where the finger actually was. The plain (bubble-phase) variant is asked only once
+   * nothing deeper in the tree has already claimed the touch, so a screen wanting its own
+   * horizontal swipe (see useSwipeSegments.ts) now gets first claim, and this only fires when
+   * nothing more specific wanted the gesture. Direction is content-follows-finger: a swipe LEFT
+   * (negative dx) advances to the NEXT tab, matching how a page-turn / carousel reads, mirroring
+   * `TabDock`'s left-to-right order rather than being reversed from it.
    *
    * Disabled while paperwork is open (`openPaperwork`, defined below where the content decides
    * what to render) — that view is a drill-in, not one of the five tabs, and a stray swipe while
@@ -473,7 +480,7 @@ function AppMain() {
   const tabSwipeEnabledRef = useRef(true);
   const tabSwipeResponder = useRef(
     PanResponder.create({
-      onMoveShouldSetPanResponderCapture: (_, gesture) =>
+      onMoveShouldSetPanResponder: (_, gesture) =>
         tabSwipeEnabledRef.current &&
         Math.abs(gesture.dx) > 24 &&
         Math.abs(gesture.dx) > Math.abs(gesture.dy) * 1.5,

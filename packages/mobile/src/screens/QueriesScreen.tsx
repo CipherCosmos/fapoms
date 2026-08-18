@@ -4,6 +4,9 @@ import { AssayerAssignment, ValidationQuery } from '../types/mobile-app';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Avatar, Badge, Card, EmptyState, FadeIn, Icon, Segmented, Tappable } from '../components/ui/primitives';
 import { calendarDayDiff } from '../utils/dates';
+import { useSwipeSegments } from '../hooks/useSwipeSegments';
+
+const QUERY_TABS = ['OPEN', 'ALL'] as const;
 
 interface QueriesScreenProps {
   assignments: AssayerAssignment[];
@@ -79,8 +82,10 @@ export const QueriesScreen: React.FC<QueriesScreenProps> = ({ assignments, onOpe
 
   const nothingToShow = shownOpen.length === 0 && (!showResolved || resolvedThreads.length === 0);
 
+  const swipeSegments = useSwipeSegments(QUERY_TABS, tab, setTab);
+
   return (
-    <View style={{ gap: t.space.lg }}>
+    <View style={{ gap: t.space.lg }} {...swipeSegments.panHandlers}>
       <Segmented
         value={tab}
         onChange={(k) => setTab(k as 'OPEN' | 'ALL')}

@@ -122,7 +122,16 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
               />
             </View>
           ) : (
-            <ScrollView style={{ flexGrow: 0 }}>
+            /*
+             * `flexShrink: 1` (not just `flexGrow: 0`) is load-bearing: Card is a plain,
+             * non-flex View with `overflow: 'hidden'` and a `maxHeight` on itself, not on this
+             * ScrollView. Without `flexShrink`, the ScrollView sizes to its full content height
+             * regardless of the Card's maxHeight, and everything past that boundary is silently
+             * clipped by the Card rather than becoming scrollable — with a long list, whichever
+             * notification rendered last sat in the clipped-off region, invisible with no visual
+             * cue that more existed below the fold.
+             */
+            <ScrollView style={{ flexShrink: 1 }} contentContainerStyle={{ paddingBottom: t.space.sm }}>
               <View style={{ gap: t.space.sm }}>
                 {notifications.map((n) => {
                   /**
