@@ -112,9 +112,20 @@ export const QueriesScreen: React.FC<QueriesScreenProps> = ({ assignments, onOpe
             const q = previewOf(a);
             const wait = state === 'NEEDS_YOU' ? waitingFor(q?.createdAt) : null;
             const count = (a.queries || []).length;
+            const rowLabel = `${a.branchName}, ${meta.label.toLowerCase()}${wait ? `, ${wait.label.toLowerCase()}` : ''}, ${count === 1 ? '1 question' : `${count} questions`}`;
             return (
               <FadeIn key={a.id} delay={Math.min(i, 6) * 45}>
-                <Card level={1} onPress={() => onOpenQueryChat(a)} style={{ gap: t.space.md }}>
+                {/* Card's own onPress wraps in a Tappable with no accessibility props exposed, so
+                    the whole thread row — the primary action of this screen — announced as an
+                    unlabelled button to a screen reader. Wrapping it here instead of passing
+                    onPress to Card gives it a real spoken label without touching the primitive. */}
+                <Tappable
+                  onPress={() => onOpenQueryChat(a)}
+                  scaleTo={0.985}
+                  accessibilityRole="button"
+                  accessibilityLabel={rowLabel}
+                >
+                <Card level={1} style={{ gap: t.space.md }}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
                     {/* Unread-style dot: lit while the thread is on the assayer. */}
                     <View
@@ -172,6 +183,7 @@ export const QueriesScreen: React.FC<QueriesScreenProps> = ({ assignments, onOpe
                     </View>
                   </View>
                 </Card>
+                </Tappable>
               </FadeIn>
             );
           })}
@@ -189,7 +201,12 @@ export const QueriesScreen: React.FC<QueriesScreenProps> = ({ assignments, onOpe
                 const count = (a.queries || []).length;
                 return (
                   <FadeIn key={a.id} delay={Math.min(i, 6) * 35}>
-                    <Tappable onPress={() => onOpenQueryChat(a)} scaleTo={0.985}>
+                    <Tappable
+                      onPress={() => onOpenQueryChat(a)}
+                      scaleTo={0.985}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${a.branchName}, resolved, ${count === 1 ? '1 question' : `${count} questions`}`}
+                    >
                       <View
                         style={{
                           flexDirection: 'row', alignItems: 'center', gap: t.space.md,

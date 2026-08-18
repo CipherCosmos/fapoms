@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { View, Animated } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Icon, Tappable } from '../components/ui/primitives';
+import * as haptics from '../lib/haptics';
 
 export interface LockScreenProps {
   /** Shown so the assayer can tell whose session this handset is holding before unlocking. */
@@ -35,7 +36,12 @@ export const LockScreen: React.FC<LockScreenProps> = ({ name, onUnlock, onSignOu
     setError(null);
     const result = await onUnlock();
     // A cancel is a deliberate choice, not a failure — the button below is the retry.
-    if (!result.success && result.error) setError(result.error);
+    if (!result.success && result.error) {
+      haptics.error();
+      setError(result.error);
+    } else if (result.success) {
+      haptics.success();
+    }
     setBusy(false);
   };
 
@@ -93,9 +99,12 @@ export const LockScreen: React.FC<LockScreenProps> = ({ name, onUnlock, onSignOu
       </View>
 
       {error && (
-        <AppText variant="small" tone="danger" style={{ textAlign: 'center' }}>
-          {error}
-        </AppText>
+        <View accessibilityRole="alert" accessibilityLiveRegion="assertive" style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.xs }}>
+          <Icon name="alert-circle" size={14} color={t.colors.danger} />
+          <AppText variant="small" tone="danger" style={{ textAlign: 'center' }}>
+            {error}
+          </AppText>
+        </View>
       )}
 
       <View style={{ width: '100%', gap: t.space.md }}>
@@ -107,7 +116,14 @@ export const LockScreen: React.FC<LockScreenProps> = ({ name, onUnlock, onSignOu
           size="lg"
           full
         />
-        <Tappable onPress={onSignOut}>
+        {/* A real, separate account switch — not the retry above — so it needs its own
+            comfortable target and an explicit warning that it ends the current session. */}
+        <Tappable
+          onPress={onSignOut}
+          hitSlop={{ top: 10, bottom: 10, left: 20, right: 20 }}
+          accessibilityRole="button"
+          accessibilityLabel="Sign out and sign in as someone else"
+        >
           <View style={{ alignItems: 'center', paddingVertical: t.space.sm }}>
             <AppText variant="small" tone="muted">
               Sign in as someone else

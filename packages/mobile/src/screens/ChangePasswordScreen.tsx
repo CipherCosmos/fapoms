@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
-import { View, TextInput, ScrollView, KeyboardAvoidingView, Platform, TextStyle } from 'react-native';
+import React, { useRef, useState } from 'react';
+import { View, TextInput, ScrollView, KeyboardAvoidingView, Platform, TextStyle, Pressable } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Card, Icon } from '../components/ui/primitives';
 import { MobileApiService } from '../services/api.service';
+import * as haptics from '../lib/haptics';
 
 /**
  * Forced password change.
@@ -34,6 +35,17 @@ interface Props {
 
 const MIN_LENGTH = 8;
 
+/** One live-checked rule. Faint and unchecked until met, so the list doesn't read as a wall of errors before typing starts. */
+const RuleRow: React.FC<{ ok: boolean; label: string }> = ({ ok, label }) => {
+  const t = useTheme();
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+      <Icon name={ok ? 'checkmark-circle' : 'ellipse-outline'} size={13} color={ok ? t.colors.success : t.colors.textFaint} />
+      <AppText variant="caption" tone={ok ? 'success' : 'faint'}>{label}</AppText>
+    </View>
+  );
+};
+
 export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onCancel }) => {
   const t = useTheme();
   const [currentPassword, setCurrentPassword] = useState('');
@@ -42,6 +54,15 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [focused, setFocused] = useState<string | null>(null);
+  const [showNew, setShowNew] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
+  /** So "Next" on the keyboard hands focus along the form instead of just showing a key nobody wired. */
+  const newRef = useRef<TextInput>(null);
+  const confirmRef = useRef<TextInput>(null);
+
+  const lengthOk = newPassword.length >= MIN_LENGTH;
+  const differsFromCurrent = newPassword.length > 0 && newPassword !== currentPassword;
+  const matches = confirmPassword.length > 0 && newPassword === confirmPassword;
 
   const inputWrap = (isFocused: boolean) => ({
     flexDirection: 'row' as const,
@@ -69,18 +90,22 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
     // Checked here as well as on the server so the person gets the answer immediately rather
     // than after a round trip on a weak field connection.
     if (!currentPassword || !newPassword) {
+      haptics.error();
       setError('Enter your current password and choose a new one.');
       return;
     }
     if (newPassword.length < MIN_LENGTH) {
+      haptics.error();
       setError(`Your new password must be at least ${MIN_LENGTH} characters.`);
       return;
     }
     if (newPassword !== confirmPassword) {
+      haptics.error();
       setError('The two new passwords do not match.');
       return;
     }
     if (newPassword === currentPassword) {
+      haptics.error();
       setError('Your new password must be different from the current one.');
       return;
     }
@@ -89,9 +114,11 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
     try {
       const res = await MobileApiService.changeOwnPassword(currentPassword, newPassword);
       if (!res.success) {
+        haptics.error();
         setError(res.error || 'Could not change your password. Please try again.');
         return;
       }
+      haptics.success();
       onChanged();
     } finally {
       setBusy(false);
@@ -133,6 +160,10 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
                 autoCapitalize="none"
                 autoCorrect={false}
                 style={inputStyle}
+                accessibilityLabel="Current password"
+                returnKeyType="next"
+                blurOnSubmit={false}
+                onSubmitEditing={() => newRef.current?.focus()}
               />
             </View>
           </View>
@@ -142,17 +173,36 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
             <View style={inputWrap(focused === 'new')}>
               <Icon name="lock-closed-outline" size={18} color={focused === 'new' ? t.colors.primary : t.colors.textFaint} />
               <TextInput
+                ref={newRef}
                 value={newPassword}
                 onChangeText={setNewPassword}
                 onFocus={() => setFocused('new')}
                 onBlur={() => setFocused(null)}
-                secureTextEntry
+                secureTextEntry={!showNew}
                 autoCapitalize="none"
                 autoCorrect={false}
                 style={inputStyle}
+                accessibilityLabel="New password"
+                returnKeyType="next"
+                blurOnSubmit={false}
+                onSubmitEditing={() => confirmRef.current?.focus()}
               />
+              <Pressable
+                onPress={() => setShowNew((v) => !v)}
+                hitSlop={14}
+                accessibilityRole="button"
+                accessibilityLabel={showNew ? 'Hide new password' : 'Show new password'}
+              >
+                <Icon name={showNew ? 'eye-off-outline' : 'eye-outline'} size={18} color={t.colors.textFaint} />
+              </Pressable>
             </View>
-            <AppText variant="caption" tone="faint">At least {MIN_LENGTH} characters.</AppText>
+            {/* Rules update live rather than only surfacing on a rejected submit — on a field
+                connection every round trip costs time, so a typo is worth catching before "Set
+                password" is even tapped. */}
+            <View style={{ gap: 4 }}>
+              <RuleRow ok={lengthOk} label={`At least ${MIN_LENGTH} characters`} />
+              <RuleRow ok={differsFromCurrent} label="Different from your current password" />
+            </View>
           </View>
 
           <View style={{ gap: t.space.sm }}>
@@ -160,22 +210,42 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
             <View style={inputWrap(focused === 'conf')}>
               <Icon name="checkmark-circle-outline" size={18} color={focused === 'conf' ? t.colors.primary : t.colors.textFaint} />
               <TextInput
+                ref={confirmRef}
                 value={confirmPassword}
                 onChangeText={setConfirmPassword}
                 onFocus={() => setFocused('conf')}
                 onBlur={() => setFocused(null)}
-                secureTextEntry
+                secureTextEntry={!showConfirm}
                 autoCapitalize="none"
                 autoCorrect={false}
                 style={inputStyle}
+                accessibilityLabel="Confirm new password"
+                returnKeyType="go"
                 onSubmitEditing={submit}
               />
+              <Pressable
+                onPress={() => setShowConfirm((v) => !v)}
+                hitSlop={14}
+                accessibilityRole="button"
+                accessibilityLabel={showConfirm ? 'Hide confirmed password' : 'Show confirmed password'}
+              >
+                <Icon name={showConfirm ? 'eye-off-outline' : 'eye-outline'} size={18} color={t.colors.textFaint} />
+              </Pressable>
             </View>
+            <RuleRow ok={matches} label="Matches the new password" />
           </View>
 
           {error ? (
-            <View style={{ backgroundColor: t.colors.dangerSoft, padding: t.space.md, borderRadius: t.radius.md }}>
-              <AppText variant="caption" style={{ color: t.colors.danger, textAlign: 'center' }}>{error}</AppText>
+            <View
+              accessibilityRole="alert"
+              accessibilityLiveRegion="assertive"
+              style={{
+                flexDirection: 'row', alignItems: 'center', gap: t.space.sm,
+                backgroundColor: t.colors.dangerSoft, padding: t.space.md, borderRadius: t.radius.md,
+              }}
+            >
+              <Icon name="alert-circle" size={16} color={t.colors.danger} />
+              <AppText variant="caption" style={{ color: t.colors.danger, flex: 1 }}>{error}</AppText>
             </View>
           ) : null}
 

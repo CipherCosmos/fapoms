@@ -187,7 +187,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               />
             ))}
             {offers.length > 2 && (
-              <Tappable onPress={onSeeSchedule}>
+              <Tappable
+                onPress={onSeeSchedule}
+                accessibilityRole="button"
+                accessibilityLabel={`See all ${offers.length} offers`}
+              >
                 <View style={{ alignItems: 'center', paddingVertical: t.space.sm }}>
                   <AppText variant="caption" tone="primary">
                     See all {offers.length} offers
@@ -203,7 +207,15 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         title="Today"
         action={
           todays.length > 0 ? (
-            <Tappable onPress={onSeeSchedule}>
+            <Tappable
+              onPress={onSeeSchedule}
+              accessibilityRole="button"
+              accessibilityLabel={`See all ${todays.length} assignments scheduled today`}
+              // The default 8px Tappable hitSlop is fine on a big card, but this is a bare
+              // caption sitting in a section header — padding gives it a real touch target
+              // instead of relying entirely on hitSlop for a one-handed outdoor tap.
+              style={{ paddingVertical: t.space.xs, paddingHorizontal: t.space.xs }}
+            >
               <AppText variant="caption" tone="primary">
                 See all
               </AppText>
@@ -436,7 +448,11 @@ const SummaryRow: React.FC<{
 }> = ({ icon, label, value, tone, onPress }) => {
   const t = useTheme();
   const body = (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
+    // A bare icon+text row was under 44dp tall — comfortable for a careful tap, not for a
+    // gloved thumb on a phone held one-handed outdoors. The vertical padding gives every row
+    // (tappable or not) a consistent minimum height without changing the visual rhythm inside
+    // the card, since Card already supplies its own outer padding.
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md, paddingVertical: t.space.xs, minHeight: 44 }}>
       <Icon name={icon} size={18} color={tone ? t.colors[tone] : t.colors.textFaint} />
       <AppText variant="body" style={{ flex: 1 }}>
         {label}
@@ -448,5 +464,9 @@ const SummaryRow: React.FC<{
     </View>
   );
 
-  return onPress ? <Tappable onPress={onPress}>{body}</Tappable> : body;
+  return onPress ? (
+    <Tappable onPress={onPress} accessibilityRole="button" accessibilityLabel={`${label}: ${value}`}>
+      {body}
+    </Tappable>
+  ) : body;
 };

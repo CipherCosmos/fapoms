@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, TextInput, Switch, TextStyle, Modal } from 'react-native';
+import { View, TextInput, Switch, TextStyle, Modal, Alert } from 'react-native';
 import { useTheme, ThemePreference } from '../theme/ThemeProvider';
 import {
   AppText, Avatar, Badge, Button, Card, CollapsibleSection, Divider, Icon, IconName, StatStrip, StatTile, Tappable,
@@ -879,7 +879,10 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       )}
 
       {/* Session: the destructive action lives alone at the very bottom, in danger tone,
-          visually severed from everything an assayer edits day to day. Never glowing. */}
+          visually severed from everything an assayer edits day to day. Never glowing.
+          A confirmation step guards it — this used to fire onLogout on a single tap, so a
+          mis-tap on a moving handset (or a thumb sliding past the row above it) threw an
+          assayer out mid-audit with no way back except re-entering their password. */}
       {onLogout && (
         <CollapsibleSection title="Session" defaultOpen>
           <Card level={1}>
@@ -888,7 +891,16 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
               tone="danger"
               label="Sign out"
               hint="You'll need your password to sign back in"
-              onPress={onLogout}
+              onPress={() => {
+                Alert.alert(
+                  'Sign out of Orbit?',
+                  "You'll need your password to sign back in.",
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Sign out', style: 'destructive', onPress: onLogout },
+                  ],
+                );
+              }}
               accessibilityLabel="Sign out of Orbit"
               chevron
             />

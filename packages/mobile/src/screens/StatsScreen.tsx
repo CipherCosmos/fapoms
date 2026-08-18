@@ -1,7 +1,7 @@
 import React from 'react';
 import { View } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
-import { AppText, Card, ProgressBar, Section, StatStrip, StatTile } from '../components/ui/primitives';
+import { AppText, Card, EmptyState, ProgressBar, Section, StatStrip, StatTile } from '../components/ui/primitives';
 
 export interface StatsScreenProps {
   totalAssignments: number;
@@ -52,6 +52,18 @@ export const StatsScreen: React.FC<StatsScreenProps> = ({
         ]
       : []),
   ];
+
+  // A brand-new assayer with no assignments yet would otherwise see a completion bar reading
+  // "0% — 0 of 0", which reads as a broken chart rather than as "nothing has happened yet".
+  if (totalAssignments === 0) {
+    return (
+      <EmptyState
+        icon="stats-chart-outline"
+        title="No performance data yet"
+        body="Once you're offered and complete your first audit, your completion rate and query stats will show up here."
+      />
+    );
+  }
 
   return (
     <View style={{ gap: t.space.xl }}>

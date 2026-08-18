@@ -9,6 +9,7 @@ import { getApiBaseUrl, setApiBaseUrl, resetApiBaseUrl } from '../services/api.s
 import { probeServerUrl, normaliseServerUrl, isBlockedCleartext, CLEARTEXT_REFUSED } from '../services/server-config';
 import { getPreference } from '../services/preferences';
 import { versionLine } from '../utils/appVersion';
+import * as haptics from '../lib/haptics';
 
 interface LoginScreenProps {
   loginUsername?: string;
@@ -167,6 +168,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
      */
     const code = username.trim();
     if (!code || !password) {
+      haptics.error();
       setErrorMsg('Please enter both Assayer Code and Password.');
       return;
     }
@@ -175,11 +177,16 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       if (onLogin) {
         const res: any = await onLogin(code, password);
         if (res === false || (typeof res === 'object' && res?.success === false)) {
+          haptics.error();
           setErrorMsg(res?.error || 'Invalid credentials. Please try again.');
         }
       }
     } catch (err: any) {
-      setErrorMsg(err?.message || 'Connection failed. Please check backend server.');
+      // Distinguished from a bad credential on purpose — a dropped field connection and a typo'd
+      // password read identically as "it didn't work" unless the message names the network, so an
+      // assayer under a weak signal knows to retry rather than re-key a password that was fine.
+      haptics.error();
+      setErrorMsg(err?.message || 'Could not reach the server. Check your connection or signal and try again.');
     } finally {
       setInternalLoading(false);
     }
@@ -192,9 +199,11 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       try {
         const res: any = await onBiometricLogin();
         if (res === false || (typeof res === 'object' && res?.success === false)) {
+          haptics.error();
           setErrorMsg(res?.error || 'Biometric authentication failed.');
         }
       } catch (err: any) {
+        haptics.error();
         setErrorMsg(err?.message || 'Biometric login failed.');
       } finally {
         setInternalLoading(false);
@@ -333,6 +342,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                   autoCapitalize="characters"
                   autoCorrect={false}
                   style={inputStyle}
+                  accessibilityLabel="Assayer code or phone"
                   returnKeyType="next"
                   /**
                    * The keyboard has always shown a "Next" key here and nothing was wired to it,
@@ -363,12 +373,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                   autoCapitalize="none"
                   autoCorrect={false}
                   style={inputStyle}
+                  accessibilityLabel="Password"
                   returnKeyType="go"
                   onSubmitEditing={handleLoginPress}
                 />
                 <Pressable
                   onPress={() => setShowPassword((v) => !v)}
-                  hitSlop={10}
+                  hitSlop={14}
                   accessibilityRole="button"
                   accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
                 >
@@ -378,8 +389,17 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
             </View>
 
             {errorMsg ? (
-              <View style={{ backgroundColor: t.colors.dangerSoft, padding: t.space.md, borderRadius: t.radius.md, borderWidth: 1, borderColor: t.colors.danger }}>
-                <AppText variant="caption" style={{ color: t.colors.danger, textAlign: 'center' }}>
+              <View
+                accessibilityRole="alert"
+                accessibilityLiveRegion="assertive"
+                style={{
+                  flexDirection: 'row', alignItems: 'center', gap: t.space.sm,
+                  backgroundColor: t.colors.dangerSoft, padding: t.space.md, borderRadius: t.radius.md,
+                  borderWidth: 1, borderColor: t.colors.danger,
+                }}
+              >
+                <Icon name="alert-circle" size={16} color={t.colors.danger} />
+                <AppText variant="caption" style={{ color: t.colors.danger, flex: 1 }}>
                   {errorMsg}
                 </AppText>
               </View>
@@ -445,6 +465,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                     autoCorrect={false}
                     keyboardType="url"
                     style={inputStyle}
+                    accessibilityLabel="Backend server address"
                   />
                 </View>
 
