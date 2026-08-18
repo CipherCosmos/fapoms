@@ -1,0 +1,63 @@
+# Ship mobile JS changes over the air, automatically, on every push to main.
+#
+# Runs on Expo's own machines as the account that owns @deepstacker/fapoms-mobile — so it needs
+# no EXPO_TOKEN and nothing to paste. The backend and web app already deploy themselves on push;
+# this closes the same gap for the mobile app, so a JS-only fix (which is most of them) is:
+# commit → push → on every phone in ~2 min, no APK build, no reinstall, no manual step.
+#
+# Publishes to the OTA branch `production` explicitly, NOT the git branch name. The installed
+# APKs listen on channel `production` (eas.json), and every update so far went there. Publishing
+# to a branch called `main` would "succeed" while reaching no phone at all — the exact failure
+# app.config.js already warns about for local builds.
+#
+# What it refuses, and why it must. This app's `runtimeVersion` is a fixed literal, not a native
+# fingerprint, so a plain `eas update` will NOT notice that a commit added a native module.
+# Publishing that JS over the air would hand every phone on the old APK code that calls into
+# native it does not have, and crash it on launch — no way back, in the field. So the guard is
+# Expo's own: `fingerprint` hashes the actual native project, and `get-build` asks whether a
+# production build with that exact hash already exists. If one does, the installed APK is
+# native-compatible with this commit and OTA is safe. If none does, native code changed and this
+# skips the publish; the run says so, and the commit ships as a real build (BUILD-APK.md,
+# deploy/publish-apk.sh) — the only correct path for it. This is a stronger test than a list of
+# "native-looking" file paths, because it measures the thing itself rather than guessing at it.
+
+name: Publish OTA update
+
+on:
+  push:
+    branches: [main]
+    # Only when the mobile app could actually differ. A backend-only commit is a no-op that would
+    # still add a line to the update list support reads from.
+    paths:
+      - 'packages/mobile/**'
+      - 'packages/shared/**'
+
+jobs:
+  fingerprint:
+    name: Fingerprint the native project
+    type: fingerprint
+    environment: production
+
+  # "Is there already a production build whose native code matches this commit?"
+  # If yes → the phones can safely take this JS. If no → native changed, do not publish.
+  compatible_build:
+    name: Is a native-compatible build already shipped?
+    needs: [fingerprint]
+    type: get-build
+    params:
+      platform: android
+      fingerprint_hash: ${{ needs.fingerprint.outputs.android_fingerprint_hash }}
+
+  publish:
+    name: Publish to production channel
+    needs: [compatible_build]
+    # `get-build` sets build_id only when a matching build exists. No build_id = native change.
+    if: ${{ needs.compatible_build.outputs.build_id != '' }}
+    type: update
+    params:
+      # The channel the installed APKs listen on. See the header — NOT the git branch.
+      branch: production
+      platform: android
+      # The commit subject as the message, so `eas update:list` and the version line on a phone
+      # (first 7 chars of the id) both trace straight back to a commit.
+      message: ${{ github.event.head_commit.message }}
