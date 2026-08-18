@@ -38,19 +38,23 @@ export const TopBar: React.FC<{
     <View style={{
       paddingTop: TOP_INSET, paddingHorizontal: t.space.xl, paddingBottom: t.space.md,
       backgroundColor: t.colors.bg,
-      flexDirection: 'row', alignItems: 'center', gap: t.space.md,
+      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     }}>
       {/*
         Identity is the way into the profile, which is how nearly every app of this shape
         works — so the fifth dock slot is free for the four things an assayer does all day.
+        `flexShrink` (not `flex: 1`) plus `justifyContent: 'space-between'` on the row: a long
+        name still truncates and never crowds the bell, but a short one no longer lets the row's
+        own flex-growth put the avatar and the notifications button within a thumb's-width of
+        each other — pinned to opposite ends of the bar regardless of name length.
       */}
       <Tappable
         onPress={onOpenProfile}
         accessibilityLabel="Open your profile"
-        style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md, flex: 1, minWidth: 0 }}
+        style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md, flexShrink: 1, minWidth: 0, marginRight: t.space.lg }}
       >
         <Avatar name={name} size={44} />
-        <View style={{ flex: 1, minWidth: 0 }}>
+        <View style={{ flexShrink: 1, minWidth: 0 }}>
           <AppText variant="h3" numberOfLines={1}>{name || 'Field Assayer'}</AppText>
           <AppText variant="caption" tone="muted" numberOfLines={1}>{subtitle ?? 'Field Assayer'}</AppText>
         </View>
