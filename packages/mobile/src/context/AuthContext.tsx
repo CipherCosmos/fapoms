@@ -18,6 +18,27 @@ import { getPreference } from '../services/preferences';
  */
 const LOCK_AFTER_BACKGROUND_MS = 2 * 60 * 1000;
 
+/**
+ * `LocalAuthentication.authenticateAsync` has no built-in timeout — on some Android sensors
+ * (and reliably on emulators with no fingerprint hardware configured) the returned promise can
+ * simply never settle rather than reject, especially right after a screen-off/screen-on cycle.
+ * Unlike an outright error (which the existing catch below already treats as "can't verify,
+ * don't strand the assayer"), a hang gives the caller nothing to react to at all — the Unlock
+ * button below sits on "Waiting…" forever with no path forward, which is indistinguishable from
+ * a real stuck app to whoever is holding it. Racing it against a timer turns a silent hang into
+ * the same explicit, already-decided-safe fallback a thrown error gets.
+ */
+const UNLOCK_SENSOR_TIMEOUT_MS = 12000;
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('sensor-timeout')), ms);
+    promise.then(
+      (v) => { clearTimeout(timer); resolve(v); },
+      (e) => { clearTimeout(timer); reject(e); },
+    );
+  });
+}
+
 /** Whether this handset can actually do a biometric check right now. */
 async function biometricsUsable(): Promise<boolean> {
   const [hasHardware, isEnrolled] = await Promise.all([
@@ -63,6 +84,14 @@ interface AuthContextType {
    */
   locked: boolean;
   unlock: () => Promise<{ success: boolean; error?: string }>;
+  /**
+   * Bypasses the sensor immediately rather than waiting out `unlock`'s own timeout. Reached
+   * only from an explicit tap the assayer makes after the biometric prompt has visibly not
+   * answered for a few seconds — see LockScreen. Same trust boundary as `unlock`'s existing
+   * sensor-unavailable fallback: this is a session already restored from the device keystore,
+   * so nothing about this action asks the network anything new.
+   */
+  skipUnlock: () => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -142,14 +171,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const unlock = useCallback(async (): Promise<{ success: boolean; error?: string }> => {
     try {
-      const result = await LocalAuthentication.authenticateAsync({
-        promptMessage: 'Unlock Orbit',
-        cancelLabel: 'Cancel',
-        // Forces the biometric sensor rather than silently accepting the device PIN. The
-        // point of the gate is to confirm the person holding the phone is the assayer the
-        // work will be recorded against, and a shared branch PIN does not establish that.
-        disableDeviceFallback: true,
-      });
+      const result = await withTimeout(
+        LocalAuthentication.authenticateAsync({
+          promptMessage: 'Unlock Orbit',
+          cancelLabel: 'Cancel',
+          // Forces the biometric sensor rather than silently accepting the device PIN. The
+          // point of the gate is to confirm the person holding the phone is the assayer the
+          // work will be recorded against, and a shared branch PIN does not establish that.
+          disableDeviceFallback: true,
+        }),
+        UNLOCK_SENSOR_TIMEOUT_MS,
+      );
       if (result.success) {
         setLocked(false);
         return { success: true };
@@ -159,11 +191,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         error: result.error === 'user_cancel' ? undefined : 'Not recognised. Try again.',
       };
     } catch (err: any) {
-      // If the sensor itself is unavailable, refusing to unlock would strand the assayer in an
-      // app they are legitimately signed in to, mid-audit, with no way forward.
+      // Covers both an outright error (sensor unavailable) and the timeout above (sensor hung
+      // and never answered at all). Neither is the assayer's fault, and refusing to unlock
+      // would strand them in an app they are legitimately signed in to, mid-audit, with no way
+      // forward — this is a fully local, already-restored session; nothing here needed the
+      // network to begin with, so there is nothing to wait for a second time.
       setLocked(false);
       return { success: true };
     }
+  }, []);
+
+  const skipUnlock = useCallback(() => {
+    setLocked(false);
   }, []);
 
   /**
@@ -325,6 +364,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         biometricLogin,
         locked,
         unlock,
+        skipUnlock,
         verifyIdentity,
         logout,
         clearMustChangePassword,

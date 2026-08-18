@@ -52,7 +52,7 @@ import { AvailabilityModal } from './src/components/AvailabilityModal';
 
 function AppMain() {
   const theme = useTheme();
-  const { isAuthenticated, user, assayerName, authenticating, login, biometricLogin, verifyIdentity, logout, clearMustChangePassword, locked, unlock } = useAuth();
+  const { isAuthenticated, user, assayerName, authenticating, login, biometricLogin, verifyIdentity, logout, clearMustChangePassword, locked, unlock, skipUnlock } = useAuth();
   const { location, refreshLocation } = useLocation();
   const { assignments, loadAssignments, updateAssignmentStatus, rejectAssignment, submitExpense, stale, lastSyncedAt } = useAssignments();
 
@@ -561,7 +561,7 @@ function AppMain() {
     return (
       <SafeAreaView style={{ flex: 1, backgroundColor: theme.colors.bg }}>
         <StatusBar barStyle={theme.mode === 'dark' ? 'light-content' : 'dark-content'} translucent backgroundColor="transparent" />
-        <LockScreen name={assayerName} onUnlock={unlock} onSignOut={logout} />
+        <LockScreen name={assayerName} onUnlock={unlock} onSignOut={logout} onSkip={skipUnlock} />
       </SafeAreaView>
     );
   }
@@ -1033,11 +1033,14 @@ export default function App() {
   }, []);
 
   if (!apiReady) {
+    // The very first frame the app ever paints. This used to be a bare `ActivityIndicator` on a
+    // hardcoded hex background — a plain spinner with none of the brand identity that greets the
+    // user one screen later on BrandLoadingScreen (the auth-restore wait) and LoginScreen. Reusing
+    // the same orbit mark here means the cold start and the auth wait read as one continuous
+    // moment instead of "generic spinner, then suddenly the real app."
     return (
       <ThemeProvider>
-        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0E1016' }}>
-          <ActivityIndicator color="#8B7CFF" />
-        </View>
+        <BrandLoadingScreen />
       </ThemeProvider>
     );
   }

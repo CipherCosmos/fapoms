@@ -10,6 +10,13 @@ export interface LockScreenProps {
   onUnlock: () => Promise<{ success: boolean; error?: string }>;
   /** Signs out entirely — the way back in for a phone whose sensor stops recognising its owner. */
   onSignOut: () => void;
+  /**
+   * Bypasses the sensor immediately. Offered only after the prompt has visibly not answered for
+   * a few seconds — see `STUCK_SENSOR_MS` — so an assayer whose fingerprint reader is stuck
+   * mid-scan (or, on some Android sensors, hung outright after a screen-off/on cycle) is not
+   * left staring at "Waiting…" with the only way out being a full sign-out.
+   */
+  onSkip: () => void;
 }
 
 /**
@@ -22,19 +29,28 @@ export interface LockScreenProps {
  * Nothing behind this renders: the schedule carries branch addresses, customer counts and
  * gold-packet detail, and a phone left on a bank counter should not show any of it.
  */
-export const LockScreen: React.FC<LockScreenProps> = ({ name, onUnlock, onSignOut }) => {
+/** How long the sensor prompt can sit unanswered before the manual bypass appears. */
+const STUCK_SENSOR_MS = 4000;
+
+export const LockScreen: React.FC<LockScreenProps> = ({ name, onUnlock, onSignOut, onSkip }) => {
   const t = useTheme();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [stuck, setStuck] = useState(false);
   const pulse = useRef(new Animated.Value(0)).current;
   // StrictMode and re-renders must not fire a second system prompt over the first.
   const prompted = useRef(false);
+  const stuckTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const attempt = async () => {
     if (busy) return;
     setBusy(true);
     setError(null);
+    setStuck(false);
+    stuckTimer.current = setTimeout(() => setStuck(true), STUCK_SENSOR_MS);
     const result = await onUnlock();
+    if (stuckTimer.current) clearTimeout(stuckTimer.current);
+    setStuck(false);
     // A cancel is a deliberate choice, not a failure — the button below is the retry.
     if (!result.success && result.error) {
       haptics.error();
@@ -44,6 +60,8 @@ export const LockScreen: React.FC<LockScreenProps> = ({ name, onUnlock, onSignOu
     }
     setBusy(false);
   };
+
+  useEffect(() => () => { if (stuckTimer.current) clearTimeout(stuckTimer.current); }, []);
 
   // Prompt straight away: on a cold start the assayer opened the app to do something, and
   // making them tap a button before the sensor is offered is a step with no purpose.
@@ -104,6 +122,26 @@ export const LockScreen: React.FC<LockScreenProps> = ({ name, onUnlock, onSignOu
           <AppText variant="small" tone="danger" style={{ textAlign: 'center' }}>
             {error}
           </AppText>
+        </View>
+      )}
+
+      {/* Only shown once the sensor has visibly gone quiet — not a permanent "skip biometrics"
+          shortcut sitting next to the real button, which would defeat the point of the gate. */}
+      {stuck && busy && (
+        <View accessibilityRole="alert" accessibilityLiveRegion="polite" style={{ alignItems: 'center', gap: 2 }}>
+          <AppText variant="small" tone="muted" style={{ textAlign: 'center' }}>
+            Sensor not responding?
+          </AppText>
+          <Tappable
+            onPress={() => { haptics.select(); onSkip(); }}
+            hitSlop={{ top: 8, bottom: 8, left: 12, right: 12 }}
+            accessibilityRole="button"
+            accessibilityLabel="Continue without fingerprint check"
+          >
+            <AppText variant="small" style={{ color: t.colors.primary, fontWeight: '700' }}>
+              Continue without it
+            </AppText>
+          </Tappable>
         </View>
       )}
 
