@@ -4,6 +4,7 @@ import { Clock } from 'lucide-react';
 import { card, label, Empty, Table, OpenLink, fmtWhen } from './hr-ui';
 import type { HrWorkforceOverview } from '../../hooks/useHrWorkforce';
 import { useHr } from './HrLayout';
+import { activityEventLabel, assayerLifecycleLabel } from '@fapoms/shared';
 
 /**
  * What has changed on the workforce record, and who changed it.
@@ -27,9 +28,10 @@ const ActivityTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate: (p
         rows={d.activity.map((a) => [
           <span style={{ whiteSpace: 'nowrap', color: 'var(--text-muted)', fontSize: '11px' }}><Clock size={11} /> {fmtWhen(a.occurredAt)}</span>,
           <strong>{a.displayName}</strong>,
-          <span style={{ fontSize: '11px' }}>{a.eventType.replace(/_/g, ' ').toLowerCase()}</span>,
+          <span style={{ fontSize: '11px' }}>{activityEventLabel(a.eventType)}</span>,
+          // The Change column is a lifecycle move: both ends are stored statuses.
           a.previousState || a.newState
-            ? <span style={{ fontSize: '11px' }}>{a.previousState ?? '—'} → <strong>{a.newState ?? '—'}</strong></span>
+            ? <span style={{ fontSize: '11px' }}>{assayerLifecycleLabel(a.previousState)} → <strong>{assayerLifecycleLabel(a.newState)}</strong></span>
             : (a.remarks ?? '—'),
           a.performedBy ?? 'system',
           <OpenLink onClick={() => navigate(`/assayers/${a.assayerId}`)} />,

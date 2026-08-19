@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Clock, ClipboardList, FileText, ShieldCheck, GitBranch } from 'lucide-react';
 import { DetailDrawer } from '../../components/ui';
 import { api } from '../../services/api';
+import { branchStatusLabel, anyStatusLabel, activityEventLabel } from '@fapoms/shared';
 
 /**
  * Everything that has happened to one branch.
@@ -77,7 +78,7 @@ export const BranchHistoryDrawer: React.FC<{ projectBranchId: string; onClose: (
       {error && <div style={{ color: 'var(--danger)', fontSize: '13px' }}>{(error as Error).message}</div>}
       {h && (
         <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', paddingBottom: 4 }}>
-          <Fact label="Current status" value={h.currentStatus.replace(/_/g, ' ')} />
+          <Fact label="Current status" value={branchStatusLabel(h.currentStatus)} />
           <Fact label="Scheduled" value={h.scheduledDate ? new Date(h.scheduledDate).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : 'Not set'} />
           <Fact label="Packets" value={h.packetCount != null ? String(h.packetCount) : '—'} />
         </div>
@@ -107,11 +108,15 @@ export const BranchHistoryDrawer: React.FC<{ projectBranchId: string; onClose: (
             </div>
             <div style={{ flex: 1, minWidth: 0, paddingTop: '2px' }}>
               <div style={{ fontSize: '13px', fontWeight: 600 }}>
-                {e.title?.replace(/_/g, ' ')}
+                {activityEventLabel(e.title)}
               </div>
               {e.from && e.to && (
                 <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                  {e.from} → <strong style={{ color: 'var(--text-primary)' }}>{e.to}</strong>
+                  {/* A timeline entry's from/to is a status on whichever axis the entry
+                      came from — STATUS entries carry branch statuses, ASSIGNMENT entries
+                      assignment ones. `anyStatusLabel` reads both and still degrades an
+                      unrecognised value to words rather than leaving it shouting. */}
+                  {anyStatusLabel(e.from)} → <strong style={{ color: 'var(--text-primary)' }}>{anyStatusLabel(e.to)}</strong>
                 </div>
               )}
               {e.detail && (

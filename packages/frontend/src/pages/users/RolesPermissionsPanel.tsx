@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Shield, Users as UsersIcon, Plus, Trash2, Lock, Info, X, ChevronRight, Search } from 'lucide-react';
-import { SystemRole } from '@fapoms/shared';
+import { SystemRole, roleLabel } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
-import { Modal, AlertBanner } from '../../components/ui';
+import { Modal, AlertBanner, useConfirm } from '../../components/ui';
 import { useCurrentRoles } from '../../hooks/useCurrentRoles';
 import {
   PERMISSION_AREAS, resourceLabel, actionLabel, scopeQualifier, areaForResource,
@@ -51,6 +51,7 @@ export const RolesPermissionsPanel: React.FC = () => {
   const roles_ = useCurrentRoles();
   const canEdit =
     roles_.includes(SystemRole.SUPER_ADMINISTRATOR) || roles_.includes(SystemRole.ADMINISTRATOR);
+  const { confirm, confirmDialog } = useConfirm();
 
   const { data: rolesRes, isLoading, refetch } = useQuery({
     queryKey: ['users', 'roles', 'full'],
@@ -176,7 +177,18 @@ export const RolesPermissionsPanel: React.FC = () => {
 
   const deleteRole = async (role: RoleRow, e: React.MouseEvent) => {
     e.stopPropagation(); // the row itself opens the role
-    if (!window.confirm(`Delete the "${role.displayName || role.name}" role?`)) return;
+    // Deleting a role silently strips whatever it allowed from everyone holding it, which
+    // is invisible from this screen — hence the typed name rather than a second click.
+    const roleName = role.displayName || roleLabel(role.name);
+    const ok = await confirm({
+      title: `Delete the "${roleName}" role?`,
+      message: 'Anyone who has this role loses everything it allowed them to do. They keep any other roles they hold.',
+      confirmLabel: 'Delete role',
+      reversible: false,
+      tone: 'danger',
+      confirmPhrase: roleName,
+    });
+    if (!ok) return;
     setError(null);
     try {
       await api.request(`/users/roles/${role.id}`, { method: 'DELETE' });
@@ -198,6 +210,7 @@ export const RolesPermissionsPanel: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      {confirmDialog}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', flexWrap: 'wrap' }}>
         <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', margin: 0, maxWidth: '68ch' }}>
           A role is a bundle of things a person is allowed to do. Open one to see or change it —
@@ -242,7 +255,7 @@ export const RolesPermissionsPanel: React.FC = () => {
 
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: '13.5px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap' }}>
-                  {role.displayName || role.name.replace(/_/g, ' ')}
+                  {role.displayName || roleLabel(role.name)}
                   {role.isSystem && (
                     <span title="Built-in role — its name is used by the system, so it cannot be renamed or removed" style={{ ...label, display: 'inline-flex', alignItems: 'center', gap: 3 }}>
                       <Lock size={10} /> BUILT-IN
@@ -285,7 +298,7 @@ export const RolesPermissionsPanel: React.FC = () => {
         <Modal
           open
           onClose={() => setOpenRole(null)}
-          title={openRole.displayName || openRole.name.replace(/_/g, ' ')}
+          title={openRole.displayName || roleLabel(openRole.name)}
           width="760px"
           closeIcon={<X size={18} />}
           footer={

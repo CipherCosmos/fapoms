@@ -7,7 +7,7 @@ import {
 import { api, WebNotification, NotificationCategory, NotificationPreference } from '../services/api';
 import { userMessage } from '../services/errors';
 import { connectSocket, getSocket } from '../services/socket';
-import { useToast } from '../components/ui';
+import { useToast, useConfirm } from '../components/ui';
 
 /**
  * The Notification Center.
@@ -347,6 +347,7 @@ const chipStyle = (active: boolean): React.CSSProperties => ({
 /** One row per category, three channel toggles each. Absence of a saved row means everything is on. */
 const PreferencesPanel: React.FC = () => {
   const { toast } = useToast();
+  const { confirm, confirmDialog } = useConfirm();
   const [prefs, setPrefs] = useState<NotificationPreference[] | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
 
@@ -362,9 +363,12 @@ const PreferencesPanel: React.FC = () => {
       // Turning off in-app for a category would mean it never appears in the
       // bell or this inbox at all — a much bigger step than muting push or
       // email, and one a non-technical user could easily not intend.
-      const ok = window.confirm(
-        `Turn off in-app notifications for ${metaFor(category).label}? You will stop seeing these in your notification bell entirely.`,
-      );
+      const ok = await confirm({
+        title: `Turn off in-app notifications for ${metaFor(category).label}?`,
+        message: 'You will stop seeing these in your notification bell and in this inbox entirely.',
+        confirmLabel: 'Turn them off',
+        reversible: true,
+      });
       if (!ok) return;
     }
 
@@ -388,6 +392,7 @@ const PreferencesPanel: React.FC = () => {
 
   return (
     <div className="glass-card" style={{ overflow: 'hidden' }}>
+      {confirmDialog}
       <div style={{ padding: '16px 20px', borderBottom: '1px solid var(--border-color)' }}>
         <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', margin: 0 }}>
           Choose how each kind of update reaches you. Nothing selected here yet still means everything is on —

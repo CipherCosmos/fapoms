@@ -13,7 +13,7 @@ import {
 } from '@fapoms/shared';
 import { api } from '../services/api';
 import { userMessage } from '../services/errors';
-import { Modal, AlertBanner, Select } from '../components/ui';
+import { Modal, AlertBanner, Select, useConfirm } from '../components/ui';
 import { useCurrentRoles, canManageTransportRates } from '../hooks/useCurrentRoles';
 
 /**
@@ -94,6 +94,7 @@ export const TransportCosts: React.FC = () => {
   const queryClient = useQueryClient();
 
   const [showModal, setShowModal] = useState(false);
+  const { confirm, confirmDialog } = useConfirm();
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState({ ...emptyForm });
   const [editIsActive, setEditIsActive] = useState(true);
@@ -216,7 +217,16 @@ export const TransportCosts: React.FC = () => {
   };
 
   const handleRetire = async (r: TransportRate) => {
-    if (!window.confirm(`Retire the ${travelModeLabel(r.mode)} rate for ${scopeDisplay(r)}? It stops pricing new offers but keeps its history.`)) return;
+    // Wording preserved from the browser dialog it replaces — it already stated the
+    // consequence plainly. Retiring keeps the history, so this is not a destructive
+    // delete and does not need the typed-name step; the reversibility line says so.
+    const ok = await confirm({
+      title: `Retire the ${travelModeLabel(r.mode)} rate for ${scopeDisplay(r)}?`,
+      message: 'It stops pricing new offers but keeps its history. Offers already priced by this rate are unaffected.',
+      confirmLabel: 'Retire rate',
+      reversibleNote: 'Past offers priced by this rate are not changed.',
+    });
+    if (!ok) return;
     try {
       await api.request(`/transport-rates/${r.id}`, { method: 'DELETE' });
       setSuccess('Rate retired. Past offers priced by it are unaffected.');
@@ -230,6 +240,7 @@ export const TransportCosts: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      {confirmDialog}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
         <div>
           <h2 style={{ fontSize: '20px', fontWeight: 700, margin: 0, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>

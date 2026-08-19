@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import { auditDocumentTypeLabel } from '@fapoms/shared';
 import {
   Send, AlertTriangle, CheckCircle2, Clock, Search, FileText, ChevronRight, ChevronDown,
 } from 'lucide-react';
@@ -222,7 +223,7 @@ export const DocumentControlPanel: React.FC<{
                 <div style={{ flex: 1, minWidth: 170 }}>
                   <div style={{ fontSize: 13, fontWeight: 600 }}>{d.branchName ?? 'Unlinked document'}</div>
                   <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                    {d.fileName} · {d.type.replace(/_/g, ' ').toLowerCase()} · {fmtSize(d.fileSize)}
+                    {d.fileName} · {auditDocumentTypeLabel(d.type)} · {fmtSize(d.fileSize)}
                   </div>
                 </div>
                 <span style={{ fontSize: 11, color: 'var(--text-muted)', minWidth: 110 }}>{d.clientName ?? '—'}</span>

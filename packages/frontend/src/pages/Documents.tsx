@@ -6,7 +6,7 @@ import { DocumentModelLegend } from './documents/DocumentModelLegend';
 import { DailyRunPanel } from './documents/DailyRunPanel';
 import { CustomerMasterVersions } from './CustomerMasterVersions';
 import { RefreshCw } from 'lucide-react';
-import { AlertBanner, Select } from '../components/ui';
+import { AlertBanner, Select, useConfirm } from '../components/ui';
 import { connectSocket, getSocket } from '../services/socket';
 import { fetchWithTimeout } from '../services/http';
 import { api } from '../services/api';
@@ -100,6 +100,7 @@ async function uploadDocumentSmart(assessmentId: string, type: string, file: Fil
 
 export const Documents: React.FC = () => {
   const [overview, setOverview] = useState<OverviewData | null>(null);
+  const { confirm, confirmDialog } = useConfirm();
   const [overviewLoading, setOverviewLoading] = useState(false);
   // Grouped-by-branch is the default: it's what answers "where is this branch's
   // paperwork" without a branch's name appearing once per file. The flat view is
@@ -208,7 +209,18 @@ export const Documents: React.FC = () => {
 
   /** Releases one or many documents, then refreshes the console. */
   const handleDispatchMany = async (ids: string[]) => {
-    if (!window.confirm(`Dispatch ${ids.length} document(s)? This updates the paperwork workflow.`)) return;
+    // "Updates the paperwork workflow" was true but told the user nothing they could act
+    // on. Say what dispatch actually means to them: the files leave the desk.
+    const ok = await confirm({
+      title: ids.length === 1 ? 'Send this document out?' : `Send ${ids.length} documents out?`,
+      message:
+        ids.length === 1
+          ? 'The document will be marked as sent and moves to the next stage of the paperwork.'
+          : `${ids.length} documents will be marked as sent and move to the next stage of the paperwork.`,
+      confirmLabel: ids.length === 1 ? 'Send document' : `Send ${ids.length} documents`,
+      reversibleNote: 'You can still mark them received later.',
+    });
+    if (!ok) return;
     setBusyKey('batch-dispatch');
     setError(null);
     setSuccessMsg(null);
@@ -242,7 +254,13 @@ export const Documents: React.FC = () => {
   };
 
   const handleMarkReceived = async (docId: string) => {
-    if (!window.confirm('Mark this document as received?')) return;
+    const ok = await confirm({
+      title: 'Mark this document as received?',
+      message: 'The document will be recorded as back with the desk, and the branch moves to the next stage.',
+      confirmLabel: 'Mark as received',
+      reversible: true,
+    });
+    if (!ok) return;
     setError(null);
     setSuccessMsg(null);
     try {
@@ -255,12 +273,22 @@ export const Documents: React.FC = () => {
   };
 
   const handleSendToOcr = async (docId: string) => {
-    if (!window.confirm('Send this document to the external OCR application?')) return;
+    // "External OCR application" is engineering vocabulary. To the person clicking, the
+    // fact that matters is that the scanned pages are being sent away to be read into
+    // text — so say that, and name the destination as the scanning software.
+    const ok = await confirm({
+      title: 'Send this document for scanning?',
+      message:
+        'The document goes to the separate scanning software, which reads the printed pages into text. It comes back here once that finishes.',
+      confirmLabel: 'Send for scanning',
+      reversible: true,
+    });
+    if (!ok) return;
     setError(null);
     setSuccessMsg(null);
     try {
       await api.request(`/documents/${docId}/send-external-ocr`, { method: 'POST' });
-      setSuccessMsg('Marked as sent to the external OCR application.');
+      setSuccessMsg('Sent to the scanning software.');
       await loadOverview();
     } catch (err) {
       setError(userMessage(err));
@@ -283,6 +311,7 @@ export const Documents: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+      {confirmDialog}
       {/* Header */}
       <div style={{ background: 'linear-gradient(90deg, var(--status-pending-bg) 0%, var(--status-completed-bg) 100%)', border: '1px solid var(--status-pending-bg)', padding: '14px 20px', borderRadius: 'var(--radius-md)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>

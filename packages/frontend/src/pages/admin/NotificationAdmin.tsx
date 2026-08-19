@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { Bell, Mail, RotateCcw, Save, Eye, FileText, Info } from 'lucide-react';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
-import { Modal, AlertBanner, useToast, Select } from '../../components/ui';
+import { Modal, AlertBanner, useToast, Select, useConfirm } from '../../components/ui';
 import { useCurrentRoles, canAdministerNotifications } from '../../hooks/useCurrentRoles';
 
 /**
@@ -81,6 +81,7 @@ export const NotificationAdmin: React.FC = () => {
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
+  const { confirm, confirmDialog } = useConfirm();
   const [categoryFilter, setCategoryFilter] = useState<string>('ALL');
   const [search, setSearch] = useState('');
   const [editing, setEditing] = useState<CatalogType | null>(null);
@@ -155,7 +156,17 @@ export const NotificationAdmin: React.FC = () => {
   };
 
   const resetType = async (t: CatalogType) => {
-    if (!window.confirm(`Reset ${t.type} to its shipped default? Every customisation on it is removed.`)) return;
+    // Names the notification by its human title, not by `t.type` — the raw catalog key
+    // (ASSIGNMENT_SLA_BREACHED and friends) is what the row is keyed on, not what the
+    // administrator recognises it as.
+    const ok = await confirm({
+      title: `Reset "${t.title}" to its shipped default?`,
+      message: 'Every customisation made to this notification — its wording, channels and recipients — is removed and the original comes back.',
+      confirmLabel: 'Reset to default',
+      reversible: false,
+      tone: 'danger',
+    });
+    if (!ok) return;
     setBusy(true);
     try {
       await api.request(`/notification-admin/catalog/${t.type}`, { method: 'DELETE' });
@@ -170,6 +181,7 @@ export const NotificationAdmin: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      {confirmDialog}
       <div>
         <h2 style={{ fontSize: '20px', fontWeight: 700, margin: 0, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
           <Bell style={{ color: 'var(--accent)' }} /> Notification Rules

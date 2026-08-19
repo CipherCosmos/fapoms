@@ -3,6 +3,7 @@ import { RefreshCw } from 'lucide-react';
 import { NegotiationBanner } from './NegotiationBanner';
 import { ProjectBranch } from './BranchListPanel';
 
+import { branchStatusLabel } from '@fapoms/shared';
 import { assignmentFee } from '../../utils/money';
 /**
  * Shared definition of the recommended assayers panel.
@@ -129,7 +130,7 @@ export const RecommendationPanel: React.FC<{
                 <div>
                   <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', marginBottom: '2px' }}>BRANCH STATUS</div>
                   <span style={{ fontSize: '12px', padding: '2px 8px', borderRadius: '4px', background: selectedPb.status === 'CLOSED' ? 'var(--status-active-bg)' : 'var(--status-pending-bg)', color: selectedPb.status === 'CLOSED' ? 'var(--success)' : 'var(--warning)', fontWeight: 700 }}>
-                    {selectedPb.status.replace(/_/g, ' ')}
+                    {branchStatusLabel(selectedPb.status)}
                   </span>
                 </div>
               </div>

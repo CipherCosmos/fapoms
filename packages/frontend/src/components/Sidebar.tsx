@@ -18,6 +18,7 @@ import {
   UserCog, Inbox, MessageSquare, Bus, BellRing, SlidersHorizontal } from 'lucide-react';
 import { GlobalSearch } from './GlobalSearch';
 import { canAccessRoute } from '../config/route-permissions';
+import { WORK_TABS } from '../pages/work/workTabs';
 import { BrandLogo } from './BrandLogo';
 
 interface SidebarProps {
@@ -29,7 +30,23 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
   const location = useLocation();
   const userRoles = (user?.roles ?? []).map((r) => r.name);
 
-  const allMenuGroups: { category: string; items: { name: string; path: string; icon: React.ComponentType<any> }[] }[] = [
+  /**
+   * ONE ENTRY FOR ONE JOB.
+   *
+   * "My Work Today", "Audit Planning", "Visit Scheduling" and "Field Work" used to be four
+   * separate rows here — four doors onto a single job, arranged by lifecycle stage rather than by
+   * anything a coordinator does. Choosing between them required already knowing which stage a
+   * branch had reached, which is precisely the thing they open the app to find out. They are now
+   * one destination with tabs inside it (src/pages/work/workTabs.ts explains the merge in full).
+   *
+   * The row still has to point at a real path, and roles differ on which stages they may open —
+   * a document executive gets the calendar only, finance gets field work only — so it points at
+   * the first tab this particular role can access. `activePaths` then keeps the row highlighted
+   * across all four, since the visitor never leaves the destination by switching tab.
+   */
+  const auditWorkTabs = WORK_TABS.filter((tab) => canAccessRoute(userRoles, tab.path));
+
+  const allMenuGroups: { category: string; items: { name: string; path: string; icon: React.ComponentType<any>; activePaths?: readonly string[] }[] }[] = [
     {
       category: 'Overview',
       items: [
@@ -41,11 +58,15 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
     {
       category: 'Operations',
       items: [
-        { name: 'My Work Today', path: '/inbox', icon: Inbox },
+        ...(auditWorkTabs.length > 0
+          ? [{
+              name: 'Audit Work',
+              path: auditWorkTabs[0].path as string,
+              icon: ClipboardList,
+              activePaths: WORK_TABS.map((tab) => tab.path),
+            }]
+          : []),
         { name: 'Projects', path: '/projects', icon: FolderKanban },
-        { name: 'Audit Planning', path: '/planning', icon: Map },
-        { name: 'Visit Scheduling', path: '/scheduling', icon: CalendarDays },
-        { name: 'Field Work', path: '/assignments', icon: ClipboardList },
       ],
     },
     {
@@ -97,9 +118,15 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
     }))
     .filter((group) => group.items.length > 0);
 
-  const renderNavLink = (item: { name: string; path: string; icon: React.ComponentType<any> }) => {
+  const renderNavLink = (item: { name: string; path: string; icon: React.ComponentType<any>; activePaths?: readonly string[] }) => {
     const Icon = item.icon;
-    const isActive = location.pathname === item.path || location.pathname.startsWith(item.path + '/');
+    // `activePaths` exists for merged destinations (Audit Work), whose tabs are each their own
+    // URL: without it, switching to a tab other than the one this row links to would un-highlight
+    // the row and make it look as though you had left the section.
+    const matchAgainst = item.activePaths ?? [item.path];
+    const isActive = matchAgainst.some(
+      (path) => location.pathname === path || location.pathname.startsWith(path + '/'),
+    );
     return (
       <NavLink
         key={item.name}

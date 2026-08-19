@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { Link } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Compass, Check, X, AlertTriangle, CheckCircle, Search, Star, Briefcase, MapPin, Phone, Mail, Award, Clock, DollarSign, Calendar, TrendingUp, Building2, Route, Users, Layers, Smartphone, Package, Car, Flame, BarChart3, Zap, ClipboardList, Send, Bus, Download, Eye, MessageCircle, Map as MapIcon, Home, Hourglass } from 'lucide-react';
 import { ProjectBranchStatus, formatDateOnly, formatRouteDistance, formatTravelTime, type RouteSource } from '@fapoms/shared';
@@ -27,6 +26,7 @@ import {
   suggestAuditDate,
   optimizeRoute,
 } from '../services/planning';
+import { WORK_TAB_STRIP_HEIGHT } from './work/workTabs';
 
 import { money } from '../utils/money';
 /** Mirrors FeeBreakdown from packages/backend/src/modules/pricing/fee-policy.service.ts. */
@@ -2087,7 +2087,7 @@ export const PlanningWorkspace: React.FC = () => {
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 64px)', overflow: 'hidden', margin: '-20px', background: 'var(--bg-page)' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', height: `calc(100vh - ${64 + WORK_TAB_STRIP_HEIGHT}px)`, overflow: 'hidden', margin: '-20px', background: 'var(--bg-page)' }}>
       {/*
         The header's scope and this page's project picker name the same thing. When they disagree
         the request carries the header's value — it is the ceiling — and this says so, with both
@@ -2134,7 +2134,7 @@ export const PlanningWorkspace: React.FC = () => {
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <span style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '13px', fontWeight: 800, color: 'var(--accent)', letterSpacing: '0.5px' }}>
-              <MapPin size={13} /> STAGE 1: ASSAYER MATCHING
+              <MapPin size={13} /> MATCHING ASSAYERS TO BRANCHES
             </span>
           </div>
           <Select
@@ -2163,20 +2163,14 @@ export const PlanningWorkspace: React.FC = () => {
           )}
         </div>
 
-        {/* Center: Stage Pipeline Switcher — real links, so keyboard/middle-click/new-tab all work. */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: 'var(--bg-surface-2)', padding: '3px 6px', borderRadius: '16px', border: '1px solid var(--border-hair)' }}>
-          <Link to="/planning" style={{ padding: '3px 10px', background: 'var(--accent)', borderRadius: '12px', color: 'var(--on-accent)', fontSize: '11px', fontWeight: 800, textDecoration: 'none' }}>
-            Stage 1: Match Assayers
-          </Link>
-          <span style={{ color: 'var(--text-secondary)', fontSize: '10px' }}>➔</span>
-          <Link to="/scheduling" style={{ padding: '3px 10px', color: 'var(--text-muted)', fontSize: '11px', fontWeight: 600, textDecoration: 'none' }}>
-            Stage 2: Dispatch
-          </Link>
-          <span style={{ color: 'var(--text-secondary)', fontSize: '10px' }}>➔</span>
-          <Link to="/assignments" style={{ padding: '3px 10px', color: 'var(--text-muted)', fontSize: '11px', fontWeight: 600, textDecoration: 'none' }}>
-            Stage 3: Execution
-          </Link>
-        </div>
+        {/*
+          The "Stage 1 → Stage 2 → Stage 3" switcher that used to sit here has been removed.
+          It existed only because planning, scheduling and field work were four separate sidebar
+          destinations, so each screen had to grow its own way of reaching the others. They are now
+          tabs of one "Audit Work" destination and the tab strip above IS this stepper — keeping
+          both would mean two steppers on one screen, disagreeing about which one is authoritative.
+          See packages/frontend/src/pages/work/workTabs.ts for the full reasoning.
+        */}
 
         {/* Right: Key Metrics & Report Export */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>

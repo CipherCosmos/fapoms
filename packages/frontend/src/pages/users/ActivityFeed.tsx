@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Activity, User as UserIcon, LogIn, KeyRound, ShieldAlert, FileText } from 'lucide-react';
 import { api } from '../../services/api';
+import { activityEventLabel, anyStatusLabel } from '@fapoms/shared';
 
 /**
  * The audit trail, made reachable.
@@ -64,7 +65,7 @@ export const UserActivityList: React.FC<{ userId: string }> = ({ userId }) => {
             {EVENT_ICON[e.eventType] ?? <Activity size={13} />}
           </span>
           <div style={{ minWidth: 0, flex: 1 }}>
-            <div>{e.remarks || e.eventType.replace(/_/g, ' ').toLowerCase()}</div>
+            <div>{e.remarks || activityEventLabel(e.eventType)}</div>
             <div style={{ ...label, marginTop: '1px' }}>{fmtWhen(e.occurredAt)}</div>
           </div>
         </div>
@@ -118,9 +119,13 @@ export const ActivityFeed: React.FC = () => {
                 </span>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: '13px' }}>
-                    {e.remarks || `${e.eventType.replace(/_/g, ' ').toLowerCase()} — ${e.entityType.toLowerCase()}`}
+                    {e.remarks || `${activityEventLabel(e.eventType)} — ${e.entityType.toLowerCase()}`}
+                    {/* The audit trail spans every entity, so the two ends of a change can be a
+                        branch status, an assignment status or something with no map at all.
+                        `anyStatusLabel` tries both axes and sentence-cases whatever is left,
+                        which is what keeps an unrecognised value readable rather than blank. */}
                     {e.previousState && e.newState && (
-                      <span style={{ color: 'var(--text-muted)' }}> ({e.previousState} → {e.newState})</span>
+                      <span style={{ color: 'var(--text-muted)' }}> ({anyStatusLabel(e.previousState)} → {anyStatusLabel(e.newState)})</span>
                     )}
                   </div>
                   <div style={{ ...label, marginTop: '3px' }}>

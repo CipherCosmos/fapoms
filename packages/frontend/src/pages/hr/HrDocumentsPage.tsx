@@ -5,7 +5,7 @@ import { userMessage } from '../../services/errors';
 import { Select } from '../../components/ui';
 import { card, label, Empty, ExpiryChip, fmtDate } from './hr-ui';
 import { useCurrentRoles, canManageAssayers } from '../../hooks/useCurrentRoles';
-import { SystemRole } from '@fapoms/shared';
+import { SystemRole, HR_DOCUMENT_TYPES, hrDocumentTypeLabel } from '@fapoms/shared';
 
 /**
  * Identity document register.
@@ -27,7 +27,9 @@ import { SystemRole } from '@fapoms/shared';
  * which is what compliance turns on — are all captured without one.
  */
 
-const DOC_TYPES = ['AADHAAR', 'PAN', 'DRIVING_LICENCE', 'VOTER_ID', 'PASSPORT'] as const;
+// The same five papers were listed here and in @fapoms/shared. Kept as an alias so the rest
+// of this file reads unchanged, but there is now one list — and one spelling of each name.
+const DOC_TYPES = HR_DOCUMENT_TYPES;
 
 interface GovDocument {
   id: string;
@@ -191,7 +193,7 @@ export const HrDocumentsPage: React.FC = () => {
                 return (
                   <div key={doc.id} style={{ padding: '11px 13px', background: 'var(--bg-surface-2)', borderRadius: '10px', display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
                     <div style={{ minWidth: '160px' }}>
-                      <div style={{ fontSize: '13px', fontWeight: 600 }}>{doc.documentType.replace(/_/g, ' ')}</div>
+                      <div style={{ fontSize: '13px', fontWeight: 600 }}>{hrDocumentTypeLabel(doc.documentType)}</div>
                       <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>{doc.documentNumber}</div>
                     </div>
 
@@ -262,7 +264,7 @@ const AddDocumentForm: React.FC<{ busy: boolean; onAdd: (type: string, number: s
       <Select
         value={type}
         onChange={setType}
-        options={DOC_TYPES.map((t) => ({ value: t, label: t.replace(/_/g, ' ') }))}
+        options={DOC_TYPES.map((t) => ({ value: t, label: hrDocumentTypeLabel(t) }))}
       />
       <input value={number} onChange={(e) => setNumber(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && submit()}
         placeholder="Document number" style={{ flex: '1 1 180px', padding: '7px 10px', fontSize: '12.5px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: '8px', color: 'var(--text-primary)', fontFamily: 'monospace' }} />

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Check, Layers } from 'lucide-react';
 import { SystemRole } from '@fapoms/shared';
-import { DataTable, Column, Modal, StatusBadge, Select, useToast } from '../components/ui';
+import { DataTable, Column, Modal, StatusBadge, Select, useToast, useConfirm } from '../components/ui';
 import { useCurrentRoles, hasAnyRole } from '../hooks/useCurrentRoles';
 import { ProjectOption } from '../services/planning';
 import { api } from '../services/api';
@@ -33,6 +33,7 @@ const RECORDS_PAGE_SIZE = 50;
 // used to carry (its own page title/padding) was unreachable and has been removed.
 export const CustomerMasterVersions: React.FC = () => {
   const { toast } = useToast();
+  const { confirm, confirmDialog } = useConfirm();
   const { scopeParams, scopeKey } = useScope();
   const roles = useCurrentRoles();
   const canApprove = hasAnyRole(roles, APPROVER_ROLES);
@@ -98,7 +99,16 @@ export const CustomerMasterVersions: React.FC = () => {
   }, [projectId, loadVersions]);
 
   const approve = async (v: CustomerMasterVersion) => {
-    if (!window.confirm(`Approve version ${v.versionNumber}? This supersedes the currently approved version and lets its PDFs generate.`)) return;
+    // Approval displaces whichever version is live right now — the risk is approving the
+    // wrong row, not the approval itself, so the dialog names the version being approved.
+    const ok = await confirm({
+      title: `Approve version ${v.versionNumber}?`,
+      message:
+        'This becomes the active customer data for the project, replacing the version approved now, and its PDFs can then be generated.',
+      confirmLabel: `Approve version ${v.versionNumber}`,
+      reversibleNote: 'To go back, another version has to be approved instead.',
+    });
+    if (!ok) return;
     setBusyId(v.id);
     try {
       await approveVersion(v.id);
@@ -184,6 +194,7 @@ export const CustomerMasterVersions: React.FC = () => {
 
   return (
     <div style={{ padding: 0 }}>
+      {confirmDialog}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
         {scopeMismatch && (
           // The picker below chose a project the header has fixed differently. The request carries

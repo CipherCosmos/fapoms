@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { Shield, ToggleLeft, ToggleRight, UserPlus, Users as UsersIcon, UserCheck, KeyRound, Lock, LockOpen, Clock } from 'lucide-react';
-import { REGION_ORDER, REGION_LABELS, Region } from '@fapoms/shared';
+import { REGION_ORDER, REGION_LABELS, Region, roleLabel } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
-import { SearchInput, FilterSelect, AlertBanner, PrimaryButton, Modal, DetailDrawer, Select } from '../../components/ui';
+import { SearchInput, FilterSelect, AlertBanner, PrimaryButton, Modal, DetailDrawer, Select, useConfirm } from '../../components/ui';
 import { useCurrentUserId } from '../../hooks/useCurrentRoles';
 import { UserActivityList } from './ActivityFeed';
 
@@ -60,6 +60,7 @@ const fmtRelative = (iso: string | null): string => {
  */
 export const DirectoryPanel: React.FC = () => {
   const myId = useCurrentUserId();
+  const { confirm, confirmDialog } = useConfirm();
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [roles, setRoles] = useState<UserRole[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -197,7 +198,16 @@ export const DirectoryPanel: React.FC = () => {
 
   const toggleUserStatus = async (user: UserProfile) => {
     const activating = user.status !== 'ACTIVE';
-    if (!activating && !window.confirm(`Suspend ${user.displayName}? They will not be able to log in until reactivated.`)) return;
+    // Only suspension is confirmed; re-activating is harmless and was never guarded.
+    if (!activating) {
+      const ok = await confirm({
+        title: `Suspend ${user.displayName}?`,
+        message: 'They will not be able to log in until someone activates the account again. Their work and history are kept.',
+        confirmLabel: 'Suspend account',
+        reversible: true,
+      });
+      if (!ok) return;
+    }
     setError(null);
     try {
       await api.request(`/users/${user.id}`, { method: 'PUT', body: JSON.stringify({ status: activating ? 'ACTIVE' : 'SUSPENDED' }) });
@@ -239,7 +249,13 @@ export const DirectoryPanel: React.FC = () => {
 
   const handleResetPassword = async () => {
     if (!editingUser || newPassword.length < 8) return;
-    if (!window.confirm(`Reset the password for ${editingUser.displayName}? They'll need the new password to sign in.`)) return;
+    const ok = await confirm({
+      title: `Reset the password for ${editingUser.displayName}?`,
+      message: 'Their current password stops working straight away. They will need the new password to sign in, so make sure you can pass it on to them.',
+      confirmLabel: 'Reset password',
+      reversible: false,
+    });
+    if (!ok) return;
     setResetting(true);
     setError(null);
     try {
@@ -275,6 +291,7 @@ export const DirectoryPanel: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+      {confirmDialog}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '14px' }}>
         <Kpi icon={<UsersIcon size={20} />} tone="var(--accent-primary)" value={filteredUsers.length} label="Total Users" />
         <Kpi icon={<UserCheck size={20} />} tone="var(--status-active)" value={filteredUsers.filter((u) => u.status === 'ACTIVE').length} label="Active" />
@@ -424,7 +441,7 @@ export const DirectoryPanel: React.FC = () => {
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                           {u.roles.map((r) => (
                             <span key={r.id} style={{ fontSize: '10px', background: 'var(--status-pending-bg)', color: 'var(--accent-secondary)', padding: '2px 8px', borderRadius: 'var(--radius-full)', fontWeight: 600 }}>
-                              {r.name.replace(/_/g, ' ')}
+                              {roleLabel(r.name)}
                             </span>
                           ))}
                           {u.roles.length === 0 && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>No roles assigned</span>}
@@ -505,10 +522,10 @@ export const DirectoryPanel: React.FC = () => {
                       const lockedSelfAdmin = editingSelf && r.name === 'SUPER_ADMINISTRATOR' && isChecked;
                       return (
                         <label key={r.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px', cursor: lockedSelfAdmin ? 'not-allowed' : 'pointer', opacity: lockedSelfAdmin ? 0.6 : 1 }}
-                          title={lockedSelfAdmin ? 'You cannot remove your own SUPER_ADMINISTRATOR role' : undefined}>
+                          title={lockedSelfAdmin ? 'You cannot remove your own Super Administrator role' : undefined}>
                           <input type="checkbox" checked={isChecked} disabled={lockedSelfAdmin}
                             onChange={() => setEditRoleIds(isChecked ? editRoleIds.filter((id) => id !== r.id) : [...editRoleIds, r.id])} />
-                          <span>{r.name.replace(/_/g, ' ')}</span>
+                          <span>{roleLabel(r.name)}</span>
                           {lockedSelfAdmin && <Lock size={11} style={{ color: 'var(--text-muted)' }} />}
                         </label>
                       );
@@ -599,7 +616,7 @@ export const DirectoryPanel: React.FC = () => {
                   return (
                     <label key={r.id} style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', cursor: 'pointer' }}>
                       <input type="checkbox" checked={isChecked} onChange={() => setSelectedRoleIds(isChecked ? selectedRoleIds.filter((id) => id !== r.id) : [...selectedRoleIds, r.id])} />
-                      <span>{r.name.replace(/_/g, ' ')}</span>
+                      <span>{roleLabel(r.name)}</span>
                     </label>
                   );
                 })}

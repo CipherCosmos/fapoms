@@ -27,6 +27,10 @@ import {
   TravelMode,
   FeedbackStatus,
   FeedbackCategory,
+  SystemRole,
+  AssayerLifecycleStatus,
+  DocumentType,
+  ValidationStatus,
 } from './enums';
 
 /** Where a branch sits in the audit lifecycle. */
@@ -452,4 +456,209 @@ export function feedbackStatusLabel(status?: string | null): string {
 export function feedbackCategoryLabel(category?: string | null): string {
   if (!category) return '—';
   return FEEDBACK_CATEGORY_LABELS[category as FeedbackCategory] ?? category;
+}
+
+// ---------------------------------------------------------------------------
+// Words for people, workforce state, money records and activity feeds
+// ---------------------------------------------------------------------------
+//
+// These five vocabularies were the ones still being rendered by de-casing the raw enum at the
+// call site — `role.replace(/_/g, ' ')` on the user directory, a lower-cased role on assayer
+// remarks, `documentType.replace(/_/g, ' ')` on the HR register. That produces "OPERATIONS
+// EXECUTIVE" and "PAN" rather than "Operations Executive" and "PAN Card", and it means the same
+// value can read differently on two screens. They belong here with everything else.
+
+/**
+ * Job titles, written the way the organisation says them out loud.
+ *
+ * Not a de-cased enum: `SUPER_ADMINISTRATOR` de-cases to "Super Administrator", but
+ * `HR_MANAGER` de-cases to "Hr Manager" and `PRODUCT_SUPPORT` to "Product Support" where the
+ * team is spoken of as "Product & Support". Spelling them out is the only way both read right.
+ */
+export const ROLE_LABELS: Record<SystemRole, string> = {
+  [SystemRole.SUPER_ADMINISTRATOR]: 'Super Administrator',
+  [SystemRole.ADMINISTRATOR]: 'Administrator',
+  [SystemRole.OPERATIONS_MANAGER]: 'Operations Manager',
+  [SystemRole.OPERATIONS_EXECUTIVE]: 'Operations Executive',
+  [SystemRole.VALIDATION_MANAGER]: 'Validation Manager',
+  [SystemRole.VALIDATOR]: 'Validator',
+  [SystemRole.DOCUMENT_EXECUTIVE]: 'Document Executive',
+  [SystemRole.DATA_ENTRY_HEAD]: 'Data Entry Head',
+  [SystemRole.ASSAYER]: 'Assayer',
+  [SystemRole.CLIENT_USER]: 'Client User',
+  [SystemRole.HR_MANAGER]: 'HR Manager',
+  [SystemRole.FINANCE_MANAGER]: 'Finance Manager',
+  [SystemRole.READ_ONLY_AUDITOR]: 'Read-Only Auditor',
+  [SystemRole.PRODUCT_SUPPORT]: 'Product & Support',
+};
+
+export function roleLabel(role?: string | null): string {
+  if (!role) return '—';
+  return ROLE_LABELS[role as SystemRole] ?? humanize(role);
+}
+
+/** Several roles on one line ("Operations Manager, Validator"). Empty list reads as a dash. */
+export function roleListLabel(roles?: readonly (string | null | undefined)[] | null): string {
+  const named = (roles ?? []).filter(Boolean).map((r) => roleLabel(r));
+  return named.length ? named.join(', ') : '—';
+}
+
+/**
+ * Where an assayer sits with HR — onboarding, working, or gone.
+ *
+ * These are read by people outside HR too (planning sees who can be offered work), so the
+ * onboarding steps say what is being waited on rather than naming the check.
+ */
+export const ASSAYER_LIFECYCLE_LABELS: Record<AssayerLifecycleStatus, string> = {
+  [AssayerLifecycleStatus.INVITED]: 'Invited',
+  [AssayerLifecycleStatus.DOCUMENT_VERIFICATION]: 'Document Verification',
+  [AssayerLifecycleStatus.BACKGROUND_VERIFICATION]: 'Background Verification',
+  [AssayerLifecycleStatus.TRAINING]: 'Training',
+  [AssayerLifecycleStatus.ACTIVE]: 'Active',
+  [AssayerLifecycleStatus.ON_LEAVE]: 'On Leave',
+  [AssayerLifecycleStatus.SUSPENDED]: 'Suspended',
+  [AssayerLifecycleStatus.INACTIVE]: 'Inactive',
+  [AssayerLifecycleStatus.RESIGNED]: 'Resigned',
+  [AssayerLifecycleStatus.TERMINATED]: 'Terminated',
+  [AssayerLifecycleStatus.ARCHIVED]: 'Archived',
+};
+
+export function assayerLifecycleLabel(status?: string | null): string {
+  if (!status) return '—';
+  return ASSAYER_LIFECYCLE_LABELS[status as AssayerLifecycleStatus] ?? humanize(status);
+}
+
+/**
+ * Government identity papers held on an assayer's HR record.
+ *
+ * De-casing is actively wrong here: `PAN` is an initialism people say as "PAN card", and
+ * `AADHAAR` alone reads as a bare word where the register lists a document. Both the short
+ * backend value (`PAN`) and the longer form some payloads carry (`PAN_CARD`) map to the same
+ * words, so the register cannot show two names for one paper.
+ */
+export const HR_DOCUMENT_TYPES = [
+  'AADHAAR',
+  'PAN',
+  'DRIVING_LICENCE',
+  'VOTER_ID',
+  'PASSPORT',
+] as const;
+
+export type HrDocumentType = (typeof HR_DOCUMENT_TYPES)[number];
+
+export const HR_DOCUMENT_TYPE_LABELS: Record<string, string> = {
+  AADHAAR: 'Aadhaar',
+  AADHAAR_CARD: 'Aadhaar',
+  PAN: 'PAN Card',
+  PAN_CARD: 'PAN Card',
+  DRIVING_LICENCE: 'Driving Licence',
+  DRIVING_LICENSE: 'Driving Licence',
+  VOTER_ID: 'Voter ID',
+  PASSPORT: 'Passport',
+  BANK_PASSBOOK: 'Bank Passbook',
+  CANCELLED_CHEQUE: 'Cancelled Cheque',
+  PHOTOGRAPH: 'Photograph',
+  OTHER: 'Other',
+};
+
+export function hrDocumentTypeLabel(type?: string | null): string {
+  if (!type) return '—';
+  return HR_DOCUMENT_TYPE_LABELS[type] ?? humanize(type);
+}
+
+/**
+ * Audit-document types (the paperwork that moves between the desk, the assayer and the client).
+ * Distinct from `HR_DOCUMENT_TYPE_LABELS`, which is a person's identity papers — the two were
+ * both called "documents" and had to be told apart in words, not only by which page you are on.
+ */
+export const AUDIT_DOCUMENT_TYPE_LABELS: Record<DocumentType, string> = {
+  [DocumentType.BRANCH_LIST]: 'Branch List',
+  [DocumentType.CUSTOMER_MASTER_DATA]: 'Customer Master Data',
+  [DocumentType.PRE_FIELD_AUDIT_PDF]: 'Pre-Field Audit PDF',
+  [DocumentType.AUDITED_RETURN_PDF]: 'Audited Return PDF',
+  [DocumentType.GENERATED_EXCEL]: 'Generated Excel',
+  [DocumentType.FINAL_REPORT]: 'Final Report',
+};
+
+export function auditDocumentTypeLabel(type?: string | null): string {
+  if (!type) return '—';
+  return AUDIT_DOCUMENT_TYPE_LABELS[type as DocumentType] ?? humanize(type);
+}
+
+/**
+ * Activity-feed wording.
+ *
+ * An event type is a sentence about something that happened, not a name — so unlike every other
+ * map here these read as sentence case ("Status changed"), which is how a timeline entry is
+ * spoken. The backend emits well over a hundred event types and grows a new one with every
+ * feature; enumerating all of them here would go stale the week it was written. So this maps the
+ * handful the generic feeds actually render, and `activityEventLabel` falls back to sentence-
+ * casing the raw value — `ASSIGNMENT_SLA_BREACHED` reads as "Assignment sla breached", which is
+ * plain enough to be useful and never a raw SCREAMING_SNAKE leak.
+ */
+export const ACTIVITY_EVENT_LABELS: Record<string, string> = {
+  STATUS_CHANGE: 'Status changed',
+  STATUS_CHANGED: 'Status changed',
+  TRANSITION: 'Moved to next stage',
+  COMMENT: 'Comment added',
+  REMARK_ADDED: 'Remark added',
+  CREATED: 'Created',
+  UPDATED: 'Updated',
+  DELETED: 'Deleted',
+  PROFILE_UPDATE: 'Details updated',
+  ASSIGNED: 'Assigned',
+  UNASSIGNED: 'Unassigned',
+  APPROVED: 'Approved',
+  REJECTED: 'Rejected',
+  CANCELLED: 'Cancelled',
+  ESCALATED: 'Escalated',
+  REMINDER_SENT: 'Reminder sent',
+  DOCUMENT_UPLOADED: 'Document uploaded',
+  DOCUMENT_DISPATCHED: 'Document sent out',
+  PAYMENT_RECORDED: 'Payment recorded',
+  INVOICE_ISSUED: 'Invoice sent',
+};
+
+/**
+ * Sentence case for a SCREAMING_SNAKE value: first letter up, the rest as ordinary words.
+ * Kept separate from `humanize` (Title Case) because a name and a sentence are not written
+ * the same way, and mixing the two is what made feeds read like a database dump.
+ */
+function sentenceCase(value: string): string {
+  const words = value.split('_').filter(Boolean).join(' ').toLowerCase();
+  return words ? words[0].toUpperCase() + words.slice(1) : value;
+}
+
+export function activityEventLabel(eventType?: string | null): string {
+  if (!eventType) return 'Activity';
+  return ACTIVITY_EVENT_LABELS[eventType] ?? sentenceCase(eventType);
+}
+
+/**
+ * Where a returned packet sits in the data-entry / validation pipeline.
+ *
+ * The only vocabulary the desk screens display that had no entry here — the reviews queue,
+ * the case workspace header and the audit trail each de-cased `ValidationStatus` themselves,
+ * so a case read "OCR PROCESSING" and "CORRECTION REQUIRED" to the operator working it.
+ *
+ * De-casing is wrong for two of these regardless of the shouting. `OCR_PROCESSING` names the
+ * scanning technology, which means nothing to the data-entry staff who see it; what they need
+ * to know is that the machine is still reading the pages. And `SUBMITTED` alone does not say
+ * submitted to whom — from this desk it always means the client. The wording matches the
+ * reviews queue's own tab labels ("In review", "Approved", "Submitted") so the tab a person
+ * clicked and the chip on the row it returns are never two different words.
+ */
+export const VALIDATION_STATUS_LABELS: Record<ValidationStatus, string> = {
+  [ValidationStatus.PENDING]: 'Not started',
+  [ValidationStatus.ASSIGNED]: 'Assigned',
+  [ValidationStatus.OCR_PROCESSING]: 'Being read',
+  [ValidationStatus.HUMAN_REVIEW]: 'In review',
+  [ValidationStatus.CORRECTION_REQUIRED]: 'Needs correction',
+  [ValidationStatus.APPROVED]: 'Approved',
+  [ValidationStatus.SUBMITTED]: 'Submitted to client',
+};
+
+export function validationStatusLabel(status?: string | null): string {
+  if (!status) return '—';
+  return VALIDATION_STATUS_LABELS[status as ValidationStatus] ?? humanize(status);
 }

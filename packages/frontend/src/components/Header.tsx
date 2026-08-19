@@ -24,9 +24,20 @@ const BREADCRUMBS: { prefix: string; category: string; label: string }[] = [
   { prefix: '/executive-map', category: 'Overview', label: 'Live Map' },
   { prefix: '/feedback', category: 'Overview', label: 'Feedback' },
   { prefix: '/projects', category: 'Operations', label: 'Projects' },
-  { prefix: '/planning', category: 'Operations', label: 'Audit Planning' },
-  { prefix: '/scheduling', category: 'Operations', label: 'Visit Scheduling' },
-  { prefix: '/assignments', category: 'Operations', label: 'Field Work' },
+  /**
+   * The four Audit Work tabs, all naming the one destination they now belong to.
+   *
+   * These were four separate breadcrumbs — "My Work Today", "Audit Planning", "Visit Scheduling",
+   * "Field Work" — back when they were four sidebar entries. Naming the tab here instead would
+   * put the app's own navigation back to describing a lifecycle stage rather than the job, which
+   * is the split this merge removed; the tab strip on the page already says which tab is in front.
+   * See src/pages/work/workTabs.ts. /inbox had no breadcrumb at all before, so it fell back to the
+   * brand text.
+   */
+  { prefix: '/inbox', category: 'Operations', label: 'Audit Work' },
+  { prefix: '/planning', category: 'Operations', label: 'Audit Work' },
+  { prefix: '/scheduling', category: 'Operations', label: 'Audit Work' },
+  { prefix: '/assignments', category: 'Operations', label: 'Audit Work' },
   { prefix: '/clients', category: 'Business Records', label: 'Clients' },
   { prefix: '/billing', category: 'Business Records', label: 'Billing' },
   { prefix: '/branches', category: 'Business Records', label: 'Branches' },

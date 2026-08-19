@@ -7,6 +7,7 @@ import { useCurrentRoles } from '../../hooks/useCurrentRoles';
 import { userMessage } from '../../services/errors';
 import { deskRole, deskCard, deskLabel, CaseListRow, TeamMember } from './deskRoles';
 import { Select } from '../../components/ui';
+import { validationStatusLabel } from '@fapoms/shared';
 
 /**
  * The review queue: validation cases as a server-paginated table.
@@ -222,7 +223,7 @@ export const ReviewsQueue: React.FC = () => {
                   </td>
                   <td style={{ padding: '9px 14px' }}>
                     <span style={{ fontSize: '10px', fontWeight: 800, padding: '2px 8px', borderRadius: '8px', color: tone, border: `1px solid ${tone}`, letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>
-                      {c.status.replace(/_/g, ' ')}
+                      {validationStatusLabel(c.status)}
                     </span>
                   </td>
                   <td style={{ padding: '9px 14px', whiteSpace: 'nowrap' }}>

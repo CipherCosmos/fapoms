@@ -5,6 +5,7 @@ import {
   Users as TeamIcon, RotateCcw,
 } from 'lucide-react';
 
+import { roleLabel, activityEventLabel } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { useCurrentRoles } from '../../hooks/useCurrentRoles';
 import { deskRole, deskCard, deskLabel, QueueCounts, PagedQueue } from './deskRoles';
@@ -57,6 +58,15 @@ const ATTENTION_BUCKETS: Array<{ key: keyof Omit<DeskAttention, 'slaHours'>; lab
 ];
 
 /** Event types → what a person reads. Anything unmapped falls back to the raw type. */
+/**
+ * Desk-specific verb phrases for the events this feed shows.
+ *
+ * Deliberately kept alongside the shared `activityEventLabel` rather than folded into it:
+ * these read as what a *named person did* ("Priya assigned a packet"), because this feed
+ * always prints an actor first. The shared map is written for feeds with no actor
+ * ("Document uploaded"). Same events, two grammatical positions. What did move to the
+ * shared layer is the fallback — an unlisted event used to be de-cased inline here.
+ */
 const ACTIVITY_LABEL: Record<string, string> = {
   DOCUMENT_DELEGATED_TO_DATA_ENTRY: 'assigned a packet',
   DOCUMENT_DATA_ENTRY_COMPLETED: 'handed back',
@@ -116,7 +126,7 @@ export const DataEntryOverview: React.FC = () => {
       {isHead && breachedBuckets.length > 0 && (
         <section style={{ ...deskCard, border: '1px solid var(--danger)' }}>
           <div style={{ ...deskLabel, color: 'var(--danger)', marginBottom: '8px' }}>
-            ⚠ Needs attention — {breachedBuckets.reduce((n, b) => n + attention![b.key].length, 0)} item{breachedBuckets.reduce((n, b) => n + attention![b.key].length, 0) > 1 ? 's' : ''} past SLA
+            ⚠ Needs attention — {breachedBuckets.reduce((n, b) => n + attention![b.key].length, 0)} item{breachedBuckets.reduce((n, b) => n + attention![b.key].length, 0) > 1 ? 's' : ''} past their due date
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {breachedBuckets.map((b) => {
@@ -201,7 +211,7 @@ export const DataEntryOverview: React.FC = () => {
                   style={{ padding: '9px 11px', borderRadius: '8px', border: `1px solid ${stale ? 'var(--danger)' : 'var(--border-hair)'}`, background: 'var(--bg-surface-2)', cursor: 'pointer', textAlign: 'left', color: 'inherit', width: 'auto' }}>
                   <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px' }}>
                     <span style={{ fontSize: '12.5px', fontWeight: 700 }}>{m.name}</span>
-                    <span style={{ ...deskLabel, fontSize: '9px' }}>{m.role.replace(/_/g, ' ')}</span>
+                    <span style={{ ...deskLabel, fontSize: '9px' }}>{roleLabel(m.role)}</span>
                   </div>
                   <div style={{ display: 'flex', gap: '9px', marginTop: '5px', fontSize: '12px', fontVariantNumeric: 'tabular-nums', flexWrap: 'wrap' }}>
                     <span title="Open packets">{m.openPackets} 📄</span>
@@ -234,7 +244,7 @@ export const DataEntryOverview: React.FC = () => {
                 {new Date(a.at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
               </span>
               <span style={{ fontWeight: 700 }}>{a.actor ?? 'System'}</span>
-              <span style={{ color: 'var(--text-secondary)' }}>{ACTIVITY_LABEL[a.eventType] ?? a.eventType.replace(/_/g, ' ').toLowerCase()}</span>
+              <span style={{ color: 'var(--text-secondary)' }}>{ACTIVITY_LABEL[a.eventType] ?? activityEventLabel(a.eventType)}</span>
               {a.branchName && (
                 a.projectBranchId ? (
                   <button onClick={() => navigate(`/data-entry/case/${a.projectBranchId}`)}

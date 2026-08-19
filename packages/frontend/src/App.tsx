@@ -23,15 +23,20 @@ const Dashboard = React.lazy(() => import('./pages/Dashboard').then((m) => ({ de
 const ExecutiveMap = React.lazy(() => import('./pages/ExecutiveMap').then((m) => ({ default: m.ExecutiveMap })));
 const Projects = React.lazy(() => import('./pages/Projects').then((m) => ({ default: m.Projects })));
 const Branches = React.lazy(() => import('./pages/Branches').then((m) => ({ default: m.Branches })));
-const PlanningWorkspace = React.lazy(() => import('./pages/PlanningWorkspace').then((m) => ({ default: m.PlanningWorkspace })));
-const Assignments = React.lazy(() => import('./pages/Assignments').then((m) => ({ default: m.Assignments })));
-const Scheduling = React.lazy(() => import('./pages/Scheduling').then((m) => ({ default: m.Scheduling })));
+/**
+ * Audit Work — the merged home of what used to be four sidebar destinations: My Work Today
+ * (/inbox), Audit Planning (/planning), Visit Scheduling (/scheduling) and Field Work
+ * (/assignments). One container serves all four paths and puts the matching tab in front, so
+ * every existing URL, bookmark, notification payload and backend-generated link keeps resolving
+ * exactly as it did — and each stage keeps its own path, which is what lets route-permissions.ts
+ * go on gating the stages individually. The four page components are code-split inside it.
+ * See src/pages/work/workTabs.ts for why they were merged.
+ */
+const AuditWork = React.lazy(() => import('./pages/work/AuditWork').then((m) => ({ default: m.AuditWork })));
 const Documents = React.lazy(() => import('./pages/Documents').then((m) => ({ default: m.Documents })));
 const Users = React.lazy(() => import('./pages/Users'));
 const Clients = React.lazy(() => import('./pages/Clients').then((m) => ({ default: m.Clients })));
 const Billing = React.lazy(() => import('./pages/Billing').then((m) => ({ default: m.Billing })));
-const LedgerPage = React.lazy(() => import('./pages/billing/LedgerPage').then((m) => ({ default: m.LedgerPage })));
-const ClientBillingSettingsPage = React.lazy(() => import('./pages/billing/ClientBillingSettingsPage').then((m) => ({ default: m.ClientBillingSettingsPage })));
 const AssayerStatementPage = React.lazy(() => import('./pages/billing/AssayerStatementPage').then((m) => ({ default: m.AssayerStatementPage })));
 const Rules = React.lazy(() => import('./pages/Rules'));
 const Notifications = React.lazy(() => import('./pages/Notifications'));
@@ -41,7 +46,6 @@ const TransportCosts = React.lazy(() => import('./pages/TransportCosts'));
 const NotificationAdmin = React.lazy(() => import('./pages/admin/NotificationAdmin'));
 const PlatformSettings = React.lazy(() => import('./pages/admin/PlatformSettings'));
 const Zones = React.lazy(() => import('./pages/Zones'));
-const OperationsInbox = React.lazy(() => import('./pages/OperationsInbox').then((m) => ({ default: m.OperationsInbox })));
 const Settings = React.lazy(() => import('./pages/Settings'));
 const RuleBypassPanel = React.lazy(() => import('./pages/admin/RuleBypassPanel').then((m) => ({ default: m.RuleBypassPanel })));
 const HrLayout = React.lazy(() => import('./pages/hr/HrLayout').then((m) => ({ default: m.HrLayout })));
@@ -319,9 +323,11 @@ export const App: React.FC = () => {
           <Route path="/executive-map" element={<ExecutiveMap />} />
           <Route path="/projects" element={<Projects />} />
           <Route path="/branches" element={<Branches />} />
-          <Route path="/planning" element={<PlanningWorkspace />} />
-          <Route path="/assignments" element={<Assignments />} />
-          <Route path="/scheduling" element={<Scheduling />} />
+          {/* The four Audit Work tabs. Same container, different tab in front — see AuditWork. */}
+          <Route path="/inbox" element={<AuditWork />} />
+          <Route path="/planning" element={<AuditWork />} />
+          <Route path="/scheduling" element={<AuditWork />} />
+          <Route path="/assignments" element={<AuditWork />} />
           <Route path="/documents" element={<Documents />} />
           <Route path="/data-entry" element={<DataEntryLayout />}>
             <Route index element={<DataEntryOverview />} />
@@ -361,8 +367,6 @@ export const App: React.FC = () => {
           </Route>
           <Route path="/clients" element={<Clients />} />
           <Route path="/billing" element={<Billing />} />
-          <Route path="/billing/ledger" element={<LedgerPage />} />
-          <Route path="/billing/settings" element={<ClientBillingSettingsPage />} />
           <Route path="/billing/statement" element={<AssayerStatementPage />} />
           <Route path="/admin/rule-bypass" element={<RuleBypassPanel />} />
           <Route path="/rules" element={<Rules />} />
@@ -371,7 +375,6 @@ export const App: React.FC = () => {
           <Route path="/admin/notifications" element={<NotificationAdmin />} />
           <Route path="/admin/settings" element={<PlatformSettings />} />
           <Route path="/zones" element={<Zones />} />
-          <Route path="/inbox" element={<OperationsInbox />} />
           <Route path="/notifications" element={<Notifications />} />
           <Route path="/feedback" element={<FeedbackPage />} />
           <Route path="/settings" element={<Settings />} />

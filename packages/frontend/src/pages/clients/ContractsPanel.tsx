@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Plus, X } from 'lucide-react';
-import { Modal, StyledInput, StatusBadge, useToast } from '../../components/ui';
+import { Modal, StyledInput, StatusBadge, useToast, useConfirm } from '../../components/ui';
 import { useClientContracts, useAddContract, useDeleteContract } from '../../hooks/useClients';
 import { contractStatusLabel } from '../../utils/statusLabels';
 import type { ClientContract } from '@fapoms/shared';
@@ -20,6 +20,7 @@ export const ContractsPanel: React.FC<{ clientId: string }> = ({ clientId }) => 
   const add = useAddContract();
   const del = useDeleteContract();
   const { toast } = useToast();
+  const { confirm, confirmDialog } = useConfirm();
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ contractNumber: '', title: '', description: '', effectiveFrom: '', effectiveTo: '', value: '' });
 
@@ -48,7 +49,16 @@ export const ContractsPanel: React.FC<{ clientId: string }> = ({ clientId }) => 
   };
 
   const handleDelete = async (contract: ClientContract) => {
-    if (!window.confirm(`Remove contract "${contract.title}"? This cannot be undone.`)) return;
+    // A contract is the commercial record behind the client's billing — typed title.
+    const ok = await confirm({
+      title: `Remove the contract "${contract.title}"?`,
+      message: 'The contract and its dates and value are removed from this client.',
+      confirmLabel: 'Remove contract',
+      reversible: false,
+      tone: 'danger',
+      confirmPhrase: contract.title,
+    });
+    if (!ok) return;
     try {
       await del.mutateAsync({ clientId, contractId: contract.id });
       toast('success', 'Contract removed');
@@ -59,6 +69,7 @@ export const ContractsPanel: React.FC<{ clientId: string }> = ({ clientId }) => 
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {confirmDialog}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span style={{ fontSize: 14, fontWeight: 600 }}>Contracts ({contracts.length})</span>
         <button onClick={() => setShowForm(true)} className="btn btn-primary" style={{ padding: '6px 12px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>

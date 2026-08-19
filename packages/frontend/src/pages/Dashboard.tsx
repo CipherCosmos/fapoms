@@ -9,7 +9,7 @@ import { api } from '../services/api';
 import { queryClient } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
 import { useScope, withScope } from '../context/ScopeContext';
-import { formatRupees as money } from '@fapoms/shared';
+import { formatRupees as money, activityEventLabel } from '@fapoms/shared';
 import { HBarChart, DonutChart, StackedColumnChart, type HBarDatum, type ColumnDatum } from '../components/charts';
 
 interface Attention {
@@ -385,7 +385,7 @@ export const Dashboard: React.FC = () => {
                 {data.activities.map((a) => (
                   <div key={a.id} style={{ display: 'flex', gap: 10, padding: '5px 0', fontSize: 12, alignItems: 'baseline' }}>
                     <span style={{ width: 5, height: 5, borderRadius: '50%', background: 'var(--accent-secondary)', flexShrink: 0 }} />
-                    <span style={{ fontWeight: 600, minWidth: 0 }}>{a.action.replace(/_/g, ' ').toLowerCase()}</span>
+                    <span style={{ fontWeight: 600, minWidth: 0 }}>{activityEventLabel(a.action)}</span>
                     {a.detail && <span style={{ color: 'var(--text-secondary)', flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.detail}</span>}
                     <span style={{ color: 'var(--text-muted)', fontSize: 10, marginLeft: 'auto', whiteSpace: 'nowrap' }}>
                       {new Date(a.occurredAt).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })}

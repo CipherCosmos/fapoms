@@ -5,12 +5,12 @@ import {
   Plus, Search, X, ChevronUp, ChevronDown, ExternalLink, Edit2, Trash2,
   AlertTriangle, Download, ArrowRightLeft, MapPin, CheckCircle2, Users, SlidersHorizontal, FileSpreadsheet,
 } from 'lucide-react';
-import { AssayerLifecycleStatus, assayerLifecyclePath } from '@fapoms/shared';
+import { AssayerLifecycleStatus, assayerLifecyclePath, assayerLifecycleLabel } from '@fapoms/shared';
 
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { connectSocket } from '../../services/socket';
-import { Select, UploadExcelControls } from '../../components/ui';
+import { Select, UploadExcelControls, useConfirm } from '../../components/ui';
 import { useSearchParams } from 'react-router-dom';
 import { useCurrentRoles, canManageAssayers } from '../../hooks/useCurrentRoles';
 import { useExcelExport } from '../../hooks/useExcelExport';
@@ -107,6 +107,7 @@ export const AssayerRoster: React.FC = () => {
 
   const navigate = useNavigate();
   const canManage = canManageAssayers(useCurrentRoles());
+  const { confirm, confirmDialog } = useConfirm();
 
   const [assayers, setAssayers] = useState<Assayer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -276,9 +277,9 @@ export const AssayerRoster: React.FC = () => {
         failed.length || skipped.length
           ? {
               tone: 'err',
-              text: `${moved} moved to ${bulkTarget.replace(/_/g, ' ')}, ${skipped.length} skipped, ${failed.length} failed.`,
+              text: `${moved} moved to ${assayerLifecycleLabel(bulkTarget)}, ${skipped.length} skipped, ${failed.length} failed.`,
             }
-          : { tone: 'ok', text: `${moved} assayer(s) moved to ${bulkTarget.replace(/_/g, ' ')}.` },
+          : { tone: 'ok', text: `${moved} assayer(s) moved to ${assayerLifecycleLabel(bulkTarget)}.` },
       );
     } catch (e) {
       setNotice({ tone: 'err', text: `Bulk move failed: ${(e as Error).message}` });
@@ -291,7 +292,18 @@ export const AssayerRoster: React.FC = () => {
   };
 
   const remove = async (a: Assayer) => {
-    if (!window.confirm(`Delete ${a.displayName} (${a.assayerCode})? This cannot be undone.`)) return;
+    // Deleting a person's whole HR record. The assayer code is what uniquely identifies
+    // them on a roster full of similar names, so that is what has to be typed — it also
+    // makes it impossible to delete the wrong row by clicking the wrong line's bin icon.
+    const ok = await confirm({
+      title: `Delete ${a.displayName}?`,
+      message: `The entire record for ${a.displayName} (${a.assayerCode}) is removed from the roster, including their details and documents.`,
+      confirmLabel: 'Delete assayer',
+      reversible: false,
+      tone: 'danger',
+      confirmPhrase: a.assayerCode,
+    });
+    if (!ok) return;
     try {
       await api.request(`/assayers/${a.id}`, { method: 'DELETE' });
       setNotice({ tone: 'ok', text: `${a.displayName} deleted.` });
@@ -405,6 +417,7 @@ export const AssayerRoster: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      {confirmDialog}
       {notice && (() => {
         const tones = {
           ok: { bg: 'var(--status-active-bg)', fg: 'var(--success)' },
@@ -507,7 +520,7 @@ export const AssayerRoster: React.FC = () => {
       {showFilters && (
         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', padding: '10px 12px', borderRadius: '8px', background: 'var(--bg-surface-2)' }}>
           <RosterFilterSelect label="State" value={stateFilter} onChange={setStateFilter} options={states} />
-          <RosterFilterSelect label="Lifecycle" value={statusFilter} onChange={setStatusFilter} options={statuses} />
+          <RosterFilterSelect label="Status" value={statusFilter} onChange={setStatusFilter} options={statuses} formatOption={assayerLifecycleLabel} />
           {(stateFilter !== 'ALL' || statusFilter !== 'ALL' || search) && (
             <button
               onClick={() => { setStateFilter('ALL'); setStatusFilter('ALL'); setSearch(''); }}
@@ -532,7 +545,7 @@ export const AssayerRoster: React.FC = () => {
             <Select
               value={bulkTarget}
               onChange={setBulkTarget}
-              options={bulkOptions.map((t) => ({ value: t, label: t.replace(/_/g, ' ') }))}
+              options={bulkOptions.map((t) => ({ value: t, label: assayerLifecycleLabel(t) }))}
               placeholder="Move all to…"
               compact
             />
@@ -565,10 +578,10 @@ export const AssayerRoster: React.FC = () => {
           </div>
           {bulkReport.skipped.length > 0 && (
             <div style={{ marginTop: '6px' }}>
-              <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Could not reach {bulkReport.target.replace(/_/g, ' ')}:</div>
+              <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Could not reach {assayerLifecycleLabel(bulkReport.target)}:</div>
               {bulkReport.skipped.map((s) => (
                 <div key={s.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
-                  <span style={{ color: 'inherit' }}>{s.current}</span>
+                  <span style={{ color: 'inherit' }}>{assayerLifecycleLabel(s.current)}</span>
                   <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>— {s.reason}</span>
                 </div>
               ))}
@@ -653,7 +666,7 @@ export const AssayerRoster: React.FC = () => {
                     <td style={cell}>
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', fontWeight: 600, color: tone }}>
                         <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: tone }} />
-                        {(a.lifecycleStatus ?? '').replace(/_/g, ' ')}
+                        {assayerLifecycleLabel(a.lifecycleStatus)}
                       </span>
                     </td>
                     <td style={cell}>
@@ -757,15 +770,22 @@ const IconBtn: React.FC<{ title: string; onClick: () => void; tone?: string; chi
   </button>
 );
 
-const RosterFilterSelect: React.FC<{ label: string; value: string; onChange: (v: string) => void; options: string[] }> = ({
-  label, value, onChange, options,
+const RosterFilterSelect: React.FC<{
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: string[];
+  /** Turns a stored option value into the words shown. Defaults to the value itself. */
+  formatOption?: (value: string) => string;
+}> = ({
+  label, value, onChange, options, formatOption = (v) => v,
 }) => (
   <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
     <span style={{ fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)' }}>{label}</span>
     <Select
       value={value}
       onChange={onChange}
-      options={[{ value: 'ALL', label: 'All' }, ...options.map((o) => ({ value: o, label: o.replace(/_/g, ' ') }))]}
+      options={[{ value: 'ALL', label: 'All' }, ...options.map((o) => ({ value: o, label: formatOption(o) }))]}
       compact
       style={{ minWidth: '150px' }}
     />

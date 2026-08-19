@@ -5,7 +5,7 @@ import { INDIAN_STATES } from '@fapoms/shared';
 import { api } from '../services/api';
 import { useClientOptions } from '../hooks/useClients';
 import { userMessage } from '../services/errors';
-import { Modal, AlertBanner, Select } from '../components/ui';
+import { Modal, AlertBanner, Select, useConfirm } from '../components/ui';
 import { useCurrentRoles, canManageZones, canDeleteZones } from '../hooks/useCurrentRoles';
 
 interface Zone {
@@ -33,6 +33,7 @@ export const Zones: React.FC = () => {
   const canDelete = canDeleteZones(roles);
 
   const [showModal, setShowModal] = useState(false);
+  const { confirm, confirmDialog } = useConfirm();
   const [submitting, setSubmitting] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
@@ -102,7 +103,18 @@ export const Zones: React.FC = () => {
   };
 
   const handleDelete = async (z: Zone) => {
-    if (!window.confirm(`Delete the "${z.name}" zone? Branches grouped under it will be left without a zone.`)) return;
+    // Deleting a zone orphans every branch grouped under it, and the zone list is a long
+    // table of similar names — so this asks for the zone's own name to be typed. That is
+    // both un-reflexive and a check that the right row is being deleted.
+    const ok = await confirm({
+      title: `Delete the "${z.name}" zone?`,
+      message: 'Branches grouped under it will be left without a zone.',
+      confirmLabel: 'Delete zone',
+      reversible: false,
+      tone: 'danger',
+      confirmPhrase: z.name,
+    });
+    if (!ok) return;
     try {
       await api.request(`/zones/${z.id}`, { method: 'DELETE' });
       setSuccess('Zone deleted.');
@@ -119,6 +131,7 @@ export const Zones: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      {confirmDialog}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
         <div>
           <h2 style={{ fontSize: '20px', fontWeight: 700, margin: 0, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>

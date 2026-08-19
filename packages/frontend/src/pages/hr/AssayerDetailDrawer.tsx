@@ -3,7 +3,7 @@ import {
   X, Edit2, ArrowRightLeft, AlertTriangle, CheckCircle2,
   User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, MapPin, KeyRound,
 } from 'lucide-react';
-import { nextAssayerLifecycleStates, AssayerLifecycleStatus } from '@fapoms/shared';
+import { nextAssayerLifecycleStates, AssayerLifecycleStatus, assayerLifecycleLabel, activityEventLabel } from '@fapoms/shared';
 
 import { api } from '../../services/api';
 import { Select } from '../../components/ui';
@@ -172,7 +172,7 @@ export const AssayerDetailDrawer: React.FC<{
                   <h2 style={{ fontSize: '17px', fontWeight: 700, margin: 0 }}>{a.displayName}</h2>
                   <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '5px', fontSize: '11.5px', color: 'var(--text-muted)' }}>
                     <span style={{ fontFamily: 'monospace' }}>{a.assayerCode}</span>
-                    <span style={{ color: tone, fontWeight: 700 }}>{(a.lifecycleStatus ?? '').replace(/_/g, ' ')}</span>
+                    <span style={{ color: tone, fontWeight: 700 }}>{assayerLifecycleLabel(a.lifecycleStatus)}</span>
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><MapPin size={10} /> {[a.city, a.state].filter(Boolean).join(', ') || '—'}</span>
                   </div>
                 </div>
@@ -258,7 +258,7 @@ export const AssayerDetailDrawer: React.FC<{
                         <Select
                           value={target}
                           onChange={setTarget}
-                          options={transitions.map((t) => ({ value: t, label: t.replace(/_/g, ' ') }))}
+                          options={transitions.map((t) => ({ value: t, label: assayerLifecycleLabel(t) }))}
                           placeholder="Choose…"
                         />
                         <input value={reason} onChange={(e) => setReason(e.target.value)}
@@ -377,9 +377,12 @@ export const AssayerDetailDrawer: React.FC<{
                   render={(h: any) => (
                     <div key={h.id} style={{ padding: '10px 0', borderBottom: '1px solid var(--border-hair)' }}>
                       <div style={{ fontSize: '12.5px' }}>
-                        {(h.eventType ?? '').replace(/_/g, ' ').toLowerCase()}
+                        {activityEventLabel(h.eventType)}
+                        {/* Both ends of a lifecycle move are stored statuses, so both need the
+                            shared wording — showing "Status changed — ON_LEAVE → ACTIVE" only
+                            fixed half the line. */}
                         {(h.previousState || h.newState) && (
-                          <> — {h.previousState ?? '—'} → <strong>{h.newState ?? '—'}</strong></>
+                          <> — {assayerLifecycleLabel(h.previousState)} → <strong>{assayerLifecycleLabel(h.newState)}</strong></>
                         )}
                       </div>
                       <div style={{ ...label, marginTop: '4px' }}>

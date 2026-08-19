@@ -21,7 +21,7 @@ import { api } from '../services/api';
 import { useScope, withScope } from '../context/ScopeContext';
 import { userMessage } from '../services/errors';
 import { connectSocket } from '../services/socket';
-import { StatusBadge, Modal, SearchInput, FilterSelect, AlertBanner, PrimaryButton, UploadExcelControls, Select } from '../components/ui';
+import { StatusBadge, Modal, SearchInput, FilterSelect, AlertBanner, PrimaryButton, UploadExcelControls, Select, useConfirm } from '../components/ui';
 import { localDateKey } from '../utils/statusLabels';
 import { useCurrentRoles, canManageProjects, canDeleteProjects } from '../hooks/useCurrentRoles';
 
@@ -227,6 +227,7 @@ export const Projects: React.FC = () => {
   const roles = useCurrentRoles();
   const canManage = canManageProjects(roles);
   const canDelete = canDeleteProjects(roles);
+  const { confirm, confirmDialog } = useConfirm();
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [projects, setProjects] = useState<ProjectItem[]>([]);
@@ -402,7 +403,14 @@ export const Projects: React.FC = () => {
 
   const handleRemoveBranch = async (projectBranchId: string) => {
     if (!detail) return;
-    if (!window.confirm('Remove this branch from the project?')) return;
+    const ok = await confirm({
+      title: 'Remove this branch from the project?',
+      message: 'The branch stops being part of this project, along with any planning done for it here.',
+      confirmLabel: 'Remove branch',
+      reversible: false,
+      tone: 'danger',
+    });
+    if (!ok) return;
     setIsSaving(true);
     setMessage(null);
     try {
@@ -524,7 +532,21 @@ export const Projects: React.FC = () => {
   const handleTransition = async (targetStatus: ProjectStatus) => {
     if (!detail) return;
     const terminal = [ProjectStatus.CANCELLED, ProjectStatus.COMPLETED, ProjectStatus.ARCHIVED].includes(targetStatus);
-    if (terminal && !window.confirm(`Move project to ${targetStatus}? This is a terminal state and cannot be reversed.`)) return;
+    // "Terminal state" is schema vocabulary — it is how the state machine describes the
+    // node, not what happens to the person's project. What they need told is that the
+    // project stops here and no further work can be booked against it. The status itself
+    // goes through `projectStatusLabel` for the same reason: CANCELLED is a stored value,
+    // "Cancelled" is a word.
+    if (terminal) {
+      const ok = await confirm({
+        title: `Move project to ${projectStatusLabel(targetStatus)}?`,
+        message: 'The project stops here. No further work can be planned or booked against it, and it cannot be moved back to an earlier stage.',
+        confirmLabel: `Move to ${projectStatusLabel(targetStatus)}`,
+        reversible: false,
+        tone: 'danger',
+      });
+      if (!ok) return;
+    }
     setMessage(null);
     try {
       // Sends the intent only. This used to PUT the entire project just to change
@@ -534,7 +556,7 @@ export const Projects: React.FC = () => {
         method: 'POST',
         body: JSON.stringify({ targetStatus }),
       });
-      setMessage({ type: 'success', text: `Project moved to ${targetStatus}` });
+      setMessage({ type: 'success', text: `Project moved to ${projectStatusLabel(targetStatus)}` });
       loadProjects();
       if (selectedId) loadDetail(selectedId);
     } catch (err: any) {
@@ -722,6 +744,7 @@ export const Projects: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+      {confirmDialog}
 
       {/* Page Header */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>

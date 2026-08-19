@@ -7,7 +7,7 @@ import {
 import { Link } from 'react-router-dom';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
-import { useToast, Select } from '../../components/ui';
+import { useToast, Select, useConfirm } from '../../components/ui';
 import {
   SectionCard, SettingRow, Toggle, Pill, controlStyle,
 } from '../../components/ui/settings';
@@ -77,6 +77,7 @@ export const PlatformSettings: React.FC = () => {
   const canWipeData = canAdministerDataReset(roles);
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const { confirm, confirmDialog } = useConfirm();
 
   const [activeGroup, setActiveGroup] = useState<string>('email');
   /** Local edits, keyed by setting. Absent = showing the server's value. */
@@ -127,7 +128,15 @@ export const PlatformSettings: React.FC = () => {
 
   const reset = async (s: Setting) => {
     const fallback = s.envVar ? `the ${s.envVar} environment variable` : 'the shipped default';
-    if (!window.confirm(`Clear the saved value for "${s.label}" and go back to ${fallback}?`)) return;
+    // Wording preserved — it already named both the setting and what it falls back to.
+    // Resetting is re-settable, so no typed-name step; the note says so plainly.
+    const ok = await confirm({
+      title: `Clear the saved value for "${s.label}"?`,
+      message: `The setting goes back to ${fallback}.`,
+      confirmLabel: 'Clear saved value',
+      reversible: true,
+    });
+    if (!ok) return;
     setSaving(s.key);
     try {
       await api.request(`/platform-settings/${s.key}`, { method: 'DELETE' });
@@ -252,6 +261,7 @@ export const PlatformSettings: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
+      {confirmDialog}
       <div>
         <h2 style={{ fontSize: '20px', fontWeight: 700, margin: 0, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
           <SlidersHorizontal style={{ color: 'var(--accent)' }} /> Platform Settings

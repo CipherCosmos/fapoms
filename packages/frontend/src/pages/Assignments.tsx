@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useUrlSelection } from '../hooks/useUrlSelection';
 import { useQuery } from '@tanstack/react-query';
-import { ClipboardList, RefreshCw, Calendar, MessageSquare, Clock, Send, Filter, CheckCircle, XCircle, ExternalLink, GitCommit, Circle, ArrowRight, MapPin, FileText, Lock, ChevronLeft, ChevronRight, AlertTriangle, Hourglass, Flame, FileSpreadsheet } from 'lucide-react';
+import { ClipboardList, RefreshCw, Calendar, MessageSquare, Clock, Send, Filter, CheckCircle, XCircle, ExternalLink, GitCommit, Circle, MapPin, FileText, Lock, ChevronLeft, ChevronRight, AlertTriangle, Hourglass, Flame, FileSpreadsheet } from 'lucide-react';
 import { StatusBadge, SearchInput, FilterSelect, AlertBanner } from '../components/ui';
 import { ProjectBranchStatus, SystemRole } from '@fapoms/shared';
 import { useCurrentRoles, hasAnyRole } from '../hooks/useCurrentRoles';
@@ -121,41 +121,13 @@ function PriorityBadge({ priority }: { priority?: string }) {
   return <StatusBadge label={priority} bg={isCritical ? 'var(--status-cancelled-bg)' : 'var(--status-pending-bg)'} color={isCritical ? 'var(--danger)' : 'var(--warning)'} icon={<Flame size={11} />} variant="tag" />;
 }
 
-// ── Compact workflow breadcrumb — replaces the old pipeline-bar + gradient
-// banner + h2 (three separate blocks all stating "Stage 3 / Field Execution").
-// Uses client-side navigation instead of window.location.href full reloads.
-function WorkflowBreadcrumb({ onNavigate }: { onNavigate: (path: string) => void }) {
-  const steps = [
-    { n: 1, label: 'Planning & Matching', path: '/planning' },
-    { n: 2, label: 'Schedule Dispatch', path: '/scheduling' },
-    { n: 3, label: 'Field Execution', path: '/assignments' },
-  ];
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-      {steps.map((s, i) => {
-        const active = s.n === 3;
-        return (
-          <React.Fragment key={s.n}>
-            <button
-              onClick={() => onNavigate(s.path)}
-              className="btn"
-              style={{
-                display: 'flex', alignItems: 'center', gap: '6px', padding: '5px 12px',
-                background: active ? 'var(--status-active-bg)' : 'var(--bg-surface-2)',
-                border: `1px solid ${active ? 'var(--success)' : 'var(--border-color)'}`,
-                borderRadius: '20px', color: active ? 'var(--text-primary)' : 'var(--text-secondary)',
-                fontSize: '11px', fontWeight: active ? 700 : 600, cursor: 'pointer',
-              }}
-            >
-              <span>{s.n}</span> {s.label}
-            </button>
-            {i < steps.length - 1 && <ArrowRight size={12} style={{ color: 'var(--text-muted)' }} />}
-          </React.Fragment>
-        );
-      })}
-    </div>
-  );
-}
+/*
+  The "1 Planning & Matching → 2 Schedule Dispatch → 3 Field Execution" breadcrumb that used to
+  live here has been removed along with its component. It existed only because those three were
+  separate sidebar destinations, so this screen had to grow its own way of reaching the other two.
+  They are now tabs of a single "Audit Work" destination, and that tab strip IS this breadcrumb.
+  See packages/frontend/src/pages/work/workTabs.ts for why the four were merged.
+*/
 
 export const Assignments: React.FC = () => {
   const navigate = useNavigate();
@@ -608,10 +580,6 @@ export const Assignments: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
-      {/* Consolidated header — one breadcrumb, one title. Replaces the old
-          pipeline-bar + gradient banner + h2 (three blocks, same fact repeated). */}
-      <WorkflowBreadcrumb onNavigate={navigate} />
-
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
         <div>
           <h2 style={{ fontSize: '24px', fontWeight: 700, fontFamily: 'var(--font-display)' }}>Field Execution Workspace</h2>

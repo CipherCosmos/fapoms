@@ -7,7 +7,8 @@ import { api } from '../services/api';
 import { userMessage } from '../services/errors';
 import { queryKeys } from '../hooks/queryKeys';
 import { hasAnyRole, useCurrentRoles, useCurrentUserId } from '../hooks/useCurrentRoles';
-import { Select } from './ui';
+import { roleLabel } from '@fapoms/shared';
+import { Select, useConfirm } from './ui';
 
 /**
  * Staff remarks about one assayer: the list, the summary the recommendation engine scores from,
@@ -107,7 +108,14 @@ const ratingTone = (rating: number | null | undefined) =>
       ? { bg: 'var(--status-active-bg)', fg: 'var(--success)' }
       : { bg: 'var(--status-cancelled-bg)', fg: 'var(--danger)' };
 
-const roleLabel = (role: string | null) => (role ? role.replace(/_/g, ' ').toLowerCase() : 'staff');
+/**
+ * Byline for a remark's author. Was a private de-caser that lower-cased the raw role, so a
+ * remark was attributed to "operations executive" / "hr manager" — a second spelling of a
+ * vocabulary that already has exactly one home. `roleLabel` is that home; the only thing kept
+ * from the local version is that an author with no role reads as "staff" rather than a dash,
+ * because this renders mid-sentence ("— Priya, operations executive") where "—" would break.
+ */
+const authorRoleLabel = (role: string | null) => (role ? roleLabel(role) : 'staff');
 
 const fmtWhen = (d: string) =>
   new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -117,6 +125,7 @@ export const AssayerRemarks: React.FC<{
   /** Tighter spacing for the planning modal; the drawer uses the default. */
   compact?: boolean;
 }> = ({ assayerId, compact = false }) => {
+  const { confirm, confirmDialog } = useConfirm();
   const roles = useCurrentRoles();
   const userId = useCurrentUserId();
   const canWrite = hasAnyRole(roles, WRITE_ROLES);
@@ -174,6 +183,7 @@ export const AssayerRemarks: React.FC<{
 
   return (
     <div>
+      {confirmDialog}
       {/* The number the engine used, stated up front so nobody has to guess why a score moved. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: compact ? '8px' : '12px', flexWrap: 'wrap' }}>
         <MessageSquare size={compact ? 12 : 14} style={{ color: 'var(--text-muted)' }} />
@@ -251,14 +261,26 @@ export const AssayerRemarks: React.FC<{
                   <div style={{ fontSize: fs, lineHeight: 1.4, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{r.content}</div>
                   <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '3px' }}>
                     <span style={{ fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.02em' }}>{r.category}</span>
-                    {' · '}{r.authorName} <span style={{ fontStyle: 'italic' }}>({roleLabel(r.authorRole)})</span>
+                    {' · '}{r.authorName} <span style={{ fontStyle: 'italic' }}>({authorRoleLabel(r.authorRole)})</span>
                     {' · '}{fmtWhen(r.createdAt)}
                     {r.assignmentId && <> · about one assignment</>}
                   </div>
                 </div>
                 {(mine || canModerate) && (
                   <button type="button" title={mine ? 'Retract your remark' : 'Remove this remark (moderator)'} disabled={remove.isPending}
-                    onClick={() => { if (window.confirm(mine ? 'Retract this remark? It stays in the audit trail.' : 'Remove this remark? It stays in the audit trail.')) remove.mutate(r.id); }}
+                    onClick={async () => {
+                      // Wording kept from the dialog this replaces: it already said the one
+                      // thing people get wrong here — removing it from the list does not
+                      // erase it from the trail.
+                      const ok = await confirm({
+                        title: mine ? 'Retract this remark?' : 'Remove this remark?',
+                        message: 'It stops showing on the assayer\u2019s record, but it stays in the audit trail.',
+                        confirmLabel: mine ? 'Retract remark' : 'Remove remark',
+                        reversible: false,
+                        tone: 'danger',
+                      });
+                      if (ok) remove.mutate(r.id);
+                    }}
                     style={{ flexShrink: 0, background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '2px' }}>
                     <Trash2 size={12} />
                   </button>

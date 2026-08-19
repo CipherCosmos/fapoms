@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Plus, X, Mail, Phone } from 'lucide-react';
-import { Modal, StyledInput, useToast } from '../../components/ui';
+import { Modal, StyledInput, useToast, useConfirm } from '../../components/ui';
 import { useClientContacts, useAddContact, useDeleteContact } from '../../hooks/useClients';
 import type { ClientContact } from '@fapoms/shared';
 import { userMessage } from '../../services/errors';
@@ -46,6 +46,7 @@ export const ContactsPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
   const add = useAddContact();
   const del = useDeleteContact();
   const { toast } = useToast();
+  const { confirm, confirmDialog } = useConfirm();
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ name: '', email: '', phone: '', designation: '', department: '', isPrimary: false });
 
@@ -76,7 +77,17 @@ export const ContactsPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
   };
 
   const handleDelete = async (contact: ClientContact) => {
-    if (!window.confirm(`Remove contact "${contact.name}" from this client?`)) return;
+    // Deleting a person's record off a client: typed name, both because it is a delete
+    // and because contact rows are a list of similar-looking names.
+    const ok = await confirm({
+      title: `Remove "${contact.name}" from this client?`,
+      message: 'This contact will no longer appear on the client, and nobody will be able to reach them from here.',
+      confirmLabel: 'Remove contact',
+      reversible: false,
+      tone: 'danger',
+      confirmPhrase: contact.name,
+    });
+    if (!ok) return;
     try {
       await del.mutateAsync({ clientId, contactId: contact.id });
       toast('success', 'Contact removed');
@@ -87,6 +98,7 @@ export const ContactsPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {confirmDialog}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <span style={{ fontSize: 14, fontWeight: 600 }}>Contacts ({contacts.length})</span>
         <button onClick={() => setShowForm(true)} className="btn btn-primary" style={{ padding: '6px 12px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 4 }}>

@@ -5,7 +5,7 @@ import { INDIAN_STATES } from '@fapoms/shared';
 import { api } from '../services/api';
 import { useClientOptions } from '../hooks/useClients';
 import { userMessage } from '../services/errors';
-import { StatusBadge, Modal, AlertBanner, Select } from '../components/ui';
+import { StatusBadge, Modal, AlertBanner, Select, useConfirm } from '../components/ui';
 import { useCurrentRoles, canManageHolidays } from '../hooks/useCurrentRoles';
 
 interface Holiday {
@@ -59,6 +59,7 @@ export const Holidays: React.FC = () => {
   const canManage = canManageHolidays(useCurrentRoles());
 
   const [view, setView] = useState<'calendar' | 'list'>('calendar');
+  const { confirm, confirmDialog } = useConfirm();
   const [monthCursor, setMonthCursor] = useState(() => { const d = new Date(); d.setDate(1); return d; });
   const yearFilter = monthCursor.getFullYear();
   const [clientFilter, setClientFilter] = useState<string>('ALL');
@@ -145,10 +146,21 @@ export const Holidays: React.FC = () => {
     }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!window.confirm('Delete this holiday record?')) return;
+  // Takes the whole record, not just its id, so the dialog can name the holiday being
+  // deleted. The delete button sits in a dense table row; "Delete this holiday record?"
+  // gave the user no way to tell which row their click had landed on.
+  const handleDelete = async (h: Holiday) => {
+    const ok = await confirm({
+      title: `Delete "${h.name}"?`,
+      message: 'This holiday will no longer block scheduling on that date.',
+      confirmLabel: 'Delete holiday',
+      reversible: false,
+      tone: 'danger',
+      confirmPhrase: h.name,
+    });
+    if (!ok) return;
     try {
-      await api.request(`/holidays/${id}`, { method: 'DELETE' });
+      await api.request(`/holidays/${h.id}`, { method: 'DELETE' });
       setSuccess('Holiday deleted.');
       refetch();
     } catch (err: any) {
@@ -177,6 +189,7 @@ export const Holidays: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      {confirmDialog}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
         <div>
           <h2 style={{ fontSize: '20px', fontWeight: 700, margin: 0, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -323,7 +336,7 @@ export const Holidays: React.FC = () => {
                         <td style={{ padding: '12px 10px', textAlign: 'right' }}>
                           <div style={{ display: 'flex', gap: '8px', justifyContent: 'flex-end' }}>
                             <button aria-label="Edit holiday" onClick={() => handleOpenEdit(h)} style={{ padding: '4px 8px', background: 'rgba(216,174,71,0.1)', border: '1px solid rgba(216,174,71,0.3)', borderRadius: '4px', color: 'var(--accent)', cursor: 'pointer' }}><Edit2 size={12} /></button>
-                            <button aria-label="Delete holiday" onClick={() => handleDelete(h.id)} style={{ padding: '4px 8px', background: 'var(--status-cancelled-bg)', border: '1px solid var(--status-cancelled-bg)', borderRadius: '4px', color: 'var(--danger)', cursor: 'pointer' }}><Trash2 size={12} /></button>
+                            <button aria-label="Delete holiday" onClick={() => handleDelete(h)} style={{ padding: '4px 8px', background: 'var(--status-cancelled-bg)', border: '1px solid var(--status-cancelled-bg)', borderRadius: '4px', color: 'var(--danger)', cursor: 'pointer' }}><Trash2 size={12} /></button>
                           </div>
                         </td>
                       )}

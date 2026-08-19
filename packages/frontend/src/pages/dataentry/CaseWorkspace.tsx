@@ -6,7 +6,7 @@ import {
 
 import { api } from '../../services/api';
 import { useCurrentRoles } from '../../hooks/useCurrentRoles';
-import { SystemRole } from '@fapoms/shared';
+import { SystemRole, validationStatusLabel, activityEventLabel } from '@fapoms/shared';
 import { PdfRegionViewer } from './PdfRegionViewer';
 import type { RegionCapture, Region } from './PdfRegionViewer';
 import { ThreadPanel } from './ThreadPanel';
@@ -235,7 +235,7 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
         {status && (
           <span style={{ fontSize: '11px', fontWeight: 700, color: tone, display: 'inline-flex', alignItems: 'center', gap: '5px' }}>
             <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: tone }} />
-            {status.replace(/_/g, ' ')}
+            {validationStatusLabel(status)}
           </span>
         )}
         {validationCase?.id && (
@@ -256,9 +256,11 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
               <span style={{ color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>
                 {new Date(t.at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
               </span>
-              <span style={{ fontWeight: 700 }}>{t.eventType.replace(/_/g, ' ')}</span>
+              <span style={{ fontWeight: 700 }}>{activityEventLabel(t.eventType)}</span>
+              {/* The trail's from/to are this case's own validation statuses — the same
+                  vocabulary as the header chip above, so it has to read the same way. */}
               {t.previousState && t.newState && t.previousState !== t.newState && (
-                <span style={{ color: 'var(--text-secondary)' }}>{t.previousState} → {t.newState}</span>
+                <span style={{ color: 'var(--text-secondary)' }}>{validationStatusLabel(t.previousState)} → {validationStatusLabel(t.newState)}</span>
               )}
               {t.actor && <span style={{ color: 'var(--accent)' }}>{t.actor}</span>}
               {t.remarks && <span style={{ color: 'var(--text-muted)', flexBasis: '100%', paddingLeft: '2px' }}>{t.remarks}</span>}

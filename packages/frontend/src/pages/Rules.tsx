@@ -53,6 +53,18 @@ const ACTION_TYPES = [
   { value: 'ALERT', label: 'Alert only — surface a warning, do not exclude' },
 ];
 
+/**
+ * Short name for a rule action. `ACTION_TYPES` already carries the wording for the form's
+ * dropdown, but those read as "Alert only — surface a warning, do not exclude": a full
+ * explanation, right for a picker and far too long for a badge. Taking the part before the
+ * dash reuses the one list rather than starting a second, and the raw value (SCORE_ADJUSTMENT)
+ * never reaches the badge.
+ */
+function actionTypeLabel(t: string) {
+  const meta = ACTION_TYPES.find((a) => a.value === t);
+  return meta ? meta.label.split('—')[0].trim() : t.charAt(0) + t.slice(1).toLowerCase().replace(/_/g, ' ');
+}
+
 function ruleTypeMeta(t: string) {
   return RULE_TYPES.find((r) => r.value === t);
 }
@@ -267,7 +279,7 @@ export const Rules: React.FC = () => {
                   <StatusBadge label={tn ? `${rule.scope}: ${tn}` : rule.scope} bg="var(--border-hair)" color="var(--text-secondary)" />
                   <StatusBadge label={ruleTypeMeta(rule.ruleType)?.label ?? rule.ruleType} bg="rgba(216,174,71,0.1)" color="var(--accent-primary)" />
                   {rule.actions?.type && rule.actions.type !== 'BLOCK' && (
-                    <StatusBadge label={rule.actions.type.replace(/_/g, ' ')} bg="var(--status-pending-bg)" color="var(--warning)" />
+                    <StatusBadge label={actionTypeLabel(rule.actions.type)} bg="var(--status-pending-bg)" color="var(--warning)" />
                   )}
                 </div>
                 <div style={{ padding: '12px', background: 'rgba(0,0,0,0.15)', borderRadius: 'var(--radius-md)', fontSize: '12.5px', color: misconfigured ? 'var(--warning)' : 'var(--text-secondary)' }}>

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Bell, CheckCheck, FileText, CheckCircle2, Calendar, Users, DollarSign, Info, MessageSquare } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { api, WebNotification, NotificationCategory } from '../services/api';
+import { activityEventLabel } from '@fapoms/shared';
 import { useToast } from './ui';
 import { connectSocket } from '../services/socket';
 import { useCurrentRoles } from '../hooks/useCurrentRoles';
@@ -226,7 +227,11 @@ export const NotificationDropdown: React.FC = () => {
 
       playWebNotificationSound();
 
-      const title = data?.title || data?.type?.replace(/_/g, ' ') || 'Notification Alert';
+      // A live notification normally carries its own written title; `type` is only the
+      // fallback when it does not, and it is the catalog key (ASSIGNMENT_SLA_BREACHED).
+      // Popping that up verbatim is the worst place to leak an enum — it is the one piece
+      // of UI that appears unbidden over whatever the person was reading.
+      const title = data?.title || (data?.type ? activityEventLabel(data.type) : null) || 'Notification Alert';
       const msg = data?.message || data?.body || (data?.branchName ? `Branch update: ${data.branchName}` : 'New real-time update received');
 
       toast({
