@@ -1029,7 +1029,9 @@ class AppErrorBoundary extends React.Component<
   // the sanctioned way for a class to read context; the fallback used to hardcode the dark
   // palette and paint a black screen with white text over a light-mode app.
   static contextType = ThemeContext;
-  declare context: React.ContextType<typeof ThemeContext>;
+  // Typed at the point of use rather than with a `declare context` field: Babel's transform
+  // rejects `declare` unless `allowDeclareFields` is on, so that form typechecks but fails the
+  // Metro bundle — a break that `tsc` cannot see and only surfaces at publish time.
 
   constructor(props: any) {
     super(props);
@@ -1048,8 +1050,9 @@ class AppErrorBoundary extends React.Component<
     if (this.state.hasError) {
       // If the theme context itself is what failed, fall back to the dark palette rather than
       // crashing the boundary — a boundary that throws takes the whole tree down with it.
-      const c = this.context?.colors ?? palettes.dark;
-      const dark = (this.context?.mode ?? 'dark') === 'dark';
+      const ctx = this.context as React.ContextType<typeof ThemeContext> | undefined;
+      const c = ctx?.colors ?? palettes.dark;
+      const dark = (ctx?.mode ?? 'dark') === 'dark';
       return (
         <SafeAreaView style={{ flex: 1, backgroundColor: c.bg, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
           <StatusBar barStyle={dark ? 'light-content' : 'dark-content'} />
