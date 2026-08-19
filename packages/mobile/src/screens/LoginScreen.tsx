@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
-  View, TextInput, ScrollView, KeyboardAvoidingView, Platform, Animated, TextStyle, Pressable,
+  View, TextInput, ScrollView, KeyboardAvoidingView, Platform, Animated, TextStyle,
 } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
 import { AmbientGlow, AppText, Button, Card, Icon, Tappable } from '../components/ui/primitives';
@@ -180,8 +180,10 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
   const enter = useRef(new Animated.Value(0)).current;
   useEffect(() => {
-    Animated.timing(enter, { toValue: 1, duration: 420, useNativeDriver: true }).start();
-  }, [enter]);
+    // t.motion.slow, not a bespoke 420ms — this was the one entrance timing in the app that
+    // didn't come from the shared motion scale.
+    Animated.timing(enter, { toValue: 1, duration: t.motion.slow, useNativeDriver: true }).start();
+  }, [enter, t.motion.slow]);
 
   /**
    * Focus is signalled by the border colour ONLY — never by adding shadow/elevation.
@@ -289,14 +291,17 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                   returnKeyType="go"
                   onSubmitEditing={handleLoginPress}
                 />
-                <Pressable
+                {/* Tappable for the same press feedback every other control in the app gives —
+                    this toggle used a bare Pressable and was the one dead-feeling tap on the
+                    login screen. */}
+                <Tappable
                   onPress={() => setShowPassword((v) => !v)}
                   hitSlop={14}
                   accessibilityRole="button"
                   accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
                 >
                   <Icon name={showPassword ? 'eye-off-outline' : 'eye-outline'} size={18} color={t.colors.textFaint} />
-                </Pressable>
+                </Tappable>
               </View>
             </View>
 

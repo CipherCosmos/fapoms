@@ -1,7 +1,7 @@
 import React, { useRef, useState } from 'react';
-import { View, TextInput, ScrollView, KeyboardAvoidingView, Platform, TextStyle, Pressable } from 'react-native';
+import { View, TextInput, ScrollView, KeyboardAvoidingView, Platform, TextStyle } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
-import { AppText, Button, Card, Icon } from '../components/ui/primitives';
+import { AppText, Button, Card, Icon, Tappable } from '../components/ui/primitives';
 import { MobileApiService } from '../services/api.service';
 import * as haptics from '../lib/haptics';
 
@@ -200,14 +200,17 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
                 blurOnSubmit={false}
                 onSubmitEditing={() => confirmRef.current?.focus()}
               />
-              <Pressable
+              {/* Tappable, not a bare Pressable — this row's show/hide toggle previously gave no
+                  press feedback at all, the one control on the screen that felt unresponsive next
+                  to every button and switch elsewhere in the app using the same scale-down cue. */}
+              <Tappable
                 onPress={() => setShowNew((v) => !v)}
                 hitSlop={14}
                 accessibilityRole="button"
                 accessibilityLabel={showNew ? 'Hide new password' : 'Show new password'}
               >
                 <Icon name={showNew ? 'eye-off-outline' : 'eye-outline'} size={18} color={t.colors.textFaint} />
-              </Pressable>
+              </Tappable>
             </View>
             {/* Rules update live rather than only surfacing on a rejected submit — on a field
                 connection every round trip costs time, so a typo is worth catching before "Set
@@ -236,14 +239,14 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
                 returnKeyType="go"
                 onSubmitEditing={submit}
               />
-              <Pressable
+              <Tappable
                 onPress={() => setShowConfirm((v) => !v)}
                 hitSlop={14}
                 accessibilityRole="button"
                 accessibilityLabel={showConfirm ? 'Hide confirmed password' : 'Show confirmed password'}
               >
                 <Icon name={showConfirm ? 'eye-off-outline' : 'eye-outline'} size={18} color={t.colors.textFaint} />
-              </Pressable>
+              </Tappable>
             </View>
             <RuleRow ok={matches} label="Matches the new password" />
           </View>

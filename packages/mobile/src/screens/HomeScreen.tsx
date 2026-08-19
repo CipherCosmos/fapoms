@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { View } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
-import { AppText, Badge, Button, Card, EmptyState, GroupedRow, GroupedSection, Icon, Section, Tappable } from '../components/ui/primitives';
+import { AppText, Badge, Button, Card, EmptyState, FadeIn, GroupedRow, GroupedSection, Icon, Section, Tappable } from '../components/ui/primitives';
 import { AssignmentStatus, assignmentStatusLabel, formatRupees as money, formatDateOnly } from '@fapoms/shared';
 import { assignmentStatusTone } from '../utils/statusTone';
 import { relativeDay, RelativeDay } from '../utils/dates';
@@ -177,14 +177,18 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       {offers.length > 0 && (
         <Section title={offers.length === 1 ? 'New offer' : `New offers (${offers.length})`}>
           <View style={{ gap: t.space.md }}>
-            {offers.slice(0, 2).map((offer) => (
-              <OfferCard
-                key={offer.id}
-                assignment={offer}
-                busy={busyActionId === offer.id}
-                onAccept={() => onAcceptOffer(offer)}
-                onDecline={() => onDeclineOffer(offer)}
-              />
+            {/* Staggered entrance, matching ScheduleScreen's assignment list — this was the one
+                list of rows in the app with a hard cut while its sibling screen crossfades in,
+                which is exactly the kind of felt-not-named inconsistency the audit was for. */}
+            {offers.slice(0, 2).map((offer, i) => (
+              <FadeIn key={offer.id} delay={Math.min(i, 6) * 45}>
+                <OfferCard
+                  assignment={offer}
+                  busy={busyActionId === offer.id}
+                  onAccept={() => onAcceptOffer(offer)}
+                  onDecline={() => onDeclineOffer(offer)}
+                />
+              </FadeIn>
             ))}
             {offers.length > 2 && (
               <Tappable

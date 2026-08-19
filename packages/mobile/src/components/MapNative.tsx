@@ -3,6 +3,7 @@ import { View, Text, Platform } from 'react-native';
 import Constants from 'expo-constants';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { Icon } from './ui/primitives';
+import { useTheme } from '../theme/ThemeProvider';
 import { MapRenderProps } from './MapWeb';
 
 // Native (Android/iOS) implementation of the in-app map.
@@ -47,6 +48,7 @@ export const InteractiveMapNative: React.FC<MapRenderProps> = ({
   follow,
   passedIndex,
 }) => {
+  const t = useTheme();
   const mapRef = useRef<any>(null);
 
   // Fit the full route when not following.
@@ -91,6 +93,9 @@ export const InteractiveMapNative: React.FC<MapRenderProps> = ({
    * inconvenience; losing the Activity is the end of the journey.
    */
   if (!CAN_RENDER_MAP) {
+    // Theme tokens, not the hand-picked slate hexes this panel used before — a fallback screen
+    // still needs to obey light/dark like the rest of the app, and its own literal colors meant
+    // it stayed dark-only regardless of the user's theme.
     return (
       <View
         style={{
@@ -99,18 +104,18 @@ export const InteractiveMapNative: React.FC<MapRenderProps> = ({
           justifyContent: 'center',
           gap: 10,
           padding: 24,
-          backgroundColor: '#090d16',
+          backgroundColor: t.colors.bg,
         }}
       >
-        <Icon name="map-outline" size={28} color="#64748b" />
-        <Text style={{ color: '#e2e8f0', fontSize: 15, fontWeight: '700', textAlign: 'center' }}>
+        <Icon name="map-outline" size={28} color={t.colors.textFaint} />
+        <Text style={{ color: t.colors.text, fontSize: 15, fontWeight: '700', textAlign: 'center' }}>
           Map unavailable in this build
         </Text>
-        <Text style={{ color: '#94a3b8', fontSize: 12, lineHeight: 18, textAlign: 'center' }}>
+        <Text style={{ color: t.colors.textMuted, fontSize: 12, lineHeight: 18, textAlign: 'center' }}>
           This app was built without a Google Maps key, so the map cannot be shown. Everything else
           works — including check-in.
         </Text>
-        <Text style={{ color: '#64748b', fontSize: 12, marginTop: 6 }} selectable>
+        <Text style={{ color: t.colors.textFaint, fontSize: 12, marginTop: 6 }} selectable>
           Destination: {destination.latitude.toFixed(5)}, {destination.longitude.toFixed(5)}
         </Text>
       </View>
@@ -149,6 +154,9 @@ export const InteractiveMapNative: React.FC<MapRenderProps> = ({
           <PolylineComponent coordinates={upcoming} strokeColor="#2563eb" strokeWidth={5} />
         )}
       </MapViewComponent>
+      {/* Fixed dark chip, not theme tokens — it sits over live map/satellite imagery whose
+          brightness doesn't follow the app's light/dark setting, so a token-driven light-mode
+          background would go unreadable against a bright map tile underneath it. */}
       <View
         style={{
           position: 'absolute',

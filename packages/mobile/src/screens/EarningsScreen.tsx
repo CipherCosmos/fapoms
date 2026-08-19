@@ -176,7 +176,9 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
         {/* Paid vs pending at a glance, in the app's chip pattern. */}
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.sm }}>
           <MoneyChip icon="trending-up" label="Earned" value={money(lifetime)} />
-          <MoneyChip icon="checkmark-circle" label="Paid" value={money(paid)} iconColor={t.colors.success} />
+          {/* Outline, matching the "Pending"/"On hold" chips beside it — a filled glyph here was
+              the odd one out in a row where every other chip is outline weight. */}
+          <MoneyChip icon="checkmark-circle-outline" label="Paid" value={money(paid)} iconColor={t.colors.success} />
           <MoneyChip icon="hourglass-outline" label="Pending" value={money(awaiting)} iconColor={t.colors.warning} />
           {onHold > 0 && (
             <MoneyChip icon="pause-circle-outline" label="On hold" value={money(onHold)} iconColor={t.colors.danger} />

@@ -60,8 +60,11 @@ const CallControl: React.FC<{
     : tone === 'success' ? t.colors.success
     : active ? t.colors.primarySoft
     : t.colors.surfaceAlt;
+  // onPrimary, not a literal white — it's the app's one "text that must read on a saturated
+  // fill" token (same role it plays on the primary button), so danger/success buttons stay
+  // legible under the same rule as everything else instead of a hardcoded value nobody re-checks.
   const fg =
-    tone === 'danger' || tone === 'success' ? '#FFFFFF'
+    tone === 'danger' || tone === 'success' ? t.colors.onPrimary
     : active ? t.colors.primary
     : t.colors.text;
   const glowStyle = glow

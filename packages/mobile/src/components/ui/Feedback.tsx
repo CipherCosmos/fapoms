@@ -146,13 +146,10 @@ const Toast: React.FC<{ notice: Notice; onDismiss: () => void }> = ({ notice, on
   const anim = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    Animated.spring(anim, {
-      toValue: 1,
-      useNativeDriver: true,
-      damping: 18,
-      stiffness: 220,
-    }).start();
-  }, [anim]);
+    // t.motion.spring, not a one-off damping/stiffness pair — this toast used to spring in on
+    // its own hand-tuned feel, one more spot where the app's motion didn't share a single voice.
+    Animated.spring(anim, { toValue: 1, ...t.motion.spring }).start();
+  }, [anim, t.motion.spring]);
 
   const tint = t.colors[notice.tone === 'error' ? 'danger' : notice.tone];
 

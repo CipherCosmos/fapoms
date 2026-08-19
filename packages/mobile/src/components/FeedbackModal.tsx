@@ -241,7 +241,11 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
                         backgroundColor: mine ? t.colors.primary : t.colors.surface,
                         borderWidth: mine ? 0 : 1, borderColor: t.colors.border,
                       }}>
-                        <AppText variant="body" style={{ color: mine ? '#fff' : t.colors.text }}>{m.body}</AppText>
+                        {/* onPrimary, not a literal white — the bubble sits on t.colors.primary,
+                            and onPrimary is the token that already tracks what stays readable on
+                            it (near-black in dark mode, white in light). A literal '#fff' here
+                            would go unreadable the moment light mode's primary got any lighter. */}
+                        <AppText variant="body" style={{ color: mine ? t.colors.onPrimary : t.colors.text }}>{m.body}</AppText>
                       </View>
                     </View>
                   );

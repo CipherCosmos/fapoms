@@ -412,7 +412,11 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           </Tappable>
         ) : (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm }}>
-            <Icon name="checkmark-circle" size={18} color={t.colors.success} />
+            {/* Outline weight, not filled — this is a static "complete" indicator, not an
+                active/selected control. The app's convention (see TabDock icon/iconActive)
+                reserves filled glyphs for the active state; a filled checkmark here read as
+                inconsistent next to QueriesScreen's outline "resolved" icon for the same concept. */}
+            <Icon name="checkmark-circle-outline" size={18} color={t.colors.success} />
             <AppText variant="small" tone="muted">Your record is complete.</AppText>
           </View>
         )}
