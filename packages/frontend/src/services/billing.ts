@@ -190,8 +190,8 @@ async function getAssayerStatement(assayerId: string): Promise<AssayerStatement>
   return api.request<AssayerStatement>(`/billing-engine/assayers/${assayerId}/statement`);
 }
 
-async function listInvoiceable(clientId?: string): Promise<{ clients: InvoiceableClient[]; total: number }> {
-  return api.request<{ clients: InvoiceableClient[]; total: number }>(`/billing-engine/invoiceable${qs({ clientId })}`);
+async function listInvoiceable(clientId?: string): Promise<{ clients: InvoiceableClient[]; total: number; truncated: boolean }> {
+  return api.request<{ clients: InvoiceableClient[]; total: number; truncated: boolean }>(`/billing-engine/invoiceable${qs({ clientId })}`);
 }
 
 async function listInvoices(params: { clientId?: string; projectId?: string; status?: InvoiceStatus } & PageParams = {}): Promise<BillingPage<InvoiceRow>> {

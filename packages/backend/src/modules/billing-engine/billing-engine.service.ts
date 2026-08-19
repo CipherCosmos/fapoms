@@ -117,6 +117,16 @@ const RECONCILE_PROGRESS_INTERVAL = 200;
 const ATTENTION_LIMIT = 25;
 
 /**
+ * The most un-invoiced lines the Invoices tab loads at once.
+ *
+ * Every line comes back with its labels because the operator ticks them individually, so this is
+ * a real payload rather than a count. The response reports `truncated` whenever the cap bites —
+ * a capped list that does not say so is the "showing the first 200" defect the old Conflicts tab
+ * had, applied to money someone is about to bill.
+ */
+const INVOICEABLE_LIMIT = 2000;
+
+/**
  * The billing engine: the assignment is the ledger line.
  *
  * When an assignment completes, `bookAssignment` creates — in ONE transaction — the assayer's fee
@@ -1321,10 +1331,15 @@ export class BillingEngineService implements OnModuleInit {
    * Completed work not yet on an invoice, grouped by client — the left-hand side of the Invoices
    * tab. Held lines are listed too (greyed by the UI) so finance can see why a client's total is
    * short; the create call refuses them.
+   *
+   * Bounded, and it SAYS so when the bound bites: `truncated` is what stops a capped list from
+   * reading as "this is everything you have to invoice". A client past the cap is invoiced a
+   * screenful at a time — scope to that client and the cap stops applying.
    */
   async listInvoiceable(filters: { clientId?: string } = {}): Promise<{
     clients: Array<{ clientId: string; clientName: string; total: number; count: number; lines: any[] }>;
     total: number;
+    truncated: boolean;
   }> {
     const rows = await this.entryRepository.manager.query(
       `SELECT e.id, e.entry_number, e.client_id, c.name AS client_name, e.project_id, p.name AS project_name,
@@ -1341,7 +1356,7 @@ export class BillingEngineService implements OnModuleInit {
         WHERE e.is_active = true AND e.state = 'UNBILLED'
           AND ($1::uuid IS NULL OR e.client_id = $1::uuid)
         ORDER BY c.name ASC, e.service_date DESC NULLS LAST, e.created_at DESC
-        LIMIT 2000`,
+        LIMIT ${INVOICEABLE_LIMIT}`,
       [filters.clientId ?? null],
     );
     const byClient = new Map<string, { clientId: string; clientName: string; total: number; count: number; lines: any[] }>();
@@ -1372,7 +1387,7 @@ export class BillingEngineService implements OnModuleInit {
       if (!line.onHold) { g.total = round2(g.total + line.totalAmount); g.count += 1; }
       byClient.set(r.client_id, g);
     }
-    return { clients: [...byClient.values()], total: rows.length };
+    return { clients: [...byClient.values()], total: rows.length, truncated: rows.length >= INVOICEABLE_LIMIT };
   }
 
   /** Client lines with their labels — the export and the assignment filter read this. */

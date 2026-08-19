@@ -33,7 +33,13 @@ export const InvoicesTab: React.FC<{ filter: InvoiceFilter; onFilter: (f: Invoic
       <Card title={<span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><FileText size={14} /> Ready to invoice</span>}>
         {invoiceable.isLoading ? <Empty>Loading…</Empty> : clients.length === 0 ? (
           <Empty>Nothing to invoice. Completed assignments appear here automatically.</Empty>
-        ) : (
+        ) : (<>
+          {invoiceable.data?.truncated && (
+            <div style={{ fontSize: 11.5, color: 'var(--warning)', marginBottom: 8, lineHeight: 1.45 }}>
+              Showing the first {invoiceable.data.total} un-invoiced lines — there are more. Invoice a client to clear its
+              share, or open that client from the Overview to see all of theirs.
+            </div>
+          )}
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {clients.map((c) => {
               const held = c.lines.filter((l) => l.onHold);
@@ -57,7 +63,7 @@ export const InvoicesTab: React.FC<{ filter: InvoiceFilter; onFilter: (f: Invoic
               );
             })}
           </div>
-        )}
+        </>)}
       </Card>
 
       <Card
