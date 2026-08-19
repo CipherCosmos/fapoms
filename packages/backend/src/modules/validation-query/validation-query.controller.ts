@@ -6,9 +6,9 @@ import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagg
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
 import { memoryStorage } from 'multer';
-import { IsOptional, IsString, IsArray, IsNumber, IsObject, ValidateNested } from 'class-validator';
+import { IsOptional, IsString, IsArray, IsNumber, IsObject, IsIn, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
-import { ValidationQueryService } from './validation-query.service';
+import { ValidationQueryService, ClarificationFilter } from './validation-query.service';
 import { QueryThreadService } from './query-thread.service';
 import { QueryMessageAuthor } from './validation-query-message.entity';
 import { CreateValidationQueryDto, RespondValidationQueryDto } from './dto/validation-query.dto';
@@ -75,6 +75,15 @@ class PostQueryMessageDto {
   @IsOptional() @IsString() replyToMessageId?: string;
   @IsOptional() @IsArray() annotations?: any[];
   @IsOptional() @IsObject() voiceNote?: { url: string; durationSeconds: number; mimeType?: string };
+}
+
+/** Which slice of the worklist to return, and how many rows. Counts always cover the whole set. */
+class ClarificationWorklistQuery {
+  @IsOptional() @IsIn(['US', 'ASSAYER', 'OVERDUE', 'DONE', 'ALL'])
+  filter?: ClarificationFilter;
+
+  @IsOptional() @Type(() => Number) @IsNumber()
+  limit?: number;
 }
 
 @ApiTags('Validation Queries')
@@ -277,9 +286,12 @@ export class ValidationQueryController {
 
   @Roles(...STAFF_ROLES)
   @Get('worklist')
-  @ApiOperation({ summary: 'All clarifications enriched for a worklist (branch, assayer, SLA, whose court)' })
-  async worklist() {
-    return { success: true, data: await this.validationQueryService.getClarificationWorklist() };
+  @ApiOperation({ summary: 'Clarifications enriched for a worklist (branch, assayer, SLA, whose court)' })
+  async worklist(@Query() q: ClarificationWorklistQuery) {
+    return {
+      success: true,
+      data: await this.validationQueryService.getClarificationWorklist({ filter: q.filter, limit: q.limit }),
+    };
   }
 
   @Roles(...STAFF_ROLES, SystemRole.ASSAYER)

@@ -24,6 +24,19 @@ export interface CreateValidationQueryDto {
   attachments?: { url: string; fileName: string; fileType: string; uploadedBy: string; timestamp: string }[];
 }
 
+/** Which slice of the worklist a caller wants. Mirrored by the tabs on the clarifications page. */
+export type ClarificationFilter = 'US' | 'ASSAYER' | 'OVERDUE' | 'DONE' | 'ALL';
+
+/**
+ * The worklist is a window, not the table.
+ *
+ * `validation_queries` is append-only and never pruned, so "every clarification, enriched with
+ * four joins" grew without limit — and the page then filtered it in the browser, shipping every
+ * resolved clarification ever raised on each load.
+ */
+const CLARIFICATION_PAGE_DEFAULT = 100;
+const CLARIFICATION_PAGE_MAX = 200;
+
 @Injectable()
 export class ValidationQueryService {
   private readonly logger = new Logger(ValidationQueryService.name);
@@ -487,22 +500,67 @@ export class ValidationQueryService {
    * to answer "which clarifications are open, whose court are they in, and which are overdue"
    * without walking every case. This is that list.
    */
-  async getClarificationWorklist(): Promise<Array<{
-    id: string;
-    validationCaseId: string;
-    projectBranchId: string | null;
-    status: string;
-    queryText: string;
-    targetField: string | null;
-    branchName: string | null;
-    assayerName: string | null;
-    assayerCode: string | null;
-    createdAt: string;
-    lastMessageAt: string | null;
-    slaDueDate: string | null;
-    slaOverdue: boolean;
-    awaiting: 'US' | 'ASSAYER' | 'DONE';
-  }>> {
+  async getClarificationWorklist(opts: { filter?: ClarificationFilter; limit?: number } = {}): Promise<{
+    items: Array<{
+      id: string;
+      validationCaseId: string;
+      projectBranchId: string | null;
+      status: string;
+      queryText: string;
+      targetField: string | null;
+      branchName: string | null;
+      assayerName: string | null;
+      assayerCode: string | null;
+      createdAt: string;
+      lastMessageAt: string | null;
+      slaDueDate: string | null;
+      slaOverdue: boolean;
+      awaiting: 'US' | 'ASSAYER' | 'DONE';
+    }>;
+    /** Counts across the whole worklist, not the page — these draw the tabs. */
+    counts: { US: number; ASSAYER: number; DONE: number; OVERDUE: number; total: number };
+    limit: number;
+  }> {
+    const filter: ClarificationFilter = opts.filter ?? 'ALL';
+    const limit = Math.min(CLARIFICATION_PAGE_MAX, Math.max(1, Number(opts.limit) || CLARIFICATION_PAGE_DEFAULT));
+
+    /**
+     * Whose court a clarification is in, as SQL.
+     *
+     * OPEN → waiting on the assayer; RESPONDED → they answered, our move; RESOLVED → done. The
+     * same split the rows are mapped with below, expressed once here so the tab counts and the
+     * filtered list cannot disagree.
+     */
+    const AWAITING = `CASE WHEN q.status = 'OPEN' THEN 'ASSAYER'
+                           WHEN q.status = 'RESPONDED' THEN 'US'
+                           ELSE 'DONE' END`;
+    const OVERDUE = `(q.sla_due_date IS NOT NULL AND q.status <> 'RESOLVED' AND q.sla_due_date < NOW())`;
+
+    // One grouped pass for the tabs. The page used to fetch every clarification ever raised —
+    // including every resolved one, forever — and count them in the browser.
+    const countRow = await this.queryRepository.manager.query(
+      `SELECT COUNT(*)::int AS total,
+              COUNT(*) FILTER (WHERE ${AWAITING} = 'US')::int       AS us,
+              COUNT(*) FILTER (WHERE ${AWAITING} = 'ASSAYER')::int  AS assayer,
+              COUNT(*) FILTER (WHERE ${AWAITING} = 'DONE')::int     AS done,
+              COUNT(*) FILTER (WHERE ${OVERDUE})::int               AS overdue
+         FROM validation_queries q
+        WHERE q.is_active = true`,
+    );
+    const c = countRow?.[0] ?? {};
+    const counts = {
+      US: Number(c.us ?? 0),
+      ASSAYER: Number(c.assayer ?? 0),
+      DONE: Number(c.done ?? 0),
+      OVERDUE: Number(c.overdue ?? 0),
+      total: Number(c.total ?? 0),
+    };
+
+    const filterSql =
+      filter === 'OVERDUE' ? `AND ${OVERDUE}`
+      : filter === 'ALL' ? ''
+      : `AND ${AWAITING} = '${filter}'`;
+
     const rows = await this.queryRepository.manager.query(
       `SELECT q.id, q.validation_case_id AS "validationCaseId", vc.project_branch_id AS "projectBranchId", q.status,
               q.query_text AS "queryText", q.target_field AS "targetField",
@@ -514,17 +572,20 @@ export class ValidationQueryService {
          LEFT JOIN project_branches pb ON pb.id = vc.project_branch_id
          LEFT JOIN branches b ON b.id = pb.branch_id
          LEFT JOIN assayers a ON a.id = q.assayer_id
-        WHERE q.is_active = true
-        ORDER BY q.sla_due_date ASC NULLS LAST, q.created_at DESC`,
+        WHERE q.is_active = true ${filterSql}
+        -- Soonest deadline first: what is left off the end is what can wait longest.
+        ORDER BY q.sla_due_date ASC NULLS LAST, q.created_at DESC, q.id DESC
+        LIMIT ${limit}`,
     );
     const now = Date.now();
-    return rows.map((r: any) => {
-      // OPEN → we are waiting on the assayer; RESPONDED → the assayer answered, our move;
-      // RESOLVED → done. This split is the whole point of the worklist.
+    const items = rows.map((r: any) => {
+      // Same split as `AWAITING` above — kept here because the row shape is what the page reads.
       const awaiting = r.status === 'OPEN' ? 'ASSAYER' : r.status === 'RESPONDED' ? 'US' : 'DONE';
       const slaOverdue = !!r.slaDueDate && r.status !== 'RESOLVED' && new Date(r.slaDueDate).getTime() < now;
       return { ...r, awaiting, slaOverdue };
     });
+
+    return { items, counts, limit };
   }
 
   /**
