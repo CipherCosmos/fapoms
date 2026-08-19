@@ -5,6 +5,7 @@ import { PostGISRoutingProvider, OSRMRoutingProvider, RoutingService } from './r
 import { GeoController } from './geo.controller';
 import { GeoSeedService } from './geo-seed.service';
 import { GeoPrecisionService } from './geo-precision.service';
+import { TileProxyService } from './tile-proxy.service';
 import { BranchEntity } from '../branch/branch.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
 
@@ -16,7 +17,7 @@ import { AssayerEntity } from '../assayer/assayer.entity';
     TypeOrmModule.forFeature([GeoStateEntity, GeoDistrictEntity, GeoCityEntity, BranchEntity, AssayerEntity]),
   ],
   controllers: [GeoController],
-  providers: [PostGISRoutingProvider, OSRMRoutingProvider, RoutingService, GeoSeedService, GeoPrecisionService],
+  providers: [PostGISRoutingProvider, OSRMRoutingProvider, RoutingService, GeoSeedService, GeoPrecisionService, TileProxyService],
   exports: [RoutingService, GeoPrecisionService, TypeOrmModule],
 })
 export class GeoModule {}

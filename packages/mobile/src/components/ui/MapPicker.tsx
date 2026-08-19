@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { View, Image, PanResponder, Animated, LayoutChangeEvent } from 'react-native';
 import { AppText, Icon, Tappable } from './primitives';
 import { useTheme } from '../../theme/ThemeProvider';
+import { getApiBaseUrl, MobileApiService } from '../../services/api.service';
 
 /**
  * A keyless "drop a pin" map, built from raster tiles, `<Image>` and `PanResponder`.
@@ -31,21 +32,39 @@ import { useTheme } from '../../theme/ThemeProvider';
  * draggable marker: no hit-testing, no marker/gesture conflicts, and the target stays under the
  * user's thumb-free centre of the screen rather than under their finger.
  *
- * ## OpenStreetMap tile usage policy
+ * ## Tiles come from our own backend, not from OSM directly
  *
- * Tiles come from OSM's public tile servers, which are donated infrastructure with a usage
- * policy (no bulk downloading, no heavy automated use, attribution required). This component is
- * a deliberately light consumer: one small viewport, no prefetching beyond the visible grid,
- * a capped maximum zoom, and panning debounced so a drag does not machine-gun requests. The
- * attribution is rendered on the map, as the policy requires.
+ * This component used to point straight at `tile.openstreetmap.org`. On real assayer handsets
+ * that started returning **HTTP 403**, and it is not a User-Agent problem — curl from a dev
+ * machine gets 200 with any UA, so the block is at the network/IP level. OSM's tile servers are
+ * donated infrastructure whose usage policy effectively rules out an app hitting them directly
+ * from a large, changing pool of mobile IPs. The note that used to sit here predicted exactly
+ * this and said the tile URL should move behind the backend once usage grew; it has.
  *
- * If this ever grows beyond occasional profile edits, TILE_URL_TEMPLATE should move to platform
- * settings (the backend already has a runtime config store) and point at a paid or self-hosted
- * tile source rather than the community servers.
+ * Tiles now come from `GET /geo/tiles/{z}/{x}/{y}` on this project's own API, which fetches
+ * upstream once with an identifying User-Agent and caches the PNG for ~30 days
+ * (packages/backend/src/modules/geo/tile-proxy.service.ts). That makes us a single, identified
+ * consumer instead of thousands of phones, keeps upstream traffic policy-compliant, and makes
+ * repeat panning over the same town fast over the Tailscale Funnel. Repointing at a paid or
+ * self-hosted tile source is now a one-constant change on the server, invisible here.
+ *
+ * The endpoint is authenticated (an open tile proxy would be an open proxy), so each tile request
+ * carries the bearer token — see `tileHeaders` below. This component stays a light consumer
+ * regardless: one small viewport, no prefetching beyond the visible grid, a capped maximum zoom,
+ * and panning debounced so a drag does not machine-gun requests. The attribution is still
+ * rendered on the map and is still required — the data is still OSM's, we merely cache it.
  */
 
-/** `{z}/{x}/{y}` raster tiles, 256px. See the OSM tile policy note above before raising usage. */
-const TILE_URL_TEMPLATE = 'https://tile.openstreetmap.org/{z}/{x}/{y}.png';
+/** A tile's URL on our own API. `getApiBaseUrl()` already returns the `.../api/v1` root the rest
+ *  of the app talks to, so tiles follow any server override the user has set (dev builds repoint
+ *  this) without a second configuration knob. */
+function tileUrl(z: number, x: number, y: number): string {
+  // Read at call time, never captured in a module constant: the base URL is restored from storage
+  // after this module is first evaluated, and a dev build can change it at runtime. A constant
+  // captured at import would pin the compiled-in default and quietly serve tiles from the wrong
+  // (or an unreachable) server.
+  return `${getApiBaseUrl()}/geo/tiles/${z}/${x}/${y}`;
+}
 const TILE_SIZE = 256;
 
 /** Capped well below OSM's 19 — street-level detail is enough to place a house, and every extra
@@ -201,6 +220,18 @@ export const MapPicker: React.FC<MapPickerProps> = ({
     emit(centreRef.current.latitude, centreRef.current.longitude);
   };
 
+  /**
+   * The tile endpoint is authenticated, so every `<Image>` has to carry the bearer token itself —
+   * RN's image loader does its own HTTP and knows nothing about the API client's interceptors.
+   * Signed out (token null) we send no header and every tile 401s, which the per-tile `onError`
+   * below already handles: blank squares over `surfaceAlt`, no crash. Memoised on the token so a
+   * re-render does not hand `<Image>` a new headers object and make it re-fetch the grid.
+   */
+  const tileHeaders = useMemo(() => {
+    const token = MobileApiService.getAuthToken();
+    return token ? { Authorization: `Bearer ${token}` } : undefined;
+  }, [MobileApiService.getAuthToken()]);
+
   /** The visible tile grid: whole tiles covering the viewport, plus one ring of overscan so a
    *  drag reveals loaded tiles rather than empty space. */
   const tiles = useMemo(() => {
@@ -224,7 +255,7 @@ export const MapPicker: React.FC<MapPickerProps> = ({
         const wrappedX = ((tx % worldSize) + worldSize) % worldSize;
         out.push({
           key: `${zoom}/${wrappedX}/${ty}`,
-          uri: TILE_URL_TEMPLATE.replace('{z}', String(zoom)).replace('{x}', String(wrappedX)).replace('{y}', String(ty)),
+          uri: tileUrl(zoom, wrappedX, ty),
           left: tx * TILE_SIZE - topLeftX,
           top: ty * TILE_SIZE - topLeftY,
         });
@@ -277,7 +308,7 @@ export const MapPicker: React.FC<MapPickerProps> = ({
           failed[tile.key] ? null : (
             <Image
               key={tile.key}
-              source={{ uri: tile.uri }}
+              source={{ uri: tile.uri, headers: tileHeaders }}
               onError={() => setFailed((prev) => ({ ...prev, [tile.key]: true }))}
               style={{ position: 'absolute', left: tile.left, top: tile.top, width: TILE_SIZE, height: TILE_SIZE }}
               // Tiles are opaque squares; fading them in makes a pan look like a stutter.
