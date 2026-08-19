@@ -3,7 +3,7 @@ import { View, TextInput, TextStyle, Modal, Alert, Dimensions } from 'react-nati
 import { useTheme, ThemePreference } from '../theme/ThemeProvider';
 import {
   AppText, Avatar, Badge, Button, Card, GroupedRow, GroupedSection, GroupedSwitch,
-  Icon, IconName, StatStrip, StatTile, Tappable,
+  Icon, IconName, StatTile, Tappable,
 } from '../components/ui/primitives';
 import { SubScreen, useStackNav } from '../components/ui/SimpleStack';
 import { ChangePasswordScreen } from './ChangePasswordScreen';
@@ -421,15 +421,26 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
         )}
       </Card>
 
-      {/* The key numbers a field worker actually checks: what I've done, what I'm owed. */}
-      <StatStrip>
+      {/*
+        The key numbers a field worker actually checks: what I've done, what I'm owed.
+
+        `StatStrip` (a horizontal ScrollView) is right for a strip that's meant to be swiped —
+        StatsScreen and EarningsScreen use it for that. Here it was wrong: at 3-4 tiles wide with
+        each tile's own `minWidth: 140`, the strip overflowed a normal phone's screen width and
+        forced a sideways scroll on the very first thing a field worker sees after their name —
+        exactly the "big component that makes things horizontally scrollable" this was reported
+        against. Nothing else in this app (or in the rest of this session's redesign) scrolls
+        sideways; a wrapping grid keeps every figure visible at once, which is also just more
+        useful for a glanceable summary than one that hides a card off-screen.
+      */}
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.md }}>
         <StatTile label="Completed" value={profile.completedAssignments ?? 0} icon="checkmark-done" tone="success" />
         <StatTile label="Assigned" value={profile.totalAssignments ?? 0} icon="clipboard-outline" />
         <StatTile label="Balance" value={money(profile.runningBalance)} icon="wallet-outline" tone="accent" />
         {Number(profile.averageRating) > 0 && (
           <StatTile label="Rating" value={Number(profile.averageRating).toFixed(1)} icon="star" tone="warning" hint="out of 5" />
         )}
-      </StatStrip>
+      </View>
 
       {/* Three groups instead of six crowded tabs */}
       <View style={{ flexDirection: 'row', gap: t.space.sm }}>
