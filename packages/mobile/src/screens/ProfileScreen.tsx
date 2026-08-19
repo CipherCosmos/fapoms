@@ -93,8 +93,6 @@ const CATEGORY_LABELS: Record<string, { label: string; hint: string }> = {
   SYSTEM: { label: 'System', hint: 'Service notices and app updates' },
 };
 
-type SectionKey = 'PROFILE' | 'WORK' | 'STATS' | 'APP';
-
 // ─────────────────────────────────────────────────────────── Row building blocks
 //
 // These are module-scope on purpose. Defining them inside the component body gives them a new
@@ -253,7 +251,6 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 }) => {
   const [changePasswordVisible, setChangePasswordVisible] = useState(false);
   const t = useTheme();
-  const [tab, setTab] = useState<SectionKey>('PROFILE');
 
   // Every settings group used to expand in place (CollapsibleSection). Zerodha/Apple-style
   // professional apps instead push each group to its own screen — a row on the list, a full
@@ -337,11 +334,11 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
    * all, and without a phone number the desk cannot reach them at a branch.
    */
   const missingFields = ([
-    { value: profile.bankAccountNumber, label: 'Bank account number', tab: 'WORK' as const },
-    { value: profile.ifscCode, label: 'IFSC code', tab: 'WORK' as const },
-    { value: profile.panNumber, label: 'PAN number', tab: 'WORK' as const },
-    { value: profile.phone, label: 'Phone number', tab: 'PROFILE' as const },
-    { value: profile.emergencyPhone, label: 'Emergency contact', tab: 'PROFILE' as const },
+    { value: profile.bankAccountNumber, label: 'Bank account number', target: 'payment' as const },
+    { value: profile.ifscCode, label: 'IFSC code', target: 'payment' as const },
+    { value: profile.panNumber, label: 'PAN number', target: 'payment' as const },
+    { value: profile.phone, label: 'Phone number', target: 'contact' as const },
+    { value: profile.emergencyPhone, label: 'Emergency contact', target: 'emergency' as const },
   ]).filter((f) => !String(f.value ?? '').trim());
 
   const recordComplete = missingFields.length === 0;
@@ -395,7 +392,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 
         {missingFields.length > 0 ? (
           <Tappable
-            onPress={() => setTab(missingFields[0].tab)}
+            onPress={() => stackNav.push(missingFields[0].target)}
             accessibilityRole="button"
             accessibilityLabel={`${missingFields.length} profile details missing — open the section to fix them`}
           >
@@ -442,137 +439,120 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
         )}
       </View>
 
-      {/* Three groups instead of six crowded tabs */}
-      <View style={{ flexDirection: 'row', gap: t.space.sm }}>
-        {([
-          { k: 'PROFILE' as const, label: 'Profile', icon: 'person-outline' as const },
-          { k: 'WORK' as const, label: 'Work', icon: 'briefcase-outline' as const },
-          { k: 'STATS' as const, label: 'Stats', icon: 'stats-chart-outline' as const },
-          { k: 'APP' as const, label: 'Settings', icon: 'settings-outline' as const },
-        ]).map((s) => {
-          const active = tab === s.k;
-          return (
-            <Tappable key={s.k} onPress={() => setTab(s.k)} style={{ flex: 1 }} accessibilityRole="button" accessibilityLabel={`${s.label} tab`}>
-              <View style={{
-                alignItems: 'center', gap: 5, paddingVertical: t.space.md, borderRadius: t.radius.md,
-                backgroundColor: active ? t.colors.primarySoft : t.colors.surface,
-                borderWidth: 1, borderColor: active ? 'transparent' : t.colors.border,
-              }}>
-                <Icon name={s.icon} size={18} color={active ? t.colors.primary : t.colors.textFaint} />
-                <AppText variant="caption" tone={active ? 'primary' : 'faint'}>{s.label}</AppText>
-              </View>
-            </Tappable>
-          );
-        })}
-      </View>
-
-      {tab === 'PROFILE' && (
-        <GroupedSection>
-          <GroupedRow
-            icon="call-outline" tone="primary" label="Contact"
-            hint={profile.phone || 'Add your phone number'}
-            onPress={() => stackNav.push('contact')} chevron
-          />
-          <GroupedRow
-            icon="home-outline" tone="accent" label="Address"
-            hint={[profile.city, profile.state].filter(Boolean).join(', ') || 'Where you are based'}
-            onPress={() => stackNav.push('address')} chevron
-          />
-          <GroupedRow
-            icon="medkit-outline" tone="danger" label="Emergency contact"
-            hint={profile.emergencyName ? `${profile.emergencyName}${profile.emergencyPhone ? ` · ${profile.emergencyPhone}` : ''}` : 'Who to call if something happens on site'}
-            onPress={() => stackNav.push('emergency')} chevron
-          />
-        </GroupedSection>
-      )}
-
-      {tab === 'WORK' && (
-        <GroupedSection>
-          {/* Self-service time off opens straight into the calendar overlay — there's nothing
-              else to show behind this row, so it stays a direct action rather than a push. */}
-          <GroupedRow
-            icon="calendar-outline" tone="primary" label="Availability"
-            hint="Mark days you're unavailable — you won't be offered audits then."
-            onPress={onOpenAvailability} accessibilityLabel="Set your time off" chevron
-          />
-          <GroupedRow
-            icon="ribbon-outline" tone="accent" label="Capability"
-            hint={`${profile.skills ? profile.skills.split(',').filter((s) => s.trim()).length : 0} skills · ${profile.languages ? profile.languages.split(',').filter((s) => s.trim()).length : 0} languages`}
-            onPress={() => stackNav.push('capability')} chevron
-          />
-          <GroupedRow
-            icon="speedometer-outline" tone="info" label="Capacity"
-            hint="How much work you can take"
-            onPress={() => stackNav.push('capacity')} chevron
-          />
-          <GroupedRow
-            icon="card-outline" tone="success" label="Payment details"
-            hint="Bank account and PAN"
-            onPress={() => stackNav.push('payment')} chevron
-          />
-        </GroupedSection>
-      )}
-
-      {/* Performance figures, all derived from counts the backend genuinely returns.
-          StatsScreen was written and then never reachable — it existed in the codebase with
-          no route into it, so an assayer could not see how they were doing. */}
-      {tab === 'STATS' && (
-        <StatsScreen
-          totalAssignments={profile.totalAssignments}
-          completedAssignments={profile.completedAssignments}
-          averageRating={profile.averageRating}
-          openQueries={openQueries ?? 0}
-          resolvedQueries={resolvedQueries ?? 0}
+      {/*
+        One continuous grouped list from here down — Apple Settings/Zerodha Console style.
+        There used to be a top-level PROFILE/WORK/STATS/APP segmented switcher gating which of
+        these sections was visible; that hid three groups behind a tap and made the screen read
+        as four separate screens wearing one title. A single scroll, in order of what an
+        assayer needs most often, does the same job without the extra navigation layer.
+      */}
+      <GroupedSection title="Profile">
+        <GroupedRow
+          icon="call-outline" tone="primary" label="Contact"
+          hint={profile.phone || 'Add your phone number'}
+          onPress={() => stackNav.push('contact')} chevron
         />
-      )}
-
-      {tab === 'APP' && (
-        <GroupedSection>
-          <GroupedRow
-            icon="color-palette-outline" tone="primary" label="Appearance"
-            hint={THEME_OPTIONS.find((o) => o.key === t.preference)?.label ?? 'Theme'}
-            onPress={() => stackNav.push('appearance')} chevron
-          />
-          <GroupedRow
-            icon="notifications-outline" tone="accent" label="Notifications"
-            hint={pushBusy ? 'Updating this device with the server…' : pushEnabled ? 'Push notifications on' : 'Push notifications off'}
-            onPress={() => stackNav.push('notifications')} chevron
-          />
-          <GroupedRow
-            icon="navigate-outline" tone="info" label="Location & Recommendations"
-            hint={liveTrackingEnabled ? 'Live location sharing on' : 'Live location sharing off'}
-            onPress={() => stackNav.push('location')} chevron
-          />
-          <GroupedRow
-            icon="finger-print-outline" tone="success" label="Security & Biometrics"
-            hint={biometrics ? 'Biometric lock on' : 'Password and biometric lock'}
-            onPress={() => stackNav.push('security')} chevron
-          />
-          <GroupedRow
-            icon="ribbon-outline" tone="primary" label="Accreditation & License"
-            hint={profile.licenseNo ? `License No: ${profile.licenseNo}` : 'No licence number on file'}
-            onPress={() => stackNav.push('accreditation')} chevron
-          />
-          <GroupedRow
-            icon="server-outline" tone="accent" label="Connection"
-            hint={serverHost}
-            onPress={() => stackNav.push('connection')} chevron
-          />
-        </GroupedSection>
-      )}
-
-      {/* Only on the tabs that hold editable fields. On Stats and Settings it was a primary
-          action that saved nothing the user had touched. */}
-      {(tab === 'PROFILE' || tab === 'WORK') && (
-        <Button
-          label={savingProfile ? 'Saving…' : 'Save changes'}
-          icon="save-outline"
-          onPress={onSaveProfile}
-          loading={savingProfile}
-          size="lg"
-          full
+        <GroupedRow
+          icon="home-outline" tone="accent" label="Address"
+          hint={[profile.city, profile.state].filter(Boolean).join(', ') || 'Where you are based'}
+          onPress={() => stackNav.push('address')} chevron
         />
-      )}
+        <GroupedRow
+          icon="medkit-outline" tone="danger" label="Emergency contact"
+          hint={profile.emergencyName ? `${profile.emergencyName}${profile.emergencyPhone ? ` · ${profile.emergencyPhone}` : ''}` : 'Who to call if something happens on site'}
+          onPress={() => stackNav.push('emergency')} chevron
+        />
+      </GroupedSection>
+
+      <GroupedSection title="Work">
+        {/* Self-service time off opens straight into the calendar overlay — there's nothing
+            else to show behind this row, so it stays a direct action rather than a push. */}
+        <GroupedRow
+          icon="calendar-outline" tone="primary" label="Availability"
+          hint="Mark days you're unavailable — you won't be offered audits then."
+          onPress={onOpenAvailability} accessibilityLabel="Set your time off" chevron
+        />
+        <GroupedRow
+          icon="ribbon-outline" tone="accent" label="Capability"
+          hint={`${profile.skills ? profile.skills.split(',').filter((s) => s.trim()).length : 0} skills · ${profile.languages ? profile.languages.split(',').filter((s) => s.trim()).length : 0} languages`}
+          onPress={() => stackNav.push('capability')} chevron
+        />
+        <GroupedRow
+          icon="speedometer-outline" tone="info" label="Capacity"
+          hint="How much work you can take"
+          onPress={() => stackNav.push('capacity')} chevron
+        />
+        <GroupedRow
+          icon="card-outline" tone="success" label="Payment details"
+          hint="Bank account and PAN"
+          onPress={() => stackNav.push('payment')} chevron
+        />
+      </GroupedSection>
+
+      {/* Saves whatever was touched in the two sections above. Kept unconditional (rather than
+          gated to a tab) now that there's no tab to gate it to — it's cheap to show and an
+          assayer who has nothing pending simply never needs to tap it. */}
+      <Button
+        label={savingProfile ? 'Saving…' : 'Save changes'}
+        icon="save-outline"
+        onPress={onSaveProfile}
+        loading={savingProfile}
+        size="lg"
+        full
+      />
+
+      {/* Performance used to be an entire alternate screen (StatsScreen) swapped in by the STATS
+          tab — the only tab that wasn't a list of rows at all, which is exactly the inconsistency
+          being fixed here. It's now one row like everything else, with a live completion-rate
+          hint so the number that matters most doesn't require a tap to see, and StatsScreen's
+          full breakdown (unchanged) lives behind it as a pushed sub-screen. */}
+      <GroupedSection title="Performance">
+        <GroupedRow
+          icon="stats-chart-outline" tone="primary" label="Performance"
+          hint={
+            Number(profile.totalAssignments) > 0
+              ? `${Math.round((Number(profile.completedAssignments) / Number(profile.totalAssignments)) * 100)}% completion rate`
+              : 'Your assignment history and ratings'
+          }
+          onPress={() => stackNav.push('stats')} chevron
+        />
+      </GroupedSection>
+
+      <GroupedSection title="App">
+        <GroupedRow
+          icon="color-palette-outline" tone="primary" label="Appearance"
+          hint={THEME_OPTIONS.find((o) => o.key === t.preference)?.label ?? 'Theme'}
+          onPress={() => stackNav.push('appearance')} chevron
+        />
+        <GroupedRow
+          icon="notifications-outline" tone="accent" label="Notifications"
+          hint={pushBusy ? 'Updating this device with the server…' : pushEnabled ? 'Push notifications on' : 'Push notifications off'}
+          onPress={() => stackNav.push('notifications')} chevron
+        />
+        <GroupedRow
+          icon="navigate-outline" tone="info" label="Location & Recommendations"
+          hint={liveTrackingEnabled ? 'Live location sharing on' : 'Live location sharing off'}
+          onPress={() => stackNav.push('location')} chevron
+        />
+        <GroupedRow
+          icon="server-outline" tone="neutral" label="Connection"
+          hint={serverHost}
+          onPress={() => stackNav.push('connection')} chevron
+        />
+      </GroupedSection>
+
+      <GroupedSection title="Account">
+        <GroupedRow
+          icon="finger-print-outline" tone="success" label="Security & Biometrics"
+          hint={biometrics ? 'Biometric lock on' : 'Password and biometric lock'}
+          onPress={() => stackNav.push('security')} chevron
+        />
+        <GroupedRow
+          icon="ribbon-outline" tone="primary" label="Accreditation & License"
+          hint={profile.licenseNo ? `License No: ${profile.licenseNo}` : 'No licence number on file'}
+          onPress={() => stackNav.push('accreditation')} chevron
+        />
+      </GroupedSection>
 
       {/* Help & Feedback: the assayer's two-way channel to the product team — report a
           bug, ask for something, or ask a question, and follow the replies in thread. */}
@@ -729,6 +709,16 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             <FieldInput label="IFSC" value={profile.ifscCode} onChange={() => {}} lockedReason="Changed by HR alongside your bank account." />
           </Card>
         </View>
+      </SubScreen>
+
+      <SubScreen active={stackNav.current === 'stats'} title="Performance" onBack={stackNav.pop}>
+        <StatsScreen
+          totalAssignments={profile.totalAssignments}
+          completedAssignments={profile.completedAssignments}
+          averageRating={profile.averageRating}
+          openQueries={openQueries ?? 0}
+          resolvedQueries={resolvedQueries ?? 0}
+        />
       </SubScreen>
 
       <SubScreen active={stackNav.current === 'appearance'} title="Appearance" onBack={stackNav.pop}>
