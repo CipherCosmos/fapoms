@@ -8,6 +8,7 @@ import { AssayerEntity, AssayerWithWorkforceAttributes } from '../assayer/assaye
 import { BranchEntity } from '../branch/branch.entity';
 import { ProjectEntity } from '../project/project.entity';
 import { AssignmentStatus, businessDateKey, BypassableRule } from '@fapoms/shared';
+import { COMMITTED_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
 import { RuleBypassService } from '../platform/rule-bypass/rule-bypass.service';
 
 export interface ConstraintContext {
@@ -123,7 +124,12 @@ export class ConstraintEvaluator {
         // `scheduledDate` is a `date` column — match on the date-only key, not a Date-with-time,
         // which never equals a midnight `date` value in Postgres and silenced this guard.
         scheduledDate: businessDateKey(scheduledDate) as any,
-        status: In([AssignmentStatus.ACCEPTED]),
+        // Every status that means the assayer's day is already committed — not just ACCEPTED.
+        // Checking in moves an assignment to CHECKED_IN, which made the person invisible to
+        // this guard: they could be booked a second branch for the same date while standing in
+        // the first one. `COMMITTED_ASSIGNMENT_STATUSES` is the shared answer to "is this day
+        // spoken for", and exists precisely so the two callers of this question agree.
+        status: In(COMMITTED_ASSIGNMENT_STATUSES),
         isActive: true,
       },
     });

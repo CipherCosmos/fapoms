@@ -105,6 +105,40 @@ describe('ConstraintEvaluator', () => {
     });
   });
 
+  describe('checkDoubleBooking', () => {
+    /**
+     * The guard used to look only for ACCEPTED assignments. Checking in moves an assignment to
+     * CHECKED_IN, so the moment an assayer arrived at their first branch they became invisible
+     * to it and could be booked a second branch for the same day — while standing in the first.
+     */
+    it('counts every status that means the day is already committed, not just ACCEPTED', async () => {
+      await evaluator.checkDoubleBooking('assayer-1', AUDIT_DATE);
+
+      const where = mockAssignmentRepo.findOne.mock.calls[0][0].where;
+      // `In([...])` keeps the values it was given on `_value`.
+      const statuses = (where.status as any)._value as string[];
+      expect(statuses).toEqual(expect.arrayContaining(['ACCEPTED', 'CHECKED_IN', 'IN_PROGRESS']));
+    });
+
+    it('refuses a second booking for an assayer already checked in that day', async () => {
+      mockAssignmentRepo.findOne.mockResolvedValue({
+        id: 'asn-existing',
+        assignmentNumber: 'ASN-001',
+        status: 'CHECKED_IN',
+      });
+
+      const result = await evaluator.checkDoubleBooking('assayer-1', AUDIT_DATE);
+      expect(result.passed).toBe(false);
+    });
+
+    it('does not treat the assignment being moved as a conflict with itself', async () => {
+      mockAssignmentRepo.findOne.mockResolvedValue({ id: 'asn-1', assignmentNumber: 'ASN-001', status: 'ACCEPTED' });
+
+      const result = await evaluator.checkDoubleBooking('assayer-1', AUDIT_DATE, 'asn-1');
+      expect(result.passed).toBe(true);
+    });
+  });
+
   describe('checkDistancePolicy', () => {
     const preferences = { minDistanceKm: 5, maxDistanceKm: 150 };
 

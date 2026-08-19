@@ -798,10 +798,39 @@ export class DayPlannerService {
      */
     preloaded?: Parameters<RecommendationEngine['recommend']>[3],
   ): Promise<{ dayPlans: DayPlanCandidate[]; excludedAssayers: ExcludedDayPlanCandidate[] }> {
-    const planningPreferences = client?.planningPreferences || {};
-    const requiredSkills: string[] = planningPreferences.requiredSkills || [];
-    const requiredCerts: string[] = planningPreferences.requiredCertifications || [];
-    const maxDistKm = relaxDistance ? Infinity : (Number(planningPreferences.maxDistanceKm) || Infinity);
+    /**
+     * The clients that own branches in THIS cluster.
+     *
+     * Every rule below used to read `client` — the first client of the whole plan, chosen by a
+     * query with no ORDER BY. A cluster spanning two engagements therefore had the wrong bank's
+     * requirements applied to it, non-deterministically. The same reasoning as
+     * `effectiveMinDistanceKm` above: a rule has to hold for every client whose work is in the
+     * cluster, so requirements union and limits take the strictest.
+     */
+    const clusterClients = [
+      ...new Map(
+        cluster.branches
+          .map((b) => clientByProjectBranchId?.get(b.id) ?? client)
+          .filter((c): c is ClientEntity => !!c)
+          .map((c) => [c.id, c] as const),
+      ).values(),
+    ];
+    const prefsOf = (c: ClientEntity) => (c.planningPreferences || {}) as Record<string, any>;
+
+    // A candidate must satisfy every client in the cluster, so requirements union.
+    const requiredSkills: string[] = [
+      ...new Set(clusterClients.flatMap((c) => (prefsOf(c).requiredSkills || []) as string[])),
+    ];
+    const requiredCerts: string[] = [
+      ...new Set(clusterClients.flatMap((c) => (prefsOf(c).requiredCertifications || []) as string[])),
+    ];
+    // Strictest ceiling wins: exceeding any one client's limit disqualifies the whole day.
+    const maxDistKm = relaxDistance
+      ? Infinity
+      : clusterClients.reduce((strictest, c) => {
+          const limit = Number(prefsOf(c).maxDistanceKm) || Infinity;
+          return Math.min(strictest, limit);
+        }, Infinity);
 
     // One recommend() call per branch, not per (branch × assayer). This used to re-run the
     // full recommendation engine — its own DB queries, 6 eligibility filters, 15 scorers,
@@ -827,7 +856,20 @@ export class DayPlannerService {
     for (const branch of cluster.branches) {
       const branchEntity = clusterBranchMap.get(branch.branchId);
       if (!branchEntity) continue;
-      const ranked = await this.recommendationEngine.recommend(branchEntity, scheduledDate, {}, preloaded);
+      /**
+       * The branch's OWN client, not the plan's first one. `preloaded.client` becomes
+       * `PlanningContext.client`, which drives ClientRestrictionFilter (the assayers this bank
+       * has barred), ClientEligibilityFilter (its approved panel), DistancePolicyFilter and the
+       * client-preference scorer. Sharing one client across a multi-client cluster silently
+       * applied one bank's approvals — and one bank's exclusions — to another bank's branches.
+       */
+      const branchClient = clientByProjectBranchId?.get(branch.id) ?? client ?? null;
+      const ranked = await this.recommendationEngine.recommend(
+        branchEntity,
+        scheduledDate,
+        {},
+        preloaded ? { ...preloaded, client: branchClient } : undefined,
+      );
       branchRecommendations.set(branch.branchId, {
         ranked,
         excluded: ((ranked as any).excluded as ExcludedDayPlanCandidate[]) || [],
@@ -1002,11 +1044,14 @@ export class DayPlannerService {
         : null;
 
       if (distinctClients.size <= 1) {
-        // Single client — one quote covers the whole cluster, as before.
+        // Single client — one quote covers the whole cluster. That client is the cluster's own
+        // (`clusterClients[0]`), not the plan's first: a cluster made entirely of the second
+        // client's branches was being quoted against the first client's rate card.
+        const clusterClient = clusterClients[0] ?? client;
         const quote = await this.feePolicyService.quote({
           assayerId: assayer.id,
-          clientId: client?.id ?? null,
-          configuration: client?.configuration ?? undefined,
+          clientId: clusterClient?.id ?? null,
+          configuration: clusterClient?.configuration ?? undefined,
           distanceKm: totalTravelKm,
           branchCount: cluster.branches.length,
           onDate: scheduledDate,
@@ -1115,7 +1160,11 @@ export class DayPlannerService {
           skillsMatch: requiredSkills.length === 0 || requiredSkills.every((s) => assayerSkills.includes(s.toLowerCase())),
           certificationsMatch: requiredCerts.length === 0 || requiredCerts.every((c) => assayerCerts.includes(c.toLowerCase())),
           distanceWithinRange: maxBranchDist >= 0 && maxBranchDist <= maxDistKm,
-          isPreferredAssayer: client?.preferredAssayers?.includes(assayer.id) || false,
+          // Every client in the cluster, matching the other fields here — all of which ask
+          // "does this candidate satisfy the requirement", not "does anyone like them".
+          isPreferredAssayer:
+            clusterClients.length > 0 &&
+            clusterClients.every((c) => c.preferredAssayers?.includes(assayer.id)),
         },
       });
     }

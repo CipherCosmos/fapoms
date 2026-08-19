@@ -166,6 +166,17 @@ const mockNotificationService = {
   // double runs the work with a manager and routes emit() to the same publisher mock, so the
   // domain-event assertions below exercise the events the service now emits from inside its
   // transaction rather than publishing after it.
+  /**
+   * The schedule repository reached through the *transaction's* manager. Stable across calls so
+   * a test can assert what a transition did to the calendar entry — completing it, or retiring
+   * it when the job is cancelled.
+   */
+  const mockScheduleRepoInTx = {
+    findOne: jest.fn().mockResolvedValue(null),
+    save: jest.fn((arg: any) => Promise.resolve(arg)),
+    create: jest.fn((arg: any) => arg),
+  };
+
   const mockUnitOfWork = {
     run: jest.fn(async (work: any) =>
       work(
@@ -175,11 +186,15 @@ const mockNotificationService = {
           query: jest.fn(async (sql: string) =>
             /nextval\('assignment_number_seq'\)/.test(sql) ? [{ n: '42' }] : [],
           ),
-          getRepository: jest.fn().mockReturnValue({
-            findOne: jest.fn(),
-            save: jest.fn((arg: any) => Promise.resolve(arg)),
-            create: jest.fn((arg: any) => arg),
-          }),
+          getRepository: jest.fn((target: any) =>
+            target === ScheduleEntity
+              ? mockScheduleRepoInTx
+              : {
+                  findOne: jest.fn(),
+                  save: jest.fn((arg: any) => Promise.resolve(arg)),
+                  create: jest.fn((arg: any) => arg),
+                },
+          ),
         },
         (event: string, payload: any) =>
           mockDomainEventPublisher.publish(event, { ...payload, timestamp: new Date() }),
@@ -493,6 +508,57 @@ const mockNotificationService = {
       const result = await service.rejectOffer('asn-1', 'user-1', 'Too far');
       expect(result.status).toBe(AssignmentStatus.REJECTED);
       expect(result.rejectReason).toBe('Too far');
+    });
+  });
+
+  /**
+   * A cancelled or rejected job must leave the calendar with it.
+   *
+   * Only completion used to touch the schedule row, so a cancelled visit stayed CONFIRMED on
+   * the calendar — and because "not yet scheduled" is `NOT EXISTS (… is_active = true)`, the
+   * branch also vanished from the list someone would use to re-book it.
+   */
+  describe('the calendar entry follows the assignment', () => {
+    const withSchedule = (status: AssignmentStatus, branchStatus: ProjectBranchStatus) => {
+      const assignment = { id: 'asn-1', status, projectBranch: { id: 'pb-1', status: branchStatus } };
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+      mockScheduleRepoInTx.findOne.mockResolvedValue({
+        id: 'sched-1', assignmentId: 'asn-1', status: 'CONFIRMED', isActive: true,
+      });
+    };
+
+    it('retires the calendar entry when the job is cancelled', async () => {
+      withSchedule(AssignmentStatus.ACCEPTED, ProjectBranchStatus.ASSIGNMENT_CONFIRMED);
+
+      await service.cancelAssignment('asn-1', 'user-1', 'Client postponed');
+
+      expect(mockScheduleRepoInTx.save).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'sched-1', isActive: false }),
+      );
+    });
+
+    it('retires it when the offer is rejected', async () => {
+      withSchedule(AssignmentStatus.PENDING, ProjectBranchStatus.NEGOTIATION);
+
+      await service.rejectOffer('asn-1', 'user-1', 'Too far');
+
+      expect(mockScheduleRepoInTx.save).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'sched-1', isActive: false }),
+      );
+    });
+
+    it('leaves the calendar alone when there is no entry to retire', async () => {
+      mockAssignmentRepo.findOne.mockResolvedValue({
+        id: 'asn-1', status: AssignmentStatus.ACCEPTED,
+        projectBranch: { id: 'pb-1', status: ProjectBranchStatus.ASSIGNMENT_CONFIRMED },
+      });
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+      mockScheduleRepoInTx.findOne.mockResolvedValue(null);
+
+      await service.cancelAssignment('asn-1', 'user-1', 'Admin override');
+
+      expect(mockScheduleRepoInTx.save).not.toHaveBeenCalled();
     });
   });
 

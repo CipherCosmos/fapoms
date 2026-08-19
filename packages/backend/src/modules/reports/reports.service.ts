@@ -1,7 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { ProjectBranchStatus } from '@fapoms/shared';
+import { ProjectBranchStatus, BRANCH_DONE_STATUSES } from '@fapoms/shared';
 import { AssignmentService } from '../assignment/assignment.service';
 import { BillingEngineService } from '../billing-engine/billing-engine.service';
 import { CommandCenterService } from '../planning/command-center.service';
@@ -62,14 +62,18 @@ export class ReportsService {
   async coverage(projectId: string): Promise<Buffer> {
     const branches = await this.projectQueryService.findProjectBranches(projectId);
 
-    const classify = (status: string | undefined): 'SCHEDULED' | 'CONFIRMED' | 'REMAINING' => {
-      if (
-        status === ProjectBranchStatus.SCHEDULED ||
-        status === ProjectBranchStatus.CLOSED ||
-        status === ProjectBranchStatus.VALIDATION_COMPLETED
-      ) {
-        return 'SCHEDULED';
-      }
+    /**
+     * Coverage as the client reads it, from the shared status sets rather than a hand-written
+     * list.
+     *
+     * `AUDIT_COMPLETED` was missing here, and it is the status a branch holds between the audit
+     * being done and validation finishing — so delivered work was exported to the client as
+     * REMAINING, i.e. as if we had not been. Reading `BRANCH_DONE_STATUSES` means the next
+     * status added to that set cannot silently fall through to "not started" again.
+     */
+    const classify = (status: string | undefined): 'COMPLETED' | 'SCHEDULED' | 'CONFIRMED' | 'REMAINING' => {
+      if (BRANCH_DONE_STATUSES.includes(status as ProjectBranchStatus)) return 'COMPLETED';
+      if (status === ProjectBranchStatus.SCHEDULED) return 'SCHEDULED';
       if (status === ProjectBranchStatus.ASSIGNMENT_CONFIRMED) return 'CONFIRMED';
       return 'REMAINING';
     };
@@ -90,17 +94,21 @@ export class ReportsService {
       ];
     });
 
+    const completed = rows.filter((r) => r[5] === 'COMPLETED').length;
     const scheduled = rows.filter((r) => r[5] === 'SCHEDULED').length;
     const confirmed = rows.filter((r) => r[5] === 'CONFIRMED').length;
     const remaining = rows.filter((r) => r[5] === 'REMAINING').length;
     const total = rows.length;
-    const coveragePercentage = total > 0 ? parseFloat((((scheduled + confirmed) / total) * 100).toFixed(1)) : 0;
+    // Delivered work counts as covered. It previously fell into REMAINING, which both
+    // understated the client's coverage and overstated what was still outstanding.
+    const coveragePercentage =
+      total > 0 ? parseFloat((((completed + scheduled + confirmed) / total) * 100).toFixed(1)) : 0;
 
     return buildWorkbook([
       {
         name: 'Summary',
-        headers: ['Total Branches', 'Scheduled', 'Confirmed', 'Remaining', 'Coverage %'],
-        rows: [[total, scheduled, confirmed, remaining, coveragePercentage]],
+        headers: ['Total Branches', 'Completed', 'Scheduled', 'Confirmed', 'Remaining', 'Coverage %'],
+        rows: [[total, completed, scheduled, confirmed, remaining, coveragePercentage]],
       },
       {
         name: 'Branch Coverage',

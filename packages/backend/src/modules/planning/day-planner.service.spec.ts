@@ -42,7 +42,7 @@ describe('DayPlannerService', () => {
   const mockConstraintEvaluator = { checkHoliday: jest.fn() };
   const mockProjectBranchRepo = { find: jest.fn() };
 
-  const build = async (overrides: { projectRepo?: any; clientRepo?: any } = {}) => {
+  const build = async (overrides: { projectRepo?: any; clientRepo?: any; recommendationEngine?: any; branchRepo?: any } = {}) => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         DayPlannerService,
@@ -72,7 +72,10 @@ describe('DayPlannerService', () => {
             find: jest.fn().mockResolvedValue([PROJECT]),
           },
         },
-        { provide: getRepositoryToken(BranchEntity), useValue: { findOne: jest.fn().mockResolvedValue(null), find: jest.fn().mockResolvedValue([]) } },
+        {
+          provide: getRepositoryToken(BranchEntity),
+          useValue: overrides.branchRepo ?? { findOne: jest.fn().mockResolvedValue(null), find: jest.fn().mockResolvedValue([]) },
+        },
         // No assayers: these tests assert clustering/date logic, which runs before candidate
         // scoring and is unaffected by it.
         { provide: getRepositoryToken(AssayerEntity), useValue: { find: jest.fn().mockResolvedValue([]) } },
@@ -95,7 +98,10 @@ describe('DayPlannerService', () => {
         },
         { provide: getRepositoryToken(AssayerCommercialProfileEntity), useValue: { findOne: jest.fn() } },
         { provide: RoutingService, useValue: { optimizeRoute: jest.fn() } },
-        { provide: RecommendationEngine, useValue: { recommend: jest.fn().mockResolvedValue([]) } },
+        {
+          provide: RecommendationEngine,
+          useValue: overrides.recommendationEngine ?? { recommend: jest.fn().mockResolvedValue([]) },
+        },
         { provide: ConstraintEvaluator, useValue: mockConstraintEvaluator },
         { provide: AssayerService, useValue: { hydrateAllWorkforceAttributes: jest.fn() } },
       ],
@@ -258,6 +264,29 @@ describe('DayPlannerService', () => {
     const CLIENT_1 = { id: 'client-1', planningPreferences: { minutesPerPacket: 15, minDistanceKm: 5 } };
     const CLIENT_2 = { id: 'client-2', planningPreferences: { minutesPerPacket: 20, minDistanceKm: 25 } };
 
+    const buildCrossClient2 = (engine?: { recommend: jest.Mock }) => build({
+      recommendationEngine: engine,
+      // The engine loop resolves each cluster branch to its BranchEntity; without this it finds
+      // nothing and never consults the engine at all.
+      branchRepo: {
+        findOne: jest.fn().mockResolvedValue(null),
+        find: jest.fn().mockResolvedValue([branchA, branchB, branchC]),
+      },
+      projectRepo: {
+        findOne: jest.fn().mockResolvedValue(PROJECT),
+        find: jest.fn().mockResolvedValue([PROJECT, PROJECT_2]),
+      },
+      clientRepo: {
+        findOne: jest.fn().mockResolvedValue(CLIENT_1),
+        find: jest.fn().mockResolvedValue([CLIENT_1, CLIENT_2]),
+        createQueryBuilder: jest.fn(() => ({
+          leftJoinAndSelect: jest.fn().mockReturnThis(),
+          where: jest.fn().mockReturnThis(),
+          getMany: jest.fn().mockResolvedValue([CLIENT_1, CLIENT_2]),
+        })),
+      },
+    });
+
     const buildCrossClient = () => build({
       projectRepo: {
         findOne: jest.fn().mockResolvedValue(PROJECT),
@@ -309,6 +338,34 @@ describe('DayPlannerService', () => {
       // client-2's 25km floor governs the whole plan; client-1's 5km must not relax it for a
       // shared day, or an assayer excluded by one bank gets in through the other's branch.
       expect(plan.effectiveMinDistanceKm).toBe(25);
+    });
+
+    /**
+     * Eligibility is decided per branch by the recommendation engine, and the engine is told
+     * which client it is deciding for. That client used to be `clients[0]` — the first client of
+     * the whole plan, chosen by a query with no ORDER BY — so adding a second bank to a day plan
+     * applied the first bank's approved panel, its barred assayers and its distance policy to
+     * the second bank's branches, non-deterministically.
+     */
+    it('tells the engine which client each branch actually belongs to', async () => {
+      const recommend = jest.fn().mockResolvedValue([]);
+      const svc = await buildCrossClient2({ recommend });
+      // Packet counts high enough to form a real cluster — an under-filled day exits before
+      // the engine is ever consulted, which is what made an earlier version of this test vacuous.
+      mockProjectBranchRepo.find.mockResolvedValue([
+        { ...projectBranch(branchA, 12), projectId: PROJECT.id },
+        { ...projectBranch(branchC, 8), projectId: PROJECT_2.id },
+      ]);
+
+      await svc.generateDayPlans([PROJECT.id, PROJECT_2.id], '2026-08-20');
+
+      const clientForBranch = new Map(
+        recommend.mock.calls.map((call) => [call[0].id as string, call[3]?.client?.id as string | undefined]),
+      );
+      // The engine must actually have been consulted, or this proves nothing.
+      expect(clientForBranch.size).toBeGreaterThan(0);
+      expect(clientForBranch.get(branchA.id)).toBe(CLIENT_1.id);
+      expect(clientForBranch.get(branchC.id)).toBe(CLIENT_2.id);
     });
 
     it("lets the operator's manual filter tighten, but never loosen, the client floors", async () => {

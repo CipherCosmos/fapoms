@@ -229,6 +229,36 @@ export class AssignmentService {
     );
   }
 
+  /**
+   * Retire the calendar entry for an assignment that is no longer happening.
+   *
+   * Only completion used to touch the schedule, so cancelling or rejecting a job left its visit
+   * on the calendar as CONFIRMED. That was wrong twice over: whoever reads the calendar still
+   * sees the branch booked, and — because `unscheduledOnly` asks `NOT EXISTS (… is_active =
+   * true)` — the branch drops out of the "ready to book" list, so the work becomes invisible in
+   * the one place someone would go to re-book it.
+   *
+   * Soft-deleted rather than moved to a CANCELLED status: `ScheduleStatus` has no such member,
+   * and adding one would need a database enum migration to record a state nobody browses. A
+   * cancelled visit is not a visit in a different state — it is a visit that is not happening.
+   * The audit trail of why lives on the assignment's own transition event.
+   */
+  private async retireSchedule(
+    assignment: AssignmentEntity,
+    userId: string,
+    manager: EntityManager,
+  ): Promise<void> {
+    const scheduleRepo = manager.getRepository(ScheduleEntity);
+    const existing = await scheduleRepo.findOne({
+      where: { assignmentId: assignment.id, isActive: true },
+    });
+    if (!existing) return;
+
+    existing.isActive = false;
+    existing.updatedBy = userId;
+    await scheduleRepo.save(existing);
+  }
+
   private async syncAssessmentStatus(assignment: AssignmentEntity): Promise<void> {
     if (assignment.assessment && assignment.projectBranch) {
       const mapped = ASSESSMENT_STATUS_MAP[assignment.projectBranch.status];
@@ -901,6 +931,13 @@ export class AssignmentService {
         // Inside the transaction: either both the assignment and its schedule reach
         // COMPLETED, or neither does.
         await this.syncScheduleCompletion(savedAssign, userId, manager);
+      } else if (
+        targetStatus === AssignmentStatus.CANCELLED ||
+        targetStatus === AssignmentStatus.REJECTED
+      ) {
+        // Same transaction, same reason: the branch goes back to needing an assayer above, so
+        // its calendar entry must go with it or the two disagree.
+        await this.retireSchedule(savedAssign, userId, manager);
       }
 
       await this.auditService.recordEventSafe({

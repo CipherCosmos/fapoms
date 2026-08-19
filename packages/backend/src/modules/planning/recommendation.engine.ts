@@ -1986,7 +1986,9 @@ export class RecommendationEngine {
               // silently emptied this set and defeated the double-booking guard. Match on the
               // date-only business key so it actually fires.
               scheduledDate: businessDateKey(scheduledDate) as any,
-              status: In([AssignmentStatus.ACCEPTED]),
+              // Same set as ConstraintEvaluator.checkDoubleBooking — a day is committed from
+              // acceptance through completion, so a checked-in assayer is not offered again.
+              status: In(COMMITTED_ASSIGNMENT_STATUSES),
               isActive: true,
             },
             select: ['assayerId', 'assignmentNumber'] as any,
