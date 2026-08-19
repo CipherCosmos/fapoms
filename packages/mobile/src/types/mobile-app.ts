@@ -107,8 +107,14 @@ export interface AssayerAssignment {
   branchCode: string;
   bankName: string;
   branchAddress: string;
-  latitude: number;
-  longitude: number;
+  /**
+   * The branch's coordinates, or `null` when the branch has none on record. Never 0: a missing
+   * coordinate used to be mapped to `0`, which is a real place — Null Island, in the Gulf of
+   * Guinea — and "Navigate" happily routed there. Every reader must handle `null`; a distance or
+   * a route to an unknown place is worse than none.
+   */
+  latitude: number | null;
+  longitude: number | null;
   scheduledDate: string;
   sequenceOrder: number;
   estimatedCustomerCount: number;

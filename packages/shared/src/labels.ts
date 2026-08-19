@@ -301,7 +301,26 @@ export function formatDateOnly(
   options: Intl.DateTimeFormatOptions = { day: '2-digit', month: 'short', year: 'numeric' },
   locale = 'en-IN',
 ): string {
-  if (value == null || value === '') return '';
+  const d = parseCalendarDate(value);
+  if (!d) return '';
+  return d.toLocaleDateString(locale, options);
+}
+
+/**
+ * Turn a date-ish value into a local `Date`, treating a bare `YYYY-MM-DD` as *local* midnight.
+ *
+ * This is the one place that knows the difference between a calendar date and an instant.
+ * `new Date('2026-08-18')` is UTC midnight, which is the evening of the 17th anywhere west of
+ * Greenwich — and the mobile schedule computed "days until" and grouped stops by day with exactly
+ * that expression. It happened to be right in IST (+05:30 keeps the calendar day) and would have
+ * put every stop a day early the moment a device left the country. `formatDateOnly` had the
+ * correct handling inline; it is extracted so the other date-only readers can share it instead
+ * of each carrying its own `new Date(iso)`.
+ *
+ * Returns `null` for empty or unparseable input, so callers decide what an absent date means.
+ */
+export function parseCalendarDate(value?: string | number | Date | null): Date | null {
+  if (value == null || value === '') return null;
   let d: Date;
   if (typeof value === 'string') {
     const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
@@ -309,8 +328,7 @@ export function formatDateOnly(
   } else {
     d = new Date(value);
   }
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleDateString(locale, options);
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
 /**

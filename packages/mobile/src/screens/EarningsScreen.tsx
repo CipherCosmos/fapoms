@@ -12,7 +12,6 @@ import {
 
 interface EarningsScreenProps {
   totalEarnings: number;
-  pendingEarnings: number;
   runningBalance?: number;
   earningsPaid?: number;
   earningsAwaitingApproval?: number;
@@ -111,7 +110,6 @@ const MoneyChip: React.FC<{ icon: string; label: string; value: string; iconColo
  */
 export const EarningsScreen: React.FC<EarningsScreenProps> = ({
   totalEarnings,
-  pendingEarnings,
   runningBalance,
   earningsPaid,
   earningsAwaitingApproval,
@@ -134,7 +132,7 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
    * that agrees with what finance sees. Falling back rather than blanking keeps the screen
    * useful when the statement request fails.
    */
-  const owed = statement?.totals.outstanding ?? runningBalance ?? pendingEarnings ?? 0;
+  const owed = statement?.totals.outstanding ?? runningBalance ?? 0;
   const paid = statement?.totals.paid ?? earningsPaid ?? 0;
   const awaiting = statement?.totals.awaitingApproval ?? earningsAwaitingApproval ?? 0;
   const lifetime = statement?.totals.earned ?? totalEarnings;

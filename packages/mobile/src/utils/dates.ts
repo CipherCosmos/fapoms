@@ -1,4 +1,4 @@
-import { formatDateOnly } from '@fapoms/shared';
+import { formatDateOnly, parseCalendarDate } from '@fapoms/shared';
 
 export type DayTone = 'neutral' | 'primary' | 'accent' | 'success' | 'warning' | 'danger' | 'info';
 
@@ -11,9 +11,15 @@ export interface RelativeDay {
   diffDays: number;
 }
 
-/** Calendar-day difference, ignoring the time-of-day component entirely. */
+/**
+ * Calendar-day difference, ignoring the time-of-day component entirely.
+ *
+ * `parseCalendarDate`, not `new Date(iso)`: a scheduled date arrives as a bare `YYYY-MM-DD`,
+ * which `new Date` reads as UTC midnight — the previous evening anywhere west of Greenwich. It
+ * was only right here because IST is ahead of UTC. See the shared helper.
+ */
 export function calendarDayDiff(iso: string, from: Date = new Date()): number {
-  const d = new Date(iso);
+  const d = parseCalendarDate(iso) ?? new Date(iso);
   const a = new Date(d.getFullYear(), d.getMonth(), d.getDate());
   const b = new Date(from.getFullYear(), from.getMonth(), from.getDate());
   return Math.round((a.getTime() - b.getTime()) / 86_400_000);
@@ -58,6 +64,6 @@ export function dayGroupHeader(iso: string | null | undefined): string {
 /** Stable yyyy-mm-dd key for grouping stops into calendar days. */
 export function dayKey(iso: string | null | undefined): string {
   if (!iso) return 'unscheduled';
-  const d = new Date(iso);
+  const d = parseCalendarDate(iso) ?? new Date(iso);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }

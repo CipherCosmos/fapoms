@@ -4,7 +4,7 @@ import * as Location from 'expo-location';
 import Constants from 'expo-constants';
 import { useTheme } from '../theme/ThemeProvider';
 import { useLocation } from '../context/LocationContext';
-import { AppText, Badge, Button, Icon, IconButton, Tappable } from './ui/primitives';
+import { AppText, Badge, Button, EmptyState, Icon, IconButton, Tappable } from './ui/primitives';
 import { AssayerAssignment } from '../types/mobile-app';
 import { InteractiveMap } from './MapEntry';
 import { calculateHaversineDistance } from '@fapoms/shared';
@@ -257,7 +257,9 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
 
   const destination: LatLng | null = useMemo(
     () =>
-      assignment
+      // Both coordinates, or nothing. The mapper hands over `null` for a branch with no pin;
+      // everything below already copes with a null destination (no route, no ETA, a message).
+      assignment && assignment.latitude != null && assignment.longitude != null
         ? { latitude: assignment.latitude, longitude: assignment.longitude }
         : null,
     [assignment],
@@ -732,7 +734,13 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
                 {(['driving', 'transit'] as RouteMode[]).map((m) => {
                   const active = mode === m;
                   return (
-                    <Tappable key={m} onPress={() => setMode(m)}>
+                    <Tappable
+                      key={m}
+                      onPress={() => setMode(m)}
+                      accessibilityRole="tab"
+                      accessibilityLabel={m === 'driving' ? 'Drive' : 'Transit'}
+                      accessibilityState={{ selected: active }}
+                    >
                       <View style={{
                         flexDirection: 'row', alignItems: 'center', gap: 6,
                         paddingHorizontal: t.space.lg, paddingVertical: t.space.sm,
@@ -867,7 +875,15 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
                   {(['driving', 'transit'] as RouteMode[]).map((m) => {
                     const active = mode === m;
                     return (
-                      <Tappable key={m} onPress={() => setMode(m)}>
+                      <Tappable
+                        key={m}
+                        onPress={() => setMode(m)}
+                        // A hand-rolled segmented control. Without a role and selected state a
+                        // screen reader reads two unrelated buttons and never says which is on.
+                        accessibilityRole="tab"
+                        accessibilityLabel={m === 'driving' ? 'Drive' : 'Transit'}
+                        accessibilityState={{ selected: active }}
+                      >
                         <View style={{
                           flexDirection: 'row',
                           alignItems: 'center',
@@ -964,6 +980,18 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
                 </>
               )}
             </View>
+          </View>
+        )}
+
+        {/* No pin on record: say so, rather than a blank body or — before the mapper stopped
+            inventing 0,0 — a confident route to Null Island. */}
+        {!destination && (
+          <View style={{ flex: 1, justifyContent: 'center' }}>
+            <EmptyState
+              icon="location-outline"
+              title="This branch has no map location yet"
+              body="Operations has not pinned it. Use the address on the assignment for now — nothing here would be accurate."
+            />
           </View>
         )}
         </View>

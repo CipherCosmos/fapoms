@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { View, ScrollView, TextInput, Image, Linking, Platform, ActivityIndicator } from 'react-native';
 import { MobileApiService } from '../services/api.service';
 import { useTheme } from '../theme/ThemeProvider';
-import { AppText, Badge, Card, Icon, IconButton, Tappable } from './ui/primitives';
+import { AppText, Badge, Button, Card, Icon, IconButton, Tappable } from './ui/primitives';
 import { useFeedback } from './ui/Feedback';
 import type { QueryMessage, ValidationQuery } from '../types/mobile-app';
 
@@ -52,6 +52,9 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
 
   const [messages, setMessages] = useState<QueryMessage[]>([]);
   const [loading, setLoading] = useState(true);
+  // Distinct from "no messages": the fetch itself failed. See `getQueryMessages` for why the two
+  // must not share a value — this used to render as an invitation to reply.
+  const [loadFailed, setLoadFailed] = useState(false);
   const [draft, setDraft] = useState('');
   const [pending, setPending] = useState<{ url: string; fileName: string; fileType: string }[]>([]);
   const [sending, setSending] = useState(false);
@@ -83,6 +86,14 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
     const seq = ++loadSeqRef.current;
     const list = await MobileApiService.getQueryMessages(query.id);
     if (seq !== loadSeqRef.current) return;
+    if (list === null) {
+      // Keep whatever was already on screen rather than blanking it, and say plainly that this
+      // is a load failure with a way to try again — not an empty thread.
+      setLoadFailed(true);
+      setLoading(false);
+      return;
+    }
+    setLoadFailed(false);
     setMessages(list);
     setLoading(false);
 
@@ -195,6 +206,13 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
           <View style={{ paddingVertical: t.space['3xl'], alignItems: 'center' }}>
             <ActivityIndicator color={t.colors.primary} />
           </View>
+        ) : loadFailed && grouped.length === 0 ? (
+          <View style={{ paddingVertical: t.space['2xl'], alignItems: 'center', gap: t.space.md }}>
+            <AppText variant="small" tone="muted" style={{ textAlign: 'center' }}>
+              Couldn't load this thread. The desk may have replied — check your connection and try again.
+            </AppText>
+            <Button label="Retry" icon="refresh" variant="neutral" onPress={() => { setLoading(true); void load(); }} />
+          </View>
         ) : grouped.length === 0 ? (
           <View style={{ paddingVertical: t.space['2xl'], alignItems: 'center' }}>
             <AppText variant="small" tone="faint">
@@ -202,7 +220,18 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
             </AppText>
           </View>
         ) : (
-          grouped.map((g) => (
+          <>
+          {loadFailed && (
+            // Older messages are still shown, but the latest refresh failed — say so, or the
+            // assayer reads a stale thread as current.
+            <Tappable onPress={() => { setLoading(true); void load(); }} accessibilityRole="button" accessibilityLabel="Retry loading the thread">
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm, alignSelf: 'center', paddingVertical: t.space.xs, paddingHorizontal: t.space.md, borderRadius: t.radius.pill, backgroundColor: t.colors.surfaceAlt, borderWidth: 1, borderColor: t.colors.border }}>
+                <Icon name="cloud-offline-outline" size={14} color={t.colors.warning} />
+                <AppText variant="caption" tone="muted">Showing an older copy — tap to refresh</AppText>
+              </View>
+            </Tappable>
+          )}
+          {grouped.map((g) => (
             <View key={g.day} style={{ gap: t.space.md }}>
               <View style={{ alignItems: 'center' }}>
                 <AppText variant="caption" tone="faint">
@@ -213,7 +242,8 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
                 <Bubble key={m.id} message={m} signed={signed} onOpenAttachment={open} />
               ))}
             </View>
-          ))
+          ))}
+          </>
         )}
       </ScrollView>
 
@@ -266,8 +296,8 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
           )}
 
           <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: t.space.sm }}>
-            <IconButton icon="attach" onPress={attach} />
-            <IconButton icon="scan" onPress={onScan} />
+            <IconButton icon="attach" onPress={attach} accessibilityLabel="Attach a file" />
+            <IconButton icon="scan" onPress={onScan} accessibilityLabel="Scan a document" />
             <TextInput
               value={draft}
               onChangeText={setDraft}
@@ -289,7 +319,7 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
                 fontSize: 15,
               }}
             />
-            <Tappable onPress={send} disabled={sending || (!draft.trim() && pending.length === 0)}>
+            <Tappable onPress={send} disabled={sending || (!draft.trim() && pending.length === 0)} accessibilityRole="button" accessibilityLabel={sending ? "Sending" : "Send reply"}>
               <View
                 style={{
                   width: 42,

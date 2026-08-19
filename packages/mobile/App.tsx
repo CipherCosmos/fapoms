@@ -16,7 +16,8 @@ import { countOpenQueries, countResolvedQueries } from './src/utils/queries';
 import { parseRupeeInput, formatRupees } from '@fapoms/shared';
 
 // Context Providers
-import { ThemeProvider, useTheme } from './src/theme/ThemeProvider';
+import { ThemeProvider, ThemeContext, useTheme } from './src/theme/ThemeProvider';
+import { palettes } from './src/theme/tokens';
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { LocationProvider, useLocation } from './src/context/LocationContext';
 import { AssignmentProvider, useAssignments } from './src/context/AssignmentContext';
@@ -598,9 +599,17 @@ function AppMain() {
     .filter((a) => a.status === 'COMPLETED')
     .reduce((sum, a) => sum + getAssignmentTotalFee(a), 0);
 
-  const pendingEarnings = assignments
-    .filter((a) => a.status !== 'COMPLETED' && a.status !== 'REJECTED')
-    .reduce((sum, a) => sum + getAssignmentTotalFee(a), 0);
+  /**
+   * There is deliberately no `pendingEarnings` computed here any more.
+   *
+   * It summed the fee of every assignment that was neither COMPLETED nor REJECTED — which
+   * counted CANCELLED jobs and PENDING offers the assayer had not even accepted as money owed to
+   * them. It was also unreachable: EarningsScreen took it as the *last* fallback behind
+   * `runningBalance`, and `runningBalance` was always passed as a number (`Number(...) || 0`),
+   * so `?? pendingEarnings` never fired. Wrong and dead is the safest kind of number to delete
+   * — the statement (from the billing engine) is the truth, and the profile snapshot is the
+   * only fallback that agrees with what finance sees.
+   */
 
   // Narrowed once here rather than re-tested inside the JSX, so each modal below reads as
   // "render this when it is the open one" and gets its subject already proven to exist.
@@ -743,7 +752,6 @@ function AppMain() {
         {selectedTab === 'EARNINGS' && (
           <EarningsScreen
             totalEarnings={totalEarnings}
-            pendingEarnings={pendingEarnings}
             runningBalance={Number(profile.runningBalance) || 0}
             earningsPaid={Number(profile.earningsPaid) || 0}
             earningsAwaitingApproval={Number(profile.earningsAwaitingApproval) || 0}
@@ -1017,6 +1025,12 @@ class AppErrorBoundary extends React.Component<
   { children: React.ReactNode },
   { hasError: boolean; error: any }
 > {
+  // A class component cannot call `useTheme()`, and error boundaries have no hook form. This is
+  // the sanctioned way for a class to read context; the fallback used to hardcode the dark
+  // palette and paint a black screen with white text over a light-mode app.
+  static contextType = ThemeContext;
+  declare context: React.ContextType<typeof ThemeContext>;
+
   constructor(props: any) {
     super(props);
     this.state = { hasError: false, error: null };
@@ -1032,13 +1046,17 @@ class AppErrorBoundary extends React.Component<
 
   render() {
     if (this.state.hasError) {
+      // If the theme context itself is what failed, fall back to the dark palette rather than
+      // crashing the boundary — a boundary that throws takes the whole tree down with it.
+      const c = this.context?.colors ?? palettes.dark;
+      const dark = (this.context?.mode ?? 'dark') === 'dark';
       return (
-        <SafeAreaView style={{ flex: 1, backgroundColor: '#0E1016', justifyContent: 'center', alignItems: 'center', padding: 20 }}>
-          <StatusBar barStyle="light-content" />
+        <SafeAreaView style={{ flex: 1, backgroundColor: c.bg, justifyContent: 'center', alignItems: 'center', padding: 20 }}>
+          <StatusBar barStyle={dark ? 'light-content' : 'dark-content'} />
           <View style={{ gap: 12, alignItems: 'center' }}>
-            <ActivityIndicator size="large" color="#8B7CFF" />
-            <Text style={{ color: '#fff', fontSize: 20, fontWeight: '700' }}>Orbit</Text>
-            <Text style={{ color: '#ef4444', textAlign: 'center', marginVertical: 10 }}>
+            <ActivityIndicator size="large" color={c.primary} />
+            <Text style={{ color: c.text, fontSize: 20, fontWeight: '700' }}>Orbit</Text>
+            <Text style={{ color: c.danger, textAlign: 'center', marginVertical: 10 }}>
               {String(this.state.error?.message || this.state.error || 'App encountered an error')}
             </Text>
           </View>

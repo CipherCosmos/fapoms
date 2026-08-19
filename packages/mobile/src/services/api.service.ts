@@ -94,20 +94,17 @@ export class MobileApiService {
     return API_BASE_URL.replace(/\/api\/v1$/, '');
   }
 
-  /** Resolves a relative attachment URL to a full authenticated URL carrying the auth token */
-  static resolveAttachmentUrl(url: string | null | undefined): string {
-    if (!url) return '';
-    if (url.startsWith('data:')) return url;
-    let fullUrl = url;
-    if (!url.startsWith('http://') && !url.startsWith('https://')) {
-      fullUrl = `${this.getApiOrigin()}${url.startsWith('/') ? '' : '/'}${url}`;
-    }
-    if (this.authToken && !fullUrl.includes('token=')) {
-      const separator = fullUrl.includes('?') ? '&' : '?';
-      fullUrl = `${fullUrl}${separator}token=${encodeURIComponent(this.authToken)}`;
-    }
-    return fullUrl;
-  }
+  /*
+   * There is deliberately no `resolveAttachmentUrl` here any more.
+   *
+   * It built attachment links by appending `?token=<access JWT>` to the URL. That puts a bearer
+   * credential where credentials must never go — into request logs, proxy logs, the OS share
+   * sheet, the image cache, and anywhere the link is copied — and it had already stopped working
+   * (the server rejects a plain JWT in the query string; see `getAttachmentUrl`). It had no
+   * callers left. Removed rather than kept "just in case", because the case it would be reached
+   * for is exactly the one it must not be used for. Attachments are opened through
+   * `getAttachmentUrl`, which asks the server for a short-lived signed path.
+   */
 
   static setAuthToken(token: string, userId?: string, userName?: string) {
     this.authToken = token;
@@ -970,9 +967,10 @@ export class MobileApiService {
    * A short-lived signed URL for viewing a chat attachment.
    *
    * The attachment route is `@Public()` but validates a signed HMAC token, and it rejects a
-   * plain JWT in the query string — so `resolveAttachmentUrl`'s `?token=<jwt>` returned 403 and
-   * every attachment in the app was unopenable. `attachment-token` is the endpoint built for
-   * exactly this and was called by nothing on either surface.
+   * plain JWT in the query string — so the old `resolveAttachmentUrl` (since removed) and its
+   * `?token=<jwt>` returned 403 and every attachment in the app was unopenable.
+   * `attachment-token` is the endpoint built for exactly this and was called by nothing on
+   * either surface.
    */
   static async getAttachmentUrl(s3Key: string): Promise<string | null> {
     if (!s3Key) return null;
@@ -997,11 +995,18 @@ export class MobileApiService {
    * back-and-forth conversation the assayer could not see: any follow-up after the first reply
    * was invisible on the phone. Both sides now read and write the same thread.
    */
-  static async getQueryMessages(queryId: string): Promise<QueryMessage[]> {
+  /**
+   * `null` means "could not load", `[]` means "loaded, and there are none". They used to be the
+   * same value, and the thread rendered a network failure as "No replies yet — answer below and
+   * the desk will see it immediately": the desk may have sent three messages the assayer could
+   * not see, and the screen told them to reply into the void. On a branch connection that is
+   * the common case, not the edge.
+   */
+  static async getQueryMessages(queryId: string): Promise<QueryMessage[] | null> {
     try {
       const res = await this.fetchWithAuth(`${API_BASE_URL}/validation-queries/${queryId}/messages`);
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data?.success) return [];
+      if (!res.ok || !data?.success) return null;
       return (data.data || []).map((m: any) => ({
         id: m.id,
         authorType: m.authorType === 'ASSAYER' ? 'ASSAYER' : 'STAFF',
@@ -1023,7 +1028,7 @@ export class MobileApiService {
         createdAt: m.createdAt,
       }));
     } catch {
-      return [];
+      return null;
     }
   }
 
@@ -1159,8 +1164,10 @@ export class MobileApiService {
           branchCode: branch?.branchCode || '',
           bankName: project?.client?.name || '',
           branchAddress: branch?.address || '',
-          latitude: branch?.latitude != null ? Number(branch.latitude) : 0,
-          longitude: branch?.longitude != null ? Number(branch.longitude) : 0,
+          // `null`, not 0. 0,0 is Null Island, and the navigation sheet used to route there for a
+          // branch that simply had no pin yet. The sheet already handles a null destination.
+          latitude: branch?.latitude != null ? Number(branch.latitude) : null,
+          longitude: branch?.longitude != null ? Number(branch.longitude) : null,
           scheduledDate: item.scheduledDate || '',
           sequenceOrder: idx + 1,
           // The server sends the count; it no longer ships the customer ROWS, which carried
