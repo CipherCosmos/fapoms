@@ -585,16 +585,42 @@ export const AssayerRoster: React.FC = () => {
           style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 12px' }}>
           <SlidersHorizontal size={13} /> Filters
         </button>
+        {/*
+          * TWO EXPORTS, AND THEY REALLY ARE TWO DIFFERENT THINGS.
+          *
+          * They read "Export 43" and "Excel", and the only statement of the difference was a
+          * tooltip on one of them. Nothing on either face said which one honoured the filters
+          * you had just set, and "Excel" versus a button whose CSV also opens in Excel is not a
+          * distinction anybody can act on. What they actually produce:
+          *
+          *   This view (CSV)   — built here in the browser from `rows`: the exact rows listed
+          *                       below, in the current filter/segment/search and sort order.
+          *                       Eleven identity/contact/location columns plus the missing-field
+          *                       list. Instant, because nothing is fetched.
+          *   Full roster (XLSX)— GET /reports/assayer-roster. Ignores everything on this screen
+          *                       and walks the whole workforce, returning two sheets: Roster
+          *                       (adds region, exit date, assignment counts and average rating)
+          *                       and the payroll rate card (base fee, daily/hourly rates,
+          *                       allowances, effective dates). PII columns are scoped to the
+          *                       caller's roles server-side.
+          *
+          * Neither is a subset of the other — the CSV has the missing-field audit the workbook
+          * lacks, the workbook has pay rates and performance the CSV lacks — so folding them
+          * into one control with a format toggle would have to drop columns to be honest. Both
+          * are kept, and the difference is now on the buttons and in the hint line below the
+          * toolbar rather than hidden in a title attribute.
+          */}
         <button onClick={exportCsv} className="btn btn-secondary"
-          style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 12px' }}>
-          <Download size={13} /> Export {rows.length}
+          style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 12px' }}
+          title={`Downloads the ${rows.length} ${rows.length === 1 ? 'person' : 'people'} listed below as a CSV, in this order, with contact and location details and what is missing from each file.`}>
+          <Download size={13} /> Export this view ({rows.length})
         </button>
         {/* The payroll-rate-card sheet is assembled over the whole roster; until it lands
             nothing on screen moves, which is why this used to be clicked repeatedly. */}
         <button onClick={handleExportExcel} disabled={exporting} className="btn btn-secondary"
           style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 12px', color: 'var(--success)' }}
-          title="Full roster with payroll rate card (roles applied)">
-          <FileSpreadsheet size={13} /> {exporting ? 'Preparing…' : 'Excel'}
+          title="Downloads an Excel workbook covering everyone on the roster, whatever the filters above say: one sheet of roster details with assignment counts and ratings, one sheet of payroll rates and allowances. Built on the server, so it takes a few seconds.">
+          <FileSpreadsheet size={13} /> {exporting ? 'Preparing…' : 'Full roster + pay rates (Excel)'}
         </button>
         {canManage && (
           <>
@@ -605,6 +631,21 @@ export const AssayerRoster: React.FC = () => {
             </button>
           </>
         )}
+      </div>
+
+      {/*
+        * The difference between the two export buttons, said on the page.
+        *
+        * A tooltip is not an answer for someone deciding which button to press: it needs a
+        * mouse, it needs a guess about which control to hover, and it vanishes. One quiet line
+        * under the toolbar states both, so the choice can be made by reading.
+        */}
+      <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', lineHeight: 1.5, marginTop: '-2px' }}>
+        <strong style={{ fontWeight: 600 }}>Export this view</strong> saves the {rows.length}{' '}
+        {rows.length === 1 ? 'person' : 'people'} currently listed — contact and location details,
+        plus what each file is missing — as a CSV.{' '}
+        <strong style={{ fontWeight: 600 }}>Full roster + pay rates</strong> ignores the filters and
+        covers everyone, adding assignment history and the payroll rate card, as an Excel workbook.
       </div>
 
       {showFilters && (

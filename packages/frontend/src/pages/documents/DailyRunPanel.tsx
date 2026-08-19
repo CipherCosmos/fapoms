@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { UploadCloud, AlertTriangle, CheckCircle2, Clock, Send, ArrowRightCircle } from 'lucide-react';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
+import { UPLOAD_LIMIT_HINT } from '@fapoms/shared';
 
 /**
  * What still has to happen for a branch on this audit date. Ordered as the day
@@ -238,6 +239,9 @@ export const DailyRunPanel: React.FC<{
               }}>
                 <UploadCloud size={12} />
                 {acting.has('bulk') ? 'Filing packets…' : `Upload all ${s.toGenerate} packets together`}
+                {/* Said before the file dialog opens, not after a batch has crawled up and been
+                    refused. One oversized packet in a batch fails only that packet. */}
+                <span style={{ fontWeight: 500, color: 'var(--text-muted)' }}>· {UPLOAD_LIMIT_HINT}</span>
                 <input type="file" multiple accept=".pdf" style={{ display: 'none' }} disabled={acting.has('bulk')}
                   onChange={(e) => { const f = e.target.files; if (f?.length) uploadGeneratedBatch(f); e.target.value = ''; }} />
               </label>
@@ -322,7 +326,7 @@ export const DailyRunPanel: React.FC<{
 };
 
 const FileUploadButton: React.FC<{ label: string; busy: boolean; onFile: (f: File) => void }> = ({ label, busy, onFile }) => (
-  <label style={{
+  <label title={UPLOAD_LIMIT_HINT} style={{
     display: 'inline-flex', alignItems: 'center', gap: 5, padding: '5px 11px', fontSize: 11.5, fontWeight: 600,
     background: 'var(--status-pending-bg)', color: 'var(--accent-primary)', border: '1px solid var(--status-pending-bg)',
     borderRadius: 'var(--radius-sm)', cursor: busy ? 'wait' : 'pointer', whiteSpace: 'nowrap',

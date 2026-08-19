@@ -14,6 +14,7 @@ import {
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { Redis } from 'ioredis';
 import { REDIS_CLIENT } from '../../infrastructure/redis/redis-client.module';
+import { assertUploadAllowed, MAX_RESUMABLE_UPLOAD_BYTES } from './upload-validation';
 
 export interface UploadSession {
   uploadId: string;       // Our internal ID (hex MD5)
@@ -52,7 +53,16 @@ export class ChunkedUploadService implements OnModuleInit {
 
   /** 512 KB — cheap to re-send on 2G, low per-request overhead. */
   static readonly DEFAULT_CHUNK_SIZE = 512 * 1024;
-  private static readonly MAX_FILE_SIZE = 100 * 1024 * 1024;
+  /**
+   * The resumable ceiling, owned by `upload-validation.ts` rather than restated here.
+   *
+   * This used to be a private `100 * 1024 * 1024` literal sitting a few files away from the 50 MB
+   * the single-request routes enforce, with nothing tying the two together — two upload limits
+   * that could be changed independently and a user who met whichever one their client happened to
+   * pick. The difference between them is intentional (see the constant's comment); the duplication
+   * was not.
+   */
+  private static readonly MAX_FILE_SIZE = MAX_RESUMABLE_UPLOAD_BYTES;
   /** Abandoned sessions are reclaimed after this long. */
   private static readonly SESSION_TTL_SECONDS = 24 * 60 * 60;
 
@@ -146,11 +156,15 @@ export class ChunkedUploadService implements OnModuleInit {
     if (!input.fileSize || input.fileSize <= 0) {
       throw new BadRequestException('fileSize must be a positive number of bytes.');
     }
-    if (input.fileSize > ChunkedUploadService.MAX_FILE_SIZE) {
-      throw new BadRequestException(
-        `File exceeds the ${ChunkedUploadService.MAX_FILE_SIZE / 1024 / 1024} MB limit.`,
-      );
-    }
+    // Same gate, same wording, same module as every other upload route — only the ceiling differs.
+    // `application/pdf` is not a guess: `CreateMultipartUpload` below stores the object as a PDF,
+    // so that is what this route accepts by construction.
+    assertUploadAllowed({
+      contentType: 'application/pdf',
+      size: input.fileSize,
+      maxBytes: ChunkedUploadService.MAX_FILE_SIZE,
+      hint: 'Scan at a lower resolution or split the packet, then send it again.',
+    });
 
     const chunkSize = input.chunkSize || ChunkedUploadService.DEFAULT_CHUNK_SIZE;
     const uploadId = createHash('md5')

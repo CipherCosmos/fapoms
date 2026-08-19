@@ -59,16 +59,29 @@ const ComplianceTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate: 
               r.name,
               r.level ?? '—',
               fmtDate(r.expiryDate),
-              <ExpiryChip days={r.daysToExpiry} />,
+              <ExpiryChip days={r.daysToExpiry} date={r.expiryDate} />,
               <OpenLink onClick={() => navigate(`/hr/roster?assayer=${r.assayerId}`)} />,
             ])}
           />
         )}
       </section>
 
-      {documents.rows.length > 0 && (
-        <section style={card}>
-          <div style={{ ...label, marginBottom: '10px' }}>Identity documents falling due ({documents.rows.length})</div>
+      {/*
+       * Rendered whether or not there is anything in it.
+       *
+       * This section used to disappear completely when no identity paper was falling due, while
+       * its twin above stayed put and explained its own emptiness. So the screen showed one of
+       * the two halves of "what is about to lapse" and gave no hint the other half had been
+       * asked about at all — a reader could reasonably conclude identity expiries are simply not
+       * tracked here. With the register largely empty (see the banner above) that was the normal
+       * state of this page, not an edge case. Same shape, same words, same 180-day window as the
+       * certifications section, so the two read as one question asked twice.
+       */}
+      <section style={card}>
+        <div style={{ ...label, marginBottom: '10px' }}>Identity documents falling due ({documents.rows.length})</div>
+        {documents.rows.length === 0 ? (
+          <Empty>No identity document expires within the next 180 days.</Empty>
+        ) : (
           <Table
             head={['Assayer', 'Document', 'Status', 'Expires', 'In', '']}
             rows={documents.rows.map((r: any) => [
@@ -76,12 +89,12 @@ const ComplianceTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate: 
               hrDocumentTypeLabel(r.documentType),
               govDocStatusLabel(r.verificationStatus),
               fmtDate(r.expiryDate),
-              <ExpiryChip days={r.daysToExpiry} />,
+              <ExpiryChip days={r.daysToExpiry} date={r.expiryDate} />,
               <OpenLink onClick={() => navigate(`/hr/roster?assayer=${r.assayerId}`)} />,
             ])}
           />
-        </section>
-      )}
+        )}
+      </section>
 
       <section style={card}>
         <div style={{ ...label, marginBottom: '10px' }}>Capability inventory</div>

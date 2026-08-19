@@ -11,7 +11,7 @@ import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { NotificationService } from '../notifications/notification.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { PushNotificationService } from '../notifications/push-notification.service';
-import { EventCategory, DocumentStatus, DocumentType, AssessmentStatus, DispatchMethod } from '@fapoms/shared';
+import { EventCategory, DocumentStatus, DocumentType, AssessmentStatus, DispatchMethod, businessTodayDateKey } from '@fapoms/shared';
 
 /** Branch rows returned when the caller names no window. */
 const BRANCH_PAGE_DEFAULT = 25;
@@ -38,6 +38,12 @@ const NEVER_PREPARED_MAX = 50;
 
 /** The pseudo-stage the branch panel uses for "confirmed audit, nothing prepared at all". */
 const NEVER_PREPARED_STAGE = 'NEVER_PREPARED';
+
+/**
+ * Rows returned for the "prepared but not sent" queue. It is ordered by audit date, so the cap
+ * keeps the urgent end; `totals.awaitingDispatch` carries the real number beside it.
+ */
+const AWAITING_DISPATCH_MAX = 100;
 
 export interface CreateDocumentDto {
   assessmentId: string;
@@ -508,12 +514,48 @@ export class DocumentService {
     /** A `DocumentStatus` the branch must have a document sitting at, or `NEVER_PREPARED`. */
     stage?: string;
   } = {}): Promise<any> {
-    const where: string[] = ['d.is_active = true'];
-    const params: any[] = [];
-    if (filters.projectId) { params.push(filters.projectId); where.push(`a.project_id = $${params.length}`); }
-    if (filters.status) { params.push(filters.status); where.push(`d.status = $${params.length}`); }
-    if (filters.type) { params.push(filters.type); where.push(`d.type = $${params.length}`); }
+    /**
+     * The filter every document query below shares, so the page, its counts and the queues agree.
+     *
+     * `search` and `stage` move into SQL with the window. They cannot stay in the browser: a
+     * client-side filter over one page searches the page, not the book — the same reason the
+     * branch list below pushed them down. `includeStage` is off for the pipeline counts, which
+     * must describe the whole backlog rather than the slice currently selected.
+     */
+    const buildDocWhere = (params: any[], opts: { includeStage?: boolean; includeSearch?: boolean } = {}): string => {
+      const clauses = ['d.is_active = true'];
+      if (filters.projectId) { params.push(filters.projectId); clauses.push(`a.project_id = $${params.length}`); }
+      if (filters.status) { params.push(filters.status); clauses.push(`d.status = $${params.length}`); }
+      if (filters.type) { params.push(filters.type); clauses.push(`d.type = $${params.length}`); }
+      const search = (filters.search ?? '').trim();
+      if (opts.includeSearch !== false && search) {
+        params.push(`%${search}%`);
+        const q = `$${params.length}`;
+        // The same fields the panel's own search box matched on, so moving it to the server
+        // changes where it runs, not what it finds.
+        clauses.push(`(d.file_name ILIKE ${q} OR b.name ILIKE ${q} OR b.branch_code ILIKE ${q}
+                       OR p.name ILIKE ${q} OR c.name ILIKE ${q})`);
+      }
+      const stage = (filters.stage ?? '').trim();
+      if (opts.includeStage !== false && stage && stage !== NEVER_PREPARED_STAGE) {
+        params.push(stage);
+        clauses.push(`d.status = $${params.length}`);
+      }
+      return clauses.join(' AND ');
+    };
 
+    const DOC_JOINS = `
+         FROM documents d
+         LEFT JOIN assessments a  ON a.id = d.assessment_id
+         LEFT JOIN branches b     ON b.id = a.branch_id
+         LEFT JOIN projects p     ON p.id = a.project_id
+         LEFT JOIN clients c      ON c.id = p.client_id`;
+
+    const docPage = Math.max(1, Math.trunc(Number(filters.page)) || 1);
+    const docLimit = Math.min(BRANCH_PAGE_MAX, Math.max(1, Number(filters.limit) || BRANCH_PAGE_DEFAULT));
+
+    const docParams: any[] = [];
+    const docWhere = buildDocWhere(docParams);
     const rows = await this.documentRepository.manager.query(
       `SELECT d.id, d.file_name, d.file_size, d.type, d.status, d.doc_version,
               d.created_at, d.dispatched_at, d.dispatch_method, d.dispatched_by,
@@ -531,9 +573,12 @@ export class DocumentService {
          LEFT JOIN clients c      ON c.id = p.client_id
          LEFT JOIN project_branches pb ON pb.project_id = a.project_id AND pb.branch_id = a.branch_id
          LEFT JOIN users u        ON u.id = d.dispatched_by
-        WHERE ${where.join(' AND ')}
-        ORDER BY d.created_at DESC`,
-      params,
+        WHERE ${docWhere}
+        -- created_at alone ties on bulk-imported batches, and an unbroken tie under
+        -- LIMIT/OFFSET lets rows swap between pages; id breaks it.
+        ORDER BY d.created_at DESC, d.id DESC
+        LIMIT ${docLimit} OFFSET ${(docPage - 1) * docLimit}`,
+      docParams,
     );
 
     const documents = rows.map((r: any) => ({
@@ -564,33 +609,92 @@ export class DocumentService {
       },
     }));
 
-    // Pipeline counts, in lifecycle order rather than alphabetical, so the shape of
-    // the backlog is readable at a glance.
+    /**
+     * Pipeline counts, in lifecycle order rather than alphabetical, so the shape of the backlog
+     * is readable at a glance.
+     *
+     * One grouped pass over the whole set, NOT eight `.filter()` passes over the page. Counted
+     * without the stage filter on purpose: these numbers are the chips a person clicks to
+     * choose a stage, so counting only the selected stage would leave every other chip at zero
+     * the moment one was picked.
+     */
+    const docCountParams: any[] = [];
+    const docCountWhere = buildDocWhere(docCountParams, { includeStage: false });
+    const stageCountRows: Array<{ status: string; n: string }> = await this.documentRepository.manager.query(
+      `SELECT d.status, COUNT(*)::int AS n ${DOC_JOINS} WHERE ${docCountWhere} GROUP BY d.status`,
+      docCountParams,
+    );
+    const countByStage = new Map(stageCountRows.map((r) => [r.status, Number(r.n)]));
+    const documentsTotal = stageCountRows.reduce((sum, r) => sum + Number(r.n), 0);
+
     const stageOrder = [
       DocumentStatus.UPLOADED, DocumentStatus.DISPATCHED, DocumentStatus.RECEIVED,
       DocumentStatus.SENT_TO_DATA_ENTRY, DocumentStatus.SENT_TO_EXTERNAL_OCR,
       DocumentStatus.EXCEL_GENERATED, DocumentStatus.PROCESSED, DocumentStatus.COMPLETED,
     ];
-    const pipeline = stageOrder.map((stage) => ({
-      stage,
-      count: documents.filter((d: any) => d.status === stage).length,
-    }));
+    const pipeline = stageOrder.map((stage) => ({ stage, count: countByStage.get(stage) ?? 0 }));
+
+    /** Outstanding pre-audit packets, counted over the whole set rather than the page. */
+    const typeCountRows: Array<{ status: string; type: string; n: string }> = await this.documentRepository.manager.query(
+      `SELECT d.status, d.type, COUNT(*)::int AS n ${DOC_JOINS} WHERE ${docCountWhere} GROUP BY d.status, d.type`,
+      [...docCountParams],
+    );
+    const outstandingReturns = typeCountRows
+      .filter((r) => r.status === DocumentStatus.DISPATCHED && r.type === DocumentType.PRE_FIELD_AUDIT_PDF)
+      .reduce((sum, r) => sum + Number(r.n), 0);
 
     // Paperwork prepared but not released, for a branch whose audit is already
     // scheduled — the assayer cannot start without it, so this is the queue that
     // actually blocks field work.
-    const today = new Date().toISOString().slice(0, 10);
-    const awaitingDispatch = documents
-      .filter((d: any) => d.status === DocumentStatus.UPLOADED
-        && DocumentService.ASSAYER_VISIBLE_TYPES.includes(d.type))
-      .map((d: any) => ({
-        ...d,
-        // Negative = the audit date has already passed with paperwork unsent.
-        daysUntilAudit: d.scheduledDate
-          ? Math.round((new Date(d.scheduledDate).getTime() - new Date(today).getTime()) / 86400000)
-          : null,
-      }))
-      .sort((a: any, b: any) => (a.daysUntilAudit ?? 9999) - (b.daysUntilAudit ?? 9999));
+    const today = businessTodayDateKey();
+
+    /**
+     * Its own query, not a filter over the page.
+     *
+     * This is a queue, ordered by urgency — it has to see the whole book, or the most urgent
+     * unsent packet drops off simply because its row fell on page two. Bounded like the other
+     * lists here, with the true count returned beside it.
+     */
+    const awaitParams: any[] = [];
+    const awaitWhere = buildDocWhere(awaitParams, { includeStage: false, includeSearch: false });
+    awaitParams.push(DocumentStatus.UPLOADED);
+    const awaitStatusIdx = awaitParams.length;
+    const visibleTypes = DocumentService.ASSAYER_VISIBLE_TYPES;
+    awaitParams.push(visibleTypes);
+    const awaitTypesIdx = awaitParams.length;
+    const awaitRows = await this.documentRepository.manager.query(
+      `SELECT d.id, d.file_name, d.file_size, d.type, d.status, d.doc_version, d.created_at,
+              b.name AS branch_name, b.branch_code, p.name AS project_name, p.project_number,
+              c.name AS client_name, pb.id AS project_branch_id, pb.scheduled_date,
+              COUNT(*) OVER() AS total_matching
+         ${DOC_JOINS}
+         LEFT JOIN project_branches pb ON pb.project_id = a.project_id AND pb.branch_id = a.branch_id
+        WHERE ${awaitWhere} AND d.status = $${awaitStatusIdx} AND d.type = ANY($${awaitTypesIdx})
+        ORDER BY pb.scheduled_date ASC NULLS LAST, d.created_at ASC
+        LIMIT ${AWAITING_DISPATCH_MAX}`,
+      awaitParams,
+    );
+    const awaitingDispatchTotal = Number(awaitRows?.[0]?.total_matching ?? 0);
+    const awaitingDispatch = awaitRows.map((r: any) => ({
+      id: r.id,
+      fileName: r.file_name,
+      fileSize: Number(r.file_size ?? 0),
+      type: r.type,
+      status: r.status,
+      version: r.doc_version,
+      createdAt: r.created_at,
+      branchName: r.branch_name,
+      branchCode: r.branch_code,
+      projectName: r.project_name,
+      projectNumber: r.project_number,
+      clientName: r.client_name,
+      projectBranchId: r.project_branch_id,
+      scheduledDate: r.scheduled_date,
+      // Negative = the audit date has already passed with paperwork unsent.
+      daysUntilAudit: r.scheduled_date
+        ? Math.round((new Date(r.scheduled_date).getTime() - new Date(today).getTime()) / 86400000)
+        : null,
+    }));
 
     // ── Branch-grouped view ──────────────────────────────────────────────
     //
@@ -770,16 +874,20 @@ export class DocumentService {
       branches,
       /** The window `branches` was cut from. The controller turns this into `meta.pagination`. */
       branchPagination: { page, limit, total: branchTotal },
+      /** The window `documents` was cut from — `documents.length` is one page, never the total. */
+      documentPagination: { page: docPage, limit: docLimit, total: documentsTotal },
       totals: {
-        total: documents.length,
-        awaitingDispatch: awaitingDispatch.length,
+        // Every figure here counts the whole set. They used to count whatever happened to be in
+        // the `documents` array, which was the entire table — correct only for as long as the
+        // page shipped all of it.
+        total: documentsTotal,
+        awaitingDispatch: awaitingDispatchTotal,
         // The true count, not `neverPrepared.length` — that list is capped at NEVER_PREPARED_MAX.
         neverPrepared: neverPreparedTotal,
         // Sent to the field but the completed paperwork has not come back.
-        outstandingReturns: documents.filter((d: any) =>
-          d.status === DocumentStatus.DISPATCHED && d.type === DocumentType.PRE_FIELD_AUDIT_PDF).length,
-        inDataEntry: documents.filter((d: any) => d.status === DocumentStatus.SENT_TO_DATA_ENTRY).length,
-        completed: documents.filter((d: any) => d.status === DocumentStatus.COMPLETED).length,
+        outstandingReturns,
+        inDataEntry: countByStage.get(DocumentStatus.SENT_TO_DATA_ENTRY) ?? 0,
+        completed: countByStage.get(DocumentStatus.COMPLETED) ?? 0,
       },
       awaitingDispatch,
       neverPrepared,

@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
+import { MAX_UPLOAD_MB, MAX_RESUMABLE_UPLOAD_MB } from '@fapoms/shared';
 
 /**
  * The one place the document pipeline decides what a file is allowed to be.
@@ -48,8 +49,32 @@ export const ALLOWED_UPLOAD_TYPES = new Set([
  * megabytes — so bringing the unchecked routes up to it rejects nothing that is currently
  * both legitimate and in use. Raise it via DOCUMENT_MAX_UPLOAD_MB rather than editing here, so
  * one deployment with unusual scans does not loosen the cap for everyone.
+ *
+ * The default comes from `@fapoms/shared` because the web and mobile file pickers need to state
+ * the limit *before* a file is chosen, and a hand-copied 50 in a React component is exactly the
+ * copy that would still say 50 the day this becomes 80.
  */
-export const MAX_UPLOAD_BYTES = (Number(process.env.DOCUMENT_MAX_UPLOAD_MB) || 50) * 1024 * 1024;
+export const MAX_UPLOAD_BYTES = (Number(process.env.DOCUMENT_MAX_UPLOAD_MB) || MAX_UPLOAD_MB) * 1024 * 1024;
+
+/**
+ * Hard ceiling on a *resumable* (chunked) upload — deliberately higher than the single-request one.
+ *
+ * These two numbers disagreeing is not drift, it is the point. A one-shot upload has to survive as
+ * one HTTP request: on the rural mobile links assayers work over, a 50 MB single POST is already at
+ * the edge of what completes before something drops it, and when it drops the whole thing restarts
+ * from zero. The chunked path exists precisely so that size stops being the risk — the file goes up
+ * as 512 KB parts that MinIO stores independently, a reconnect re-sends only the gaps, and a
+ * 100 MB colour scan of a thick branch file is therefore a reasonable thing to accept there and an
+ * unreasonable thing to accept on the plain route.
+ *
+ * What *was* wrong is that the chunked service kept its own private literal, so the two rules could
+ * drift apart without anyone noticing and neither number was stated anywhere a user could read it
+ * before choosing a file. Both now live here, both are enforced through `assertUploadAllowed`, and
+ * `DOCUMENT_MAX_RESUMABLE_UPLOAD_MB` is the deployment escape hatch — the same shape as the other
+ * cap, so raising one does not silently teach anybody to edit the other by hand.
+ */
+export const MAX_RESUMABLE_UPLOAD_BYTES =
+  (Number(process.env.DOCUMENT_MAX_RESUMABLE_UPLOAD_MB) || MAX_RESUMABLE_UPLOAD_MB) * 1024 * 1024;
 
 const HUMAN_ALLOWED = 'PDF, images (JPEG/PNG/WebP/HEIC), Excel and CSV';
 
@@ -69,16 +94,22 @@ export function assertUploadAllowed(input: {
   size?: number | null;
   /** Appended to the size message so an assayer is told what to do about a huge scan. */
   hint?: string;
+  /**
+   * Which ceiling applies. Defaults to the single-request one; the resumable route passes
+   * `MAX_RESUMABLE_UPLOAD_BYTES`. Callers pass a constant from this module, never a literal.
+   */
+  maxBytes?: number;
 }): void {
+  const maxBytes = input.maxBytes ?? MAX_UPLOAD_BYTES;
   const declared = (input.contentType || 'application/octet-stream').toLowerCase().split(';')[0].trim();
   if (!ALLOWED_UPLOAD_TYPES.has(declared)) {
     throw new BadRequestException(
       `Files of type "${declared}" are not accepted. Allowed: ${HUMAN_ALLOWED}.`,
     );
   }
-  if (input.size != null && input.size > MAX_UPLOAD_BYTES) {
+  if (input.size != null && input.size > maxBytes) {
     throw new BadRequestException(
-      `That file is ${mb(input.size)} MB, over the ${mb(MAX_UPLOAD_BYTES)} MB limit.` +
+      `That file is ${mb(input.size)} MB, over the ${mb(maxBytes)} MB limit.` +
         (input.hint ? ` ${input.hint}` : ''),
     );
   }

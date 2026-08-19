@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Clock, AlertTriangle, User, ArrowRight } from 'lucide-react';
 import { api } from '../../services/api';
@@ -46,33 +46,43 @@ const slaLabel = (row: ClarificationRow): { text: string; tone: string } => {
   return { text: `${hrs}h left`, tone: hrs <= 2 ? 'var(--warning)' : 'var(--text-muted)' };
 };
 
+/** The whole worklist's shape, computed in SQL. The tabs read these, never the loaded rows. */
+interface WorklistCounts { US: number; ASSAYER: number; OVERDUE: number; DONE: number; total: number }
+interface WorklistResponse { items: ClarificationRow[]; counts: WorklistCounts }
+
 export const ClarificationsPage: React.FC = () => {
   const navigate = useNavigate();
   const [rows, setRows] = useState<ClarificationRow[]>([]);
+  const [counts, setCounts] = useState<WorklistCounts>({ US: 0, ASSAYER: 0, OVERDUE: 0, DONE: 0, total: 0 });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>('US');
 
+  /**
+   * One tab's worth of rows, and the counts for all of them.
+   *
+   * This used to fetch every clarification ever raised — resolved ones included, forever — and
+   * filter and count them in the browser. `validation_queries` is append-only, so that request
+   * grew without limit for a page that shows one tab at a time.
+   */
   useEffect(() => {
     let cancelled = false;
-    api.request<ClarificationRow[]>('/validation-queries/worklist')
-      .then((r) => { if (!cancelled) setRows(r); })
+    setLoading(true);
+    api.request<WorklistResponse>(`/validation-queries/worklist?filter=${filter}`)
+      .then((r) => {
+        if (cancelled) return;
+        setRows(r.items ?? []);
+        setCounts(r.counts ?? { US: 0, ASSAYER: 0, OVERDUE: 0, DONE: 0, total: 0 });
+        setError(null);
+      })
       .catch((e) => { if (!cancelled) setError(`Could not load the clarification list. ${userMessage(e)}`); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, []);
+  }, [filter]);
 
-  const counts = useMemo(() => ({
-    US: rows.filter((r) => r.awaiting === 'US').length,
-    ASSAYER: rows.filter((r) => r.awaiting === 'ASSAYER').length,
-    OVERDUE: rows.filter((r) => r.slaOverdue).length,
-    DONE: rows.filter((r) => r.awaiting === 'DONE').length,
-  }), [rows]);
-
-  const shown = useMemo(() => {
-    if (filter === 'OVERDUE') return rows.filter((r) => r.slaOverdue);
-    return rows.filter((r) => r.awaiting === filter);
-  }, [rows, filter]);
+  const shown = rows;
+  /** True when the server had more for this tab than it sent — say so rather than imply a total. */
+  const truncated = counts[filter] > shown.length;
 
   if (loading) return <div style={{ color: 'var(--text-muted)', fontSize: 13 }}>Loading clarifications…</div>;
   if (error) return <div style={{ color: 'var(--danger)', fontSize: 13 }}>{error}</div>;
@@ -116,6 +126,12 @@ export const ClarificationsPage: React.FC = () => {
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+          {truncated && (
+            <div style={{ fontSize: 11.5, color: 'var(--warning)', lineHeight: 1.45 }}>
+              Showing the {shown.length} most urgent of {counts[filter]}. Clear these and the rest move up —
+              they are ordered by reply deadline, soonest first.
+            </div>
+          )}
           {shown.map((r) => {
             const sla = slaLabel(r);
             return (

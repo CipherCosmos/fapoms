@@ -337,8 +337,26 @@ const Clients: React.FC = () => {
                 compact
               />
               <button onClick={runBulkTransition} disabled={!bulkTarget || bulkBusy} className="btn btn-primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
-                {bulkBusy ? 'Applying…' : `Apply to ${selectedClients.length}`}
+                {bulkBusy ? `Applying to ${selectedClients.length}…` : `Apply to ${selectedClients.length}`}
               </button>
+              {/*
+                A working state, not a progress bar — and that is the honest answer here rather
+                than a shortcut. This is ONE request: `/clients/bulk/lifecycle` takes the whole
+                list, decides each client server-side and returns one report of moved / skipped /
+                failed. The browser learns nothing at all until that report arrives, so a "12 of
+                40" counter would be an animation, not a measurement, and a bar that reached 90%
+                while the server was still on client three would be worse than no bar. What the
+                user actually needs is to know the button registered and roughly how big the job
+                is, which is what the count and this line say. There is nothing to cancel either:
+                stopping the fetch would abandon the response, not the work — the server would
+                finish moving every client regardless and the user would be left not knowing which
+                ones had changed. Waiting and reading the report is strictly better.
+              */}
+              {bulkBusy && (
+                <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
+                  Working through {selectedClients.length} client{selectedClients.length === 1 ? '' : 's'} in one go — the result lists what moved, what was skipped and what failed.
+                </span>
+              )}
             </>
           ) : (
             <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No stage is reachable from the selected clients.</span>

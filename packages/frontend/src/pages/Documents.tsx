@@ -11,6 +11,7 @@ import { connectSocket, getSocket } from '../services/socket';
 import { fetchWithTimeout } from '../services/http';
 import { api } from '../services/api';
 import { userMessage, AppError } from '../services/errors';
+import { uploadSizeProblem } from '@fapoms/shared';
 
 /**
  * The presigned PUT's own budget, longer than the API default because the file, not the network,
@@ -63,6 +64,15 @@ async function openDocumentDownload(documentId: string): Promise<void> {
  * between a rejected file and storage.
  */
 async function uploadDocumentSmart(assessmentId: string, type: string, file: File): Promise<any> {
+  // Refused here, before any of the three transports below is attempted. The server enforces the
+  // same ceiling and is still the authority — but it can only say no *after* the bytes have been
+  // pushed to it, which on an office link is several minutes of watching a spinner to be told the
+  // file was never going to be accepted. The limit is also written next to the file pickers, so
+  // this is the second line, not the only one. `MAX_UPLOAD_MB` comes from @fapoms/shared, the same
+  // constant the API's cap defaults to.
+  const tooBig = uploadSizeProblem(file);
+  if (tooBig) throw new AppError(tooBig, undefined, 400);
+
   const contentType = file.type || 'application/octet-stream';
   try {
     const presign = await api.request<{ uploadUrl?: string; objectKey?: string }>('/documents/upload/presign', {
@@ -132,7 +142,9 @@ export const Documents: React.FC = () => {
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [busyKey, setBusyKey] = useState<string | null>(null);
 
-  // The branch list is the only paged array in the overview payload; these three drive its window.
+  // Both lists in this payload — branches and documents — are pages of the same filtered query,
+  // and only one of the two views is on screen at a time. So there is one search, one stage and
+  // one page number here, and whichever view is showing reads and writes them.
   const [branchPage, setBranchPage] = useState(1);
   const [branchSearch, setBranchSearch] = useState('');
   const [branchStage, setBranchStage] = useState('ALL');
@@ -414,6 +426,11 @@ export const Documents: React.FC = () => {
               busy={busyKey === 'batch-dispatch'}
               onDispatch={handleDispatchMany}
               onDownload={(id) => { openDocumentDownload(id).catch((e) => setError(userMessage(e))); }}
+              search={branchSearch}
+              onSearchChange={changeBranchSearch}
+              stage={branchStage}
+              onStageChange={changeBranchStage}
+              onPageChange={setBranchPage}
             />
           )}
         </div>

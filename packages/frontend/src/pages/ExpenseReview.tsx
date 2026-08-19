@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Check, X, Receipt, RefreshCw, MapPin } from 'lucide-react';
+import { Check, X, Receipt, RefreshCw, MapPin, CheckCircle2 } from 'lucide-react';
 import { formatRupees } from '@fapoms/shared';
-import { DataTable, Column, Modal, useToast } from '../components/ui';
+import { DataTable, Column, Modal, useConfirm, useToast } from '../components/ui';
 import {
   getPendingExpenses,
   reviewExpense,
@@ -12,18 +12,27 @@ import { TravelEvidence } from '../components/TravelEvidence';
 import { userMessage } from '../services/errors';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '../hooks/queryKeys';
+import { visibleSelection, hiddenSelectionNote } from '../utils/selection';
 
 /**
  * Expense Review — the finance/ops queue for assayer reimbursement claims.
  *
  * Assayers raise claims from the mobile app; this is where they get approved or rejected. A
  * rejection requires a reason (the backend enforces it too), so the assayer always knows why.
+ *
+ * Approving can be done to several claims at once; rejecting cannot, and that asymmetry is
+ * deliberate. Approving is one decision repeated — "yes, these are all payable" — and the
+ * reviewer has the amounts in front of them. Rejecting is a different decision each time,
+ * because the reason belongs to the individual claim and is the only thing the assayer is
+ * told; a reason written once and applied to a batch would be a form letter attached to
+ * people's own money, and would be worse than the extra clicks it saved.
  */
 // Always rendered inside <Billing/>'s Expenses tab, never routed standalone — the
 // `embedded=false` branch this used to carry (its own page title) was unreachable and has
 // been removed.
 export const ExpenseReview: React.FC = () => {
   const { toast } = useToast();
+  const { confirm, confirmDialog } = useConfirm();
   const qc = useQueryClient();
   const [claims, setClaims] = useState<ExpenseClaim[]>([]);
   const [loading, setLoading] = useState(true);
@@ -32,6 +41,9 @@ export const ExpenseReview: React.FC = () => {
   const [rejectReason, setRejectReason] = useState('');
   // A travel claim whose movement trail the reviewer has opened.
   const [inspecting, setInspecting] = useState<ExpenseClaim | null>(null);
+  // Ticked claim ids, and the progress line shown while a batch is being worked through.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkProgress, setBulkProgress] = useState<string | null>(null);
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -57,6 +69,7 @@ export const ExpenseReview: React.FC = () => {
     try {
       await reviewExpense(claim.id, true);
       setClaims((prev) => prev.filter((c) => c.id !== claim.id));
+      setSelected((s) => { const n = new Set(s); n.delete(claim.id); return n; });
       // Approval books the reimbursement as a payout in the same transaction; the Payouts tab
       // and the overview read it from the server.
       void qc.invalidateQueries({ queryKey: queryKeys.billing.all });
@@ -68,6 +81,115 @@ export const ExpenseReview: React.FC = () => {
     }
   };
 
+  /**
+   * The rows the bulk button will actually change: the ticked ids narrowed to the claims on
+   * screen right now, via the one shared rule (`visibleSelection`). Ticks survive a refresh
+   * that drops a claim — someone else may have reviewed it meanwhile — but a claim that is no
+   * longer listed is not approved behind the reviewer's back, and the count below says so.
+   */
+  const picked = useMemo(
+    () => visibleSelection(selected, claims, (c) => c.id),
+    [selected, claims],
+  );
+  const pickedTotal = useMemo(
+    () => picked.rows.reduce((sum, c) => sum + Number(c.amount || 0), 0),
+    [picked],
+  );
+  const hiddenNote = hiddenSelectionNote(picked.hiddenCount, 'claim');
+
+  const toggleSelect = (id: string) =>
+    setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const selectAll = (checked: boolean) =>
+    setSelected((s) => {
+      const n = new Set(s);
+      claims.forEach((c) => (checked ? n.add(c.id) : n.delete(c.id)));
+      return n;
+    });
+
+  /**
+   * Approve every ticked claim.
+   *
+   * Approving a claim authorises a reimbursement — it books a payout due to the assayer in the
+   * same transaction — so the batch version carries more friction than the single-row button,
+   * not less. The dialog names the count *and* the rupee total being authorised, and asks for
+   * that total to be typed, exactly as PayoutsTab does before approving payouts: a second click
+   * is the same reflex as the first, but a number that has to be read off the dialog and typed
+   * cannot be produced without looking at it. The phrase is plain digits rather than the
+   * formatted "₹12,340" because the rupee sign and the Indian grouping are awkward to type, and
+   * a phrase people cannot type is a phrase they find a way around.
+   *
+   * There is no bulk-approve endpoint, so this walks the claims one at a time on the same
+   * per-claim call the single button uses. That is on purpose rather than a compromise: each
+   * claim succeeds or fails on its own, a failure part-way through does not roll back or skip
+   * the rest, and the reviewer is told which ones did not go through. Approved rows leave the
+   * list and lose their tick; the ones that failed keep theirs, so the retry is the same button
+   * on exactly the claims that still need it. The selection is never blanket-cleared, because
+   * clearing it after a partial failure would hide the very rows that still need attention.
+   */
+  const runBulkApprove = async () => {
+    const rows = picked.rows;
+    if (!rows.length) return;
+    const amountText = formatRupees(pickedTotal);
+    const ok = await confirm({
+      title: `Approve ${rows.length} expense claim${rows.length === 1 ? '' : 's'}?`,
+      message: (
+        <>
+          This authorises <strong>{amountText}</strong> of reimbursements across {rows.length} claim
+          {rows.length === 1 ? '' : 's'} from {new Set(rows.map((c) => c.assayerId)).size} assayer
+          {new Set(rows.map((c) => c.assayerId)).size === 1 ? '' : 's'}. Each approved claim becomes a payout
+          due to that assayer.
+          {hiddenNote ? <><br />{hiddenNote}</> : null}
+        </>
+      ),
+      confirmLabel: `Approve ${amountText}`,
+      reversible: false,
+      reversibleNote: 'Approving cannot be undone here. Once a claim is approved it becomes a payout, and stopping it means putting that payout on hold before it is paid.',
+      tone: 'danger',
+      confirmPhrase: String(Math.round(pickedTotal)),
+    });
+    if (!ok) return;
+
+    const done: string[] = [];
+    const failed: { claim: ExpenseClaim; message: string }[] = [];
+    setBulkProgress(`Approving 1 of ${rows.length}…`);
+    try {
+      for (let i = 0; i < rows.length; i++) {
+        const claim = rows[i];
+        setBulkProgress(`Approving ${i + 1} of ${rows.length}…`);
+        try {
+          await reviewExpense(claim.id, true);
+          done.push(claim.id);
+        } catch (err: any) {
+          failed.push({ claim, message: userMessage(err) });
+        }
+      }
+    } finally {
+      setBulkProgress(null);
+    }
+
+    // Only the claims that actually went through leave the list and lose their tick.
+    if (done.length) {
+      const approvedIds = new Set(done);
+      setClaims((prev) => prev.filter((c) => !approvedIds.has(c.id)));
+      setSelected((s) => { const n = new Set(s); approvedIds.forEach((id) => n.delete(id)); return n; });
+      void qc.invalidateQueries({ queryKey: queryKeys.billing.all });
+    }
+
+    if (!failed.length) {
+      toast({ type: 'success', title: `${done.length} claim${done.length === 1 ? '' : 's'} approved`, message: `${amountText} is now payable to the assayers.` });
+    } else {
+      const names = failed
+        .slice(0, 3)
+        .map((f) => `${f.claim.assayer?.displayName ?? 'Assayer'} (${formatRupees(Number(f.claim.amount || 0))}) — ${f.message}`)
+        .join(' · ');
+      toast({
+        type: 'warning',
+        title: `${done.length} approved, ${failed.length} not approved`,
+        message: `Still selected, so you can try again: ${names}${failed.length > 3 ? ` · and ${failed.length - 3} more` : ''}`,
+      });
+    }
+  };
+
   const confirmReject = async () => {
     if (!rejecting || !rejectReason.trim()) return;
     const claim = rejecting;
@@ -75,6 +197,7 @@ export const ExpenseReview: React.FC = () => {
     try {
       await reviewExpense(claim.id, false, rejectReason.trim());
       setClaims((prev) => prev.filter((c) => c.id !== claim.id));
+      setSelected((s) => { const n = new Set(s); n.delete(claim.id); return n; });
       toast({ type: 'success', title: 'Claim rejected', message: 'The assayer will see the reason you gave.' });
       setRejecting(null);
       setRejectReason('');
@@ -161,7 +284,7 @@ export const ExpenseReview: React.FC = () => {
           <button
             type="button"
             onClick={() => approve(c)}
-            disabled={busyId === c.id}
+            disabled={busyId === c.id || !!bulkProgress}
             title="Approve"
             style={btnStyle('var(--success, #16a34a)')}
           >
@@ -170,7 +293,7 @@ export const ExpenseReview: React.FC = () => {
           <button
             type="button"
             onClick={() => { setRejecting(c); setRejectReason(''); }}
-            disabled={busyId === c.id}
+            disabled={busyId === c.id || !!bulkProgress}
             title="Reject"
             style={btnStyle('var(--danger, #dc2626)')}
           >
@@ -196,10 +319,41 @@ export const ExpenseReview: React.FC = () => {
         </div>
       </div>
 
+      {picked.rows.length > 0 && (
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap', padding: '10px 14px', marginBottom: 12, background: 'var(--bg-tertiary)', border: '1px solid var(--accent, #2563eb)', borderRadius: 8 }}>
+          {/* The number on the button is the number that will change — the ticked claims that
+              are on screen — and anything ticked but not shown is named rather than silently
+              included or silently dropped. */}
+          <span style={{ fontSize: 13, fontWeight: 600 }}>
+            {picked.rows.length} selected · {formatRupees(pickedTotal)}
+          </span>
+          <button
+            type="button"
+            onClick={() => void runBulkApprove()}
+            disabled={!!bulkProgress || !!busyId}
+            style={btnStyle('var(--success, #16a34a)')}
+          >
+            <CheckCircle2 size={15} /> {bulkProgress ?? `Approve ${picked.rows.length} (${formatRupees(pickedTotal)})`}
+          </button>
+          <button type="button" onClick={() => setSelected(new Set())} disabled={!!bulkProgress} style={btnStyle('var(--text-muted)')}>
+            Clear selection
+          </button>
+          {/* Rejecting is per claim on purpose: the reason is written for that assayer. */}
+          <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
+            Rejecting stays one claim at a time, so each assayer gets a reason written for their claim.
+          </span>
+          {hiddenNote && <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{hiddenNote}</span>}
+        </div>
+      )}
+
       <DataTable<ExpenseClaim>
         columns={columns}
         rows={claims}
         rowKey={(c) => c.id}
+        selectable
+        selected={selected}
+        onToggleSelect={toggleSelect}
+        onSelectAll={selectAll}
         loading={loading}
         emptyMessage="No expense claims are awaiting review."
       />
@@ -264,6 +418,8 @@ export const ExpenseReview: React.FC = () => {
         </p>
         {inspecting?.assignmentId && <TravelEvidence assignmentId={inspecting.assignmentId} />}
       </Modal>
+
+      {confirmDialog}
     </div>
   );
 };

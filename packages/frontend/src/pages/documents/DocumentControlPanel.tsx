@@ -1,6 +1,7 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState } from 'react';
 import { auditDocumentTypeLabel } from '@fapoms/shared';
 import { visibleSelection, hiddenSelectionNote } from '../../utils/selection';
+import { Pagination } from '../../components/ui';
 import {
   Send, AlertTriangle, CheckCircle2, Clock, Search, FileText, ChevronRight, ChevronDown,
 } from 'lucide-react';
@@ -65,6 +66,10 @@ export interface BranchGroup {
 }
 
 export interface OverviewData {
+  /**
+   * ONE PAGE of documents, filtered and cut in SQL — see `documentPagination` for the size of
+   * the set it came from. Never `documents.length` when you mean "how many are there".
+   */
   documents: DocRow[];
   pipeline: Array<{ stage: string; count: number }>;
   totals: {
@@ -80,6 +85,7 @@ export interface OverviewData {
    */
   branches: BranchGroup[];
   branchPagination: { page: number; limit: number; total: number };
+  documentPagination: { page: number; limit: number; total: number };
   /** Capped alert list; `totals.neverPrepared` is the true count. */
   neverPrepared: BranchGroup[];
 }
@@ -100,23 +106,28 @@ export const DocumentControlPanel: React.FC<{
   onDispatch: (ids: string[]) => Promise<void>;
   onDownload: (id: string) => void;
   busy?: boolean;
-}> = ({ data, onDispatch, onDownload, busy }) => {
+  /**
+   * The search box and pipeline chips are the page's filter, not this panel's — the server
+   * applies them, so they have to live where the request is made. Held by `Documents.tsx` and
+   * shared with the branch view, which asks the same question of the same query.
+   */
+  search: string;
+  onSearchChange: (v: string) => void;
+  stage: string;
+  onStageChange: (v: string) => void;
+  onPageChange: (p: number) => void;
+}> = ({ data, onDispatch, onDownload, busy, search, onSearchChange, stage, onStageChange, onPageChange }) => {
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [search, setSearch] = useState('');
-  const [stage, setStage] = useState<string>('ALL');
   const [expanded, setExpanded] = useState<string | null>(null);
 
-  const rows = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return data.documents.filter((d) => {
-      if (stage !== 'ALL' && d.status !== stage) return false;
-      if (!q) return true;
-      // Searching by branch or client is the common case in practice; the old page
-      // could only match file name, type and status because nothing else was loaded.
-      return [d.fileName, d.type, d.status, d.branchName, d.branchCode, d.projectName, d.clientName]
-        .some((v) => v?.toLowerCase().includes(q));
-    });
-  }, [data.documents, search, stage]);
+  /**
+   * The document rows as the server sent them.
+   *
+   * Search and the stage filter now run in SQL alongside the branch list's, so this no longer
+   * filters locally: a client-side filter over one page searches the page, not the book, and
+   * `documents` is a window now rather than the whole table.
+   */
+  const rows = data.documents;
 
   const selectable = rows.filter((r) => r.status === 'UPLOADED');
   const toggle = (id: string) =>
@@ -175,12 +186,12 @@ export const DocumentControlPanel: React.FC<{
       <div>
         <Label>Pipeline</Label>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          <Stage active={stage === 'ALL'} onClick={() => setStage('ALL')} label="All" count={data.totals.total} color="var(--text-secondary)" bg="var(--bg-surface-2)" />
+          <Stage active={stage === 'ALL'} onClick={() => onStageChange('ALL')} label="All" count={data.totals.total} color="var(--text-secondary)" bg="var(--bg-surface-2)" />
           {data.pipeline.filter((s) => s.count > 0).map((s) => (
             <Stage
               key={s.stage}
               active={stage === s.stage}
-              onClick={() => setStage(stage === s.stage ? 'ALL' : s.stage)}
+              onClick={() => onStageChange(stage === s.stage ? 'ALL' : s.stage)}
               label={STAGE_META[s.stage]?.label ?? s.stage}
               count={s.count}
               color={STAGE_META[s.stage]?.color ?? 'var(--text-muted)'}
@@ -195,7 +206,7 @@ export const DocumentControlPanel: React.FC<{
         <div style={{ position: 'relative', flex: 1, minWidth: 220 }}>
           <Search size={14} style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
           <input
-            value={search} onChange={(e) => setSearch(e.target.value)}
+            value={search} onChange={(e) => onSearchChange(e.target.value)}
             placeholder="Search by branch, client, project or file…"
             style={{ width: '100%', padding: '8px 10px 8px 30px', background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', fontSize: 13 }}
           />
@@ -217,9 +228,27 @@ export const DocumentControlPanel: React.FC<{
           </button>
         )}
         {dispatchableIds.length > 0 && (
-          <button onClick={dispatchSelected} disabled={busy} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '7px 13px' }}>
-            <Send size={13} /> {busy ? 'Sending…' : `Send ${dispatchableIds.length} to assayers`}
-          </button>
+          <>
+            <button onClick={dispatchSelected} disabled={busy} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '7px 13px' }}>
+              <Send size={13} /> {busy ? `Sending ${dispatchableIds.length}…` : `Send ${dispatchableIds.length} to assayers`}
+            </button>
+            {/*
+              A working state rather than "12 of 40", deliberately. Dispatch is a single
+              `POST /documents/dispatch-batch` carrying every id; the server marks them and
+              answers once. Nothing on this side observes an individual document being sent, so
+              any per-item counter here would be invented — and an invented counter is worse than
+              a spinner, because it tells the user a document has gone out when it may not have.
+              Cancelling is not offered for the same reason: aborting the request would only stop
+              us listening, while the server carried on releasing paperwork to assayers. The
+              button naming the count is the part that was actually missing — on a forty-document
+              selection it previously said "Sending…" and looked dead.
+            */}
+            {busy && (
+              <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>
+                Releasing {dispatchableIds.length} document{dispatchableIds.length === 1 ? '' : 's'} in one go — the list refreshes when it is done.
+              </span>
+            )}
+          </>
         )}
         {hiddenNote && (
           <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{hiddenNote}</span>
@@ -283,6 +312,14 @@ export const DocumentControlPanel: React.FC<{
           );
         })}
       </div>
+
+      <Pagination
+        page={data.documentPagination.page}
+        totalPages={Math.max(1, Math.ceil(data.documentPagination.total / data.documentPagination.limit))}
+        total={data.documentPagination.total}
+        pageSize={data.documentPagination.limit}
+        onPageChange={onPageChange}
+      />
     </div>
   );
 };

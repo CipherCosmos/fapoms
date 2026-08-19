@@ -175,13 +175,21 @@ describe('DocumentService', () => {
    */
   describe('operationsOverview branch grouping', () => {
     /**
-     * The branch list is three queries now — the page, its count, and the never-prepared alert
-     * list — where it used to be one unbounded SELECT the service filtered in JS. They all read
-     * `FROM project_branches pb`, so the mock routes on what makes each distinct.
+     * Seven queries now, not one.
+     *
+     * Both lists on this page are windows: the branch list (page, count, never-prepared alerts)
+     * and, since the documents list stopped being an unbounded SELECT the browser filtered, the
+     * documents page plus the two GROUP BY aggregates that count the whole set behind it, plus
+     * the awaiting-dispatch queue with its own cap. They share join shapes, so the mock routes
+     * on what makes each distinct — most specific marker first.
      */
     const BRANCH_LIST_SQL = 'LIMIT $';
     const BRANCH_COUNT_SQL = 'COUNT(*)::int';
     const NEVER_PREPARED_SQL = 'gap_total';
+    const DOC_PAGE_SQL = 'ORDER BY d.created_at DESC, d.id DESC';
+    const STAGE_COUNT_SQL = 'GROUP BY d.status';
+    const TYPE_COUNT_SQL = 'GROUP BY d.status, d.type';
+    const AWAITING_SQL = 'total_matching';
 
     /** Captures the SQL the service actually emitted, so a query can be asserted on by name. */
     const emitted = () => mockManagerQuery.mock.calls.map((c) => String(c[0]));
@@ -195,12 +203,26 @@ describe('DocumentService', () => {
      * @param gapRows     rows for the never-prepared alert list
      * @param total       what COUNT(*) reports for the filtered set
      */
-    const mockQueries = (opts: { docs?: any[]; branchRows?: any[]; gapRows?: any[]; total?: number } = {}) => {
+    const mockQueries = (opts: {
+      docs?: any[]; branchRows?: any[]; gapRows?: any[]; total?: number;
+      /** What the GROUP BY aggregates report for the whole filtered set, page or no page. */
+      stageCounts?: Array<{ status: string; n: number }>;
+      typeCounts?: Array<{ status: string; type: string; n: number }>;
+      awaitingRows?: any[];
+    } = {}) => {
       mockManagerQuery.mockImplementation(async (sql: string) => {
         // Order matters: every branch query embeds a `FROM documents d2` subquery, which the
         // flat-documents check below would otherwise swallow. Most specific marker first.
+        if (sql.includes(TYPE_COUNT_SQL)) return opts.typeCounts ?? [];
+        if (sql.includes(STAGE_COUNT_SQL)) {
+          // Default: the counts agree with the page, which is what an un-paged fixture means.
+          return opts.stageCounts
+            ?? (opts.docs ?? []).map((d: any) => ({ status: d.status, n: 1 }));
+        }
+        if (sql.includes(AWAITING_SQL)) return opts.awaitingRows ?? [];
         if (sql.includes(BRANCH_COUNT_SQL)) return [{ n: opts.total ?? (opts.branchRows?.length ?? 0) }];
         if (sql.includes(NEVER_PREPARED_SQL)) return opts.gapRows ?? [];
+        if (sql.includes(DOC_PAGE_SQL)) return opts.docs ?? [];
         if (sql.includes(BRANCH_LIST_SQL)) return opts.branchRows ?? [];
         if (sql.includes('FROM documents d')) return opts.docs ?? [];
         return [];
@@ -215,6 +237,85 @@ describe('DocumentService', () => {
 
     beforeEach(() => {
       mockManagerQuery.mockReset();
+    });
+
+    /**
+     * The documents list is a window now.
+     *
+     * It used to be every row in `documents` — a table that grows with every audit — shipped to
+     * the browser so a `useMemo` could filter it. The console shows one page at a time, so the
+     * page is cut in SQL and the figures beside it come from aggregates over the whole set.
+     */
+    describe('documents paging', () => {
+      const docRow = (over: Record<string, any> = {}) => ({
+        id: 'doc-1', file_name: 'pre-audit.pdf', file_size: 100, type: 'PRE_FIELD_AUDIT_PDF',
+        status: 'DISPATCHED', doc_version: 1, created_at: new Date(), project_branch_id: 'pb-1',
+        branch_name: 'Pune Main Branch', branch_code: 'BR-1', project_name: 'P1',
+        project_number: 'PRJ-1', client_name: 'SBI', scheduled_date: null, ...over,
+      });
+
+      it('cuts the documents list in SQL rather than sending the table', async () => {
+        mockQueries({ docs: [docRow()] });
+
+        await service.operationsOverview({ page: 3, limit: 25 });
+
+        const sql = sqlFor(DOC_PAGE_SQL);
+        expect(sql).toContain('LIMIT 25');
+        expect(sql).toContain('OFFSET 50');
+      });
+
+      it('counts the whole set, not the rows that fit on the page', async () => {
+        mockQueries({
+          docs: [docRow({ id: 'doc-1' }), docRow({ id: 'doc-2' })],
+          stageCounts: [
+            { status: 'DISPATCHED', n: 400 },
+            { status: 'SENT_TO_DATA_ENTRY', n: 60 },
+            { status: 'COMPLETED', n: 40 },
+          ],
+        });
+
+        const result = await service.operationsOverview({ limit: 2 });
+
+        // Two rows on the page; five hundred in the book. The old code answered "2".
+        expect(result.documents).toHaveLength(2);
+        expect(result.totals.total).toBe(500);
+        expect(result.documentPagination.total).toBe(500);
+        expect(result.totals.inDataEntry).toBe(60);
+        expect(result.totals.completed).toBe(40);
+      });
+
+      it('pushes the search into the documents query instead of the browser', async () => {
+        mockQueries({ docs: [docRow()] });
+
+        await service.operationsOverview({ search: 'Pune' });
+
+        expect(paramsFor(DOC_PAGE_SQL)).toContain('%Pune%');
+      });
+
+      it('leaves the pipeline counts unfiltered by the selected stage, so the other chips survive', async () => {
+        mockQueries({ docs: [docRow()] });
+
+        await service.operationsOverview({ stage: DocumentStatus.DISPATCHED });
+
+        // The page shows the chosen stage...
+        expect(paramsFor(DOC_PAGE_SQL)).toContain(DocumentStatus.DISPATCHED);
+        // ...but every chip still reports its own count, or picking one would zero the rest.
+        expect(paramsFor(STAGE_COUNT_SQL)).not.toContain(DocumentStatus.DISPATCHED);
+      });
+
+      it('reports the true awaiting-dispatch count even when that queue is capped', async () => {
+        mockQueries({
+          docs: [docRow()],
+          awaitingRows: [
+            { id: 'doc-9', file_name: 'a.pdf', file_size: 1, type: 'PRE_FIELD_AUDIT_PDF', status: 'UPLOADED', doc_version: 1, created_at: new Date(), branch_name: 'B', branch_code: 'B1', project_name: 'P1', project_number: 'PRJ-1', client_name: 'SBI', project_branch_id: 'pb-1', scheduled_date: null, total_matching: '137' },
+          ],
+        });
+
+        const result = await service.operationsOverview();
+
+        expect(result.awaitingDispatch).toHaveLength(1);
+        expect(result.totals.awaitingDispatch).toBe(137);
+      });
     });
 
     it("groups a branch's multiple documents under one entry instead of repeating its name", async () => {

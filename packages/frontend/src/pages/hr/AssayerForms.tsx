@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { User, MapPin, Briefcase, Award, CreditCard, Clock, Phone, X, CheckCircle, Edit2, AlertTriangle } from 'lucide-react';
 import { INDIAN_STATES, todayDateKey } from '@fapoms/shared';
 import { api } from '../../services/api';
@@ -68,8 +69,63 @@ interface FieldDef {
   options?: { value: string; label: string }[];
   /** Renders a ChipMultiSelect fed by the roster's own vocabulary instead of a text box. */
   vocab?: 'skills' | 'languages' | 'certifications';
+  /**
+   * Renders a searchable list of people instead of a text box, storing the id behind the name.
+   * Used for the reporting manager, which is an id nobody can be expected to know by heart.
+   */
+  people?: true;
   hint?: string;
 }
+
+/**
+ * The people who can be named as somebody's reporting manager.
+ *
+ * `assayers.manager_id` points at another row of `assayers` — that is what the original
+ * foreign key on the column declared — so the roster is the candidate list, and
+ * `GET /assayers` is an endpoint this screen's own roster already calls. No new backend
+ * route, and no second idea of who a manager is.
+ *
+ * Loaded only where the field is actually shown. `null` means "still loading", which the
+ * picker renders as such rather than as "there is nobody to choose".
+ */
+const useManagerOptions = (enabled: boolean, excludeId?: string) => {
+  const [people, setPeople] = useState<{ value: string; label: string }[] | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    let alive = true;
+    api.request<Assayer[]>('/assayers?limit=1000')
+      .then((res) => {
+        if (!alive) return;
+        const list = (Array.isArray(res) ? res : []).filter((a) => a.id !== excludeId).map((a) => ({
+          value: a.id,
+          // Code included because two people on a national roster share a name often enough
+          // that a bare name would make the choice a coin toss.
+          label: a.assayerCode ? `${a.displayName} · ${a.assayerCode}` : a.displayName,
+        })).sort((x, y) => x.label.localeCompare(y.label));
+        setPeople(list);
+      })
+      .catch((e) => { if (alive) { setPeople([]); setFailed(userMessage(e)); } });
+    return () => { alive = false; };
+  }, [enabled, excludeId]);
+  return { people, failed };
+};
+
+/**
+ * Deep link support: `?section=<tab>` opens this form on that section instead of at the top.
+ *
+ * The pay screen and the assayer drawer both link people here *because* their bank details are
+ * missing, and both landed on the first tab — the person then had to know that "Financial" is
+ * three clicks away, in a mode they may not be in. The section named in the URL is matched to a
+ * tab by title, case-insensitively, so the link reads in plain words and survives re-ordering
+ * of the tabs. An unknown or absent section leaves the form exactly as it was.
+ */
+const sectionTabIndex = (section: string | null, groups: FieldGroup[]): number | null => {
+  const want = (section || '').trim().toLowerCase();
+  if (!want) return null;
+  const i = groups.findIndex((g) => g.title.toLowerCase() === want);
+  return i >= 0 ? i : null;
+};
 
 /**
  * Skills, languages and certifications are lists, and this form's state is a flat
@@ -184,9 +240,11 @@ const EDIT_FIELDS: FieldDef[] = [
   { key: 'joiningDate', label: 'Joining Date', type: 'date' },
   { key: 'exitDate', label: 'Exit Date', type: 'date' },
   { key: 'terminationDate', label: 'Termination Date', type: 'date' },
-  // The office does not know anybody's UUID. Left blank it is simply not sent, which is the
-  // normal case; it stays on the form because records imported with one must remain editable.
-  { key: 'managerId', label: 'Manager ID', placeholder: 'Leave blank unless you were given an ID', hint: 'Internal identifier — optional.' },
+  // Was a box asking for a raw UUID, which nobody in the office has ever been able to type,
+  // so the reporting line simply went unrecorded. It is a pick from the roster now: the name
+  // is shown, the id is what gets stored. Still optional — the server treats it as optional,
+  // and an assayer who reports to nobody on the roster is a normal record, not an error.
+  { key: 'managerId', label: 'Reporting Manager', people: true, full: true, hint: 'Optional. Who this person reports to.' },
   { key: 'panNumber', label: 'PAN Number' },
   { key: 'bankAccountNumber', label: 'Bank Account' },
   { key: 'ifscCode', label: 'IFSC Code' },
@@ -236,6 +294,7 @@ const renderFormField = (
   setForm: (v: Record<string, string>) => void,
   vocabulary?: { skills: string[] | null; languages: string[] | null; certifications: string[] | null },
   onBlurField?: (key: string) => void,
+  people?: { options: { value: string; label: string }[] | null; failed: string | null },
 ) => {
   const val = form[field.key] || '';
   const isTextarea = FIELD_TEXTAREA.has(field.key);
@@ -257,7 +316,41 @@ const renderFormField = (
       <label style={labelStyle}>
         {field.label}{field.required && <span style={{ color: 'var(--danger)', marginLeft: '2px' }}>*</span>}
       </label>
-      {field.vocab ? (
+      {field.people ? (
+        /**
+         * A person picker, not a UUID box. `single` gives it radio behaviour, and an id that is
+         * not in the list is still offered back marked "(as recorded)" — so opening the form to
+         * change a phone number cannot silently erase a manager who has since been archived off
+         * the roster, which is exactly what a plain dropdown would have done.
+         */
+        (() => {
+          const opts = people?.options ?? null;
+          // Kept out of the orphan path ChipMultiSelect would otherwise take, because that one
+          // labels an unrecognised value with the raw id — which is the very thing this field
+          // stopped showing people. Applies while the roster is still loading too.
+          const known = (opts || []).some((o) => o.value === val);
+          return (
+            <>
+              <ChipMultiSelect
+                single
+                options={val && !known ? [...(opts || []), { value: val, label: 'Manager recorded earlier' }] : (opts || [])}
+                value={val ? [val] : []}
+                onChange={(next) => setForm({ ...form, [field.key]: next[0] || '' })}
+                searchPlaceholder="Search by name or code…"
+                searchThreshold={5}
+                emptyText={opts === null ? 'Loading the roster…' : 'No one else is on the roster yet.'}
+                aria-label={field.label}
+              />
+              {people?.failed && (
+                <div style={{ fontSize: '10.5px', color: 'var(--warning)', marginTop: '4px' }}>
+                  {/* Named, not swallowed: without the list the field looks empty by choice. */}
+                  Could not load the list of people. {people.failed}
+                </div>
+              )}
+            </>
+          );
+        })()
+      ) : field.vocab ? (
         /**
          * The vocabulary endpoint is HR-scoped, so a coordinator may legitimately get an empty
          * list back. ChipMultiSelect treats that as a real state and still keeps any value
@@ -286,15 +379,17 @@ const renderFormField = (
           style={{ width: '100%' }}
         />
       ) : GEO_AUTO_FIELDS.has(field.key) ? (
-        <div onBlur={() => onBlurField?.(field.key)}>
         <Autocomplete
           value={val}
           onChange={(v) => handleChange(v)}
           onSelect={(place) => applyPlace(field.key, place, form, setForm)}
+          // Real prop now, instead of a wrapper <div> listening for bubbled focusout. The
+          // wrapper fired on the way into the suggestion list too, so the pincode check ran
+          // against the fragment the user was still replacing.
+          onBlur={() => onBlurField?.(field.key)}
           placeholder={field.placeholder || (field.key === 'pincode' ? 'Search pincode…' : `Type to search ${field.label.toLowerCase()}…`)}
           filterType={(r) => field.key === 'pincode' ? !!r.pincode : true}
         />
-        </div>
       ) : isTextarea ? (
         <textarea value={val} onChange={(e) => handleChange(e.target.value)} placeholder={field.placeholder || `Enter ${field.label.toLowerCase().replace(' *', '')}`}
           rows={3} style={{ ...formFieldStyle, resize: 'vertical', minHeight: '60px', fontFamily: 'inherit' }} />
@@ -309,7 +404,7 @@ const renderFormField = (
             required={field.required}
             placeholder={
               field.placeholder ||
-              (isTel ? '9876543210' : field.key === 'pincode' ? '6-digit pincode' : field.key === 'email' ? 'name@example.com' : field.key === 'panNumber' ? 'ABCDE1234F' : field.key === 'ifscCode' ? 'HDFC0001234' : field.key === 'bankAccountNumber' ? 'Account number' : field.key === 'managerId' ? 'Manager UUID' : `Enter ${field.label.toLowerCase().replace(' *', '')}`)
+              (isTel ? '9876543210' : field.key === 'pincode' ? '6-digit pincode' : field.key === 'email' ? 'name@example.com' : field.key === 'panNumber' ? 'ABCDE1234F' : field.key === 'ifscCode' ? 'HDFC0001234' : field.key === 'bankAccountNumber' ? 'Account number' : `Enter ${field.label.toLowerCase().replace(' *', '')}`)
             }
             inputMode={isNum || field.key === 'pincode' || isTel ? 'numeric' : field.key === 'email' ? 'email' : 'text'}
             maxLength={field.key === 'pincode' ? 6 : field.key === 'panNumber' ? 10 : field.key === 'ifscCode' ? 11 : undefined}
@@ -335,8 +430,15 @@ const renderFormField = (
   );
 };
 
-export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () => void }> = ({ onClose, onCreated }) => {
+export const CreateAssayerModal: React.FC<{
+  onClose: () => void;
+  onCreated: () => void;
+  /** Overrides `?section=` when the opening screen already knows which section it wants. */
+  initialSection?: string;
+}> = ({ onClose, onCreated, initialSection }) => {
   const { toast } = useToast();
+  const [urlParams] = useSearchParams();
+  const wantedTab = sectionTabIndex(initialSection ?? urlParams.get('section'), CREATE_FIELD_GROUPS);
   const [mode, setMode] = useState<'express' | 'advanced'>('express');
   const [form, setForm] = useState<Record<string, string>>(() => {
     // Deliberately blank: the server allocates the code, because it is the only side that can see
@@ -356,14 +458,21 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
       joiningDate: todayDateKey(),
     };
   });
-  const [activeTab, setActiveTab] = useState(0);
+  const [activeTab, setActiveTab] = useState(wantedTab ?? 0);
   const [submitting, setSubmitting] = useState(false);
 
   const [addrError, setAddrError] = useState<string | null>(null);
   const [addrLookup, setAddrLookup] = useState(false);
   const { skills, languages, certifications } = useWorkforceVocabulary();
   const vocabulary = { skills, languages, certifications };
-  const [showBank, setShowBank] = useState(false);
+  /**
+   * Express mode has no tabs, so a `?section=financial` link opens the collapsed bank block
+   * instead — otherwise the deep link works in Advanced and silently does nothing in the mode
+   * most people are actually in, which is the failure it was added to prevent.
+   */
+  const [showBank, setShowBank] = useState(
+    (initialSection ?? urlParams.get('section') ?? '').trim().toLowerCase() === 'financial',
+  );
 
   /**
    * Ask the postal directory what a pincode actually is, and hand the answer back.
@@ -710,12 +819,14 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
 
             <div>
               <label style={labelStyle}>Pincode {addrLookup && <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>· looking up…</span>}</label>
-              {/* Wrapper, because Autocomplete exposes no onBlur and adding one to a shared
-                  component used by several other forms is not this change's business. Blur
-                  bubbles as focusout, so listening here reaches the input inside. */}
-              <div onBlur={() => { void applyPincodeLookup(form.pincode || ''); }}>
+              {/* Autocomplete now has a real `onBlur`, which fires only once focus has left the
+                  whole control. The previous wrapper <div> caught bubbled focusout, so moving
+                  the mouse into the suggestion list counted as leaving the field and looked up
+                  a half-typed pincode — reporting it as unknown a moment before the click that
+                  would have filled in a valid one. */}
               <Autocomplete
                 value={form.pincode || ''}
+                onBlur={(v) => { void applyPincodeLookup(v); }}
                 onChange={(v) => setForm({ ...form, pincode: v })}
                 onSelect={(place) => {
                   const next: Record<string, string> = { ...form, pincode: place.pincode || form.pincode || '' };
@@ -728,7 +839,6 @@ export const CreateAssayerModal: React.FC<{ onClose: () => void; onCreated: () =
                 placeholder="Search pincode, e.g. 110001"
                 filterType={(r) => !!r.pincode}
               />
-              </div>
               <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '4px' }}>Fills in city and state for you.</div>
             </div>
 
@@ -877,8 +987,16 @@ const EDIT_FIELD_GROUPS: FieldGroup[] = [
   { title: 'Other', icon: <Clock size={13} />, fields: ['workingHoursStart', 'workingHoursEnd', 'notes'] },
 ];
 
-export const EditAssayerModal: React.FC<{ assayer: Assayer; onClose: () => void; onUpdated: () => void }> = ({ assayer, onClose, onUpdated }) => {
+export const EditAssayerModal: React.FC<{
+  assayer: Assayer;
+  onClose: () => void;
+  onUpdated: () => void;
+  /** Overrides `?section=` when the opening screen already knows which section it wants. */
+  initialSection?: string;
+}> = ({ assayer, onClose, onUpdated, initialSection }) => {
   const { toast } = useToast();
+  const [urlParams] = useSearchParams();
+  const wantedTab = sectionTabIndex(initialSection ?? urlParams.get('section'), EDIT_FIELD_GROUPS);
   const [form, setForm] = useState<Record<string, string>>(() => {
     const f: Record<string, string> = {};
     EDIT_FIELDS.forEach(field => {
@@ -896,10 +1014,13 @@ export const EditAssayerModal: React.FC<{ assayer: Assayer; onClose: () => void;
     });
     return f;
   });
-  const [activeEditTab, setActiveEditTab] = useState(0);
+  const [activeEditTab, setActiveEditTab] = useState(wantedTab ?? 0);
   const [submitting, setSubmitting] = useState(false);
   const { skills, languages, certifications } = useWorkforceVocabulary();
   const vocabulary = { skills, languages, certifications };
+  // Loaded for the reporting-manager picker on the Employment tab. `assayer.id` is excluded
+  // so nobody can be saved as their own manager, which the column would happily have stored.
+  const managers = useManagerOptions(true, assayer.id);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault(); setSubmitting(true);
@@ -959,9 +1080,19 @@ export const EditAssayerModal: React.FC<{ assayer: Assayer; onClose: () => void;
           <div style={{ display: 'flex', gap: '8px' }}>
             <button type="button" onClick={onClose} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px' }}>Cancel</button>
             {activeEditTab < EDIT_FIELD_GROUPS.length - 1 ? (
-              <button type="button" onClick={() => setActiveEditTab(activeEditTab + 1)} className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                Next →
-              </button>
+              <>
+                {/* Someone sent here by a "no bank details" link came to fill in one section and
+                    leave. Without this they would have to press Next through four tabs they were
+                    never asked about before the only Save button appeared. */}
+                {wantedTab !== null && (
+                  <button type="submit" disabled={submitting} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    {submitting ? 'Saving...' : <><CheckCircle size={14} /> Save Changes</>}
+                  </button>
+                )}
+                <button type="button" onClick={() => setActiveEditTab(activeEditTab + 1)} className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                  Next →
+                </button>
+              </>
             ) : (
               <button type="submit" disabled={submitting} className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
                 {submitting ? 'Saving...' : <><CheckCircle size={14} /> Save Changes</>}
@@ -1005,7 +1136,9 @@ export const EditAssayerModal: React.FC<{ assayer: Assayer; onClose: () => void;
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px' }}>
           {currentGroup.fields.map(key => {
             const field = fieldsMap.get(key);
-            return field ? renderFormField(field, form, setForm, vocabulary) : null;
+            return field
+              ? renderFormField(field, form, setForm, vocabulary, undefined, { options: managers.people, failed: managers.failed })
+              : null;
           })}
         </div>
       </div>

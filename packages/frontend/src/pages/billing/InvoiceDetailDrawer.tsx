@@ -44,6 +44,12 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
   const [payNote, setPayNote] = useState('');
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState('');
+  // Which payment (if any) the reversal panel is open under, and the reason typed into it.
+  // Held per payment id rather than as a boolean so the panel can only ever belong to the row
+  // it was opened from — an invoice can carry several payments, and a reason typed against one
+  // receipt must never be submitted against another.
+  const [reversingId, setReversingId] = useState<string | null>(null);
+  const [reverseReason, setReverseReason] = useState('');
 
   if (!invoice) return <DetailDrawer open onClose={onClose} title="Loading…" width={640}><div /></DetailDrawer>;
 
@@ -88,10 +94,30 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
     } catch (e) { toast({ type: 'error', title: 'Could not cancel', message: userMessage(e) }); }
   };
 
+  /**
+   * Reversing a receipt un-books money the client has been recorded as having paid: the invoice
+   * goes back to owing that amount and starts being chased for it again.
+   *
+   * It was collected with `window.prompt`. That is the browser's own dialog — unstyled, outside
+   * the app, indistinguishable from the notification and translation pop-ups office staff have
+   * been trained to dismiss on sight, and dismissed by Escape or a stray Enter. It also blocks
+   * the page, so nothing around it can show which payment is about to be undone. For an action
+   * that moves money, the wrong shape entirely.
+   *
+   * The reason now comes from an inline panel in the drawer — deliberately the same shape as
+   * the cancel-invoice panel a few lines above, rather than a third pattern to learn: it opens
+   * under the payment it belongs to, states what reversing does, and its button stays disabled
+   * until a reason is typed. The `!reason.trim()` guard below is kept as well as the disabled
+   * button, so the reason is required by the handler and not only by the styling.
+   */
   const doReverse = async (paymentId: string) => {
-    const reason = window.prompt('Why is this payment being reversed?');
-    if (!reason?.trim()) return;
-    try { await reverse.mutateAsync({ paymentId, reason: reason.trim() }); toast('success', 'Payment reversed'); }
+    const reason = reverseReason.trim();
+    if (!reason) return;
+    try {
+      await reverse.mutateAsync({ paymentId, reason });
+      toast('success', 'Payment reversed — the invoice shows it as outstanding again');
+      setReversingId(null); setReverseReason('');
+    }
     catch (e) { toast({ type: 'error', title: 'Could not reverse', message: userMessage(e) }); }
   };
 
@@ -181,15 +207,50 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
           <h4 style={{ fontSize: 13, fontWeight: 700, margin: '0 0 6px', color: 'var(--text-primary)' }}>Payments</h4>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
             {invoice.payments.map((p) => (
-              <div key={p.id} style={{ background: 'var(--bg-tertiary)', padding: 8, borderRadius: 'var(--radius-sm)', fontSize: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-                <div>
-                  <div style={{ fontWeight: 600 }}>{p.paymentReference} · <span style={{ fontWeight: 700 }}>{money(p.amount)}</span></div>
-                  <div style={{ color: 'var(--text-muted)', marginTop: 2 }}>{paymentMethodLabel(p.method)} · {fmtDate(p.receivedDate)}{p.notes ? ` · ${p.notes}` : ''}</div>
+              <div key={p.id} style={{ background: 'var(--bg-tertiary)', padding: 8, borderRadius: 'var(--radius-sm)', fontSize: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                  <div>
+                    <div style={{ fontWeight: 600 }}>{p.paymentReference} · <span style={{ fontWeight: 700 }}>{money(p.amount)}</span></div>
+                    <div style={{ color: 'var(--text-muted)', marginTop: 2 }}>{paymentMethodLabel(p.method)} · {fmtDate(p.receivedDate)}{p.notes ? ` · ${p.notes}` : ''}</div>
+                  </div>
+                  {canAct && (
+                    <button
+                      onClick={() => { setReversingId((cur) => (cur === p.id ? null : p.id)); setReverseReason(''); }}
+                      disabled={reverse.isPending}
+                      title="Reverse this payment"
+                      style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer', display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: 11.5 }}
+                    >
+                      <Undo2 size={13} /> Reverse
+                    </button>
+                  )}
                 </div>
-                {canAct && (
-                  <button onClick={() => doReverse(p.id)} disabled={reverse.isPending} title="Reverse this payment" style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer', display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: 11.5 }}>
-                    <Undo2 size={13} /> Reverse
-                  </button>
+
+                {canAct && reversingId === p.id && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 8, paddingTop: 8, borderTop: '1px solid var(--border-color)' }}>
+                    {/* Says what happens to the money, in the words finance uses, before the
+                        reason field — not after it, where it would be read only by someone who
+                        had already decided. */}
+                    <div style={{ fontSize: 12.5 }}>
+                      Reversing <strong>{money(p.amount)}</strong> ({p.paymentReference}) removes it from what this
+                      invoice has been paid, so <strong>{invoice.invoiceNumber}</strong> will show that amount as
+                      outstanding again and the client will be chased for it.
+                      {' '}<strong>This cannot be undone here</strong> — the only way back is to record the payment again.
+                      {' '}Say why:
+                    </div>
+                    <textarea
+                      value={reverseReason}
+                      onChange={(e) => setReverseReason(e.target.value)}
+                      rows={2}
+                      placeholder="Reason *"
+                      style={{ ...inputStyle, width: '100%', resize: 'vertical' }}
+                    />
+                    <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                      <button onClick={() => { setReversingId(null); setReverseReason(''); }} className="btn btn-secondary">Keep payment</button>
+                      <button onClick={() => doReverse(p.id)} disabled={reverse.isPending || !reverseReason.trim()} className="btn btn-primary">
+                        {reverse.isPending ? 'Reversing…' : 'Reverse payment'}
+                      </button>
+                    </div>
+                  </div>
                 )}
               </div>
             ))}

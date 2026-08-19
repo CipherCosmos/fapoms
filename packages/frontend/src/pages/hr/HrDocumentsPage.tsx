@@ -367,7 +367,14 @@ export const HrDocumentsPage: React.FC = () => {
 
                     <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                       {doc.expiryDate && <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>exp {fmtDate(doc.expiryDate)}</span>}
-                      {days !== null && <ExpiryChip days={days} />}
+                      {/*
+                        * Rendered unconditionally now. It used to be guarded on `days !== null`,
+                        * so an Aadhaar recorded without an expiry date showed no chip whatsoever —
+                        * visually identical to one that is years from lapsing. The chip says
+                        * "No expiry date" for that case instead, which is the fact HR needs in
+                        * order to go and fill it in.
+                        */}
+                      <ExpiryChip days={days} date={doc.expiryDate} />
                     </div>
 
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11px', fontWeight: 700, padding: '3px 9px', borderRadius: '999px', background: meta.bg, color: meta.fg, marginLeft: 'auto' }}>

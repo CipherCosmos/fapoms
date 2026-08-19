@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { assertUploadAllowed, MAX_UPLOAD_BYTES } from './upload-validation';
+import { assertUploadAllowed, MAX_UPLOAD_BYTES, MAX_RESUMABLE_UPLOAD_BYTES } from './upload-validation';
 
 /**
  * These rules are the only thing standing between an authenticated caller and arbitrary bytes in
@@ -25,6 +25,19 @@ describe('assertUploadAllowed', () => {
     expect(() => assertUploadAllowed({ contentType: 'application/pdf', size: MAX_UPLOAD_BYTES + 1 }))
       .toThrow(BadRequestException);
     expect(() => assertUploadAllowed({ contentType: 'application/pdf', size: MAX_UPLOAD_BYTES })).not.toThrow();
+  });
+
+  it('lets the resumable route use its own, higher ceiling', () => {
+    // The two limits differ on purpose (a chunked upload survives a dropped link, a single POST
+    // does not), so the thing worth pinning is that the difference is real and in the right
+    // direction — and that a file over the resumable cap is still refused.
+    expect(MAX_RESUMABLE_UPLOAD_BYTES).toBeGreaterThan(MAX_UPLOAD_BYTES);
+    expect(() => assertUploadAllowed({
+      contentType: 'application/pdf', size: MAX_UPLOAD_BYTES + 1, maxBytes: MAX_RESUMABLE_UPLOAD_BYTES,
+    })).not.toThrow();
+    expect(() => assertUploadAllowed({
+      contentType: 'application/pdf', size: MAX_RESUMABLE_UPLOAD_BYTES + 1, maxBytes: MAX_RESUMABLE_UPLOAD_BYTES,
+    })).toThrow(BadRequestException);
   });
 
   it('treats a missing content type as the generic fallback rather than a refusal', () => {

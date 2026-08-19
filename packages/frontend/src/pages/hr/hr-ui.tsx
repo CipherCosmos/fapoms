@@ -148,15 +148,44 @@ export const Table: React.FC<{ head: string[]; rows: React.ReactNode[][] }> = ({
   </div>
 );
 
-export const ExpiryChip: React.FC<{ days: number }> = ({ days }) => {
-  const tone = days < 0
-    ? { bg: 'var(--status-cancelled-bg)', fg: 'var(--danger)' }
-    : days <= 30
-      ? { bg: 'var(--status-pending-bg)', fg: 'var(--warning)' }
-      : { bg: 'var(--bg-surface-2)', fg: 'var(--text-muted)' };
+/**
+ * How long something has left before it lapses — the one sentence every HR screen uses.
+ *
+ * EXTENDED, NOT FORKED. `days` was `number` and both extra props are optional, so the existing
+ * `<ExpiryChip days={n} />` calls (HrCapabilityPage among them, which this file cannot edit)
+ * render byte-identically to before. What was added:
+ *
+ *   `days: number | null` — a certificate or identity paper with no expiry date recorded used
+ *   to render *nothing at all*: the caller guarded on `days !== null` and skipped the chip. On
+ *   screen that is indistinguishable from a row that is still loading, or from one that is
+ *   comfortably in date. "No expiry date" is a fact about the record and it deserves to be
+ *   said, in the same chip, in the same place the countdown would have been. Callers that
+ *   still guard on null keep their old behaviour; callers that pass null get the new chip.
+ *
+ *   `date` — the expiry date itself, shown only as the chip's hover title. "12d left" does not
+ *   tell you *which day*, and the two paperwork tables print that date in different shapes
+ *   (Compliance in its own column, Documents inline as "exp …"). Carrying it on the chip means
+ *   the answer is reachable from the chip wherever the chip appears.
+ */
+export const ExpiryChip: React.FC<{ days: number | null; date?: string | null }> = ({ days, date }) => {
+  const tone = days === null
+    ? { bg: 'var(--bg-surface-2)', fg: 'var(--text-muted)' }
+    : days < 0
+      ? { bg: 'var(--status-cancelled-bg)', fg: 'var(--danger)' }
+      : days <= 30
+        ? { bg: 'var(--status-pending-bg)', fg: 'var(--warning)' }
+        : { bg: 'var(--bg-surface-2)', fg: 'var(--text-muted)' };
+  const text = days === null
+    ? 'No expiry date'
+    : days < 0 ? `${Math.abs(days)}d overdue` : `${days}d left`;
+  const title = days === null
+    ? 'No expiry date has been recorded against this record.'
+    : date
+      ? `Expires ${fmtDate(date)}`
+      : undefined;
   return (
-    <span style={{ fontSize: '10.5px', fontWeight: 700, padding: '2px 7px', borderRadius: '999px', background: tone.bg, color: tone.fg }}>
-      {days < 0 ? `${Math.abs(days)}d overdue` : `${days}d left`}
+    <span title={title} style={{ fontSize: '10.5px', fontWeight: 700, padding: '2px 7px', borderRadius: '999px', background: tone.bg, color: tone.fg }}>
+      {text}
     </span>
   );
 };

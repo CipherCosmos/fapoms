@@ -173,7 +173,14 @@ export const HrPayPage: React.FC = () => {
                         <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{a.assayerCode}{a.district ? ` · ${a.district}` : ''}</div>
                         {bankMissing(a) && (
                           <Link
-                            to={`/hr/roster?assayer=${a.id}`}
+                            /**
+                             * `section=financial` so the edit form opens on the Financial tab.
+                             * Without it this landed on the top of a four-tab form and the bank
+                             * fields — the entire reason for following this link — were three
+                             * clicks away. The modal reads the parameter itself (see
+                             * AssayerForms), so nothing has to be threaded through the roster.
+                             */
+                            to={`/hr/roster?assayer=${a.id}&section=financial`}
                             style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 600, color: 'var(--danger)', marginTop: '3px' }}
                           >
                             <AlertTriangle size={11} /> No bank details — add them

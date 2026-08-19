@@ -27,3 +27,6 @@ export * from './labels';
 export * from './utils';
 export * from './assayer-lifecycle';
 export * from './rule-bypass';
+
+// Upload size limits shared by the API and every client that offers a file picker
+export * from './upload-limits';

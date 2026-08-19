@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { Pagination } from '../../components/ui';
 import type { BranchGroup } from './DocumentControlPanel';
+import { UPLOAD_LIMIT_HINT } from '@fapoms/shared';
 
 const TYPE_META: Record<string, { label: string; short: string }> = {
   CUSTOMER_MASTER_DATA: { label: 'Customer Master Excel', short: 'Customer data' },
@@ -327,9 +328,12 @@ const StageChip: React.FC<{ active: boolean; onClick: () => void; label: string;
 
 /** A file input disguised as a chip or button — the same control that shows a
     file type is missing is what you click to supply it. */
+/* The size limit rides along in the tooltip. There is no room on a chip this small for a
+   sentence, but there is no excuse for the limit being discoverable only by failing an upload —
+   and the picker itself refuses an oversized file immediately (`Documents.tsx`). */
 const UploadChip: React.FC<{ label: string; title: string; busy: boolean; onFile: (file: File) => void; variant?: 'chip' | 'button' }> = ({ label, title, busy, onFile, variant = 'chip' }) => (
   <label
-    title={title}
+    title={`${title} — ${UPLOAD_LIMIT_HINT}`}
     style={variant === 'button' ? {
       display: 'inline-flex', alignItems: 'center', gap: 4, padding: '3px 9px', fontSize: 11, fontWeight: 600,
       background: 'var(--status-completed-bg)', color: 'var(--success)', border: '1px solid var(--status-completed-bg)',
