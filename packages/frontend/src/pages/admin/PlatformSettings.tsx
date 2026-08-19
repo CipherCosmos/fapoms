@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   SlidersHorizontal, Mail, Clock, Wallet, Receipt, Database, Send,
-  RotateCcw, Info, CheckCircle2, XCircle, Eye, EyeOff,
+  RotateCcw, Info, CheckCircle2, XCircle, Eye, EyeOff, AlertTriangle,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { api } from '../../services/api';
@@ -11,7 +11,15 @@ import { useToast, Select } from '../../components/ui';
 import {
   SectionCard, SettingRow, Toggle, Pill, controlStyle,
 } from '../../components/ui/settings';
-import { useCurrentRoles, canAdministerPlatformSettings } from '../../hooks/useCurrentRoles';
+import { useCurrentRoles, canAdministerPlatformSettings, canAdministerDataReset } from '../../hooks/useCurrentRoles';
+import { DangerZoneSection } from './DangerZone/DangerZoneSection';
+
+/**
+ * Client-side-only nav entry — the data-reset domains have no corresponding "setting group" on
+ * the server (they aren't a saved-value/environment/default setting at all), so unlike every
+ * other row in `groups` this one is never fetched, just appended.
+ */
+const DANGER_ZONE_GROUP = { key: 'dangerZone', label: 'Danger zone', description: 'Clear accumulated test data — everything here is destructive.' };
 
 /**
  * Platform Settings.
@@ -53,6 +61,7 @@ const GROUP_ICON: Record<string, React.ElementType> = {
   fees: Wallet,
   billing: Receipt,
   retention: Database,
+  dangerZone: AlertTriangle,
 };
 
 
@@ -63,7 +72,9 @@ const APPLIES_LABEL: Record<string, string> = {
 };
 
 export const PlatformSettings: React.FC = () => {
-  const canEdit = canAdministerPlatformSettings(useCurrentRoles());
+  const roles = useCurrentRoles();
+  const canEdit = canAdministerPlatformSettings(roles);
+  const canWipeData = canAdministerDataReset(roles);
   const queryClient = useQueryClient();
   const { toast } = useToast();
 
@@ -81,7 +92,10 @@ export const PlatformSettings: React.FC = () => {
     queryFn: () => api.request<any>('/platform-settings'),
   });
   const payload = res ? (res as { groups: Group[]; settings: Setting[] }) : null;
-  const groups = payload?.groups ?? [];
+  const groups = useMemo(
+    () => [...(payload?.groups ?? []), ...(canWipeData ? [DANGER_ZONE_GROUP] : [])],
+    [payload, canWipeData],
+  );
   const settings = useMemo(() => payload?.settings ?? [], [payload]);
 
   const { data: emailStatusRes } = useQuery({
@@ -250,7 +264,7 @@ export const PlatformSettings: React.FC = () => {
       {!canEdit && (
         <div className="glass-card" style={{ padding: '10px 14px', display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12px', color: 'var(--text-secondary)' }}>
           <Info size={14} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-          You can see how the platform is configured. Changing it is limited to administrators.
+          You can see how the platform is configured. Changing it is limited to super administrators.
         </div>
       )}
 
@@ -336,6 +350,9 @@ export const PlatformSettings: React.FC = () => {
             </SectionCard>
           )}
 
+          {activeGroup === 'dangerZone' ? (
+            <DangerZoneSection />
+          ) : (
           <SectionCard
             title={groups.find((g) => g.key === activeGroup)?.label ?? 'Settings'}
             description={groups.find((g) => g.key === activeGroup)?.description}
@@ -391,6 +408,7 @@ export const PlatformSettings: React.FC = () => {
               ))
             )}
           </SectionCard>
+          )}
 
           {activeGroup === 'fees' && (
             <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', display: 'flex', gap: '8px', alignItems: 'flex-start', padding: '0 4px' }}>

@@ -7,8 +7,9 @@
 
 FROM node:22-alpine
 
-# Install OS-level deps for native modules (bcrypt, pg)
-RUN apk add --no-cache python3 make g++
+# Install OS-level deps for native modules (bcrypt, pg) and the pg_dump client the data-reset
+# feature's on-demand backup shells out to (see infrastructure/data-reset/backup-on-demand.service.ts).
+RUN apk add --no-cache python3 make g++ postgresql16-client
 
 WORKDIR /app
 

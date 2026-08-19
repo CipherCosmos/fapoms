@@ -87,7 +87,19 @@ export function canManageHolidays(roles: SystemRole[]): boolean {
  * changes either list next.
  */
 export function canAdministerPlatformSettings(roles: SystemRole[]): boolean {
-  return roles.some((r) => [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR].includes(r));
+  // Super administrators only, by decision (2026-08-17) — mirrors SETTINGS_ADMIN_ROLES.
+  return roles.includes(SystemRole.SUPER_ADMINISTRATOR);
+}
+
+/**
+ * The "Danger Zone" data-reset tool. Named after its own feature rather than reusing
+ * `canAdministerPlatformSettings` for the same reason the comment above it gives: they gate
+ * different backends, and a wipe-the-database permission check should not silently ride along
+ * with whatever platform-settings decides next. Mirrors the controller-level
+ * `@Roles(SystemRole.SUPER_ADMINISTRATOR)` on `DataResetController`.
+ */
+export function canAdministerDataReset(roles: SystemRole[]): boolean {
+  return roles.includes(SystemRole.SUPER_ADMINISTRATOR);
 }
 
 /**
@@ -111,7 +123,8 @@ export function canManageTransportRates(roles: SystemRole[]): boolean {
  * one desk's planning inputs. Mirrors NOTIFICATION_ADMIN_ROLES on the backend controller.
  */
 export function canAdministerNotifications(roles: SystemRole[]): boolean {
-  return roles.some((r) => [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR].includes(r));
+  // Super administrators only, by decision (2026-08-17) — mirrors NOTIFICATION_ADMIN_ROLES.
+  return roles.includes(SystemRole.SUPER_ADMINISTRATOR);
 }
 
 /** Business rules feed candidate scoring directly — operations own this too. */

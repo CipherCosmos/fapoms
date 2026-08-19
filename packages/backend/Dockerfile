@@ -28,6 +28,11 @@ FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
+# pg_dump for the data-reset feature's on-demand backup — see
+# infrastructure/data-reset/backup-on-demand.service.ts. Runner stage only; the builder never
+# needs it.
+RUN apk add --no-cache postgresql16-client
+
 COPY package*.json ./
 COPY packages/shared/package*.json packages/shared/
 COPY packages/backend/package*.json packages/backend/

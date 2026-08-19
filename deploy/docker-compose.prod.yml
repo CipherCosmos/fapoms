@@ -221,6 +221,14 @@ services:
       # the cgroup with no log line. Keep ~500 MB between the two for buffers, sockets, TLS
       # and the file uploads that pass through this process.
       NODE_OPTIONS: ${BACKEND_NODE_OPTIONS:---max-old-space-size=1024}
+    volumes:
+      # On-demand pg_dump snapshots from the data-reset "danger zone" feature (see
+      # infrastructure/data-reset/backup-on-demand.service.ts). A named volume rather than a
+      # bind-mount next to backup.sh's own ~/backups/fapoms — compose's variable interpolation
+      # doesn't expand `~`, and this avoids depending on FAPOMS_BACKUP_DIR being exported in the
+      # exact shell that runs `compose up`. To hand a specific dump to `restore.sh`:
+      #   podman cp deploy-backend-1:/app/backups/<file>.dump ~/backups/fapoms/on-demand/
+      - backupsdata:/app/backups
     mem_limit: ${BACKEND_MEM_LIMIT:-1536m}
     # A deploy or restart used to get podman's default 10 s before SIGKILL, against a
     # request timeout of 300 s: field uploads, Excel imports and OCR jobs in flight were cut
@@ -287,3 +295,4 @@ volumes:
   redisdata:
   miniodata:
   caddydata:
+  backupsdata:

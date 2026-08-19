@@ -190,6 +190,9 @@ services:
       - /app/node_modules
       - /app/packages/backend/node_modules
       - /app/packages/shared/node_modules
+      # On-demand pg_dump snapshots from the data-reset "danger zone" feature — named, so they
+      # survive a container recreate the same way pgdata does.
+      - backupsdata:/app/backups
     depends_on:
       postgres:
         condition: service_healthy
@@ -284,4 +287,6 @@ volumes:
   redisdata:
     driver: local
   miniodata:
+    driver: local
+  backupsdata:
     driver: local

@@ -7,7 +7,11 @@ import { AuthService } from '../../modules/auth/auth.service';
 import { MetricsService } from '../observability/metrics.service';
 
 /**
- * FAPOMS — the only thing in this system that deletes anything.
+ * FAPOMS — the only *scheduled* thing in this system that deletes anything.
+ *
+ * (The other is `DataResetModule` — a super administrator clearing accumulated test/seed data on
+ * demand, not a recurring job. Different trigger, different audience, same discipline: neither
+ * touches `audit_events`, `workflow_history`, or anything this comment already says is evidence.)
  *
  * ## Why this exists
  *

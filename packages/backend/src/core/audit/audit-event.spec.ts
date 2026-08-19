@@ -1,4 +1,4 @@
-import { AuditEvent } from './audit-event';
+import { AuditEvent, NOT_A_RECORD_ENTITY_ID } from './audit-event';
 import { EventCategory } from '@fapoms/shared';
 
 const base = {
@@ -65,6 +65,59 @@ describe('AuditEvent', () => {
     it('accepts an uppercase uuid', () => {
       const actor = 'AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE';
       expect(AuditEvent.record({ ...base, userId: actor }).userId).toBe(actor);
+    });
+  });
+
+  describe('the subject', () => {
+    it('keeps a uuid entity id as the subject', () => {
+      const event = AuditEvent.record({ ...base });
+
+      expect(event.entityId).toBe(base.entityId);
+      expect(event.metadata).toBeNull();
+    });
+
+    it('refuses a non-uuid entity id rather than letting the insert throw', () => {
+      // `entity_id` is `uuid NOT NULL`. This is the bug that made the whole class of it
+      // visible: the platform-settings controller passed a setting key here, Postgres
+      // rejected every insert, and the caller swallowed the error — so no settings change
+      // was ever audited and the trail's emptiness was the only symptom.
+      const event = AuditEvent.record({ ...base, entityId: 'email.transport' });
+
+      expect(event.entityId).toBe(NOT_A_RECORD_ENTITY_ID);
+      expect(event.metadata).toEqual({ unresolvedEntityId: 'email.transport' });
+    });
+
+    it('treats a missing entity id as no record, with nothing to preserve', () => {
+      const event = AuditEvent.record({ ...base, entityId: null as any });
+
+      expect(event.entityId).toBe(NOT_A_RECORD_ENTITY_ID);
+      expect(event.metadata).toBeNull();
+    });
+
+    it('leaves the sentinel alone when a caller passes it deliberately', () => {
+      // A caller with no record to name is expected to say so outright. Annotating that as
+      // unresolved would turn the intended value into evidence of a mistake.
+      const event = AuditEvent.record({ ...base, entityId: NOT_A_RECORD_ENTITY_ID });
+
+      expect(event.entityId).toBe(NOT_A_RECORD_ENTITY_ID);
+      expect(event.metadata).toBeNull();
+    });
+
+    it('preserves a refused subject alongside a refused actor and caller metadata', () => {
+      const event = AuditEvent.record({
+        ...base,
+        entityId: 'ALL',
+        userId: 'system',
+        metadata: { reason: 'nightly sweep' },
+      });
+
+      expect(event.entityId).toBe(NOT_A_RECORD_ENTITY_ID);
+      expect(event.userId).toBeNull();
+      expect(event.metadata).toEqual({
+        reason: 'nightly sweep',
+        unresolvedActor: 'system',
+        unresolvedEntityId: 'ALL',
+      });
     });
   });
 

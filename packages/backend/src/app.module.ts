@@ -64,6 +64,7 @@ import { createResilientThrottlerStorage } from './infrastructure/http/throttlin
 import { MetricsService } from './infrastructure/observability/metrics.service';
 import { APP_GUARD } from '@nestjs/core';
 import { PlatformSettingsModule } from './infrastructure/settings/platform-settings.module';
+import { DataResetModule } from './infrastructure/data-reset/data-reset.module';
 
 @Module({
   imports: [
@@ -162,6 +163,9 @@ import { PlatformSettingsModule } from './infrastructure/settings/platform-setti
     // location pings grow by roughly 10 GB a year between them, and the only DELETE that
     // existed was a location purge whose retention defaulted to "never".
     RetentionModule,
+    // The second thing in this system that deletes anything — unlike RetentionModule, operator
+    // invoked rather than scheduled: a super administrator clearing accumulated test/seed data.
+    DataResetModule,
 
     // Core modules
     AuditModule,
