@@ -644,6 +644,76 @@ describe('ProjectService', () => {
         expect(patch).not.toHaveProperty('riskScore');
       });
     });
+
+    /**
+     * What the preflight counts decides whether the operator waits or is sent to a status URL.
+     * It used to count "rows without a Latitude column" — a fair proxy until the template stopped
+     * asking for coordinates, after which every row looked like a lookup. A re-import of 72
+     * unchanged branches was deferred to a background job that ran zero geocodes in one second.
+     */
+    describe('preflight — counts the lookups that will actually happen', () => {
+      const preflight = (rows: Record<string, any>[]) =>
+        service.preflightBranchExcel('p-1', sheetBuffer(rows));
+
+      /** A row shaped like the current template: no coordinate columns at all. */
+      const noCoords = (over: Record<string, any> = {}) => {
+        const { Latitude: _lat, Longitude: _lng, ...rest } = templateRow(over);
+        return rest;
+      };
+
+      beforeEach(() => {
+        mockProjectQueryService.findOne.mockResolvedValue({ id: 'p-1', clientId: 'c-1', organizationId: 'o-1' });
+      });
+
+      it('counts every row when the branches are new to this client', async () => {
+        mockBranchRepo.find.mockResolvedValue([]);
+
+        const result = await preflight([noCoords({ BRANCH: 'NEW-1' }), noCoords({ BRANCH: 'NEW-2' })]);
+
+        expect(result.rowsNeedingGeocode).toBe(2);
+      });
+
+      it('counts nothing when every branch is already known and has not moved', async () => {
+        mockBranchRepo.find.mockResolvedValue([
+          { branchCode: 'BR-1', address: '1 Main Road, Palakkad 678001', district: 'PALAKKAD', state: 'Kerala' },
+        ]);
+
+        const result = await preflight([noCoords()]);
+
+        // The whole point: this import runs in the request in milliseconds, so the operator is
+        // never told to go and watch a job that has already finished.
+        expect(result.rowsNeedingGeocode).toBe(0);
+        expect(result.totalRows).toBe(1);
+      });
+
+      it('counts a known branch again once its address moves', async () => {
+        mockBranchRepo.find.mockResolvedValue([
+          { branchCode: 'BR-1', address: 'The old address', district: 'PALAKKAD', state: 'Kerala' },
+        ]);
+
+        const result = await preflight([noCoords()]);
+
+        expect(result.rowsNeedingGeocode).toBe(1);
+      });
+
+      it('counts a known branch again when its district or state is corrected', async () => {
+        mockBranchRepo.find.mockResolvedValue([
+          { branchCode: 'BR-1', address: '1 Main Road, Palakkad 678001', district: 'THRISSUR', state: 'Kerala' },
+        ]);
+
+        await expect(preflight([noCoords()])).resolves.toMatchObject({ rowsNeedingGeocode: 1 });
+      });
+
+      it('never counts a row that carries its own coordinates', async () => {
+        mockBranchRepo.find.mockResolvedValue([]);
+
+        // templateRow still supplies Latitude/Longitude — a client export may carry them.
+        const result = await preflight([templateRow({ BRANCH: 'NEW-9' })]);
+
+        expect(result.rowsNeedingGeocode).toBe(0);
+      });
+    });
+
   });
 
   describe('generateBranchTemplate', () => {

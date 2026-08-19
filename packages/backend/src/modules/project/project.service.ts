@@ -735,20 +735,71 @@ export class ProjectService implements OnModuleInit {
   async preflightBranchExcel(projectId: string, fileBuffer: Buffer): Promise<BranchImportPreflight> {
     // Settled in the request, so an upload against a project that does not exist still 404s
     // immediately rather than being accepted and failing inside a job nobody is watching.
-    await this.findOne(projectId);
+    const project = await this.findOne(projectId);
     const sheet = this.parseBranchSheet(fileBuffer);
 
-    let rowsNeedingGeocode = 0;
+    /**
+     * A row already in the database does not cost a geocode, and the estimate has to know that.
+     *
+     * This counted "rows with no Latitude/Longitude column" — which was a fair proxy while the
+     * template still asked for coordinates. It no longer does (they are derived), so every row
+     * looked like a lookup and every file over 25 rows was deferred to a background job. Measured
+     * on a real re-import of 72 unchanged branches: preflight said "72 need a location looked up",
+     * the job ran zero geocodes and finished in **one second** — after telling the operator to go
+     * and watch a status URL.
+     *
+     * What actually costs a lookup is a branch this client has never seen, or one whose address
+     * moved: `BranchService.update` re-resolves only when the address, district or state changes
+     * (a hand-placed pin survives even then). So the estimate asks the same question the importer
+     * will, with the same one `In(codes)` query the importer already issues per file.
+     */
+    const candidates: Array<{ code: string; address: string; district: string; state: string; hasCoords: boolean }> = [];
     for (const row of sheet.rows) {
       const get = rowReader(row);
       // The same blank-trailing-row test the importer uses, so the estimate counts the rows that
       // will actually be worked rather than the empty ones Excel leaves at the bottom of a sheet.
-      if (!get('BRANCH_NAME', 'Branch Name', 'BranchName', 'Name') && !get('BRANCH', 'Branch Code', 'BranchCode', 'BrCode', 'Code', 'SOL ID', 'SolId')) {
-        continue;
-      }
+      const name = get('BRANCH_NAME', 'Branch Name', 'BranchName', 'Name');
+      const code = get('BRANCH', 'Branch Code', 'BranchCode', 'BrCode', 'Code', 'SOL ID', 'SolId');
+      if (!name && !code) continue;
       const lat = parseFloat(get('Latitude', 'Lat'));
       const lng = parseFloat(get('Longitude', 'Lng', 'Long'));
-      if (!Number.isFinite(lat) || !Number.isFinite(lng)) rowsNeedingGeocode++;
+      candidates.push({
+        code,
+        address: get('Branch Address', 'Address', 'BranchAddress'),
+        district: get('DISTRICT', 'District', 'DistrictName').toUpperCase(),
+        state: get('STATE', 'State', 'StateName'),
+        // A sheet that still carries coordinates skips the lookup entirely — see the importer.
+        hasCoords: Number.isFinite(lat) && Number.isFinite(lng),
+      });
+    }
+
+    const codes = candidates.map((c) => c.code).filter(Boolean);
+    const known = codes.length
+      ? await this.branchRepository.find({
+          where: {
+            branchCode: In(codes),
+            isActive: true,
+            ...(project.clientId ? { clientId: project.clientId } : {}),
+          },
+          select: ['branchCode', 'address', 'district', 'state'],
+        })
+      : [];
+    const knownByCode = new Map(known.map((b) => [b.branchCode, b]));
+
+    let rowsNeedingGeocode = 0;
+    for (const c of candidates) {
+      if (c.hasCoords) continue;
+      const existing = knownByCode.get(c.code);
+      if (!existing) {
+        rowsNeedingGeocode++; // A new branch: always located from its address.
+        continue;
+      }
+      // Mirrors the patch the importer builds, and `BranchService.update`'s re-resolve test.
+      const moved =
+        (!!c.address && c.address !== existing.address) ||
+        (!!c.district && c.district !== existing.district) ||
+        (!!c.state && c.state !== existing.state);
+      if (moved) rowsNeedingGeocode++;
     }
 
     return { totalRows: sheet.rows.length, rowsNeedingGeocode, sheetName: sheet.sheetName };
@@ -1203,7 +1254,14 @@ export class ProjectService implements OnModuleInit {
            * this project's priority happens to be. It is set once, at creation.
            */
           if (calculatedHours !== null) {
-            patch.estimatedDurationHours = calculatedHours;
+            // Compared, not assigned blindly. This wrote the hours on every re-import whether or
+            // not they had changed, so `patch` was never empty: an identical sheet re-imported
+            // 72 branches, wrote 72 rows, raised 72 audit events, and reported "updated: 72"
+            // when nothing had actually changed. Complexity was already compared; hours now are
+            // too, so an unchanged re-import touches nothing and says so.
+            if (Number(branch.estimatedDurationHours) !== calculatedHours) {
+              patch.estimatedDurationHours = calculatedHours;
+            }
             const derivedComplexity = complexityFromPackets(packetCount);
             if (branch.complexity !== derivedComplexity) patch.complexity = derivedComplexity;
           }
