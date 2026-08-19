@@ -88,7 +88,12 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
   return (
     <Modal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
       <View style={{ flex: 1, backgroundColor: t.colors.scrim, justifyContent: 'center', padding: t.space.lg }}>
-        <Card level={2} style={{ gap: t.space.sm, padding: t.space.lg, maxHeight: '82%' }}>
+        {/* `level={1}` (not 2): this sheet used to carry the heaviest shadow in the app on its
+            outer frame AND every row inside it carried its own border+shadow again — two tiers
+            of elevation compounding into a stack of visibly separate boxes. One moderate shadow
+            on the outer sheet is enough to lift it off the scrim; the rows below no longer need
+            their own. */}
+        <Card level={1} style={{ gap: t.space.sm, padding: t.space.lg, maxHeight: '82%' }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
             <AppText variant="h3">
               Notifications{unreadCount > 0 ? ` (${unreadCount})` : ''}
@@ -132,8 +137,19 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
              * cue that more existed below the fold.
              */
             <ScrollView style={{ flexShrink: 1 }} contentContainerStyle={{ paddingBottom: t.space.sm }}>
-              <View style={{ gap: t.space.sm }}>
-                {notifications.map((n) => {
+              {/* One bordered container for the whole list, hairline dividers between rows —
+                  the same single-container-with-dividers shape as GroupedSection, rather than a
+                  stack of individually-bordered, individually-shadowed Cards. A per-row border +
+                  elevation + accent rail + icon box was four layers of chrome repeated on every
+                  item; a scannable notification list only needs the icon and the text to differ
+                  row to row, not the frame around them. GroupedRow itself isn't reused directly
+                  because a row here needs a 3-line message preview and a swipe gesture riding on
+                  top of it, which GroupedRow's fixed single-line layout doesn't carry. */}
+              <View style={{
+                backgroundColor: t.colors.surfaceAlt, borderRadius: t.radius.lg,
+                borderWidth: 1, borderColor: t.colors.border, overflow: 'hidden',
+              }}>
+                {notifications.map((n, i) => {
                   /**
                    * One row, one swipe action, always the opposite of its current state — swipe
                    * an unread item to mark it read without opening it (triaging a long list one
@@ -143,30 +159,40 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
                    * swipe distance just resolves to whichever half exists.
                    */
                   const row = (
-                    <Card level={1} padded={false}>
-                      <View style={{ flexDirection: 'row' }}>
-                        <View style={{ width: 4, backgroundColor: n.isRead ? 'transparent' : t.colors.accent }} />
-                        <View style={{ flex: 1, flexDirection: 'row', gap: t.space.md, padding: t.space.md, alignItems: 'flex-start' }}>
-                          <View style={{
-                            width: 36, height: 36, borderRadius: t.radius.md,
-                            backgroundColor: n.isRead ? t.colors.surfaceAlt : t.colors.accentSoft,
-                            alignItems: 'center', justifyContent: 'center',
-                          }}>
-                            <Icon name={iconFor(n)} size={16} color={n.isRead ? t.colors.textFaint : t.colors.accent} />
+                    <View>
+                      <View style={{ flexDirection: 'row', gap: t.space.md, padding: t.space.md, alignItems: 'flex-start' }}>
+                        <View style={{
+                          width: 32, height: 32, borderRadius: t.radius.sm,
+                          backgroundColor: n.isRead ? t.colors.surfacePress : t.colors.accentSoft,
+                          alignItems: 'center', justifyContent: 'center',
+                        }}>
+                          <Icon name={iconFor(n)} size={15} color={n.isRead ? t.colors.textFaint : t.colors.accent} />
+                        </View>
+                        <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+                          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                            {/* A small dot carries the same "unread" signal the old full-height
+                                accent rail did, without a coloured bar running down every row. */}
+                            {!n.isRead && (
+                              <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: t.colors.accent }} />
+                            )}
+                            <AppText variant={n.isRead ? 'body' : 'bodyStrong'} numberOfLines={2} style={{ flex: 1 }}>
+                              {n.title}
+                            </AppText>
                           </View>
-                          <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
-                            <AppText variant={n.isRead ? 'body' : 'bodyStrong'} numberOfLines={2}>{n.title}</AppText>
-                            {n.message ? <AppText variant="small" tone="muted" numberOfLines={3}>{n.message}</AppText> : null}
-                            <AppText variant="caption" tone="faint">{relative(n.createdAt)}</AppText>
-                          </View>
+                          {n.message ? <AppText variant="small" tone="muted" numberOfLines={3}>{n.message}</AppText> : null}
+                          <AppText variant="caption" tone="faint">{relative(n.createdAt)}</AppText>
                         </View>
                       </View>
-                    </Card>
+                      {i < notifications.length - 1 && (
+                        <View style={{ height: 1, backgroundColor: t.colors.border, marginLeft: 32 + t.space.md + t.space.md }} />
+                      )}
+                    </View>
                   );
 
                   return (
                     <SwipeableRow
                       key={n.id}
+                      style={{ borderRadius: 0 }}
                       leftAction={
                         n.isRead && onMarkUnread
                           ? { icon: 'mail-unread-outline', label: 'Unread', color: t.colors.accent, onTrigger: () => onMarkUnread(n.id) }
