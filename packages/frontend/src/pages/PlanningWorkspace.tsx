@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { Compass, Check, X, AlertTriangle, CheckCircle, Search, Star, Briefcase, MapPin, Phone, Mail, Award, Clock, DollarSign, Calendar, TrendingUp, Building2, Route, Users, Layers, Smartphone, Package, Car, Flame, BarChart3, Zap, ClipboardList, Send, Bus, Download, Eye, MessageCircle, Map as MapIcon, Home, Hourglass } from 'lucide-react';
-import { ProjectBranchStatus, branchStatusLabel, roleLabel, formatDateOnly, formatRouteDistance, formatTravelTime, type RouteSource } from '@fapoms/shared';
+import { ProjectBranchStatus, roleLabel, formatDateOnly, formatRouteDistance, formatTravelTime, type RouteSource } from '@fapoms/shared';
 import { branchStatusLabel, BRANCH_COVERED_STATUSES, localDateKey, todayDateKey } from '../utils/statusLabels';
 import { api } from '../services/api';
 import { userMessage } from '../services/errors';
