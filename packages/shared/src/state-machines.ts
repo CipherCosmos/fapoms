@@ -1,6 +1,7 @@
 import {
   BillingState,
   ClientLifecycleStatus,
+  DocumentStatus,
   InvoiceStatus,
   AssayerPayableStatus,
   ProjectStatus,
@@ -112,6 +113,59 @@ export const VALIDATION_TRANSITIONS: TransitionMap<ValidationStatus> = {
   [ValidationStatus.CORRECTION_REQUIRED]: [ValidationStatus.HUMAN_REVIEW],
   [ValidationStatus.APPROVED]: [ValidationStatus.SUBMITTED],
 };
+
+/**
+ * A packet's journey, and the only way it is allowed to go.
+ *
+ * Documents were the one lifecycle in this system with no transition map. Every other status
+ * column — assignment, project, invoice, payable, assayer — is guarded by one; a document's
+ * was written straight from the request body, so `PATCH /documents/:id/status` could set any
+ * of the nine states from any other. A packet that had come back from the field, been typed
+ * up and delivered could be sent to UPLOADED, at which point it reappeared in the
+ * awaiting-dispatch queue and in the "blocked, paperwork never sent" banner, and staff would
+ * re-send paperwork that was already finished.
+ *
+ * Two artifacts share this pipeline and enter it at different points. A PRE_FIELD_AUDIT_PDF
+ * is uploaded and goes out: UPLOADED → DISPATCHED → RECEIVED. An AUDITED_RETURN_PDF is
+ * uploaded *by* the assayer and is received in the same act: UPLOADED → RECEIVED. A
+ * GENERATED_EXCEL is neither — it is produced at the end, so UPLOADED → COMPLETED. Hence
+ * UPLOADED has three exits rather than one.
+ *
+ * The rule the map encodes is that a packet only ever moves forward. Nothing here goes back:
+ * a hand-back from data entry stamps `data_entry_completed_at` and leaves the status where it
+ * is, precisely because the packet has not moved anywhere. ARCHIVED is reachable from every
+ * state and is terminal — it is how a packet leaves the pipeline without pretending it
+ * finished it.
+ */
+export const DOCUMENT_TRANSITIONS: TransitionMap<DocumentStatus> = {
+  [DocumentStatus.UPLOADED]: [
+    DocumentStatus.DISPATCHED,
+    DocumentStatus.RECEIVED,
+    DocumentStatus.COMPLETED,
+    DocumentStatus.ARCHIVED,
+  ],
+  [DocumentStatus.DISPATCHED]: [DocumentStatus.RECEIVED, DocumentStatus.ARCHIVED],
+  [DocumentStatus.RECEIVED]: [
+    DocumentStatus.SENT_TO_DATA_ENTRY,
+    DocumentStatus.SENT_TO_EXTERNAL_OCR,
+    DocumentStatus.ARCHIVED,
+  ],
+  [DocumentStatus.SENT_TO_DATA_ENTRY]: [
+    DocumentStatus.SENT_TO_EXTERNAL_OCR,
+    DocumentStatus.EXCEL_GENERATED,
+    DocumentStatus.ARCHIVED,
+  ],
+  [DocumentStatus.SENT_TO_EXTERNAL_OCR]: [DocumentStatus.EXCEL_GENERATED, DocumentStatus.ARCHIVED],
+  [DocumentStatus.EXCEL_GENERATED]: [DocumentStatus.PROCESSED, DocumentStatus.ARCHIVED],
+  [DocumentStatus.PROCESSED]: [DocumentStatus.COMPLETED, DocumentStatus.ARCHIVED],
+  [DocumentStatus.COMPLETED]: [DocumentStatus.ARCHIVED],
+  [DocumentStatus.ARCHIVED]: [],
+};
+
+/** Whether a packet may move from one state to the other. Re-stating the same state is not a move. */
+export function canTransitionDocument(from: DocumentStatus, to: DocumentStatus): boolean {
+  return isValidTransition(DOCUMENT_TRANSITIONS, from, to);
+}
 
 export function isValidTransition<T extends string>(
   transitions: TransitionMap<T>,

@@ -11,7 +11,10 @@ import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { NotificationService } from '../notifications/notification.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { PushNotificationService } from '../notifications/push-notification.service';
-import { EventCategory, DocumentStatus, DocumentType, AssessmentStatus, DispatchMethod, businessTodayDateKey } from '@fapoms/shared';
+import {
+  EventCategory, DocumentStatus, DocumentType, AssessmentStatus, DispatchMethod, businessTodayDateKey,
+  DOCUMENT_TRANSITIONS, canTransitionDocument,
+} from '@fapoms/shared';
 
 /** Branch rows returned when the caller names no window. */
 const BRANCH_PAGE_DEFAULT = 25;
@@ -179,7 +182,10 @@ export class DocumentService {
     doc.assignedAt = new Date();
     doc.assignedBy = actorId;
     doc.dataEntryCompletedAt = null;
-    if (doc.status === DocumentStatus.RECEIVED) {
+    // Advance only from a state the pipeline actually allows it from — in practice RECEIVED,
+    // stated through the shared map rather than re-asserted here, so there is one rule about
+    // where a packet may move and not two. A packet already past this point keeps its place.
+    if (canTransitionDocument(doc.status, DocumentStatus.SENT_TO_DATA_ENTRY)) {
       doc.status = DocumentStatus.SENT_TO_DATA_ENTRY;
       doc.sentToDataEntryAt = doc.sentToDataEntryAt ?? new Date();
     }
@@ -445,9 +451,31 @@ export class DocumentService {
     return doc;
   }
 
+  /**
+   * Move a packet one step along the pipeline.
+   *
+   * This wrote whatever it was handed. Every other lifecycle in the system is guarded by a transition map in
+   * `@fapoms/shared`; documents were the exception, so a finished packet could be sent back to
+   * UPLOADED and would reappear in the awaiting-dispatch queue and the "paperwork never sent"
+   * banner, and staff would re-send work that was already delivered. See DOCUMENT_TRANSITIONS
+   * for the shape of the journey and why UPLOADED has three exits.
+   *
+   * Re-stating the status a packet already holds is a no-op rather than an error: the callers
+   * below are retried (the dispatch worker, the receive path called from a `.catch(() => {})`),
+   * and a retry that lands on the state it was aiming for has succeeded, not failed.
+   */
   async updateStatus(id: string, status: DocumentStatus, userId: string): Promise<DocumentEntity> {
     const doc = await this.findOne(id);
     const prevStatus = doc.status;
+
+    if (prevStatus === status) return doc;
+    if (!canTransitionDocument(prevStatus, status)) {
+      throw new BadRequestException(
+        `A document at ${prevStatus} cannot move to ${status}. Paperwork only moves forward: ` +
+        `${(DOCUMENT_TRANSITIONS[prevStatus] ?? []).join(', ') || 'nothing follows this state'}.`,
+      );
+    }
+
     doc.status = status;
     doc.updatedBy = userId;
 

@@ -173,6 +173,62 @@ describe('DocumentService', () => {
    * branch being "listed twice" — and so branches with zero documents, which a
    * flat per-document list can never show, still surface as a gap.
    */
+  /**
+   * The guard on the status column itself.
+   *
+   * `updateStatus` is what every transition funnels through, and it used to write whatever it
+   * was given. These pin that it now refuses a rewind, and that a retry landing on the state it
+   * was aiming for still succeeds — the dispatch worker and the receive path both retry, and
+   * treating "already there" as a failure would turn a successful retry into an error.
+   */
+  describe('updateStatus transition guard', () => {
+    const doc = (status: DocumentStatus) => ({
+      id: 'doc-1', fileName: 'return.pdf', status, assessmentId: 'as-1', isActive: true,
+    });
+
+    beforeEach(() => {
+      mockDocumentRepo.save.mockImplementation(async (d: any) => d);
+      mockAuditService.recordEvent.mockResolvedValue(undefined);
+    });
+
+    it('refuses to send a finished packet back to the start of the pipeline', async () => {
+      mockDocumentRepo.findOne.mockResolvedValue(doc(DocumentStatus.COMPLETED));
+
+      await expect(service.updateStatus('doc-1', DocumentStatus.UPLOADED, 'u-1'))
+        .rejects.toThrow(BadRequestException);
+      // And nothing was written — the refusal has to happen before the save, or the audit
+      // trail records a transition that the packet did not make.
+      expect(mockDocumentRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('refuses to un-receive a packet that is already with data entry', async () => {
+      mockDocumentRepo.findOne.mockResolvedValue(doc(DocumentStatus.SENT_TO_DATA_ENTRY));
+
+      await expect(service.updateStatus('doc-1', DocumentStatus.RECEIVED, 'u-1'))
+        .rejects.toThrow(/only moves forward/i);
+    });
+
+    it('allows the step the pipeline actually takes', async () => {
+      mockDocumentRepo.findOne.mockResolvedValue(doc(DocumentStatus.RECEIVED));
+
+      const saved = await service.updateStatus('doc-1', DocumentStatus.SENT_TO_DATA_ENTRY, 'u-1');
+
+      expect(saved.status).toBe(DocumentStatus.SENT_TO_DATA_ENTRY);
+      expect(mockDocumentRepo.save).toHaveBeenCalled();
+    });
+
+    it('treats a retry onto the same status as done, not as an illegal move', async () => {
+      mockDocumentRepo.findOne.mockResolvedValue(doc(DocumentStatus.DISPATCHED));
+
+      const saved = await service.updateStatus('doc-1', DocumentStatus.DISPATCHED, 'u-1');
+
+      expect(saved.status).toBe(DocumentStatus.DISPATCHED);
+      // No second save and no second audit row: nothing happened, so nothing is recorded.
+      expect(mockDocumentRepo.save).not.toHaveBeenCalled();
+      expect(mockAuditService.recordEvent).not.toHaveBeenCalled();
+    });
+  });
+
   describe('operationsOverview branch grouping', () => {
     /**
      * Seven queries now, not one.

@@ -936,11 +936,42 @@ export class DocumentController {
     };
   }
 
+  /**
+   * The states a packet reaches by being moved, each with the route that moves it.
+   *
+   * Every one of these has side effects that the status alone does not carry: dispatching
+   * stamps who sent it, when and how, syncs the assessment and notifies the assayer;
+   * receiving stamps the return; delegating names an owner. Writing the status directly
+   * produced a document that claimed to have been dispatched with an empty transport trail
+   * and nobody told — and, because the assayer's view keys off DISPATCHED, released client
+   * paperwork to the field with no record of anyone having released it.
+   */
+  private static readonly STATUS_HAS_ITS_OWN_ROUTE: Partial<Record<DocumentStatus, string>> = {
+    [DocumentStatus.DISPATCHED]: 'POST /documents/:id/dispatch',
+    [DocumentStatus.RECEIVED]: 'POST /documents/:id/receive',
+    [DocumentStatus.SENT_TO_DATA_ENTRY]: 'POST /documents/:id/assign-data-entry',
+    [DocumentStatus.SENT_TO_EXTERNAL_OCR]: 'POST /documents/:id/send-external-ocr',
+  };
+
   @Patch(':id/status')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DOCUMENT_EXECUTIVE)
   @RequirePermissions('document:edit:organization')
-  @ApiOperation({ summary: 'Update document status' })
+  @ApiOperation({
+    summary: 'Update document status',
+    description:
+      'For the back-office end of the pipeline only. States reached by an act — dispatched, '
+      + 'received, delegated, sent to OCR — have their own routes, which record the act. '
+      + 'A packet only ever moves forward; see DOCUMENT_TRANSITIONS.',
+  })
   async updateStatus(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateDocumentStatusRequestDto, @Req() req: any) {
+    const properRoute = DocumentController.STATUS_HAS_ITS_OWN_ROUTE[dto.status];
+    if (properRoute) {
+      throw new BadRequestException(
+        `Use ${properRoute} to move a document to ${dto.status}. Setting the status directly `
+        + 'would leave the packet claiming a hand-off that never happened — no timestamp, no '
+        + 'record of who did it, and nobody notified.',
+      );
+    }
     const doc = await this.documentService.updateStatus(id, dto.status, req.user.id);
     return { success: true, data: doc };
   }
