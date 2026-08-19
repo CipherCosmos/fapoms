@@ -19,6 +19,7 @@ import { Modal, FilterSelect, AlertBanner, Select, useConfirm } from '../compone
 import { suggestAuditDate, describeSuggestedDate } from '../services/planning';
 
 import { assignmentFee, assignmentFeeValue } from '../utils/money';
+import { visibleSelection, hiddenSelectionNote } from '../utils/selection';
 interface Schedule {
   id: string;
   projectId: string;
@@ -201,6 +202,13 @@ export const Scheduling: React.FC = () => {
   const scopedSchedules = schedules;
   const scopedAssignments = assignments;
 
+  // The offers a bulk schedule will really touch: ticked AND still in the queue on screen. The
+  // queue is re-fetched on focus and re-scoped by the header's project picker, so an offer can
+  // leave it (someone else scheduled it) while its tick lingers. See `utils/selection.ts`.
+  const { ids: bulkActionableIds, hiddenCount: bulkHiddenCount } =
+    visibleSelection(bulkQueueIds, scopedAssignments, (a) => a.id);
+  const bulkHiddenNote = hiddenSelectionNote(bulkHiddenCount, 'offer');
+
   const { data: holidaysRes } = useQuery({
     queryKey: ['holidays', currentYear],
     queryFn: () => api.request<any[]>(`/holidays?year=${currentYear}&limit=200`),
@@ -335,10 +343,11 @@ export const Scheduling: React.FC = () => {
 
   /** Schedule every selected queue offer on one date; failures stay selected for retry. */
   const handleBulkSchedule = async () => {
-    if (bulkQueueIds.size === 0 || !bulkDate || bulkScheduling) return;
+    if (bulkActionableIds.length === 0 || !bulkDate || bulkScheduling) return;
     setBulkScheduling(true);
     setError(null);
-    const ids = [...bulkQueueIds];
+    // Visible-only, matching the count on the button.
+    const ids = bulkActionableIds;
     const results = await Promise.allSettled(
       ids.map((id) => api.request('/schedules', {
         method: 'POST',
@@ -349,7 +358,11 @@ export const Scheduling: React.FC = () => {
     const okCount = ids.length - failedIds.length;
     setBulkScheduling(false);
     // Only successes leave the selection — what remains selected is exactly what still needs doing.
-    setBulkQueueIds(new Set(failedIds));
+    setBulkQueueIds((prev) => {
+      const next = new Set(prev);
+      for (const id of ids) if (!failedIds.includes(id)) next.delete(id);
+      return next;
+    });
     if (failedIds.length === 0) {
       setSuccessMsg(`${okCount} audit(s) scheduled for ${bulkDate}.`);
     } else {
@@ -657,10 +670,16 @@ export const Scheduling: React.FC = () => {
                     <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
                       <input
                         type="checkbox"
-                        checked={bulkQueueIds.size === scopedAssignments.length && scopedAssignments.length > 0}
-                        onChange={(e) => setBulkQueueIds(e.target.checked ? new Set(scopedAssignments.map(a => a.id)) : new Set())}
+                        checked={bulkActionableIds.length === scopedAssignments.length && scopedAssignments.length > 0}
+                        onChange={(e) => setBulkQueueIds(prev => {
+                          // Adds or removes the offers listed in the queue right now; anything the
+                          // queue no longer shows keeps whatever state the user gave it.
+                          const next = new Set(prev);
+                          for (const a of scopedAssignments) e.target.checked ? next.add(a.id) : next.delete(a.id);
+                          return next;
+                        })}
                       />
-                      Select all ({scopedAssignments.length})
+                      Select all {scopedAssignments.length} in this queue
                     </label>
                     {/* Leaving the mode must also drop the selection — a hidden set of ticked rows
                         would otherwise still be scheduled by the next bulk action. */}
@@ -669,15 +688,19 @@ export const Scheduling: React.FC = () => {
                       Done
                     </button>
                   </div>
-                  {bulkQueueIds.size > 0 && (
+                  {bulkActionableIds.length > 0 && (
                     <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
                       <input type="date" value={bulkDate} min={todayDateKey()} onChange={(e) => setBulkDate(e.target.value)}
                         style={{ flex: 1, minWidth: '120px', fontSize: '11px', padding: '4px 6px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none' }} />
+                      {/* The number on the button is the number of offers that will be scheduled. */}
                       <button onClick={handleBulkSchedule} disabled={bulkScheduling}
                         className="btn btn-primary" style={{ padding: '4px 10px', fontSize: '11px', fontWeight: 700 }}>
-                        {bulkScheduling ? 'Scheduling…' : `Schedule ${bulkQueueIds.size}`}
+                        {bulkScheduling ? 'Scheduling…' : `Schedule ${bulkActionableIds.length}`}
                       </button>
                     </div>
+                  )}
+                  {bulkHiddenNote && (
+                    <div style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>{bulkHiddenNote}</div>
                   )}
                   </>
                   )}

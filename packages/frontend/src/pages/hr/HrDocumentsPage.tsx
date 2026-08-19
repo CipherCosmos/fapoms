@@ -234,7 +234,14 @@ export const HrDocumentsPage: React.FC = () => {
             </div>
           )}
 
-          {canManage && <AddDocumentForm busy={docsLoading} onAdd={addDoc} />}
+          {/*
+            * Keyed by the selected assayer so switching people in the roster REMOUNTS the form
+            * and clears it. Its type/number/expiry live in its own state, and nothing reset them
+            * on selection change: a half-typed PAN stayed in the box after clicking another
+            * assayer, and pressing Add then filed that number against the wrong person — a
+            * government identity document attached to someone it does not belong to.
+            */}
+          {canManage && <AddDocumentForm key={selectedId} busy={docsLoading} onAdd={addDoc} />}
         </div>
       </div>
     </div>

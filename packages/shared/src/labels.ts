@@ -36,6 +36,8 @@ import {
   PaymentMethod,
   DocumentType,
   ValidationStatus,
+  Priority,
+  UserStatus,
 } from './enums';
 
 /** Where a branch sits in the audit lifecycle. */
@@ -214,6 +216,41 @@ export function clientLifecycleLabel(status?: string | null): string {
 export function clientTypeLabel(type?: string | null): string {
   if (!type) return '—';
   return CLIENT_TYPE_LABELS[type as ClientType] ?? humanize(type);
+}
+
+/**
+ * Client/work priority. CRITICAL was rendered raw in the client create and edit forms, so a
+ * picker offered "CRITICAL" beside "Banking & Finance" — the only screaming word on the form.
+ */
+const PRIORITY_LABELS: Record<Priority, string> = {
+  [Priority.LOW]: 'Low',
+  [Priority.MEDIUM]: 'Medium',
+  [Priority.HIGH]: 'High',
+  [Priority.CRITICAL]: 'Critical',
+};
+
+export function priorityLabel(priority?: string | null): string {
+  if (!priority) return '—';
+  return PRIORITY_LABELS[priority as Priority] ?? humanize(priority);
+}
+
+/**
+ * Account state in the users directory. These are shown to an administrator deciding whether
+ * to suspend or reactivate somebody, which is precisely when the raw enum reads as a system
+ * error rather than a state a person chose.
+ */
+const USER_STATUS_LABELS: Record<UserStatus, string> = {
+  [UserStatus.INVITED]: 'Invited',
+  [UserStatus.ACTIVE]: 'Active',
+  [UserStatus.SUSPENDED]: 'Suspended',
+  [UserStatus.LOCKED]: 'Locked',
+  [UserStatus.DISABLED]: 'Disabled',
+  [UserStatus.ARCHIVED]: 'Archived',
+};
+
+export function userStatusLabel(status?: string | null): string {
+  if (!status) return '—';
+  return USER_STATUS_LABELS[status as UserStatus] ?? humanize(status);
 }
 
 export function contractStatusLabel(status?: string | null): string {

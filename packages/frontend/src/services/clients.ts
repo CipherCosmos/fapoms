@@ -54,7 +54,8 @@ export interface ClientConfigurationPayload {
 }
 
 export interface CreateClientPayload {
-  clientCode: string;
+  /** Optional: left out or blank, the server allocates the next free CL-nnnn. */
+  clientCode?: string;
   name: string;
   displayName: string;
   website?: string;

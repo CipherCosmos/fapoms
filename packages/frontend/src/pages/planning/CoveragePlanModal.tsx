@@ -59,7 +59,18 @@ export const CoveragePlanModal: React.FC<{
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CoveragePlanExecuteResult | null>(null);
 
-  const tomorrow = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return d.toISOString().slice(0, 10); })();
+  // The START of the campaign, not the date of every audit.
+  //
+  // Deploy used to send this one date and the backend put EVERY branch on it — a 155-branch
+  // plan booked 155 audits for one day, which is what made the whole-project path unusable.
+  // The backend now spreads: each branch gets its own workable date (holidays, Sundays and the
+  // assayer's own capacity applied per branch), starting from this date. Local calendar date,
+  // not toISOString(), which rolls an IST evening back a day.
+  const tomorrow = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() + 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  })();
   const [scheduledDate, setScheduledDate] = useState<string>(tomorrow);
 
   const loadPreview = async () => {
@@ -216,17 +227,48 @@ export const CoveragePlanModal: React.FC<{
 
         {/* Result */}
         {result ? (
-          <div style={{ padding: '14px', background: 'var(--status-active-bg)', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 800, color: 'var(--success)' }}>
-              <CheckCircle2 size={18} /> {result.deployedCount} assignment(s) deployed
-              {result.skippedCount > 0 && <span style={{ color: 'var(--warning)', fontWeight: 700 }}>· {result.skippedCount} skipped</span>}
-            </div>
-            {result.skipped.length > 0 && (
-              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', maxHeight: '120px', overflowY: 'auto' }}>
-                {result.skipped.slice(0, 20).map((s, i) => (
-                  <div key={i}>• {s.branchId ?? s.clusterId}: {s.reason}</div>
+          /* A deploy where nothing landed is an EXPLAINED OUTCOME, not a crash. It used to come
+             back as a thrown error showing the first five reasons — the likeliest first
+             experience on a fresh project with no fee data. Grouped counts say it once. */
+          <div style={{ padding: '14px', background: result.fullySkipped ? 'var(--status-cancelled-bg)' : 'var(--status-active-bg)', borderRadius: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {result.fullySkipped ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 800, color: 'var(--danger)' }}>
+                <AlertTriangle size={18} /> Nothing could be deployed — {result.skippedCount} branch(es) skipped
+              </div>
+            ) : (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 800, color: 'var(--success)' }}>
+                <CheckCircle2 size={18} /> {result.deployedCount} assignment(s) deployed
+                {result.skippedCount > 0 && <span style={{ color: 'var(--warning)', fontWeight: 700 }}>· {result.skippedCount} skipped</span>}
+              </div>
+            )}
+            {result.dateRange && (
+              <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>
+                {result.dateRange.start === result.dateRange.end
+                  ? `All on ${result.dateRange.start}.`
+                  : `Spread across ${result.dateRange.start} → ${result.dateRange.end} — each branch on its own workable date.`}
+              </div>
+            )}
+            {result.fullySkipped && (
+              <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>
+                The plan is still APPROVED — fix the reasons below and deploy again.
+              </div>
+            )}
+            {(result.skippedReasons?.length ?? 0) > 0 && (
+              <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)' }}>
+                {result.skippedReasons!.map((r, i) => (
+                  <div key={i}><b>{r.count}×</b> {r.reason}</div>
                 ))}
               </div>
+            )}
+            {result.skipped.length > 0 && (
+              <details style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                <summary style={{ cursor: 'pointer', userSelect: 'none' }}>Branch-by-branch detail ({result.skipped.length})</summary>
+                <div style={{ maxHeight: '120px', overflowY: 'auto', marginTop: '4px' }}>
+                  {result.skipped.slice(0, 100).map((s, i) => (
+                    <div key={i}>• {s.branchId ?? s.clusterId}: {s.reason}</div>
+                  ))}
+                </div>
+              </details>
             )}
             <button onClick={onClose} className="btn btn-primary" style={{ alignSelf: 'flex-start', marginTop: '4px', fontSize: '12px', padding: '6px 14px' }}>Done</button>
           </div>
@@ -250,10 +292,17 @@ export const CoveragePlanModal: React.FC<{
               <>
                 <span style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Version {plan.currentVersion} · <b style={{ color: 'var(--success)' }}>APPROVED</b></span>
                 <label style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  Deploy for
+                  Start from
                   <input type="date" value={scheduledDate} onChange={(e) => setScheduledDate(e.target.value)}
+                    aria-label="Campaign start date — each branch gets its own workable date on or after this"
                     style={{ fontSize: '11px', padding: '3px 6px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)' }} />
                 </label>
+                <div style={{ flexBasis: '100%', fontSize: '11px', color: 'var(--text-secondary)', order: 9 }}>
+                  Each branch is booked on its <b>own</b> workable date on or after this one — Sundays,
+                  holidays and each assayer's daily capacity are applied per branch, so the work spreads
+                  over a range instead of stacking on one day. Deploying creates <b>pending offers</b> at the
+                  approved fees; every assayer still has to accept.
+                </div>
                 <button onClick={doDeploy} disabled={busy != null} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--success)' }}>
                   {busy === 'deploy' ? <Loader2 size={14} className="spin" /> : <Rocket size={14} />} Deploy whole project
                 </button>

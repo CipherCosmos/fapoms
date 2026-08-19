@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Shield, ToggleLeft, ToggleRight, UserPlus, Users as UsersIcon, UserCheck, KeyRound, Lock, LockOpen, Clock } from 'lucide-react';
-import { REGION_ORDER, REGION_LABELS, Region, roleLabel } from '@fapoms/shared';
+import { REGION_ORDER, REGION_LABELS, Region, roleLabel, userStatusLabel } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { SearchInput, FilterSelect, AlertBanner, PrimaryButton, Modal, DetailDrawer, Select, useConfirm } from '../../components/ui';
@@ -81,8 +81,17 @@ export const DirectoryPanel: React.FC = () => {
 
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [username, setUsername] = useState('');
+  /**
+   * Whether the admin has taken the username over. Until they do, it follows the email address,
+   * which is the only identifier they already know — inventing a second one was a value that had
+   * to be remembered and communicated for no benefit, and the two drifted immediately
+   * ("r.sharma" against rahul.sharma@…). Typing in the box stops the derivation for good, so a
+   * deliberate username is never overwritten by a later correction to the email.
+   */
+  const [usernameEdited, setUsernameEdited] = useState(false);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [passwordCopied, setPasswordCopied] = useState(false);
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
@@ -103,6 +112,44 @@ export const DirectoryPanel: React.FC = () => {
   const [bulkReport, setBulkReport] = useState<{ target: string; succeeded: number; skipped: { id: string; current: string; reason: string }[]; failed: { id: string; reason: string }[] } | null>(null);
 
   useEffect(() => { loadUsers(); loadRoles(); }, []);
+
+  /**
+   * The email's local part, lowercased, with anything that is not a letter, digit, dot, dash or
+   * underscore folded to a dot. `MaxLength(100)` on the DTO is the only length rule, so the
+   * clamp here just keeps the preview honest rather than failing on save.
+   */
+  const usernameFromEmail = (addr: string): string => {
+    const local = addr.split('@')[0] ?? '';
+    return local.toLowerCase().replace(/[^a-z0-9._-]+/g, '.').replace(/^\.+|\.+$/g, '').slice(0, 100);
+  };
+
+  /**
+   * A password nobody chose, so nobody is tempted to choose "Welcome@123" for the fifth account
+   * this month. `crypto.getRandomValues` is the platform CSPRNG — `Math.random` is not one and
+   * must never back a credential.
+   *
+   * This is generated in the browser, which is a real limitation worth naming: the ideal is for
+   * the server to mint it and return it once, and that needs a change in the users module. What
+   * it does fix is the part that was under this screen's control — the admin no longer invents
+   * the password, and it is strong, unique and shown exactly once, at creation.
+   */
+  const generatePassword = (): string => {
+    // No l/I/1/O/0: this password gets read aloud or copied off a screen.
+    const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789@#%+=?';
+    const bytes = new Uint32Array(16);
+    crypto.getRandomValues(bytes);
+    return Array.from(bytes, (b) => alphabet[b % alphabet.length]).join('');
+  };
+
+  const openCreateModal = () => {
+    setUsername(''); setUsernameEdited(false); setEmail('');
+    setPassword(generatePassword()); setPasswordCopied(false);
+    setFirstName(''); setLastName(''); setSelectedRoleIds([]);
+    setShowCreateModal(true);
+  };
+
+  /** Resolves an id from a bulk report to the person it belongs to — see the report markup. */
+  const displayNameFor = (id: string): string => users.find((u) => u.id === id)?.displayName ?? 'Account no longer listed';
 
   const loadUsers = async () => {
     setIsLoading(true);
@@ -141,7 +188,9 @@ export const DirectoryPanel: React.FC = () => {
         body: JSON.stringify({ username, email, password, firstName, lastName, roleIds: selectedRoleIds }),
       });
       setShowCreateModal(false);
-      setUsername(''); setEmail(''); setPassword(''); setFirstName(''); setLastName(''); setSelectedRoleIds([]);
+      setNotice(`${firstName} ${lastName} can now sign in as "${username}". Pass on the initial password shown on the form — it is not stored anywhere you can read it back.`);
+      setUsername(''); setUsernameEdited(false); setEmail(''); setPassword(''); setPasswordCopied(false);
+      setFirstName(''); setLastName(''); setSelectedRoleIds([]);
       loadUsers();
     } catch (err: any) {
       setError(`Failed to create user. ${userMessage(err)}`);
@@ -312,7 +361,7 @@ export const DirectoryPanel: React.FC = () => {
         ]} />
         <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{filteredUsers.length} of {users.length} users</span>
         <div style={{ marginLeft: 'auto' }}>
-          <PrimaryButton onClick={() => setShowCreateModal(true)} icon={<UserPlus size={16} />}>
+          <PrimaryButton onClick={openCreateModal} icon={<UserPlus size={16} />}>
             <span>Add User</span>
           </PrimaryButton>
         </div>
@@ -360,10 +409,11 @@ export const DirectoryPanel: React.FC = () => {
               </div>
               {bulkReport.skipped.length > 0 && (
                 <div style={{ marginTop: '6px' }}>
-                  <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Already at {bulkReport.target}:</div>
+                  <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Already {userStatusLabel(bulkReport.target).toLowerCase()}:</div>
                   {bulkReport.skipped.map((s) => (
                     <div key={s.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
-                      <span>{s.current}</span><span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>— {s.reason}</span>
+                      <span>{displayNameFor(s.id)}</span>
+                      <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>— {userStatusLabel(s.current)}: {s.reason}</span>
                     </div>
                   ))}
                 </div>
@@ -371,9 +421,11 @@ export const DirectoryPanel: React.FC = () => {
               {bulkReport.failed.length > 0 && (
                 <div style={{ marginTop: '6px' }}>
                   <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Failed:</div>
+                  {/* Was the first eight characters of the account's UUID — an identifier nobody
+                      can act on. The directory is already in memory, so name the person. */}
                   {bulkReport.failed.map((f) => (
                     <div key={f.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
-                      <span>{f.id.slice(0, 8)}</span><span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>— {f.reason}</span>
+                      <span>{displayNameFor(f.id)}</span><span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>— {f.reason}</span>
                     </div>
                   ))}
                 </div>
@@ -459,7 +511,7 @@ export const DirectoryPanel: React.FC = () => {
                         >
                           {u.status === 'ACTIVE' ? <ToggleRight size={24} /> : <ToggleLeft size={24} />}
                         </button>
-                        <div style={{ fontSize: '9.5px', color: STATUS_TONE[u.status] ?? 'var(--text-muted)', marginTop: '2px', fontWeight: 600 }}>{u.status}</div>
+                        <div style={{ fontSize: '9.5px', color: STATUS_TONE[u.status] ?? 'var(--text-muted)', marginTop: '2px', fontWeight: 600 }}>{userStatusLabel(u.status)}</div>
                       </td>
                       <td style={{ padding: '14px 24px', textAlign: 'right' }}>
                         <button onClick={() => startEditUser(u)}
@@ -601,9 +653,43 @@ export const DirectoryPanel: React.FC = () => {
           }
         >
           <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <div><label className="form-label">Username</label><input type="text" className="form-input" value={username} onChange={(e) => setUsername(e.target.value)} required /></div>
-            <div><label className="form-label">Email Address</label><input type="email" className="form-input" value={email} onChange={(e) => setEmail(e.target.value)} required /></div>
-            <div><label className="form-label">Initial Password</label><input type="password" className="form-input" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} /></div>
+            <div>
+              <label className="form-label" htmlFor="new-user-email">Email Address</label>
+              <input id="new-user-email" type="email" className="form-input" value={email}
+                onChange={(e) => {
+                  setEmail(e.target.value);
+                  if (!usernameEdited) setUsername(usernameFromEmail(e.target.value));
+                }} required />
+            </div>
+            <div>
+              <label className="form-label" htmlFor="new-user-username">Username</label>
+              <input id="new-user-username" type="text" className="form-input" value={username}
+                onChange={(e) => { setUsernameEdited(true); setUsername(e.target.value); }} required />
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                {usernameEdited ? 'You are setting this yourself.' : 'Taken from the email address — change it only if you need something different.'}
+              </div>
+            </div>
+            <div>
+              <label className="form-label" htmlFor="new-user-password">Initial Password</label>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                {/* Deliberately readable, not masked: it is generated here and shown exactly once,
+                    so the admin has to be able to see it in order to pass it on. */}
+                <input id="new-user-password" type="text" className="form-input" value={password} readOnly
+                  style={{ flex: 1, fontFamily: 'var(--font-mono, monospace)' }} />
+                <button type="button" className="btn btn-secondary" style={{ padding: '8px 12px', fontSize: '12px', whiteSpace: 'nowrap' }}
+                  onClick={() => { navigator.clipboard?.writeText(password).then(() => setPasswordCopied(true)).catch(() => setPasswordCopied(false)); }}>
+                  {passwordCopied ? 'Copied' : 'Copy'}
+                </button>
+                <button type="button" className="btn btn-secondary" style={{ padding: '8px 12px', fontSize: '12px', whiteSpace: 'nowrap' }}
+                  onClick={() => { setPassword(generatePassword()); setPasswordCopied(false); }}>
+                  New
+                </button>
+              </div>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                Generated for you — copy it now and pass it on. It is not shown again, and there is no
+                email flow; you can set a new one later from the account's own panel.
+              </div>
+            </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '12px' }}>
               <div><label className="form-label">First Name</label><input type="text" className="form-input" value={firstName} onChange={(e) => setFirstName(e.target.value)} required /></div>
               <div><label className="form-label">Last Name</label><input type="text" className="form-input" value={lastName} onChange={(e) => setLastName(e.target.value)} required /></div>

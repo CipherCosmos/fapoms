@@ -14,7 +14,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import {
-  IsString, IsNotEmpty, IsOptional, IsObject, IsArray, IsNumber, IsEmail, IsBoolean, IsEnum, Min, IsUUID, MaxLength,
+  IsString, IsNotEmpty, IsOptional, IsObject, IsArray, IsNumber, IsEmail, IsBoolean, IsEnum, Min, Max, IsUUID, MaxLength,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
 
@@ -31,30 +31,54 @@ import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions }
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole, ClientLifecycleStatus } from '@fapoms/shared';
 
+/**
+ * Bounds, not just types.
+ *
+ * `defaultRadius`, `penaltyRate` and `maxResponseTimeHours` were bare `@IsNumber()`, so the
+ * configuration screen's unlabelled boxes could store a −50% penalty rate, a 900 000 km search
+ * radius or a response time of zero hours, and every one of them was accepted and then silently
+ * applied to planning and billing. The web form now states these same ranges next to each box;
+ * these decorators are what actually enforces them, because the mobile app and the importer
+ * call this API too.
+ *
+ * The ranges are deliberately generous — they exist to catch a wrong unit or a stray minus sign,
+ * not to second-guess an operator.
+ */
 class CreateClientConfigDto {
   @IsOptional() @IsObject() importMapping?: Record<string, string>;
   @IsOptional() @IsArray() workingDays?: number[];
-  @IsOptional() @IsNumber() defaultRadius?: number;
+  // Serviceability radius in km. Below 1 no branch is ever in range; the platform default is 50.
+  @IsOptional() @IsNumber() @Min(1) @Max(2000) defaultRadius?: number;
   @IsOptional() @IsObject() slaRules?: Record<string, any>;
   @IsOptional() @IsString() serviceLevel?: string;
-  @IsOptional() @IsNumber() maxResponseTimeHours?: number;
-  @IsOptional() @IsNumber() penaltyRate?: number;
+  // Hours, so an upper bound of one year. Zero would mean "already breached on creation".
+  @IsOptional() @IsNumber() @Min(1) @Max(8760) maxResponseTimeHours?: number;
+  // A percentage of the fee. A negative rate would pay a bonus for missing the SLA.
+  @IsOptional() @IsNumber() @Min(0) @Max(100) penaltyRate?: number;
   @IsOptional() @IsObject() serviceHours?: Record<string, any>;
   // The client rate card that determines what the client is billed — distinct from the
   // assayer's own commercial profile, which determines what the assayer is paid. The gap
   // between them is the margin. These columns exist and FeePolicyService reads them, but
   // nothing could write them, so they stayed NULL and billing fell through to platform
   // defaults on every client.
-  @IsOptional() @IsNumber() defaultBaseFee?: number;
-  @IsOptional() @IsNumber() travelFeePerKm?: number;
-  @IsOptional() @IsNumber() freeTravelAllowanceKm?: number;
+  // Rupees. A negative fee is a payment to the client; the ceiling only catches a paise/rupee mix-up.
+  @IsOptional() @IsNumber() @Min(0) @Max(10_000_000) defaultBaseFee?: number;
+  @IsOptional() @IsNumber() @Min(0) @Max(1000) travelFeePerKm?: number;
+  @IsOptional() @IsNumber() @Min(0) @Max(2000) freeTravelAllowanceKm?: number;
 }
 
 class CreateClientRequestDto implements CreateClientDto {
   // Lengths mirror the columns (see the clients table): over-long input used to reach Postgres and
   // come back as a 500 telling the operator something had gone wrong "on our side" and to try
   // again — advice that could never work, since the fix was to shorten the field.
-  @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(50) clientCode: string;
+  /**
+   * Optional. Blank means "allocate the next free one" — see `ClientService.allocateClientCode()`,
+   * which is the same rule branches, projects and assayers already follow.
+   *
+   * Still declared because every existing caller (the mobile app, the seed, imports) supplies
+   * one, and a supplied code is always honoured exactly as typed.
+   */
+  @IsOptional() @IsString() @TrimmedString() @MaxLength(50) clientCode?: string;
   @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(255) name: string;
   @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(255) displayName: string;
   @IsOptional() @IsString() @MaxLength(500) website?: string;

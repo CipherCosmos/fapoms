@@ -590,11 +590,19 @@ export class PlanningController {
     return {
       success: true,
       data: {
-        message: `Coverage plan deployed: ${result.deployed.length} assignment(s) created${result.skipped.length > 0 ? `, ${result.skipped.length} skipped` : ''}.`,
+        message: result.fullySkipped
+          ? `Nothing could be deployed — ${result.skipped.length} allocation(s) were skipped.`
+          : `Coverage plan deployed: ${result.deployed.length} assignment(s) created${result.skipped.length > 0 ? `, ${result.skipped.length} skipped` : ''}` +
+            (result.dateRange ? ` across ${result.dateRange.start} → ${result.dateRange.end}.` : '.'),
         deployedCount: result.deployed.length,
         skippedCount: result.skipped.length,
         deployed: result.deployed,
         skipped: result.skipped,
+        // Additive: a fully-skipped deploy is now an explained outcome rather than a thrown
+        // error, and each branch carries its own workable date instead of one shared one.
+        skippedReasons: result.skippedReasons,
+        fullySkipped: result.fullySkipped,
+        dateRange: result.dateRange,
       },
     };
   }

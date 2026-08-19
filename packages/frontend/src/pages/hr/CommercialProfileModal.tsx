@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Modal, Select, useToast } from '../../components/ui';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
+import { todayDateKey } from '../../utils/statusLabels';
 
 export interface CommercialProfile {
   id: string;
@@ -29,6 +30,34 @@ const NUMERIC_FIELDS: { key: string; label: string; hint?: string }[] = [
 const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED', 'SAR'];
 
 /**
+ * The form values for one profile — or an empty sheet when adding a new pay structure.
+ *
+ * `todayDateKey()` (local calendar) and not `new Date().toISOString().slice(0, 10)`: the ISO
+ * slice is the **UTC** date, so from 17:30 IST onwards it pre-fills *tomorrow*. A pay structure
+ * silently dated a day early takes effect on the wrong day and mis-prices every audit billed
+ * against it that evening.
+ */
+const buildForm = (profile?: CommercialProfile | null): Record<string, string> => {
+  if (profile) {
+    return {
+      baseFee: String(profile.baseFee ?? ''),
+      hourlyRate: String(profile.hourlyRate ?? ''),
+      dailyRate: String(profile.dailyRate ?? ''),
+      travelReimbursement: String(profile.travelReimbursement ?? ''),
+      accommodationAllowance: String(profile.accommodationAllowance ?? ''),
+      mealAllowance: String(profile.mealAllowance ?? ''),
+      currency: profile.currency || 'INR',
+      effectiveStartDate: (profile.effectiveStartDate || '').slice(0, 10),
+      effectiveEndDate: profile.effectiveEndDate ? profile.effectiveEndDate.slice(0, 10) : '',
+    };
+  }
+  return {
+    baseFee: '', hourlyRate: '', dailyRate: '', travelReimbursement: '', accommodationAllowance: '', mealAllowance: '',
+    currency: 'INR', effectiveStartDate: todayDateKey(), effectiveEndDate: '',
+  };
+};
+
+/**
  * Create or edit an assayer's commercial (pay) profile — the base fee, rates and
  * allowances the recommendation engine and billing quote from. Previously this
  * could only be set through the CSV import or raw API calls; the drawer now lets
@@ -43,27 +72,32 @@ export const CommercialProfileModal: React.FC<{
 }> = ({ open, onClose, assayerId, profile, onSaved }) => {
   const { toast } = useToast();
   const [busy, setBusy] = useState(false);
-  const [form, setForm] = useState<Record<string, string>>(() => {
-    if (profile) {
-      const d = (profile.effectiveStartDate || '').slice(0, 10);
-      const e = profile.effectiveEndDate ? profile.effectiveEndDate.slice(0, 10) : '';
-      return {
-        baseFee: String(profile.baseFee ?? ''),
-        hourlyRate: String(profile.hourlyRate ?? ''),
-        dailyRate: String(profile.dailyRate ?? ''),
-        travelReimbursement: String(profile.travelReimbursement ?? ''),
-        accommodationAllowance: String(profile.accommodationAllowance ?? ''),
-        mealAllowance: String(profile.mealAllowance ?? ''),
-        currency: profile.currency || 'INR',
-        effectiveStartDate: d,
-        effectiveEndDate: e,
-      };
-    }
-    return {
-      baseFee: '', hourlyRate: '', dailyRate: '', travelReimbursement: '', accommodationAllowance: '', mealAllowance: '',
-      currency: 'INR', effectiveStartDate: new Date().toISOString().slice(0, 10), effectiveEndDate: '',
-    };
-  });
+  const [form, setForm] = useState<Record<string, string>>(() => buildForm(profile));
+
+  /**
+   * Re-seed the form whenever the dialog is opened, or opened onto a different profile.
+   *
+   * The lazy `useState` initialiser above runs **once per mount**. `HrPayPage` mounts this modal
+   * conditionally so it was never a problem there, but `AssayerDetailDrawer` keeps it mounted the
+   * whole time and only toggles `open` — so "Add pay structure" followed by "Edit" on an existing
+   * profile still showed the *first* form's numbers, and Save wrote those stale rates against the
+   * newly chosen profile's id. Real money, silently wrong.
+   *
+   * Fixed here rather than with a `key={profile?.id ?? 'new'}` at the call site: the bug then
+   * returns the moment anyone adds a 37th call site (or drops the key while refactoring), and the
+   * component would still be quietly unsafe to keep mounted. Owning the reset makes every present
+   * and future caller correct by default.
+   *
+   * Deliberately keyed on the profile *id*, not the object: a background refetch that hands back
+   * an equal-but-new object must not wipe out what the user is halfway through typing. The
+   * dependency list also excludes `form`, so re-seeding never fights a keystroke.
+   */
+  const profileId = profile?.id ?? null;
+  React.useEffect(() => {
+    if (!open) return;
+    setForm(buildForm(profile));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, profileId]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();

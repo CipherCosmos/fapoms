@@ -24,6 +24,18 @@ export const Modal: React.FC<{
   children: React.ReactNode;
   asForm?: boolean;
   onSubmit?: React.FormEventHandler;
+  /**
+   * Close the dialog when the dim area around the panel is clicked. **Off by default.**
+   *
+   * The backdrop covers the whole viewport, so a single mis-aimed click — reaching for a field
+   * near the edge, a text selection that ends outside the panel, a stray click while reading —
+   * used to discard a ten-field form with no warning and no undo, in all 36 modals at once.
+   * Nothing in the app tracks dirty state, so there was no way to even ask before throwing the
+   * typing away. Escape and the close button (and every call site's own Cancel button) still
+   * dismiss, so no modal becomes un-closable; only the accidental gesture is disarmed.
+   * Opt in per call site for genuinely throwaway pop-ups (a preview, a picker with no input).
+   */
+  dismissOnBackdrop?: boolean;
   backdropBlur?: boolean;
   maxHeight?: string;
   closeIcon?: React.ReactNode;
@@ -39,6 +51,7 @@ export const Modal: React.FC<{
   children,
   asForm = false,
   onSubmit,
+  dismissOnBackdrop = false,
   backdropBlur = true,
   maxHeight,
   closeIcon,
@@ -67,7 +80,41 @@ export const Modal: React.FC<{
   React.useEffect(() => {
     if (!open) return;
     const previouslyFocused = document.activeElement as HTMLElement | null;
-    panelRef.current?.focus?.();
+
+    /**
+     * Put the caret in the first field the user is going to type into, not on the panel.
+     *
+     * Focusing the panel meant every one of the ~29 modals that open onto a form cost a mouse
+     * trip before a single character could be typed, and keyboard users had to Tab past the
+     * close button first. Rules:
+     *  - Only *typing* controls qualify. Checkboxes, radios and buttons are skipped, so a modal
+     *    whose first control is a tick-list (e.g. the invoice line picker) does not land focus on
+     *    a checkbox that a stray Space would then toggle.
+     *  - Disabled, read-only and hidden controls are skipped — focusing them does nothing and
+     *    would silently swallow the first keystrokes.
+     *  - If the content already claimed focus itself (a React `autoFocus`, which runs before this
+     *    passive effect), it is left exactly where it is rather than being fought over.
+     *  - A dialog with no typing controls at all — a confirmation, a preview, a detail read-out —
+     *    keeps the old behaviour and focuses the panel, so focus stays trapped inside the modal
+     *    without pre-selecting one of the confirm/cancel buttons for the user.
+     */
+    const panel = panelRef.current;
+    const alreadyInside =
+      previouslyFocused && panel && previouslyFocused !== panel && panel.contains(previouslyFocused);
+    if (!alreadyInside) {
+      const NON_TEXT_INPUTS = ['checkbox', 'radio', 'button', 'submit', 'reset', 'image', 'hidden'];
+      const candidates = panel?.querySelectorAll<HTMLElement>('input, select, textarea');
+      let firstField: HTMLElement | undefined;
+      candidates?.forEach((el) => {
+        if (firstField) return;
+        const field = el as HTMLInputElement;
+        if (field.disabled || field.readOnly) return;
+        if (field.tagName === 'INPUT' && NON_TEXT_INPUTS.includes(field.type)) return;
+        if (el.offsetParent === null && getComputedStyle(el).position !== 'fixed') return; // not rendered
+        firstField = el;
+      });
+      (firstField ?? panel)?.focus?.();
+    }
 
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -118,7 +165,7 @@ export const Modal: React.FC<{
         padding: '12px',
         zIndex: 1100,
       }}
-      onClick={onClose}
+      onClick={dismissOnBackdrop ? onClose : undefined}
     >
       <div
         ref={panelRef}

@@ -4,6 +4,7 @@ import { Modal, StyledInput, useToast } from '../../components/ui';
 import { useCreateBillingInvoice } from '../../hooks/useBilling';
 import type { InvoiceableClient } from '../../services/billing';
 import { userMessage } from '../../services/errors';
+import { todayDateKey } from '../../utils/statusLabels';
 import { moneyTotal as money } from '../../utils/money';
 import { HoldPill, fmtDate } from './shared';
 
@@ -16,7 +17,15 @@ export const CreateInvoiceModal: React.FC<{ client: InvoiceableClient; onClose: 
   const create = useCreateBillingInvoice();
   const eligible = useMemo(() => client.lines.filter((l) => !l.onHold), [client.lines]);
   const [selected, setSelected] = useState<Set<string>>(() => new Set(eligible.map((l) => l.assignmentId)));
-  const [issueDate, setIssueDate] = useState(new Date().toISOString().slice(0, 10));
+  // Local calendar day, not `new Date().toISOString().slice(0, 10)`: the ISO slice is the UTC
+  // date, so any invoice raised after 17:30 IST was pre-dated tomorrow — an issue date in the
+  // future on a document that goes to the client and drives the due date.
+  const [issueDate, setIssueDate] = useState(todayDateKey());
+  // Left blank on purpose: the due date is issue date + the client's payment terms, and
+  // `InvoiceableClient` (see services/billing.ts) carries no `paymentTerms` — it is only ever
+  // written, through UpdateBillingPayload, never returned on this payload. The server already
+  // applies the client's terms when this is empty, so blank is the correct default and inventing
+  // a NET30 here would silently override real contract terms. Fill it in only to override.
   const [dueDate, setDueDate] = useState('');
   const [notes, setNotes] = useState('');
 

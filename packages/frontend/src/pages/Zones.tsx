@@ -5,7 +5,7 @@ import { INDIAN_STATES } from '@fapoms/shared';
 import { api } from '../services/api';
 import { useClientOptions } from '../hooks/useClients';
 import { userMessage } from '../services/errors';
-import { Modal, AlertBanner, Select, useConfirm } from '../components/ui';
+import { Modal, AlertBanner, Select, ChipMultiSelect, useConfirm } from '../components/ui';
 import { useCurrentRoles, canManageZones, canDeleteZones } from '../hooks/useCurrentRoles';
 
 interface Zone {
@@ -41,8 +41,55 @@ export const Zones: React.FC = () => {
   const [description, setDescription] = useState('');
   const [clientId, setClientId] = useState<string>('');
   const [selectedStates, setSelectedStates] = useState<string[]>([]);
-  const [stateSearch, setStateSearch] = useState('');
+  const [selectedDistricts, setSelectedDistricts] = useState<string[]>([]);
+  /** Only ever shown when the reference data below cannot be read — see `districtOptions`. */
   const [districtsText, setDistrictsText] = useState('');
+
+  /**
+   * Districts were a comma-separated free-text box sitting next to a chip list of states, and
+   * the coverage planner matches these strings against a branch's own district by exact value.
+   * "Kolhapur " or "Ahmadnagar" quietly narrows a zone to nothing, and nothing on the screen
+   * says so — the same silent-mismatch trap the states list had already been fixed for.
+   *
+   * The reference data has always existed: GET /geo/states gives the id for a state name, and
+   * GET /geo/states/:id/districts the districts under it. The options are therefore filtered to
+   * whatever states are currently selected, which is also what makes the list short enough to
+   * pick from at all (India has ~780 districts).
+   *
+   * `null` = still loading. `[]` on `geoStates` means the endpoint is unreadable or empty, and
+   * the old free-text box comes back rather than losing the ability to record a district.
+   */
+  const [geoStates, setGeoStates] = useState<{ id: string; name: string }[] | null>(null);
+  const [districtOptions, setDistrictOptions] = useState<string[] | null>(null);
+
+  React.useEffect(() => {
+    api.request<{ id: string; name: string }[]>('/geo/states')
+      .then((rows) => setGeoStates(Array.isArray(rows) ? rows : []))
+      .catch(() => setGeoStates([]));   // unavailable → free-text fallback
+  }, []);
+
+  React.useEffect(() => {
+    if (geoStates === null) return;
+    if (geoStates.length === 0) { setDistrictOptions([]); return; }
+    const ids = selectedStates
+      .map((name) => geoStates.find((g) => g.name.toLowerCase() === name.toLowerCase())?.id)
+      .filter((id): id is string => Boolean(id));
+    if (ids.length === 0) { setDistrictOptions([]); return; }
+    // A state can be deselected while its request is in flight; only the newest result wins.
+    let cancelled = false;
+    setDistrictOptions(null);
+    Promise.all(ids.map((id) =>
+      api.request<{ name: string }[]>(`/geo/states/${id}/districts`).catch(() => [] as { name: string }[]),
+    )).then((lists) => {
+      if (cancelled) return;
+      const names = Array.from(new Set(lists.flat().map((d) => d.name).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+      setDistrictOptions(names);
+    });
+    return () => { cancelled = true; };
+  }, [selectedStates, geoStates]);
+
+  /** True only when the reference data itself is missing — not when it is merely still loading. */
+  const geoUnavailable = geoStates !== null && geoStates.length === 0;
 
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -57,7 +104,7 @@ export const Zones: React.FC = () => {
   const zones: Zone[] = (Array.isArray(zonesRes) ? zonesRes : (zonesRes as any)?.data) || [];
 
   const resetForm = () => {
-    setName(''); setDescription(''); setClientId(''); setSelectedStates([]); setStateSearch(''); setDistrictsText('');
+    setName(''); setDescription(''); setClientId(''); setSelectedStates([]); setSelectedDistricts([]); setDistrictsText('');
   };
 
   const handleOpenCreate = () => {
@@ -72,7 +119,7 @@ export const Zones: React.FC = () => {
     setDescription(z.description || '');
     setClientId(z.clientId || '');
     setSelectedStates(z.states || []);
-    setStateSearch('');
+    setSelectedDistricts(z.districts || []);
     setDistrictsText((z.districts || []).join(', '));
     setShowModal(true);
   };
@@ -80,7 +127,11 @@ export const Zones: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    const districts = districtsText.split(',').map((d) => d.trim()).filter(Boolean);
+    // The picker is the source of truth; the text box only exists when the reference data
+    // could not be loaded, and only then is it what gets saved.
+    const districts = geoUnavailable
+      ? districtsText.split(',').map((d) => d.trim()).filter(Boolean)
+      : selectedDistricts;
     // clientId is only sent on create — the update DTO does not accept it, since re-parenting a
     // zone to another client is not a routine edit.
     const base = { name, description: description || null, states: selectedStates, districts };
@@ -124,10 +175,16 @@ export const Zones: React.FC = () => {
     }
   };
 
-  const toggleState = (st: string) =>
-    setSelectedStates((prev) => (prev.includes(st) ? prev.filter((s) => s !== st) : [...prev, st]));
-
-  const filteredStateOptions = INDIAN_STATES.filter((s) => s.label.toLowerCase().includes(stateSearch.toLowerCase()));
+  /**
+   * Deselecting a state drops the districts that belonged to it. Leaving them behind would
+   * keep a district in the zone whose state is no longer part of it — a scope nobody chose.
+   * Districts the reference data does not know (older hand-typed values) are kept, since we
+   * cannot tell which state they belong to and dropping them would silently narrow the zone.
+   */
+  const handleStatesChange = (next: string[]) => {
+    setSelectedStates(next);
+    if (next.length === 0) setSelectedDistricts([]);
+  };
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -256,30 +313,47 @@ export const Zones: React.FC = () => {
 
             <div>
               <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '6px' }}>States in this zone</label>
-              <input
-                type="text" placeholder="Search states…" value={stateSearch} onChange={(e) => setStateSearch(e.target.value)}
-                style={{ width: '100%', padding: '7px 9px', marginBottom: '6px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '12px' }}
+              <ChipMultiSelect
+                aria-label="States in this zone"
+                options={INDIAN_STATES}
+                value={selectedStates}
+                onChange={handleStatesChange}
+                searchPlaceholder="Search states…"
+                maxHeight={140}
               />
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', maxHeight: '140px', overflowY: 'auto', padding: '8px', background: 'var(--bg-primary)', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
-                {filteredStateOptions.map((st) => {
-                  const isSelected = selectedStates.includes(st.value);
-                  return (
-                    <button type="button" key={st.value} onClick={() => toggleState(st.value)}
-                      style={{ padding: '4px 8px', borderRadius: '4px', fontSize: '11px', border: 'none', cursor: 'pointer', backgroundColor: isSelected ? 'var(--accent)' : 'var(--bg-tertiary)', color: isSelected ? 'var(--on-accent)' : 'var(--text-primary)' }}>
-                      {isSelected ? `✓ ${st.label}` : st.label}
-                    </button>
-                  );
-                })}
-                {filteredStateOptions.length === 0 && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>No match.</span>}
-              </div>
             </div>
 
             <div>
               <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'block', marginBottom: '4px' }}>
-                Districts (Optional) <span style={{ fontWeight: 400 }}>— comma separated</span>
+                Districts (Optional){geoUnavailable ? <span style={{ fontWeight: 400 }}> — comma separated</span> : null}
               </label>
-              <input type="text" placeholder="e.g. Kolhapur, Sangli, Satara" value={districtsText} onChange={(e) => setDistrictsText(e.target.value)}
-                style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px' }} />
+              {geoUnavailable ? (
+                <input type="text" placeholder="e.g. Kolhapur, Sangli, Satara" value={districtsText} onChange={(e) => setDistrictsText(e.target.value)}
+                  style={{ width: '100%', padding: '9px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', fontSize: '13px' }} />
+              ) : selectedStates.length === 0 ? (
+                <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', padding: '9px', border: '1px dashed var(--border-color)', borderRadius: '6px' }}>
+                  Choose a state first — districts are listed per state.
+                </div>
+              ) : districtOptions === null ? (
+                <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', padding: '9px' }}>Loading districts…</div>
+              ) : (
+                <>
+                  <ChipMultiSelect
+                    aria-label="Districts in this zone"
+                    options={districtOptions.map((d) => ({ value: d, label: d }))}
+                    value={selectedDistricts}
+                    onChange={setSelectedDistricts}
+                    searchPlaceholder="Search districts…"
+                    emptyText="No districts on record for the selected state(s)."
+                    maxHeight={140}
+                  />
+                  <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                    {selectedDistricts.length === 0
+                      ? 'Leave empty to cover every district in the selected states.'
+                      : `${selectedDistricts.length} selected.`}
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </Modal>

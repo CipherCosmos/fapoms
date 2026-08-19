@@ -11,6 +11,7 @@ import { PdfRegionViewer } from './PdfRegionViewer';
 import type { RegionCapture, Region } from './PdfRegionViewer';
 import { ThreadPanel } from './ThreadPanel';
 import { userMessage } from '../../services/errors';
+import { useConfirm } from '../../components/ui';
 
 /**
  * The merged workspace for one branch's returned packet: the PDF, the data
@@ -65,6 +66,7 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
   projectBranchId, onBack, onChanged,
 }) => {
   const roles = useCurrentRoles();
+  const { confirm, confirmDialog } = useConfirm();
   /**
    * The desk has two real roles. VALIDATORS are the working members: they key the packet,
    * run assayer clarifications (the chat below, phone calls), and hand the report back.
@@ -158,8 +160,32 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
       .catch((e) => setErr(`Could not open the document: ${(e as Error).message}`));
   }, [returnedDoc]);
 
+  /**
+   * "Submit to client" is the one action on this screen that leaves the building: it hands the
+   * finished report to the outside party who commissioned the audit. Nothing in the product can
+   * pull it back afterwards — the client has it. It sat unguarded next to Approve, in the same
+   * button row, styled the same, so the click that a manager makes dozens of times a day to
+   * approve was one position away from an external send that cannot be retracted. Approve and
+   * Request correction stay unguarded: both are internal and both have a way back.
+   */
   const decide = async (targetStatus: string) => {
     if (!validationCase) return;
+    if (targetStatus === 'SUBMITTED') {
+      const ok = await confirm({
+        title: 'Send this report to the client?',
+        message: (
+          <>
+            The report for <strong>{branchName ?? 'this branch'}</strong>
+            {branchCode ? ` (${branchCode})` : ''} will be sent to the client as final.
+          </>
+        ),
+        confirmLabel: 'Send to client',
+        reversible: false,
+        reversibleNote: 'Once sent, it cannot be recalled. Any correction has to be sent to the client separately.',
+        tone: 'danger',
+      });
+      if (!ok) return;
+    }
     setBusy(true);
     setErr(null);
     try {
@@ -223,6 +249,7 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+      {confirmDialog}
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
         <button onClick={onBack} className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
           <ArrowLeft size={14} /> Back to the board

@@ -30,6 +30,7 @@ import {
 import { WORK_TAB_STRIP_HEIGHT } from './work/workTabs';
 
 import { money } from '../utils/money';
+import { visibleSelection, hiddenSelectionNote } from '../utils/selection';
 /** Mirrors FeeBreakdown from packages/backend/src/modules/pricing/fee-policy.service.ts. */
 interface FeeQuote {
   baseFee: number;
@@ -1065,13 +1066,22 @@ export const PlanningWorkspace: React.FC = () => {
     });
   };
 
+  /**
+   * Tick (or untick) every unassigned branch the queue is showing right now.
+   *
+   * Scoped to the shown branches on both halves: unticking used to throw the whole selection away,
+   * including branches the current filter happens to hide, which is the same silent surprise from
+   * the other direction.
+   */
   const toggleBulkSelectAll = () => {
     const selectable = filteredBranches.filter((b) => !b.assignment && b.status !== 'UNABLE_TO_COVER');
-    setBulkSelectedIds((prev) =>
-      selectable.length > 0 && selectable.every((b) => prev.has(b.id))
-        ? new Set()
-        : new Set(selectable.map((b) => b.id)),
-    );
+    if (selectable.length === 0) return;
+    setBulkSelectedIds((prev) => {
+      const allShownTicked = selectable.every((b) => prev.has(b.id));
+      const next = new Set(prev);
+      for (const b of selectable) allShownTicked ? next.delete(b.id) : next.add(b.id);
+      return next;
+    });
   };
 
   /**
@@ -1083,7 +1093,7 @@ export const PlanningWorkspace: React.FC = () => {
    * aborting the run: one "Branch Busy" collision shouldn't cost the other nine offers.
    */
   const handleBulkAssign = async (assayerId: string, assayerName: string) => {
-    const targets = filteredBranches.filter((b) => bulkSelectedIds.has(b.id));
+    const targets = bulkTargetBranches.rows;
     if (targets.length === 0) return;
 
     setBulkAssigning(true);
@@ -1176,16 +1186,24 @@ export const PlanningWorkspace: React.FC = () => {
             method: 'POST',
             body: JSON.stringify({ reason }),
           });
-          return { ok: true as const };
+          return { ok: true as const, id, name: nameById.get(id) || id };
         } catch {
-          return { ok: false as const, name: nameById.get(id) || id };
+          return { ok: false as const, id, name: nameById.get(id) || id };
         }
       }),
     );
-    const failed = outcomes.filter((o) => !o.ok).map((o) => (o as { name: string }).name);
+    const failed = outcomes.filter((o) => !o.ok).map((o) => o.name);
     const ok = outcomes.length - failed.length;
     setUnableSubmitting(false);
-    if (unableModal.ids.length > 1) setBulkSelectedIds(new Set());
+    // Only what was actually recorded is unticked. A branch the server refused stays selected so
+    // the coordinator can simply try again, instead of hunting it back down in the queue.
+    if (unableModal.ids.length > 1) {
+      setBulkSelectedIds((prev) => {
+        const next = new Set(prev);
+        for (const o of outcomes) if (o.ok) next.delete(o.id);
+        return next;
+      });
+    }
     setUnableModal(null);
     setUnableReason('');
     setMessage(
@@ -1390,6 +1408,28 @@ export const PlanningWorkspace: React.FC = () => {
       return ra - rb;
     });
   }, [branches, searchTerm, stateFilter, statusFilter, cityFilter, districtFilter, priorityFilter, zoneFilter, optimizedStops]);
+
+  /**
+   * The branches a bulk action will actually change: ticked, still listed under the current
+   * search and filters, and still in a state a bulk action may touch.
+   *
+   * The two bulk buttons on this bar used to disagree. "Offer all to …" re-filtered against
+   * `filteredBranches`, but "Mark unable to cover" posted the raw `bulkSelectedIds`, so ticking
+   * branches, narrowing the state filter and pressing it recorded — permanently, and reported to
+   * the client — branches the coordinator could not see and had not chosen. The count in the bar
+   * agreed with neither. Both now read this one list, and so does the count. See
+   * `utils/selection.ts` for why the selection is narrowed here rather than wiped on every
+   * filter change.
+   */
+  const bulkTargetBranches = useMemo(
+    () => visibleSelection(
+      bulkSelectedIds,
+      filteredBranches.filter((b) => !b.assignment && b.status !== 'UNABLE_TO_COVER'),
+      (b) => b.id,
+    ),
+    [bulkSelectedIds, filteredBranches],
+  );
+  const bulkHiddenNote = hiddenSelectionNote(bulkTargetBranches.hiddenCount, 'branch');
 
   /**
    * The branch points the map actually draws, derived once instead of inline at four call sites.
@@ -2403,9 +2443,13 @@ export const PlanningWorkspace: React.FC = () => {
           display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 16px', flexShrink: 0,
           background: 'var(--bg-surface-2)', borderBottom: '1px solid var(--accent)', flexWrap: 'wrap',
         }}>
+          {/* This count is what the buttons below will change — nothing more. */}
           <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--accent)' }}>
-            {bulkSelectedIds.size} branch{bulkSelectedIds.size === 1 ? '' : 'es'} selected
+            {bulkTargetBranches.rows.length} branch{bulkTargetBranches.rows.length === 1 ? '' : 'es'} selected
           </span>
+          {bulkHiddenNote && (
+            <span style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>{bulkHiddenNote}</span>
+          )}
 
           <label style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '5px' }}>
             Date
@@ -2431,7 +2475,7 @@ export const PlanningWorkspace: React.FC = () => {
 
           <button
             onClick={() => selectedCandidate && handleBulkAssign(selectedCandidate.id, selectedCandidate.displayName)}
-            disabled={!selectedCandidate || bulkAssigning}
+            disabled={!selectedCandidate || bulkAssigning || bulkTargetBranches.rows.length === 0}
             className="btn btn-primary"
             style={{ padding: '5px 11px', fontSize: '11px', fontWeight: 700 }}
             title={selectedCandidate
@@ -2447,9 +2491,14 @@ export const PlanningWorkspace: React.FC = () => {
           <button
             onClick={() => {
               setUnableReason('');
-              setUnableModal({ ids: [...bulkSelectedIds], label: `${bulkSelectedIds.size} branches` });
+              // Visible ticked branches only, and the label says the same number the modal will
+              // act on. This is the call site that used to send the raw selection.
+              setUnableModal({
+                ids: bulkTargetBranches.ids,
+                label: `${bulkTargetBranches.rows.length} branch${bulkTargetBranches.rows.length === 1 ? '' : 'es'}`,
+              });
             }}
-            disabled={bulkAssigning}
+            disabled={bulkAssigning || bulkTargetBranches.rows.length === 0}
             className="btn btn-secondary"
             style={{ padding: '5px 11px', fontSize: '11px', fontWeight: 600, color: 'var(--danger)', borderColor: 'var(--danger)' }}>
             Mark unable to cover

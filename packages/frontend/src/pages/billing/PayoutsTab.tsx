@@ -137,7 +137,15 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
           <button className="btn btn-primary" disabled={!approvable.length || approve.isPending} onClick={runApprove} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
             <CheckCircle2 size={14} /> Approve {approvable.length ? `(${approvable.length} · ${money(approvable.reduce((s, p) => s + Number(p.totalAmount), 0))})` : ''}
           </button>
-          <button className="btn btn-primary" disabled={!payable.length} onClick={() => setPayOpen(true)} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+          {/*
+            Gated on `pay.isPending` as well as on there being something payable — Approve
+            beside it already was, and Pay is the button that actually disburses money. Without
+            the in-flight guard the toolbar stayed live while a payment request was on the wire,
+            so a slow response invited a second click: the modal reopened over the same
+            selection and a second batch of disbursements went out against the same payouts.
+            Double-paying is the one mistake on this screen the product cannot walk back.
+          */}
+          <button className="btn btn-primary" disabled={!payable.length || pay.isPending} onClick={() => setPayOpen(true)} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
             <Banknote size={14} /> Pay {payable.length ? `(${payable.length} · ${money(payable.reduce((s, p) => s + Number(p.totalAmount) - Number(p.paidAmount), 0))})` : ''}
           </button>
           <button className="btn btn-secondary" onClick={() => setSelected(new Set())}>Clear</button>
@@ -297,15 +305,38 @@ const PayModal: React.FC<{
   );
 };
 
+/**
+ * The everyday reasons a payout gets held, offered as one-click options.
+ *
+ * The reason is mandatory and was free text only, so a finance clerk holding a dozen rows in a
+ * morning had to type the same sentence a dozen times — and typed reasons drifted ("bank dtls
+ * wrong", "wrong acct") until the assayer statement, where this text is shown, read like a
+ * different person wrote each line. These cover what is actually typed; "Other…" keeps the free
+ * text for everything else, so nothing that could be said before can no longer be said.
+ */
+const HOLD_REASONS = [
+  'Bank details missing or incorrect',
+  'Waiting for the assayer\u2019s invoice',
+  'Report still being checked',
+  'Client has disputed this assignment',
+  'Duplicate of another payout',
+];
+
 const HoldModal: React.FC<{ row: PayoutRow; busy: boolean; onClose: () => void; onSubmit: (reason?: string) => Promise<void> }> = ({ row, busy, onClose, onSubmit }) => {
+  const [preset, setPreset] = useState('');
   const [reason, setReason] = useState('');
   const releasing = row.onHold;
+  // A preset stands on its own; only "Other…" needs anything typed. The submitted value is
+  // still a plain sentence either way, so what reaches the API and the statement is unchanged.
+  const isOther = preset === '__other__';
+  const effectiveReason = isOther ? reason.trim() : preset;
+  const reasonReady = releasing || !!effectiveReason;
   return (
     <Modal open onClose={onClose} title={releasing ? 'Release hold' : 'Put payout on hold'} width="460px" asForm
-      onSubmit={(e) => { e.preventDefault(); if (!releasing && !reason.trim()) return; void onSubmit(releasing ? undefined : reason.trim()); }}
+      onSubmit={(e) => { e.preventDefault(); if (!reasonReady) return; void onSubmit(releasing ? undefined : effectiveReason); }}
       footer={<>
         <button type="button" onClick={onClose} className="btn btn-secondary">Cancel</button>
-        <button type="submit" disabled={busy || (!releasing && !reason.trim())} className="btn btn-primary">{releasing ? 'Release' : 'Hold'}</button>
+        <button type="submit" disabled={busy || !reasonReady} className="btn btn-primary">{releasing ? 'Release' : 'Hold'}</button>
       </>}>
       <div style={{ fontSize: 13 }}>
         <strong>{row.assignmentNumber ?? row.payableNumber}</strong> · {row.assayerName} · {money(Number(r(row.totalAmount)) - Number(r(row.paidAmount)))}
@@ -315,7 +346,19 @@ const HoldModal: React.FC<{ row: PayoutRow; busy: boolean; onClose: () => void; 
       ) : (
         <>
           <div style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>A held payout cannot be approved or paid until released. The reason is shown to finance and on the assayer's statement.</div>
-          <textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why is this on hold? *" rows={3} style={{ ...inputStyle, width: '100%', resize: 'vertical' }} />
+          <Select
+            value={preset}
+            onChange={(v) => setPreset(v)}
+            options={[
+              { value: '', label: 'Why is this on hold? *' },
+              ...HOLD_REASONS.map((r) => ({ value: r, label: r })),
+              { value: '__other__', label: 'Other\u2026' },
+            ]}
+            style={{ width: '100%' }}
+          />
+          {isOther && (
+            <textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why is this on hold? *" rows={3} style={{ ...inputStyle, width: '100%', resize: 'vertical' }} />
+          )}
         </>
       )}
     </Modal>

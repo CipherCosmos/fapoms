@@ -6,7 +6,7 @@ import { api } from '../../services/api';
 import { useCurrentRoles } from '../../hooks/useCurrentRoles';
 import { userMessage } from '../../services/errors';
 import { deskRole, deskCard, deskLabel, CaseListRow, TeamMember } from './deskRoles';
-import { Select } from '../../components/ui';
+import { Select, useConfirm } from '../../components/ui';
 import { validationStatusLabel } from '@fapoms/shared';
 
 /**
@@ -36,6 +36,7 @@ const PAGE_SIZE = 25;
 export const ReviewsQueue: React.FC = () => {
   const roles = useCurrentRoles();
   const { isHead } = deskRole(roles);
+  const { confirm, confirmDialog } = useConfirm();
   const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
 
@@ -103,8 +104,35 @@ export const ReviewsQueue: React.FC = () => {
     setBusy(null);
   };
 
+  /**
+   * Bulk approve had no confirmation of any kind. Approving here is a head signing off audit
+   * reports for a whole set of branches at once, and there is no un-approve anywhere in this
+   * UI — the only way back is to reopen each case individually. The selection itself is easy
+   * to get wrong: the header checkbox ticks every row on the page, the page reloads under a
+   * filter change, and the button sits directly beside "Send back for rework", so a mis-aimed
+   * click signed off work nobody had read. Sending back is the recoverable direction (the case
+   * simply returns for correction), so only approval is gated, and the dialog states the count
+   * so the number being signed off has to be read before it happens.
+   */
   const bulkDecide = async (target: 'APPROVED' | 'CORRECTION_REQUIRED') => {
     if (sel.size === 0) return;
+    if (target === 'APPROVED') {
+      const n = sel.size;
+      const ok = await confirm({
+        title: `Approve ${n} report${n === 1 ? '' : 's'}?`,
+        message: (
+          <>
+            This signs off <strong>{n} audit report{n === 1 ? '' : 's'}</strong> as checked and correct.
+            Approved reports are the ones a manager can send to the client.
+          </>
+        ),
+        confirmLabel: `Approve ${n} report${n === 1 ? '' : 's'}`,
+        reversible: false,
+        reversibleNote: 'Approving cannot be undone from this screen. Each report would have to be reopened one by one.',
+        tone: 'danger',
+      });
+      if (!ok) return;
+    }
     setMsg(null);
     setBusy('__bulk__');
     try {
@@ -135,6 +163,7 @@ export const ReviewsQueue: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+      {confirmDialog}
       <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
         {STATUS_TABS.map((t) => (
           <button key={t.key || 'all'} onClick={() => setStatus(t.key)}

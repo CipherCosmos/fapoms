@@ -196,6 +196,61 @@ export const TransportCosts: React.FC = () => {
       notes: form.notes || null,
     };
     if (editingId) body.isActive = editIsActive;
+
+    /**
+     * Saving a rate is not "editing a settings row" — it is repricing every offer the desk
+     * makes from today onward. The quote engine resolves these rows to recommend a travel
+     * amount before an offer goes out, so a mistyped per-km figure quietly leaves with real
+     * money attached to it, on offers nobody re-reads. The far less consequential Retire
+     * button beside it already asked for confirmation, which meant the risky action was the
+     * easy one and the safe action was the guarded one.
+     *
+     * The dialog shows the actual before/after numbers rather than a generic "are you sure":
+     * the mistake this catches is a decimal point or a stray digit, and the only thing that
+     * reveals it is seeing the old value beside the new one. Computed from the record being
+     * edited versus what is in the form, so it states what will really change; a new rate has
+     * no "before", so it says what it will start pricing instead.
+     */
+    const existing = editingId ? rates.find((r) => r.id === editingId) : undefined;
+    const newPerKm = Number(form.perKmRate);
+    const newBase = Number(form.baseFare || 0);
+    const scopeText = `${travelModeLabel(form.mode as TravelMode)} \u00b7 ${form.scopeType === 'NATIONAL' ? 'National' : form.scopeValue}`;
+    const changes: string[] = [];
+    if (existing) {
+      if (Number(existing.perKmRate) !== newPerKm) {
+        changes.push(`${formatRupees(Number(existing.perKmRate))} to ${formatRupees(newPerKm)} per km`);
+      }
+      if (Number(existing.baseFare ?? 0) !== newBase) {
+        changes.push(`a base fare of ${formatRupees(Number(existing.baseFare ?? 0))} to ${formatRupees(newBase)}`);
+      }
+    }
+    const ok = await confirm({
+      title: editingId ? 'Save this rate change?' : 'Add this rate?',
+      message: existing ? (
+        changes.length ? (
+          <>
+            <strong>{scopeText}</strong> changes from {changes.join(', and ')}. This affects every offer priced
+            from today.
+          </>
+        ) : (
+          <>
+            <strong>{scopeText}</strong> keeps the same fares; only its other details change. It stays the rate
+            every offer for this scope is priced from.
+          </>
+        )
+      ) : (
+        <>
+          <strong>{scopeText}</strong> will price travel at {formatRupees(newPerKm)} per km
+          {newBase ? <> plus a base fare of {formatRupees(newBase)}</> : null}. This affects every offer priced
+          from today.
+        </>
+      ),
+      confirmLabel: editingId ? 'Save rate' : 'Add rate',
+      reversibleNote: 'Offers already priced by the old rate are not changed.',
+      tone: 'danger',
+    });
+    if (!ok) return;
+
     setSubmitting(true);
     try {
       if (editingId) {

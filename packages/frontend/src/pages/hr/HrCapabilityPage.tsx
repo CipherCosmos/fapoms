@@ -206,7 +206,13 @@ export const HrCapabilityPage: React.FC = () => {
 
         {(Object.keys(TYPE_META) as AttrType[]).map((type) => (
           <AttributeSection
-            key={type}
+            /*
+             * Keyed by assayer AND attribute type. Keying by type alone kept the same section
+             * instances mounted while the selected assayer changed, so the "add" row's typed name
+             * and expiry survived the switch — and adding then recorded that skill/certification
+             * against whoever was selected second.
+             */
+            key={`${selectedId ?? 'none'}:${type}`}
             type={type}
             rows={byType(type)}
             vocab={vocab[type] ?? []}

@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { auditDocumentTypeLabel } from '@fapoms/shared';
+import { visibleSelection, hiddenSelectionNote } from '../../utils/selection';
 import {
   Send, AlertTriangle, CheckCircle2, Clock, Search, FileText, ChevronRight, ChevronDown,
 } from 'lucide-react';
@@ -121,9 +122,23 @@ export const DocumentControlPanel: React.FC<{
   const toggle = (id: string) =>
     setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
+  // What "Send to assayers" will really send: ticked AND still listed under the current search and
+  // pipeline stage. The button used to post the raw ticked set, so narrowing the search after
+  // ticking dispatched paperwork that was no longer on screen. See `utils/selection.ts`.
+  const { ids: dispatchableIds, hiddenCount: hiddenSelectedCount } =
+    visibleSelection(selected, selectable, (r) => r.id);
+  const hiddenNote = hiddenSelectionNote(hiddenSelectedCount, 'document');
+
   const dispatchSelected = async () => {
-    await onDispatch([...selected]);
-    setSelected(new Set());
+    if (dispatchableIds.length === 0) return;
+    await onDispatch(dispatchableIds);
+    // Only what was sent is unticked. Anything the filter is hiding stays ticked and reappears,
+    // still selected, when the filter is cleared.
+    setSelected((s) => {
+      const n = new Set(s);
+      for (const id of dispatchableIds) n.delete(id);
+      return n;
+    });
   };
 
   return (
@@ -186,17 +201,28 @@ export const DocumentControlPanel: React.FC<{
           />
         </div>
         {selectable.length > 0 && (
+          // Ticks or unticks the unsent documents CURRENTLY LISTED, and says so — it is not
+          // "every unsent document in the project" whenever a search or stage filter is on.
+          // Anything the filter hides keeps whatever state the user already gave it.
           <button
-            onClick={() => setSelected(selected.size === selectable.length ? new Set() : new Set(selectable.map((r) => r.id)))}
+            onClick={() => setSelected((prev) => {
+              const next = new Set(prev);
+              const allShownTicked = selectable.every((r) => prev.has(r.id));
+              for (const r of selectable) allShownTicked ? next.delete(r.id) : next.add(r.id);
+              return next;
+            })}
             className="btn btn-secondary" style={{ fontSize: 12, padding: '7px 12px' }}
           >
-            {selected.size === selectable.length ? 'Clear' : `Select all ${selectable.length} unsent`}
+            {selectable.every((r) => selected.has(r.id)) ? `Clear the ${selectable.length} shown` : `Select all ${selectable.length} unsent shown`}
           </button>
         )}
-        {selected.size > 0 && (
+        {dispatchableIds.length > 0 && (
           <button onClick={dispatchSelected} disabled={busy} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, padding: '7px 13px' }}>
-            <Send size={13} /> {busy ? 'Sending…' : `Send ${selected.size} to assayers`}
+            <Send size={13} /> {busy ? 'Sending…' : `Send ${dispatchableIds.length} to assayers`}
           </button>
+        )}
+        {hiddenNote && (
+          <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>{hiddenNote}</span>
         )}
       </div>
 

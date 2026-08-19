@@ -18,6 +18,7 @@ import { ContractsPanel } from './clients/ContractsPanel';
 import { BillingPanel } from './clients/BillingPanel';
 import { ConfigurationPanel } from './clients/ConfigurationPanel';
 import { useCurrentRoles, canDeleteClients } from '../hooks/useCurrentRoles';
+import { visibleSelection, hiddenSelectionNote } from '../utils/selection';
 
 const LIFECYCLE_COLORS: Record<string, { color: string; bg: string }> = {
   PROSPECT: { color: 'var(--warning)', bg: 'var(--status-pending-bg)' },
@@ -90,7 +91,9 @@ const Clients: React.FC = () => {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkTarget, setBulkTarget] = useState('');
   const [bulkBusy, setBulkBusy] = useState(false);
-  const [bulkReport, setBulkReport] = useState<{ target: string; succeeded: number; skipped: { id: string; current: string; reason: string }[]; failed: { id: string; reason: string }[] } | null>(null);
+  // Names, not ids: the failure list used to print `id.slice(0, 8)`, a raw UUID prefix that means
+  // nothing to the person who has to decide what to do about it.
+  const [bulkReport, setBulkReport] = useState<{ target: string; succeeded: number; skipped: { id: string; name: string; current: string; reason: string }[]; failed: { id: string; name: string; reason: string }[] } | null>(null);
   const { toast } = useToast();
   
   const roles = useCurrentRoles();
@@ -140,7 +143,15 @@ const Clients: React.FC = () => {
 
   const selectedClient = data?.items.find((c) => c.id === selectedId) ?? null;
 
-  const selectedClients = data?.items.filter((c) => selectedIds.has(c.id)) ?? [];
+  // The clients this page will actually change — ticked AND on the page in front of the user.
+  // The list is server-paged and server-filtered, so a tick made on page 1 or under a different
+  // lifecycle filter is not something the user can see or check any more. `hidden` is surfaced in
+  // the bar rather than silently included (the old behaviour, which sent the raw set) or silently
+  // dropped. See `utils/selection.ts` for the rule.
+  const { rows: selectedClients, ids: actionableIds, hiddenCount: hiddenSelectedCount } =
+    visibleSelection(selectedIds, data?.items ?? [], (c) => c.id);
+  const hiddenNote = hiddenSelectionNote(hiddenSelectedCount, 'client');
+
   const bulkTargets = (() => {
     if (selectedClients.length === 0) return [] as string[];
     const reachable = new Set<string>();
@@ -154,23 +165,39 @@ const Clients: React.FC = () => {
   })();
 
   const runBulkTransition = async () => {
-    if (!bulkTarget || selectedIds.size === 0) return;
+    // Only the visible ones are sent. The count on the button is `selectedClients.length`, so the
+    // request and the promise on screen are the same number by construction.
+    if (!bulkTarget || actionableIds.length === 0) return;
+    const target = bulkTarget;
+    // Captured before the refetch swaps the page out from under us, so the report can name the
+    // clients even after the list reloads.
+    const nameById = new Map(selectedClients.map((c) => [c.id, c.displayName]));
     setBulkBusy(true);
     setBulkReport(null);
     try {
       const res = await api.request<{ succeeded: { id: string }[]; skipped: { id: string; current: string; reason: string }[]; failed: { id: string; reason: string }[] }>('/clients/bulk/lifecycle', {
         method: 'PATCH',
-        body: JSON.stringify({ ids: [...selectedIds], status: bulkTarget }),
+        body: JSON.stringify({ ids: actionableIds, status: target }),
       });
       const { succeeded, skipped, failed } = res ?? { succeeded: [], skipped: [], failed: [] };
-      setBulkReport({ target: bulkTarget, succeeded: succeeded.length, skipped, failed });
-      toast('success', `${succeeded.length} client(s) moved to ${clientLifecycleLabel(bulkTarget)}.`);
+      setBulkReport({
+        target,
+        succeeded: succeeded.length,
+        skipped: skipped.map((s) => ({ ...s, name: nameById.get(s.id) ?? s.id })),
+        failed: failed.map((f) => ({ ...f, name: nameById.get(f.id) ?? f.id })),
+      });
+      // Same rule as the dispatch queue in Scheduling: only what succeeded (or was refused for a
+      // reason retrying cannot fix) leaves the selection. Clearing everything meant that after a
+      // partial failure the user had to hunt down and re-tick each failure by hand.
+      setSelectedIds(new Set(failed.map((f) => f.id)));
+      setBulkTarget(failed.length > 0 ? target : '');
+      toast('success', `${succeeded.length} client(s) moved to ${clientLifecycleLabel(target)}.`);
     } catch (err: any) {
+      // The whole call failed, so nothing changed — keep the selection exactly as it was so the
+      // user can simply press Apply again.
       toast({ type: 'error', title: 'Bulk lifecycle change failed', message: userMessage(err) });
     } finally {
       setBulkBusy(false);
-      setBulkTarget('');
-      setSelectedIds(new Set());
       refetch();
     }
   };
@@ -291,8 +318,15 @@ const Clients: React.FC = () => {
           padding: '10px 14px', borderRadius: '8px',
           background: 'var(--status-pending-bg)', border: '1px solid rgba(216,174,71,0.3)',
         }}>
-          <strong style={{ fontSize: '13px' }}>{selectedIds.size} selected</strong>
-          {bulkTargets.length > 0 ? (
+          {/* The count is the number of clients Apply will change — visible ones only — so it can
+              never over-promise the way `selectedIds.size` did. */}
+          <strong style={{ fontSize: '13px' }}>{selectedClients.length} selected</strong>
+          {hiddenNote && (
+            <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>{hiddenNote}</span>
+          )}
+          {selectedClients.length === 0 ? (
+            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Nothing on this page is selected. Clear the filters or go back a page to work on them.</span>
+          ) : bulkTargets.length > 0 ? (
             <>
               <ArrowLeftRight size={13} style={{ color: 'var(--text-muted)' }} />
               <Select
@@ -303,7 +337,7 @@ const Clients: React.FC = () => {
                 compact
               />
               <button onClick={runBulkTransition} disabled={!bulkTarget || bulkBusy} className="btn btn-primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
-                {bulkBusy ? 'Applying…' : 'Apply'}
+                {bulkBusy ? 'Applying…' : `Apply to ${selectedClients.length}`}
               </button>
             </>
           ) : (
@@ -326,17 +360,18 @@ const Clients: React.FC = () => {
               <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Could not reach {clientLifecycleLabel(bulkReport.target)}:</div>
               {bulkReport.skipped.map((s) => (
                 <div key={s.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
-                  <span>{s.current}</span><span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>— {s.reason}</span>
+                  <span style={{ fontWeight: 600 }}>{s.name}</span>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>{clientLifecycleLabel(s.current)} — {s.reason}</span>
                 </div>
               ))}
             </div>
           )}
           {bulkReport.failed.length > 0 && (
             <div style={{ marginTop: '6px' }}>
-              <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Failed:</div>
+              <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Failed — still selected, press Apply again to retry:</div>
               {bulkReport.failed.map((f) => (
                 <div key={f.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
-                  <span>{f.id.slice(0, 8)}</span><span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>— {f.reason}</span>
+                  <span style={{ fontWeight: 600 }}>{f.name}</span><span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>— {f.reason}</span>
                 </div>
               ))}
             </div>
@@ -356,7 +391,13 @@ const Clients: React.FC = () => {
         selectable
         selected={selectedIds}
         onToggleSelect={toggleSelect}
-        onSelectAll={(checked) => setSelectedIds(checked ? new Set((data?.items ?? []).map((c) => c.id)) : new Set())}
+        // Adds or removes THIS page's rows only, leaving any ticks made on another page alone —
+        // the header box speaks for the page it sits on, and nothing else.
+        onSelectAll={(checked) => setSelectedIds((prev) => {
+          const next = new Set(prev);
+          for (const c of data?.items ?? []) checked ? next.add(c.id) : next.delete(c.id);
+          return next;
+        })}
         emptyState={
           <div style={{ padding: '16px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
             <Building2 size={34} style={{ color: 'var(--text-muted)', opacity: 0.4 }} />

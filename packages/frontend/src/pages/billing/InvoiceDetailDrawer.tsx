@@ -4,6 +4,7 @@ import { DetailDrawer, StyledInput, Select, useConfirm, useToast } from '../../c
 import { useBillingInvoice, useSendInvoice, useRecordBillingPayment, useCancelInvoice, useReversePayment } from '../../hooks/useBilling';
 import { InvoiceStatus, PaymentMethod, paymentMethodLabel } from '@fapoms/shared';
 import { userMessage } from '../../services/errors';
+import { todayDateKey } from '../../utils/statusLabels';
 import { moneyExact as money } from '../../utils/money';
 import { InvoiceStatusPill, LineStatePill, fmtDate, inputStyle, th, td, tdNum } from './shared';
 
@@ -35,7 +36,11 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
   const [method, setMethod] = useState<PaymentMethod>(PaymentMethod.NEFT);
   const [reference, setReference] = useState('');
   const [amount, setAmount] = useState('');
-  const [receivedDate, setReceivedDate] = useState(new Date().toISOString().slice(0, 10));
+  // todayDateKey() is the LOCAL calendar day. `new Date().toISOString().slice(0, 10)` is the UTC
+  // day, so from 17:30 IST onwards it pre-filled tomorrow's date — finance recording an evening
+  // receipt got a payment dated a day in the future, which lands in the wrong reconciliation
+  // period and cannot be spotted after the fact.
+  const [receivedDate, setReceivedDate] = useState(todayDateKey());
   const [payNote, setPayNote] = useState('');
   const [cancelOpen, setCancelOpen] = useState(false);
   const [cancelReason, setCancelReason] = useState('');

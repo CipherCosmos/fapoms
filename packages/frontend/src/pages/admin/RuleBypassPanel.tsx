@@ -7,6 +7,7 @@ import {
 } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
+import { useConfirm } from '../../components/ui';
 
 /**
  * Where an administrator suspends operational rules for testing.
@@ -40,6 +41,7 @@ function formatCountdown(iso: string | null): string | null {
 
 export const RuleBypassPanel: React.FC = () => {
   const queryClient = useQueryClient();
+  const { confirm, confirmDialog } = useConfirm();
   const [selected, setSelected] = useState<Set<BypassableRule>>(new Set());
   const [reason, setReason] = useState('');
   const [hours, setHours] = useState(DEFAULT_BYPASS_HOURS);
@@ -174,6 +176,7 @@ export const RuleBypassPanel: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '900px' }}>
+      {confirmDialog}
       <div>
         <h2 style={{ fontSize: '19px', fontWeight: 700, margin: 0 }}>Rule bypass</h2>
         <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: '5px 0 0', lineHeight: 1.55 }}>
@@ -218,8 +221,33 @@ export const RuleBypassPanel: React.FC = () => {
               {current.expiresAt && <>Expires {formatCountdown(current.expiresAt)} ({new Date(current.expiresAt).toLocaleString()})</>}
             </div>
           </div>
+          {/*
+            Restoring is the safe direction — it puts the controls back — but it is not a
+            no-op, and it fired on a single click. Anyone mid-test loses the window they set
+            up (the suspension cannot be resumed; it has to be requested again, with a reason,
+            from scratch), and the button sits immediately under the countdown people come to
+            this screen just to read, so a click aimed at the banner ended someone else's test
+            run. One dialog naming what comes back on is enough; no typed phrase, because
+            nothing is destroyed and re-suspending is always possible.
+          */}
           <button
-            onClick={() => disable.mutate()}
+            onClick={async () => {
+              const names = activeRuleInfos.map((r) => r.label).join(', ');
+              const ok = await confirm({
+                title: 'Turn all rules back on now?',
+                message: (
+                  <>
+                    Enforcement resumes immediately for {activeRuleInfos.length} suspended rule
+                    {activeRuleInfos.length === 1 ? '' : 's'}
+                    {names ? <> — {names}</> : null}. Anyone testing right now will start being blocked by them again.
+                  </>
+                ),
+                confirmLabel: 'Restore all rules',
+                reversibleNote: 'To suspend them again you have to pick the rules and give a reason afresh.',
+              });
+              if (!ok) return;
+              disable.mutate();
+            }}
             disabled={disable.isPending}
             className="btn btn-primary"
             style={{ marginTop: '12px', padding: '7px 14px', fontSize: '13px', fontWeight: 700 }}
@@ -326,7 +354,7 @@ export const RuleBypassPanel: React.FC = () => {
         )}
 
         <button
-          onClick={() => {
+          onClick={async () => {
             /**
              * The button is never HTML-`disabled` for a missing selection or a short reason —
              * only while a request is actually in flight. Everything else is validated here, on
@@ -347,8 +375,36 @@ export const RuleBypassPanel: React.FC = () => {
               return;
             }
             setGuidance(null);
-            const names = rules.filter((r) => selected.has(r.rule)).map((r) => r.label).join('\n· ');
-            if (!confirm(`Suspend these rules for ${hours}h?\n\n· ${names}\n\nEvery record created while they are off is marked as produced without them.`)) return;
+            /*
+              The last guard before the controls come off used the browser's own dialog — the
+              one that looks identical to the pop-ups office staff are trained to dismiss
+              unread, whose buttons say only "OK" and "Cancel", and where Enter confirms. That
+              is the weakest possible gate on the one action that changes what every audit
+              record produced in the next few hours means. Same wording, same decision, in the
+              in-app dialog, which names the action on its button and says plainly that this
+              cannot be undone for records already created.
+            */
+            const chosen = rules.filter((r) => selected.has(r.rule));
+            const ok = await confirm({
+              title: `Suspend ${chosen.length} rule${chosen.length === 1 ? '' : 's'} for ${hours}h?`,
+              message: (
+                <>
+                  These checks stop being enforced for the next {hours} hour{hours === 1 ? '' : 's'}:
+                  <ul style={{ margin: '6px 0 0', paddingLeft: '18px' }}>
+                    {chosen.map((r) => (
+                      <li key={r.rule}>{r.label}</li>
+                    ))}
+                  </ul>
+                  <div style={{ marginTop: '8px' }}>
+                    Every record created while they are off is marked as produced without them.
+                  </div>
+                </>
+              ),
+              confirmLabel: `Suspend for ${hours}h`,
+              reversibleNote: 'You can restore the rules at any time, but records already created while they were off stay marked.',
+              tone: 'danger',
+            });
+            if (!ok) return;
             enable.mutate();
           }}
           disabled={enable.isPending}

@@ -19,7 +19,8 @@ import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { EventCategory, ClientLifecycleStatus, CLIENT_LIFECYCLE_TRANSITIONS, toWorkflowTransitions } from '@fapoms/shared';
 
 export interface CreateClientDto {
-  clientCode: string;
+  /** Optional. Blank means "allocate the next free one" — see `allocateClientCode()`. */
+  clientCode?: string;
   name: string;
   displayName: string;
   website?: string;
@@ -203,10 +204,108 @@ export class ClientService implements OnModuleInit {
   // Client Profile
   // -----------------------------------------------------------------------
 
+  /**
+   * The next free CL-nnnn.
+   *
+   * Deliberately the same shape as `BranchService.allocateBranchCode()`: read the codes that
+   * already match the pattern, take the highest, add one. Hand-typed codes ("SBI", "HDFC-GOLD")
+   * simply do not match and are ignored, so introducing this cannot collide with the codes the
+   * existing clients carry.
+   */
+  private async allocateClientCode(): Promise<string> {
+    const rows = await this.clientRepository.find({ select: ['clientCode'], withDeleted: true } as any);
+    const highest = rows.reduce((max, r) => {
+      const m = /^CL-(\d+)$/.exec(r.clientCode ?? '');
+      return m ? Math.max(max, Number(m[1])) : max;
+    }, 0);
+    return `CL-${String(highest + 1).padStart(4, '0')}`;
+  }
+
+  /**
+   * Ranges for the two JSON blobs the client configuration screen writes.
+   *
+   * These are checked here rather than with nested DTO decorators on purpose: the API runs with
+   * `forbidNonWhitelisted`, so declaring a nested class for `slaRules` or `planningPreferences`
+   * would start rejecting every key not listed on it — and the mobile app and older records
+   * carry keys this service has never known about. Checking only the keys we understand, and
+   * leaving the rest untouched, keeps the contract backward-compatible.
+   *
+   * The weights are the reason this exists. They were five bare numbers behind an `@IsObject()`,
+   * so a −50 distance weight saved happily and then inverted the factor: the recommendation
+   * engine ranked the furthest assayer first, and the configuration screen showed a value that
+   * looked deliberate. A weight is a share, so it is bounded to 0–1.
+   */
+  private assertNumberInRange(value: unknown, label: string, min: number, max: number): void {
+    if (value === undefined || value === null || value === '') return;
+    const n = Number(value);
+    if (!Number.isFinite(n)) {
+      throw new BadRequestException(`${label} must be a number.`);
+    }
+    if (n < min || n > max) {
+      throw new BadRequestException(`${label} must be between ${min} and ${max}. Received ${n}.`);
+    }
+  }
+
+  private validateTunables(dto: CreateClientDto | UpdateClientDto): void {
+    const sla = dto.configuration?.slaRules;
+    if (sla && typeof sla === 'object') {
+      this.assertNumberInRange(sla.maxAuditsPerMonth, 'Max audits per month', 1, 100_000);
+      this.assertNumberInRange(sla.schedulingWindowDays, 'Scheduling window (days)', 1, 365);
+      this.assertNumberInRange(sla.maxResponseTimeHours, 'Max response time (hours)', 1, 8760);
+      this.assertNumberInRange(sla.penaltyRate, 'Penalty rate (%)', 0, 100);
+    }
+
+    const planning = dto.planningPreferences;
+    if (planning && typeof planning === 'object') {
+      this.assertNumberInRange(planning.minDistanceKm, 'Minimum distance (km)', 0, 2000);
+      this.assertNumberInRange(planning.maxDistanceKm, 'Maximum distance (km)', 0, 2000);
+      const min = Number(planning.minDistanceKm);
+      const max = Number(planning.maxDistanceKm);
+      // A maximum below the minimum excludes every candidate, silently, on every branch.
+      if (Number.isFinite(min) && Number.isFinite(max) && max < min) {
+        throw new BadRequestException(`Maximum distance (${max} km) cannot be below the minimum (${min} km).`);
+      }
+
+      const weights = planning.weights;
+      if (weights && typeof weights === 'object') {
+        for (const [key, value] of Object.entries(weights as Record<string, unknown>)) {
+          this.assertNumberInRange(value, `The "${key}" ranking weight`, 0, 1);
+        }
+      }
+    }
+  }
+
   async create(dto: CreateClientDto, userId: string, organizationId?: string | null): Promise<ClientEntity> {
-    const existing = await this.clientRepository.findOne({ where: { clientCode: dto.clientCode } });
-    if (existing) {
-      throw new ConflictException(`Client code ${dto.clientCode} already exists.`);
+    this.validateTunables(dto);
+
+    /**
+     * A typed code is honoured as-is; a blank one is allocated here, and only here.
+     *
+     * The retry covers two people creating a client at the same moment: both read the same
+     * highest code, the first save wins, and the second finds its allocation taken and asks for
+     * the next one. A user-supplied code never retries — that must still surface as a conflict
+     * rather than quietly saving under a different code than the one that was typed.
+     */
+    const supplied = dto.clientCode?.trim();
+    if (supplied) {
+      dto = { ...dto, clientCode: supplied };
+      const existing = await this.clientRepository.findOne({ where: { clientCode: supplied } });
+      if (existing) {
+        throw new ConflictException(`Client code ${supplied} already exists.`);
+      }
+    } else {
+      dto = { ...dto, clientCode: undefined };
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const candidate = await this.allocateClientCode();
+        const taken = await this.clientRepository.findOne({
+          where: { clientCode: candidate },
+          withDeleted: true,
+        } as any);
+        if (!taken) { dto = { ...dto, clientCode: candidate }; break; }
+      }
+      if (!dto.clientCode) {
+        throw new BadRequestException('Could not allocate a client code just now. Please try again.');
+      }
     }
 
     const config = this.configRepository.create({
@@ -227,7 +326,7 @@ export class ClientService implements OnModuleInit {
     });
 
     const client = this.clientRepository.create({
-      clientCode: dto.clientCode,
+      clientCode: dto.clientCode!,   // guaranteed above: supplied, or allocated
       name: dto.name,
       displayName: dto.displayName,
       website: dto.website ?? null,
@@ -355,6 +454,9 @@ export class ClientService implements OnModuleInit {
   }
 
   async update(id: string, dto: UpdateClientDto, userId: string): Promise<ClientEntity> {
+    // Same ranges as create — an edit must not be able to write what create refuses.
+    this.validateTunables(dto);
+
     const client = await this.findOne(id);
 
     if (dto.name !== undefined) client.name = dto.name;

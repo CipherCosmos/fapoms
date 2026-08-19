@@ -3,9 +3,12 @@ import { Building2 } from 'lucide-react';
 import { Modal, StyledInput, Select, useToast } from '../../components/ui';
 import { useUpdateClient } from '../../hooks/useClients';
 import type { Client } from '@fapoms/shared';
-import { ClientType, Priority } from '@fapoms/shared';
+import { ClientType, Priority, clientTypeLabel, priorityLabel } from '@fapoms/shared';
 import { userMessage } from '../../services/errors';
 
+// The enum supplies the values; `@fapoms/shared`'s label layer supplies the wording, the same
+// way the clients list already does. Rendering the value itself put "MICROFINANCE" and
+// "CRITICAL" in front of an office user as if they were words.
 const CLIENT_TYPES = Object.values(ClientType);
 const PRIORITIES = Object.values(Priority);
 
@@ -96,7 +99,7 @@ export const EditClientModal: React.FC<{ client: Client; onClose: () => void }> 
               <Select
                 value={form.clientType}
                 onChange={(v) => set('clientType', v)}
-                options={CLIENT_TYPES.map((t) => ({ value: t, label: t }))}
+                options={CLIENT_TYPES.map((t) => ({ value: t, label: clientTypeLabel(t) }))}
                 style={{ width: '100%' }}
               />
             </div>
@@ -105,7 +108,7 @@ export const EditClientModal: React.FC<{ client: Client; onClose: () => void }> 
               <Select
                 value={form.priority}
                 onChange={(v) => set('priority', v)}
-                options={PRIORITIES.map((p) => ({ value: p, label: p }))}
+                options={PRIORITIES.map((p) => ({ value: p, label: priorityLabel(p) }))}
                 style={{ width: '100%' }}
               />
             </div>

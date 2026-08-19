@@ -95,7 +95,11 @@ export const Holidays: React.FC = () => {
   const byDate = useMemo(() => {
     const m = new Map<string, Holiday[]>();
     for (const h of holidays) {
-      const key = new Date(h.date).toISOString().slice(0, 10);
+      // Local calendar key, matching the `toISODate` used for the grid cells below. The UTC
+      // slice this replaces disagreed with the cells whenever the stored timestamp is local
+      // midnight (18:30Z the previous day in IST), which parked the holiday on the day before
+      // the one it is actually observed on.
+      const key = toISODate(new Date(h.date));
       if (!m.has(key)) m.set(key, []);
       m.get(key)!.push(h);
     }
@@ -109,14 +113,22 @@ export const Holidays: React.FC = () => {
   const handleOpenCreate = (prefillDate?: string) => {
     setEditingId(null);
     resetForm();
-    setDate(prefillDate ?? toISODate(new Date(yearFilter, monthCursor.getMonth(), 1)));
+    /*
+     * Default to *today* while the calendar is showing the current month — which is what it
+     * opens on and where nearly every holiday is registered from — instead of the 1st, which
+     * was almost never the date wanted and had to be retyped every time. Browsing to another
+     * month keeps the old behaviour (that month's 1st), since "today" is not in view there.
+     */
+    const today = new Date();
+    const onCurrentMonth = yearFilter === today.getFullYear() && monthCursor.getMonth() === today.getMonth();
+    setDate(prefillDate ?? toISODate(onCurrentMonth ? today : new Date(yearFilter, monthCursor.getMonth(), 1)));
     setShowModal(true);
   };
 
   const handleOpenEdit = (h: Holiday) => {
     setEditingId(h.id);
     setName(h.name);
-    setDate(new Date(h.date).toISOString().split('T')[0]);
+    setDate(toISODate(new Date(h.date))); // local key — same reason as the byDate map above
     setType((h.type as Holiday['type']) ?? 'BANK');
     setClientId(h.clientId || '');
     setSelectedStates(h.applicableStates || []);

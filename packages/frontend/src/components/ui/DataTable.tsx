@@ -49,7 +49,18 @@ export const DataTable = <T,>({
           <tr>
             {selectable && (
               <th style={{ width: 32, whiteSpace: 'nowrap' }}>
-                <input type="checkbox" checked={allSelected} onChange={(e) => onSelectAll?.(e.target.checked)} style={{ cursor: 'pointer' }} />
+                {/* Says what it does. This box ticks the rows of the LOADED PAGE, not everything
+                    matching the current filter — the rest of the result set was never fetched, so
+                    it could not tick it even if it wanted to. It was previously an unlabelled
+                    checkbox, which read as "select everything" and quietly meant something else. */}
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  onChange={(e) => onSelectAll?.(e.target.checked)}
+                  style={{ cursor: 'pointer' }}
+                  title={allSelected ? `Clear the ${rows.length} on this page` : `Select all ${rows.length} on this page`}
+                  aria-label={allSelected ? `Clear the ${rows.length} selected rows on this page` : `Select all ${rows.length} rows on this page`}
+                />
               </th>
             )}
             {columns.map((c) => {

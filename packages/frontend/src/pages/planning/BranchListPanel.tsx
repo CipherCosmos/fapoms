@@ -96,12 +96,24 @@ export const BranchListPanel: React.FC<{
             checked={allSelectableSelected}
             onChange={() => onToggleBulkSelectAll?.()}
             style={{ cursor: 'pointer', accentColor: 'var(--accent)' }}
-            aria-label="Select all unassigned branches"
+            aria-label={
+              allSelectableSelected
+                ? `Clear the ${selectableBranches.length} unassigned branches shown`
+                : `Select all ${selectableBranches.length} unassigned branches shown`
+            }
           />
+          {/*
+            Always visible whenever the queue holds an unassigned branch — it does not wait for a
+            row to be ticked first, because a control nobody can see is a control nobody uses, and
+            staffing 155 branches one click at a time was the alternative.
+
+            The wording is scoped on purpose: this ticks the branches the search and filters are
+            currently showing, not every branch in the project.
+          */}
           <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>
-            {bulkSelectedIds!.size > 0
-              ? `${bulkSelectedIds!.size} selected`
-              : `Select unassigned (${selectableBranches.length})`}
+            {allSelectableSelected
+              ? `All ${selectableBranches.length} shown selected — click to clear`
+              : `Select all ${selectableBranches.length} unassigned shown`}
           </span>
         </div>
       )}

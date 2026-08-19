@@ -15,3 +15,5 @@ export type { ToastType, ToastOptions } from './Toast';
 export { SectionCard, SettingRow, Toggle, Tabs, Pill, controlStyle } from './settings';
 export { useConfirm } from './ConfirmDialog';
 export type { ConfirmOptions, ConfirmTone } from './ConfirmDialog';
+export { ChipMultiSelect } from './ChipMultiSelect';
+export type { ChipOption, ChipMultiSelectProps } from './ChipMultiSelect';

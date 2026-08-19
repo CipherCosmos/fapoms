@@ -2,9 +2,12 @@ import React, { useState } from 'react';
 import { Building2 } from 'lucide-react';
 import { Modal, StyledInput, Select, useToast } from '../../components/ui';
 import { useCreateClient } from '../../hooks/useClients';
-import { ClientType, Priority } from '@fapoms/shared';
+import { ClientType, Priority, clientTypeLabel, priorityLabel } from '@fapoms/shared';
 import { userMessage } from '../../services/errors';
 
+// The enum supplies the values; `@fapoms/shared`'s label layer supplies the wording, the same
+// way the clients list already does. Rendering the value itself put "MICROFINANCE" and
+// "CRITICAL" in front of an office user as if they were words.
 const CLIENT_TYPES = Object.values(ClientType);
 const PRIORITIES = Object.values(Priority);
 
@@ -35,10 +38,12 @@ export const CreateClientModal: React.FC<{ onClose: () => void }> = ({ onClose }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.clientCode || !form.name || !form.displayName) return;
+    if (!form.name || !form.displayName) return;
     try {
       await create.mutateAsync({
-        clientCode: form.clientCode,
+        // Blank is meaningful: the server allocates the next free code, the same way branches,
+        // projects and assayers already do. Sending "" would be a code of empty string.
+        clientCode: form.clientCode.trim() || undefined,
         name: form.name,
         displayName: form.displayName,
         contactPerson: form.contactPerson || undefined,
@@ -61,7 +66,7 @@ export const CreateClientModal: React.FC<{ onClose: () => void }> = ({ onClose }
     <Modal open onClose={onClose} title={<><Building2 size={18} style={{ marginRight: 6 }} /> Add New Client</>} width="560px" asForm onSubmit={handleSubmit} footer={
       <>
         <button type="button" onClick={onClose} className="btn btn-secondary">Cancel</button>
-        <button type="submit" disabled={create.isPending || !form.clientCode || !form.name || !form.displayName} className="btn btn-primary">
+        <button type="submit" disabled={create.isPending || !form.name || !form.displayName} className="btn btn-primary">
           {create.isPending ? 'Creating...' : 'Create Client'}
         </button>
       </>
@@ -72,8 +77,11 @@ export const CreateClientModal: React.FC<{ onClose: () => void }> = ({ onClose }
           <h4 style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, margin: '0 0 12px 0', borderBottom: '1px solid var(--border-color)', paddingBottom: 6, color: 'var(--accent-primary)' }}>General Identity</h4>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
-              <Label text="Client Code" required />
-              <StyledInput placeholder="e.g., SBI" value={form.clientCode} onChange={(e) => set('clientCode', e.target.value)} required />
+              {/* The last hand-typed code on the platform. Branches, projects and assayers all
+                  allocate their own when the field is left blank; clients now do the same, so
+                  nobody has to invent a short code and check it is not already taken. */}
+              <Label text="Client Code" />
+              <StyledInput placeholder="Left blank, one is assigned for you" value={form.clientCode} onChange={(e) => set('clientCode', e.target.value)} />
             </div>
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               <Label text="Legal Name" required />
@@ -92,7 +100,7 @@ export const CreateClientModal: React.FC<{ onClose: () => void }> = ({ onClose }
               <Select
                 value={form.clientType}
                 onChange={(v) => set('clientType', v)}
-                options={CLIENT_TYPES.map((t) => ({ value: t, label: t }))}
+                options={CLIENT_TYPES.map((t) => ({ value: t, label: clientTypeLabel(t) }))}
                 style={{ width: '100%' }}
               />
             </div>
@@ -131,7 +139,7 @@ export const CreateClientModal: React.FC<{ onClose: () => void }> = ({ onClose }
               <Select
                 value={form.priority}
                 onChange={(v) => set('priority', v)}
-                options={PRIORITIES.map((p) => ({ value: p, label: p }))}
+                options={PRIORITIES.map((p) => ({ value: p, label: priorityLabel(p) }))}
                 style={{ width: '100%' }}
               />
             </div>

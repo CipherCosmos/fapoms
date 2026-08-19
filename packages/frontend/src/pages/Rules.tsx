@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Trash2, Edit2, Shield, Sliders, AlertTriangle, Info } from 'lucide-react';
+import { INDIAN_STATES } from '@fapoms/shared';
 import { api } from '../services/api';
 import { useClientOptions } from '../hooks/useClients';
-import { StatusBadge, Modal, SearchInput, FilterSelect, PrimaryButton, Select } from '../components/ui';
+import { StatusBadge, Modal, SearchInput, FilterSelect, PrimaryButton, Select, ChipMultiSelect } from '../components/ui';
+import { useWorkforceVocabulary, asOptions } from '../hooks/useWorkforceVocabulary';
 import { useCurrentRoles, canManageRules, canDeleteRules } from '../hooks/useCurrentRoles';
 
 /**
@@ -100,7 +102,15 @@ export const Rules: React.FC = () => {
   const [err, setErr] = useState<string | null>(null);
 
   const [form, setForm] = useState(emptyForm);
-  const [stateInput, setStateInput] = useState('');
+
+  /**
+   * A rule's skill/certification is compared to an assayer's recorded competencies by exact
+   * string match inside RuleEngine.evaluateSingleRule(). Typed free-hand, "Gold Assaying " or
+   * "Gold Assayer" is accepted happily and then matches nobody — a BLOCK rule that excludes
+   * every candidate, or a SCORE_ADJUSTMENT that never fires, with nothing on screen to say so.
+   * Picking from the roster's own vocabulary makes that unrepresentable.
+   */
+  const { skills: skillOptions, certifications: certOptions } = useWorkforceVocabulary();
 
   const { data: clientsRes } = useClientOptions();
   const clients = (Array.isArray(clientsRes) ? clientsRes : (clientsRes as any)?.data) || [];
@@ -118,7 +128,7 @@ export const Rules: React.FC = () => {
 
   React.useEffect(() => { fetchRules(); }, []);
 
-  const openCreate = () => { setEditingId(null); setForm(emptyForm); setStateInput(''); setShowModal(true); };
+  const openCreate = () => { setEditingId(null); setForm(emptyForm); setShowModal(true); };
 
   const openEdit = (r: BusinessRule) => {
     setEditingId(r.id);
@@ -131,7 +141,6 @@ export const Rules: React.FC = () => {
       actionType: r.actions?.type ?? 'BLOCK',
       actionValue: r.actions?.value !== undefined ? String(r.actions.value) : '',
     });
-    setStateInput('');
     setShowModal(true);
   };
 
@@ -353,28 +362,55 @@ export const Rules: React.FC = () => {
 
             {form.ruleType === 'SKILL' && (
               <Field label="Required Skill">
-                <input type="text" required value={form.requiredSkill} onChange={(e) => setForm({ ...form, requiredSkill: e.target.value })} placeholder="e.g. Gold Assaying" style={inputStyle} />
+                {/* Still loading, or the HR-scoped vocabulary is not readable by this role: keep the
+                    old free-text box so a rule can always be recorded, rather than blocking the form. */}
+                {skillOptions === null || skillOptions.length === 0 ? (
+                  <input type="text" required value={form.requiredSkill} onChange={(e) => setForm({ ...form, requiredSkill: e.target.value })} placeholder="e.g. Gold Assaying" style={inputStyle} />
+                ) : (
+                  <ChipMultiSelect
+                    aria-label="Required skill"
+                    single
+                    options={asOptions(skillOptions)}
+                    value={form.requiredSkill ? [form.requiredSkill] : []}
+                    onChange={(next) => setForm({ ...form, requiredSkill: next[0] ?? '' })}
+                    searchPlaceholder="Search skills…"
+                    emptyText="No skills recorded on the roster yet."
+                  />
+                )}
               </Field>
             )}
             {form.ruleType === 'CERTIFICATION' && (
               <Field label="Required Certification">
-                <input type="text" required value={form.requiredCertification} onChange={(e) => setForm({ ...form, requiredCertification: e.target.value })} placeholder="e.g. Certified Gold Assayer" style={inputStyle} />
+                {certOptions === null || certOptions.length === 0 ? (
+                  <input type="text" required value={form.requiredCertification} onChange={(e) => setForm({ ...form, requiredCertification: e.target.value })} placeholder="e.g. Certified Gold Assayer" style={inputStyle} />
+                ) : (
+                  <ChipMultiSelect
+                    aria-label="Required certification"
+                    single
+                    options={asOptions(certOptions)}
+                    value={form.requiredCertification ? [form.requiredCertification] : []}
+                    onChange={(next) => setForm({ ...form, requiredCertification: next[0] ?? '' })}
+                    searchPlaceholder="Search certifications…"
+                    emptyText="No certifications recorded on the roster yet."
+                  />
+                )}
               </Field>
             )}
             {form.ruleType === 'TERRITORY' && (
               <Field label="Restricted States">
-                <div style={{ display: 'flex', gap: '6px', marginBottom: '6px' }}>
-                  <input type="text" value={stateInput} onChange={(e) => setStateInput(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); if (stateInput.trim()) { setForm({ ...form, restrictedStates: [...form.restrictedStates, stateInput.trim()] }); setStateInput(''); } } }}
-                    placeholder="Type a state and press Enter" style={inputStyle} />
-                </div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                  {form.restrictedStates.map((s, i) => (
-                    <span key={i} style={{ padding: '3px 8px', background: 'var(--text-secondary)', borderRadius: '4px', fontSize: '11px', display: 'flex', gap: '5px', alignItems: 'center' }}>
-                      {s} <button type="button" onClick={() => setForm({ ...form, restrictedStates: form.restrictedStates.filter((_, j) => j !== i) })} style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', padding: 0 }}>×</button>
-                    </span>
-                  ))}
-                  {form.restrictedStates.length === 0 && <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>None added yet.</span>}
+                {/* Was "type a state and press Enter", which is the same exact-match trap as the
+                    skill fields: TERRITORY compares these strings to the assayer's own state, so
+                    "Maharastra" excludes nobody and the rule reads as configured. INDIAN_STATES is
+                    the same canonical list the Zones page and the branch form already pick from. */}
+                <ChipMultiSelect
+                  aria-label="Restricted states"
+                  options={INDIAN_STATES}
+                  value={form.restrictedStates}
+                  onChange={(next) => setForm({ ...form, restrictedStates: next })}
+                  searchPlaceholder="Search states…"
+                />
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
+                  {form.restrictedStates.length === 0 ? 'None selected yet — the rule will do nothing until at least one state is chosen.' : `${form.restrictedStates.length} selected.`}
                 </div>
               </Field>
             )}

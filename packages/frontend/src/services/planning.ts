@@ -243,8 +243,15 @@ export interface CoveragePlanExecuteResult {
   message: string;
   deployedCount: number;
   skippedCount: number;
-  deployed: Array<{ branchId: string; assignmentId: string }>;
+  /** Each branch carries the workable date it was actually booked for — no longer one shared date. */
+  deployed: Array<{ branchId: string; assignmentId: string; scheduledDate?: string }>;
   skipped: Array<{ clusterId: string; branchId: string | null; reason: string }>;
+  /** Skip reasons collapsed to reason → count, so 155 identical failures read as one line. */
+  skippedReasons?: Array<{ reason: string; count: number }>;
+  /** True when the deploy produced nothing: an explained outcome now, not a thrown error. */
+  fullySkipped?: boolean;
+  /** First and last date booked, when anything deployed. */
+  dateRange?: { start: string; end: string } | null;
 }
 
 /** Computed cluster/capacity preview for a project (does not persist a version). */
