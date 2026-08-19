@@ -19,6 +19,22 @@ import { ZoneEntity } from '../zone/zone.entity';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import * as xlsx from 'xlsx';
 
+/**
+ * The geocoder, stubbed at the module boundary.
+ *
+ * The template no longer asks for Latitude/Longitude, so the common case is now a row with
+ * neither — and until this mock existed no test reached `getRealCoordinates` at all (every
+ * fixture supplied a pair). A stable pincode-tier answer lets the no-coordinates path be asserted
+ * without touching the network or the on-disk geo cache.
+ */
+jest.mock('../geo/india-geocoder', () => ({
+  geocodeIndiaRobust: jest.fn(async () => ({
+    lat: 10.78, lng: 76.65, accuracyMeters: 2500, source: 'pincode', matchedName: 'Palakkad 678001',
+  })),
+}));
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const { geocodeIndiaRobust: mockGeocode } = require('../geo/india-geocoder') as { geocodeIndiaRobust: jest.Mock };
+
 describe('ProjectService', () => {
   let service: ProjectService;
   let projectRepo: Repository<ProjectEntity>;
@@ -477,6 +493,184 @@ describe('ProjectService', () => {
 
       expect(report.created).toBe(1);
       expect(report.skipped).toHaveLength(0);
+    });
+
+    /**
+     * The six columns an operator was asked for and never knew — Latitude, Longitude, Risk
+     * Category, Risk Score, Complexity, Estimated Hours — are gone from the template and are
+     * derived by the importer instead. These cases pin down what "derived" means.
+     */
+    describe('derives what the sheet no longer asks for', () => {
+      /** A row shaped like the new template: no coordinates, no risk, no complexity, no hours. */
+      const plainRow = (over: Record<string, any> = {}) => {
+        const { Latitude: _lat, Longitude: _lng, ...rest } = templateRow(over);
+        return rest;
+      };
+
+      beforeEach(() => {
+        mockGeocode.mockClear();
+        mockProjectQueryService.findOne.mockResolvedValue({
+          id: 'p-1', clientId: 'c-1', organizationId: 'o-1', status: ProjectStatus.PLANNING,
+          priority: Priority.HIGH,
+        });
+      });
+
+      it('locates a branch from its address when no coordinates are supplied', async () => {
+        const report = await service.uploadBranchesFromExcel('p-1', sheetBuffer([plainRow()]), 'user-1');
+
+        expect(report.created).toBe(1);
+        expect(mockGeocode).toHaveBeenCalledTimes(1);
+        expect(mockBranchService.registerImportedBranch).toHaveBeenCalledWith(
+          expect.objectContaining({
+            latitude: 10.78, longitude: 76.65, geoSource: 'pincode', geoAccuracyMeters: 2500,
+            geoMatchedName: 'Palakkad 678001',
+          }),
+          'user-1',
+        );
+      });
+
+      it('still honours a coordinate pair a sheet happens to carry, and skips the geocoder for it', async () => {
+        await service.uploadBranchesFromExcel('p-1', sheetBuffer([templateRow()]), 'user-1');
+
+        expect(mockGeocode).not.toHaveBeenCalled();
+        expect(mockBranchService.registerImportedBranch).toHaveBeenCalledWith(
+          expect.objectContaining({ latitude: 10.7867, longitude: 76.6548 }),
+          'user-1',
+        );
+      });
+
+      it("takes the branch's risk from the project's priority, and scores it so the planner's senior-assayer rule can fire", async () => {
+        await service.uploadBranchesFromExcel('p-1', sheetBuffer([plainRow()]), 'user-1');
+
+        expect(mockBranchService.registerImportedBranch).toHaveBeenCalledWith(
+          // HIGH → 7, the threshold the recommendation engine reads as "send someone senior".
+          expect.objectContaining({ riskCategory: 'HIGH', riskScore: 7 }),
+          'user-1',
+        );
+      });
+
+      it('carries the project priority onto the project_branch row, which assignments inherit', async () => {
+        await service.uploadBranchesFromExcel('p-1', sheetBuffer([plainRow()]), 'user-1');
+
+        expect(mockProjectBranchRepo.create).toHaveBeenCalledWith(
+          expect.objectContaining({ priority: Priority.HIGH }),
+        );
+      });
+
+      it('rates complexity from packet volume', async () => {
+        const cases: Array<[number, string]> = [
+          [16, 'SIMPLE'], [40, 'SIMPLE'], [41, 'STANDARD'], [100, 'STANDARD'], [101, 'COMPLEX'], [161, 'COMPLEX'],
+        ];
+        for (const [packets, expected] of cases) {
+          mockBranchService.registerImportedBranch.mockClear();
+          await service.uploadBranchesFromExcel(
+            'p-1', sheetBuffer([plainRow({ BRANCH: `BR-${packets}`, Packets: packets })]), 'user-1',
+          );
+          expect(mockBranchService.registerImportedBranch).toHaveBeenCalledWith(
+            expect.objectContaining({ complexity: expected }),
+            'user-1',
+          );
+        }
+      });
+
+      it('falls back to STANDARD complexity and 6 hours when no packets are recorded', async () => {
+        await service.uploadBranchesFromExcel('p-1', sheetBuffer([plainRow({ Packets: '' })]), 'user-1');
+
+        expect(mockBranchService.registerImportedBranch).toHaveBeenCalledWith(
+          expect.objectContaining({ complexity: 'STANDARD', estimatedDurationHours: 6.0 }),
+          'user-1',
+        );
+      });
+
+      it('ignores Risk Category, Risk Score, Complexity and Estimated Hours if a sheet still carries them', async () => {
+        // A legacy sheet — or a hand-edited one — with values that contradict every derivation.
+        const row = plainRow({
+          Packets: 16, // → SIMPLE
+          'Risk Category': 'CRITICAL', 'Risk Score': 9, Complexity: 'COMPLEX', 'Estimated Hours': 99,
+        });
+        await service.uploadBranchesFromExcel('p-1', sheetBuffer([row]), 'user-1');
+
+        expect(mockBranchService.registerImportedBranch).toHaveBeenCalledWith(
+          expect.objectContaining({
+            riskCategory: 'HIGH', riskScore: 7,      // from the project, not the sheet
+            complexity: 'SIMPLE',                     // from packets, not the sheet
+            estimatedDurationHours: 4,                // 16 × 15 / 60, not the sheet's 99
+          }),
+          'user-1',
+        );
+      });
+
+      it('re-derives complexity and hours on re-import when packets change, but never risk', async () => {
+        mockBranchRepo.find.mockResolvedValue([{
+          id: 'b-old', branchCode: 'BR-1', name: 'Thenkurissi', address: '1 Main Road, Palakkad 678001',
+          state: 'Kerala', district: 'PALAKKAD', region: 'SOUTH', latitude: 10.7867, longitude: 76.6548,
+          // Ops escalated this one by hand — a re-import must leave it alone.
+          riskCategory: 'CRITICAL', riskScore: 9, complexity: 'SIMPLE', estimatedDurationHours: 10,
+        }]);
+        mockBranchService.update.mockImplementation(async (id: string) => ({ id, zoneId: null }));
+
+        // This cycle the branch has far more packets.
+        const report = await service.uploadBranchesFromExcel('p-1', sheetBuffer([plainRow({ Packets: 140 })]), 'user-1');
+
+        expect(report.updated).toBe(1);
+        const [, patch] = mockBranchService.update.mock.calls[0];
+        expect(patch).toEqual(expect.objectContaining({ complexity: 'COMPLEX', estimatedDurationHours: 35 }));
+        expect(patch).not.toHaveProperty('riskCategory');
+        expect(patch).not.toHaveProperty('riskScore');
+      });
+    });
+  });
+
+  describe('generateBranchTemplate', () => {
+    beforeEach(() => {
+      mockProjectQueryService.findOne.mockResolvedValue({ id: 'p-1', clientId: 'c-1', organizationId: 'o-1' });
+      mockClientRepo.findOne.mockResolvedValue({ id: 'c-1' });
+    });
+
+    it('asks only for what the operator can know, and says the rest is worked out', async () => {
+      mockProjectBranchRepo.find.mockResolvedValue([]);
+
+      const wb = xlsx.read(await service.generateBranchTemplate('p-1'), { type: 'buffer' });
+
+      const branchSheet = wb.Sheets['Branch'];
+      const headers = (xlsx.utils.sheet_to_json(branchSheet, { header: 1 })[0] as string[]);
+      expect(headers).toEqual([
+        'BRANCH', 'BRANCH_NAME', 'DISTRICT', 'STATE', 'Branch Address', 'Packets',
+        'Pincode', 'Branch Manager', 'Branch Phone', 'Branch Email',
+      ]);
+
+      const instructions = xlsx.utils.sheet_to_json<{ Field: string; Description: string }>(wb.Sheets['Instructions']);
+      const fields = instructions.map((r) => r.Field);
+      for (const gone of ['Latitude', 'Longitude', 'Risk Category', 'Risk Score', 'Complexity', 'Estimated Hours']) {
+        expect(fields).not.toContain(gone);
+      }
+      // And the operator is told why they are not being asked.
+      expect(instructions[0].Field).toBe('Worked out for you');
+      expect(instructions[0].Description).toMatch(/priority set on the project/);
+    });
+
+    it('prefills existing branches without the derived columns', async () => {
+      mockProjectBranchRepo.find.mockResolvedValue([{
+        packetCount: 58,
+        branch: {
+          branchCode: 'BR-1', name: 'Thenkurissi', district: 'Palakkad', state: 'Kerala',
+          address: '1 Main Road', pincode: '678001', latitude: 10.78, longitude: 76.65,
+          riskCategory: 'HIGH', complexity: 'STANDARD', estimatedDurationHours: 14.5,
+          managerName: 'A. Nair', phone: '9876543210', email: 'b@x.in',
+        },
+      }]);
+
+      const wb = xlsx.read(await service.generateBranchTemplate('p-1'), { type: 'buffer' });
+      const [row] = xlsx.utils.sheet_to_json<Record<string, any>>(wb.Sheets['Branch']);
+
+      expect(row).toEqual({
+        BRANCH: 'BR-1', BRANCH_NAME: 'Thenkurissi', DISTRICT: 'Palakkad', STATE: 'Kerala',
+        'Branch Address': '1 Main Road', Packets: 58, Pincode: '678001',
+        'Branch Manager': 'A. Nair', 'Branch Phone': '9876543210', 'Branch Email': 'b@x.in',
+      });
+      expect(row).not.toHaveProperty('Latitude');
+      expect(row).not.toHaveProperty('Risk Category');
+      expect(row).not.toHaveProperty('Estimated Hours');
     });
   });
 });

@@ -180,8 +180,12 @@ export interface CreateProjectDto {
 
 
 /**
- * A 0-10 risk rating derived from the client's stated risk category, used when the import sheet
- * carries no explicit score. Ten is the top of the scale the planning map reads (>= 7 = high).
+ * A 0-10 risk rating derived from the branch's risk category. Ten is the top of the scale the
+ * planning map reads (>= 7 = high), and the recommendation engine's "send a senior assayer"
+ * rule fires at 7 — so HIGH and CRITICAL trip it, MEDIUM and LOW do not.
+ *
+ * The category itself is no longer something the import sheet asks for: it is the project's
+ * priority (see `uploadBranchesFromExcel`), which the person creating the project already set.
  */
 function riskScoreFromCategory(category: string): number {
   switch (category) {
@@ -191,6 +195,27 @@ function riskScoreFromCategory(category: string): number {
     case 'LOW': return 2;
     default: return 2;
   }
+}
+
+/**
+ * Complexity from packet volume — the one per-branch workload signal the sheet actually carries.
+ *
+ * This used to be a column the operator was asked to fill ("SIMPLE / STANDARD / COMPLEX") and in
+ * practice was left blank on every row, so every branch defaulted to STANDARD. Packets is what
+ * sizes the audit — the day planner turns it into hours at `minutesPerPacket` — so it is the
+ * honest basis for "how involved is this branch", and it moves with each cycle's real numbers
+ * instead of sticking at whatever someone typed once.
+ *
+ * Tiers are read off the real client distribution (16–161 packets; median 58, p75 100) against
+ * the 15-minute default: up to 40 packets is about one assayer-day, 41–100 is one to two and a
+ * half, past 100 the branch is a multi-day job. No packets recorded means no signal, and the
+ * middle tier is the only answer that does not overstate either way.
+ */
+function complexityFromPackets(packets: number | null): 'SIMPLE' | 'STANDARD' | 'COMPLEX' {
+  if (packets === null || !Number.isFinite(packets) || packets <= 0) return 'STANDARD';
+  if (packets <= 40) return 'SIMPLE';
+  if (packets <= 100) return 'STANDARD';
+  return 'COMPLEX';
 }
 
 @Injectable()
@@ -585,17 +610,28 @@ export class ProjectService implements OnModuleInit {
       ? await this.clientRepository.findOne({ where: { id: project.clientId } })
       : null;
 
-    // Headers match the column names on the branch lists actually received from
-    // clients (BRANCH / BRANCH_NAME / DISTRICT / STATE / Branch Address) so a
-    // client's own export can be filled in and returned without restructuring.
-    // The importer accepts both these and the friendlier equivalents.
+    /**
+     * Only what the person filling this in can actually know.
+     *
+     * Headers match the column names on the branch lists actually received from clients
+     * (BRANCH / BRANCH_NAME / DISTRICT / STATE / Branch Address) so a client's own export can be
+     * filled in and returned without restructuring. The importer accepts both these and the
+     * friendlier equivalents.
+     *
+     * This used to carry six more: Latitude, Longitude, Risk Category, Risk Score, Complexity,
+     * Estimated Hours. Every one of them was derived by the importer when left blank — and they
+     * were left blank on every row of every real sheet received, because an operator does not
+     * know a branch's coordinates or a risk rating and should not be asked to invent them. Asking
+     * made the template look like a form they had failed to complete. They are derived now, every
+     * time: location from the address, risk from the project's priority, complexity and hours
+     * from Packets. (A supplied Latitude/Longitude pair is still honoured if a client's export
+     * happens to carry one — see the importer — but the template no longer asks.)
+     */
     const headers = [
       // Identity + location (required)
       'BRANCH', 'BRANCH_NAME', 'DISTRICT', 'STATE', 'Branch Address', 'Packets',
-      // Optional, but each one removes guesswork the system otherwise has to do
-      'Pincode', 'Latitude', 'Longitude',
-      'Branch Manager', 'Branch Phone', 'Branch Email',
-      'Risk Category', 'Risk Score', 'Complexity', 'Estimated Hours',
+      // Optional contact details
+      'Pincode', 'Branch Manager', 'Branch Phone', 'Branch Email',
     ];
 
     // Prefill existing branches if any
@@ -612,14 +648,9 @@ export class ProjectService implements OnModuleInit {
       'Branch Address': pb.branch.address || '',
       Packets: pb.packetCount ?? '',
       Pincode: pb.branch.pincode || '',
-      Latitude: pb.branch.latitude ?? '',
-      Longitude: pb.branch.longitude ?? '',
       'Branch Manager': pb.branch.managerName || '',
       'Branch Phone': pb.branch.phone || '',
       'Branch Email': pb.branch.email || '',
-      'Risk Category': pb.branch.riskCategory || '',
-      Complexity: pb.branch.complexity || '',
-      'Estimated Hours': pb.branch.estimatedDurationHours ?? '',
     }));
 
     if (rows.length === 0) {
@@ -632,22 +663,17 @@ export class ProjectService implements OnModuleInit {
     xlsx.utils.book_append_sheet(wb, ws, 'Branch');
 
     const instructions = [
+      { Field: 'Worked out for you', Required: '', Description: 'You do not need to supply a location, a risk rating, a complexity, or audit hours. The branch is located from its address, risk follows the priority set on the project, and complexity and audit hours are calculated from Packets. Any of these can be adjusted afterwards on the Branches page if needed.' },
       { Field: 'BRANCH', Required: 'Yes', Description: 'Branch code from the client, e.g. 8 or BR-0010. Re-importing the same code updates that branch rather than creating a duplicate.' },
       { Field: 'BRANCH_NAME', Required: 'Yes', Description: 'Branch name, e.g. THENKURISSI.' },
       { Field: 'DISTRICT', Required: 'Yes', Description: 'District name — used to cluster nearby branches into one assayer-day and to compute travel.' },
       { Field: 'STATE', Required: 'Yes', Description: 'State name — used to apply state-specific public holidays when scheduling.' },
-      { Field: 'Branch Address', Required: 'Yes', Description: 'Full address. Used to geocode the branch; a 6-digit pincode inside this text is detected automatically.' },
-      { Field: 'Packets', Required: 'Yes', Description: 'Estimated packets to audit at this branch this cycle. Drives how long the audit takes, how many branches one assayer can cover in a day, and the coverage figure quoted to the client. Left blank, the system assumes a flat 6 hours and the plan will be wrong.' },
+      { Field: 'Branch Address', Required: 'Yes', Description: 'Full address. The branch is located on the map from this; a 6-digit pincode inside the text is detected automatically. The more complete the address, the more precise the pin.' },
+      { Field: 'Packets', Required: 'Yes', Description: 'Estimated packets to audit at this branch this cycle. This is the number that matters most: it sets how long the audit takes, how complex the branch is rated, how many branches one assayer can cover in a day, and the coverage figure quoted to the client. Left blank, the system assumes a flat 6 hours and the plan will be wrong.' },
       { Field: 'Pincode', Required: 'No', Description: '6-digit pincode. Leave blank if it already appears in the address.' },
-      { Field: 'Latitude', Required: 'No', Description: 'Decimal degrees, e.g. 10.7867. Supply with Longitude to skip geocoding entirely — faster on import and exact, instead of relying on an address lookup that can place the branch imprecisely or fail.' },
-      { Field: 'Longitude', Required: 'No', Description: 'Decimal degrees, e.g. 76.6548. Must be supplied together with Latitude.' },
       { Field: 'Branch Manager', Required: 'No', Description: 'Contact name at the branch, shown to the assayer before the visit.' },
       { Field: 'Branch Phone', Required: 'No', Description: 'Branch contact number, shown to the assayer before the visit.' },
       { Field: 'Branch Email', Required: 'No', Description: 'Branch email for correspondence.' },
-      { Field: 'Risk Category', Required: 'No', Description: 'LOW / MEDIUM / HIGH / CRITICAL. Higher-risk branches are preferentially matched to more experienced assayers.' },
-      { Field: 'Risk Score', Required: 'No', Description: '0-10 rating. Leave blank to derive it from Risk Category. Branches scoring 7 or above are highlighted for attention on the planning map.' },
-      { Field: 'Complexity', Required: 'No', Description: 'SIMPLE / STANDARD / COMPLEX. Feeds the same matching, and the time allowance per branch.' },
-      { Field: 'Estimated Hours', Required: 'No', Description: 'Override the audit duration for this branch. Normally leave blank — it is calculated from Packets, which stays accurate as packet counts change each cycle.' },
     ];
     const instrWs = xlsx.utils.json_to_sheet(instructions, { header: ['Field', 'Required', 'Description'] });
     instrWs['!cols'] = [{ wch: 18 }, { wch: 10 }, { wch: 110 }];
@@ -890,9 +916,10 @@ export class ProjectService implements OnModuleInit {
           ? parseFloat(((packetCount * minutesPerPacket) / 60).toFixed(2))
           : null;
 
-        // Client-supplied coordinates win over geocoding: they are exact, and they
-        // avoid a network lookup per branch that is rate-limited to ~1/second and
-        // throws when it cannot resolve an address.
+        // The template no longer asks for coordinates — a branch is located from its address —
+        // but a pair that arrives anyway (a client's own export carrying their GPS survey, say)
+        // is exact and is honoured over geocoding. This is the one derived field a sheet may
+        // still override, because a real coordinate beats any lookup.
         const latRaw = parseFloat(get('Latitude', 'Lat'));
         const lngRaw = parseFloat(get('Longitude', 'Lng', 'Long'));
         // Normalised to the same shape a geocode returns, so the two paths cannot diverge in
@@ -1012,6 +1039,13 @@ export class ProjectService implements OnModuleInit {
       });
     };
 
+    /**
+     * Every branch in this file inherits the project's priority as its risk category. Resolved
+     * once, here, because it is a property of the project and not of any row — and normalised so
+     * an enum value and a stray lowercase string from an older record land on the same answer.
+     */
+    const derivedRiskCategory = String(project.priority || 'MEDIUM').toUpperCase();
+
     // ---- Pass 2: the writes, and the geocoding that makes this slow ------------------------
     for (let position = 0; position < prepared.length; position++) {
       const {
@@ -1099,20 +1133,27 @@ export class ProjectService implements OnModuleInit {
             managerName,
             phone,
             email: get('Branch Email', 'Email') || null,
-            // Taken from the sheet when the client supplies it, otherwise derived from the risk
-            // category they did supply. This was the literal 2.0 for every branch ever imported,
-            // which is why all 72 branches in the database score identically and the map's
-            // "high risk" highlight (>= 7) could never fire for anybody.
-            riskScore: parseFloat(get('Risk Score')) || riskScoreFromCategory(
-              get('Risk Category').toUpperCase(),
-            ),
-            // Optional operational attributes: taken from the sheet when the client
-            // supplies them, otherwise sensible defaults. These feed assayer matching,
-            // so a real value here produces a better-matched assayer than the default.
-            riskCategory: get('Risk Category').toUpperCase() || 'LOW',
-            complexity: get('Complexity').toUpperCase() || 'STANDARD',
-            estimatedDurationHours:
-              parseFloat(get('Estimated Hours')) || calculatedHours || 6.0,
+            /**
+             * Derived, never read from the sheet.
+             *
+             * Risk Category / Risk Score / Complexity / Estimated Hours used to be optional
+             * columns. In practice the sheet never carried them, so every branch fell through to
+             * the same flat defaults — LOW, 2.0, STANDARD — and the one rule that reads risk
+             * (the planner sends a senior assayer to a branch scoring >= 7) could never fire for
+             * anybody. And when a sheet *did* carry a value, it was whatever someone typed once,
+             * with nothing checking it.
+             *
+             * Risk is the project's priority: the person who created the project already made
+             * that call, on the same LOW/MEDIUM/HIGH/CRITICAL scale, and it is the one place the
+             * stakes of this engagement are actually stated. Complexity is read off Packets, the
+             * only workload figure the sheet has. Hours were already Packets-derived. The
+             * operator can still adjust any of these per branch on the Branches page — that is
+             * the override path, not a column in a bulk upload.
+             */
+            riskCategory: derivedRiskCategory,
+            riskScore: riskScoreFromCategory(derivedRiskCategory),
+            complexity: complexityFromPackets(Number.isFinite(packetCount) ? packetCount : null),
+            estimatedDurationHours: calculatedHours || 6.0,
             createdBy: userId,
             updatedBy: userId,
           }, userId);
@@ -1142,7 +1183,20 @@ export class ProjectService implements OnModuleInit {
           // Backfills the branches that predate region canonicalisation, and repairs any whose
           // state changed. `update` canonicalises again, so a raw state name cannot get back in.
           if (region && branch.region !== region) patch.region = region;
-          if (calculatedHours !== null) patch.estimatedDurationHours = calculatedHours;
+          /**
+           * The packet-derived fields follow the packets. Hours already did; complexity now does
+           * too, because both are read off the same number and that number changes every cycle.
+           *
+           * Risk is deliberately NOT re-derived here. It lives on the branch, which is shared
+           * across every project that audits it, and an operator may have escalated it by hand
+           * on the Branches page — a later re-import must not quietly reset that to whatever
+           * this project's priority happens to be. It is set once, at creation.
+           */
+          if (calculatedHours !== null) {
+            patch.estimatedDurationHours = calculatedHours;
+            const derivedComplexity = complexityFromPackets(packetCount);
+            if (branch.complexity !== derivedComplexity) patch.complexity = derivedComplexity;
+          }
 
           if (Object.keys(patch).length > 0) {
             branch = await this.branchService.update(branch.id, patch, userId);
@@ -1161,6 +1215,11 @@ export class ProjectService implements OnModuleInit {
             zoneId: branch.zoneId,
             status: ProjectBranchStatus.IMPORTED,
             packetCount: !isNaN(packetCount) && packetCount > 0 ? packetCount : null,
+            // Inherits the project's priority rather than the column default (MEDIUM for
+            // everything). Assignments take theirs from this row (assignment.service), so
+            // project → branch → assignment is now one line of truth instead of a HIGH project
+            // dispatching MEDIUM work.
+            priority: project.priority,
             createdBy: userId,
             updatedBy: userId,
           });
