@@ -268,7 +268,7 @@ export const Dashboard: React.FC = () => {
               <SectionLabel>Branches by status</SectionLabel>
               <div className="glass-card" style={{ padding: 14 }}>
                 {funnelBars.length === 0 ? (
-                  <div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>No branches loaded yet.</div>
+                  <div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>No branches yet. Once branches are added to a project, this chart shows how many are at each stage of the audit.</div>
                 ) : (
                   <HBarChart data={funnelBars} valueColumnWidth={72} />
                 )}

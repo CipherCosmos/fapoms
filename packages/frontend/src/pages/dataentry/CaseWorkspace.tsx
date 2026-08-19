@@ -250,7 +250,7 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
         <section style={{ ...panel, padding: '12px 14px', maxHeight: '260px', overflowY: 'auto' }}>
           <div style={{ ...label, marginBottom: '8px' }}>Audit trail — every action on this packet and case</div>
           {trail === null && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Loading…</div>}
-          {trail?.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No recorded events.</div>}
+          {trail?.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Nothing has happened on this case yet. Every upload, edit, clarification and approval will be listed here as it happens.</div>}
           {trail?.map((t, i) => (
             <div key={i} style={{ display: 'flex', gap: '10px', padding: '6px 0', borderTop: i > 0 ? '1px solid var(--border-hair)' : 'none', fontSize: '12px', alignItems: 'baseline', flexWrap: 'wrap' }}>
               <span style={{ color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' }}>

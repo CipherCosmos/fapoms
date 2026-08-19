@@ -1,8 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { CheckCircle2, Banknote, PauseCircle, PlayCircle, Receipt } from 'lucide-react';
-import { AssayerPayableStatus, PaymentMethod, payableStatusLabel } from '@fapoms/shared';
-import { Modal, Pagination, Select, StyledInput, useToast } from '../../components/ui';
+import { AssayerPayableStatus, PaymentMethod, payableStatusLabel, paymentMethodLabel } from '@fapoms/shared';
+import { Modal, Pagination, Select, StyledInput, useConfirm, useToast } from '../../components/ui';
 import { usePayouts, useApprovePayouts, usePayPayouts, useHoldPayout } from '../../hooks/useBilling';
 import { BILLING_PAGE_SIZE } from '../../services/billing';
 import type { PayoutRow } from '../../services/billing';
@@ -23,6 +23,7 @@ export type PayoutFilter = 'ALL' | 'PENDING' | 'APPROVED' | 'PAID' | 'HELD';
 
 export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFilter) => void; canAct: boolean; canReviewClaims: boolean }> = ({ filter, onFilter, canAct, canReviewClaims }) => {
   const { toast } = useToast();
+  const { confirm, confirmDialog } = useConfirm();
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [payOpen, setPayOpen] = useState(false);
@@ -64,7 +65,46 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
     return n;
   });
 
+  /**
+   * Approve is the gate before money leaves: an approved payout is the one thing Pay will
+   * accept, so approving is the decision, and paying is the paperwork that follows it.
+   *
+   * It had no confirmation at all. The billing rebuild replaced the old PayableModals, which
+   * asked "Approve this payable? This authorizes disbursement and is not easily reversed."
+   * before every approval, with a single toolbar button wired straight to the mutation — so
+   * one click on a header checkbox (which ticks a whole assayer's rows) followed by one click
+   * on Approve authorised every selected payout with nothing in between. There is no un-approve
+   * in this UI; the only way back is a hold, row by row, before someone pays them.
+   *
+   * A second click would not have fixed that — it is the same reflex as the first. So the
+   * dialog states the count and the rupee total being authorised and makes the user type the
+   * total, which cannot be done by reflex and forces them to read the number they are
+   * committing to. Nothing about the request itself changes: the same ids, the same call.
+   */
   const runApprove = async () => {
+    const totalAmount = approvable.reduce((s, p) => s + Number(p.totalAmount), 0);
+    const assayers = new Set(approvable.map((p) => p.assayerId)).size;
+    const amountText = money(totalAmount);
+    // Typed as plain digits, not the formatted "₹1,23,456": the rupee sign and the Indian
+    // grouping are awkward to reproduce on a keyboard, and a phrase people cannot type is a
+    // phrase they route around. The digits are still the number they must read to type it.
+    const amountPhrase = String(Math.round(totalAmount));
+    const ok = await confirm({
+      title: `Approve ${approvable.length} payout${approvable.length === 1 ? '' : 's'}?`,
+      message: (
+        <>
+          This authorises <strong>{amountText}</strong> to be paid to {assayers} assayer{assayers === 1 ? '' : 's'},
+          across {approvable.length} payout{approvable.length === 1 ? '' : 's'}. Approved payouts are the ones finance
+          can pay out, so this is the approval to disburse the money.
+        </>
+      ),
+      confirmLabel: `Approve ${amountText}`,
+      reversible: false,
+      reversibleNote: 'Approving cannot be undone here. To stop one afterwards, you must put it on hold before it is paid.',
+      tone: 'danger',
+      confirmPhrase: amountPhrase,
+    });
+    if (!ok) return;
     try {
       const r = await approve.mutateAsync(approvable.map((p) => p.id));
       if (r.refused.length) toast({ type: 'warning', title: `${r.done.length} approved, ${r.refused.length} refused`, message: r.refused.map((x) => x.reason).join(' · ') });
@@ -214,10 +254,16 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
           }}
         />
       )}
+
+      {confirmDialog}
     </div>
   );
 };
 
+// The dropdown lists the enum's own values, but never its own spelling of them: de-casing
+// `BANK_TRANSFER` reads as "BANK TRANSFER" and shouts a database value at the user, while the
+// shared label layer already knows this vocabulary and keeps the Indian rails' initialisms
+// (NEFT, RTGS, UPI) upper-case where de-casing would have broken them.
 const METHODS = Object.values(PaymentMethod);
 
 const PayModal: React.FC<{
@@ -243,7 +289,7 @@ const PayModal: React.FC<{
       </div>
       <StyledInput placeholder="Bank / UTR reference *" value={reference} onChange={(e) => setReference(e.target.value)} style={{ width: '100%' }} />
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
-        <Select value={method} onChange={(v) => setMethod(v as PaymentMethod)} options={METHODS.map((m) => ({ value: m, label: m.replace(/_/g, ' ') }))} style={{ width: '100%' }} />
+        <Select value={method} onChange={(v) => setMethod(v as PaymentMethod)} options={METHODS.map((m) => ({ value: m, label: paymentMethodLabel(m) }))} style={{ width: '100%' }} />
         <StyledInput type="date" value={paidDate} onChange={(e) => setPaidDate(e.target.value)} style={{ width: '100%' }} />
       </div>
       <StyledInput placeholder="Notes" value={notes} onChange={(e) => setNotes(e.target.value)} style={{ width: '100%' }} />

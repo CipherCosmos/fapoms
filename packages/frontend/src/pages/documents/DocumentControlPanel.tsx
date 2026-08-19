@@ -204,7 +204,7 @@ export const DocumentControlPanel: React.FC<{
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {rows.length === 0 && (
           <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
-            No documents match this filter.
+            No documents match this filter. Clear it to see every document for this project.
           </div>
         )}
         {rows.map((d) => {

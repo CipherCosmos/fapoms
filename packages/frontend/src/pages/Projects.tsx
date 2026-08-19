@@ -16,7 +16,7 @@ const useIsNarrow = (max = 900): boolean => {
   return narrow;
 };
 import { FileSpreadsheet, Eye, X, Edit2, Trash2, Building2, FolderKanban, ChevronRight, Clock, ExternalLink, Compass, AlertTriangle, RefreshCw, ChevronDown } from 'lucide-react';
-import { ProjectStatus, Priority, projectStatusLabel } from '@fapoms/shared';
+import { ProjectStatus, Priority, projectStatusLabel, branchStatusLabel } from '@fapoms/shared';
 import { api } from '../services/api';
 import { useScope, withScope } from '../context/ScopeContext';
 import { userMessage } from '../services/errors';
@@ -99,6 +99,28 @@ const TRANSITIONS: Record<ProjectStatus, ProjectStatus[]> = {
   [ProjectStatus.ON_HOLD]: [ProjectStatus.SCHEDULING, ProjectStatus.EXECUTION, ProjectStatus.CANCELLED],
   [ProjectStatus.ARCHIVED]: [],
   [ProjectStatus.CANCELLED]: [],
+};
+
+/**
+ * What each transition button asks the coordinator to DO, rather than what the enum is called.
+ *
+ * The buttons were rendered as `→ ${target}`, so moving a project on read "→ SCHEDULING" —
+ * an arrow and a database value. Nothing on that button said whether it was describing where
+ * the project is now or where it would end up, and a coordinator who is not sure what a button
+ * does does not press it: projects sat in DRAFT because nobody would risk "→ PLANNING".
+ * Verb-first wording says what happens, and matches the stage names `projectStatusLabel`
+ * already prints on the lifecycle strip right above these buttons.
+ */
+const TRANSITION_ACTION_LABELS: Record<ProjectStatus, string> = {
+  [ProjectStatus.DRAFT]: 'Back to draft',
+  [ProjectStatus.PLANNING]: 'Start planning',
+  [ProjectStatus.SCHEDULING]: 'Send to scheduling',
+  [ProjectStatus.EXECUTION]: 'Start field work',
+  [ProjectStatus.VALIDATION]: 'Send for validation',
+  [ProjectStatus.COMPLETED]: 'Mark completed',
+  [ProjectStatus.ARCHIVED]: 'Archive',
+  [ProjectStatus.ON_HOLD]: 'Put on hold',
+  [ProjectStatus.CANCELLED]: 'Cancel',
 };
 
 const CAN_TRANSITION: Record<ProjectStatus, boolean> = {
@@ -256,6 +278,52 @@ export const Projects: React.FC = () => {
   const [projectBranches, setProjectBranches] = useState<any[]>([]);
   const [allClientBranches, setAllClientBranches] = useState<any[]>([]);
   const [branchSearch, setBranchSearch] = useState('');
+
+  /**
+   * The skills and certifications that actually exist on the roster — the same vocabulary the
+   * HR capability page and the branch form pick from.
+   *
+   * These two fields fed the matching engine as comma-separated free text, and nothing checked
+   * what was typed. "Gold Valuar" is not rejected: it becomes a requirement no assayer on the
+   * roster holds, so the project quietly matches nobody and the coordinator sees an empty
+   * candidate list on every branch with no hint that a typo caused it. Picking from the roster's
+   * own vocabulary makes that class of mistake unrepresentable.
+   *
+   * `null` means "still loading"; an empty array means the HR-scoped endpoint is not readable by
+   * this role, in which case the fields fall back to the free-text boxes rather than vanishing
+   * and leaving no way to record a requirement at all.
+   */
+  const [skillOptions, setSkillOptions] = useState<string[] | null>(null);
+  const [certOptions, setCertOptions] = useState<string[] | null>(null);
+  /** Matching requirements are an expert override; most projects use the client's defaults. */
+  const [showAdvancedMatching, setShowAdvancedMatching] = useState(false);
+
+  useEffect(() => {
+    api.request<{ SKILL?: { name: string }[]; CERTIFICATION?: { name: string }[] }>('/assayers/workforce-attribute/vocabulary')
+      .then((v) => {
+        const names = (list?: { name: string }[]) =>
+          Array.from(new Set((list ?? []).map((x) => x.name).filter(Boolean))).sort((a, b) => a.localeCompare(b));
+        setSkillOptions(names(v?.SKILL));
+        setCertOptions(names(v?.CERTIFICATION));
+      })
+      .catch(() => { setSkillOptions([]); setCertOptions([]); });   // not permitted / unavailable → free text fallback
+  }, []);
+
+  /**
+   * The form stores these as the comma-separated string the create/update handlers already
+   * split on, so the chips are purely a way of editing that string. Keeping the storage format
+   * untouched means the submit path, the edit-prefill and the server contract are all unchanged
+   * — and a value typed before this picker existed still round-trips.
+   */
+  const csvValues = (raw: string) => raw.split(',').map((x) => x.trim()).filter(Boolean);
+
+  const toggleCsvValue = (key: 'requiredSkills' | 'requiredCertifications', name: string) => {
+    setForm((f) => {
+      const current = csvValues(f[key]);
+      const next = current.includes(name) ? current.filter((c) => c !== name) : [...current, name];
+      return { ...f, [key]: next.join(', ') };
+    });
+  };
 
   const { scopeParams, scopeKey } = useScope();
   const scopeQuery = withScope(scopeParams);
@@ -729,14 +797,73 @@ export const Projects: React.FC = () => {
             <textarea value={form.scope} onChange={(e) => setForm(f => ({ ...f, scope: e.target.value }))} placeholder="Scope details and objectives..." style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', minHeight: '60px', resize: 'vertical' }} />
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Required Skills (comma-separated)</label>
-            <input type="text" value={form.requiredSkills} onChange={(e) => setForm(f => ({ ...f, requiredSkills: e.target.value }))} placeholder="e.g. Gold Valuer, Auditing" style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }} />
-          </div>
+          {/*
+            * Behind a disclosure because these two fields decide who the engine will even
+            * consider, and every project already arrives with sensible defaults. Sitting open in
+            * the main flow they read as fields waiting to be filled in, so coordinators edited
+            * them by habit and narrowed the candidate pool on projects that needed no narrowing.
+            * Closed by default they are still one click away for the person who genuinely needs
+            * them, and the summary line says whether anything is set without opening it.
+            */}
+          <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '12px' }}>
+            <button type="button" onClick={() => setShowAdvancedMatching(v => !v)} aria-expanded={showAdvancedMatching}
+              style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--text-secondary)', fontSize: '12px', fontWeight: 600 }}>
+              <ChevronDown size={14} style={{ transform: showAdvancedMatching ? 'rotate(0deg)' : 'rotate(-90deg)', transition: 'transform 0.15s' }} />
+              Advanced matching rules
+              <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>
+                {(() => {
+                  const n = csvValues(form.requiredSkills).length + csvValues(form.requiredCertifications).length;
+                  return n === 0 ? '— none set' : `— ${n} requirement${n === 1 ? '' : 's'} set`;
+                })()}
+              </span>
+            </button>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Required Certifications (comma-separated)</label>
-            <input type="text" value={form.requiredCertifications} onChange={(e) => setForm(f => ({ ...f, requiredCertifications: e.target.value }))} placeholder="e.g. Gold Valuer License" style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }} />
+            {showAdvancedMatching && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', marginTop: '12px' }}>
+                <p style={{ fontSize: '11px', color: 'var(--text-muted)', margin: 0 }}>
+                  Only assayers who have everything selected here will be offered branches on this project. Leave both empty to consider the whole roster.
+                </p>
+
+                {([
+                  { key: 'requiredSkills' as const, title: 'Required Skills', options: skillOptions, placeholder: 'e.g. Gold Valuer, Auditing' },
+                  { key: 'requiredCertifications' as const, title: 'Required Certifications', options: certOptions, placeholder: 'e.g. Gold Valuer License' },
+                ]).map(({ key, title, options, placeholder }) => {
+                  const selected = csvValues(form[key]);
+                  return (
+                    <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                      <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{title}</label>
+                      {options === null ? (
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Loading…</span>
+                      ) : options.length > 0 ? (
+                        /* Picked, never typed — a misspelling here matches nobody and there is
+                           nothing on screen afterwards to say why the shortlist came back empty.
+                           Values already stored on the project are shown alongside the roster's
+                           own list so an older free-text entry stays visible and removable. */
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                          {Array.from(new Set([...options, ...selected])).map((name) => {
+                            const on = selected.includes(name);
+                            return (
+                              <button key={name} type="button" onClick={() => toggleCsvValue(key, name)} aria-pressed={on}
+                                style={{ padding: '4px 10px', fontSize: '11.5px', borderRadius: '999px', cursor: 'pointer',
+                                  border: `1px solid ${on ? 'var(--accent-primary)' : 'var(--border-color)'}`,
+                                  background: on ? 'rgba(216,174,71,0.12)' : 'var(--bg-primary)',
+                                  color: on ? 'var(--accent-primary)' : 'var(--text-secondary)' }}>
+                                {name}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      ) : (
+                        /* The roster vocabulary is not readable by this role — free text rather
+                           than no field, so the requirement can still be recorded. */
+                        <input type="text" value={form[key]} onChange={(e) => setForm(f => ({ ...f, [key]: e.target.value }))} placeholder={placeholder}
+                          style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }} />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
         </div>
       </div>
     </Modal>
@@ -843,7 +970,11 @@ export const Projects: React.FC = () => {
         <SearchInput value={searchTerm} onChange={setSearchTerm} placeholder="Search by project name or code..." style={{ minWidth: '240px' }} />
         <FilterSelect value={statusFilter} onChange={setStatusFilter} options={[
           { value: 'ALL', label: 'All Statuses' },
-          ...Object.values(ProjectStatus).map(status => ({ value: status, label: status })),
+          /* The filter offered the nine raw enum values ("ON_HOLD", "SCHEDULING"), while the
+             pipeline strip immediately above it named the very same stages properly. A
+             coordinator picking "ON_HOLD" here and reading "On Hold" there had no way to know
+             they were the same thing. */
+          ...Object.values(ProjectStatus).map(status => ({ value: status, label: projectStatusLabel(status) })),
         ]} />
         <span style={{ fontSize: '12px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{filteredProjects.length} of {projects.length} results</span>
       </div>
@@ -960,7 +1091,7 @@ export const Projects: React.FC = () => {
                         )}
                       </td>
                       <td>
-                        <StatusBadge className="badge" label={p.status} bg={statusBadge(p.status).background} color={statusBadge(p.status).color} />
+                        <StatusBadge className="badge" label={projectStatusLabel(p.status)} bg={statusBadge(p.status).background} color={statusBadge(p.status).color} />
                       </td>
                       <td style={{ textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
                         <div style={{ display: 'flex', gap: '6px', justifyContent: 'center' }}>
@@ -1009,7 +1140,7 @@ export const Projects: React.FC = () => {
                       <h3 style={{ fontSize: '18px', fontWeight: 700, margin: '4px 0 2px' }}>{detail.name}</h3>
                       <code style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'monospace' }}>{detail.projectNumber}</code>
                     </div>
-                    <StatusBadge className="badge" label={detail.status} bg={statusBadge(detail.status).background} color={statusBadge(detail.status).color} />
+                    <StatusBadge className="badge" label={projectStatusLabel(detail.status)} bg={statusBadge(detail.status).background} color={statusBadge(detail.status).color} />
                   </div>
                 </div>
                 <div style={{ display: 'flex', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-surface-2)' }}>
@@ -1114,26 +1245,55 @@ export const Projects: React.FC = () => {
                       )
                     : [];
 
+                  /*
+                   * Branches can only be added or uploaded while the project is still being put
+                   * together; once it starts, the branch list is what assayers have been offered
+                   * and what the client has been quoted, so it is frozen server-side.
+                   *
+                   * The controls used to be rendered only in DRAFT/PLANNING and to disappear
+                   * entirely afterwards. From the coordinator's chair a missing button is
+                   * indistinguishable from a broken one: support requests came in reporting that
+                   * "the upload button is gone" on projects that had simply moved on. Showing the
+                   * controls inert, with the reason next to them, answers the question on the
+                   * screen where it is asked.
+                   */
+                  const branchesLocked = !(detail.status === ProjectStatus.DRAFT || detail.status === ProjectStatus.PLANNING);
+                  const lockReason = 'Locked once the project starts';
+
                   return (
                     <div style={{ display: 'flex', flexDirection: 'column', padding: '16px 20px', gap: '14px' }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
                         <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '1px' }}>
                           Associated Branches ({projectBranches.length})
                         </span>
-                        {(detail.status === ProjectStatus.DRAFT || detail.status === ProjectStatus.PLANNING) && (
-                          <div style={{ display: 'flex', gap: '8px' }}>
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                          {branchesLocked && (
+                            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{lockReason}</span>
+                          )}
+                          <div
+                            aria-disabled={branchesLocked || undefined}
+                            title={branchesLocked ? lockReason : undefined}
+                            style={{ display: 'flex', gap: '8px', opacity: branchesLocked ? 0.45 : 1, pointerEvents: branchesLocked ? 'none' : 'auto' }}
+                          >
                             <UploadExcelControls onUpload={handleUploadBranches} onDownloadTemplate={handleDownloadTemplate} accept=".xlsx,.xls" />
                           </div>
-                        )}
+                        </div>
                       </div>
 
                       {/* Dynamic Branch Search Adder Widget */}
-                      {(detail.status === ProjectStatus.DRAFT || detail.status === ProjectStatus.PLANNING) && (
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '10px' }}>
-                          <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>ADD BRANCH MANUALLY</span>
-                          <input type="text" value={branchSearch} onChange={e => setBranchSearch(e.target.value)} placeholder="Type branch name or code to search..."
-                            style={{ padding: '8px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '12px' }} />
-                          {branchSearch.trim() && (
+                      {(
+                        <div
+                          aria-disabled={branchesLocked || undefined}
+                          title={branchesLocked ? lockReason : undefined}
+                          style={{ display: 'flex', flexDirection: 'column', gap: '8px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '10px', opacity: branchesLocked ? 0.55 : 1 }}
+                        >
+                          <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>
+                            ADD BRANCH MANUALLY{branchesLocked ? ` — ${lockReason.toUpperCase()}` : ''}
+                          </span>
+                          <input type="text" value={branchSearch} onChange={e => setBranchSearch(e.target.value)} disabled={branchesLocked}
+                            placeholder={branchesLocked ? 'Branch list is fixed for this project' : 'Type branch name or code to search...'}
+                            style={{ padding: '8px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '12px', cursor: branchesLocked ? 'not-allowed' : 'text' }} />
+                          {!branchesLocked && branchSearch.trim() && (
                             <div style={{ maxHeight: '120px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '4px', background: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)', padding: '4px' }}>
                               {suggestions.length === 0 ? (
                                 <div style={{ fontSize: '11px', color: 'var(--text-muted)', padding: '6px', textAlign: 'center' }}>No matching unassociated branches found.</div>
@@ -1171,7 +1331,7 @@ export const Projects: React.FC = () => {
                                 <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{pb.branch?.city}, {pb.branch?.state}</div>
                               </div>
                               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                                <span className="badge" style={{ fontSize: '10px', padding: '2px 8px', background: 'var(--bg-surface-2)', color: 'var(--text-muted)', borderRadius: '4px', fontWeight: 500 }}>{pb.status}</span>
+                                <span className="badge" style={{ fontSize: '10px', padding: '2px 8px', background: 'var(--bg-surface-2)', color: 'var(--text-muted)', borderRadius: '4px', fontWeight: 500 }}>{branchStatusLabel(pb.status)}</span>
                                 {canManage && (detail.status === ProjectStatus.DRAFT || detail.status === ProjectStatus.PLANNING) && (
                                   <button type="button" aria-label="Remove branch" onClick={() => handleRemoveBranch(pb.id)}
                                     style={{ background: 'none', border: 'none', color: 'var(--danger)', cursor: 'pointer', padding: '4px', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -1236,7 +1396,7 @@ export const Projects: React.FC = () => {
                                 color: target === ProjectStatus.CANCELLED ? 'var(--danger)' : 'var(--accent-primary)',
                                 cursor: 'pointer', fontWeight: 600, transition: 'all 0.2s'
                               }}>
-                              {target === ProjectStatus.CANCELLED ? 'Cancel' : `→ ${target}`}
+                              {TRANSITION_ACTION_LABELS[target] ?? projectStatusLabel(target)}
                             </button>
                           ))}
                         </div>

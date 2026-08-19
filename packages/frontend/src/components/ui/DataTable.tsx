@@ -15,7 +15,7 @@ export const DataTable = <T,>({
   rowKey,
   onRowClick,
   loading,
-  emptyMessage = 'No records found.',
+  emptyMessage = 'Nothing to show here yet.',
   emptyState,
   sortKey,
   sortOrder,

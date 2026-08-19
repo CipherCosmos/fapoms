@@ -55,7 +55,7 @@ export const UserActivityList: React.FC<{ userId: string }> = ({ userId }) => {
   const events = (Array.isArray(data) ? data : (data as any)?.data) || [];
 
   if (isLoading) return <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>Loading…</div>;
-  if (events.length === 0) return <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>No recorded activity yet.</div>;
+  if (events.length === 0) return <div style={{ fontSize: '12px', color: 'var(--text-muted)', padding: '8px 0' }}>Nothing recorded for this person yet. Their sign-ins and the changes they make will be listed here.</div>;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', maxHeight: '220px', overflowY: 'auto' }}>
@@ -108,7 +108,7 @@ export const ActivityFeed: React.FC = () => {
         ) : events.length === 0 ? (
           <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
             <ShieldAlert size={28} style={{ opacity: 0.35 }} />
-            <div style={{ fontSize: '13px', marginTop: '8px' }}>No activity recorded in this category.</div>
+            <div style={{ fontSize: '13px', marginTop: '8px' }}>Nothing has been recorded in this category yet. Pick another category to see other activity.</div>
           </div>
         ) : (
           <div>

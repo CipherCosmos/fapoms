@@ -112,7 +112,7 @@ export const BranchListPanel: React.FC<{
             <div>Loading branches…</div>
           </div>
         ) : branches.length === 0 ? (
-          <div style={{ textAlign: 'center', padding: '30px 12px', color: 'var(--text-muted)', fontSize: '12px' }}>No branches in this project.</div>
+          <div style={{ textAlign: 'center', padding: '30px 12px', color: 'var(--text-muted)', fontSize: '12px' }}>No branches in this project yet. Add branches to the project before visits can be planned for them.</div>
         ) : branches.map(pb => {
           const isSelected = pb.id === selectedBranchId;
           const isAssigned = !!pb.assignment;

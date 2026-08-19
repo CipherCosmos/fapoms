@@ -271,7 +271,11 @@ const TeamView: React.FC<{ selectedId: string | null; setSelectedId: (id: string
           {/* List */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', overflowY: 'auto', flex: 1, minHeight: 0, paddingRight: '2px' }}>
             {items === null && <div style={{ color: 'var(--text-muted)', fontSize: '13px', display: 'flex', gap: '8px', alignItems: 'center' }}><Loader2 size={15} className="spin" /> Loading…</div>}
-            {items?.length === 0 && <div style={{ ...card, textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}><Inbox size={24} style={{ opacity: 0.3, marginBottom: '6px' }} /><div>Nothing here.</div></div>}
+            {items?.length === 0 && <div style={{ ...card, textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}><Inbox size={24} style={{ opacity: 0.3, marginBottom: '6px' }} /><div>
+              {statusTab !== 'ALL' || category || severity || mineOnly || debounced
+                ? 'Nothing matches the filters you have picked. Clear them to see all feedback.'
+                : 'No feedback yet. Anyone in the company can report a bug, suggest an idea or raise a complaint from the app, and it arrives here for the product team to answer.'}
+            </div></div>}
             {items?.map((t) => <Row key={t.id} t={t} active={t.id === selectedId} onClick={() => setSelectedId(t.id)} />)}
           </div>
 

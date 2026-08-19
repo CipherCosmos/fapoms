@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { Compass, Check, X, AlertTriangle, CheckCircle, Search, Star, Briefcase, MapPin, Phone, Mail, Award, Clock, DollarSign, Calendar, TrendingUp, Building2, Route, Users, Layers, Smartphone, Package, Car, Flame, BarChart3, Zap, ClipboardList, Send, Bus, Download, Eye, MessageCircle, Map as MapIcon, Home, Hourglass } from 'lucide-react';
-import { ProjectBranchStatus, roleLabel, formatDateOnly, formatRouteDistance, formatTravelTime, type RouteSource } from '@fapoms/shared';
+import { ProjectBranchStatus, roleLabel, formatDateOnly, formatRouteDistance, formatTravelTime, type RouteSource, callOutcomeLabel, CALL_OUTCOME_LABELS } from '@fapoms/shared';
 import { branchStatusLabel, BRANCH_COVERED_STATUSES, localDateKey, todayDateKey } from '../utils/statusLabels';
 import { api } from '../services/api';
 import { userMessage } from '../services/errors';
@@ -331,32 +331,6 @@ const NO_PROJECTS: ProjectOption[] = [];
 const NO_ZONES: { id: string; name: string }[] = [];
 const NO_CONTACT: Record<string, { outcome: string; timestamp: string; negotiatedFee: number | null }> = {};
 
-/**
- * What happened on a call, in the words the coordinator would use on the phone.
- *
- * The "last contact" chip used to de-case the raw value, so a branch nobody could reach read
- * "no answer" in one place while the very dropdown that recorded it said "No answer" — and
- * `CALLBACK_REQUESTED` de-cased to "callback requested", which is not what the operator chose
- * ("Asked to call back"). The picker below is now built from this same map, so the word a
- * person clicks is by construction the word that comes back at them afterwards.
- *
- * This lives here rather than in `@fapoms/shared` only because call outcomes have no entry in
- * the shared label layer yet and that package is owned by another effort right now; it belongs
- * there the moment it can be moved.
- */
-const CALL_OUTCOME_LABELS: Record<string, string> = {
-  AGREED: 'Agreed',
-  NEGOTIATING: 'Negotiating',
-  DECLINED: 'Declined the work',
-  NO_ANSWER: 'No answer',
-  CALLBACK_REQUESTED: 'Asked to call back',
-  WRONG_NUMBER: 'Wrong number',
-};
-
-function callOutcomeLabel(outcome?: string | null): string {
-  if (!outcome) return '—';
-  return CALL_OUTCOME_LABELS[outcome] ?? outcome.charAt(0) + outcome.slice(1).toLowerCase().replace(/_/g, ' ');
-}
 
 
 

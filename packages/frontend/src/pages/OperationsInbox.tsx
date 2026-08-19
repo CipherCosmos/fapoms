@@ -13,7 +13,7 @@ import { useSocketConnection } from '../hooks/useSocketConnection';
 import { getRecommendations, suggestAuditDate, describeSuggestedDate } from '../services/planning';
 import { userMessage } from '../services/errors';
 import { todayDateKey, formatDateOnly } from '../utils/statusLabels';
-import { formatRouteDistance, type RouteSource } from '@fapoms/shared';
+import { formatRouteDistance, type RouteSource, callOutcomeLabel } from '@fapoms/shared';
 import { AlertBanner } from '../components/ui';
 
 import { usePlatformLimits } from '../hooks/usePlatformLimits';
@@ -52,6 +52,7 @@ interface InboxItem {
   lastCallOutcome: string | null;
   rejectReason?: string | null;
 }
+
 
 interface FieldIssueItem {
   id: string; assignmentId: string; branchName: string | null; assayerName: string | null;
@@ -302,7 +303,7 @@ export const OperationsInbox: React.FC = () => {
             <span>offered {age(item.ageHours)}</span>
             {item.callAttempts > 0 && (
               <span style={{ color: 'var(--warning)', fontWeight: 700 }}>
-                {item.callAttempts} call{item.callAttempts > 1 ? 's' : ''}{item.lastCallOutcome ? ` · last: ${item.lastCallOutcome.replace(/_/g, ' ').toLowerCase()}` : ''}
+                {item.callAttempts} call{item.callAttempts > 1 ? 's' : ''}{item.lastCallOutcome ? ` · last: ${callOutcomeLabel(item.lastCallOutcome)}` : ''}
               </span>
             )}
           </div>

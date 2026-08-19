@@ -5,6 +5,7 @@ import { DataTable, Column, Modal, StatusBadge, Select, useToast, useConfirm } f
 import { useCurrentRoles, hasAnyRole } from '../hooks/useCurrentRoles';
 import { ProjectOption } from '../services/planning';
 import { api } from '../services/api';
+import { userMessage } from '../services/errors';
 import { useScope, withScope, scopeConflict } from '../context/ScopeContext';
 import {
   getVersions,
@@ -88,7 +89,7 @@ export const CustomerMasterVersions: React.FC = () => {
     try {
       setVersions(await getVersions(pid));
     } catch (err: any) {
-      toast({ type: 'error', title: 'Could not load versions', message: err?.message });
+      toast({ type: 'error', title: 'Could not load versions', message: `Check your connection and try again. ${userMessage(err)}` });
     } finally {
       setLoading(false);
     }
@@ -115,7 +116,7 @@ export const CustomerMasterVersions: React.FC = () => {
       toast({ type: 'success', title: `Version ${v.versionNumber} approved`, message: 'It is now the active customer data for this project.' });
       await loadVersions(projectId);
     } catch (err: any) {
-      toast({ type: 'error', title: 'Could not approve', message: err?.message });
+      toast({ type: 'error', title: 'Could not approve', message: `This version has not been approved. Try again in a moment. ${userMessage(err)}` });
     } finally {
       setBusyId(null);
     }
@@ -130,7 +131,7 @@ export const CustomerMasterVersions: React.FC = () => {
       setRecords(res.data);
       setRecordsTotal(res.meta.total);
     } catch (err: any) {
-      toast({ type: 'error', title: 'Could not load records', message: err?.message });
+      toast({ type: 'error', title: 'Could not load records', message: `Close this window and open the version again. ${userMessage(err)}` });
     } finally {
       setRecordsLoading(false);
     }
@@ -228,7 +229,7 @@ export const CustomerMasterVersions: React.FC = () => {
         rows={versions}
         rowKey={(v) => v.id}
         loading={loading}
-        emptyMessage={projectId ? 'No customer-master versions uploaded for this project yet.' : 'Select a project.'}
+        emptyMessage={projectId ? 'No customer list has been uploaded for this project yet. Upload one above to get started.' : 'Pick a project above to see the customer lists uploaded for it.'}
       />
 
       <Modal
@@ -241,7 +242,7 @@ export const CustomerMasterVersions: React.FC = () => {
           rows={records}
           rowKey={(r) => r.id}
           loading={recordsLoading}
-          emptyMessage="No records in this version."
+          emptyMessage="This upload contains no customer rows."
         />
         {recordsTotal > RECORDS_PAGE_SIZE && recordsFor && (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 12 }}>

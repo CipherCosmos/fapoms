@@ -466,7 +466,7 @@ export const Branches: React.FC = () => {
                 </thead>
                 <tbody>
                   {filteredBranches.length === 0 ? (
-                    <tr><td colSpan={8} style={{ textAlign: 'center', padding: '24px', color: 'var(--text-secondary)' }}>No branches found.</td></tr>
+                    <tr><td colSpan={8} style={{ textAlign: 'center', padding: '24px', color: 'var(--text-secondary)' }}>No branches to show. Branches come from a client’s branch list — clear your search and filters if you expected to see some.</td></tr>
                   ) : filteredBranches.map((b) => (
                     <tr key={b.id || b.branchCode}
                       onClick={() => { loadBranchDetail(b); selectBranch(b.id); }}
@@ -592,7 +592,7 @@ export const Branches: React.FC = () => {
                   <FileText size={13} /> Documents ({branchDetail.documents?.length || 0})
                 </h5>
                 {(!branchDetail.documents || branchDetail.documents.length === 0) ? (
-                  <div style={{ padding: '12px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-md)' }}>No documents.</div>
+                  <div style={{ padding: '12px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '12px', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-md)' }}>No documents saved for this branch yet.</div>
                 ) : branchDetail.documents.map(d => (
                   <div key={d.id} style={{ padding: '10px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', fontSize: '12px', marginBottom: '8px' }}>
                     <div style={{ fontWeight: 600 }}>{d.fileName}</div>

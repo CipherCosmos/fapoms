@@ -373,7 +373,7 @@ export const AssayerDetailDrawer: React.FC<{
               {tab === 'history' && (
                 <List
                   rows={loaded.history}
-                  empty="No recorded activity."
+                  empty="Nothing recorded for this assayer yet. Status changes, assignments and HR updates will be listed here."
                   render={(h: any) => (
                     <div key={h.id} style={{ padding: '10px 0', borderBottom: '1px solid var(--border-hair)' }}>
                       <div style={{ fontSize: '12.5px' }}>

@@ -262,7 +262,7 @@ const AttributeSection: React.FC<{
       </div>
 
       {rows.length === 0 ? (
-        <Empty>No {meta.label.toLowerCase()} recorded.</Empty>
+        <Empty>{`No ${meta.label.toLowerCase()} recorded yet. They appear here once HR adds them to an assayer’s record.`}</Empty>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
           {rows.map((r) => {

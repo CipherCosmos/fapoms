@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Clock, AlertTriangle, User, ArrowRight } from 'lucide-react';
 import { api } from '../../services/api';
+import { userMessage } from '../../services/errors';
 
 /**
  * The clarification worklist.
@@ -56,7 +57,7 @@ export const ClarificationsPage: React.FC = () => {
     let cancelled = false;
     api.request<ClarificationRow[]>('/validation-queries/worklist')
       .then((r) => { if (!cancelled) setRows(r); })
-      .catch((e) => { if (!cancelled) setError((e as Error).message); })
+      .catch((e) => { if (!cancelled) setError(`Could not load the clarification list. ${userMessage(e)}`); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, []);
@@ -104,7 +105,15 @@ export const ClarificationsPage: React.FC = () => {
       </div>
 
       {shown.length === 0 ? (
-        <div style={{ ...card, color: 'var(--text-muted)', fontSize: 13 }}>Nothing here.</div>
+        <div style={{ ...card, color: 'var(--text-muted)', fontSize: 13 }}>
+          {filter === 'US'
+            ? 'Nothing is waiting on you. When an assayer answers a clarification, it moves here so the desk can act on it.'
+            : filter === 'ASSAYER'
+              ? 'Nothing is waiting on an assayer. Data-entry staff raise a clarification when something on a submitted report is not clear, and it sits here until the assayer replies.'
+              : filter === 'OVERDUE'
+                ? 'Nothing is past its reply deadline. A clarification shows up here when it has not been answered in the agreed time.'
+                : 'No clarification has been closed yet. Once a question is answered and accepted, it is kept here as a record.'}
+        </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {shown.map((r) => {

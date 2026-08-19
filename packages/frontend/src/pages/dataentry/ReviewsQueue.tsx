@@ -204,7 +204,15 @@ export const ReviewsQueue: React.FC = () => {
           <tbody>
             {rows.length === 0 && (
               <tr><td colSpan={showBulk ? 5 : 4} style={{ padding: '22px 14px', color: 'var(--text-muted)', textAlign: 'center' }}>
-                Nothing here{search ? ` matching “${search}”` : ''}.
+                {search
+                  ? `No report matches “${search}”. Try a shorter branch name or code.`
+                  : status === 'HUMAN_REVIEW'
+                    ? 'No report is waiting to be reviewed. Reports arrive here once data-entry staff finish typing up an assayer\u2019s submission.'
+                    : status === 'APPROVED'
+                      ? 'No report has been approved yet. A report moves here once a reviewer signs it off.'
+                      : status === 'SUBMITTED'
+                        ? 'No report has been sent to the client yet.'
+                        : 'No reports yet. They appear here as assayers submit their work and data-entry staff type it up.'}
               </td></tr>
             )}
             {rows.map((c) => {

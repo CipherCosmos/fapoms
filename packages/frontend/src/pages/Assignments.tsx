@@ -2,11 +2,12 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useUrlSelection } from '../hooks/useUrlSelection';
 import { useQuery } from '@tanstack/react-query';
-import { ClipboardList, RefreshCw, Calendar, MessageSquare, Clock, Send, Filter, CheckCircle, XCircle, ExternalLink, GitCommit, Circle, MapPin, FileText, Lock, ChevronLeft, ChevronRight, AlertTriangle, Hourglass, Flame, FileSpreadsheet } from 'lucide-react';
-import { StatusBadge, SearchInput, FilterSelect, AlertBanner } from '../components/ui';
-import { ProjectBranchStatus, SystemRole } from '@fapoms/shared';
+import { ClipboardList, RefreshCw, Calendar, MessageSquare, Clock, Send, CheckCircle, XCircle, ExternalLink, GitCommit, Circle, MapPin, FileText, Lock, ChevronLeft, ChevronRight, AlertTriangle, Hourglass, Flame, FileSpreadsheet } from 'lucide-react';
+import { StatusBadge, SearchInput, AlertBanner, useConfirm } from '../components/ui';
+import { ProjectBranchStatus, SystemRole, activityEventLabel } from '@fapoms/shared';
 import { useCurrentRoles, hasAnyRole } from '../hooks/useCurrentRoles';
 import { anyStatusLabel, branchStatusLabel, branchStatusTone } from '../utils/statusLabels';
+import { userMessage } from '../services/errors';
 import { api } from '../services/api';
 import { queryClient } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
@@ -92,6 +93,20 @@ const ESCALATED_FILTER = 'CRITICAL';
 const TERMINAL_FILTER = 'REJECTED,CANCELLED';
 const PAGE_SIZE = 25;
 
+/**
+ * Completing an assignment is offered from two places — the row's quick "Complete" button and the
+ * detail panel's primary action — and both must say the same thing. Two hand-written copies of
+ * the same warning is exactly how one of them ends up quietly milder than the other.
+ * Nothing is deleted here, so no typed-phrase friction: the wording states the consequence and the
+ * button names the action, which is the level of friction this decision deserves.
+ */
+const COMPLETE_CONFIRM = {
+  title: 'Mark this assignment complete?',
+  message: 'This closes out the field work and moves the audit to the next stage.',
+  confirmLabel: 'Mark complete',
+  reversible: false,
+} as const;
+
 // ── Shared status badge — single source of truth, used by both the list rows
 // and the detail panel header (previously duplicated as two separate inline IIFEs).
 // Colours come from the canonical branch-status tone in statusLabels, so this badge
@@ -120,7 +135,9 @@ function AutoDeclinedChip() {
 function PriorityBadge({ priority }: { priority?: string }) {
   if (priority !== 'CRITICAL' && priority !== 'HIGH') return null;
   const isCritical = priority === 'CRITICAL';
-  return <StatusBadge label={priority} bg={isCritical ? 'var(--status-cancelled-bg)' : 'var(--status-pending-bg)'} color={isCritical ? 'var(--danger)' : 'var(--warning)'} icon={<Flame size={11} />} variant="tag" />;
+  // "CRITICAL" / "HIGH" shouted the database's own words at the desk. The badge says what the
+  // desk is meant to do about it — the whole point of the chip is the instruction, not the enum.
+  return <StatusBadge label={isCritical ? 'Escalated — act today' : 'Urgent'} bg={isCritical ? 'var(--status-cancelled-bg)' : 'var(--status-pending-bg)'} color={isCritical ? 'var(--danger)' : 'var(--warning)'} icon={<Flame size={11} />} variant="tag" />;
 }
 
 /*
@@ -153,6 +170,21 @@ export const Assignments: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   const [page, setPage] = useState(1);
+  // The in-app confirmation dialog. `window.confirm` renders the browser's own pop-up, which the
+  // office staff who run this desk have been trained to dismiss unread, and whose "OK" button
+  // never names the action it is about to take.
+  const { confirm, confirmDialog } = useConfirm();
+  /**
+   * Whether the detail panel's secondary lifecycle actions (cancel / reassign / escalate) are
+   * showing. The panel used to present six equal-weight buttons at once, so the one normal next
+   * step — accept the offer, or close out finished work — was indistinguishable from the three
+   * exception paths beside it. One primary button now carries the routine case and the rest stay
+   * one click away under "More".
+   */
+  const [showMoreActions, setShowMoreActions] = useState(false);
+  // Reset per selection: "More" left open from the previous assignment would offer exception
+  // actions for a row the operator has not looked at yet.
+  useEffect(() => { setShowMoreActions(false); }, [selectedAsnId]);
 
   const applyFilter = (value: string) => {
     setStatusFilter(value);
@@ -190,7 +222,7 @@ export const Assignments: React.FC = () => {
       queryClient.invalidateQueries({ queryKey: queryKeys.assignments.all });
       resetActionState();
     } catch (err: any) {
-      setActionError(err?.message || 'Action failed.');
+      setActionError(userMessage(err));
     } finally {
       setActionBusy(false);
     }
@@ -201,7 +233,7 @@ export const Assignments: React.FC = () => {
   const [quickBusyId, setQuickBusyId] = useState<string | null>(null);
   const quickAction = async (asnId: string, targetStatus: 'ACCEPTED' | 'COMPLETED') => {
     if (quickBusyId) return;
-    if (targetStatus === 'COMPLETED' && !window.confirm('Mark this assignment complete? This is not reversible.')) return;
+    if (targetStatus === 'COMPLETED' && !(await confirm(COMPLETE_CONFIRM))) return;
     setQuickBusyId(asnId);
     try {
       await api.request(`/assignments/${asnId}/transition`, {
@@ -212,7 +244,7 @@ export const Assignments: React.FC = () => {
     } catch (err: any) {
       // Open the panel on the failing row so the error lands next to its context.
       selectAssignment(asnId);
-      setActionError(err?.message || 'Action failed.');
+      setActionError(userMessage(err));
     } finally {
       setQuickBusyId(null);
     }
@@ -233,7 +265,7 @@ export const Assignments: React.FC = () => {
       setActionReason('');
       queryClient.invalidateQueries({ queryKey: queryKeys.assignments.all });
     } catch (err: any) {
-      setActionError(err?.message || 'Escalate failed.');
+      setActionError(userMessage(err));
     } finally {
       setActionBusy(false);
     }
@@ -326,6 +358,27 @@ export const Assignments: React.FC = () => {
   // escalated assignment is also active) and don't cover everything, so summing them
   // under-reported the total and disagreed with the dashboard.
   const totalCount = summaryQ.data?.total ?? 0;
+
+  // Stage drill-down is offered while the operator is on the "Active" group or already inside one
+  // of its stages — never as a permanent eleventh-chip row on the default view.
+  const showStageDrilldown =
+    statusFilter === ACTIVE_STATUSES || (STAGE3_STATUSES as string[]).includes(statusFilter);
+  /**
+   * What the list is currently showing, said in words next to the search box.
+   *
+   * `isAttentionView` used to rename the table's "Actions" column to "Waiting" instead, which told
+   * the reader nothing about *why* the column had changed under them — a column header is a
+   * description of its cells, not a place to announce which filter is on.
+   */
+  const currentViewLabel =
+    statusFilter === 'ALL' ? 'Everything'
+    : statusFilter === ACTIVE_STATUSES ? 'Active work'
+    : statusFilter === 'PENDING' ? 'Awaiting the assayer’s response'
+    : statusFilter === 'REJECTED' ? 'Declined — needs a replacement'
+    : statusFilter === NEEDS_ATTENTION_FILTER ? 'Awaiting a response or declined'
+    : statusFilter === ESCALATED_FILTER ? 'Escalated'
+    : statusFilter === TERMINAL_FILTER ? 'Cancelled or rejected'
+    : branchStatusLabel(statusFilter);
 
   // The desk's queue of problems the field has flagged (branch closed, access denied, safety…).
   // This endpoint existed with no UI at all — an assayer could report an issue from the field and
@@ -650,6 +703,34 @@ export const Assignments: React.FC = () => {
         })}
       </div>
 
+      {/* Stage drill-down. "Active" is three field-execution stages in one count; the removed
+          dropdown was the only way to look at them separately, so they are offered here instead —
+          but only once the operator is already looking at that group, so the default view stays
+          seven chips rather than eleven. */}
+      {showStageDrilldown && (
+        <div className="glass-card" style={{ padding: '6px 12px', display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+          <span style={{ fontSize: '10.5px', color: 'var(--text-muted)', fontWeight: 700, letterSpacing: '0.3px' }}>NARROW TO ONE STAGE</span>
+          {STAGE3_STATUSES.map(s => {
+            const isActive = statusFilter === s;
+            return (
+              <button
+                key={s}
+                onClick={() => applyFilter(isActive ? ACTIVE_STATUSES : s)}
+                className="btn btn-secondary"
+                style={{
+                  padding: '3px 10px', fontSize: '11px', fontWeight: 700, borderRadius: '14px',
+                  border: isActive ? '1.5px solid var(--accent-secondary)' : '1px solid var(--border-color)',
+                  background: isActive ? 'rgba(216,174,71,0.12)' : 'transparent',
+                  color: isActive ? 'var(--accent-secondary)' : 'var(--text-secondary)',
+                }}
+              >
+                {branchStatusLabel(s)} <span style={{ fontWeight: 800 }}>{branchStatusCounts[s] ?? 0}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       {/* Field issues — problems the field flagged from the mobile app. Clicking a row jumps
           straight to the affected assignment. Resolved implicitly when the assignment leaves an
           actionable state, so only open ones demand attention here. */}
@@ -704,18 +785,17 @@ export const Assignments: React.FC = () => {
       {/* Search & Filter */}
       <div className="glass-card" style={{ padding: '12px 16px', display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'center' }}>
         <SearchInput value={searchTerm} onChange={setSearchTerm} placeholder="Search this page by ID, project, assayer, branch..." iconSize={16} />
-        <FilterSelect
-          value={statusFilter}
-          onChange={applyFilter}
-          label={<Filter size={14} style={{ color: 'var(--text-muted)' }} />}
-          options={[
-            { value: 'ALL', label: 'All Statuses' },
-            ...STAGE3_STATUSES.map(s => ({ value: s, label: branchStatusLabel(s) })),
-            { value: TERMINAL_FILTER, label: 'Cancelled / Rejected' },
-            { value: NEEDS_ATTENTION_FILTER, label: 'Needs Attention (awaiting response / auto-declined)' },
-            { value: ESCALATED_FILTER, label: 'Escalated (Critical priority)' },
-          ]}
-        />
+        {/* The status dropdown that stood here has been removed. It filtered the same axis as the
+            count-chips above — two controls for one job, which left the operator unsure which one
+            the list was obeying (and they could disagree: picking one silently un-highlighted the
+            other). The chips win because they carry counts and are scannable without opening
+            anything. Nothing became unreachable: the dropdown's only chip-less entries were the
+            individual field-execution stages, which are now the drill-down row below, and its
+            combined "Needs Attention", which the Awaiting-response and Declined chips already
+            split into the two situations that need different actions. */}
+        <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
+          Showing: <strong style={{ color: 'var(--text-secondary)' }}>{currentViewLabel}</strong>
+        </span>
       </div>
 
       {/* The execution desk's primary surface is the WORK LIST, so it gets the width: the shared
@@ -746,7 +826,10 @@ export const Assignments: React.FC = () => {
                   </th>
                   <th style={{ padding: '10px 14px' }}>Fee</th>
                   <th style={{ padding: '10px 14px' }}>Status</th>
-                  <th style={{ padding: '10px 14px' }}>{isAttentionView ? 'Waiting' : 'Actions'}</th>
+                  {/* Always "Actions". In the attention views the cell holds how long the offer has
+                      been waiting, and this header used to silently become "Waiting" — the view is
+                      named beside the search box now, so the column can just describe itself. */}
+                  <th style={{ padding: '10px 14px' }}>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -783,8 +866,10 @@ export const Assignments: React.FC = () => {
                       </div>
                     </td>
                     <td style={{ padding: '10px 14px', whiteSpace: 'nowrap' }} onClick={(e) => e.stopPropagation()}>
+                      {/* The header no longer changes to "Waiting", so the cell says what its own
+                          number means rather than relying on the column to explain it. */}
                       {isAttentionView ? (
-                        <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{formatRelativeTime(asn.createdAt)}</span>
+                        <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>Waiting since {formatRelativeTime(asn.createdAt)}</span>
                       ) : (
                         <div style={{ display: 'flex', gap: '4px' }}>
                           {canAccept && (
@@ -872,38 +957,96 @@ export const Assignments: React.FC = () => {
               {/* Lifecycle actions — contextual to the current status. Touch-friendly hit targets for ops. */}
               {canActOnAssignments && selectedAsn.status !== 'COMPLETED' && (
                 <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border-color)', display: 'flex', flexDirection: 'column', gap: '10px', background: 'var(--bg-surface-2)' }}>
-                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
-                    {selectedAsn.status === 'PENDING' && (
-                      <>
-                        <button onClick={() => { if (window.confirm('Accept this offer? This commits the assayer to the assignment.')) runTransition('ACCEPTED'); }} disabled={actionBusy} className="btn btn-primary" style={{ padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700, background: 'var(--success)', borderColor: 'var(--success)' }}>
-                          ✓ Accept Offer
-                        </button>
-                        <button onClick={() => setActionMode('REJECT')} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700, color: 'var(--danger)', borderColor: 'var(--status-cancelled-bg)' }}>
-                          ✕ Reject Offer
-                        </button>
-                      </>
-                    )}
-                    {['ACCEPTED', 'CHECKED_IN', 'IN_PROGRESS'].includes(selectedAsn.status) && (
-                      <button onClick={() => { if (window.confirm('Mark this assignment complete? This is not reversible.')) runTransition('COMPLETED'); }} disabled={actionBusy} className="btn btn-primary" style={{ padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700, background: 'var(--success)', borderColor: 'var(--success)' }}>
-                        ✓ Mark Audit Complete
-                      </button>
-                    )}
-                    {['PENDING', 'ACCEPTED', 'CHECKED_IN', 'IN_PROGRESS'].includes(selectedAsn.status) && (
-                      <button onClick={() => setActionMode('CANCEL')} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700, color: 'var(--text-secondary)' }}>
-                        🚫 Cancel Assignment
-                      </button>
-                    )}
-                    {['REJECTED', 'CANCELLED'].includes(selectedAsn.status) && (
-                      <button onClick={() => navigate(planningLinkFor(selectedAsn))} className="btn btn-secondary" style={{ padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}>
-                        🔄 Reassign Branch →
-                      </button>
-                    )}
-                    {selectedAsn.priority !== 'CRITICAL' && (
-                      <button onClick={() => setActionMode('ESCALATE')} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px', color: 'var(--warning)', borderColor: 'var(--status-pending-bg)', marginLeft: 'auto' }}>
-                        ⚠ Escalate
-                      </button>
-                    )}
-                  </div>
+                  {/* ONE primary action, chosen by where the assignment stands, plus a "More" menu
+                      for the exception paths.
+                      Six equally-sized buttons — Accept, Reject, Complete, Cancel, Reassign,
+                      Escalate — gave a coordinator no way to tell which was the ordinary next step
+                      and which would derail the job; the two green ones were the routine ones, but
+                      that is a colour convention nobody was taught. Every action is still here and
+                      still guarded by the same permission check; only their weight changed. */}
+                  {(() => {
+                    const canAcceptOffer = selectedAsn.status === 'PENDING';
+                    const canComplete = ['ACCEPTED', 'CHECKED_IN', 'IN_PROGRESS'].includes(selectedAsn.status);
+                    const canCancel = ['PENDING', 'ACCEPTED', 'CHECKED_IN', 'IN_PROGRESS'].includes(selectedAsn.status);
+                    const canReassign = ['REJECTED', 'CANCELLED'].includes(selectedAsn.status);
+                    const canEscalate = selectedAsn.priority !== 'CRITICAL';
+                    const hasMore = canAcceptOffer || canCancel || canReassign || canEscalate;
+                    return (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                          {canAcceptOffer && (
+                            <button
+                              onClick={async () => {
+                                if (await confirm({
+                                  title: 'Accept this offer?',
+                                  message: 'This commits the assayer to the assignment.',
+                                  confirmLabel: 'Accept offer',
+                                  reversible: true,
+                                })) runTransition('ACCEPTED');
+                              }}
+                              disabled={actionBusy}
+                              className="btn btn-primary"
+                              style={{ padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700, background: 'var(--success)', borderColor: 'var(--success)' }}
+                            >
+                              ✓ Accept Offer
+                            </button>
+                          )}
+                          {canComplete && (
+                            <button
+                              onClick={async () => { if (await confirm(COMPLETE_CONFIRM)) runTransition('COMPLETED'); }}
+                              disabled={actionBusy}
+                              className="btn btn-primary"
+                              style={{ padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700, background: 'var(--success)', borderColor: 'var(--success)' }}
+                            >
+                              ✓ Mark Audit Complete
+                            </button>
+                          )}
+                          {canReassign && !canAcceptOffer && !canComplete && (
+                            // Nothing routine is left to do on a declined/cancelled assignment, so
+                            // finding it a new assayer IS the primary action here.
+                            <button onClick={() => navigate(planningLinkFor(selectedAsn))} className="btn btn-primary" style={{ padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}>
+                              🔄 Reassign Branch →
+                            </button>
+                          )}
+                          {hasMore && (
+                            <button
+                              onClick={() => setShowMoreActions(v => !v)}
+                              disabled={actionBusy}
+                              className="btn btn-secondary"
+                              style={{ padding: '8px 12px', minHeight: '38px', fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)', marginLeft: 'auto' }}
+                              aria-expanded={showMoreActions}
+                            >
+                              More {showMoreActions ? '▲' : '▼'}
+                            </button>
+                          )}
+                        </div>
+                        {showMoreActions && (
+                          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', padding: '8px', borderRadius: 'var(--radius-sm)', background: 'var(--bg-primary)', border: '1px solid var(--border-hair)' }}>
+                            {canAcceptOffer && (
+                              <button onClick={() => setActionMode('REJECT')} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px', fontWeight: 700, color: 'var(--danger)', borderColor: 'var(--status-cancelled-bg)' }}>
+                                ✕ Reject Offer
+                              </button>
+                            )}
+                            {canCancel && (
+                              <button onClick={() => setActionMode('CANCEL')} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px', fontWeight: 700, color: 'var(--text-secondary)' }}>
+                                🚫 Cancel Assignment
+                              </button>
+                            )}
+                            {canReassign && (canAcceptOffer || canComplete) && (
+                              <button onClick={() => navigate(planningLinkFor(selectedAsn))} className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px', fontWeight: 700 }}>
+                                🔄 Reassign Branch →
+                              </button>
+                            )}
+                            {canEscalate && (
+                              <button onClick={() => setActionMode('ESCALATE')} disabled={actionBusy} className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '12px', fontWeight: 700, color: 'var(--warning)', borderColor: 'var(--status-pending-bg)' }}>
+                                ⚠ Escalate
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                   {actionMode && (
                     <div style={{ display: 'flex', gap: '6px' }}>
@@ -975,11 +1118,15 @@ export const Assignments: React.FC = () => {
                     <span style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.4px' }}>Checked in on site</span>
                     <p style={{ fontSize: '12px', fontWeight: 600, margin: '1px 0', color: 'var(--text-primary)' }}>
                       {new Date(selectedAsn.checkedInAt).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })}
+                      {/* Said as a sentence. "40m from branch (±12m GPS)" is surveyor's notation:
+                          the desk staff who read this to judge whether someone really stood at the
+                          branch do not know what "±12m GPS" is claiming, and the parenthesis reads
+                          as an error the phone made rather than the phone's own margin. */}
                       {selectedAsn.checkInDistanceMeters != null && (
-                        <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}> · {selectedAsn.checkInDistanceMeters < 1000 ? `${selectedAsn.checkInDistanceMeters}m` : `${(selectedAsn.checkInDistanceMeters / 1000).toFixed(1)}km`} from branch</span>
+                        <span style={{ color: 'var(--text-secondary)', fontWeight: 400 }}> · Checked in {selectedAsn.checkInDistanceMeters < 1000 ? `${selectedAsn.checkInDistanceMeters} m` : `${(selectedAsn.checkInDistanceMeters / 1000).toFixed(1)} km`} from the branch</span>
                       )}
                       {selectedAsn.checkInAccuracyMeters != null && (
-                        <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> (±{selectedAsn.checkInAccuracyMeters}m GPS)</span>
+                        <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}> — the phone placed itself to within about {selectedAsn.checkInAccuracyMeters} m</span>
                       )}
                     </p>
                     {selectedAsn.checkInLatitude != null && selectedAsn.checkInLongitude != null && (
@@ -1024,9 +1171,13 @@ export const Assignments: React.FC = () => {
                         borderRadius: 'var(--radius-sm)', padding: '7px 9px',
                       }}>
                         <span style={{ fontSize: '12px', fontWeight: 700 }}>₹{Number(e.amount).toLocaleString()}</span>
-                        <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{String(e.category).replace(/_/g, ' ').toLowerCase()}</span>
+                        {/* Both of these were de-cased database values ("local travel", "APPROVED").
+                            The shared label layer is the one place this vocabulary is written, so
+                            an expense chip here and the same expense in billing cannot drift into
+                            two different words for one state. */}
+                        <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{anyStatusLabel(e.category)}</span>
                         {e.description && <span style={{ fontSize: '10px', color: 'var(--text-secondary)', flex: 1, minWidth: 0 }}>{e.description}</span>}
-                        <span style={{ fontSize: '9px', fontWeight: 700, color: tone }}>{e.status}</span>
+                        <span style={{ fontSize: '9px', fontWeight: 700, color: tone }}>{anyStatusLabel(e.status)}</span>
                         {pending && (
                           <span style={{ display: 'flex', gap: '4px' }}>
                             <button onClick={() => reviewExpense(e.id, true)} disabled={reviewingExpenseId === e.id}
@@ -1134,7 +1285,12 @@ export const Assignments: React.FC = () => {
                                           background: accent.color + '20',
                                           color: accent.color,
                                         }}>
-                                          {evt.type}
+                                          {/* Was the raw event type — the timeline read "COMMENT"
+                                              and "STATUS_CHANGE" to people who never see the
+                                              database. The shared label layer already names every
+                                              one of these, and names them the same way the mobile
+                                              app does. */}
+                                          {activityEventLabel(evt.type)}
                                         </span>
                                         <span style={{ color: 'var(--text-secondary)', fontSize: '11px', fontWeight: 500 }}>
                                           {evt.user}
@@ -1218,6 +1374,8 @@ export const Assignments: React.FC = () => {
           )}
         </div>
       </div>
+
+      {confirmDialog}
     </div>
   );
 };

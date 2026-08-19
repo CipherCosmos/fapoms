@@ -83,7 +83,7 @@ const ComplianceTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate: 
             ([title, items]) => (
               <div key={title}>
                 <div style={{ ...label, fontSize: '10px', marginBottom: '8px' }}>{title}</div>
-                {items.length === 0 ? <Empty>None recorded.</Empty> : items.slice(0, 10).map((s: any) => (
+                {items.length === 0 ? <Empty>{`No ${title.toLowerCase()} recorded against any assayer yet. HR adds these on an assayer’s record.`}</Empty> : items.slice(0, 10).map((s: any) => (
                   <div key={s.name} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', padding: '3px 0' }}>
                     <span>{s.name}</span>
                     <span style={{ color: 'var(--text-muted)' }}>{s.assayerCount}</span>

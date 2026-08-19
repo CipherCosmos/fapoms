@@ -1,12 +1,14 @@
 import React, { useState } from 'react';
 import { Send, Banknote, Ban, Undo2 } from 'lucide-react';
-import { DetailDrawer, StyledInput, Select, useToast } from '../../components/ui';
+import { DetailDrawer, StyledInput, Select, useConfirm, useToast } from '../../components/ui';
 import { useBillingInvoice, useSendInvoice, useRecordBillingPayment, useCancelInvoice, useReversePayment } from '../../hooks/useBilling';
-import { InvoiceStatus, PaymentMethod } from '@fapoms/shared';
+import { InvoiceStatus, PaymentMethod, paymentMethodLabel } from '@fapoms/shared';
 import { userMessage } from '../../services/errors';
 import { moneyExact as money } from '../../utils/money';
 import { InvoiceStatusPill, LineStatePill, fmtDate, inputStyle, th, td, tdNum } from './shared';
 
+// Named by the shared label layer, never by de-casing the enum — see the same note in
+// PayoutsTab. "BANK TRANSFER" is a database value; "Bank Transfer" is a payment method.
 const METHODS = Object.values(PaymentMethod);
 
 const Row: React.FC<{ label: string; value: React.ReactNode; strong?: boolean }> = ({ label, value, strong }) => (
@@ -22,6 +24,7 @@ const Row: React.FC<{ label: string; value: React.ReactNode; strong?: boolean }>
  */
 export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => void; canAct: boolean }> = ({ invoiceId, onClose, canAct }) => {
   const { toast } = useToast();
+  const { confirm, confirmDialog } = useConfirm();
   const { data: invoice } = useBillingInvoice(invoiceId);
   const send = useSendInvoice();
   const pay = useRecordBillingPayment();
@@ -42,8 +45,23 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
   const outstanding = Number(invoice.outstandingAmount);
   const partPaid = Number(invoice.paidAmount) > 0 && outstanding > 0;
 
+  /**
+   * Marking an invoice sent is a one-way door: it leaves Draft for Sent, which is the state
+   * the client is chased from and the point after which it can no longer be cancelled once any
+   * payment lands. That was guarded by `window.confirm` — the browser's own pop-up, which looks
+   * exactly like the notification and ad prompts office staff dismiss without reading, and whose
+   * "OK" button is the Enter default, so the transition could be made by a keypress aimed at
+   * something else. The in-app dialog names the action on its button and states plainly that it
+   * cannot be taken back.
+   */
   const doSend = async () => {
-    if (!window.confirm(`Mark ${invoice.invoiceNumber} as sent to the client?`)) return;
+    const ok = await confirm({
+      title: 'Mark this invoice as sent?',
+      message: <>Mark <strong>{invoice.invoiceNumber}</strong> as sent to the client{invoice.clientName ? <> ({invoice.clientName})</> : null}. It moves out of Draft and becomes payable, and payments can then be recorded against it.</>,
+      confirmLabel: 'Mark as sent',
+      reversible: false,
+    });
+    if (!ok) return;
     try { await send.mutateAsync(invoice.id); toast('success', 'Invoice marked as sent'); }
     catch (e) { toast({ type: 'error', title: 'Could not send', message: userMessage(e) }); }
   };
@@ -105,7 +123,7 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
       {payOpen && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--bg-tertiary)', padding: 12, borderRadius: 'var(--radius-sm)' }}>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8 }}>
-            <Select value={method} onChange={(v) => setMethod(v as PaymentMethod)} options={METHODS.map((m) => ({ value: m, label: m.replace(/_/g, ' ') }))} />
+            <Select value={method} onChange={(v) => setMethod(v as PaymentMethod)} options={METHODS.map((m) => ({ value: m, label: paymentMethodLabel(m) }))} />
             <StyledInput placeholder="Payment reference *" value={reference} onChange={(e) => setReference(e.target.value)} />
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 8 }}>
@@ -161,7 +179,7 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
               <div key={p.id} style={{ background: 'var(--bg-tertiary)', padding: 8, borderRadius: 'var(--radius-sm)', fontSize: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
                 <div>
                   <div style={{ fontWeight: 600 }}>{p.paymentReference} · <span style={{ fontWeight: 700 }}>{money(p.amount)}</span></div>
-                  <div style={{ color: 'var(--text-muted)', marginTop: 2 }}>{p.method.replace(/_/g, ' ')} · {fmtDate(p.receivedDate)}{p.notes ? ` · ${p.notes}` : ''}</div>
+                  <div style={{ color: 'var(--text-muted)', marginTop: 2 }}>{paymentMethodLabel(p.method)} · {fmtDate(p.receivedDate)}{p.notes ? ` · ${p.notes}` : ''}</div>
                 </div>
                 {canAct && (
                   <button onClick={() => doReverse(p.id)} disabled={reverse.isPending} title="Reverse this payment" style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer', display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: 11.5 }}>
@@ -175,6 +193,8 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
       )}
 
       {invoice.notes && <div style={{ fontSize: 13, color: 'var(--text-secondary)' }}>{invoice.notes}</div>}
+
+      {confirmDialog}
     </DetailDrawer>
   );
 };

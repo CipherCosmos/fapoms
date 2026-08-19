@@ -2,6 +2,19 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Search } from 'lucide-react';
 import { useGlobalSearch } from '../hooks/useGlobalSearch';
 
+/*
+  The placeholder used to read "Search... (⌘K)". ⌘ is a Mac key that most staff here have
+  never seen on their keyboard, and a bare shortcut in a placeholder reads as noise to
+  someone who is not a developer. The placeholder now says what can actually be searched —
+  the one thing a first-time user needs — and the shortcut moved to a quiet hint on the
+  right, written with the modifier that person's keyboard really has. The binding itself
+  (SearchOverlay) has always accepted both Ctrl and ⌘, so Windows users were never locked
+  out; only the label was wrong.
+*/
+const IS_MAC = typeof navigator !== 'undefined' &&
+  /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent || '');
+const SHORTCUT_HINT = IS_MAC ? '⌘K' : 'Ctrl+K';
+
 export const GlobalSearch: React.FC = () => {
   const { query, setQuery, results, loading, navigateTo, totalCount } = useGlobalSearch();
   const [open, setOpen] = useState(false);
@@ -57,7 +70,8 @@ export const GlobalSearch: React.FC = () => {
         <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
         <input
           type="text"
-          placeholder="Search... (⌘K)"
+          placeholder="Search branches, assayers, projects, clients"
+          aria-keyshortcuts={IS_MAC ? 'Meta+K' : 'Control+K'}
           value={query}
           onChange={(e) => { setQuery(e.target.value); setOpen(true); }}
           onFocus={() => { if (results) setOpen(true); }}
@@ -67,7 +81,11 @@ export const GlobalSearch: React.FC = () => {
             borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', outline: 'none',
           }}
         />
-        {loading && <span style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', fontSize: '10px', color: 'var(--text-muted)' }}>...</span>}
+        {loading ? (
+          <span style={{ position: 'absolute', right: '10px', top: '50%', transform: 'translateY(-50%)', fontSize: '10px', color: 'var(--text-muted)' }}>...</span>
+        ) : !query && (
+          <span aria-hidden="true" style={{ position: 'absolute', right: '8px', top: '50%', transform: 'translateY(-50%)', fontSize: '10px', color: 'var(--text-muted)', border: '1px solid var(--border-color)', borderRadius: '4px', padding: '1px 5px', pointerEvents: 'none', opacity: 0.75 }}>{SHORTCUT_HINT}</span>
+        )}
       </div>
 
       {open && query && (

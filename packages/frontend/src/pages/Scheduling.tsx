@@ -15,7 +15,7 @@ import { userMessage } from '../services/errors';
 import { queryClient } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
 import { useScope, withScope } from '../context/ScopeContext';
-import { Modal, FilterSelect, AlertBanner, Select } from '../components/ui';
+import { Modal, FilterSelect, AlertBanner, Select, useConfirm } from '../components/ui';
 import { suggestAuditDate, describeSuggestedDate } from '../services/planning';
 
 import { assignmentFee, assignmentFeeValue } from '../utils/money';
@@ -146,6 +146,24 @@ export const Scheduling: React.FC = () => {
   const [bulkQueueIds, setBulkQueueIds] = useState<Set<string>>(new Set());
   const [bulkDate, setBulkDate] = useState(todayDateKey());
   const [bulkScheduling, setBulkScheduling] = useState(false);
+  /**
+   * Bulk dispatch used to reveal itself only when the queue happened to hold more than one offer,
+   * so the feature was invisible on the days a coordinator most wanted to learn it existed and
+   * appeared unannounced on the days it didn't. It is now a named control the operator turns on.
+   */
+  const [bulkMode, setBulkMode] = useState(false);
+  /**
+   * The status filter's plain three (Today / Upcoming / Done) cover the whole working day. The
+   * remaining five are lifecycle states a coordinator needs perhaps once a month, and mixing them
+   * into one eight-item list made the daily choice a reading exercise. They live behind "More",
+   * which stays open on its own once one of them is the active filter — otherwise selecting one
+   * would hide the control that shows what is currently filtering the calendar.
+   */
+  const [showMoreFilters, setShowMoreFilters] = useState(false);
+
+  // The one in-app confirmation dialog. `window.confirm` looked like the browser pop-ups office
+  // staff are trained to dismiss unread, and its "OK" button never said what it would do.
+  const { confirm, confirmDialog } = useConfirm();
 
   const { scopeParams, scopeKey } = useScope();
   const scopeQuery = withScope(scopeParams);
@@ -361,7 +379,15 @@ export const Scheduling: React.FC = () => {
       setShowRescheduleModal(true);
       return;
     }
-    if (targetStatus === ScheduleStatus.COMPLETED && !window.confirm('Mark this schedule complete? This moves the audit forward and is not reversible.')) return;
+    if (
+      targetStatus === ScheduleStatus.COMPLETED &&
+      !(await confirm({
+        title: 'Mark this schedule complete?',
+        message: 'This moves the audit forward to the next stage.',
+        confirmLabel: 'Mark complete',
+        reversible: false,
+      }))
+    ) return;
     setError(null);
     setTransitioningId(id);
     try {
@@ -477,17 +503,61 @@ export const Scheduling: React.FC = () => {
 
         {/* Action Controls & Navigation Shortcuts */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-          {/* Filter Dropdown */}
-          <FilterSelect value={statusFilter} onChange={setStatusFilter} label={<Filter size={14} style={{ color: 'var(--text-muted)' }} />} compact options={[
-            { value: 'ALL', label: 'All Schedules' },
-            { value: 'ONGOING', label: 'Ongoing (Today)' },
-            { value: 'UPCOMING', label: 'Upcoming' },
-            { value: 'COMPLETED', label: 'Completed' },
-            { value: 'CONFIRMED', label: 'Confirmed' },
-            { value: 'RESCHEDULED', label: 'Rescheduled' },
-            { value: 'TENTATIVE', label: 'Tentative' },
-            { value: 'HISTORICAL', label: 'History Log' },
-          ]} style={{ background: 'none', border: '1px solid var(--border-color)' }} />
+          {/* What the calendar is showing. The everyday three sit in the open as buttons the eye
+              can scan; the five lifecycle states nobody needs daily sit behind "More" so the
+              common choice is not buried in an eight-item list of half-database words. Every
+              option that existed before is still selectable — nothing was dropped. */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', flexWrap: 'wrap' }}>
+            <Filter size={14} style={{ color: 'var(--text-muted)' }} />
+            {[
+              { value: 'ALL', label: 'All' },
+              { value: 'ONGOING', label: 'Today' },
+              { value: 'UPCOMING', label: 'Upcoming' },
+              { value: 'COMPLETED', label: 'Done' },
+            ].map(opt => (
+              <button
+                key={opt.value}
+                onClick={() => setStatusFilter(opt.value)}
+                className="btn btn-secondary"
+                style={{
+                  padding: '4px 10px', fontSize: '11px', fontWeight: 700, borderRadius: '14px',
+                  border: statusFilter === opt.value ? '1.5px solid var(--accent)' : '1px solid var(--border-color)',
+                  background: statusFilter === opt.value ? 'rgba(216,174,71,0.14)' : 'transparent',
+                  color: statusFilter === opt.value ? 'var(--accent)' : 'var(--text-secondary)',
+                }}
+              >
+                {opt.label}
+              </button>
+            ))}
+            {(() => {
+              const moreOptions = [
+                { value: 'CONFIRMED', label: 'Confirmed with the assayer' },
+                { value: 'TENTATIVE', label: 'Not confirmed yet' },
+                { value: 'RESCHEDULED', label: 'Moved to another date' },
+                { value: 'HISTORICAL', label: 'Past dates and finished work' },
+              ];
+              const activeMore = moreOptions.find(o => o.value === statusFilter);
+              // An active "More" choice keeps the picker on screen: hiding it would leave the
+              // calendar filtered by something the operator can no longer see or undo.
+              if (!showMoreFilters && !activeMore) {
+                return (
+                  <button onClick={() => setShowMoreFilters(true)} className="btn btn-secondary"
+                    style={{ padding: '4px 10px', fontSize: '11px', fontWeight: 700, borderRadius: '14px', color: 'var(--text-secondary)' }}>
+                    More…
+                  </button>
+                );
+              }
+              return (
+                <FilterSelect
+                  value={activeMore ? statusFilter : ''}
+                  onChange={(v) => { if (v) setStatusFilter(v); }}
+                  compact
+                  options={[{ value: '', label: 'More views…' }, ...moreOptions]}
+                  style={{ background: 'none', border: '1px solid var(--border-color)' }}
+                />
+              );
+            })()}
+          </div>
 
           {/* View Toggle */}
           <div style={{ display: 'flex', background: 'var(--bg-primary)', padding: '2px', borderRadius: '6px', border: '1px solid var(--border-color)' }}>
@@ -561,17 +631,38 @@ export const Scheduling: React.FC = () => {
               </div>
             ) : (
               <>
-              {/* Bulk dispatch bar — select several offers, one date, one action. */}
-              {canManageSchedules && scopedAssignments.length > 1 && (
+              {/* Bulk dispatch — select several offers, one date, one action.
+                  The bar itself used to be the only sign the feature existed, and it appeared only
+                  when the queue happened to hold two or more rows, so nobody could learn it was
+                  there. A named "Select several" button is always offered instead. */}
+              {canManageSchedules && (
                 <div style={{ padding: '8px', marginBottom: '6px', borderRadius: '8px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-hair)', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
-                    <input
-                      type="checkbox"
-                      checked={bulkQueueIds.size === scopedAssignments.length && scopedAssignments.length > 0}
-                      onChange={(e) => setBulkQueueIds(e.target.checked ? new Set(scopedAssignments.map(a => a.id)) : new Set())}
-                    />
-                    Select all ({scopedAssignments.length})
-                  </label>
+                  {!bulkMode ? (
+                    <button
+                      onClick={() => setBulkMode(true)}
+                      className="btn btn-secondary"
+                      style={{ padding: '4px 10px', fontSize: '11px', fontWeight: 700, alignSelf: 'flex-start' }}
+                    >
+                      Select several
+                    </button>
+                  ) : (
+                  <>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '6px' }}>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
+                      <input
+                        type="checkbox"
+                        checked={bulkQueueIds.size === scopedAssignments.length && scopedAssignments.length > 0}
+                        onChange={(e) => setBulkQueueIds(e.target.checked ? new Set(scopedAssignments.map(a => a.id)) : new Set())}
+                      />
+                      Select all ({scopedAssignments.length})
+                    </label>
+                    {/* Leaving the mode must also drop the selection — a hidden set of ticked rows
+                        would otherwise still be scheduled by the next bulk action. */}
+                    <button onClick={() => { setBulkMode(false); setBulkQueueIds(new Set()); }} className="btn btn-secondary"
+                      style={{ padding: '2px 8px', fontSize: '10px' }}>
+                      Done
+                    </button>
+                  </div>
                   {bulkQueueIds.size > 0 && (
                     <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
                       <input type="date" value={bulkDate} min={todayDateKey()} onChange={(e) => setBulkDate(e.target.value)}
@@ -582,12 +673,14 @@ export const Scheduling: React.FC = () => {
                       </button>
                     </div>
                   )}
+                  </>
+                  )}
                 </div>
               )}
               {scopedAssignments.map(a => (
                 <div key={a.id} style={{ padding: '10px', borderRadius: '8px', marginBottom: '6px', background: 'var(--bg-surface-2)', border: bulkQueueIds.has(a.id) ? '1px solid var(--accent)' : '1px solid var(--border-hair)', display: 'flex', flexDirection: 'column', gap: '4px' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '6px' }}>
-                    {canManageSchedules && (
+                    {canManageSchedules && bulkMode && (
                       <input
                         type="checkbox"
                         checked={bulkQueueIds.has(a.id)}
@@ -987,7 +1080,14 @@ export const Scheduling: React.FC = () => {
                 <div style={{ fontSize: '10px', marginTop: '2px', padding: '4px 8px', borderRadius: '4px',
                   background: full ? 'var(--status-cancelled-bg)' : 'var(--status-active-bg)',
                   color: full ? 'var(--danger)' : 'var(--success)' }}>
-                  Assayer Weekly Load: {assayerWorkload.count} of {cap} schedule(s)
+                  {/* Written as a sentence a coordinator can act on. "Assayer Weekly Load: 12 of 15
+                      schedule(s)" read as a system readout — the number that matters is whether
+                      there is still room this week, so the verdict comes first. */}
+                  {full
+                    ? `Fully booked this week — ${assayerWorkload.count} of ${cap} jobs already booked.`
+                    : assayerWorkload.count === 0
+                      ? `Free this week — no jobs booked yet (room for ${cap}).`
+                      : `Busy this week — ${assayerWorkload.count} of ${cap} jobs booked.`}
                 </div>
               );
             })()}
@@ -1057,6 +1157,8 @@ export const Scheduling: React.FC = () => {
           </div>
         </Modal>
       )}
+
+      {confirmDialog}
     </div>
   );
 };

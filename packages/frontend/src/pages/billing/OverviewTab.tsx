@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import {
   AlertTriangle, ArrowDownLeft, ArrowUpRight, CheckCircle2, Clock, FileText, PauseCircle, Wallet, TrendingUp,
 } from 'lucide-react';
-import type { BillingAttentionItem } from '@fapoms/shared';
+import { activityEventLabel, type BillingAttentionItem } from '@fapoms/shared';
 import { useBillingOverview } from '../../hooks/useBilling';
 import { moneyTotal as money, moneyExact } from '../../utils/money';
 import { Card, SectionLabel, Empty, fmtDate, th, td, tdNum } from './shared';
@@ -216,6 +216,17 @@ const Rows: React.FC<{ rows: Array<[string, string]> }> = ({ rows }) => (
   </div>
 );
 
+/**
+ * Billing-history verbs, in the finance desk's own words.
+ *
+ * These stay local because they are billing's vocabulary, not the generic activity feed's:
+ * `PAYABLE_STATUS_CHANGED` means one specific thing on this ledger ("Payout approved") that a
+ * shared map cannot know. The *fallback* is what changed — it used to de-case the raw value, so
+ * any event the backend added ahead of this list rendered as "score adjustment" or, worse,
+ * a lower-cased database constant. `activityEventLabel` is the one place that already knows how
+ * to phrase an unknown event type as a sentence, so unrecognised actions borrow it instead of
+ * this file growing a second implementation of the same fallback.
+ */
 const ACTION_WORDS: Record<string, string> = {
   PAYABLE_CREATED: 'Payout booked',
   ENTRY_CREATED: 'Client line booked',
@@ -233,4 +244,4 @@ const ACTION_WORDS: Record<string, string> = {
   PAYMENT_RECEIVED: 'Client payment received',
   PAYMENT_REVERSED: 'Payment reversed',
 };
-export const describeAction = (action: string) => ACTION_WORDS[action] ?? action.replace(/_/g, ' ').toLowerCase();
+export const describeAction = (action: string) => ACTION_WORDS[action] ?? activityEventLabel(action);

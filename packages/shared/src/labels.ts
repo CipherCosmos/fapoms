@@ -742,3 +742,26 @@ export function validationStatusLabel(status?: string | null): string {
   if (!status) return '—';
   return VALIDATION_STATUS_LABELS[status as ValidationStatus] ?? humanize(status);
 }
+
+/**
+ * How a call to an assayer about a branch ended.
+ *
+ * Lived as an identical copy inside PlanningWorkspace.tsx and OperationsInbox.tsx, because the
+ * shared package was frozen while a billing refactor landed and the two screens both needed it
+ * at once. Duplicated vocabularies are exactly how the same value comes to read two different
+ * ways on two screens, which is the problem this whole file exists to prevent — so it belongs
+ * here, and the outcome picker and the outcome chip now read from one list.
+ */
+export const CALL_OUTCOME_LABELS: Record<string, string> = {
+  AGREED: 'Agreed',
+  NEGOTIATING: 'Negotiating',
+  DECLINED: 'Declined the work',
+  NO_ANSWER: 'No answer',
+  CALLBACK_REQUESTED: 'Asked to call back',
+  WRONG_NUMBER: 'Wrong number',
+};
+
+export function callOutcomeLabel(outcome?: string | null): string {
+  if (!outcome) return '—';
+  return CALL_OUTCOME_LABELS[outcome] ?? humanize(outcome);
+}
