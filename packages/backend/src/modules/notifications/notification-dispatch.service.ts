@@ -12,6 +12,7 @@ import { NotificationEntity } from './notification.entity';
 import { NotificationPreferenceEntity } from './notification-preference.entity';
 import { UserEntity } from '../user/user.entity';
 import { AuditService } from '../../core/audit/audit.service';
+import { NOT_A_RECORD_ENTITY_ID } from '../../core/audit/audit-event';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { NOTIFICATION_CATALOG, renderTemplate } from './notification-catalog';
 import { NotificationSettingsService, EffectiveNotificationType } from './notification-settings.service';
@@ -499,7 +500,10 @@ export class NotificationDispatchService {
         category: EventCategory.SYSTEM,
         eventType: `NOTIFICATION_${opts.type}`,
         entityType: opts.entityType ?? 'NOTIFICATION',
-        entityId: opts.entityId ?? groupKey,
+        // `groupKey` used to be the fallback, but it is `type:entityId:timestamp` — never a
+        // uuid, so any dispatch without an `entityId` (the field is optional) would have had
+        // its audit row rejected. It is recorded in `metadata.groupKey` just below regardless.
+        entityId: opts.entityId ?? NOT_A_RECORD_ENTITY_ID,
         userId: opts.actorUserId ?? undefined,
         remarks: `Notified ${created} recipient(s)${suppressed ? `, ${suppressed} suppressed as duplicate` : ''}: ${title}`,
         metadata: {

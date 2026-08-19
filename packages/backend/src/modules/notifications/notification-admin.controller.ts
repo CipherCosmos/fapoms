@@ -21,6 +21,7 @@ import { NotificationSettingsService, EffectiveNotificationType } from './notifi
 import { NOTIFICATION_CATALOG } from './notification-catalog';
 import { EmailProvider, appPublicUrl, renderEmailHtml } from '../../infrastructure/notifications/email-provider';
 import { AuditService } from '../../core/audit/audit.service';
+import { NOT_A_RECORD_ENTITY_ID } from '../../core/audit/audit-event';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { EventCategory } from '@fapoms/shared';
 import { InjectQueue } from '@nestjs/bull';
@@ -88,26 +89,18 @@ export class TestEmailRequestDto {
   to: string;
 }
 
-const NOTIFICATION_ADMIN_ROLES = [
-  SystemRole.SUPER_ADMINISTRATOR,
-  SystemRole.ADMINISTRATOR,
-] as const;
-
 /**
- * Narrowed from `STAFF_ROLES` to the same four roles the web app admits to `/admin/notifications`.
+ * Super administrators only — reads and writes alike.
  *
- * The class gate admitted all eleven staff roles, so six who never see this page in the UI could
- * read the whole notification catalog, preview any template, and — through `GET email/status` —
- * the resolved mail transport and from-address, simply by calling the API. The writes were always
- * correctly restricted; it was the reads that were wider than the page that fronts them, and a
- * boundary the UI enforces and the API does not is not a boundary.
+ * This was narrowed once already, from all eleven staff roles to the four the web app admitted
+ * to `/admin/notifications`, on the principle that a boundary the UI enforces and the API does
+ * not is not a boundary. On 2026-08-17 the platform owner asked for notification rules (with
+ * platform settings and feedback) to be visible to the super administrator and nobody else, so
+ * both lists collapse to that one role. Kept as two names because the read/write split is a
+ * real seam — if the desk is ever widened again, it is the read list that widens first.
  */
-const NOTIFICATION_ADMIN_READ_ROLES = [
-  SystemRole.SUPER_ADMINISTRATOR,
-  SystemRole.ADMINISTRATOR,
-  SystemRole.OPERATIONS_MANAGER,
-  SystemRole.READ_ONLY_AUDITOR,
-];
+const NOTIFICATION_ADMIN_ROLES = [SystemRole.SUPER_ADMINISTRATOR] as const;
+const NOTIFICATION_ADMIN_READ_ROLES = [...NOTIFICATION_ADMIN_ROLES];
 
 @ApiTags('Notification Administration')
 @ApiBearerAuth()
@@ -138,17 +131,22 @@ export class NotificationAdminController {
    * change it describes.
    */
   private async record(eventType: string, type: string, userId: string | undefined, remarks: string, metadata?: any) {
-    await this.audit
-      .recordEvent({
-        category: EventCategory.SYSTEM,
-        eventType,
-        entityType: 'NOTIFICATION_SETTING',
-        entityId: type,
-        userId,
-        remarks,
-        metadata,
-      })
-      .catch(() => undefined);
+    /**
+     * The notification type goes in `metadata`, not `entityId`. It reads like an identifier
+     * but it is a catalog key ('SLA_BREACH'), and `entity_id` is `uuid NOT NULL` — so every
+     * write here was rejected by Postgres and then swallowed by `.catch(() => undefined)`.
+     * The trail this comment promises did not exist: `NOTIFICATION_SETTING` had zero rows.
+     * `recordEventSafe` still cannot fail the change it describes, but it says so in the log.
+     */
+    await this.audit.recordEventSafe({
+      category: EventCategory.SYSTEM,
+      eventType,
+      entityType: 'NOTIFICATION_SETTING',
+      entityId: NOT_A_RECORD_ENTITY_ID,
+      userId,
+      remarks,
+      metadata: { ...(metadata ?? {}), notificationType: type },
+    });
   }
 
   /**

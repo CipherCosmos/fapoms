@@ -247,19 +247,20 @@ export class RuleBypassService implements OnModuleDestroy {
     if (!info?.evidential) return;
 
     if (context.userId && context.entityId) {
-      void this.auditService
-        .recordEventSafe({
-          category: EventCategory.SYSTEM,
-          eventType: 'RULE_BYPASSED',
-          entityType: context.entityType ?? 'SYSTEM',
-          entityId: context.entityId,
-          userId: context.userId,
-          remarks:
-            `Rule "${info.label}" was NOT enforced — an administrator has it suspended. ` +
-            `${info.protects}${context.detail ? ` (${context.detail})` : ''}`,
-          metadata: { rule, evidential: true },
-        })
-        .catch(() => undefined);
+      // No `.catch()`: `recordEventSafe` already absorbs a failed write and logs it at error
+      // level. Adding one back would re-create the bare swallow it exists to replace — the
+      // pattern that hid a broken audit write in this codebase for months.
+      void this.auditService.recordEventSafe({
+        category: EventCategory.SYSTEM,
+        eventType: 'RULE_BYPASSED',
+        entityType: context.entityType ?? 'SYSTEM',
+        entityId: context.entityId,
+        userId: context.userId,
+        remarks:
+          `Rule "${info.label}" was NOT enforced — an administrator has it suspended. ` +
+          `${info.protects}${context.detail ? ` (${context.detail})` : ''}`,
+        metadata: { rule, evidential: true },
+      });
       return;
     }
 
@@ -349,6 +350,8 @@ export class RuleBypassService implements OnModuleDestroy {
           : `${pending.occurrences} time(s)`;
       const details = [...pending.details].slice(0, 5).join('; ');
 
+      // Unguarded on purpose — see `noteBypass`: `recordEventSafe` cannot throw, and wrapping
+      // it in a `.catch()` would only put the silent swallow back.
       await this.auditService
         .recordEventSafe({
           category: EventCategory.SYSTEM,
@@ -372,8 +375,7 @@ export class RuleBypassService implements OnModuleDestroy {
             subjectCount: pending.subjects.size,
             subjects,
           },
-        })
-        .catch(() => undefined);
+        });
     }
   }
 

@@ -5,6 +5,7 @@ import { formatRupees } from '@fapoms/shared';
 import { DeskEscalationService } from '../../modules/validation/desk-escalation.service';
 import { FeedbackEscalationService } from '../../modules/feedback/feedback-escalation.service';
 import { HrWorkforceService } from '../../modules/assayer/hr-workforce.service';
+import { FEEDBACK_TEAM_ROLE_NAMES } from '../../modules/feedback/feedback-roles';
 import { EmailProvider, appPublicUrl, renderEmailHtml } from '../notifications/email-provider';
 import { PlatformSettingsService } from '../settings/platform-settings.service';
 
@@ -35,7 +36,8 @@ interface DigestSection {
 /** Which roles receive which sections. A user with several roles gets the union, once. */
 const SECTION_AUDIENCES: Record<string, string[]> = {
   desk: ['DATA_ENTRY_HEAD', 'VALIDATION_MANAGER'],
-  feedback: ['PRODUCT_SUPPORT', 'SUPER_ADMINISTRATOR', 'ADMINISTRATOR'],
+  // Whoever owns the feedback desk — one list, see feedback-roles.ts (super administrators only).
+  feedback: FEEDBACK_TEAM_ROLE_NAMES,
   finance: ['FINANCE_MANAGER'],
   hr: ['HR_MANAGER'],
 };

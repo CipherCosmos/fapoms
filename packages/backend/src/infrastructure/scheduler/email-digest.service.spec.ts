@@ -127,7 +127,7 @@ describe('EmailDigestService', () => {
     });
     audience([
       { id: 'u-1', email: 'desk@x.in', role_name: 'VALIDATION_MANAGER' },
-      { id: 'u-2', email: 'support@x.in', role_name: 'PRODUCT_SUPPORT' },
+      { id: 'u-2', email: 'support@x.in', role_name: 'SUPER_ADMINISTRATOR' },
     ]);
 
     await service.run();
@@ -146,7 +146,7 @@ describe('EmailDigestService', () => {
       firstResponseOverdue: [{ id: 'f1', title: 'X', ageHours: 30 }],
       resolutionOverdue: [],
     });
-    audience([{ id: 'u-1', email: 'support@x.in', role_name: 'PRODUCT_SUPPORT' }]);
+    audience([{ id: 'u-1', email: 'support@x.in', role_name: 'SUPER_ADMINISTRATOR' }]);
 
     const result = await service.run();
 

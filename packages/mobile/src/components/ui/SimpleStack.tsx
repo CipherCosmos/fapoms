@@ -121,6 +121,17 @@ export const SubScreen: React.FC<SubScreenProps> = ({ active, title, onBack, tra
 
   return (
     <Modal visible={mounted} transparent={false} animationType="none" onRequestClose={onBack} statusBarTranslucent>
+      {/*
+       * A plain, non-animated backdrop the full size of the Modal's window, painted BEFORE the
+       * sliding panel. `translateX` starts off-screen (at `SCREEN_W`) and animates in over
+       * `t.motion.base` — for that whole duration, the area the panel hasn't slid into yet was
+       * showing whatever's behind it, which for a `transparent={false}` Modal on Android is the
+       * native window's own default white background, not this app's theme. That's the "white
+       * screen for a while" on every sub-page open: not a loading delay, the animation itself
+       * revealing an unpainted backdrop the entire time it ran. Themed backdrop underneath fixes
+       * it regardless of slide progress.
+       */}
+      <View style={{ flex: 1, backgroundColor: t.colors.bg }}>
       <Animated.View
         {...panResponder.panHandlers}
         style={[
@@ -161,6 +172,7 @@ export const SubScreen: React.FC<SubScreenProps> = ({ active, title, onBack, tra
           {children}
         </ScrollView>
       </Animated.View>
+      </View>
     </Modal>
   );
 };

@@ -22,6 +22,7 @@ import { Repository, IsNull, Not } from 'typeorm';
 import { BranchEntity } from '../branch/branch.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
 import { AuditService } from '../../core/audit/audit.service';
+import { NOT_A_RECORD_ENTITY_ID } from '../../core/audit/audit-event';
 import { EventCategory } from '@fapoms/shared';
 import { resolveCoordinates, needsBetterFix, isPlausibleIndianCoord, GeoFields } from './coordinate-resolution';
 import { reverseFreely, PRECISION_METERS, GeoPrecision } from './osm-geocoder';
@@ -156,7 +157,10 @@ export class GeoPrecisionService {
         category: EventCategory.OPERATIONAL,
         eventType: 'GEO_PRECISION_BACKFILL',
         entityType: target === 'branch' ? 'BRANCH' : 'ASSAYER',
-        entityId: null as any,
+        // A backfill sweeps many rows, so there is no one record to point at — and `null`,
+        // which this used to pass, is not a value a `uuid NOT NULL` column accepts. The
+        // sweep's subjects are in `metadata.moved`.
+        entityId: NOT_A_RECORD_ENTITY_ID,
         userId: 'system',
         remarks:
           `Re-resolved ${report.improved} of ${report.examined} imprecise ${target} coordinate(s); ` +
