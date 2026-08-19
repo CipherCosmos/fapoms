@@ -54,14 +54,11 @@ const EVENT_KEYS: [string, ...any[]][] = [
   ['client:created', queryKeys.clients.all, queryKeys.clients.list({})],
   ['client:updated', queryKeys.clients.all, queryKeys.clients.list({})],
   ['client:status-changed', queryKeys.clients.all, queryKeys.clients.list({})],
-  ['billing:entry-created', queryKeys.billing.entries({}), queryKeys.billing.dashboard(undefined), queryKeys.billing.all],
-  ['billing:entry-state-changed', queryKeys.billing.entries({}), queryKeys.billing.all, queryKeys.billing.dashboard(undefined)],
-  ['billing:duplicate-detected', queryKeys.billing.conflicts(undefined), queryKeys.billing.all],
-  ['billing:conflict-resolved', queryKeys.billing.conflicts(undefined), queryKeys.billing.all],
-  ['billing:invoice-created', queryKeys.billing.invoices({}), queryKeys.billing.all],
-  ['billing:invoice-status-changed', queryKeys.billing.invoices({}), queryKeys.billing.all],
-  ['billing:payment-received', queryKeys.billing.invoices({}), queryKeys.billing.entries({}), queryKeys.billing.all],
-  ['billing:payable-status-changed', queryKeys.billing.payables({}), queryKeys.billing.all],
+  // Money: every billing event is "the book changed" — the three events name what changed so a
+  // future screen can be selective, but today every billing query re-reads from the server.
+  ['billing:booked', queryKeys.billing.all],
+  ['billing:payout-changed', queryKeys.billing.all],
+  ['billing:invoice-changed', queryKeys.billing.all],
 ];
 
 /**

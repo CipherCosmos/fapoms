@@ -45,8 +45,12 @@ export interface FeeBearing {
  * figure both sides settled on. The proposed fee stands in only while none has been agreed, so
  * an offer awaiting a reply still shows the amount on the table rather than a blank.
  *
- * Mirrors `assignmentFee(a, 'COST')` in the backend's billing-money.ts. Returns null rather than
- * 0 when neither exists, so a screen can render "—" instead of claiming the job pays nothing.
+ * Mirrors `assignmentFee(a)` in the backend's assignment-money.ts. Returns null rather than 0
+ * when neither exists, so a screen can render "—" instead of claiming the job pays nothing.
+ *
+ * This is the OFFER figure, for display on an assignment card. Never sum it into an earnings or
+ * revenue total — those come from the billing API (`/billing-engine/...`), which is the one place
+ * that knows what was actually booked, held, paid and collected.
  */
 export function assignmentFeeValue(a: FeeBearing | null | undefined): number | null {
   if (!a) return null;

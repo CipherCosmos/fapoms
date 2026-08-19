@@ -167,8 +167,7 @@ export class OperationsSnapshotService {
 
       this.dataSource.query(`
         SELECT
-          COALESCE(SUM(taxable_amount) FILTER (WHERE state IN
-            ('PENDING_BILLING','READY_FOR_BILLING','DRAFT','SUBMITTED','UNDER_REVIEW','APPROVED')),0) AS unbilled,
+          COALESCE(SUM(taxable_amount) FILTER (WHERE state = 'UNBILLED' AND on_hold = false),0) AS unbilled,
           COALESCE(SUM(outstanding_amount),0) AS outstanding,
           COALESCE(SUM(paid_amount),0)        AS collected
           FROM billing_entries WHERE is_active = true`),

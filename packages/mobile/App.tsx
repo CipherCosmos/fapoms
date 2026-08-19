@@ -9,7 +9,6 @@ import { loadPreferences } from './src/services/preferences';
 import { useAssayerNotifications, type NotificationTapData } from './src/hooks/useAssayerNotifications';
 import { useAssayerProfile } from './src/hooks/useAssayerProfile';
 import { useReturnPaperwork } from './src/hooks/useReturnPaperwork';
-import { getAssignmentTotalFee } from './src/utils/fees';
 import { connectMobileSocket } from './src/services/socket';
 import { handleIncomingCall, handleCallAnswered, handleCallEnded } from './src/services/calls';
 import { countOpenQueries, countResolvedQueries } from './src/utils/queries';
@@ -73,6 +72,8 @@ function AppMain() {
    */
   const [claims, setClaims] = useState<AssayerExpense[]>([]);
   const [statement, setStatement] = useState<AssayerStatement | null>(null);
+  /** True when the last statement read failed. The screen says so rather than showing a figure. */
+  const [statementError, setStatementError] = useState(false);
   const [expenseSummary, setExpenseSummary] = useState<ExpenseSummary>({
     pending: 0,
     approved: 0,
@@ -188,7 +189,8 @@ function AppMain() {
     ]);
     if (summary.status === 'fulfilled') setExpenseSummary(summary.value);
     if (mine.status === 'fulfilled') setClaims(mine.value);
-    if (stmt.status === 'fulfilled') setStatement(stmt.value);
+    if (stmt.status === 'fulfilled') { setStatement(stmt.value); setStatementError(false); }
+    else setStatementError(true);
   }, [user?.id]);
 
   /**
@@ -595,20 +597,14 @@ function AppMain() {
   // Same helper Home uses, so the badge and the row beneath it can never disagree.
   const queryCount = countOpenQueries(assignments);
 
-  const totalEarnings = assignments
-    .filter((a) => a.status === 'COMPLETED')
-    .reduce((sum, a) => sum + getAssignmentTotalFee(a), 0);
-
   /**
-   * There is deliberately no `pendingEarnings` computed here any more.
+   * There is deliberately no earnings figure computed here.
    *
-   * It summed the fee of every assignment that was neither COMPLETED nor REJECTED — which
-   * counted CANCELLED jobs and PENDING offers the assayer had not even accepted as money owed to
-   * them. It was also unreachable: EarningsScreen took it as the *last* fallback behind
-   * `runningBalance`, and `runningBalance` was always passed as a number (`Number(...) || 0`),
-   * so `?? pendingEarnings` never fired. Wrong and dead is the safest kind of number to delete
-   * — the statement (from the billing engine) is the truth, and the profile snapshot is the
-   * only fallback that agrees with what finance sees.
+   * This screen used to sum `agreedFee + travelAllowance` across whatever assignments happened
+   * to be loaded, and EarningsScreen fell back to that (and to a profile snapshot) whenever the
+   * statement request failed. A number the phone works out for itself is a second answer to
+   * "what am I owed" that can disagree with what finance will actually pay. The statement is the
+   * only answer; when it cannot be loaded the screen says so instead of showing a figure.
    */
 
   // Narrowed once here rather than re-tested inside the JSX, so each modal below reads as
@@ -710,7 +706,8 @@ function AppMain() {
             totalAssignments={profile.totalAssignments}
             completedAssignments={profile.completedAssignments}
             averageRating={profile.averageRating}
-            runningBalance={Number(profile.runningBalance) || 0}
+            statement={statement}
+            statementError={statementError}
             expenseSummary={expenseSummary}
             onOpenAssignment={paperwork.open}
             onCheckIn={handleCheckIn}
@@ -751,14 +748,11 @@ function AppMain() {
 
         {selectedTab === 'EARNINGS' && (
           <EarningsScreen
-            totalEarnings={totalEarnings}
-            runningBalance={Number(profile.runningBalance) || 0}
-            earningsPaid={Number(profile.earningsPaid) || 0}
-            earningsAwaitingApproval={Number(profile.earningsAwaitingApproval) || 0}
             assignments={assignments}
             claims={claims}
             claimSummary={expenseSummary}
             statement={statement}
+            statementError={statementError}
             onOpenExpenseModal={() => {
               // From the Earnings tab there is no open job, so tie the claim to the one the
               // assayer is currently on (checked in / in progress / accepted). If there is
@@ -786,6 +780,7 @@ function AppMain() {
             assayerName={assayerName}
             assayerCode={user?.assayerCode || profile.assayerCode}
             profile={profile}
+            statement={statement}
             savingProfile={savingProfile}
             profileDirty={profileDirty}
             openQueries={countOpenQueries(assignments)}

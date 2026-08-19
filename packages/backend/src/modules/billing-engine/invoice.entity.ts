@@ -4,11 +4,14 @@ import { ClientEntity } from '../client/client.entity';
 import { ProjectEntity } from '../project/project.entity';
 import { BillingEntryEntity } from './billing-entry.entity';
 import { BillingPaymentEntity } from './payment.entity';
-import { InvoiceStatus, InvoiceType } from '@fapoms/shared';
+import { InvoiceStatus } from '@fapoms/shared';
 
 /**
- * Consolidates approved billing entries. `type` distinguishes consolidated
- * client invoices (many projects) from per-project invoices (spec §2).
+ * A client invoice: a set of completed assignments for one client.
+ *
+ *   DRAFT → ISSUED ("Sent") → PAID   (+ CANCELLED, which returns its lines to UNBILLED)
+ *
+ * Part-payment is derived (`paidAmount > 0 && outstandingAmount > 0`), not a status.
  */
 @Entity('billing_invoices')
 @Index(['clientId'])
@@ -21,11 +24,9 @@ export class BillingInvoiceEntity extends BaseEntity {
   @Column({ name: 'client_id', type: 'uuid' })
   clientId: string;
 
+  /** Set when every line on the invoice is from one project; null for a mixed invoice. */
   @Column({ name: 'project_id', type: 'uuid', nullable: true })
   projectId: string | null;
-
-  @Column({ type: 'varchar', length: 20, default: InvoiceType.PER_PROJECT })
-  type: InvoiceType;
 
   @Column({ type: 'varchar', length: 20, default: InvoiceStatus.DRAFT })
   status: InvoiceStatus;
@@ -39,11 +40,9 @@ export class BillingInvoiceEntity extends BaseEntity {
   @Column({ length: 3, default: 'INR' })
   currency: string;
 
+  /** Pre-tax taxable value of the invoiced lines. */
   @Column({ type: 'decimal', precision: 14, scale: 2, default: 0 })
   subtotal: number;
-
-  @Column({ name: 'discount_amount', type: 'decimal', precision: 14, scale: 2, default: 0 })
-  discountAmount: number;
 
   @Column({ name: 'tax_amount', type: 'decimal', precision: 14, scale: 2, default: 0 })
   taxAmount: number;
@@ -52,6 +51,7 @@ export class BillingInvoiceEntity extends BaseEntity {
   @Column({ name: 'tds_amount', type: 'decimal', precision: 14, scale: 2, default: 0 })
   tdsAmount: number;
 
+  /** subtotal + GST − TDS. */
   @Column({ type: 'decimal', precision: 14, scale: 2, default: 0 })
   total: number;
 

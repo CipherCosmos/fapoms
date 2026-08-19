@@ -2,7 +2,7 @@ import React from 'react';
 import { View } from 'react-native';
 import { AssayerPayableStatus, formatRupees as money, formatDateOnly } from '@fapoms/shared';
 import { AssayerAssignment, AssayerExpense, ExpenseSummary, AssayerStatement } from '../types/mobile-app';
-import { getAssignmentTotalFee, hasResolvedFee } from '../utils/fees';
+
 import { calendarDayDiff } from '../utils/dates';
 import { CAT_LABELS } from '../components/ExpenseModal';
 import { useTheme } from '../theme/ThemeProvider';
@@ -11,10 +11,6 @@ import {
 } from '../components/ui/primitives';
 
 interface EarningsScreenProps {
-  totalEarnings: number;
-  runningBalance?: number;
-  earningsPaid?: number;
-  earningsAwaitingApproval?: number;
   assignments: AssayerAssignment[];
   onOpenExpenseModal: () => void;
   /**
@@ -27,30 +23,29 @@ interface EarningsScreenProps {
   claims?: AssayerExpense[];
   claimSummary?: ExpenseSummary;
   /**
-   * The billing engine's own statement. Replaces `billingEntries?: any[]`, which was never
-   * passed, and the `qualityScore` / `queryResolutionRate` / `avgAuditHours` props, which had
-   * no backing field on the assayer record or anywhere in the API.
+   * The assayer's statement — the ONE source for every figure on this screen.
+   *
+   * There used to be fallbacks: a profile snapshot, and a total this app summed from whatever
+   * assignments happened to be loaded. Both could disagree with what finance will actually pay,
+   * and a wrong number about someone's own pay is worse than no number. When the statement
+   * cannot be read the screen says so and shows nothing.
    */
   statement?: AssayerStatement | null;
+  /** True when the last statement read failed. */
+  statementError?: boolean;
 }
 
 type Tone = 'neutral' | 'primary' | 'accent' | 'success' | 'warning' | 'danger' | 'info';
 
 /**
- * The five statuses a payable can actually hold, keyed off the shared enum so the app cannot
- * drift from the backend.
- *
- * The previous map invented fourteen: PENDING_BILLING, READY_FOR_BILLING, DRAFT, SUBMITTED,
- * UNDER_REVIEW, INVOICED, PARTIALLY_PAID, CANCELLED, ADJUSTED and REJECTED do not exist in
- * `AssayerPayableStatus`. Worse, the one status every seeded payable actually carries —
- * PENDING — was missing, so real rows fell through to a raw uppercase string with no tone.
+ * The three states a payout can hold, keyed off the shared enum so the app cannot drift from the
+ * backend: due for approval, approved, paid. A hold is a flag on top of any of them, not a
+ * fourth state — see the badge below.
  */
 const PAYABLE_STATE: Record<AssayerPayableStatus, { label: string; tone: Tone }> = {
   [AssayerPayableStatus.PENDING]: { label: 'Awaiting approval', tone: 'warning' },
   [AssayerPayableStatus.APPROVED]: { label: 'Approved', tone: 'info' },
   [AssayerPayableStatus.PAID]: { label: 'Paid', tone: 'success' },
-  [AssayerPayableStatus.ON_HOLD]: { label: 'On hold', tone: 'warning' },
-  [AssayerPayableStatus.DISPUTED]: { label: 'Disputed', tone: 'danger' },
 };
 
 /** A rejected claim read as "pending" before — the same neutral grey as awaiting approval. */
@@ -109,12 +104,9 @@ const MoneyChip: React.FC<{ icon: string; label: string; value: string; iconColo
  * check. Amounts come from the billing engine, so they match what finance sees.
  */
 export const EarningsScreen: React.FC<EarningsScreenProps> = ({
-  totalEarnings,
-  runningBalance,
-  earningsPaid,
-  earningsAwaitingApproval,
   assignments,
   statement,
+  statementError,
   onOpenExpenseModal,
   claims,
   claimSummary,
@@ -124,19 +116,19 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
   const expenses = claims?.length ? claims : assignments.flatMap((a) => a.expenses ?? []);
   const totalExpenses =
     claimSummary?.totalClaimed ?? expenses.reduce((s, e) => s + (e?.amount ?? 0), 0);
-  /**
-   * The billing engine's figures win when the statement has loaded.
-   *
-   * The profile fields kept as the fallback are a denormalised snapshot refreshed when the
-   * profile is read; the statement is computed from the payables themselves, so it is the one
-   * that agrees with what finance sees. Falling back rather than blanking keeps the screen
-   * useful when the statement request fails.
-   */
-  const owed = statement?.totals.outstanding ?? runningBalance ?? 0;
-  const paid = statement?.totals.paid ?? earningsPaid ?? 0;
-  const awaiting = statement?.totals.awaitingApproval ?? earningsAwaitingApproval ?? 0;
-  const lifetime = statement?.totals.earned ?? totalEarnings;
-  const onHold = statement?.totals.onHoldOrDisputed ?? 0;
+  // Every figure below comes from the statement. No fallbacks — see the prop's doc comment.
+  const t0 = statement?.totals;
+  const owed = t0?.outstanding ?? 0;
+  const paid = t0?.paid ?? 0;
+  const awaiting = t0?.awaitingApproval ?? 0;
+  const lifetime = t0?.earned ?? 0;
+  const onHold = t0?.onHoldOrDisputed ?? 0;
+  /** What each completed audit was actually booked at, by assignment. */
+  const bookedByAssignment = new Map<string, number>(
+    (statement?.payables ?? [])
+      .filter((p) => !p.expenseId && p.assignmentId)
+      .map((p) => [p.assignmentId as string, p.totalAmount]),
+  );
 
   const completed = assignments
     .filter((a) => a.status === 'COMPLETED')
@@ -162,26 +154,38 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
         </View>
 
         <AppText variant="overline" tone="faint">BALANCE OWED TO YOU</AppText>
-        <AppText variant="display" tone={owed > 0 ? 'accent' : 'muted'}>{money(owed)}</AppText>
-        <AppText variant="caption" tone="muted">
-          {owed > 0
-            ? 'Owed to you across all completed work, after payments and TDS.'
-            : 'You are fully settled — nothing outstanding right now.'}
-        </AppText>
+        {statement ? (
+          <>
+            <AppText variant="display" tone={owed > 0 ? 'accent' : 'muted'}>{money(owed)}</AppText>
+            <AppText variant="caption" tone="muted">
+              {owed > 0
+                ? 'Owed to you across all completed work, after payments and TDS.'
+                : 'You are fully settled — nothing outstanding right now.'}
+            </AppText>
 
-        <Divider spacing={2} />
+            <Divider spacing={2} />
 
-        {/* Paid vs pending at a glance, in the app's chip pattern. */}
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.sm }}>
-          <MoneyChip icon="trending-up" label="Earned" value={money(lifetime)} />
-          {/* Outline, matching the "Pending"/"On hold" chips beside it — a filled glyph here was
-              the odd one out in a row where every other chip is outline weight. */}
-          <MoneyChip icon="checkmark-circle-outline" label="Paid" value={money(paid)} iconColor={t.colors.success} />
-          <MoneyChip icon="hourglass-outline" label="Pending" value={money(awaiting)} iconColor={t.colors.warning} />
-          {onHold > 0 && (
-            <MoneyChip icon="pause-circle-outline" label="On hold" value={money(onHold)} iconColor={t.colors.danger} />
-          )}
-        </View>
+            {/* Paid vs pending at a glance, in the app's chip pattern. */}
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.sm }}>
+              <MoneyChip icon="trending-up" label="Earned" value={money(lifetime)} />
+              <MoneyChip icon="checkmark-circle-outline" label="Paid" value={money(paid)} iconColor={t.colors.success} />
+              <MoneyChip icon="hourglass-outline" label="Pending" value={money(awaiting)} iconColor={t.colors.warning} />
+              {onHold > 0 && (
+                <MoneyChip icon="pause-circle-outline" label="On hold" value={money(onHold)} iconColor={t.colors.danger} />
+              )}
+            </View>
+          </>
+        ) : (
+          /* No number at all rather than a guess. See the `statement` prop's doc comment. */
+          <>
+            <AppText variant="display" tone="muted">—</AppText>
+            <AppText variant="caption" tone={statementError ? 'danger' : 'muted'}>
+              {statementError
+                ? "Couldn't load your statement. Pull down to try again — your money is safe, this screen just can't read it right now."
+                : 'Loading your statement…'}
+            </AppText>
+          </>
+        )}
       </Card>
 
       <StatStrip>
@@ -210,17 +214,18 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
       )}
 
       {statement && (
-        <CollapsibleSection title="Payables" defaultOpen>
+        <CollapsibleSection title="Payouts" defaultOpen>
           {payables.length === 0 ? (
             <EmptyState
               icon="document-text-outline"
               title="Nothing raised yet"
-              body="A payable is raised for each validated audit — none are on your statement yet."
+              body="A payout is raised the moment an audit completes — none are on your statement yet."
             />
           ) : (
             payables.slice(0, 8).map((p, i) => {
-              const state = PAYABLE_STATE[p.status as AssayerPayableStatus]
-                ?? { label: String(p.status), tone: 'neutral' as Tone };
+              const state = p.onHold
+                ? { label: 'On hold', tone: 'danger' as Tone }
+                : PAYABLE_STATE[p.status as AssayerPayableStatus] ?? { label: String(p.status), tone: 'neutral' as Tone };
               return (
                 <FadeIn key={p.id} delay={Math.min(i, 6) * 40}>
                   <Card level={1} style={{ gap: t.space.sm }}>
@@ -234,8 +239,11 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
                       <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
                         <AppText variant="h3">{money(p.totalAmount)}</AppText>
                         <AppText variant="caption" tone="faint" numberOfLines={1}>
-                          {p.payableNumber} · {pastDay(p.createdAt)}
+                          {p.expenseId ? 'Expense reimbursement' : p.payableNumber} · {pastDay(p.createdAt)}
                         </AppText>
+                        {p.onHold && p.holdReason ? (
+                          <AppText variant="caption" tone="muted" numberOfLines={2}>{p.holdReason}</AppText>
+                        ) : null}
                       </View>
                       <View style={{ alignItems: 'flex-end', gap: 4 }}>
                         <Badge label={state.label} tone={state.tone} dot />
@@ -325,18 +333,19 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
           <EmptyState
             icon="wallet-outline"
             title="No earnings yet"
-            body="Fees appear here once you complete your first audit and the desk validates it."
+            body="Your fee appears here the moment you complete your first audit."
           />
         ) : (
           completed.slice(0, 15).map((a, i) => (
             <FadeIn key={a.id} delay={Math.min(i, 6) * 40}>
               <Card level={1} style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
                 <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
-                  {/* An assignment with no fee on it is unpriced, not free — say so rather
-                      than rendering a zero or fabricated amount against someone's pay. */}
-                  {hasResolvedFee(a)
-                    ? <AppText variant="bodyStrong">{money(getAssignmentTotalFee(a))}</AppText>
-                    : <AppText variant="small" tone="muted">Fee not set</AppText>}
+                  {/* What the payout was actually booked at — not a figure worked out here.
+                      An audit with no payout yet says so rather than showing an offer amount
+                      that may not be what is paid. */}
+                  {bookedByAssignment.has(a.id)
+                    ? <AppText variant="bodyStrong">{money(bookedByAssignment.get(a.id) as number)}</AppText>
+                    : <AppText variant="small" tone="muted">Not booked yet</AppText>}
                   <AppText variant="caption" tone="faint" numberOfLines={1}>
                     {a.branchName} · {a.scheduledDate ? pastDay(a.scheduledDate) : '—'}
                   </AppText>

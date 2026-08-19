@@ -16,6 +16,7 @@ import { formatRupees as money, INDIAN_STATES, canonicalStateName } from '@fapom
 import { MapPicker, isPlausibleIndianCoord, INDIA_CENTRE } from '../components/ui/MapPicker';
 import { getPreference, setPreference as setDevicePreference } from '../services/preferences';
 import { MobileApiService, NotificationPreference, getApiBaseUrl } from '../services/api.service';
+import type { AssayerStatement } from '../types/mobile-app';
 import { probeServerUrl } from '../services/server-config';
 import { registerForPushNotificationsAsync, unregisterPushNotificationsAsync } from '../services/notification.service';
 import { StatsScreen } from './StatsScreen';
@@ -61,10 +62,6 @@ export interface ProfileDataState {
   totalAssignments: number;
   completedAssignments: number;
   onTimeCompletions: number;
-  totalEarnings: number | string;
-  runningBalance: number | string;
-  earningsPaid: number | string;
-  earningsAwaitingApproval: number | string;
   assayerCode: string;
 }
 
@@ -75,6 +72,8 @@ interface ProfileScreenProps {
   assayerName?: string;
   assayerCode?: string;
   profile: ProfileDataState;
+  /** The assayer's statement — the one source for what they are owed. Null while it loads. */
+  statement?: AssayerStatement | null;
   savingProfile: boolean;
   /** Whether `profile` actually differs from the server's last confirmed copy. */
   profileDirty: boolean;
@@ -685,6 +684,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   assayerName = '',
   assayerCode = '',
   profile,
+  statement,
   savingProfile,
   profileDirty,
   onUpdateProfileField,
@@ -895,7 +895,9 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.md }}>
         <StatTile label="Completed" value={profile.completedAssignments ?? 0} icon="checkmark-done" tone="success" />
         <StatTile label="Assigned" value={profile.totalAssignments ?? 0} icon="clipboard-outline" />
-        <StatTile label="Balance" value={money(profile.runningBalance)} icon="wallet-outline" tone="accent" />
+        {/* What you are owed has one source — the statement — so this tile shows what the
+            statement says, or an em dash when it could not be read. Never a second figure. */}
+        <StatTile label="Balance" value={statement ? money(statement.totals.outstanding) : '—'} icon="wallet-outline" tone="accent" />
         {Number(profile.averageRating) > 0 && (
           <StatTile label="Rating" value={Number(profile.averageRating).toFixed(1)} icon="star" tone="warning" hint="out of 5" />
         )}

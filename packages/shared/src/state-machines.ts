@@ -1,9 +1,7 @@
 import {
   BillingState,
-  ClientBillingStatus,
   ClientLifecycleStatus,
   InvoiceStatus,
-  PaymentState,
   AssayerPayableStatus,
   ProjectStatus,
   ScheduleStatus,
@@ -115,13 +113,6 @@ export const VALIDATION_TRANSITIONS: TransitionMap<ValidationStatus> = {
   [ValidationStatus.APPROVED]: [ValidationStatus.SUBMITTED],
 };
 
-export const BILLING_TRANSITIONS: TransitionMap<ClientBillingStatus> = {
-  [ClientBillingStatus.DRAFT]: [ClientBillingStatus.ACTIVE, ClientBillingStatus.INACTIVE],
-  [ClientBillingStatus.ACTIVE]: [ClientBillingStatus.SUSPENDED, ClientBillingStatus.INACTIVE],
-  [ClientBillingStatus.SUSPENDED]: [ClientBillingStatus.ACTIVE, ClientBillingStatus.INACTIVE],
-  [ClientBillingStatus.INACTIVE]: [ClientBillingStatus.ACTIVE],
-};
-
 export function isValidTransition<T extends string>(
   transitions: TransitionMap<T>,
   currentState: T,
@@ -133,85 +124,27 @@ export function isValidTransition<T extends string>(
 }
 
 /**
- * Multi-level billing state machine (spec §6).
- *
- * Forward spine:
- *   NOT_BILLABLE → PENDING_BILLING → READY_FOR_BILLING → DRAFT → SUBMITTED
- *     → UNDER_REVIEW → (REJECTED ⇄ DRAFT) → APPROVED → INVOICED
- *     → PARTIALLY_PAID → PAID
- * Cross-cutting hold/dispute/cancel/adjust, each with an escape hatch.
+ * The client-side line. Invoicing moves UNBILLED → INVOICED; recording the last rupee moves
+ * INVOICED → PAID; cancelling the invoice moves INVOICED → UNBILLED (the work is still billable).
+ * CANCELLED is terminal — a line that will never be billed.
  */
 export const BILLING_STATE_TRANSITIONS: TransitionMap<BillingState> = {
-  [BillingState.NOT_BILLABLE]: [BillingState.PENDING_BILLING],
-  [BillingState.PENDING_BILLING]: [BillingState.READY_FOR_BILLING, BillingState.NOT_BILLABLE, BillingState.CANCELLED],
-  [BillingState.READY_FOR_BILLING]: [BillingState.DRAFT, BillingState.ON_HOLD, BillingState.CANCELLED],
-  [BillingState.DRAFT]: [
-    BillingState.SUBMITTED,
-    BillingState.READY_FOR_BILLING,
-    BillingState.ON_HOLD,
-    BillingState.CANCELLED,
-  ],
-  [BillingState.SUBMITTED]: [BillingState.UNDER_REVIEW, BillingState.DRAFT, BillingState.ON_HOLD, BillingState.CANCELLED],
-  [BillingState.UNDER_REVIEW]: [
-    BillingState.APPROVED,
-    BillingState.REJECTED,
-    BillingState.ON_HOLD,
-    BillingState.DISPUTED,
-  ],
-  [BillingState.REJECTED]: [BillingState.DRAFT, BillingState.CANCELLED],
-  [BillingState.APPROVED]: [
-    BillingState.INVOICED,
-    BillingState.ON_HOLD,
-    BillingState.DISPUTED,
-    BillingState.CANCELLED,
-    BillingState.ADJUSTED,
-  ],
-  [BillingState.INVOICED]: [
-    BillingState.PARTIALLY_PAID,
-    BillingState.PAID,
-    BillingState.ON_HOLD,
-    BillingState.DISPUTED,
-    BillingState.ADJUSTED,
-  ],
-  [BillingState.PARTIALLY_PAID]: [BillingState.PAID, BillingState.DISPUTED, BillingState.ON_HOLD, BillingState.ADJUSTED],
-  [BillingState.PAID]: [BillingState.ADJUSTED, BillingState.DISPUTED],
-  [BillingState.ON_HOLD]: [
-    BillingState.READY_FOR_BILLING,
-    BillingState.DRAFT,
-    BillingState.UNDER_REVIEW,
-    BillingState.CANCELLED,
-  ],
-  [BillingState.DISPUTED]: [BillingState.UNDER_REVIEW, BillingState.APPROVED, BillingState.ON_HOLD, BillingState.CANCELLED],
+  [BillingState.UNBILLED]: [BillingState.INVOICED, BillingState.CANCELLED],
+  [BillingState.INVOICED]: [BillingState.PAID, BillingState.UNBILLED],
+  [BillingState.PAID]: [],
   [BillingState.CANCELLED]: [],
-  [BillingState.ADJUSTED]: [BillingState.APPROVED, BillingState.ON_HOLD],
 };
 
 export const INVOICE_TRANSITIONS: TransitionMap<InvoiceStatus> = {
-  [InvoiceStatus.DRAFT]: [InvoiceStatus.ISSUED, InvoiceStatus.CANCELLED, InvoiceStatus.VOID],
-  [InvoiceStatus.ISSUED]: [
-    InvoiceStatus.PARTIALLY_PAID,
-    InvoiceStatus.PAID,
-    InvoiceStatus.DISPUTED,
-    InvoiceStatus.CANCELLED,
-  ],
-  [InvoiceStatus.PARTIALLY_PAID]: [InvoiceStatus.PAID, InvoiceStatus.DISPUTED, InvoiceStatus.CANCELLED],
-  [InvoiceStatus.PAID]: [InvoiceStatus.DISPUTED],
-  [InvoiceStatus.DISPUTED]: [InvoiceStatus.ISSUED, InvoiceStatus.CANCELLED],
+  [InvoiceStatus.DRAFT]: [InvoiceStatus.ISSUED, InvoiceStatus.CANCELLED],
+  [InvoiceStatus.ISSUED]: [InvoiceStatus.PAID, InvoiceStatus.CANCELLED],
+  [InvoiceStatus.PAID]: [],
   [InvoiceStatus.CANCELLED]: [],
-  [InvoiceStatus.VOID]: [],
 };
 
-export const PAYMENT_STATE_TRANSITIONS: TransitionMap<PaymentState> = {
-  [PaymentState.UNPAID]: [PaymentState.PARTIALLY_PAID, PaymentState.PAID],
-  [PaymentState.PARTIALLY_PAID]: [PaymentState.PAID, PaymentState.UNPAID],
-  [PaymentState.PAID]: [PaymentState.PARTIALLY_PAID],
-  [PaymentState.REVERSED]: [PaymentState.UNPAID],
-};
-
+/** One approval, then payment. PAID is only ever reached by recording a disbursement. */
 export const PAYABLE_TRANSITIONS: TransitionMap<AssayerPayableStatus> = {
-  [AssayerPayableStatus.PENDING]: [AssayerPayableStatus.APPROVED, AssayerPayableStatus.ON_HOLD, AssayerPayableStatus.DISPUTED],
-  [AssayerPayableStatus.APPROVED]: [AssayerPayableStatus.PAID, AssayerPayableStatus.ON_HOLD, AssayerPayableStatus.DISPUTED],
-  [AssayerPayableStatus.PAID]: [AssayerPayableStatus.DISPUTED],
-  [AssayerPayableStatus.DISPUTED]: [AssayerPayableStatus.PENDING, AssayerPayableStatus.APPROVED, AssayerPayableStatus.ON_HOLD],
-  [AssayerPayableStatus.ON_HOLD]: [AssayerPayableStatus.PENDING, AssayerPayableStatus.APPROVED, AssayerPayableStatus.DISPUTED],
+  [AssayerPayableStatus.PENDING]: [AssayerPayableStatus.APPROVED],
+  [AssayerPayableStatus.APPROVED]: [AssayerPayableStatus.PAID],
+  [AssayerPayableStatus.PAID]: [],
 };

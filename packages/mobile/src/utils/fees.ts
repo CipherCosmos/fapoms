@@ -1,55 +1,39 @@
 /**
- * Single source of truth for resolving an assignment's payable audit fee.
+ * What an assignment is worth, for display on this phone.
  *
- * Previously App.tsx and EarningsScreen.tsx each implemented their own formula
- * (one precedence-based, one `Math.max`-based), which meant a legitimately
- * negotiated-down agreed fee could be inflated back up to the standard rate in
- * one place while the other place respected the negotiated amount — showing
- * two different totals for the same assignment. Both screens must import
- * from here so there is exactly one formula in the app.
+ * One precedence, and it is the backend's — `assignmentFee` in
+ * `billing-engine/assignment-money.ts`: the agreed fee always wins, including when it was
+ * negotiated DOWN, because that is what both sides settled on; the proposed fee stands in only
+ * while none has been agreed, so an offer awaiting a reply still shows the amount on the table.
+ *
+ * There is deliberately no third fallback. This used to fall through to the assayer's standard
+ * profile rate (and before that to a hardcoded ₹1200), which showed a field worker a figure they
+ * would not actually be paid — the booked payout comes from the agreed or proposed fee and
+ * nothing else. An assignment with neither resolves to null and the screens render "not set".
+ *
+ * This is the OFFER figure. Never sum it into an earnings total: what has been earned, paid and
+ * is still owed comes from the assayer's statement (`/billing-engine/assayers/:id/statement`),
+ * which is the same set of rows finance works from.
  */
 
 export interface FeeBearingAssignment {
   agreedBaseFee?: number | null;
   proposedFee?: number | null;
-  standardBaseFee?: number | null;
-  agreedTravelFee?: number | null;
 }
 
-/**
- * No client-side default fee.
- *
- * This used to fall back to a hardcoded ₹1200 when an assignment carried no fee of any kind.
- * That was a seventh independent copy of a base-fee figure that the backend now resolves from
- * the client's contracted rate card and the assayer's own commercial profile — so the number
- * invented here could differ from what the worker is actually owed. Showing a field worker a
- * fabricated figure for their own pay is worse than showing them nothing, so an unpriced
- * assignment now resolves to 0 and the screens render it as "not set".
- *
- * In practice the server always sends `currentStandardBaseFee` (and a real proposed/agreed
- * fee), so this path is defensive rather than routine.
- */
-
-/**
- * Resolves the base audit fee (excluding travel) for an assignment.
- * Precedence: an agreed/finalized fee always wins — even if it was negotiated
- * DOWN below the standard rate — otherwise a proposed (not yet agreed) fee,
- * and only falling back to the standard/default base rate when neither has
- * been set.
- */
-export function getAssignmentBaseFee(a: FeeBearingAssignment): number {
+/** The fee to show, or null when the assignment carries none. */
+export function assignmentFee(a: FeeBearingAssignment): number | null {
   if (a.agreedBaseFee && a.agreedBaseFee > 0) return a.agreedBaseFee;
   if (a.proposedFee && a.proposedFee > 0) return a.proposedFee;
-  return a.standardBaseFee && a.standardBaseFee > 0 ? a.standardBaseFee : 0;
+  return null;
 }
 
-/** True when nothing on the assignment states a fee — render "not set", never a guess. */
+/** True when the assignment states a fee — render "not set", never a guess. */
 export function hasResolvedFee(a: FeeBearingAssignment): boolean {
-  return getAssignmentTotalFee(a) > 0;
+  return assignmentFee(a) !== null;
 }
 
-/** Base fee (see {@link getAssignmentBaseFee}) plus any agreed travel allowance. */
-export function getAssignmentTotalFee(a: FeeBearingAssignment): number {
-  const travel = a.agreedTravelFee || 0;
-  return getAssignmentBaseFee(a) + travel;
+/** The fee as a number, zero when unpriced — for summing offer cards on one screen. */
+export function assignmentFeeValue(a: FeeBearingAssignment): number {
+  return assignmentFee(a) ?? 0;
 }

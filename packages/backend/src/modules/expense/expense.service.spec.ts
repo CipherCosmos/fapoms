@@ -10,6 +10,7 @@ import { AuditService } from '../../core/audit/audit.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { BillingEngineService } from '../billing-engine/billing-engine.service';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
+import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 
 const OWNER = 'assayer-owner';
 const INTRUDER = 'assayer-intruder';
@@ -20,6 +21,9 @@ describe('ExpenseService', () => {
   let assignmentRepo: any;
   let dispatch: any;
   let billing: any;
+  /** The transaction's manager: `save` lands on the expense repo so the tests can see the row. */
+  let txManager: any;
+  let uow: any;
 
   const assignment = (status: AssignmentStatus = AssignmentStatus.CHECKED_IN) => ({
     id: 'asn-1',
@@ -38,7 +42,11 @@ describe('ExpenseService', () => {
     };
     assignmentRepo = { findOne: jest.fn().mockResolvedValue(assignment()) };
     dispatch = { emitSafe: jest.fn(), emit: jest.fn() };
-    billing = { createPayable: jest.fn().mockResolvedValue({ id: 'pay-1' }) };
+    billing = { createReimbursementPayable: jest.fn().mockResolvedValue({ id: 'pay-1' }) };
+    txManager = { save: jest.fn((v: any) => expenseRepo.save(v)) };
+    // A UnitOfWork double that models ROLLBACK: the callback's writes reach the repository only
+    // if the callback resolves. A throw propagates and nothing is "committed".
+    uow = { run: jest.fn(async (work: any) => work(txManager, jest.fn())) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -60,6 +68,7 @@ describe('ExpenseService', () => {
         { provide: AuditService, useValue: { recordEvent: jest.fn().mockResolvedValue(undefined) , recordEventSafe: jest.fn(function (this: any, dto: any) { return this.recordEvent(dto); })} },
         { provide: NotificationDispatchService, useValue: dispatch },
         { provide: BillingEngineService, useValue: billing },
+        { provide: UnitOfWork, useValue: uow },
       ],
     }).compile();
 
@@ -167,71 +176,42 @@ describe('ExpenseService', () => {
       expenseRepo.save.mockImplementation((v: any) => Promise.resolve(v));
     });
 
-    it('raises a payable when a claim is approved', async () => {
+    it('raises a payable when a claim is approved, on the same transaction as the approval', async () => {
       // Before this, APPROVED was the end of the road: nothing owed the assayer the money and
       // there was no state that said it was still coming.
       await service.review('exp-1', true, 'reviewer-1');
-      expect(billing.createPayable).toHaveBeenCalledWith(
-        expect.objectContaining({ assayerId: OWNER, baseAmount: 240, assignmentId: 'asn-1' }),
+      expect(uow.run).toHaveBeenCalledTimes(1);
+      expect(billing.createReimbursementPayable).toHaveBeenCalledWith(
+        expect.objectContaining({ assayerId: OWNER, amount: 240, assignmentId: 'asn-1' }),
+        txManager,
         'reviewer-1',
       );
+      // The approval itself is saved through the transaction's manager, not the repository.
+      expect(txManager.save).toHaveBeenCalledWith(expect.objectContaining({ status: ExpenseStatus.APPROVED }));
     });
 
     it('links the claim to the payable that will pay it', async () => {
       await service.review('exp-1', true, 'reviewer-1');
-      expect(expenseRepo.save).toHaveBeenLastCalledWith(
+      expect(txManager.save).toHaveBeenLastCalledWith(
         expect.objectContaining({ reimbursementPayableId: 'pay-1' }),
       );
     });
 
-    it('withholds no tds, because a reimbursement is not income', async () => {
-      // The assayer is getting their own money back. Withholding would deduct tax on a sum
-      // they were never paid.
-      await service.review('exp-1', true, 'reviewer-1');
-      expect(billing.createPayable).toHaveBeenCalledWith(
-        expect.objectContaining({ tdsRate: 0, taxRate: 0 }),
-        expect.anything(),
-      );
-    });
-
-    it('books nothing as travel, so a travel claim is not paid twice', async () => {
-      // The transport rate card already puts a travel allowance in the assignment fee. Booking
-      // a toll claim as travel as well would reimburse the same journey through two channels.
-      await service.review('exp-1', true, 'reviewer-1');
-      expect(billing.createPayable).toHaveBeenCalledWith(
-        expect.objectContaining({ travelAmount: 0 }),
-        expect.anything(),
-      );
-    });
-
-    it('raises nothing when a claim is rejected', async () => {
+    it('raises nothing when a claim is rejected, and opens no transaction', async () => {
       await service.review('exp-1', false, 'reviewer-1', 'Duplicate of ASN-001');
-      expect(billing.createPayable).not.toHaveBeenCalled();
+      expect(billing.createReimbursementPayable).not.toHaveBeenCalled();
+      expect(uow.run).not.toHaveBeenCalled();
     });
 
-    it('keeps the approval when the payable cannot be raised, and leaves it retryable', async () => {
-      // Rolling the approval back would leave the assayer told nothing at all. The claim stays
-      // approved with a null payable id — which is exactly what the unpaid-approvals queue looks
-      // for — rather than the decision silently disappearing.
-      billing.createPayable.mockRejectedValueOnce(new Error('db down'));
-      const result = await service.review('exp-1', true, 'reviewer-1');
-      expect(result.status).toBe(ExpenseStatus.APPROVED);
-      expect(result.reimbursementPayableId).toBeNull();
-    });
-
-    it('does not raise a second payable for a claim that already has one', async () => {
-      // The double-payment guard. A retry sweep must be safe to run as often as anyone likes.
-      expenseRepo.find.mockResolvedValueOnce([approved({ status: ExpenseStatus.APPROVED, reimbursementPayableId: 'pay-existing' })]);
-      const result = await service.retryUnpaidApprovals('reviewer-1');
-      expect(billing.createPayable).not.toHaveBeenCalled();
-      expect(result).toEqual({ attempted: 1, raised: 1 });
-    });
-
-    it('raises the missing payables when the queue is retried', async () => {
-      expenseRepo.find.mockResolvedValueOnce([approved({ status: ExpenseStatus.APPROVED })]);
-      const result = await service.retryUnpaidApprovals('reviewer-1');
-      expect(billing.createPayable).toHaveBeenCalledTimes(1);
-      expect(result).toEqual({ attempted: 1, raised: 1 });
+    it('rolls the approval back when the payable cannot be raised', async () => {
+      // The approval and the money are one act. An approved claim with no payable behind it is
+      // the state that used to need an "unpaid approvals" queue, a retry button, and opened a
+      // double-payment window on the retry. Now the reviewer sees the failure and the claim
+      // stays PENDING.
+      billing.createReimbursementPayable.mockRejectedValueOnce(new Error('db down'));
+      await expect(service.review('exp-1', true, 'reviewer-1')).rejects.toThrow('db down');
+      expect(expenseRepo.save).not.toHaveBeenCalled();
+      expect(dispatch.emitSafe).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'EXPENSE_APPROVED' }));
     });
   });
 });

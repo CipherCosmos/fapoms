@@ -12,12 +12,11 @@ import { ClientConfigurationEntity } from './client-configuration.entity';
 import { ClientContactEntity } from './client-contact.entity';
 import { ClientContractEntity } from './client-contract.entity';
 import { ClientBillingEntity } from './client-billing.entity';
-import { ClientBillingHistoryEntity } from './client-billing-history.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
-import { EventCategory, ClientLifecycleStatus, ClientBillingStatus, ClientBillingEventType, CLIENT_LIFECYCLE_TRANSITIONS, toWorkflowTransitions } from '@fapoms/shared';
+import { EventCategory, ClientLifecycleStatus, CLIENT_LIFECYCLE_TRANSITIONS, toWorkflowTransitions } from '@fapoms/shared';
 
 export interface CreateClientDto {
   clientCode: string;
@@ -172,13 +171,6 @@ function findLifecyclePathTo(from: string, target: string): string[] | null {
   return null;
 }
 
-const VALID_BILLING_TRANSITIONS: Record<string, string[]> = {
-  [ClientBillingStatus.DRAFT]: [ClientBillingStatus.ACTIVE, ClientBillingStatus.INACTIVE],
-  [ClientBillingStatus.ACTIVE]: [ClientBillingStatus.SUSPENDED, ClientBillingStatus.INACTIVE],
-  [ClientBillingStatus.SUSPENDED]: [ClientBillingStatus.ACTIVE, ClientBillingStatus.INACTIVE],
-  [ClientBillingStatus.INACTIVE]: [ClientBillingStatus.ACTIVE],
-};
-
 @Injectable()
 export class ClientService implements OnModuleInit {
   constructor(
@@ -192,8 +184,6 @@ export class ClientService implements OnModuleInit {
     private readonly contractRepository: Repository<ClientContractEntity>,
     @InjectRepository(ClientBillingEntity)
     private readonly billingRepository: Repository<ClientBillingEntity>,
-    @InjectRepository(ClientBillingHistoryEntity)
-    private readonly billingHistoryRepository: Repository<ClientBillingHistoryEntity>,
     private readonly auditService: AuditService,
     private readonly eventPublisher: DomainEventPublisher,
     private readonly cache: CacheService,
@@ -858,16 +848,12 @@ export class ClientService implements OnModuleInit {
     return String(value);
   }
 
-  private async recordBillingHistory(
-    clientId: string,
-    userId: string,
-    entry: Partial<ClientBillingHistoryEntity>,
-  ): Promise<ClientBillingHistoryEntity> {
-    return this.billingHistoryRepository.save(
-      this.billingHistoryRepository.create({ clientId, createdBy: userId, updatedBy: userId, ...entry }),
-    );
-  }
-
+  /**
+   * Create or update the client's billing profile: terms, tax identity, bank details, and the
+   * GST/TDS rates every client line is priced at. There is no billing "status" and no separate
+   * history — the profile is either there or not, and every edit is an audit event with the
+   * fields that changed.
+   */
   async upsertBilling(clientId: string, dto: UpdateBillingDto, userId: string): Promise<ClientBillingEntity> {
     await this.findOne(clientId);
 
@@ -877,7 +863,6 @@ export class ClientService implements OnModuleInit {
     if (!billing) {
       billing = this.billingRepository.create({
         clientId,
-        status: ClientBillingStatus.DRAFT,
         paymentTerms: dto.paymentTerms ?? 'NET30',
         currency: dto.currency ?? 'INR',
         taxIdentifier: dto.taxIdentifier ?? null,
@@ -908,110 +893,18 @@ export class ClientService implements OnModuleInit {
 
     const saved = await this.billingRepository.save(billing);
 
-    // Record profile edits on the timeline.
-    if (changes.length > 0) {
-      for (const change of changes) {
-        await this.recordBillingHistory(clientId, userId, {
-          eventType: ClientBillingEventType.PROFILE_UPDATE,
-          field: change.field,
-          remarks: `${change.label} updated`,
-          fromValue: change.fromValue,
-          toValue: change.toValue,
-        });
-      }
-    }
-
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
       eventType: 'CLIENT_BILLING_UPDATED',
       entityType: 'CLIENT',
       entityId: clientId,
       userId,
-      remarks: `Updated billing for client ${clientId}`,
+      remarks: changes.length
+        ? `Updated billing: ${changes.map((c) => c.label).join(', ')}`
+        : `Created billing profile for client ${clientId}`,
+      metadata: changes.length ? { changes } : undefined,
     });
 
     return saved;
-  }
-
-  async transitionBillingStatus(
-    clientId: string,
-    targetStatus: ClientBillingStatus,
-    userId: string,
-    remarks?: string,
-  ): Promise<ClientBillingEntity> {
-    await this.findOne(clientId);
-
-    const billing = await this.billingRepository.findOne({ where: { clientId } });
-    if (!billing) {
-      throw new NotFoundException('Billing profile not found for this client.');
-    }
-
-    const allowed = VALID_BILLING_TRANSITIONS[billing.status] ?? [];
-    if (billing.status === targetStatus) {
-      throw new ConflictException(`Billing is already ${targetStatus}.`);
-    }
-    if (!allowed.includes(targetStatus)) {
-      throw new BadRequestException(
-        `Cannot transition billing from ${billing.status} to ${targetStatus}. Allowed: ${allowed.join(', ') || 'none'}.`,
-      );
-    }
-
-    const fromStatus = billing.status;
-    billing.status = targetStatus;
-    billing.updatedBy = userId;
-    const saved = await this.billingRepository.save(billing);
-
-    await this.recordBillingHistory(clientId, userId, {
-      eventType: ClientBillingEventType.STATUS_CHANGE,
-      fromStatus,
-      toStatus: targetStatus,
-      remarks: remarks ?? null,
-    });
-
-    await this.auditService.recordEvent({
-      category: EventCategory.OPERATIONAL,
-      eventType: 'CLIENT_BILLING_STATUS_CHANGED',
-      entityType: 'CLIENT',
-      entityId: clientId,
-      userId,
-      remarks: `Billing status ${fromStatus} -> ${targetStatus}`,
-    });
-
-    return saved;
-  }
-
-  async addBillingRemark(clientId: string, remarks: string, userId: string): Promise<ClientBillingHistoryEntity> {
-    await this.findOne(clientId);
-    const billing = await this.billingRepository.findOne({ where: { clientId } });
-    if (!billing) {
-      throw new NotFoundException('Billing profile not found for this client.');
-    }
-    const entry = await this.recordBillingHistory(clientId, userId, {
-      eventType: ClientBillingEventType.REMARK,
-      remarks,
-    });
-
-    // Billing status changes reach audit_events; a remark against the same billing profile did
-    // not, so a note explaining why an invoice was held existed only in the billing history and
-    // was invisible to the client's unified trail.
-    await this.auditService.recordEventSafe({
-      category: EventCategory.OPERATIONAL,
-      eventType: 'CLIENT_BILLING_REMARK_ADDED',
-      entityType: 'CLIENT',
-      entityId: clientId,
-      userId,
-      remarks,
-      metadata: { billingHistoryId: entry.id },
-    });
-
-    return entry;
-  }
-
-  async findBillingHistory(clientId: string): Promise<ClientBillingHistoryEntity[]> {
-    await this.findOne(clientId);
-    return this.billingHistoryRepository.find({
-      where: { clientId },
-      order: { createdAt: 'DESC' },
-    });
   }
 }

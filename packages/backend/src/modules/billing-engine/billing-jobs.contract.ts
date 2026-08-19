@@ -19,23 +19,26 @@ export const BILLING_QUEUE = 'billing-jobs';
  * `@Process({ name: BILLING_JOB.X })`.
  */
 export const BILLING_JOB = {
-  SYNC_ASSIGNMENTS: 'sync-assignments',
+  RECONCILE: 'reconcile',
 } as const;
 
 export type BillingJobName = (typeof BILLING_JOB)[keyof typeof BILLING_JOB];
 
 /**
- * The backfill carries no parameters — it scans the whole book by design.
+ * The reconcile's one parameter: only assignments completed on or after `since` (YYYY-MM-DD),
+ * or the whole book when null.
  *
- * `requestedBy` is not decoration: every entry and payable this job creates is attributed to
- * that user id in `created_by` and in the billing history, so the person who pressed the button
- * is on the record for what it wrote. It is also what `assertJobVisibleTo` matches on, so one
- * operator cannot poll another's run.
+ * `requestedBy` is not decoration: every payable and client line this job creates is attributed
+ * to that user id in `created_by` and in the billing history, so the person who pressed the
+ * button is on the record for what it wrote. It is also what `assertJobVisibleTo` matches on, so
+ * one operator cannot poll another's run.
  */
-export interface SyncAssignmentsJobData extends QueuedJobEnvelope {}
+export interface ReconcileJobData extends QueuedJobEnvelope {
+  since: string | null;
+}
 
 /**
- * How long a completed sync is kept.
+ * How long a completed reconcile is kept.
  *
  * Unlike the planning queue, the result here is a small summary — counts plus a bounded error
  * list — not the deliverable itself, so the sizing constraint is "long enough for an operator to
@@ -48,9 +51,9 @@ export const BILLING_COMPLETED_RETENTION: KeepJobsOptions = { age: 60 * 60, coun
  * Options every billing job is enqueued with.
  *
  * **`attempts: 1`, and here it matters more than it does for planning.** The planning jobs are
- * read-only, so a retry would merely be useless; this job WRITES — it raises receivables and
- * assayer payables. A half-finished run that is retried from the beginning would re-walk
- * assignments it has already billed. The database refuses the duplicates outright (see
+ * read-only, so a retry would merely be useless; this job WRITES — it books payouts and client
+ * lines. A half-finished run that is retried from the beginning would re-walk assignments it has
+ * already booked. The database refuses the duplicates outright (see
  * `UQ_billing_entries_root_per_assignment` and `UQ_assayer_payables_fee_per_assignment`), so
  * money cannot actually be double-booked — but a retry would still spend the whole scan
  * collecting constraint violations into the error list, and report a failure that looks like a

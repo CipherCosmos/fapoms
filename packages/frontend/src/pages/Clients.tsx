@@ -103,12 +103,17 @@ const Clients: React.FC = () => {
 
   // Open the client the user picked from global search (/clients?id=…), mirroring the other list
   // pages, then drop the param so a later manual close does not silently reopen it.
+  // `?client=…&tab=billing` is the link the Billing overview uses to reach a client's rate card.
   useEffect(() => {
-    const id = searchParams.get('id');
+    const id = searchParams.get('id') ?? searchParams.get('client');
     if (!id) return;
     setSelectedId(id);
+    const wanted = searchParams.get('tab');
+    if (wanted === 'contacts' || wanted === 'contracts' || wanted === 'billing' || wanted === 'config') setTab(wanted);
     const next = new URLSearchParams(searchParams);
     next.delete('id');
+    next.delete('client');
+    next.delete('tab');
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
 

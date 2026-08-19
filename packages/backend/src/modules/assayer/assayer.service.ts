@@ -1356,8 +1356,6 @@ export class AssayerService implements OnModuleInit {
       completedResult,
       cancelled,
       onTimeResult,
-      finRes,
-      totalEarnedFromAssignments,
       lastAssignment,
     ] = await Promise.all([
       mgr.count('assignments', { where: { assayerId, isActive: true } }),
@@ -1379,34 +1377,6 @@ export class AssayerService implements OnModuleInit {
          AND (a.completion_date IS NULL OR a.scheduled_date IS NULL OR a.completion_date <= a.scheduled_date)`,
         [assayerId],
       ),
-      // Earnings come from the billing engine's payables — the record finance
-      // actually pays against — rather than being re-derived from assignment fees.
-      mgr.query(
-        `SELECT 
-           COALESCE(SUM(total_amount), 0)                                     AS total_earned,
-           COALESCE(SUM(total_amount - paid_amount), 0)                      AS owed,
-           COALESCE(SUM(paid_amount), 0)                                      AS paid,
-           COALESCE(SUM(total_amount) FILTER (WHERE status = 'PENDING'), 0) AS awaiting_approval
-         FROM assayer_payables
-         WHERE assayer_id = $1 AND is_active = true
-           AND status NOT IN ('DISPUTED', 'ON_HOLD')`,
-        [assayerId],
-      ).catch(() => [{ total_earned: 0, owed: 0, paid: 0, awaiting_approval: 0 }]),
-      // The fallback for an assayer with no payables raised yet. Computed unconditionally so it
-      // can share the round-trip; which of the two is used is decided below, as before.
-      //
-      // The COALESCE below is the SQL spelling of `assignmentFee(a, 'COST')` in
-      // billing-engine/billing-money.ts — this is money owed to the assayer, so it reads the
-      // proposed fee when none was agreed, exactly as the payable does. If that precedence ever
-      // changes, it has to change in both places or an assayer's earnings figure will stop
-      // matching the payables that eventually replace it.
-      mgr.query(
-        `SELECT COALESCE(SUM(COALESCE(a.agreed_fee, a.proposed_fee)), 0) AS total
-           FROM assignments a
-          WHERE a.assayer_id = $1 AND a.is_active = true
-            AND a.status IN ('ACCEPTED', 'COMPLETED')`,
-        [assayerId],
-      ).then((r: any) => Number(r[0]?.total ?? 0)).catch(() => 0),
       mgr.query(
         `SELECT updated_at FROM assignments a
          WHERE a.assayer_id = $1 AND a.is_active = true
@@ -1416,15 +1386,15 @@ export class AssayerService implements OnModuleInit {
     ]);
 
     const completed = Number(completedResult[0]?.cnt ?? 0);
-    const totalEarnedFromPayables = Number(finRes[0]?.total_earned ?? 0);
-    const realTotalEarnings = totalEarnedFromPayables > 0 ? totalEarnedFromPayables : totalEarnedFromAssignments;
 
+    // Earnings are deliberately NOT cached here. What an assayer is owed has exactly one answer —
+    // `BillingEngineService.assayerTotals` — and a counter that self-heals on read is still a
+    // second answer that can be wrong between reads.
     await this.assayerRepository.update(assayerId, {
       totalAssignments: total,
       completedAssignments: completed,
       cancelledAssignments: cancelled,
       onTimeCompletions: Number(onTimeResult[0]?.cnt ?? 0),
-      totalEarnings: realTotalEarnings,
       lastAssignmentDate: lastAssignment[0]?.updated_at ?? null,
     });
     await this.recomputeAverageRating(assayerId);
@@ -1474,28 +1444,6 @@ export class AssayerService implements OnModuleInit {
       [target.id],
     ).catch(() => [{ cnt: 0 }]);
     (target as any).queryCount = Number(queryRes[0]?.cnt ?? 0);
-
-    // Money still owed to this assayer, derived from real payables in the billing engine
-    const balanceRes = await mgr.query(
-      `SELECT COALESCE(SUM(total_amount), 0)                                     AS total_earned,
-              COALESCE(SUM(total_amount - paid_amount), 0)                      AS owed,
-              COALESCE(SUM(paid_amount), 0)                                      AS paid,
-              COALESCE(SUM(total_amount) FILTER (WHERE status = 'PENDING'), 0) AS awaiting_approval
-         FROM assayer_payables
-        WHERE assayer_id = $1 AND is_active = true
-          AND status NOT IN ('DISPUTED', 'ON_HOLD')`,
-      [target.id],
-    ).catch(() => [{ total_earned: 0, owed: 0, paid: 0, awaiting_approval: 0 }]);
-
-    const totalEarnedFromPayables = Number(balanceRes[0]?.total_earned ?? 0);
-    const totalEarnedFromAssignments = target.totalEarnings || 0;
-    const finalEarnings = totalEarnedFromPayables > 0 ? totalEarnedFromPayables : totalEarnedFromAssignments;
-    const finalBalance = totalEarnedFromPayables > 0 ? Number(balanceRes[0]?.owed ?? 0) : totalEarnedFromAssignments;
-
-    (target as any).totalEarnings = finalEarnings;
-    (target as any).runningBalance = finalBalance;
-    (target as any).earningsPaid = Number(balanceRes[0]?.paid ?? 0);
-    (target as any).earningsAwaitingApproval = Number(balanceRes[0]?.awaiting_approval ?? 0);
 
     // 2. Acceptance vs Rejection Rate Breakdown
     const totalOffered = await mgr.count('assignments', { where: { assayerId: target.id, isActive: true } });

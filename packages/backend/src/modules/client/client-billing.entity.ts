@@ -2,6 +2,15 @@ import { Entity, Column, OneToOne, JoinColumn } from 'typeorm';
 import { BaseEntity } from '../../core/entities/base.entity';
 import type { ClientEntity } from './client.entity';
 
+/**
+ * A client's billing profile: payment terms, tax identity and the GST/TDS rates every client
+ * line is priced at.
+ *
+ * There is deliberately no status. It was a four-state machine (DRAFT/ACTIVE/SUSPENDED/INACTIVE)
+ * with its own transition table and its own history table, and nothing in the billing engine ever
+ * read it — an invoice was never blocked by it. The profile is either set up or it is not, and
+ * every edit lands in `audit_events` like any other client change.
+ */
 @Entity('client_billing')
 export class ClientBillingEntity extends BaseEntity {
   @Column({ name: 'client_id', type: 'uuid', unique: true })
@@ -10,9 +19,6 @@ export class ClientBillingEntity extends BaseEntity {
   @OneToOne('ClientEntity', 'billing', { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'client_id' })
   client: ClientEntity;
-
-  @Column({ name: 'status', length: 20, default: 'DRAFT' })
-  status: string;
 
   @Column({ name: 'payment_terms', length: 200 })
   paymentTerms: string;

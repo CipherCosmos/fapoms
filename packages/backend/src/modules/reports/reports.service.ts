@@ -187,13 +187,13 @@ export class ReportsService {
 
   // ── Billing ──────────────────────────────────────────────────────────────
 
-  /** Billing entries and invoices, matching the finance screens. */
+  /** Client lines and invoices, matching the finance screens. */
   async billing(
     q: { clientId?: string; projectId?: string; assayerId?: string; state?: string },
     onProgress?: ProgressCallback,
   ): Promise<Buffer> {
-    await onProgress?.(0, EXPORT_PHASES, 'Loading billing entries and invoices');
-    const entries = await this.billingService.findEntriesEnriched({
+    await onProgress?.(0, EXPORT_PHASES, 'Loading client lines and invoices');
+    const entries = await this.billingService.listClientLines({
       clientId: q.clientId,
       projectId: q.projectId,
       assayerId: q.assayerId,
@@ -207,39 +207,34 @@ export class ReportsService {
 
     const entryRows = entries.map((e: any) => [
       e.entryNumber,
-      e.level,
       e.state,
-      e.paymentState,
+      e.onHold ? `ON HOLD — ${e.holdReason ?? ''}` : '',
       e.clientName ?? '',
       e.projectName ?? '',
       e.assignmentNumber ?? '',
       e.branchName ?? '',
       e.assayerName ?? '',
-      toDate(e.billingPeriodStart),
-      toDate(e.billingPeriodEnd),
+      toDate(e.serviceDate),
       inr(e.baseAmount),
       inr(e.travelAmount),
       inr(e.adjustmentAmount),
-      inr(e.discountAmount),
+      e.adjustmentReason ?? '',
+      inr(e.taxableAmount),
       inr(e.taxAmount),
       inr(e.tdsAmount),
       inr(e.totalAmount),
-      inr(e.billedAmount),
       inr(e.paidAmount),
       inr(e.outstandingAmount),
-      inr(e.disputedAmount),
       e.isActive === false ? 'DELETED' : 'ACTIVE',
     ]);
 
     const invoiceRows = (invoices as any[]).map((inv) => [
       inv.invoiceNumber,
-      inv.type,
       inv.status,
       toDate(inv.issueDate),
       toDate(inv.dueDate),
       inv.currency ?? 'INR',
       inr(inv.subtotal),
-      inr(inv.discountAmount),
       inr(inv.taxAmount),
       inr(inv.tdsAmount),
       inr(inv.total),
@@ -252,30 +247,27 @@ export class ReportsService {
     await onProgress?.(2, EXPORT_PHASES, 'Writing workbook');
     return buildWorkbook([
       {
-        name: 'Entries',
+        name: 'Client Lines',
         headers: [
-          'Entry No',
-          'Level',
+          'Line No',
           'State',
-          'Payment State',
+          'Hold',
           'Client',
           'Project',
           'Assignment',
           'Branch',
           'Assayer',
-          'Period Start',
-          'Period End',
+          'Service Date',
           'Base',
           'Travel',
           'Adjustment',
-          'Discount',
-          'Tax',
+          'Adjustment Reason',
+          'Taxable',
+          'GST',
           'TDS',
           'Total',
-          'Billed',
           'Paid',
           'Outstanding',
-          'Disputed',
           'Active',
         ],
         rows: entryRows,
@@ -284,14 +276,12 @@ export class ReportsService {
         name: 'Invoices',
         headers: [
           'Invoice No',
-          'Type',
           'Status',
           'Issue Date',
           'Due Date',
           'Currency',
           'Subtotal',
-          'Discount',
-          'Tax',
+          'GST',
           'TDS',
           'Total',
           'Paid',
@@ -479,7 +469,6 @@ export class ReportsService {
       toDate(a.exitDate ?? a.terminationDate),
       a.totalAssignments ?? 0,
       a.completedAssignments ?? 0,
-      a.totalEarnings != null ? inr(a.totalEarnings) : '',
       a.averageRating ?? '',
     ]);
 
@@ -525,7 +514,6 @@ export class ReportsService {
           'Exit Date',
           'Total Assignments',
           'Completed Assignments',
-          'Total Earnings',
           'Avg Rating',
         ],
         rows: rosterRows,

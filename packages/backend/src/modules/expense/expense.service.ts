@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, IsNull } from 'typeorm';
+import { Repository, In } from 'typeorm';
 
 import { ExpenseEntity, ExpenseCategory, ExpenseStatus } from './expense.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
@@ -9,6 +9,7 @@ import { NotificationDispatchService } from '../notifications/notification-dispa
 import { EventCategory, AssignmentStatus } from '@fapoms/shared';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { BillingEngineService } from '../billing-engine/billing-engine.service';
+import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 
 export interface CreateExpenseDto {
   category: ExpenseCategory;
@@ -33,6 +34,7 @@ export class ExpenseService {
     private readonly notificationDispatch: NotificationDispatchService,
     private readonly settings: PlatformSettingsService,
     private readonly billing: BillingEngineService,
+    private readonly uow: UnitOfWork,
   ) {}
 
   /**
@@ -203,11 +205,24 @@ export class ExpenseService {
     expense.reviewNotes = notes?.trim() || null;
     expense.updatedBy = userId;
 
-    const saved = await this.expenseRepository.save(expense);
-
-    if (approve) {
-      await this.raiseReimbursement(saved, userId);
-    }
+    /**
+     * The approval and the money are one act.
+     *
+     * Reimbursement goes through `assayer_payables` rather than a mechanism of its own: that
+     * table already knows how to approve, pay and record a payment history, and an expense payout
+     * is the same act as a fee payout. The approval and the payable are written in ONE
+     * transaction, so an approved claim with no money behind it cannot exist — the failure mode
+     * that previously needed an "unpaid approvals" queue and a retry button, and that opened a
+     * double-payment window on the retry. If the payable cannot be written, the approval rolls
+     * back and the reviewer sees the error.
+     */
+    const saved = approve
+      ? await this.uow.run(async (m) => {
+          const payable = await this.billing.createReimbursementPayable(expense, m, userId);
+          expense.reimbursementPayableId = payable.id;
+          return m.save(expense);
+        })
+      : await this.expenseRepository.save(expense);
 
     await this.auditService.recordEvent({
       category: EventCategory.WORKFLOW,
@@ -236,85 +251,5 @@ export class ExpenseService {
     });
 
     return saved;
-  }
-
-  /**
-   * Turns an approved claim into money the assayer is actually owed.
-   *
-   * Reimbursement goes through `assayer_payables` rather than a mechanism of its own: that table
-   * already knows how to approve, withhold TDS, disburse and record a payment history, and an
-   * expense payout is the same act as a fee payout. A second route to "pay an assayer" would
-   * mean two places to look when someone asks what they are owed, and two to fix when the payout
-   * rules change.
-   *
-   * Booked as `baseAmount` with no travel component. An expense is a reimbursement of money the
-   * assayer already spent, so `travelAmount` — which the transport rate card computes as an
-   * allowance — would double-count a claim that is itself often for travel.
-   *
-   * Failure here does not undo the approval. The reviewer's decision is a real event that has
-   * already been recorded and notified, and rolling it back because the payable could not be
-   * written would leave the assayer told nothing at all. `reimbursementPayableId` stays null,
-   * which is exactly the state {@link listUnpaidApprovals} reports so ops can retry it.
-   */
-  private async raiseReimbursement(expense: ExpenseEntity, userId: string): Promise<void> {
-    // The unique index is the real guard against double payment; this is the cheap check that
-    // keeps the common case from reaching it.
-    if (expense.reimbursementPayableId) return;
-
-    try {
-      const assignment = await this.assignmentRepository.findOne({
-        where: { id: expense.assignmentId },
-        select: ['id', 'assayerId', 'projectId'],
-      });
-
-      const payable = await this.billing.createPayable({
-        assayerId: expense.assayerId,
-        assignmentId: expense.assignmentId,
-        projectId: assignment?.projectId ?? undefined,
-        baseAmount: Number(expense.amount),
-        travelAmount: 0,
-        // No TDS on a reimbursement: this is the assayer's own money being returned, not income
-        // earned. Withholding on it would take tax on a sum they were never paid.
-        taxRate: 0,
-        tdsRate: 0,
-        remarks: `Expense reimbursement — ${expense.category}${expense.description ? `: ${expense.description}` : ''}`,
-        rateSnapshot: { source: 'EXPENSE_CLAIM', expenseId: expense.id, category: expense.category },
-      }, userId);
-
-      expense.reimbursementPayableId = payable.id;
-      await this.expenseRepository.save(expense);
-    } catch (err) {
-      // Logged rather than thrown, for the reason in the doc comment above.
-      this.logger.error(
-        `Approved expense ${expense.id} but could not raise its reimbursement payable: ${
-          err instanceof Error ? err.message : String(err)
-        }. It will appear in the unpaid-approvals list until retried.`,
-      );
-    }
-  }
-
-  /**
-   * Approved claims that never became a payable — the queue that stops a failed reimbursement
-   * from being invisible.
-   *
-   * Without this the failure mode is silent in the worst way: the assayer has been told their
-   * claim was approved, and nobody on the finance side has anything to act on.
-   */
-  async listUnpaidApprovals(): Promise<ExpenseEntity[]> {
-    return this.expenseRepository.find({
-      where: { status: ExpenseStatus.APPROVED, reimbursementPayableId: IsNull(), isActive: true },
-      order: { reviewedAt: 'ASC' },
-    });
-  }
-
-  /** Raises the missing payables for {@link listUnpaidApprovals}. Safe to run repeatedly. */
-  async retryUnpaidApprovals(userId: string): Promise<{ attempted: number; raised: number }> {
-    const pending = await this.listUnpaidApprovals();
-    let raised = 0;
-    for (const expense of pending) {
-      await this.raiseReimbursement(expense, userId);
-      if (expense.reimbursementPayableId) raised += 1;
-    }
-    return { attempted: pending.length, raised };
   }
 }

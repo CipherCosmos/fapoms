@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { View, Linking } from 'react-native';
 import { AssayerAssignment } from '../types/mobile-app';
 import { MobileApiService } from '../services/api.service';
-import { getAssignmentTotalFee } from '../utils/fees';
+import { assignmentFeeValue } from '../utils/fees';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Badge, Button, Card, Divider, EmptyState, FadeIn, Icon, Segmented } from '../components/ui/primitives';
 import { formatRupees as money, assignmentStatusLabel, isAssignmentTerminal, formatDateOnly, travelModeLabel } from '@fapoms/shared';
@@ -220,14 +220,14 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                 header={g.header}
                 tone={g.tone}
                 count={g.items.length}
-                totalFee={g.items.reduce((s, x) => s + getAssignmentTotalFee(x), 0)}
+                totalFee={g.items.reduce((s, x) => s + assignmentFeeValue(x), 0)}
               />
             )}
             {g.items.map((a, i) => {
           // Wording from @fapoms/shared, tone from the app's one tone map — this screen used
           // to keep its own copy of both, and they had drifted from HomeScreen's.
           const meta = { label: assignmentStatusLabel(a.status), tone: assignmentStatusTone(a.status) as Tone };
-          const fee = getAssignmentTotalFee(a);
+          const fee = assignmentFeeValue(a);
           const rounds = a.negotiationCount || 0;
 
           return (

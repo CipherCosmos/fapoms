@@ -57,7 +57,12 @@ export interface AssayerPayable {
   id: string;
   payableNumber: string;
   status: string;
+  /** A held payout is not being paid yet, and the statement says why. */
+  onHold?: boolean;
+  holdReason?: string | null;
   assignmentId?: string;
+  /** Set when this payout reimburses an expense claim rather than paying an audit fee. */
+  expenseId?: string | null;
   baseAmount: number;
   travelAmount: number;
   tdsAmount: number;
@@ -131,9 +136,7 @@ export interface AssayerAssignment {
    */
   isActive?: boolean;
   proposedFee: number;
-  standardBaseFee?: number;
   agreedBaseFee: number;
-  agreedTravelFee: number;
   distanceKm?: number;
   /**
    * The travel component INSIDE the offered fee, as the desk's calculator priced it —
@@ -198,8 +201,6 @@ export interface AssayerProfile {
   completedAuditsCount: number;
   totalCustomersAudited: number;
   queryResolutionRatePercent: number;
-  totalEarnings: number;
-  pendingEarnings: number;
 }
 
 /** One message in a clarification thread (`/validation-queries/:id/messages`). */

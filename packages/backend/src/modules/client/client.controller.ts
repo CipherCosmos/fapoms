@@ -29,7 +29,7 @@ const TrimmedString = () => Transform(({ value }) => (typeof value === 'string' 
 import { ClientService, CreateClientDto, UpdateClientDto, CreateContactDto, UpdateContactDto, CreateContractDto, UpdateContractDto, UpdateBillingDto } from './client.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
-import { SystemRole, ClientLifecycleStatus, ClientBillingStatus } from '@fapoms/shared';
+import { SystemRole, ClientLifecycleStatus } from '@fapoms/shared';
 
 class CreateClientConfigDto {
   @IsOptional() @IsObject() importMapping?: Record<string, string>;
@@ -174,19 +174,6 @@ class BulkLifecycleTransitionDto {
 
   @IsOptional() @IsString()
   reason?: string;
-}
-
-class BillingStatusTransitionDto {
-  @IsEnum(ClientBillingStatus)
-  status: string;
-
-  @IsOptional() @IsString()
-  remarks?: string;
-}
-
-class BillingRemarkDto {
-  @IsString() @IsNotEmpty()
-  remarks: string;
 }
 
 @ApiTags('Clients')
@@ -408,13 +395,6 @@ export class ClientController {
     return { success: true, data: billing };
   }
 
-  @Get(':id/billing/history')
-  @ApiOperation({ summary: 'Get client billing timeline (status changes, remarks, profile edits)' })
-  async findBillingHistory(@Param('id', ParseUUIDPipe) id: string) {
-    const history = await this.clientService.findBillingHistory(id);
-    return { success: true, data: history };
-  }
-
   @Put(':id/billing')
   @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
   @RequirePermissions('client:edit:organization')
@@ -426,31 +406,5 @@ export class ClientController {
   ) {
     const billing = await this.clientService.upsertBilling(id, dto, req.user.id);
     return { success: true, data: billing };
-  }
-
-  @Patch(':id/billing/status')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
-  @RequirePermissions('client:edit:organization')
-  @ApiOperation({ summary: 'Transition client billing status' })
-  async transitionBillingStatus(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: BillingStatusTransitionDto,
-    @Req() req: any,
-  ) {
-    const billing = await this.clientService.transitionBillingStatus(id, dto.status as ClientBillingStatus, req.user.id, dto.remarks);
-    return { success: true, data: billing };
-  }
-
-  @Post(':id/billing/remarks')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
-  @RequirePermissions('client:edit:organization')
-  @ApiOperation({ summary: 'Add a remark to client billing timeline' })
-  async addBillingRemark(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: BillingRemarkDto,
-    @Req() req: any,
-  ) {
-    const entry = await this.clientService.addBillingRemark(id, dto.remarks, req.user.id);
-    return { success: true, data: entry };
   }
 }

@@ -15,6 +15,8 @@ import { useSocketConnection } from '../hooks/useSocketConnection';
 import { useExcelExport } from '../hooks/useExcelExport';
 
 import { assignmentFee } from '../utils/money';
+import { AssignmentMoneyCard } from './billing/AssignmentMoneyCard';
+
 interface Assignment {
   id: string;
   assignmentNumber: string;
@@ -1002,6 +1004,9 @@ export const Assignments: React.FC = () => {
                   </div>
                 </div>
               </div>
+
+              {/* The assignment's money: payout to the assayer, line to the client. */}
+              <AssignmentMoneyCard assignmentId={selectedAsn.id} status={String(selectedAsn.status)} canEdit={canActOnAssignments} />
 
               {/* Expense claims — approve or reject without leaving the assignment. */}
               {expenses.length > 0 && (

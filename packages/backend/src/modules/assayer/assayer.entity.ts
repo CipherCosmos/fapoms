@@ -310,9 +310,6 @@ export class AssayerEntity extends BaseEntity {
   @Column({ name: 'on_time_completions', type: 'int', default: 0 })
   onTimeCompletions: number;
 
-  @Column({ name: 'total_earnings', type: 'decimal', precision: 14, scale: 2, default: 0 })
-  totalEarnings: number;
-
   @Column({ name: 'last_assignment_date', type: 'timestamptz', nullable: true })
   lastAssignmentDate: Date | null;
 

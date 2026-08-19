@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import { Compass, Check, X, AlertTriangle, CheckCircle, Search, Star, Briefcase, MapPin, Phone, Mail, Award, Clock, DollarSign, Calendar, TrendingUp, Building2, Route, Users, Layers, Smartphone, Package, Car, Flame, BarChart3, Zap, ClipboardList, Send, Bus, Download, Eye, MessageCircle, Map as MapIcon, Home, Hourglass } from 'lucide-react';
-import { ProjectBranchStatus, formatDateOnly, formatRouteDistance, formatTravelTime, type RouteSource } from '@fapoms/shared';
+import { ProjectBranchStatus, branchStatusLabel, roleLabel, formatDateOnly, formatRouteDistance, formatTravelTime, type RouteSource } from '@fapoms/shared';
 import { branchStatusLabel, BRANCH_COVERED_STATUSES, localDateKey, todayDateKey } from '../utils/statusLabels';
 import { api } from '../services/api';
 import { userMessage } from '../services/errors';
@@ -176,7 +177,6 @@ interface AssayerDetail {
   completedAssignments: number;
   cancelledAssignments: number;
   onTimeCompletions: number;
-  totalEarnings: number;
   lastAssignmentDate: string | null;
   averageRating: number;
   notes: string | null;
@@ -330,6 +330,33 @@ const NO_EXCLUDED: ExcludedCandidate[] = [];
 const NO_PROJECTS: ProjectOption[] = [];
 const NO_ZONES: { id: string; name: string }[] = [];
 const NO_CONTACT: Record<string, { outcome: string; timestamp: string; negotiatedFee: number | null }> = {};
+
+/**
+ * What happened on a call, in the words the coordinator would use on the phone.
+ *
+ * The "last contact" chip used to de-case the raw value, so a branch nobody could reach read
+ * "no answer" in one place while the very dropdown that recorded it said "No answer" — and
+ * `CALLBACK_REQUESTED` de-cased to "callback requested", which is not what the operator chose
+ * ("Asked to call back"). The picker below is now built from this same map, so the word a
+ * person clicks is by construction the word that comes back at them afterwards.
+ *
+ * This lives here rather than in `@fapoms/shared` only because call outcomes have no entry in
+ * the shared label layer yet and that package is owned by another effort right now; it belongs
+ * there the moment it can be moved.
+ */
+const CALL_OUTCOME_LABELS: Record<string, string> = {
+  AGREED: 'Agreed',
+  NEGOTIATING: 'Negotiating',
+  DECLINED: 'Declined the work',
+  NO_ANSWER: 'No answer',
+  CALLBACK_REQUESTED: 'Asked to call back',
+  WRONG_NUMBER: 'Wrong number',
+};
+
+function callOutcomeLabel(outcome?: string | null): string {
+  if (!outcome) return '—';
+  return CALL_OUTCOME_LABELS[outcome] ?? outcome.charAt(0) + outcome.slice(1).toLowerCase().replace(/_/g, ' ');
+}
 
 
 
@@ -1808,7 +1835,7 @@ export const PlanningWorkspace: React.FC = () => {
                     background: negative ? 'var(--status-cancelled-bg)' : 'var(--status-pending-bg)',
                     color: negative ? 'var(--danger)' : 'var(--warning)',
                   }}>
-                    <Phone size={10} /> {lc.outcome.replace(/_/g, ' ').toLowerCase()} · {when}
+                    <Phone size={10} /> {callOutcomeLabel(lc.outcome)} · {when}
                     {lc.negotiatedFee != null && ` · ₹${lc.negotiatedFee.toLocaleString()}`}
                   </div>
                 );
@@ -1900,7 +1927,11 @@ export const PlanningWorkspace: React.FC = () => {
                 const latest = c.remarkSummary.latest;
                 return (
                   <button type="button" onClick={() => loadAssayerDetail(c.id)}
-                    title={latest ? `Latest (${latest.category.toLowerCase()}, ${latest.authorRole?.replace(/_/g, ' ').toLowerCase() ?? 'staff'}): "${latest.text.length > 140 ? `${latest.text.slice(0, 137)}…` : latest.text}" — click for all remarks` : 'Click for remarks'}
+                    /* The author's role was de-cased here, so a remark left by an operations
+                       manager was attributed to "operations manager" while the user directory
+                       and every other surface name the same person's role from the shared
+                       ROLE_LABELS map — and HR_MANAGER de-cased to "hr manager". */
+                    title={latest ? `Latest (${latest.category.toLowerCase()}, ${latest.authorRole ? roleLabel(latest.authorRole) : 'staff'}): "${latest.text.length > 140 ? `${latest.text.slice(0, 137)}…` : latest.text}" — click for all remarks` : 'Click for remarks'}
                     style={{ alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '10.5px', fontWeight: 600, padding: '3px 8px', borderRadius: 'var(--radius-sm)', background: tone.bg, color: tone.fg, border: 'none', cursor: 'pointer' }}>
                     <MessageCircle size={10} /> {c.remarkSummary.count} remark{c.remarkSummary.count === 1 ? '' : 's'} · avg {fmtSignedMean(m)}
                   </button>
@@ -1998,10 +2029,10 @@ export const PlanningWorkspace: React.FC = () => {
                     recordCall(c.id, v as any, undefined, 'Logged from candidate list');
                   }}
                   options={[
-                    { value: 'NO_ANSWER', label: 'No answer' },
-                    { value: 'CALLBACK_REQUESTED', label: 'Asked to call back' },
-                    { value: 'DECLINED', label: 'Declined the work' },
-                    { value: 'WRONG_NUMBER', label: 'Wrong number' },
+                    { value: 'NO_ANSWER', label: CALL_OUTCOME_LABELS.NO_ANSWER },
+                    { value: 'CALLBACK_REQUESTED', label: CALL_OUTCOME_LABELS.CALLBACK_REQUESTED },
+                    { value: 'DECLINED', label: CALL_OUTCOME_LABELS.DECLINED },
+                    { value: 'WRONG_NUMBER', label: CALL_OUTCOME_LABELS.WRONG_NUMBER },
                   ]}
                   placeholder="Log call outcome…"
                   aria-label="Record a call that did not result in an assignment"
@@ -2740,7 +2771,10 @@ export const PlanningWorkspace: React.FC = () => {
                 </div>
                 <div style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
                   <span style={{ color: 'var(--text-muted)' }}>Status: </span>
-                  <span style={{ color: 'var(--warning)', fontWeight: 600 }}>{selectedPb.status.replace(/_/g, ' ')}</span>
+                  {/* This panel shouted the raw branch enum ("ASSIGNMENT CONFIRMED") beside a
+                      badge on the same screen that already said "Assigned", so one branch
+                      appeared to be in two states at once. */}
+                  <span style={{ color: 'var(--warning)', fontWeight: 600 }}>{branchStatusLabel(selectedPb.status)}</span>
                 </div>
                 <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>
                   <span style={{ color: 'var(--text-muted)' }}>Priority: </span>
@@ -2936,10 +2970,10 @@ export const PlanningWorkspace: React.FC = () => {
                             <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '3px' }}><AlertTriangle size={10} /> Queries Raised</div>
                             <div style={{ fontSize: '20px', fontWeight: 700, color: (detailAssayer.queryCount || 0) > 0 ? 'var(--warning)' : 'var(--success)' }}>{detailAssayer.queryCount ?? 0}</div>
                           </div>
-                          <div className="glass-card" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
-                            <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '3px' }}><DollarSign size={10} /> Total Paid</div>
-                            <div style={{ fontSize: '18px', fontWeight: 700, color: 'var(--warning)' }}>₹{Number(detailAssayer.totalEarnings).toLocaleString()}</div>
-                          </div>
+                          <Link to={`/billing/statement?assayer=${detailAssayer.id}`} className="glass-card" style={{ padding: '12px', borderRadius: 'var(--radius-md)', textDecoration: 'none', color: 'inherit' }} title="Open the assayer's statement — earned, paid, owed">
+                            <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '3px' }}><DollarSign size={10} /> Earnings</div>
+                            <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--accent)' }}>Statement →</div>
+                          </Link>
                         </div>
 
                         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
@@ -2999,14 +3033,6 @@ export const PlanningWorkspace: React.FC = () => {
                                   <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>₹{detailAssayer.activeCommercialProfile.baseFee?.toLocaleString()} / audit</div>
                                   <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '2px' }}>
                                     Travel: ₹{detailAssayer.activeCommercialProfile.travelReimbursement || 0} | Daily: ₹{detailAssayer.activeCommercialProfile.dailyRate || 0}
-                                  </div>
-                                </div>
-                              )}
-                              {detailAssayer.totalEarnings > 0 && (
-                                <div>
-                                  <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '3px' }}>AVERAGE EARNINGS PER JOB</div>
-                                  <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--warning)' }}>
-                                    ₹{Math.round(Number(detailAssayer.totalEarnings) / Math.max(detailAssayer.completedAssignments, 1)).toLocaleString()}
                                   </div>
                                 </div>
                               )}

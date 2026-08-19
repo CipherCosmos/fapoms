@@ -8,7 +8,7 @@ import { ExpenseController } from './expense.controller';
 // AuditService comes from the @Global AuditModule, so it needs no import here.
 import { NotificationsModule } from '../notifications/notifications.module';
 // Approved claims are reimbursed through the existing payables mechanism rather than a second
-// payout path of their own — see ExpenseService.raiseReimbursement.
+// payout path of their own — see ExpenseService.review.
 import { BillingEngineModule } from '../billing-engine/billing-engine.module';
 
 @Module({

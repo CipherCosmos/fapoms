@@ -508,11 +508,14 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         break;
       }
 
-      case 'billing:created': {
+      // Money events. The assayer whose money moved hears it on their phone; the desk hears all.
+      case 'billing:booked':
+      case 'billing:payout-changed':
+      case 'billing:invoice-changed': {
         if (payload.assayerId) {
-          this.server.to(`user:${payload.assayerId}`).emit('billing:created', payload);
+          this.server.to(`user:${payload.assayerId}`).emit(eventType, payload);
         }
-        this.emitOperational('billing:created', payload);
+        this.emitOperational(eventType, payload);
         break;
       }
 

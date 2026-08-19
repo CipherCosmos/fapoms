@@ -9,6 +9,7 @@ import {
   ExpenseClaim,
 } from '../services/expenses';
 import { TravelEvidence } from '../components/TravelEvidence';
+import { userMessage } from '../services/errors';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '../hooks/queryKeys';
 
@@ -36,7 +37,7 @@ export const ExpenseReview: React.FC = () => {
     try {
       setClaims(await getPendingExpenses());
     } catch (err: any) {
-      toast({ type: 'error', title: 'Could not load claims', message: err?.message ?? 'Please try again.' });
+      toast({ type: 'error', title: 'Could not load claims', message: `Check your connection and refresh the page. ${userMessage(err)}` });
     } finally {
       setLoading(false);
     }
@@ -61,7 +62,7 @@ export const ExpenseReview: React.FC = () => {
       void qc.invalidateQueries({ queryKey: queryKeys.billing.all });
       toast({ type: 'success', title: 'Claim approved', message: `${formatRupees(Number(claim.amount))} is now a payout due to the assayer.` });
     } catch (err: any) {
-      toast({ type: 'error', title: 'Could not approve', message: err?.message ?? 'Please try again.' });
+      toast({ type: 'error', title: 'Could not approve', message: `The claim has not been approved. Try again in a moment. ${userMessage(err)}` });
     } finally {
       setBusyId(null);
     }
@@ -78,7 +79,7 @@ export const ExpenseReview: React.FC = () => {
       setRejecting(null);
       setRejectReason('');
     } catch (err: any) {
-      toast({ type: 'error', title: 'Could not reject', message: err?.message ?? 'Please try again.' });
+      toast({ type: 'error', title: 'Could not reject', message: `The claim has not been rejected. Try again in a moment. ${userMessage(err)}` });
     } finally {
       setBusyId(null);
     }

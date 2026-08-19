@@ -177,7 +177,7 @@ export class EmailDigestService {
     const [payables, expenses, invoices] = await Promise.all([
       q(`SELECT COUNT(*)::int AS n, COALESCE(SUM(total_amount),0)::numeric AS total,
                 EXTRACT(DAY FROM NOW() - MIN(created_at))::int AS oldest_days
-           FROM assayer_payables WHERE status = 'PENDING' AND is_active = true`, 'pending payables'),
+           FROM assayer_payables WHERE status = 'PENDING' AND on_hold = false AND is_active = true`, 'pending payables'),
       q(`SELECT COUNT(*)::int AS n, COALESCE(SUM(amount),0)::numeric AS total
            FROM assignment_expenses WHERE status = 'PENDING' AND is_active = true`, 'pending expense claims'),
       q(`SELECT COUNT(*)::int AS n, COALESCE(SUM(outstanding_amount),0)::numeric AS total

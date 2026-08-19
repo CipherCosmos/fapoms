@@ -43,10 +43,6 @@ function emptyProfile(seed: { assayerCode?: string; latitude?: number; longitude
     totalAssignments: 0,
     completedAssignments: 0,
     onTimeCompletions: 0,
-    totalEarnings: 0,
-    runningBalance: 0,
-    earningsPaid: 0,
-    earningsAwaitingApproval: 0,
     assayerCode: seed.assayerCode || '',
   };
 }
@@ -144,10 +140,6 @@ export function useAssayerProfile(user: {
         bankAccountNumber: p.bankAccountNumber || prev.bankAccountNumber,
         ifscCode: p.ifscCode || prev.ifscCode,
         assayerCode: p.assayerCode || prev.assayerCode,
-        totalEarnings: p.totalEarnings ?? 0,
-        runningBalance: p.runningBalance ?? 0,
-        earningsPaid: p.earningsPaid ?? 0,
-        earningsAwaitingApproval: p.earningsAwaitingApproval ?? 0,
         completedAssignments: p.completedAssignments ?? 0,
         totalAssignments: p.totalAssignments ?? 0,
         onTimeCompletions: p.onTimeCompletions ?? prev.onTimeCompletions,

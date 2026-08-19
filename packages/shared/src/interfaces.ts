@@ -29,8 +29,6 @@ import {
   AuthorizationScope,
   ClientLifecycleStatus,
   ClientType,
-  ClientBillingStatus,
-  ClientBillingEventType,
   ContractStatus,
   DocumentStatus,
   DocumentType,
@@ -44,18 +42,11 @@ import {
   TravelMode,
   UserStatus,
   ValidationStatus,
-  BillingLevel,
   BillingState,
-  PaymentState,
-  BillingPricingModel,
   InvoiceStatus,
-  InvoiceType,
-  PaymentStatus,
   PaymentMethod,
+  PaymentDirection,
   AssayerPayableStatus,
-  BillingConflictSeverity,
-  BillingConflictStatus,
-  BillingConflictAction,
   BillingEntityType,
 } from './enums';
 
@@ -183,19 +174,6 @@ export interface ClientBilling extends AuditMetadata {
   notes?: string;
   gstRate?: number;
   tdsRate?: number;
-  status: ClientBillingStatus;
-}
-
-export interface ClientBillingHistory extends AuditMetadata {
-  id: string;
-  clientId: string;
-  eventType: ClientBillingEventType;
-  fromStatus?: ClientBillingStatus;
-  toStatus?: ClientBillingStatus;
-  remarks?: string;
-  field?: string;
-  fromValue?: string;
-  toValue?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -623,172 +601,242 @@ export interface WorkforceAttribute extends AuditMetadata {
 
 
 // ---------------------------------------------------------------------------
-// Multi-level Billing Engine (Client / Project / Assignment / Assayer Payable)
+// Billing — the assignment is the ledger line
 // ---------------------------------------------------------------------------
 
-
+/** The client-side line for one assignment. One per assignment, created when it completes. */
 export interface BillingEntry extends AuditMetadata {
   id: string;
   entryNumber: string;
-  level: BillingLevel;
   clientId: string;
-  projectId?: string;
-  assignmentId?: string;
-  assayerId?: string;
+  projectId?: string | null;
+  assignmentId: string;
+  assayerId?: string | null;
   state: BillingState;
-  paymentState: PaymentState;
-  pricingModel: BillingPricingModel;
-  rate?: number;
-  quantity?: number;
-  billingPeriodStart?: string;
-  billingPeriodEnd?: string;
-  description?: string;
-  parentEntryId?: string;          // set when this is a split/merge child
-  sourceEntryId?: string;          // set when flagged as a duplicate of another entry
-  conflictIds?: string[];
-  invoiceId?: string;
-  // Flat money fields (matches backend serialization)
+  /** A held line cannot be invoiced. The reason is shown wherever the hold is. */
+  onHold: boolean;
+  holdReason?: string | null;
+  /** The day the work was delivered — what the invoice line is dated. */
+  serviceDate?: string | null;
+  description?: string | null;
+  invoiceId?: string | null;
+  // Money. base + travel + adjustment = taxable; taxable + GST − TDS = total.
   baseAmount: number;
-  travelAmount?: number;
-  adjustmentAmount?: number;
-  discountAmount?: number;
-  taxRate?: number;
-  taxAmount?: number;
-  tdsRate?: number;
-  tdsAmount?: number;
-  /** base + travel + adjustment − discount: the value GST and TDS are computed on. */
-  taxableAmount?: number;
+  travelAmount: number;
+  adjustmentAmount: number;
+  adjustmentReason?: string | null;
+  taxRate: number;
+  taxableAmount: number;
+  taxAmount: number;
+  tdsRate: number;
+  tdsAmount: number;
   totalAmount: number;
   currency: string;
-  billedAmount?: number;
-  paidAmount?: number;
-  outstandingAmount?: number;
-  disputedAmount?: number;
-  cancelledAmount?: number;
-  adjustedAmount?: number;
+  paidAmount: number;
+  outstandingAmount: number;
+  // Labels attached by list endpoints.
+  clientName?: string | null;
+  projectName?: string | null;
+  projectNumber?: string | null;
+  assignmentNumber?: string | null;
+  branchName?: string | null;
+  assayerName?: string | null;
 }
 
+/** A client invoice: a set of completed assignments for one client. */
 export interface BillingInvoice extends AuditMetadata {
   id: string;
   invoiceNumber: string;
   clientId: string;
-  projectId?: string;
-  type: InvoiceType;
+  projectId?: string | null;
   status: InvoiceStatus;
-  issueDate?: string;
-  dueDate?: string;
+  issueDate?: string | null;
+  dueDate?: string | null;
   currency: string;
   /** Pre-tax taxable value of the invoiced lines. */
   subtotal: number;
-  taxAmount?: number;
+  taxAmount: number;
   /** Total TDS withheld by the client across this invoice's lines. */
-  tdsAmount?: number;
-  discountAmount?: number;
+  tdsAmount: number;
   /** subtotal + GST − TDS. */
   total: number;
-  paidAmount?: number;
-  outstandingAmount?: number;
-  notes?: string;
-  entryIds?: string[];
+  paidAmount: number;
+  outstandingAmount: number;
+  notes?: string | null;
+  entries?: BillingEntry[];
   payments?: BillingPayment[];
+  /** On list rows only. */
+  entryCount?: number;
+  clientName?: string | null;
 }
 
+/** One real movement of money, in either direction. Reversed = `isActive: false`. */
 export interface BillingPayment extends AuditMetadata {
   id: string;
-  invoiceId: string;
+  direction: PaymentDirection;
   paymentReference: string;
   method: PaymentMethod;
   amount: number;
   currency: string;
-  receivedDate?: string;
-  status: PaymentStatus;
-  allocatedToEntryIds?: string[];
-  notes?: string;
+  receivedDate?: string | null;
+  notes?: string | null;
+  invoiceId?: string | null;
+  payableId?: string | null;
+  assayerId?: string | null;
+  /** OUTBOUND only: what the assayer was still owed after this payment. */
+  runningBalance?: number | null;
 }
 
+/** What we owe an assayer for one assignment, or for one approved expense claim. */
 export interface AssayerPayable extends AuditMetadata {
   id: string;
   payableNumber: string;
   assayerId: string;
-  clientId?: string;
-  projectId?: string;
-  assignmentId?: string;
+  clientId?: string | null;
+  projectId?: string | null;
+  assignmentId: string;
+  /** Set on reimbursement payables; null on the fee payable. */
+  expenseId?: string | null;
   status: AssayerPayableStatus;
-  // Flat money fields (matches backend serialization)
+  /** A held payable cannot be approved or paid. */
+  onHold: boolean;
+  holdReason?: string | null;
   baseAmount: number;
-  travelAmount?: number;
-  taxAmount?: number;
-  tdsAmount?: number;
+  travelAmount: number;
+  taxAmount: number;
+  tdsAmount: number;
   totalAmount: number;
   currency: string;
-  paidAmount?: number;
-  approvedAt?: string;
-  approvedBy?: string;
-  paidAt?: string;
-  paidBy?: string;
-  rateSnapshot?: Record<string, unknown>;
-  remarks?: string;
-}
-
-export interface BillingConflict extends AuditMetadata {
-  id: string;
-  conflictNumber: string;
-  severity: BillingConflictSeverity;
-  entityType: BillingEntityType;
-  entryIds: string[];
-  description: string;
-  reason?: string;
-  createdById: string;
-  createdByName?: string;
-  status: BillingConflictStatus;
-  resolutionAction?: BillingConflictAction;
-  resolutionNote?: string;
-  resolvedById?: string;
-  resolvedByName?: string;
-  resolvedAt?: string;
+  paidAmount: number;
+  approvedAt?: string | null;
+  approvedBy?: string | null;
+  paidAt?: string | null;
+  paidBy?: string | null;
+  rateSnapshot?: Record<string, unknown> | null;
+  remarks?: string | null;
+  // Labels attached by list endpoints.
+  assayerName?: string | null;
+  assayerCode?: string | null;
+  projectName?: string | null;
+  clientName?: string | null;
+  assignmentNumber?: string | null;
+  branchName?: string | null;
 }
 
 export interface BillingHistoryEvent extends AuditMetadata {
   id: string;
-  clientId?: string;
-  projectId?: string;
-  assignmentId?: string;
-  assayerId?: string;
+  clientId?: string | null;
+  projectId?: string | null;
+  assignmentId?: string | null;
+  assayerId?: string | null;
   entityType: BillingEntityType;
   entityId: string;
   action: string;
-  fromState?: string;
-  toState?: string;
-  previousValue?: Record<string, unknown>;
-  newValue?: Record<string, unknown>;
-  reason?: string;
-  userId?: string;
-  userName?: string;
-  occurredAt: string;
+  fromState?: string | null;
+  toState?: string | null;
+  previousValue?: Record<string, unknown> | null;
+  newValue?: Record<string, unknown> | null;
+  reason?: string | null;
+  userName?: string | null;
 }
 
-export interface BillingDashboardSummary {
+/** Something finance should look at. Derived on every read — never stored, never "resolved". */
+export interface BillingAttentionItem {
+  kind:
+    | 'UNBOOKED'            // a COMPLETED assignment with no payable or no client line
+    | 'UNSETTLED_FEE'       // booked from a proposed fee that was never agreed
+    | 'FEE_CHANGED'         // the assignment fee moved after the line was booked
+    | 'HELD'                // a held payout or client line
+    | 'OVERDUE_INVOICE';    // a sent invoice past its due date
+  assignmentId?: string | null;
+  assignmentNumber?: string | null;
+  invoiceId?: string | null;
+  invoiceNumber?: string | null;
+  payableId?: string | null;
+  entryId?: string | null;
+  clientName?: string | null;
+  assayerName?: string | null;
+  amount?: number | null;
+  detail: string;
+}
+
+/** The finance overview: every headline figure, from one endpoint, off one set of rows. */
+export interface BillingOverview {
   currency: string;
-  totals: {
-    billed: number;
+  payouts: {
+    /** Σ net still to pay on PENDING payables (not held). */
+    due: number;
+    /** Σ net still to pay on APPROVED payables (not held). */
+    approved: number;
+    /** Σ paid out, ever. */
     paid: number;
+    /** Σ net still owed on held payables. */
+    held: number;
+    dueCount: number;
+    approvedCount: number;
+    heldCount: number;
+  };
+  receivables: {
+    /** Σ total on UNBILLED, un-held client lines. */
+    unbilled: number;
+    /** Σ invoice totals on sent (ISSUED) and PAID invoices. */
+    invoiced: number;
+    /** Σ collected against invoices. */
+    collected: number;
+    /** Σ still owed on sent invoices. */
     outstanding: number;
-    pending: number;
-    disputed: number;
-    cancelledAdjusted: number;
-    /** Earned in the field but not yet on an invoice. */
-    unbilledRevenue: number;
-    /** Net of GST — what we actually earn. */
+    /** Σ total on held client lines. */
+    held: number;
+    aging: { current: number; d1_30: number; d31_60: number; d61_90: number; d90_plus: number };
+  };
+  margin: {
+    /** Σ taxable on live client lines (ex-GST). */
     revenue: number;
-    /** Assayer fee + travel owed for completed work. */
-    assayerCost: number;
+    /** Σ gross (base + travel, pre-TDS) on live payables. */
+    cost: number;
     margin: number;
     marginPct: number | null;
   };
-  /** Outstanding receivables bucketed by days past due. */
-  aging: { current: number; d1_30: number; d31_60: number; d61_90: number; d90_plus: number };
-  byLevel: Record<BillingLevel, { billed: number; paid: number; outstanding: number }>;
-  payable: { pending: number; approved: number; paid: number; disputed: number; onHold: number };
-  invoices: { total: number; issued: number; paid: number; outstanding: number };
-  openConflicts: number;
+  tax: { gstCollected: number; tdsWithheldByClients: number; tdsWithheldFromAssayers: number };
+  cashflow: { in: number; out: number; net: number };
+  attention: BillingAttentionItem[];
+  byClient: Array<{
+    clientId: string;
+    clientName: string;
+    clientRate: number | null;
+    unbilled: number;
+    invoiced: number;
+    outstanding: number;
+    revenue: number;
+    cost: number;
+    margin: number;
+    assignmentCount: number;
+  }>;
+  recentActivity: Array<{
+    id: string;
+    action: string;
+    entityType: string;
+    entityId: string;
+    fromState?: string | null;
+    toState?: string | null;
+    reason?: string | null;
+    occurredAt: string;
+    userName?: string | null;
+  }>;
+}
+
+/** Everything money-related about one assignment — the one line the assignment detail shows. */
+export interface AssignmentMoneyLine {
+  assignmentId: string;
+  assignmentNumber: string | null;
+  assignmentStatus: string | null;
+  booked: boolean;
+  /** The fee the money was (or would be) booked from, and whether it was ever agreed. */
+  fee: { amount: number; settled: boolean; source: 'AGREED' | 'PROPOSED' | 'NONE' } | null;
+  payable: AssayerPayable | null;
+  reimbursements: AssayerPayable[];
+  entry: BillingEntry | null;
+  invoice: Pick<BillingInvoice, 'id' | 'invoiceNumber' | 'status' | 'issueDate' | 'dueDate' | 'total' | 'paidAmount' | 'outstandingAmount'> | null;
+  payments: BillingPayment[];
+  history: BillingHistoryEvent[];
 }

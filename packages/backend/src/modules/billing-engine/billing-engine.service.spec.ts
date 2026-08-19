@@ -7,7 +7,6 @@ import { BillingEntryEntity } from './billing-entry.entity';
 import { BillingInvoiceEntity } from './invoice.entity';
 import { BillingPaymentEntity } from './payment.entity';
 import { AssayerPayableEntity } from './payable.entity';
-import { BillingConflictEntity } from './conflict.entity';
 import { BillingHistoryEntity } from './history.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ProjectEntity } from '../project/project.entity';
@@ -16,27 +15,22 @@ import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { TypeOrmUnitOfWork } from '../../infrastructure/persistence/typeorm-unit-of-work';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
-import {
-  BillingLevel, BillingState, AssayerPayableStatus, PaymentMethod, PaymentDirection,
-  InvoiceStatus, InvoiceType, PaymentState,
-} from '@fapoms/shared';
+import { BillingState, AssayerPayableStatus, PaymentMethod, PaymentDirection, InvoiceStatus, AssignmentStatus } from '@fapoms/shared';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 
 /**
- * Covers the money math, the guards that decide whether money may move, and — since
- * Track B — the transaction and locking behaviour that decides whether a half-finished
- * money movement can survive.
+ * The billing engine: the assignment is the ledger line.
  *
- * The DataSource double below is the part that makes the second group testable. It buffers
- * everything written through a transaction's EntityManager and only flushes it to
- * `committed` when the callback resolves. So `committed` answers "what would still be in
- * the database afterwards?", which is the only question a rollback test is really asking.
- * `saved` is the older array and means something different — "what was written at all",
- * successfully or not — and both are useful: a rollback test asserts a row appears in one
- * and not the other.
+ * Covers the booking (one transaction, two legs, one formula), the guards that decide whether
+ * money may move (approve → pay; held lines; invoiced lines), and the transaction and locking
+ * behaviour that decides whether a half-finished money movement can survive.
+ *
+ * The DataSource double buffers everything written through a transaction's EntityManager and
+ * only flushes it to `committed` when the callback resolves. So `committed` answers "what would
+ * still be in the database afterwards?" — the only question a rollback test is really asking.
+ * `saved` means "what was written at all", successfully or not.
  */
 describe('BillingEngineService', () => {
-  let settings: any;
   let service: BillingEngineService;
 
   const saved: any[] = [];
@@ -44,29 +38,22 @@ describe('BillingEngineService', () => {
   let committed: any[] = [];
   /** Every lock the service asked for, in acquisition order. */
   let locks: Array<{ entity: string; mode: string; ids?: string[]; orderBy?: string }> = [];
-  /** SQL run on a transaction's own connection (as opposed to a repository's). */
+  /** SQL run on a transaction's own connection. */
   let txQueries: string[] = [];
-  /** Outbox rows written inside a transaction — the durable record of each domain event. */
-  let outboxWrites: any[] = [];
+  /** Rows the `assayerTotals` SQL returns. Set by tests that care about the running balance. */
+  let totalsRow: any = { earned: 0, paid: 0, outstanding: 0, awaiting_approval: 0, on_hold: 0, payable_count: 0 };
 
-  // Client contract used by every test: 18% GST, 10% TDS, NET30. Typed loosely because
-  // individual tests swap in their own row shapes for the same query surface.
-  const managerQuery: jest.Mock<Promise<any[]>, [string, any[]?]> = jest.fn(
-    async (sql: string, _params?: any[]) => {
-      if (sql.includes('FROM client_billing')) return [{ gst_rate: '18', tds_rate: '10', payment_terms: 'NET30' }];
-      if (sql.includes('FROM users')) return [{ display_name: 'Priya Menon' }];
-      if (sql.includes('FROM clients WHERE id')) return [{ id: 'client-1' }];
-      return [];
-    },
-  );
-
-  /** Restores the default contract rows after a test swaps in its own. */
+  // A client with a ₹3,000 rate card, NET30, 18% GST, 10% TDS — used by every booking test.
   const defaultManagerQuery = async (sql: string): Promise<any[]> => {
+    if (sql.includes('FROM client_configurations')) return [{ default_base_fee: '3000' }];
+    if (sql.includes('FROM clients WHERE id')) return [{ planning_preferences: {}, id: 'client-1' }];
     if (sql.includes('FROM client_billing')) return [{ gst_rate: '18', tds_rate: '10', payment_terms: 'NET30' }];
     if (sql.includes('FROM users')) return [{ display_name: 'Priya Menon' }];
-    if (sql.includes('FROM clients WHERE id')) return [{ id: 'client-1' }];
+    if (sql.includes('FROM assayer_payables') && sql.includes('awaiting_approval')) return [totalsRow];
+    if (sql.includes('FROM billing_payments') && sql.includes('SUM(amount)')) return [{ paid: 0 }];
     return [];
   };
+  const managerQuery: jest.Mock<Promise<any[]>, [string, any[]?]> = jest.fn(defaultManagerQuery);
 
   const queryBuilderStub = () => ({
     setLock: jest.fn().mockReturnThis(),
@@ -82,129 +69,71 @@ describe('BillingEngineService', () => {
     save: jest.fn(async (d) => { const r = { id: d.id ?? `entry-${saved.length + 1}`, ...d }; saved.push(r); return r; }),
     find: jest.fn(async () => []),
     findOne: jest.fn(async () => null),
+    findAndCount: jest.fn(async () => [[], 0]),
     createQueryBuilder: jest.fn(() => queryBuilderStub()),
     manager: { query: managerQuery },
   };
-
-  const conflictRepo: any = {
-    create: jest.fn((d) => d),
-    save: jest.fn(async (d) => ({ id: 'conflict-1', ...d })),
-    find: jest.fn(async () => []),
-    findOne: jest.fn(async () => null),
-    count: jest.fn(async () => 0),
-    createQueryBuilder: jest.fn(() => queryBuilderStub()),
-  };
-
   const paymentRepo: any = {
     create: jest.fn((d) => ({ ...d })),
-    save: jest.fn(async (d) => ({ id: 'payment-1', ...d })),
+    save: jest.fn(async (d) => ({ id: d.id ?? `payment-${saved.length + 1}`, isActive: true, ...d })),
     find: jest.fn(async () => []),
     findOne: jest.fn(async () => null),
   };
-
-  /**
-   * Two query-builder chains run against this repository, both filtering on a jsonb expression
-   * the repository API cannot express, so one chainable stub serves both:
-   *
-   *  - `findFeePayable` — one assignment, resolved through `getOne` to `payableRepo.feePayable`.
-   *  - the backfill's skip set — every assignment that already has a fee payable, resolved
-   *    through `getRawMany` to `payableRepo.feePayableRows`.
-   *
-   * Keeping them on one stub means a test that sets up the second cannot silently break the
-   * first, which is what happened when the backfill's chain was added.
-   */
   const payableRepo: any = {
-    create: jest.fn((d) => d),
-    save: jest.fn(async (d) => ({ id: 'payable-1', ...d })),
+    create: jest.fn((d) => ({ ...d })),
+    save: jest.fn(async (d) => { const r = { id: d.id ?? `payable-${saved.length + 1}`, ...d }; saved.push(r); return r; }),
     find: jest.fn(async () => []),
     findOne: jest.fn(async () => null),
-    feePayable: null as any,
-    feePayableRows: [] as Array<{ assignment_id: string }>,
-    createQueryBuilder: jest.fn(() => {
-      const qb: any = {
-        select: () => qb,
-        addSelect: () => qb,
-        where: () => qb,
-        andWhere: () => qb,
-        orderBy: () => qb,
-        getOne: async () => payableRepo.feePayable,
-        getRawMany: async () => payableRepo.feePayableRows,
-      };
-      return qb;
-    }),
+    findAndCount: jest.fn(async () => [[], 0]),
     manager: { query: managerQuery },
   };
-
   const invoiceRepo: any = {
     create: jest.fn((d) => ({ ...d })),
     save: jest.fn(async (d) => ({ id: d.id ?? 'invoice-1', ...d })),
     find: jest.fn(async () => []),
     findOne: jest.fn(async () => null),
-    createQueryBuilder: jest.fn(() => queryBuilderStub()),
+    findAndCount: jest.fn(async () => [[], 0]),
+    manager: { query: managerQuery },
   };
-
   const historyRepo: any = {
     create: jest.fn((d) => ({ ...d })),
-    save: jest.fn(async (d) => ({ id: 'history-1', ...d })),
+    save: jest.fn(async (d) => ({ id: `history-${saved.length + 1}`, ...d })),
     find: jest.fn(async () => []),
     findOne: jest.fn(async () => null),
   };
-
   const assignmentRepo: any = {
-    create: jest.fn((d) => d), save: jest.fn(async (d) => ({ id: 'x', ...d })),
     find: jest.fn(async () => []), findOne: jest.fn(async () => null),
+    manager: { query: managerQuery },
   };
+  const projectRepo: any = { find: jest.fn(async () => []), findOne: jest.fn(async () => null) };
 
-  const projectRepo: any = {
-    create: jest.fn((d) => d), save: jest.fn(async (d) => ({ id: 'x', ...d })),
-    find: jest.fn(async () => []), findOne: jest.fn(async () => null),
-  };
-
-  /** Repository double for an entity class, for `manager.findOne` / `manager.createQueryBuilder`. */
   const repoForEntity = (target: any): any => {
     if (target === BillingEntryEntity) return entryRepo;
     if (target === BillingInvoiceEntity) return invoiceRepo;
     if (target === BillingPaymentEntity) return paymentRepo;
     if (target === AssayerPayableEntity) return payableRepo;
-    if (target === BillingConflictEntity) return conflictRepo;
     if (target === BillingHistoryEntity) return historyRepo;
+    if (target === AssignmentEntity) return assignmentRepo;
+    if (target === ProjectEntity) return projectRepo;
     throw new Error(`No repository double registered for ${target?.name ?? target}`);
   };
 
-  /**
-   * Which repository a row belongs to, inferred from its shape.
-   *
-   * `EntityManager.save(entity)` carries no entity class, so the double has to work it out.
-   * Each billing table has a distinctive identifying column and the fixtures set them, so
-   * the mapping is unambiguous here. Order matters: a payable and a conflict both carry
-   * `status`, so the number columns are checked first.
-   */
+  /** Which repository a row belongs to, inferred from its shape. Order matters. */
   const repoForRow = (row: any): any => {
     if (row?.payableNumber !== undefined) return payableRepo;
     if (row?.invoiceNumber !== undefined) return invoiceRepo;
-    if (row?.conflictNumber !== undefined) return conflictRepo;
     if (row?.direction !== undefined) return paymentRepo;
     if (row?.action !== undefined && row?.entityType !== undefined) return historyRepo;
-    if (row?.entryNumber !== undefined || row?.level !== undefined || row?.state !== undefined) return entryRepo;
+    if (row?.entryNumber !== undefined) return entryRepo;
     return historyRepo;
   };
 
   const entityName = (target: any) => target?.name ?? String(target);
 
-  /**
-   * An EntityManager double scoped to one transaction.
-   *
-   * Writes go to `pending` as well as to the underlying repository double, so a test can
-   * distinguish "this was written" from "this survived the commit".
-   */
   const makeManager = (pending: any[], stagedOutbox: any[]) => ({
     findOne: jest.fn(async (target: any, opts: any) => {
       if (opts?.lock) {
-        locks.push({
-          entity: entityName(target),
-          mode: opts.lock.mode,
-          ids: opts.where?.id ? [opts.where.id] : undefined,
-        });
+        locks.push({ entity: entityName(target), mode: opts.lock.mode, ids: opts.where?.id ? [opts.where.id] : undefined });
       }
       return repoForEntity(target).findOne(opts);
     }),
@@ -215,18 +144,12 @@ describe('BillingEngineService', () => {
     }),
     createQueryBuilder: jest.fn((target: any, alias: string) => {
       const qb: any = repoForEntity(target).createQueryBuilder(alias);
-      // Record the lock the builder asks for, and the ids it was scoped to, so the
-      // deadlock-ordering guarantee is assertable.
       const originalSetLock = qb.setLock;
-      qb.setLock = jest.fn((mode: string) => {
-        locks.push({ entity: entityName(target), mode });
-        originalSetLock(mode);
-        return qb;
-      });
+      qb.setLock = jest.fn((mode: string) => { locks.push({ entity: entityName(target), mode }); originalSetLock(mode); return qb; });
       const originalWhere = qb.where;
       qb.where = jest.fn((clause: string, params: any) => {
         const last = locks[locks.length - 1];
-        if (last && params?.entryIds) last.ids = params.entryIds;
+        if (last && params?.assignmentIds) last.ids = params.assignmentIds;
         originalWhere(clause, params);
         return qb;
       });
@@ -239,75 +162,85 @@ describe('BillingEngineService', () => {
       });
       return qb;
     }),
-    query: jest.fn(async (sql: string, params?: any[]) => {
-      txQueries.push(sql);
-      return managerQuery(sql, params);
-    }),
-    // Outbox rows. Kept out of `pending` deliberately: `committed` is asserted against as the
-    // set of *business* rows that survived, and the event log is not one of them.
-    insert: jest.fn(async (_target: any, rows: any[]) => {
-      stagedOutbox.push(...rows);
-      return { identifiers: rows.map((r) => ({ id: r.id })) };
-    }),
+    query: jest.fn(async (sql: string, params?: any[]) => { txQueries.push(sql); return managerQuery(sql, params); }),
+    insert: jest.fn(async (_target: any, rows: any[]) => { stagedOutbox.push(...rows); return { identifiers: rows.map((r) => ({ id: r.id })) }; }),
   });
 
-  /**
-   * DataSource double. Runs the callback against a fresh transaction-scoped manager and
-   * flushes its writes to `committed` only if the callback resolves — so a throw models a
-   * ROLLBACK rather than merely propagating an error.
-   */
   const dataSource: any = {
     transaction: jest.fn(async (isolationOrWork: any, maybeWork?: any) => {
       const work = typeof isolationOrWork === 'function' ? isolationOrWork : maybeWork;
       const pending: any[] = [];
       const stagedOutbox: any[] = [];
       const result = await work(makeManager(pending, stagedOutbox));
-      // Outbox rows are written inside the transaction, so a rollback must take them with it —
-      // otherwise a discarded event would still be relayed a minute later.
       committed.push(...pending);
-      outboxWrites.push(...stagedOutbox);
       return result;
     }),
   };
 
   const publish = jest.fn();
   const emitSafe = jest.fn();
-
-  /** Marks outbox rows dispatched once the immediate publish has succeeded. */
+  /** Let detached promise chains (the post-commit notifications) run to completion. */
+  const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
   const outboxRepo: any = { update: jest.fn(async () => undefined) };
+
+  // ── Fixtures ──────────────────────────────────────────────────────────────
+  const completed = (over: Partial<any> = {}) => ({
+    id: 'asn-1', assignmentNumber: 'ASN-001', status: AssignmentStatus.COMPLETED,
+    projectId: 'project-1', assayerId: 'assayer-1', agreedFee: '2000.00', proposedFee: '2200.00',
+    quotedTravelFee: '300.00', quotedTransportMode: 'CAR', quotedDistanceKm: '42.00', quotedDistanceSource: 'OSRM',
+    completionDate: new Date('2026-08-10T10:00:00Z'), ...over,
+  });
+  const payable = (over: Partial<any> = {}) => ({
+    id: 'payable-1', payableNumber: 'PY-1', assayerId: 'assayer-1', clientId: 'client-1', projectId: 'project-1',
+    assignmentId: 'asn-1', expenseId: null, status: AssayerPayableStatus.PENDING, onHold: false, holdReason: null,
+    baseAmount: '1700.00', travelAmount: '300.00', taxAmount: '0.00', tdsAmount: '200.00', totalAmount: '1800.00',
+    currency: 'INR', paidAmount: '0.00', rateSnapshot: { feeAmount: 2000, settled: true }, ...over,
+  });
+  const line = (over: Partial<any> = {}) => ({
+    id: 'entry-1', entryNumber: 'BE-1', clientId: 'client-1', projectId: 'project-1', assignmentId: 'asn-1', assayerId: 'assayer-1',
+    state: BillingState.UNBILLED, onHold: false, holdReason: null, invoiceId: null,
+    baseAmount: '3000.00', travelAmount: '300.00', adjustmentAmount: '0.00', adjustmentReason: null,
+    taxRate: '18.00', taxableAmount: '3300.00', taxAmount: '594.00', tdsRate: '10.00', tdsAmount: '330.00', totalAmount: '3564.00',
+    currency: 'INR', paidAmount: '0.00', outstandingAmount: '0.00', ...over,
+  });
+  const invoice = (over: Partial<any> = {}) => ({
+    id: 'invoice-1', invoiceNumber: 'INV-1', clientId: 'client-1', projectId: 'project-1', status: InvoiceStatus.ISSUED,
+    issueDate: '2026-08-11', dueDate: '2026-09-10', currency: 'INR', subtotal: '3300.00', taxAmount: '594.00', tdsAmount: '330.00',
+    total: '3564.00', paidAmount: '0.00', outstandingAmount: '3564.00', ...over,
+  });
 
   beforeEach(async () => {
     saved.length = 0;
     committed = [];
     locks = [];
     txQueries = [];
-    outboxWrites = [];
+    totalsRow = { earned: 0, paid: 0, outstanding: 0, awaiting_approval: 0, on_hold: 0, payable_count: 0 };
     jest.clearAllMocks();
     managerQuery.mockImplementation(defaultManagerQuery);
-    entryRepo.manager.query = managerQuery;
-    settings = {
-      get: jest.fn(async () => null),
-      getMany: jest.fn(async () => ({})),
-      getNumber: jest.fn(async (_k: string, fb?: number) => fb as number),
-      describeAll: jest.fn(async () => []),
-      onChange: jest.fn(),
-    };
-    payableRepo.manager.query = managerQuery;
+    for (const r of [entryRepo, payableRepo, invoiceRepo, paymentRepo, historyRepo, assignmentRepo, projectRepo]) {
+      r.findOne.mockImplementation(async () => null);
+      r.find.mockImplementation(async () => []);
+    }
+    entryRepo.createQueryBuilder.mockImplementation(() => queryBuilderStub());
+    projectRepo.findOne.mockImplementation(async () => ({ id: 'project-1', clientId: 'client-1' }));
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         {
           provide: PlatformSettingsService,
-          // Nothing configured in tests: every lookup falls through to the caller's fallback,
-          // which is the shipped constant. Held in a named `settings` so a test that cares about
-          // a specific limit — the credit-note approval threshold — can set one.
-          useValue: settings,
+          useValue: {
+            get: jest.fn(async () => null),
+            getMany: jest.fn(async () => ({})),
+            getNumber: jest.fn(async (_k: string, fb?: number) => fb as number),
+            describeAll: jest.fn(async () => []),
+            onChange: jest.fn(),
+          },
         },
         BillingEngineService,
         { provide: getRepositoryToken(BillingEntryEntity), useValue: entryRepo },
         { provide: getRepositoryToken(BillingInvoiceEntity), useValue: invoiceRepo },
         { provide: getRepositoryToken(BillingPaymentEntity), useValue: paymentRepo },
         { provide: getRepositoryToken(AssayerPayableEntity), useValue: payableRepo },
-        { provide: getRepositoryToken(BillingConflictEntity), useValue: conflictRepo },
         { provide: getRepositoryToken(BillingHistoryEntity), useValue: historyRepo },
         { provide: getRepositoryToken(AssignmentEntity), useValue: assignmentRepo },
         { provide: getRepositoryToken(ProjectEntity), useValue: projectRepo },
@@ -315,11 +248,8 @@ describe('BillingEngineService', () => {
         { provide: DataSource, useValue: dataSource },
         { provide: DomainEventPublisher, useValue: { publish, subscribe: jest.fn() } },
         { provide: NotificationDispatchService, useValue: { emit: jest.fn(), emitSafe } },
-        // The real UnitOfWork over the same DataSource double, rather than a stub that just
-        // calls the callback. The transaction-boundary and post-commit-event assertions below
-        // are assertions about the boundary, so they have to run the code that implements it —
-        // a stub would let `inTx` degrade to a passthrough and every one of them would still
-        // pass.
+        // The real UnitOfWork over the DataSource double, so the transaction-boundary assertions
+        // run the code that implements the boundary rather than a passthrough.
         {
           provide: UnitOfWork,
           useFactory: () =>
@@ -332,13 +262,8 @@ describe('BillingEngineService', () => {
         {
           provide: CacheService,
           useValue: {
-            // Run the guarded work immediately, unlocked — the guards themselves are
-            // what these tests exercise.
             withLock: jest.fn((_key: string, _ttl: number, fn: () => any) => fn()),
-            getJson: jest.fn().mockResolvedValue(null),
-            setJson: jest.fn(),
-            del: jest.fn(),
-            delByPattern: jest.fn(),
+            getJson: jest.fn().mockResolvedValue(null), setJson: jest.fn(), del: jest.fn(), delByPattern: jest.fn(),
           },
         },
       ],
@@ -346,949 +271,473 @@ describe('BillingEngineService', () => {
     service = module.get(BillingEngineService);
   });
 
-  describe('money math', () => {
-    it('withholds TDS at the given rate instead of dropping it', async () => {
-      const entry = await service.createEntry(
-        { level: BillingLevel.CLIENT, clientId: 'client-1', baseAmount: 1000, taxRate: 18, tdsRate: 10 },
-        'user-1',
-      );
-      // 1000 taxable, +18% GST, −10% TDS. TDS used to be read off `tdsAmount`
-      // (a rupee figure) as though it were a percentage, so it was always 0 and
-      // the client was over-billed by the withheld amount.
-      expect(Number(entry.taxableAmount)).toBe(1000);
-      expect(Number(entry.taxAmount)).toBe(180);
-      expect(Number(entry.tdsAmount)).toBe(100);
-      expect(Number(entry.totalAmount)).toBe(1080);
+  // ── Booking ───────────────────────────────────────────────────────────────
+
+  describe('bookAssignment — one completed assignment, both legs, one transaction', () => {
+    beforeEach(() => {
+      assignmentRepo.findOne.mockImplementation(async () => completed());
     });
 
-    it("falls back to the client's contracted rates when none are supplied", async () => {
-      const entry = await service.createEntry(
-        { level: BillingLevel.CLIENT, clientId: 'client-1', baseAmount: 1000 },
-        'user-1',
-      );
-      expect(Number(entry.taxRate)).toBe(18);
-      expect(Number(entry.tdsRate)).toBe(10);
-      expect(Number(entry.totalAmount)).toBe(1080);
-    });
-
-    it('keeps base immutable so a second recompute does not re-add travel', async () => {
-      const entry = await service.createEntry(
-        { level: BillingLevel.CLIENT, clientId: 'client-1', baseAmount: 1000, travelAmount: 200, taxRate: 0, tdsRate: 0 },
-        'user-1',
-      );
-      expect(Number(entry.baseAmount)).toBe(1000); // not 1200
-      expect(Number(entry.taxableAmount)).toBe(1200);
-
-      // Adjusting recomputes; travel must not be folded in a second time.
-      entryRepo.findOne.mockResolvedValueOnce({ ...entry, paidAmount: 0 });
-      const adjusted = await service.adjustEntry(entry.id, 100, 'scope change', 'user-1');
-      expect(Number(adjusted.baseAmount)).toBe(1000);
-      expect(Number(adjusted.taxableAmount)).toBe(1300); // 1000 + 200 + 100
-    });
-
-    it('separates assayer fee from travel so the columns reconcile', async () => {
-      const payable = await service.createPayable(
-        { assayerId: 'assayer-1', baseAmount: 2456, travelAmount: 500, tdsRate: 10 },
-        'user-1',
-      );
-      // fee and travel stay distinct; total = (fee + travel) − 10% TDS
-      expect(Number(payable.baseAmount)).toBe(2456);
-      expect(Number(payable.travelAmount)).toBe(500);
-      expect(Number(payable.tdsAmount)).toBe(295.6);
-      expect(Number(payable.totalAmount)).toBe(2660.4);
-    });
-  });
-
-  describe('guards on money movement', () => {
-    it('blocks a transition only when a conflict names that entry', async () => {
-      const entry = { id: 'entry-1', state: BillingState.READY_FOR_BILLING, clientId: 'client-1' };
-      entryRepo.findOne.mockResolvedValue(entry);
-
-      // No conflict references this entry → the transition proceeds. Previously any
-      // blocking conflict anywhere in the system froze billing for every client.
-      await expect(service.transitionEntry('entry-1', BillingState.DRAFT, 'user-1')).resolves.toBeDefined();
-
-      conflictRepo.createQueryBuilder.mockReturnValueOnce({
-        ...queryBuilderStub(),
-        getOne: jest.fn(async () => ({ conflictNumber: 'BC-1', description: 'Duplicate suspected' })),
-      });
-      entryRepo.findOne.mockResolvedValue({ ...entry, state: BillingState.READY_FOR_BILLING });
-      await expect(service.transitionEntry('entry-1', BillingState.DRAFT, 'user-1')).rejects.toThrow(ConflictException);
-    });
-
-    it('refuses to re-price an entry that already has money collected', async () => {
-      entryRepo.findOne.mockResolvedValue({ id: 'entry-1', entryNumber: 'BE-1', paidAmount: 500, state: BillingState.INVOICED });
-      await expect(service.adjustEntry('entry-1', -100, 'discount', 'user-1')).rejects.toThrow(ConflictException);
-    });
-
-    /**
-     * `adjustEntry` refuses a paid line and tells the operator to issue a credit note. Until this
-     * existed there was nothing to issue, so the one route the engine points people down was the
-     * one it could not follow — and a client over-charged by a double-counted travel fee stayed
-     * over-charged.
-     */
-    describe('credit notes', () => {
-      /** The real over-charged line: travel counted twice, GST at 18%, TDS at 10%. */
-      const paidEntry = () => ({
-        id: 'entry-9',
-        entryNumber: 'BE-MST1U27K-106215',
-        state: BillingState.INVOICED,
-        paymentState: PaymentState.PAID,
-        clientId: 'client-1',
-        baseAmount: 2071,
-        travelAmount: 871,
-        adjustmentAmount: 0,
-        discountAmount: 0,
-        adjustedAmount: 2942,
-        taxableAmount: 2942,
-        taxRate: 18,
-        tdsRate: 10,
-        taxAmount: 529.56,
-        tdsAmount: 294.2,
-        totalAmount: 3177.36,
-        paidAmount: 3177.36,
-      });
-
-      it('reverses tax and TDS in proportion, and reports what must be refunded', async () => {
-        entryRepo.findOne.mockResolvedValue(paidEntry());
-
-        const { entry, refundDue } = await service.creditEntry('entry-9', 871, 'Travel billed twice', 'user-1');
-
-        // Taxable falls to the fee alone; tax and TDS come off at the entry's own rates.
-        expect(Number(entry.taxableAmount)).toBe(2071);
-        expect(Number(entry.taxAmount)).toBe(372.78);
-        expect(Number(entry.tdsAmount)).toBe(207.1);
-        expect(Number(entry.totalAmount)).toBe(2236.68);
-        // Already collected 3177.36 against a line now worth 2236.68.
-        expect(refundDue).toBe(940.68);
-      });
-
-      it('will not credit more than was charged', async () => {
-        entryRepo.findOne.mockResolvedValue(paidEntry());
-        await expect(service.creditEntry('entry-9', 5000, 'oops', 'user-1')).rejects.toThrow(/only ₹2942/);
-      });
-
-      it('insists on a reason, and on a positive amount', async () => {
-        entryRepo.findOne.mockResolvedValue(paidEntry());
-        await expect(service.creditEntry('entry-9', 100, '   ', 'user-1')).rejects.toThrow(/Say why/);
-        await expect(service.creditEntry('entry-9', 0, 'nothing', 'user-1')).rejects.toThrow(/positive amount/);
-      });
-
-      it('holds a credit above the approval limit rather than applying it', async () => {
-        settings.getNumber.mockResolvedValue(500);
-        entryRepo.findOne.mockResolvedValue(paidEntry());
-        await expect(service.creditEntry('entry-9', 871, 'Travel billed twice', 'user-1'))
-          .rejects.toThrow(/above the ₹500 limit/);
-      });
-    });
-
-    it('refuses to merge entries belonging to different clients', async () => {
-      entryRepo.createQueryBuilder.mockReturnValueOnce({
-        ...queryBuilderStub(),
-        getMany: jest.fn(async () => [
-          { id: 'a', clientId: 'client-1', entryNumber: 'BE-A', paidAmount: 0, invoiceId: null },
-          { id: 'b', clientId: 'client-2', entryNumber: 'BE-B', paidAmount: 0, invoiceId: null },
-        ]),
-      });
-      await expect(service.mergeEntries(['a', 'b'], 'user-1')).rejects.toThrow(BadRequestException);
-    });
-
-    it('refuses to merge entries already invoiced or part-paid', async () => {
-      entryRepo.createQueryBuilder.mockReturnValueOnce({
-        ...queryBuilderStub(),
-        getMany: jest.fn(async () => [
-          { id: 'a', clientId: 'client-1', entryNumber: 'BE-A', paidAmount: 0, invoiceId: 'inv-1' },
-          { id: 'b', clientId: 'client-1', entryNumber: 'BE-B', paidAmount: 0, invoiceId: null },
-        ]),
-      });
-      await expect(service.mergeEntries(['a', 'b'], 'user-1')).rejects.toThrow(ConflictException);
-    });
-
-    it('refuses to split an entry that is already invoiced', async () => {
-      // `mergeEntries` has always refused this; the split path did not, so the same line
-      // could be split out from under an invoice that referenced it.
-      entryRepo.findOne.mockResolvedValueOnce({
-        id: 'entry-1', entryNumber: 'BE-1', totalAmount: 1000, paidAmount: 0, invoiceId: 'inv-1',
-        state: BillingState.INVOICED, parentEntryId: null,
-      });
-      await expect(
-        service.splitEntry('entry-1', { amounts: [400, 600] }, 'user-1'),
-      ).rejects.toThrow(ConflictException);
-    });
-  });
-
-  // =========================================================================
-  // Track B — transactional boundaries and row locking
-  // =========================================================================
-
-  describe('transaction boundaries', () => {
-    const issuedInvoice = () => ({
-      id: 'inv-1', invoiceNumber: 'INV-1', clientId: 'client-1', projectId: 'proj-1',
-      currency: 'INR', status: InvoiceStatus.ISSUED,
-      total: 1000, paidAmount: 0, outstandingAmount: 1000,
-    });
-
-    const invoiceEntries = () => [
-      { id: 'entry-a', entryNumber: 'BE-A', state: BillingState.INVOICED, clientId: 'client-1', paidAmount: 0, outstandingAmount: 600 },
-      { id: 'entry-b', entryNumber: 'BE-B', state: BillingState.INVOICED, clientId: 'client-1', paidAmount: 0, outstandingAmount: 400 },
-    ];
-
-    const arrangePayment = (entries = invoiceEntries()) => {
-      invoiceRepo.findOne.mockResolvedValue(issuedInvoice());
-      entryRepo.createQueryBuilder.mockReturnValue({
-        ...queryBuilderStub(),
-        getMany: jest.fn(async () => entries),
-      });
-    };
-
-    it('writes the payment, the invoice and every entry in one transaction', async () => {
-      arrangePayment();
-
-      await service.recordPayment(
-        { invoiceId: 'inv-1', paymentReference: 'NEFT-1', method: PaymentMethod.NEFT, amount: 1000 },
-        'user-1',
-      );
-
-      // One transaction, not the 2+N autocommits this used to be.
+    it('writes the fee payable and the client line in ONE transaction', async () => {
+      const r = await service.bookAssignment('asn-1');
+      expect(r.booked).toBe(true);
       expect(dataSource.transaction).toHaveBeenCalledTimes(1);
-      // READ COMMITTED is explicit: the FOR UPDATE locks below rely on the second writer
-      // re-reading at the new committed value rather than aborting.
-      expect(dataSource.transaction.mock.calls[0][0]).toBe('READ COMMITTED');
-
-      // Payment + invoice + 2 entries + history all survived the same commit.
-      expect(committed.some((r) => r.direction === PaymentDirection.INBOUND)).toBe(true);
-      expect(committed.some((r) => r.id === 'inv-1' && r.status === InvoiceStatus.PAID)).toBe(true);
-      expect(committed.filter((r) => r.id === 'entry-a' || r.id === 'entry-b')).toHaveLength(2);
+      const payables = committed.filter((row) => row.payableNumber);
+      const lines = committed.filter((row) => row.entryNumber);
+      expect(payables).toHaveLength(1);
+      expect(lines).toHaveLength(1);
     });
 
-    it('rolls the payment back when applying it to an entry fails', async () => {
-      arrangePayment();
-      // The DB rejects the second entry write — a constraint violation, a statement
-      // timeout, a dropped connection. Before Track B the payment row and the invoice
-      // update had already committed by this point and stayed committed.
-      entryRepo.save.mockImplementationOnce(async (d: any) => { saved.push(d); return d; })
-                    .mockImplementationOnce(async () => { throw new Error('deadlock detected'); });
-
-      await expect(
-        service.recordPayment(
-          { invoiceId: 'inv-1', paymentReference: 'NEFT-2', method: PaymentMethod.NEFT, amount: 1000 },
-          'user-1',
-        ),
-      ).rejects.toThrow('deadlock detected');
-
-      // Nothing survives: no payment, no invoice adjustment, no partial entry allocation.
-      expect(committed).toHaveLength(0);
-      // The payment row was attempted — proving the failure happened mid-sequence and the
-      // rollback is what removed it, not an early guard that stopped before writing.
-      expect(paymentRepo.save).toHaveBeenCalled();
+    it('prices both legs through assignmentMoney — the client rate and the carved fee', async () => {
+      await service.bookAssignment('asn-1');
+      const p = committed.find((row) => row.payableNumber);
+      const e = committed.find((row) => row.entryNumber);
+      // Assayer: fee 2000 carved into 1700 + 300, 10% TDS on gross, net 1800.
+      expect(p).toMatchObject({ baseAmount: 1700, travelAmount: 300, tdsAmount: 200, totalAmount: 1800, status: AssayerPayableStatus.PENDING, expenseId: null });
+      // Client: rate 3000 + recharged travel 300 = 3300 taxable; 594 GST; 330 TDS; 3564 total.
+      expect(e).toMatchObject({ baseAmount: 3000, travelAmount: 300, taxableAmount: 3300, taxAmount: 594, tdsAmount: 330, totalAmount: 3564, state: BillingState.UNBILLED, onHold: false });
+      expect(e.serviceDate).toBe('2026-08-10');
     });
 
-    it('publishes payment-received only after the transaction commits', async () => {
-      arrangePayment();
-      entryRepo.save.mockImplementationOnce(async () => { throw new Error('write conflict'); });
-
-      await expect(
-        service.recordPayment(
-          { invoiceId: 'inv-1', paymentReference: 'NEFT-3', method: PaymentMethod.NEFT, amount: 1000 },
-          'user-1',
-        ),
-      ).rejects.toThrow('write conflict');
-
-      // The bus is synchronous and in-process. Publishing inside the transaction would have
-      // told every subscriber that money had arrived, and then rolled it back underneath them.
-      expect(publish).not.toHaveBeenCalledWith('billing:payment-received', expect.anything());
-    });
-
-    it('records the invoice status the payment actually moved from', async () => {
-      arrangePayment();
-
-      await service.recordPayment(
-        { invoiceId: 'inv-1', paymentReference: 'NEFT-4', method: PaymentMethod.NEFT, amount: 1000 },
-        'user-1',
-      );
-
-      const history = historyRepo.create.mock.calls
-        .map((c: any[]) => c[0])
-        .find((h: any) => h.action === 'PAYMENT_RECEIVED');
-      // A single payment settling an ISSUED invoice outright is the common case, and the
-      // trail used to infer the prior status backwards from the new one and call it
-      // PARTIALLY_PAID — a state this invoice was never in.
-      expect(history.fromState).toBe(InvoiceStatus.ISSUED);
-      expect(history.toState).toBe(InvoiceStatus.PAID);
-    });
-
-    it('refuses a payment larger than the invoice outstanding', async () => {
-      arrangePayment();
-      await expect(
-        service.recordPayment(
-          { invoiceId: 'inv-1', paymentReference: 'NEFT-5', method: PaymentMethod.NEFT, amount: 1500 },
-          'user-1',
-        ),
-      ).rejects.toThrow(BadRequestException);
+    it('rolls BOTH legs back if the second insert fails — no one-sided ledger', async () => {
+      entryRepo.save.mockImplementationOnce(async () => { throw new Error('disk full'); });
+      await expect(service.bookAssignment('asn-1')).rejects.toThrow('disk full');
+      // The payable was written to the transaction, but nothing survived the rollback.
+      expect(saved.some((row) => row.payableNumber)).toBe(true);
       expect(committed).toHaveLength(0);
     });
 
-    it('returns the original payment when the same reference is submitted twice', async () => {
-      // The invoice is already PAID because the first call settled it. A retry carries the
-      // same paymentReference; without idempotency it would either record a second payment or,
-      // here, be rejected by the overpayment guard for a payment that already succeeded. The
-      // existing-payment check runs before that guard, so the retry is a no-op that returns
-      // the first result.
-      invoiceRepo.findOne.mockResolvedValue({
-        ...issuedInvoice(), status: InvoiceStatus.PAID, paidAmount: 1000, outstandingAmount: 0,
+    it('books only COMPLETED assignments', async () => {
+      assignmentRepo.findOne.mockImplementation(async () => completed({ status: AssignmentStatus.IN_PROGRESS }));
+      const r = await service.bookAssignment('asn-1');
+      expect(r).toEqual({ booked: false, reason: 'assignment not completed' });
+      expect(committed).toHaveLength(0);
+    });
+
+    it('writes nothing when the assignment carries no fee at all', async () => {
+      assignmentRepo.findOne.mockImplementation(async () => completed({ agreedFee: null, proposedFee: null }));
+      const r = await service.bookAssignment('asn-1');
+      expect(r).toEqual({ booked: false, reason: 'NO_FEE' });
+      expect(committed).toHaveLength(0);
+    });
+
+    it('books from the proposed fee when nothing was agreed, and records that it was not settled', async () => {
+      // Symmetric: the old engine paid the assayer and refused to bill the client here.
+      assignmentRepo.findOne.mockImplementation(async () => completed({ agreedFee: null }));
+      const r = await service.bookAssignment('asn-1');
+      expect(r.booked).toBe(true);
+      const p = committed.find((row) => row.payableNumber);
+      expect(p.rateSnapshot).toMatchObject({ feeAmount: 2200, feeSource: 'PROPOSED', settled: false });
+      expect(committed.find((row) => row.entryNumber)).toBeTruthy();
+    });
+
+    it('is idempotent: an already-booked assignment writes nothing', async () => {
+      entryRepo.findOne.mockImplementation(async () => line());
+      payableRepo.findOne.mockImplementation(async () => payable());
+      const r = await service.bookAssignment('asn-1');
+      expect(r).toEqual({ booked: false, reason: 'already booked', entryId: 'entry-1', payableId: 'payable-1' });
+      expect(committed).toHaveLength(0);
+    });
+
+    it('repairs a half-booked assignment by writing only the missing leg', async () => {
+      payableRepo.findOne.mockImplementation(async () => payable());
+      const r = await service.bookAssignment('asn-1');
+      expect(r.booked).toBe(true);
+      expect(committed.filter((row) => row.payableNumber)).toHaveLength(0);
+      expect(committed.filter((row) => row.entryNumber)).toHaveLength(1);
+    });
+
+    it('reports the winner when a concurrent booking got there first', async () => {
+      // The event bus is at-least-once and the lock fails open; the unique index decides.
+      const violation: any = new Error('duplicate');
+      violation.code = '23505';
+      violation.constraint = 'UQ_assayer_payables_fee_per_assignment';
+      payableRepo.save.mockImplementationOnce(async () => { throw violation; });
+      entryRepo.findOne.mockImplementation(async () => line());
+      payableRepo.findOne
+        .mockImplementationOnce(async () => null)   // inside the transaction: not there yet
+        .mockImplementation(async () => payable()); // after the violation: the winner
+      const r = await service.bookAssignment('asn-1');
+      expect(r).toEqual({ booked: false, reason: 'already booked (concurrent)', entryId: 'entry-1', payableId: 'payable-1' });
+    });
+
+    it('writes a history row for each leg on the same transaction, and announces the booking after commit', async () => {
+      await service.bookAssignment('asn-1');
+      const actions = committed.filter((row) => row.action).map((row) => row.action);
+      expect(actions).toEqual(expect.arrayContaining(['PAYABLE_CREATED', 'ENTRY_CREATED']));
+      expect(publish).toHaveBeenCalledWith('billing:booked', expect.objectContaining({ assignmentId: 'asn-1', assayerId: 'assayer-1', settled: true }));
+    });
+
+    it('passes the fee through at cost when the client has no rate card', async () => {
+      managerQuery.mockImplementation(async (sql: string) => {
+        if (sql.includes('FROM client_configurations')) return [];
+        return defaultManagerQuery(sql);
       });
-      const original = {
-        id: 'payment-first', direction: PaymentDirection.INBOUND, paymentReference: 'NEFT-DUP', amount: 1000,
-      };
-      paymentRepo.findOne.mockResolvedValueOnce(original);
-
-      const result = await service.recordPayment(
-        { invoiceId: 'inv-1', paymentReference: 'NEFT-DUP', method: PaymentMethod.NEFT, amount: 1000 },
-        'user-1',
-      );
-
-      expect(result).toBe(original);
-      // No second payment, no invoice mutation, no history — nothing committed at all.
-      expect(committed).toHaveLength(0);
-      expect(paymentRepo.save).not.toHaveBeenCalled();
+      await service.bookAssignment('asn-1');
+      const e = committed.find((row) => row.entryNumber);
+      expect(e).toMatchObject({ baseAmount: 1700, travelAmount: 300, taxableAmount: 2000 });
+      expect(e.description).toContain('no client rate set');
     });
+  });
 
-    it('refuses to commit an allocation that credits more than was received', async () => {
-      arrangePayment(); // entries outstanding 600 + 400 against a 1000 invoice
-      // A ₹500 part-payment allocated to only one of the two entries. entry-a takes the
-      // whole 500 because it is named; entry-b still takes its pro-rata slice of the same
-      // 500 (400/1000 × 500 = 200) because it is not. 700 credited for 500 received.
-      await expect(
-        service.recordPayment(
-          {
-            invoiceId: 'inv-1', paymentReference: 'NEFT-6', method: PaymentMethod.NEFT,
-            amount: 500, allocatedToEntryIds: ['entry-a'],
-          },
-          'user-1',
-        ),
-      ).rejects.toThrow(ConflictException);
-      // The point of raising it rather than clamping: the money is still intact and the
-      // caller finds out, instead of the ledger quietly ceasing to reconcile.
-      expect(committed).toHaveLength(0);
-    });
-
-    it('allocates a full payment across every entry without tripping the guard', async () => {
-      arrangePayment();
-      // The `Math.min(share, outstanding)` clamp means a payment that settles the invoice
-      // outright cannot over-credit even when partially allocated — each entry absorbs at
-      // most its own balance and those sum to the invoice. The guard must not fire here.
-      const payment = await service.recordPayment(
-        {
-          invoiceId: 'inv-1', paymentReference: 'NEFT-6b', method: PaymentMethod.NEFT,
-          amount: 1000, allocatedToEntryIds: ['entry-a'],
-        },
-        'user-1',
-      );
-      expect(Number(payment.amount)).toBe(1000);
-      expect(committed.some((r) => r.id === 'entry-a' && r.paymentState === PaymentState.PAID)).toBe(true);
-      expect(committed.some((r) => r.id === 'entry-b' && r.paymentState === PaymentState.PAID)).toBe(true);
-    });
-
-    it('rolls a state transition back when its history row cannot be written', async () => {
-      entryRepo.findOne.mockResolvedValue({
-        id: 'entry-1', entryNumber: 'BE-1', state: BillingState.READY_FOR_BILLING, clientId: 'client-1',
+  describe('reconcile — the repair button', () => {
+    it('books every completed assignment that is missing a leg, and nothing else', async () => {
+      assignmentRepo.manager.query = jest.fn(async (sql: string) => {
+        if (sql.includes('LEFT JOIN billing_entries')) return [{ id: 'asn-1' }, { id: 'asn-2' }];
+        return managerQuery(sql);
       });
-      historyRepo.save.mockImplementationOnce(async () => { throw new Error('history insert failed'); });
-
-      await expect(
-        service.transitionEntry('entry-1', BillingState.DRAFT, 'user-1'),
-      ).rejects.toThrow('history insert failed');
-
-      // A state change with no record of who made it is exactly what an audit trail for a
-      // bank cannot contain, so the change goes back rather than the record being optional.
-      expect(committed).toHaveLength(0);
-      expect(publish).not.toHaveBeenCalledWith('billing:entry-state-changed', expect.anything());
+      assignmentRepo.findOne.mockImplementation(async (opts: any) => completed({ id: opts.where.id, assignmentNumber: opts.where.id.toUpperCase() }));
+      const r = await service.reconcile('finance-1');
+      expect(r).toMatchObject({ scanned: 2, booked: 2, skipped: 0, errors: [] });
+      expect(committed.filter((row) => row.payableNumber)).toHaveLength(2);
+      assignmentRepo.manager.query = managerQuery;
     });
 
-    it('keeps each row in a bulk transition independent', async () => {
-      const rows: Record<string, any> = {
-        'entry-ok': { id: 'entry-ok', entryNumber: 'BE-OK', state: BillingState.READY_FOR_BILLING, clientId: 'client-1' },
-        'entry-bad': { id: 'entry-bad', entryNumber: 'BE-BAD', state: BillingState.PAID, clientId: 'client-1' },
-      };
-      entryRepo.findOne.mockImplementation(async (opts: any) => rows[opts.where.id] ?? null);
+    it('honours `since` so a fresh deploy does not book years of history', async () => {
+      const spy = jest.fn(async () => []);
+      assignmentRepo.manager.query = spy;
+      await service.reconcilePreview({ since: '2026-08-01' });
+      expect(spy).toHaveBeenCalledWith(expect.stringContaining('completion_date >= $1::date'), ['2026-08-01']);
+      assignmentRepo.manager.query = managerQuery;
+    });
+  });
 
-      const result = await service.bulkTransitionEntries(
-        ['entry-ok', 'entry-bad'], BillingState.DRAFT, 'user-1',
-      );
-
-      // One transaction per row, so the invalid row rolls back alone.
-      expect(dataSource.transaction).toHaveBeenCalledTimes(2);
-      expect(result.succeeded).toEqual([{ id: 'entry-ok', from: BillingState.READY_FOR_BILLING, to: BillingState.DRAFT }]);
-      expect(result.failed).toHaveLength(1);
-      expect(result.failed[0].id).toBe('entry-bad');
-      // The good row is still committed — an operator selecting two hundred lines expects
-      // the valid ones to move.
-      expect(committed.some((r) => r.id === 'entry-ok')).toBe(true);
+  describe('repriceAssignment — the safety net for a fee that moved', () => {
+    beforeEach(() => {
+      assignmentRepo.findOne.mockImplementation(async () => completed({ agreedFee: '2500.00' }));
     });
 
-    it('reports the from-state read under the lock, not one glanced at beforehand', async () => {
-      // First read (were it unlocked) would say SUBMITTED; the value seen under the lock
-      // is APPROVED, because another writer got there first.
-      entryRepo.findOne.mockResolvedValue({
-        id: 'entry-1', entryNumber: 'BE-1', state: BillingState.APPROVED, clientId: 'client-1',
-      });
-
-      const result = await service.bulkTransitionEntries(['entry-1'], BillingState.INVOICED, 'user-1');
-      expect(result.succeeded[0].from).toBe(BillingState.APPROVED);
+    it('re-prices an unbilled line and an unpaid payable in place', async () => {
+      entryRepo.findOne.mockImplementation(async () => line());
+      payableRepo.findOne.mockImplementation(async () => payable());
+      const r = await service.repriceAssignment('asn-1', 'ops-1');
+      expect(r.repriced).toBe(true);
+      expect(committed.find((row) => row.payableNumber)).toMatchObject({ baseAmount: 2200, travelAmount: 300, totalAmount: 2250 });
+      expect(committed.filter((row) => row.action).map((row) => row.action)).toEqual(expect.arrayContaining(['PAYABLE_REPRICED', 'ENTRY_REPRICED']));
     });
 
-    it('treats "already in the target state" as skipped, not failed', async () => {
-      entryRepo.findOne.mockResolvedValue({
-        id: 'entry-1', entryNumber: 'BE-1', state: BillingState.DRAFT, clientId: 'client-1',
-      });
-      const result = await service.bulkTransitionEntries(['entry-1'], BillingState.DRAFT, 'user-1');
-      expect(result.skipped).toEqual([{ id: 'entry-1', current: BillingState.DRAFT, reason: 'Already DRAFT' }]);
-      expect(result.failed).toHaveLength(0);
-    });
-
-    it('rolls an invoice back rather than leaving some entries marked INVOICED', async () => {
-      const entries = [
-        { id: 'entry-a', entryNumber: 'BE-A', state: BillingState.APPROVED, clientId: 'client-1', invoiceId: null, currency: 'INR', taxableAmount: 600, taxAmount: 0, tdsAmount: 0, discountAmount: 0, totalAmount: 600 },
-        { id: 'entry-b', entryNumber: 'BE-B', state: BillingState.APPROVED, clientId: 'client-1', invoiceId: null, currency: 'INR', taxableAmount: 400, taxAmount: 0, tdsAmount: 0, discountAmount: 0, totalAmount: 400 },
-      ];
-      entryRepo.createQueryBuilder.mockReturnValue({ ...queryBuilderStub(), getMany: jest.fn(async () => entries) });
-      entryRepo.save.mockImplementationOnce(async (d: any) => { saved.push(d); return d; })
-                    .mockImplementationOnce(async () => { throw new Error('constraint violation'); });
-
-      await expect(
-        service.createInvoice(
-          { clientId: 'client-1', type: InvoiceType.CONSOLIDATED, entryIds: ['entry-a', 'entry-b'] },
-          'user-1',
-        ),
-      ).rejects.toThrow('constraint violation');
-
-      // Otherwise: an invoice exists, entry-a points at it and is INVOICED, entry-b is still
-      // APPROVED and free to be invoiced again — the same work billed twice.
+    it('leaves an invoiced line and a paid payable alone — they record what actually happened', async () => {
+      entryRepo.findOne.mockImplementation(async () => line({ state: BillingState.INVOICED, invoiceId: 'invoice-1' }));
+      payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.PAID, paidAmount: '1800.00' }));
+      const r = await service.repriceAssignment('asn-1', 'ops-1');
+      expect(r).toEqual({ repriced: false, reason: 'nothing re-priceable' });
       expect(committed).toHaveLength(0);
     });
   });
 
-  describe('row locking', () => {
-    it('takes a write lock on the entry before evaluating any transition guard', async () => {
-      entryRepo.findOne.mockResolvedValue({
-        id: 'entry-1', entryNumber: 'BE-1', state: BillingState.READY_FOR_BILLING, clientId: 'client-1',
-      });
+  // ── Payouts ───────────────────────────────────────────────────────────────
 
-      await service.transitionEntry('entry-1', BillingState.DRAFT, 'user-1');
-
-      const entryLock = locks.find((l) => l.entity === 'BillingEntryEntity');
-      expect(entryLock).toEqual({ entity: 'BillingEntryEntity', mode: 'pessimistic_write', ids: ['entry-1'] });
-      // The lock is the first thing the transaction does — guards evaluated before it would
-      // be judging a row another writer can still change.
-      expect(locks[0]).toBe(entryLock);
+  describe('approvePayouts — the one gate', () => {
+    it('approves a due payout, stamps who and when, and tells the assayer', async () => {
+      payableRepo.findOne.mockImplementation(async () => payable());
+      const r = await service.approvePayouts(['payable-1'], 'finance-1');
+      expect(r).toEqual({ done: ['payable-1'], refused: [] });
+      const p = committed.find((row) => row.payableNumber);
+      expect(p).toMatchObject({ status: AssayerPayableStatus.APPROVED, approvedBy: 'finance-1' });
+      expect(p.approvedAt).toBeInstanceOf(Date);
+      expect(locks).toContainEqual(expect.objectContaining({ entity: 'AssayerPayableEntity', mode: 'pessimistic_write' }));
+      // The notification is detached from the transaction (it must never roll money back), so
+      // let the event loop turn once before asserting it was sent.
+      await flush();
+      expect(emitSafe).toHaveBeenCalledWith(expect.objectContaining({ type: 'PAYABLE_APPROVED', assayerId: 'assayer-1' }));
     });
 
-    it('locks the invoice before checking whether the payment overpays it', async () => {
-      invoiceRepo.findOne.mockResolvedValue({
-        id: 'inv-1', invoiceNumber: 'INV-1', clientId: 'client-1', projectId: null,
-        currency: 'INR', status: InvoiceStatus.ISSUED, total: 1000, paidAmount: 0, outstandingAmount: 1000,
-      });
-      entryRepo.createQueryBuilder.mockReturnValue({ ...queryBuilderStub(), getMany: jest.fn(async () => []) });
-
-      await service.recordPayment(
-        { invoiceId: 'inv-1', paymentReference: 'NEFT-7', method: PaymentMethod.NEFT, amount: 400 },
-        'user-1',
-      );
-
-      expect(locks[0]).toEqual({ entity: 'BillingInvoiceEntity', mode: 'pessimistic_write', ids: ['inv-1'] });
+    it('refuses a held payout, naming the hold reason, and approves the rest', async () => {
+      payableRepo.findOne.mockImplementation(async (opts: any) =>
+        opts.where.id === 'held-1' ? payable({ id: 'held-1', payableNumber: 'PY-H', onHold: true, holdReason: 'Client dispute' }) : payable());
+      const r = await service.approvePayouts(['held-1', 'payable-1'], 'finance-1');
+      expect(r.done).toEqual(['payable-1']);
+      expect(r.refused).toEqual([{ id: 'held-1', reason: expect.stringContaining('Client dispute') }]);
     });
 
-    it('locks multi-entry operations in a stable id order', async () => {
-      const entries = [
-        { id: 'entry-a', entryNumber: 'BE-A', state: BillingState.APPROVED, clientId: 'client-1', invoiceId: null, paidAmount: 0, totalAmount: 600, baseAmount: 600, taxAmount: 0, tdsAmount: 0 },
-        { id: 'entry-b', entryNumber: 'BE-B', state: BillingState.APPROVED, clientId: 'client-1', invoiceId: null, paidAmount: 0, totalAmount: 400, baseAmount: 400, taxAmount: 0, tdsAmount: 0 },
-      ];
-      entryRepo.createQueryBuilder.mockReturnValue({ ...queryBuilderStub(), getMany: jest.fn(async () => entries) });
+    it('treats an already-approved payout as done — the bulk button may be pressed twice', async () => {
+      payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED }));
+      const r = await service.approvePayouts(['payable-1'], 'finance-1');
+      expect(r).toEqual({ done: ['payable-1'], refused: [] });
+      expect(committed).toHaveLength(0);
+      expect(emitSafe).not.toHaveBeenCalled();
+    });
 
-      await service.mergeEntries(['entry-b', 'entry-a'], 'user-1');
+    it('refuses a paid payout', async () => {
+      payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.PAID }));
+      const r = await service.approvePayouts(['payable-1'], 'finance-1');
+      expect(r.refused[0].reason).toContain('already paid');
+    });
+  });
 
+  describe('payPayouts / recordDisbursement — the only path to PAID', () => {
+    it('refuses a payout that has not been approved', async () => {
+      payableRepo.findOne.mockImplementation(async () => payable());
+      const r = await service.payPayouts(['payable-1'], { paymentReference: 'UTR-1', method: PaymentMethod.NEFT }, 'finance-1');
+      expect(r.done).toEqual([]);
+      expect(r.refused[0].reason).toContain('not been approved');
+      expect(committed).toHaveLength(0);
+    });
+
+    it('refuses a held payout even when approved', async () => {
+      payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED, onHold: true, holdReason: 'Pending PAN' }));
+      const r = await service.payPayouts(['payable-1'], { paymentReference: 'UTR-1', method: PaymentMethod.NEFT }, 'finance-1');
+      expect(r.refused[0].reason).toContain('Pending PAN');
+    });
+
+    it('pays the full outstanding, records a real payment row, marks PAID, and tells the assayer', async () => {
+      payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED }));
+      totalsRow = { ...totalsRow, outstanding: 0 };
+      const r = await service.payPayouts(['payable-1'], { paymentReference: 'UTR-1', method: PaymentMethod.NEFT, paidDate: '2026-08-12' }, 'finance-1');
+      expect(r.done).toEqual([{ payableId: 'payable-1', paymentId: expect.any(String) }]);
+      const p = committed.find((row) => row.payableNumber);
+      expect(p).toMatchObject({ status: AssayerPayableStatus.PAID, paidAmount: 1800, paidBy: 'finance-1' });
+      const payment = committed.find((row) => row.direction === PaymentDirection.OUTBOUND);
+      expect(payment).toMatchObject({ amount: 1800, paymentReference: 'UTR-1', payableId: 'payable-1', assayerId: 'assayer-1', receivedDate: '2026-08-12', runningBalance: 0 });
+      await flush();
+      expect(emitSafe).toHaveBeenCalledWith(expect.objectContaining({ type: 'PAYABLE_PAID' }));
+    });
+
+    it('computes the running balance on the transaction’s own connection, after the write', async () => {
+      payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED }));
+      await service.payPayouts(['payable-1'], { paymentReference: 'UTR-1', method: PaymentMethod.NEFT }, 'finance-1');
+      expect(txQueries.some((sql) => sql.includes('FROM assayer_payables') && sql.includes('awaiting_approval'))).toBe(true);
+    });
+
+    it('is idempotent by reference: a retried payment returns the original and pays nothing twice', async () => {
+      payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.PAID, paidAmount: '1800.00' }));
+      paymentRepo.findOne.mockImplementation(async () => ({ id: 'payment-first', direction: PaymentDirection.OUTBOUND, amount: 1800, isActive: true }));
+      const r = await service.payPayouts(['payable-1'], { paymentReference: 'UTR-1', method: PaymentMethod.NEFT }, 'finance-1');
+      expect(r.done).toEqual([{ payableId: 'payable-1', paymentId: 'payment-first' }]);
+      expect(committed).toHaveLength(0);
+      expect(emitSafe).not.toHaveBeenCalled();
+    });
+
+    it('refuses an amount above what is owed', async () => {
+      payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED }));
+      await expect(service.recordDisbursement({ payableId: 'payable-1', paymentReference: 'UTR-1', method: PaymentMethod.NEFT, amount: 1800.5 }, 'f'))
+        .rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('holdPayout', () => {
+    it('requires a reason to hold, and refuses to hold a paid payout', async () => {
+      await expect(service.holdPayout('payable-1', true, '  ', 'f')).rejects.toThrow(BadRequestException);
+      payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.PAID }));
+      await expect(service.holdPayout('payable-1', true, 'why', 'f')).rejects.toThrow(ConflictException);
+    });
+
+    it('flags the payout with the reason and writes history; release clears it', async () => {
+      payableRepo.findOne.mockImplementation(async () => payable());
+      const held = await service.holdPayout('payable-1', true, 'Awaiting PAN', 'f');
+      expect(held).toMatchObject({ onHold: true, holdReason: 'Awaiting PAN' });
+      payableRepo.findOne.mockImplementation(async () => payable({ onHold: true, holdReason: 'Awaiting PAN' }));
+      const released = await service.holdPayout('payable-1', false, undefined, 'f');
+      expect(released).toMatchObject({ onHold: false, holdReason: null });
+      expect(committed.filter((row) => row.action === 'PAYABLE_HOLD_CHANGED')).toHaveLength(2);
+    });
+  });
+
+  describe('assayerTotals — the one predicate', () => {
+    it('maps the SQL to the statement shape and keeps earned = paid + outstanding + held', async () => {
+      totalsRow = { earned: '5000.00', paid: '1800.00', outstanding: '2000.00', awaiting_approval: '2000.00', on_hold: '1200.00', payable_count: 3 };
+      const t = await service.assayerTotals('assayer-1');
+      expect(t).toEqual({ earned: 5000, paid: 1800, outstanding: 2000, awaitingApproval: 2000, onHoldOrDisputed: 1200, payableCount: 3 });
+      expect(t.earned).toBe(t.paid + t.outstanding + t.onHoldOrDisputed);
+    });
+
+    it('excludes held rows from outstanding and awaiting — the SQL says so', async () => {
+      await service.assayerTotals('assayer-1');
+      const sql = managerQuery.mock.calls.map((c) => c[0]).find((s: string) => s.includes('awaiting_approval')) as string;
+      expect(sql).toMatch(/FILTER \(WHERE on_hold = false\), 0\)\s+AS outstanding/);
+      expect(sql).toMatch(/status = 'PENDING' AND on_hold = false/);
+    });
+  });
+
+  // ── Invoices ──────────────────────────────────────────────────────────────
+
+  describe('createInvoice — a set of completed assignments for one client', () => {
+    const qbWith = (rows: any[]) => ({ ...queryBuilderStub(), getMany: jest.fn(async () => rows) });
+
+    it('locks the lines by assignment, invoices them, and totals from the lines', async () => {
+      entryRepo.createQueryBuilder.mockImplementation(() => qbWith([line(), line({ id: 'entry-2', entryNumber: 'BE-2', assignmentId: 'asn-2' })]));
+      const inv = await service.createInvoice({ clientId: 'client-1', assignmentIds: ['asn-1', 'asn-2'] }, 'finance-1');
+      expect(inv).toMatchObject({ status: InvoiceStatus.DRAFT, subtotal: 6600, taxAmount: 1188, tdsAmount: 660, total: 7128, outstandingAmount: 7128, projectId: 'project-1' });
+      expect(inv.dueDate).toBe('2026-09-18'.slice(0, 0) + inv.dueDate); // derived from NET30 below
       const lock = locks.find((l) => l.entity === 'BillingEntryEntity');
-      expect(lock?.mode).toBe('pessimistic_write');
-      // Ordering is what stops a merge and a payment over the same lines from deadlocking:
-      // both acquire entry-a before entry-b and one simply waits.
-      expect(lock?.orderBy).toBe('e.id ASC');
+      expect(lock).toMatchObject({ mode: 'pessimistic_write', ids: ['asn-1', 'asn-2'], orderBy: 'e.id ASC' });
+      const invoiced = committed.filter((row) => row.entryNumber);
+      expect(invoiced.every((e) => e.state === BillingState.INVOICED && e.invoiceId === 'invoice-1' && Number(e.outstandingAmount) === 3564)).toBe(true);
     });
 
-    it('inherits the source line from the caller order, not the lock order', async () => {
-      const entries = [
-        { id: 'entry-a', entryNumber: 'BE-A', state: BillingState.APPROVED, clientId: 'client-1', projectId: 'proj-a', invoiceId: null, paidAmount: 0, totalAmount: 600, baseAmount: 600, taxAmount: 0, tdsAmount: 0, level: BillingLevel.ASSIGNMENT },
-        { id: 'entry-b', entryNumber: 'BE-B', state: BillingState.APPROVED, clientId: 'client-1', projectId: 'proj-b', invoiceId: null, paidAmount: 0, totalAmount: 400, baseAmount: 400, taxAmount: 0, tdsAmount: 0, level: BillingLevel.ASSIGNMENT },
-      ];
-      entryRepo.createQueryBuilder.mockReturnValue({ ...queryBuilderStub(), getMany: jest.fn(async () => entries) });
-
-      // Caller names entry-b first, so the merged line is entry-b's. Rows are still locked
-      // a-then-b; the two orders are deliberately independent.
-      const merged = await service.mergeEntries(['entry-b', 'entry-a'], 'user-1');
-      expect(merged.projectId).toBe('proj-b');
+    it('derives the due date from the client’s payment terms', async () => {
+      entryRepo.createQueryBuilder.mockImplementation(() => qbWith([line()]));
+      const inv = await service.createInvoice({ clientId: 'client-1', assignmentIds: ['asn-1'], issueDate: '2026-08-01' }, 'f');
+      expect(inv.dueDate).toBe('2026-08-31');
     });
 
-    it('locks the payable before deciding how much is still owed', async () => {
-      payableRepo.findOne.mockResolvedValue({
-        id: 'payable-1', payableNumber: 'PY-1', assayerId: 'assayer-1', clientId: 'client-1',
-        projectId: null, assignmentId: 'asn-1', status: AssayerPayableStatus.APPROVED,
-        totalAmount: 1000, paidAmount: 0, currency: 'INR',
-      });
-
-      await service.recordDisbursement(
-        { payableId: 'payable-1', paymentReference: 'NEFT-8', method: PaymentMethod.NEFT }, 'user-1',
-      );
-
-      expect(locks[0]).toEqual({ entity: 'AssayerPayableEntity', mode: 'pessimistic_write', ids: ['payable-1'] });
-    });
-
-    it("computes the assayer's running balance on the transaction's own connection", async () => {
-      payableRepo.findOne.mockResolvedValue({
-        id: 'payable-1', payableNumber: 'PY-1', assayerId: 'assayer-1', clientId: 'client-1',
-        projectId: null, assignmentId: 'asn-1', status: AssayerPayableStatus.APPROVED,
-        totalAmount: 1000, paidAmount: 0, currency: 'INR',
-      });
-
-      await service.recordDisbursement(
-        { payableId: 'payable-1', paymentReference: 'NEFT-11', method: PaymentMethod.NEFT }, 'user-1',
-      );
-
-      // On a separate connection this SUM would not see the paidAmount written moments
-      // earlier, and the balance stamped on the payment row would be stale on arrival.
-      expect(txQueries.some((sql) => sql.includes('FROM assayer_payables'))).toBe(true);
-    });
-  });
-
-  describe('billing the client at their contracted rate (margin)', () => {
-    const completedAssignment = {
-      id: 'asn-1', assignmentNumber: 'ASN-1', status: 'COMPLETED',
-      assayerId: 'as-1', projectId: 'proj-1', agreedFee: 2000, completionDate: new Date('2026-08-20'),
-    };
-
-    beforeEach(() => {
-      assignmentRepo.find.mockResolvedValue([completedAssignment]);
-      assignmentRepo.findOne.mockResolvedValue(completedAssignment);
-      // No existing entries or payables, so both legs are created fresh.
-      entryRepo.find.mockResolvedValue([]);
-      payableRepo.findOne.mockResolvedValue(null);
-    });
-
-    it('bills the client the contracted base fee, not the assayer fee, creating margin', async () => {
-      const q = async (sql: string): Promise<any[]> => {
-        if (sql.includes('default_base_fee')) return [{ default_base_fee: '3000' }];
-        if (sql.includes('planning_preferences')) return [{ planning_preferences: {} }];
-        if (sql.includes('assayer_commercial_profiles')) return [{ base_fee: '2000', travel_reimbursement: '0', daily_rate: '0' }];
-        if (sql.includes('FROM clients WHERE id')) return [{ id: 'client-1' }];
-        if (sql.includes('FROM client_billing')) return [{ gst_rate: '18', tds_rate: '10', payment_terms: 'NET30' }];
-        return [];
-      };
-      entryRepo.manager.query = q;
-      payableRepo.manager.query = q;
-      managerQuery.mockImplementation(q);
-      projectRepo.find = jest.fn(async () => [{ id: 'proj-1', clientId: 'client-1' }]);
-
-      await service.syncFromAssignments('user-1');
-
-      // The entry (what the client pays) is booked at the client rate 3000; the payable (what
-      // the assayer is paid) stays at the agreed fee 2000. Margin = 1000, no longer zero.
-      const entry = saved.find((r) => r.level === 'ASSIGNMENT' && r.clientId === 'client-1');
-      expect(entry).toBeDefined();
-      expect(Number(entry.baseAmount)).toBe(3000);
-    });
-
-    it('falls back to the assayer fee when the client has set no rate', async () => {
-      const q = async (sql: string): Promise<any[]> => {
-        if (sql.includes('default_base_fee')) return [{ default_base_fee: null }];
-        if (sql.includes('planning_preferences')) return [{ planning_preferences: {} }];
-        if (sql.includes('assayer_commercial_profiles')) return [{ base_fee: '2000', travel_reimbursement: '0', daily_rate: '0' }];
-        if (sql.includes('FROM clients WHERE id')) return [{ id: 'client-1' }];
-        if (sql.includes('FROM client_billing')) return [{ gst_rate: '18', tds_rate: '10', payment_terms: 'NET30' }];
-        return [];
-      };
-      entryRepo.manager.query = q;
-      payableRepo.manager.query = q;
-      managerQuery.mockImplementation(q);
-      projectRepo.find = jest.fn(async () => [{ id: 'proj-1', clientId: 'client-1' }]);
-
-      await service.syncFromAssignments('user-1');
-
-      const entry = saved.find((r) => r.level === 'ASSIGNMENT' && r.clientId === 'client-1');
-      expect(Number(entry.baseAmount)).toBe(2000);
-    });
-
-    /**
-     * The fallback is a PASS-THROUGH, so it must total the agreed fee — not the fee plus travel.
-     *
-     * The agreed fee already contains travel (the payable carves it back out using
-     * `quotedTravelFee`, and the mobile app tells the assayer as much). Billing the whole fee as
-     * base and then adding the rechargeable travel on top charged the client for the journey
-     * twice. It was invisible because the duplicate landed exactly on the margin line: revenue
-     * exceeded cost by precisely the travel figure, so a double-charge read as healthy profit.
-     */
-    it('does not bill travel twice on the fallback: base + travel equals the agreed fee', async () => {
-      const withTravel = { ...completedAssignment, agreedFee: 2000, quotedTravelFee: 500 };
-      assignmentRepo.find.mockResolvedValue([withTravel]);
-      assignmentRepo.findOne.mockResolvedValue(withTravel);
-
-      const q = async (sql: string): Promise<any[]> => {
-        // No client rate card — the pass-through path.
-        if (sql.includes('default_base_fee')) return [{ default_base_fee: null }];
-        if (sql.includes('planning_preferences')) return [{ planning_preferences: {} }];
-        if (sql.includes('assayer_commercial_profiles')) return [{ base_fee: '2000', travel_reimbursement: '0', daily_rate: '0' }];
-        if (sql.includes('FROM clients WHERE id')) return [{ id: 'client-1' }];
-        if (sql.includes('FROM client_billing')) return [{ gst_rate: '18', tds_rate: '10', payment_terms: 'NET30' }];
-        return [];
-      };
-      entryRepo.manager.query = q;
-      payableRepo.manager.query = q;
-      managerQuery.mockImplementation(q);
-      projectRepo.find = jest.fn(async () => [{ id: 'proj-1', clientId: 'client-1' }]);
-
-      await service.syncFromAssignments('user-1');
-
-      const entry = saved.find((r) => r.level === 'ASSIGNMENT' && r.clientId === 'client-1');
-      expect(Number(entry.travelAmount)).toBe(500);
-      // 2000 agreed = 1500 base + 500 travel. Before the fix this was 2000 + 500 = 2500.
-      expect(Number(entry.baseAmount)).toBe(1500);
-      expect(Number(entry.baseAmount) + Number(entry.travelAmount)).toBe(2000);
-    });
-
-    /**
-     * Offers made before `quotedTravelFee` existed have no knowable split, so they keep the whole
-     * fee as base. Restating history would be worse than the known flaw.
-     */
-    it('leaves legacy offers with no recorded travel component alone', async () => {
-      const noTravelQuote = { ...completedAssignment, agreedFee: 2000, quotedTravelFee: null };
-      assignmentRepo.find.mockResolvedValue([noTravelQuote]);
-      assignmentRepo.findOne.mockResolvedValue(noTravelQuote);
-
-      const q = async (sql: string): Promise<any[]> => {
-        if (sql.includes('default_base_fee')) return [{ default_base_fee: null }];
-        if (sql.includes('planning_preferences')) return [{ planning_preferences: {} }];
-        if (sql.includes('assayer_commercial_profiles')) return [{ base_fee: '2000', travel_reimbursement: '0', daily_rate: '0' }];
-        if (sql.includes('FROM clients WHERE id')) return [{ id: 'client-1' }];
-        if (sql.includes('FROM client_billing')) return [{ gst_rate: '18', tds_rate: '10', payment_terms: 'NET30' }];
-        return [];
-      };
-      entryRepo.manager.query = q;
-      payableRepo.manager.query = q;
-      managerQuery.mockImplementation(q);
-      projectRepo.find = jest.fn(async () => [{ id: 'proj-1', clientId: 'client-1' }]);
-
-      await service.syncFromAssignments('user-1');
-
-      const entry = saved.find((r) => r.level === 'ASSIGNMENT' && r.clientId === 'client-1');
-      expect(Number(entry.baseAmount)).toBe(2000);
-    });
-  });
-
-  describe('payable rate snapshot', () => {
-    it('records the agreed fee it actually booked, not the profile standard rate', async () => {
-      // Completed assignment agreed at 2000; the assayer's standard profile rate is 3406.
-      assignmentRepo.findOne.mockResolvedValue({
-        id: 'asn-1', assignmentNumber: 'ASN-1', status: 'COMPLETED',
-        assayerId: 'as-1', projectId: 'proj-1', agreedFee: 2000, proposedFee: 2100,
-      });
-      payableRepo.findOne.mockResolvedValue(null);
-      // The commercial-profile lookup (via manager.query) returns the standard rate.
-      const q = payableRepo.manager.query as jest.Mock;
-      q.mockImplementation(async (sql: string): Promise<any[]> => {
-        if (sql.includes('assayer_commercial_profiles')) return [{ base_fee: '3406', travel_reimbursement: '313', daily_rate: '5000' }];
-        if (sql.includes('FROM clients WHERE id')) return [{ id: 'client-1' }];
-        return [];
-      });
-      let captured: any = null;
-      payableRepo.save.mockImplementation(async (d: any) => { captured = d; return { id: 'payable-1', ...d }; });
-
-      await service.syncPayableForAssignment('asn-1', 'user-1');
-
-      // The payable is booked at the agreed fee, and the snapshot must justify that number.
-      expect(Number(captured.baseAmount)).toBe(2000);
-      expect(Number(captured.rateSnapshot.baseFee)).toBe(2000);
-      // The profile's standard rate is kept for context, clearly separated, never conflated
-      // with the amount actually paid.
-      expect(Number(captured.rateSnapshot.profileStandardBaseFee)).toBe(3406);
-    });
-  });
-
-  /**
-   * One receivable and one fee payable per assignment. Auto-sync runs from an at-least-once
-   * event under a fail-open lock, so the database's partial unique indexes (migration
-   * 1790500000000) are the guard; these pin how the service behaves around them.
-   */
-  /**
-   * The backfill's cost is dominated by what it does PER ASSIGNMENT, so what matters is not that
-   * it produces the right totals but that it stops before doing per-assignment work on rows that
-   * are already settled. It used to call syncPayableForAssignment for every billable assignment
-   * before checking anything — three to four queries each, on a book where the overwhelming
-   * majority are long since billed.
-   */
-  describe('backfill skips settled assignments before touching them', () => {
-    const settled = {
-      id: 'asn-settled', assignmentNumber: 'ASN-S', status: 'COMPLETED',
-      assayerId: 'as-1', projectId: 'proj-1', agreedFee: 2000,
-    };
-    const fresh = {
-      id: 'asn-fresh', assignmentNumber: 'ASN-F', status: 'COMPLETED',
-      assayerId: 'as-1', projectId: 'proj-1', agreedFee: 2000,
-    };
-
-    beforeEach(() => {
-      assignmentRepo.find.mockResolvedValue([settled, fresh]);
-      assignmentRepo.findOne.mockImplementation(async (opts: any) => {
-        const id = opts?.where?.id;
-        return id === settled.id ? { ...settled } : id === fresh.id ? { ...fresh } : null;
-      });
-      projectRepo.find = jest.fn(async () => [{ id: 'proj-1', clientId: 'client-1' }]);
-      projectRepo.findOne = jest.fn(async () => ({ id: 'proj-1', clientId: 'client-1' }));
-      const q = async (sql: string): Promise<any[]> => {
-        if (sql.includes('assayer_commercial_profiles')) return [{ base_fee: '2000', travel_reimbursement: '0', daily_rate: '0' }];
-        if (sql.includes('FROM clients WHERE id')) return [{ id: 'client-1' }];
-        return [];
-      };
-      entryRepo.manager.query = q;
-      payableRepo.manager.query = q;
-      managerQuery.mockImplementation(q);
-    });
-
-    it('does no per-assignment work for an assignment that already has both legs', async () => {
-      // Both legs already exist for the settled one, neither for the fresh one.
-      entryRepo.find.mockResolvedValue([{ assignmentId: settled.id }]);
-      payableRepo.feePayableRows = [{ assignment_id: settled.id }];
-      assignmentRepo.findOne.mockClear();
-
-      const result = await service.syncFromAssignments('user-1');
-
-      expect(result.skipped).toBe(1);
-      // syncPayableForAssignment opens by loading the assignment. It must never have been
-      // called for the settled one — that lookup, and the three that follow it, are the cost
-      // this pre-filter exists to avoid.
-      const lookedUp = assignmentRepo.findOne.mock.calls.map((c: any[]) => c[0]?.where?.id);
-      expect(lookedUp).not.toContain(settled.id);
-      expect(lookedUp).toContain(fresh.id);
-    });
-
-    it('still raises the missing leg when only one of the two exists', async () => {
-      // Receivable present, payable absent: the cost leg must still be backfilled.
-      entryRepo.find.mockResolvedValue([{ assignmentId: settled.id }, { assignmentId: fresh.id }]);
-      payableRepo.feePayableRows = [];
-      payableRepo.feePayable = null;
-      assignmentRepo.findOne.mockClear();
-
-      const result = await service.syncFromAssignments('user-1');
-
-      // Both are already billed, so no new receivables — but both still need their payable.
-      expect(result.created).toBe(0);
-      const lookedUp = assignmentRepo.findOne.mock.calls.map((c: any[]) => c[0]?.where?.id);
-      expect(lookedUp).toContain(settled.id);
-    });
-
-    it('reports progress against the total when a reporter is supplied', async () => {
-      entryRepo.find.mockResolvedValue([{ assignmentId: settled.id }, { assignmentId: fresh.id }]);
-      payableRepo.feePayableRows = [{ assignment_id: settled.id }, { assignment_id: fresh.id }];
-      const onProgress = jest.fn();
-
-      await service.syncFromAssignments('user-1', onProgress);
-
-      // The queued path needs a final 100% even when the scan skipped everything, or the poll
-      // endpoint would sit at 0 on a settled book and read as a stalled job.
-      expect(onProgress).toHaveBeenLastCalledWith(2, 2, 'Complete');
-    });
-  });
-
-  describe('billing uniqueness per assignment', () => {
-    const completed = {
-      id: 'asn-1', assignmentNumber: 'ASN-1', status: 'COMPLETED',
-      assayerId: 'as-1', projectId: 'proj-1', agreedFee: 2000, proposedFee: 2100,
-    };
-    const uniqueViolation = (constraint: string) =>
-      Object.assign(new Error('duplicate key value violates unique constraint'), { code: '23505', constraint });
-
-    beforeEach(() => {
-      assignmentRepo.findOne.mockResolvedValue({ ...completed });
-      payableRepo.feePayable = null;
-      payableRepo.findOne.mockResolvedValue(null);
-      entryRepo.findOne.mockResolvedValue(null);
-      const q = async (sql: string): Promise<any[]> => {
-        if (sql.includes('assayer_commercial_profiles')) return [{ base_fee: '2000', travel_reimbursement: '0', daily_rate: '0' }];
-        if (sql.includes('FROM clients WHERE id')) return [{ id: 'client-1' }];
-        return [];
-      };
-      (payableRepo.manager.query as jest.Mock).mockImplementation(q);
-      projectRepo.findOne = jest.fn(async () => ({ id: 'proj-1', clientId: 'client-1' }));
-    });
-
-    it('an approved expense reimbursement does NOT count as the fee payable already existing', async () => {
-      // A reimbursement raised before completion is a payable against the same assignment; the
-      // old `findOne({ assignmentId })` saw it and never raised the fee.
-      payableRepo.feePayable = null; // findFeePayable excludes EXPENSE_CLAIM rows by predicate
-      payableRepo.save.mockImplementation(async (d: any) => ({ id: 'payable-fee', ...d }));
-
-      const result = await service.syncPayableForAssignment('asn-1', 'user-1');
-
-      expect(result.created).toBe(true);
-    });
-
-    it('when a fee payable exists it is reported and nothing is inserted', async () => {
-      payableRepo.feePayable = { id: 'payable-existing' };
-      payableRepo.save.mockClear();
-
-      const result = await service.syncPayableForAssignment('asn-1', 'user-1');
-
-      expect(result).toMatchObject({ created: false, payableId: 'payable-existing' });
-      expect(payableRepo.save).not.toHaveBeenCalled();
-    });
-
-    it('a lost race on the fee payable is reported as the winner, not an error', async () => {
-      // find said "none", then the insert hit the unique index because a concurrent sync won.
-      payableRepo.save.mockImplementationOnce(async () => {
-        throw uniqueViolation('UQ_assayer_payables_fee_per_assignment');
-      });
-      let calls = 0;
-      payableRepo.createQueryBuilder.mockImplementation(() => {
-        const qb: any = {
-          where: () => qb, andWhere: () => qb, orderBy: () => qb,
-          getOne: async () => (calls++ === 0 ? null : { id: 'payable-winner' }),
-        };
-        return qb;
-      });
-
-      const result = await service.syncPayableForAssignment('asn-1', 'user-1');
-
-      expect(result).toMatchObject({ created: false, payableId: 'payable-winner' });
-    });
-
-    it('a lost race on the billing entry is reported as the winner, not an error', async () => {
-      entryRepo.findOne
-        .mockResolvedValueOnce(null)                       // syncAssignment: "not billed yet"
-        .mockResolvedValueOnce({ id: 'entry-winner' });    // after the collision: the winner
-      entryRepo.save.mockImplementationOnce(async () => {
-        throw uniqueViolation('UQ_billing_entries_root_per_assignment');
-      });
-
-      const result = await service.syncAssignment('asn-1');
-
-      expect(result).toMatchObject({ created: false, entryId: 'entry-winner' });
-    });
-
-    it('a manual second fee payable is refused with a 409, not a 500', async () => {
-      payableRepo.save.mockImplementationOnce(async () => {
-        throw uniqueViolation('UQ_assayer_payables_fee_per_assignment');
-      });
-      await expect(
-        service.createPayable({ assayerId: 'as-1', assignmentId: 'asn-1', baseAmount: 100 } as any, 'user-1'),
-      ).rejects.toMatchObject({ status: 409 });
-    });
-  });
-
-  describe('assayer disbursement', () => {
-    const approved = {
-      id: 'payable-1', payableNumber: 'PY-1', assayerId: 'assayer-1', clientId: 'client-1',
-      projectId: null, assignmentId: 'asn-1', status: AssayerPayableStatus.APPROVED,
-      totalAmount: 2660.4, paidAmount: 0, currency: 'INR',
-    };
-
-    it('refuses to pay out a payable that has not been approved', async () => {
-      payableRepo.findOne.mockResolvedValueOnce({ ...approved, status: AssayerPayableStatus.PENDING });
-      await expect(
-        service.recordDisbursement({ payableId: 'payable-1', paymentReference: 'NEFT-1', method: PaymentMethod.NEFT }, 'user-1'),
-      ).rejects.toThrow(BadRequestException);
+    it('refuses a held line', async () => {
+      entryRepo.createQueryBuilder.mockImplementation(() => qbWith([line({ onHold: true, holdReason: 'Scope query' })]));
+      await expect(service.createInvoice({ clientId: 'client-1', assignmentIds: ['asn-1'] }, 'f')).rejects.toThrow(ConflictException);
       expect(committed).toHaveLength(0);
     });
 
-    it('refuses to pay out more than is owed', async () => {
-      payableRepo.findOne.mockResolvedValueOnce({ ...approved });
-      await expect(
-        service.recordDisbursement(
-          { payableId: 'payable-1', paymentReference: 'NEFT-1', method: PaymentMethod.NEFT, amount: 5000 },
-          'user-1',
-        ),
-      ).rejects.toThrow(BadRequestException);
+    it('refuses a line that is already invoiced', async () => {
+      entryRepo.createQueryBuilder.mockImplementation(() => qbWith([line({ state: BillingState.INVOICED, invoiceId: 'invoice-9' })]));
+      await expect(service.createInvoice({ clientId: 'client-1', assignmentIds: ['asn-1'] }, 'f')).rejects.toThrow(ConflictException);
+    });
+
+    it('refuses a line that belongs to another client', async () => {
+      entryRepo.createQueryBuilder.mockImplementation(() => qbWith([line({ clientId: 'client-2' })]));
+      await expect(service.createInvoice({ clientId: 'client-1', assignmentIds: ['asn-1'] }, 'f')).rejects.toThrow(BadRequestException);
+    });
+
+    it('names the assignments that have no line yet', async () => {
+      entryRepo.createQueryBuilder.mockImplementation(() => qbWith([line()]));
+      await expect(service.createInvoice({ clientId: 'client-1', assignmentIds: ['asn-1', 'asn-9'] }, 'f')).rejects.toThrow(/asn-9/);
+    });
+  });
+
+  describe('sendInvoice / cancelInvoice', () => {
+    it('sends a draft, and treats sending a sent invoice as a no-op', async () => {
+      invoiceRepo.findOne.mockImplementation(async () => invoice({ status: InvoiceStatus.DRAFT }));
+      expect((await service.sendInvoice('invoice-1', 'f')).status).toBe(InvoiceStatus.ISSUED);
+      invoiceRepo.findOne.mockImplementation(async () => invoice());
+      await service.sendInvoice('invoice-1', 'f');
+      expect(committed.filter((row) => row.invoiceNumber)).toHaveLength(1);
+    });
+
+    it('cancels an unpaid invoice and returns its lines to UNBILLED', async () => {
+      invoiceRepo.findOne.mockImplementation(async () => invoice());
+      entryRepo.createQueryBuilder.mockImplementation(() => ({ ...queryBuilderStub(), getMany: jest.fn(async () => [line({ state: BillingState.INVOICED, invoiceId: 'invoice-1', outstandingAmount: '3564.00' })]) }));
+      const inv = await service.cancelInvoice('invoice-1', 'Wrong client', 'f');
+      expect(inv).toMatchObject({ status: InvoiceStatus.CANCELLED, outstandingAmount: 0 });
+      const e = committed.find((row) => row.entryNumber);
+      expect(e).toMatchObject({ state: BillingState.UNBILLED, invoiceId: null, outstandingAmount: 0 });
+    });
+
+    it('refuses to cancel an invoice with money collected against it', async () => {
+      invoiceRepo.findOne.mockImplementation(async () => invoice({ paidAmount: '1000.00', outstandingAmount: '2564.00' }));
+      await expect(service.cancelInvoice('invoice-1', 'x', 'f')).rejects.toThrow(ConflictException);
+    });
+  });
+
+  describe('recordPayment — collection against a sent invoice', () => {
+    const invoiced = [
+      line({ id: 'entry-1', state: BillingState.INVOICED, invoiceId: 'invoice-1', outstandingAmount: '3564.00' }),
+      line({ id: 'entry-2', entryNumber: 'BE-2', assignmentId: 'asn-2', state: BillingState.INVOICED, invoiceId: 'invoice-1', outstandingAmount: '3564.00' }),
+    ];
+    beforeEach(() => {
+      invoiceRepo.findOne.mockImplementation(async () => invoice({ total: '7128.00', outstandingAmount: '7128.00' }));
+      entryRepo.createQueryBuilder.mockImplementation(() => ({ ...queryBuilderStub(), getMany: jest.fn(async () => invoiced.map((e) => ({ ...e }))) }));
+    });
+
+    it('refuses a payment against a draft', async () => {
+      invoiceRepo.findOne.mockImplementation(async () => invoice({ status: InvoiceStatus.DRAFT }));
+      await expect(service.recordPayment({ invoiceId: 'invoice-1', paymentReference: 'R1', method: PaymentMethod.NEFT, amount: 100 }, 'f')).rejects.toThrow(/not been sent/);
+    });
+
+    it('refuses more than is outstanding', async () => {
+      await expect(service.recordPayment({ invoiceId: 'invoice-1', paymentReference: 'R1', method: PaymentMethod.NEFT, amount: 7128.5 }, 'f')).rejects.toThrow(BadRequestException);
+    });
+
+    it('spreads a part-payment across the lines in proportion, and leaves the invoice sent', async () => {
+      await service.recordPayment({ invoiceId: 'invoice-1', paymentReference: 'R1', method: PaymentMethod.NEFT, amount: 3564 }, 'f');
+      const inv = committed.find((row) => row.invoiceNumber);
+      expect(inv).toMatchObject({ status: InvoiceStatus.ISSUED, paidAmount: 3564, outstandingAmount: 3564 });
+      const lines = committed.filter((row) => row.entryNumber);
+      expect(lines.map((e) => e.paidAmount)).toEqual([1782, 1782]);
+      expect(lines.every((e) => e.state === BillingState.INVOICED)).toBe(true);
+    });
+
+    it('settles the invoice and every line when the last rupee lands', async () => {
+      await service.recordPayment({ invoiceId: 'invoice-1', paymentReference: 'R1', method: PaymentMethod.NEFT, amount: 7128 }, 'f');
+      const inv = committed.find((row) => row.invoiceNumber);
+      expect(inv).toMatchObject({ status: InvoiceStatus.PAID, outstandingAmount: 0 });
+      const lines = committed.filter((row) => row.entryNumber);
+      expect(lines.every((e) => e.state === BillingState.PAID && e.outstandingAmount === 0)).toBe(true);
+    });
+
+    it('is idempotent by reference', async () => {
+      paymentRepo.findOne.mockImplementation(async () => ({ id: 'payment-first', direction: PaymentDirection.INBOUND, amount: 100, isActive: true }));
+      const r = await service.recordPayment({ invoiceId: 'invoice-1', paymentReference: 'R1', method: PaymentMethod.NEFT, amount: 100 }, 'f');
+      expect(r.id).toBe('payment-first');
       expect(committed).toHaveLength(0);
     });
 
-    it('settles the full balance by default and marks the payable PAID', async () => {
-      const row = { ...approved };
-      payableRepo.findOne.mockResolvedValueOnce(row);
-      payableRepo.save.mockImplementationOnce(async (d: any) => d);
+    it('locks the invoice before the lines, lines in id order', async () => {
+      await service.recordPayment({ invoiceId: 'invoice-1', paymentReference: 'R1', method: PaymentMethod.NEFT, amount: 100 }, 'f');
+      expect(locks[0]).toMatchObject({ entity: 'BillingInvoiceEntity', mode: 'pessimistic_write' });
+      expect(locks[1]).toMatchObject({ entity: 'BillingEntryEntity', orderBy: 'e.id ASC' });
+    });
+  });
 
-      const payment = await service.recordDisbursement(
-        { payableId: 'payable-1', paymentReference: 'NEFT-9', method: PaymentMethod.NEFT }, 'user-1',
+  describe('reversePayment — retire the row, recompute from what remains', () => {
+    it('reverses an inbound payment: the invoice goes back to sent and the lines are re-derived', async () => {
+      paymentRepo.findOne.mockImplementation(async () => ({ id: 'payment-1', direction: PaymentDirection.INBOUND, invoiceId: 'invoice-1', amount: '3564.00', paymentReference: 'R1', isActive: true }));
+      invoiceRepo.findOne.mockImplementation(async () => invoice({ status: InvoiceStatus.PAID, paidAmount: '3564.00', outstandingAmount: '0.00' }));
+      entryRepo.createQueryBuilder.mockImplementation(() => ({ ...queryBuilderStub(), getMany: jest.fn(async () => [line({ state: BillingState.PAID, invoiceId: 'invoice-1', paidAmount: '3564.00' })]) }));
+      await service.reversePayment('payment-1', 'Bounced cheque', 'f');
+      expect(committed.find((row) => row.direction)).toMatchObject({ isActive: false });
+      expect(committed.find((row) => row.invoiceNumber)).toMatchObject({ status: InvoiceStatus.ISSUED, paidAmount: 0, outstandingAmount: 3564 });
+      expect(committed.find((row) => row.entryNumber)).toMatchObject({ state: BillingState.INVOICED, paidAmount: 0, outstandingAmount: 3564 });
+      expect(committed.find((row) => row.action === 'PAYMENT_REVERSED')).toMatchObject({ reason: 'Bounced cheque' });
+    });
+
+    it('reverses an outbound payment: the payable goes back to APPROVED', async () => {
+      paymentRepo.findOne.mockImplementation(async () => ({ id: 'payment-1', direction: PaymentDirection.OUTBOUND, payableId: 'payable-1', amount: '1800.00', paymentReference: 'UTR-1', isActive: true }));
+      payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.PAID, paidAmount: '1800.00', paidAt: new Date(), paidBy: 'f' }));
+      await service.reversePayment('payment-1', 'Wrong account', 'f');
+      expect(committed.find((row) => row.payableNumber)).toMatchObject({ status: AssayerPayableStatus.APPROVED, paidAmount: 0, paidAt: null, paidBy: null });
+    });
+
+    it('refuses to reverse a payment twice', async () => {
+      paymentRepo.findOne.mockImplementation(async () => ({ id: 'payment-1', direction: PaymentDirection.OUTBOUND, payableId: 'payable-1', isActive: false }));
+      payableRepo.findOne.mockImplementation(async () => payable());
+      await expect(service.reversePayment('payment-1', 'again', 'f')).rejects.toThrow(ConflictException);
+    });
+  });
+
+  // ── The client line ───────────────────────────────────────────────────────
+
+  describe('editClientLine — adjust and hold, before invoicing', () => {
+    it('applies an adjustment with its reason and re-taxes the line', async () => {
+      entryRepo.findOne.mockImplementation(async () => line());
+      const e = await service.editClientLine('asn-1', { adjustmentAmount: -300, adjustmentReason: 'Goodwill' }, 'f');
+      expect(e).toMatchObject({ adjustmentAmount: -300, adjustmentReason: 'Goodwill', taxableAmount: 3000, taxAmount: 540, tdsAmount: 300, totalAmount: 3240 });
+    });
+
+    it('requires a reason for a non-zero adjustment and for a hold', async () => {
+      entryRepo.findOne.mockImplementation(async () => line());
+      await expect(service.editClientLine('asn-1', { adjustmentAmount: 100 }, 'f')).rejects.toThrow(BadRequestException);
+      await expect(service.editClientLine('asn-1', { onHold: true }, 'f')).rejects.toThrow(BadRequestException);
+    });
+
+    it('refuses once the line is invoiced', async () => {
+      entryRepo.findOne.mockImplementation(async () => line({ state: BillingState.INVOICED, invoiceId: 'invoice-1' }));
+      await expect(service.editClientLine('asn-1', { onHold: true, holdReason: 'x' }, 'f')).rejects.toThrow(BadRequestException);
+    });
+
+    it('404s an assignment that has no line yet', async () => {
+      await expect(service.editClientLine('asn-1', { onHold: true, holdReason: 'x' }, 'f')).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  // ── Reimbursement ─────────────────────────────────────────────────────────
+
+  describe('createReimbursementPayable', () => {
+    it('writes a payable keyed by expense, with no TDS and no travel, on the caller’s manager', async () => {
+      const pending: any[] = [];
+      const m: any = makeManager(pending, []);
+      assignmentRepo.findOne.mockImplementation(async () => ({ id: 'asn-1', projectId: 'project-1', assignmentNumber: 'ASN-001' }));
+      const p = await service.createReimbursementPayable(
+        { id: 'exp-1', assayerId: 'assayer-1', assignmentId: 'asn-1', amount: '240.00', category: 'TOLL', description: 'NH-48' }, m, 'ops-1',
       );
-
-      // Recorded as an ordinary payment row, just outbound — this is what makes
-      // cash-flow answerable from one table instead of a separate ledger module.
-      expect(payment.direction).toBe(PaymentDirection.OUTBOUND);
-      expect(Number(payment.amount)).toBe(2660.4);
-      expect(payment.assayerId).toBe('assayer-1');
-      expect(row.status).toBe(AssayerPayableStatus.PAID);
-      expect(Number(row.paidAmount)).toBe(2660.4);
+      expect(p).toMatchObject({ expenseId: 'exp-1', baseAmount: 240, travelAmount: 0, tdsAmount: 0, totalAmount: 240, clientId: 'client-1', status: AssayerPayableStatus.PENDING });
+      expect(pending.some((row) => row.action === 'PAYABLE_CREATED')).toBe(true);
     });
 
-    it('returns the original disbursement when the same reference is submitted twice', async () => {
-      // A retried disbursement must not pay the assayer a second time. The payable is already
-      // PAID from the first call, which would trip the "already fully paid" guard on a naive
-      // retry; the existing-disbursement check runs first and returns the original.
-      payableRepo.findOne.mockResolvedValueOnce({
-        ...approved, status: AssayerPayableStatus.PAID, paidAmount: 2660.4,
-      });
-      const original = {
-        id: 'disb-first', direction: PaymentDirection.OUTBOUND, paymentReference: 'NEFT-DUP',
-        payableId: 'payable-1', amount: 2660.4,
-      };
-      paymentRepo.findOne.mockResolvedValueOnce(original);
-
-      const result = await service.recordDisbursement(
-        { payableId: 'payable-1', paymentReference: 'NEFT-DUP', method: PaymentMethod.NEFT, amount: 2660.4 },
-        'user-1',
-      );
-
-      expect(result).toBe(original);
-      expect(committed).toHaveLength(0);
-      expect(payableRepo.save).not.toHaveBeenCalled();
-    });
-
-    it('records the status the payable actually moved from on a settling top-up', async () => {
-      // Second disbursement against a payable already marked PAID by the first. The trail
-      // hardcoded APPROVED here, so a top-up was indistinguishable from a first payment.
-      payableRepo.findOne.mockResolvedValueOnce({
-        ...approved, status: AssayerPayableStatus.PAID, paidAmount: 2000,
-      });
-      payableRepo.save.mockImplementationOnce(async (d: any) => d);
-
-      await service.recordDisbursement(
-        { payableId: 'payable-1', paymentReference: 'NEFT-12', method: PaymentMethod.NEFT, amount: 660.4 },
-        'user-1',
-      );
-
-      const history = historyRepo.create.mock.calls
-        .map((c: any[]) => c[0])
-        .find((h: any) => h.action === 'DISBURSEMENT_PAID');
-      expect(history.fromState).toBe(AssayerPayableStatus.PAID);
-    });
-
-    it('rejects an unknown entity type on the universal ledger', async () => {
-      await expect(service.entityLedger('warehouse' as any, 'id-1')).rejects.toThrow(BadRequestException);
-    });
-
-    it('leaves a part-paid payable APPROVED so the remainder stays visible', async () => {
-      const row = { ...approved };
-      payableRepo.findOne.mockResolvedValueOnce(row);
-      payableRepo.save.mockImplementationOnce(async (d: any) => d);
-
-      await service.recordDisbursement(
-        { payableId: 'payable-1', paymentReference: 'NEFT-10', method: PaymentMethod.NEFT, amount: 1000 },
-        'user-1',
-      );
-
-      expect(Number(row.paidAmount)).toBe(1000);
-      expect(row.status).toBe(AssayerPayableStatus.APPROVED);
-    });
-
-    it('surfaces a missing payable as NotFound rather than a null dereference', async () => {
-      payableRepo.findOne.mockResolvedValueOnce(null);
-      await expect(
-        service.recordDisbursement({ payableId: 'nope', paymentReference: 'X', method: PaymentMethod.NEFT }, 'user-1'),
-      ).rejects.toThrow(NotFoundException);
+    it('turns the unique violation into a clear refusal', async () => {
+      const violation: any = new Error('dup'); violation.code = '23505'; violation.constraint = 'UQ_assayer_payables_expense';
+      payableRepo.save.mockImplementationOnce(async () => { throw violation; });
+      const m: any = makeManager([], []);
+      await expect(service.createReimbursementPayable({ id: 'exp-1', assayerId: 'a', assignmentId: 'asn-1', amount: 1, category: 'TOLL' }, m, 'u'))
+        .rejects.toThrow(ConflictException);
     });
   });
 });

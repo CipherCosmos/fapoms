@@ -5,7 +5,6 @@ import { BillingEntryEntity } from './billing-entry.entity';
 import { BillingInvoiceEntity } from './invoice.entity';
 import { BillingPaymentEntity } from './payment.entity';
 import { AssayerPayableEntity } from './payable.entity';
-import { BillingConflictEntity } from './conflict.entity';
 import { BillingHistoryEntity } from './history.entity';
 import { BillingEngineService } from './billing-engine.service';
 import { BillingEngineController } from './billing-engine.controller';
@@ -34,7 +33,6 @@ import { BillingJobsWorker } from './billing-jobs.worker';
       BillingInvoiceEntity,
       BillingPaymentEntity,
       AssayerPayableEntity,
-      BillingConflictEntity,
       BillingHistoryEntity,
       AssignmentEntity,
       ProjectEntity,

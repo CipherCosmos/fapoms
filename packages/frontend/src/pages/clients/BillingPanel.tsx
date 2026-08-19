@@ -1,275 +1,174 @@
 import React, { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Save, ArrowLeftRight, MessageSquarePlus, CreditCard, ArrowRight, Plus, SlidersHorizontal } from 'lucide-react';
-import { StatusBadge, Select, useToast } from '../../components/ui';
-import {
-  useClientBilling,
-  useClientBillingHistory,
-  useUpdateBilling,
-  useTransitionBillingStatus,
-  useAddBillingRemark,
-} from '../../hooks/useClients';
-import { billingStatusLabel } from '../../utils/statusLabels';
-import { BILLING_TRANSITIONS } from '@fapoms/shared';
-import type { ClientBillingStatus, ClientBillingEventType } from '@fapoms/shared';
+import { Save, CreditCard, AlertTriangle, Percent, Truck } from 'lucide-react';
+import { Toggle, useToast } from '../../components/ui';
+import { useClientBilling, useClientDetail, useUpdateBilling, useUpdateClient } from '../../hooks/useClients';
 import { userMessage } from '../../services/errors';
 
-const STATUS_COLORS: Record<string, { color: string; bg: string }> = {
-  DRAFT: { color: 'var(--warning)', bg: 'var(--status-pending-bg)' },
-  ACTIVE: { color: 'var(--success)', bg: 'var(--status-active-bg)' },
-  SUSPENDED: { color: 'var(--danger)', bg: 'var(--status-cancelled-bg)' },
-  INACTIVE: { color: 'var(--text-muted)', bg: 'var(--status-draft-bg)' },
-};
-
-const EVENT_ICONS: Record<ClientBillingEventType, { icon: React.ReactNode; color: string }> = {
-  STATUS_CHANGE: { icon: <ArrowLeftRight size={13} />, color: 'var(--accent)' },
-  REMARK: { icon: <MessageSquarePlus size={13} />, color: 'var(--warning)' },
-  PROFILE_UPDATE: { icon: <CreditCard size={13} />, color: 'var(--success)' },
-};
-
-function formatDateTime(iso?: string): string {
-  if (!iso) return '';
-  const d = new Date(iso);
-  return d.toLocaleDateString(undefined, { day: '2-digit', month: 'short', year: 'numeric' }) +
-    ', ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-}
+/**
+ * A client's billing, in one place: what they are billed per audit (the rate card), the tax
+ * treatment, payment terms, and the bank/address details that print on an invoice.
+ *
+ * These used to live on two screens — a "Client billing settings" page under Finance and this
+ * panel under Clients — each editing half of the same client. There is no billing "status" and
+ * no separate timeline any more: the profile is either set or not, and every edit is an audit
+ * event on the client.
+ */
+const num = (v: string): number | undefined => (v.trim() === '' ? undefined : Number(v));
 
 export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
   const { data: billing, isLoading } = useClientBilling(clientId);
-  const { data: history = [], isLoading: historyLoading } = useClientBillingHistory(clientId);
-  const update = useUpdateBilling();
-  const transition = useTransitionBillingStatus();
-  const addRemark = useAddBillingRemark();
+  const detail = useClientDetail(clientId);
+  const updateBilling = useUpdateBilling();
+  const updateClient = useUpdateClient();
   const { toast } = useToast();
 
-  // Profile edit form
+  // Rate card + travel policy (client_configurations / clients.planning_preferences)
+  const [baseFee, setBaseFee] = useState('');
+  const [travelPerKm, setTravelPerKm] = useState('');
+  const [freeKm, setFreeKm] = useState('');
+  const [rechargeTravel, setRechargeTravel] = useState(true);
+  // Tax, terms, identity (client_billing)
   const [form, setForm] = useState<Record<string, string>>({});
-  // Transition
-  const [targetStatus, setTargetStatus] = useState('');
-  const [transitionRemarks, setTransitionRemarks] = useState('');
-  // Remark
-  const [remark, setRemark] = useState('');
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (billing) {
-      setForm({
-        currency: billing.currency,
-        taxIdentifier: billing.taxIdentifier ?? '',
-        invoiceCycle: billing.invoiceCycle,
-        billingAddress: billing.billingAddress,
-        bankAccount: billing.bankAccount ?? '',
-        bankName: billing.bankName ?? '',
-        ifscCode: billing.ifscCode ?? '',
-        notes: billing.notes ?? '',
-      });
-    }
+    const c = detail.data;
+    const cfg = c?.configuration;
+    setBaseFee(cfg?.defaultBaseFee != null ? String(cfg.defaultBaseFee) : '');
+    setTravelPerKm(cfg?.travelFeePerKm != null ? String(cfg.travelFeePerKm) : '');
+    setFreeKm(cfg?.freeTravelAllowanceKm != null ? String(cfg.freeTravelAllowanceKm) : '');
+    setRechargeTravel((c?.planningPreferences as any)?.rechargeTravel !== false);
+  }, [detail.data]);
+
+  useEffect(() => {
+    setForm({
+      gstRate: billing?.gstRate != null ? String(billing.gstRate) : '18',
+      tdsRate: billing?.tdsRate != null ? String(billing.tdsRate) : '10',
+      paymentTerms: billing?.paymentTerms ?? 'NET30',
+      invoiceCycle: billing?.invoiceCycle ?? 'MONTHLY',
+      currency: billing?.currency ?? 'INR',
+      taxIdentifier: billing?.taxIdentifier ?? '',
+      billingAddress: billing?.billingAddress ?? '',
+      bankAccount: billing?.bankAccount ?? '',
+      bankName: billing?.bankName ?? '',
+      ifscCode: billing?.ifscCode ?? '',
+      notes: billing?.notes ?? '',
+    });
   }, [billing]);
 
   const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
 
-  const handleProfileSubmit = async (e: React.FormEvent) => {
+  const save = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (saving) return;
+    setSaving(true);
     try {
-      await update.mutateAsync({
+      await updateClient.mutateAsync({
+        id: clientId,
+        payload: {
+          configuration: { defaultBaseFee: num(baseFee), travelFeePerKm: num(travelPerKm), freeTravelAllowanceKm: num(freeKm) },
+          planningPreferences: { ...((detail.data?.planningPreferences as Record<string, unknown>) ?? {}), rechargeTravel },
+        },
+      });
+      await updateBilling.mutateAsync({
         clientId,
         payload: {
-          currency: form.currency,
-          taxIdentifier: form.taxIdentifier || undefined,
-          invoiceCycle: form.invoiceCycle,
-          billingAddress: form.billingAddress,
-          bankAccount: form.bankAccount || undefined,
-          bankName: form.bankName || undefined,
-          ifscCode: form.ifscCode || undefined,
+          gstRate: num(form.gstRate), tdsRate: num(form.tdsRate),
+          paymentTerms: form.paymentTerms || undefined, invoiceCycle: form.invoiceCycle || undefined, currency: form.currency || undefined,
+          taxIdentifier: form.taxIdentifier || undefined, billingAddress: form.billingAddress,
+          bankAccount: form.bankAccount || undefined, bankName: form.bankName || undefined, ifscCode: form.ifscCode || undefined,
           notes: form.notes || undefined,
         },
       });
-      toast('success', 'Billing profile updated');
-    } catch (err: any) {
-      toast({ type: 'error', title: 'Failed to update billing', message: userMessage(err) });
+      toast('success', 'Billing saved. Applies to audits completed from now on.');
+    } catch (err) {
+      toast({ type: 'error', title: 'Could not save billing', message: userMessage(err) });
+    } finally {
+      setSaving(false);
     }
   };
 
-  const handleTransition = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!targetStatus) return;
-    try {
-      await transition.mutateAsync({ clientId, status: targetStatus as ClientBillingStatus, remarks: transitionRemarks || undefined });
-      toast('success', `Billing moved to ${billingStatusLabel(targetStatus)}`);
-      setTargetStatus('');
-      setTransitionRemarks('');
-    } catch (err: any) {
-      toast({ type: 'error', title: 'Status transition failed', message: userMessage(err) });
-    }
-  };
+  if (isLoading || detail.isLoading) return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>Loading…</div>;
 
-  const handleAddRemark = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!remark.trim()) return;
-    try {
-      await addRemark.mutateAsync({ clientId, remarks: remark.trim() });
-      toast('success', 'Remark added');
-      setRemark('');
-    } catch (err: any) {
-      toast({ type: 'error', title: 'Failed to add remark', message: userMessage(err) });
-    }
-  };
-
-  if (isLoading) return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>Loading…</div>;
-
-  const currentStatus = billing?.status ?? 'DRAFT';
-  const allowedTargets = BILLING_TRANSITIONS[currentStatus as ClientBillingStatus] ?? [];
-
-  const inputStyle: React.CSSProperties = { padding: 8, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', width: '100%' };
-  const labelStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--text-muted)' };
-  const sectionTitle: React.CSSProperties = { margin: 0, fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 };
+  const hasRate = baseFee.trim() !== '' && Number(baseFee) > 0;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-      {/* Current status + transition */}
-      <section style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: 14, background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <h4 style={{ margin: 0, fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <CreditCard size={14} /> Billing Status
-          </h4>
-          <StatusBadge label={billingStatusLabel(currentStatus)} color={STATUS_COLORS[currentStatus]?.color ?? 'var(--text-muted)'} bg={STATUS_COLORS[currentStatus]?.bg ?? 'var(--status-draft-bg)'} />
+    <form onSubmit={save} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      {!hasRate && (
+        <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start', padding: '10px 12px', borderLeft: '3px solid var(--warning)', background: 'var(--bg-surface-2)', borderRadius: 'var(--radius-md)', fontSize: 12.5 }}>
+          <AlertTriangle size={15} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: 1 }} />
+          <span style={{ color: 'var(--text-secondary)' }}>
+            No rate set. Until one is, this client's audits are billed at what the assayer is paid — every audit earns zero margin.
+          </span>
         </div>
-        {allowedTargets.length > 0 ? (
-          <form onSubmit={handleTransition} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <Select
-                value={targetStatus}
-                onChange={setTargetStatus}
-                options={allowedTargets.map((s) => ({ value: s, label: billingStatusLabel(s) }))}
-                placeholder="-- Move to... --"
-                style={{ flex: 1, minWidth: 160 }}
-              />
-              <button type="submit" disabled={!targetStatus || transition.isPending} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <ArrowLeftRight size={14} /> {transition.isPending ? 'Updating...' : 'Transition'}
-              </button>
-            </div>
-            <input type="text" placeholder="Reason (optional)" value={transitionRemarks} onChange={(e) => setTransitionRemarks(e.target.value)} style={inputStyle} />
-          </form>
-        ) : (
-          <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>No further transitions available from this status.</div>
-        )}
+      )}
+
+      <section style={sectionStyle}>
+        <h4 style={sectionTitle}><CreditCard size={14} /> What we bill per audit</h4>
+        <Field label="Rate per audit (₹)" hint="Charged per branch audit. The margin is this minus what the assayer is paid. Also the fallback base when an assayer has no rate profile of their own.">
+          <input type="number" value={baseFee} onChange={(e) => setBaseFee(e.target.value)} placeholder="e.g. 3000" style={inputStyle} />
+        </Field>
+        <Field label="Travel on the invoice" hint={rechargeTravel ? 'The assayer’s travel component is added to the client’s line.' : 'All-inclusive contract — travel stays our cost and never appears on the invoice.'}>
+          <Toggle checked={rechargeTravel} onChange={setRechargeTravel} label={rechargeTravel ? 'Recharged' : 'Absorbed'} />
+        </Field>
+        <Field label="Travel per chargeable km (₹)" hint="Used when pricing offers for this client's audits, after the free allowance. Blank uses the platform default.">
+          <input type="number" value={travelPerKm} onChange={(e) => setTravelPerKm(e.target.value)} placeholder="e.g. 8" style={inputStyle} />
+        </Field>
+        <Field label="Free travel allowance (km)" hint="Distance not charged for travel before the per-km rate applies.">
+          <input type="number" value={freeKm} onChange={(e) => setFreeKm(e.target.value)} placeholder="e.g. 10" style={inputStyle} />
+        </Field>
       </section>
 
-      {/* Add remark */}
-      <section style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-        <h4 style={sectionTitle}><MessageSquarePlus size={14} /> Add Remark</h4>
-        <form onSubmit={handleAddRemark} style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <input type="text" placeholder="Add a note about billing..." value={remark} onChange={(e) => setRemark(e.target.value)} style={{ ...inputStyle, flex: 1, minWidth: 180 }} />
-          <button type="submit" disabled={!remark.trim() || addRemark.isPending} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
-            <Plus size={14} /> Add
-          </button>
-        </form>
+      <section style={sectionStyle}>
+        <h4 style={sectionTitle}><Percent size={14} /> Tax and terms</h4>
+        <Field label="GST (%)" hint="Added to every line on this client's invoices.">
+          <input type="number" value={form.gstRate ?? ''} onChange={(e) => set('gstRate', e.target.value)} style={inputStyle} />
+        </Field>
+        <Field label="TDS withheld by client (%)" hint="What the client deducts when paying us; shown on the invoice.">
+          <input type="number" value={form.tdsRate ?? ''} onChange={(e) => set('tdsRate', e.target.value)} style={inputStyle} />
+        </Field>
+        <Field label="Payment terms" hint="e.g. NET30 — sets the due date when an invoice is created.">
+          <input value={form.paymentTerms ?? ''} onChange={(e) => set('paymentTerms', e.target.value)} placeholder="NET30" style={inputStyle} />
+        </Field>
+        <Field label="Invoice cycle" hint="How often this client is invoiced.">
+          <input value={form.invoiceCycle ?? ''} onChange={(e) => set('invoiceCycle', e.target.value)} placeholder="MONTHLY" style={inputStyle} />
+        </Field>
       </section>
 
-      {/* Timeline */}
-      <section style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-        <h4 style={sectionTitle}><ArrowLeftRight size={14} /> Timeline</h4>
-        {historyLoading ? (
-          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>Loading…</div>
-        ) : history.length === 0 ? (
-          <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-md)' }}>
-            No billing activity recorded yet.
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column' }}>
-            {history.map((h, idx) => {
-              const ev = EVENT_ICONS[h.eventType as ClientBillingEventType] ?? { icon: <Plus size={13} />, color: 'var(--text-muted)' };
-              const isLast = idx === history.length - 1;
-              return (
-                <div key={h.id} style={{ display: 'flex', gap: 12 }}>
-                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                    <span style={{ width: 26, height: 26, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: `color-mix(in srgb, ${ev.color} 13%, transparent)`, color: ev.color, border: `1px solid color-mix(in srgb, ${ev.color} 33%, transparent)`, flexShrink: 0 }}>
-                      {ev.icon}
-                    </span>
-                    {!isLast && <span style={{ width: 2, flex: 1, background: 'var(--border-color)', minHeight: 24 }} />}
-                  </div>
-                  <div style={{ paddingBottom: isLast ? 0 : 16, flex: 1 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
-                      <div style={{ fontSize: 13, fontWeight: 600 }}>
-                        {h.eventType === 'STATUS_CHANGE' && (
-                          <>
-                            {billingStatusLabel(h.fromStatus)} <ArrowRight size={12} style={{ verticalAlign: 'middle' }} /> {billingStatusLabel(h.toStatus)}
-                          </>
-                        )}
-                        {h.eventType === 'REMARK' && 'Remark added'}
-                        {h.eventType === 'PROFILE_UPDATE' && `Updated: ${h.remarks ?? 'profile'}`}
-                      </div>
-                      <span style={{ fontSize: 11, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{formatDateTime(h.createdAt)}</span>
-                    </div>
-                    {h.eventType === 'PROFILE_UPDATE' && h.fromValue !== null && (
-                      <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>
-                        <span style={{ textDecoration: 'line-through', opacity: 0.6 }}>{h.fromValue || '(empty)'}</span>
-                        <ArrowRight size={11} style={{ margin: '0 4px', verticalAlign: 'middle' }} />
-                        <span>{h.toValue || '(empty)'}</span>
-                      </div>
-                    )}
-                    {h.eventType !== 'PROFILE_UPDATE' && h.remarks && (
-                      <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginTop: 2 }}>{h.remarks}</div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
-      {/* Profile edit */}
-      <section style={{ display: 'flex', flexDirection: 'column', gap: 12, padding: 14, background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
-        <h4 style={sectionTitle}><Save size={14} /> Billing Details</h4>
-        <div style={{ fontSize: 11.5, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 6, marginTop: -4 }}>
-          <SlidersHorizontal size={12} />
-          Rate card (base fee, GST/TDS) and payment terms are set in{' '}
-          <Link to={`/billing/settings?client=${clientId}`} style={{ color: 'var(--accent)', textDecoration: 'none', fontWeight: 600 }}>
-            Client billing settings
-          </Link>.
+      <section style={sectionStyle}>
+        <h4 style={sectionTitle}><Truck size={14} /> Invoice details</h4>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+          <label style={labelStyle}>GSTIN / tax identifier<input style={{ ...inputStyle, width: '100%' }} value={form.taxIdentifier ?? ''} onChange={(e) => set('taxIdentifier', e.target.value)} /></label>
+          <label style={labelStyle}>Currency<input style={{ ...inputStyle, width: '100%' }} value={form.currency ?? ''} onChange={(e) => set('currency', e.target.value)} /></label>
+          <label style={labelStyle}>Bank account<input style={{ ...inputStyle, width: '100%' }} value={form.bankAccount ?? ''} onChange={(e) => set('bankAccount', e.target.value)} /></label>
+          <label style={labelStyle}>Bank name<input style={{ ...inputStyle, width: '100%' }} value={form.bankName ?? ''} onChange={(e) => set('bankName', e.target.value)} /></label>
+          <label style={labelStyle}>IFSC<input style={{ ...inputStyle, width: '100%' }} value={form.ifscCode ?? ''} onChange={(e) => set('ifscCode', e.target.value)} /></label>
         </div>
-        <form onSubmit={handleProfileSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
-            <label style={labelStyle}>
-              Currency
-              <input style={inputStyle} value={form.currency ?? ''} onChange={(e) => set('currency', e.target.value)} />
-            </label>
-            <label style={labelStyle}>
-              Tax Identifier
-              <input style={inputStyle} value={form.taxIdentifier ?? ''} onChange={(e) => set('taxIdentifier', e.target.value)} />
-            </label>
-            <label style={labelStyle}>
-              Invoice Cycle
-              <input style={inputStyle} value={form.invoiceCycle ?? ''} onChange={(e) => set('invoiceCycle', e.target.value)} />
-            </label>
-            <label style={labelStyle}>
-              Bank Account
-              <input style={inputStyle} value={form.bankAccount ?? ''} onChange={(e) => set('bankAccount', e.target.value)} />
-            </label>
-            <label style={labelStyle}>
-              Bank Name
-              <input style={inputStyle} value={form.bankName ?? ''} onChange={(e) => set('bankName', e.target.value)} />
-            </label>
-            <label style={labelStyle}>
-              IFSC Code
-              <input style={inputStyle} value={form.ifscCode ?? ''} onChange={(e) => set('ifscCode', e.target.value)} />
-            </label>
-          </div>
-          <label style={labelStyle}>
-            Billing Address
-            <textarea rows={2} style={inputStyle} value={form.billingAddress ?? ''} onChange={(e) => set('billingAddress', e.target.value)} />
-          </label>
-          <label style={labelStyle}>
-            Notes
-            <textarea rows={2} style={inputStyle} value={form.notes ?? ''} onChange={(e) => set('notes', e.target.value)} />
-          </label>
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <button type="submit" disabled={update.isPending} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <Save size={14} /> {update.isPending ? 'Saving...' : 'Save Billing Details'}
-            </button>
-          </div>
-        </form>
+        <label style={labelStyle}>Billing address<textarea rows={2} style={{ ...inputStyle, width: '100%' }} value={form.billingAddress ?? ''} onChange={(e) => set('billingAddress', e.target.value)} /></label>
+        <label style={labelStyle}>Notes<textarea rows={2} style={{ ...inputStyle, width: '100%' }} value={form.notes ?? ''} onChange={(e) => set('notes', e.target.value)} /></label>
       </section>
-    </div>
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: 10 }}>
+        <span style={{ fontSize: 11.5, color: 'var(--text-muted)' }}>Applies to audits completed from now on; booked lines are unchanged.</span>
+        <button type="submit" disabled={saving} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Save size={14} /> {saving ? 'Saving…' : 'Save billing'}
+        </button>
+      </div>
+    </form>
   );
 };
+
+const sectionStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 6, padding: 14, background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' };
+const sectionTitle: React.CSSProperties = { margin: '0 0 6px', fontSize: 13, fontWeight: 600, display: 'flex', alignItems: 'center', gap: 6 };
+const inputStyle: React.CSSProperties = { width: 200, maxWidth: '100%', padding: '7px 10px', fontSize: 13, background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' };
+const labelStyle: React.CSSProperties = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--text-muted)' };
+
+const Field: React.FC<{ label: string; hint?: string; children: React.ReactNode }> = ({ label, hint, children }) => (
+  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, padding: '8px 0', borderBottom: '1px solid var(--border-hair, var(--border-color))', flexWrap: 'wrap' }}>
+    <div style={{ minWidth: 200, flex: 1 }}>
+      <div style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{label}</div>
+      {hint && <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, maxWidth: 380 }}>{hint}</div>}
+    </div>
+    {children}
+  </div>
+);

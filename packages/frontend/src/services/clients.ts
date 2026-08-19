@@ -4,9 +4,7 @@ import type {
   ClientContact,
   ClientContract,
   ClientBilling,
-  ClientBillingHistory,
   ClientLifecycleStatus,
-  ClientBillingStatus,
 } from '@fapoms/shared';
 
 export interface PaginatedMeta {
@@ -185,24 +183,6 @@ async function updateBilling(clientId: string, payload: UpdateBillingPayload): P
   return api.request<ClientBilling>(`/clients/${clientId}/billing`, { method: 'PUT', body: JSON.stringify(payload) });
 }
 
-async function getBillingHistory(clientId: string): Promise<ClientBillingHistory[]> {
-  return api.request<ClientBillingHistory[]>(`/clients/${clientId}/billing/history`);
-}
-
-async function transitionBillingStatus(clientId: string, status: ClientBillingStatus, remarks?: string): Promise<ClientBilling> {
-  return api.request<ClientBilling>(`/clients/${clientId}/billing/status`, {
-    method: 'PATCH',
-    body: JSON.stringify({ status, remarks }),
-  });
-}
-
-async function addBillingRemark(clientId: string, remarks: string): Promise<ClientBillingHistory> {
-  return api.request<ClientBillingHistory>(`/clients/${clientId}/billing/remarks`, {
-    method: 'POST',
-    body: JSON.stringify({ remarks }),
-  });
-}
-
 export const clientApi = {
   list: listClients,
   get: getClient,
@@ -217,7 +197,4 @@ export const clientApi = {
   deleteContract,
   getBilling,
   updateBilling,
-  getBillingHistory,
-  transitionBillingStatus,
-  addBillingRemark,
 };

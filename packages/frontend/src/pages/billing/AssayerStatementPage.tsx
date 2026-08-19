@@ -6,6 +6,7 @@ import { useAssayerStatement } from '../../hooks/useBilling';
 import { api } from '../../services/api';
 import type { AssayerStatement } from '../../services/billing';
 import { Select } from '../../components/ui';
+import { payableStatusLabel } from '@fapoms/shared';
 
 /**
  * Assayer statement — what an assayer has earned, been paid, and is still owed.
@@ -51,7 +52,7 @@ export const AssayerStatementPage: React.FC = () => {
     <div style={{ padding: '20px 24px', maxWidth: 1200, display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Assayer statement</h1>
-        <Link to="/billing" style={{ fontSize: 12.5, color: 'var(--accent)', textDecoration: 'none' }}>← Back to Finance</Link>
+        <Link to="/billing?tab=payouts" style={{ fontSize: 12.5, color: 'var(--accent)', textDecoration: 'none' }}>← Back to Billing</Link>
       </div>
 
       <div style={{ ...card, display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -93,16 +94,18 @@ const StatementBody: React.FC<{ data: AssayerStatement }> = ({ data }) => {
         <Stat label="Paid" value={money(t.paid)} tone="var(--success)" />
         <Stat label="Outstanding" value={money(t.outstanding)} tone={t.outstanding > 0 ? 'var(--warning)' : 'var(--text-muted)'} />
         <Stat label="Awaiting approval" value={money(t.awaitingApproval)} tone="var(--text-secondary)" />
-        <Stat label="On hold / disputed" value={money(t.onHoldOrDisputed)} tone={t.onHoldOrDisputed > 0 ? 'var(--danger)' : 'var(--text-muted)'} />
+        <Stat label="On hold" value={money(t.onHoldOrDisputed)} tone={t.onHoldOrDisputed > 0 ? 'var(--danger)' : 'var(--text-muted)'} />
       </div>
 
       {data.payables.length > 0 && (
         <div style={card}>
-          <div style={{ ...label, marginBottom: 10 }}>Payables ({data.payables.length})</div>
+          <div style={{ ...label, marginBottom: 10 }}>Payouts ({data.payables.length})</div>
           <SimpleTable
-            head={['Payable', 'Status', 'Base', 'Travel', 'TDS', 'Total', 'Paid', 'Outstanding']}
+            head={['Payout', 'Status', 'Base', 'Travel', 'TDS', 'Total', 'Paid', 'Outstanding']}
             rows={data.payables.map((p) => [
-              p.payableNumber, p.status, money(p.baseAmount), money(p.travelAmount),
+              p.expenseId ? `${p.payableNumber} · reimbursement` : p.payableNumber,
+              p.onHold ? `${payableStatusLabel(p.status)} · on hold${p.holdReason ? ` (${p.holdReason})` : ''}` : payableStatusLabel(p.status),
+              money(p.baseAmount), money(p.travelAmount),
               `−${money(p.tdsAmount)}`, money(p.totalAmount), money(p.paidAmount), money(p.outstanding),
             ])}
           />
@@ -111,7 +114,7 @@ const StatementBody: React.FC<{ data: AssayerStatement }> = ({ data }) => {
 
       {data.payments.length > 0 && (
         <div style={card}>
-          <div style={{ ...label, marginBottom: 10 }}>Disbursements ({data.payments.length})</div>
+          <div style={{ ...label, marginBottom: 10 }}>Payments made ({data.payments.length})</div>
           <SimpleTable
             head={['Reference', 'Method', 'Amount', 'Paid on', 'Balance after', 'Note']}
             rows={data.payments.map((p) => [
@@ -124,7 +127,7 @@ const StatementBody: React.FC<{ data: AssayerStatement }> = ({ data }) => {
       )}
 
       {data.payables.length === 0 && data.payments.length === 0 && (
-        <div style={{ ...card, color: 'var(--text-muted)', fontSize: 13 }}>No payables or disbursements recorded for this assayer.</div>
+        <div style={{ ...card, color: 'var(--text-muted)', fontSize: 13 }}>No payouts or payments recorded for this assayer yet.</div>
       )}
     </>
   );

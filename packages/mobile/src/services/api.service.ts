@@ -938,7 +938,10 @@ export class MobileApiService {
           id: p.id,
           payableNumber: p.payableNumber,
           status: p.status,
+          onHold: !!p.onHold,
+          holdReason: p.holdReason ?? null,
           assignmentId: p.assignmentId,
+          expenseId: p.expenseId ?? null,
           baseAmount: num(p.baseAmount),
           travelAmount: num(p.travelAmount),
           tdsAmount: num(p.tdsAmount),
@@ -1183,9 +1186,11 @@ export class MobileApiService {
           // assayer's commercial profile, so a missing value means "unknown", not "₹1200".
           // `undefined`, not `null`: the model treats the field as optional, and extracting this
           // mapper is what surfaced the mismatch the inline version had been widening away.
-          standardBaseFee: item.currentStandardBaseFee != null ? Number(item.currentStandardBaseFee) : undefined,
+          // The agreed fee, and nothing else. `standardBaseFee` (the assayer's profile rate) and
+          // `agreedTravelFee` (from a `travelAllowance` field the server never sends, so always
+          // 0) were both dropped: a payout is booked from the agreed or proposed fee alone, and
+          // a display fallback to any other figure shows a worker money they will not be paid.
           agreedBaseFee: item.agreedFee != null ? Number(item.agreedFee) : 0,
-          agreedTravelFee: item.travelAllowance != null ? Number(item.travelAllowance) : 0,
           // The quote breakdown recorded when the offer was priced. Grounding for display —
           // "includes ₹X travel by bus" — never added to totals: proposedFee already holds it.
           quotedTravelFee: item.quotedTravelFee != null ? Number(item.quotedTravelFee) : null,

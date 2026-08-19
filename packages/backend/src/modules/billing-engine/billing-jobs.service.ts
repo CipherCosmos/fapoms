@@ -5,7 +5,7 @@ import {
   BILLING_JOB,
   BILLING_JOB_OPTIONS,
   BILLING_QUEUE,
-  SyncAssignmentsJobData,
+  ReconcileJobData,
 } from './billing-jobs.contract';
 import {
   IN_FLIGHT_SCAN_LIMIT,
@@ -38,25 +38,26 @@ export class BillingJobsService {
   constructor(@InjectQueue(BILLING_QUEUE) private readonly queue: Queue) {}
 
   /**
-   * Queue a full backfill of billable assignments.
+   * Queue a reconcile: book every completed assignment that is missing a payout or a client line.
    *
-   * The dedupe fingerprint is the job name plus the requesting user — the backfill takes no
-   * parameters, so two requests from the same account are always the same request.
+   * The dedupe fingerprint is the job name, the requesting user and the `since` date, so two
+   * presses of the same button join one run.
    */
-  async enqueueSyncAssignments(requestedBy: string): Promise<EnqueueBillingJobResult> {
-    const data: SyncAssignmentsJobData = {
+  async enqueueReconcile(requestedBy: string, since: string | null): Promise<EnqueueBillingJobResult> {
+    const data: ReconcileJobData = {
       requestedBy,
-      dedupeKey: dedupeKeyFor(BILLING_JOB.SYNC_ASSIGNMENTS, requestedBy, {}),
+      since,
+      dedupeKey: dedupeKeyFor(BILLING_JOB.RECONCILE, requestedBy, { since }),
     };
 
-    const inFlight = await this.findInFlight(BILLING_JOB.SYNC_ASSIGNMENTS, data.dedupeKey);
+    const inFlight = await this.findInFlight(BILLING_JOB.RECONCILE, data.dedupeKey);
     if (inFlight) {
-      this.logger.log(`Joining in-flight billing sync ${inFlight.id} rather than starting a duplicate.`);
+      this.logger.log(`Joining in-flight billing reconcile ${inFlight.id} rather than starting a duplicate.`);
       return { jobId: String(inFlight.id), deduplicated: true };
     }
 
-    const job = await this.queue.add(BILLING_JOB.SYNC_ASSIGNMENTS, data, BILLING_JOB_OPTIONS);
-    this.logger.log(`Enqueued billing sync ${job.id}.`);
+    const job = await this.queue.add(BILLING_JOB.RECONCILE, data, BILLING_JOB_OPTIONS);
+    this.logger.log(`Enqueued billing reconcile ${job.id}.`);
     return { jobId: String(job.id), deduplicated: false };
   }
 
@@ -75,8 +76,8 @@ export class BillingJobsService {
    * Finds an identical request that has not finished yet.
    *
    * Unfinished states only. Matching a completed job would mean that for the whole retention
-   * window every press of Sync returned the previous run's counts, so an operator who had since
-   * completed ten audits would be told there was nothing to bill.
+   * window every press of Reconcile returned the previous run's counts, so an operator who had
+   * since completed ten audits would be told there was nothing to book.
    *
    * A failure here never blocks the enqueue: the scan is an optimisation whose worst outcome is
    * one redundant run, while refusing the work because a list read failed would turn a Redis
@@ -91,7 +92,7 @@ export class BillingJobsService {
         ) ?? null
       );
     } catch (err) {
-      this.logger.warn(`Could not scan for an in-flight billing sync (${(err as Error).message}); enqueuing anyway.`);
+      this.logger.warn(`Could not scan for an in-flight billing reconcile (${(err as Error).message}); enqueuing anyway.`);
       return null;
     }
   }

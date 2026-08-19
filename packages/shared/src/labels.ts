@@ -22,13 +22,18 @@ import {
   ClientLifecycleStatus,
   ClientType,
   ContractStatus,
-  ClientBillingStatus,
+  BillingState,
+  InvoiceStatus,
+  AssayerPayableStatus,
   ProjectStatus,
   TravelMode,
   FeedbackStatus,
   FeedbackCategory,
   SystemRole,
   AssayerLifecycleStatus,
+  BillingEntityType,
+  PaymentDirection,
+  PaymentMethod,
   DocumentType,
   ValidationStatus,
 } from './enums';
@@ -123,12 +128,28 @@ const CONTRACT_STATUS_LABELS: Record<ContractStatus, string> = {
   [ContractStatus.RENEWED]: 'Renewed',
 };
 
-/** Client billing state. */
-const BILLING_STATUS_LABELS: Record<ClientBillingStatus, string> = {
-  [ClientBillingStatus.DRAFT]: 'Draft',
-  [ClientBillingStatus.ACTIVE]: 'Active',
-  [ClientBillingStatus.SUSPENDED]: 'Suspended',
-  [ClientBillingStatus.INACTIVE]: 'Inactive',
+/**
+ * Money words, shared by the finance desk and the assayer's phone so the same line never
+ * reads "PENDING" on one screen and "Awaiting approval" on the other.
+ */
+export const BILLING_STATE_LABELS: Record<BillingState, string> = {
+  [BillingState.UNBILLED]: 'Unbilled',
+  [BillingState.INVOICED]: 'Invoiced',
+  [BillingState.PAID]: 'Paid',
+  [BillingState.CANCELLED]: 'Cancelled',
+};
+
+export const PAYABLE_STATUS_LABELS: Record<AssayerPayableStatus, string> = {
+  [AssayerPayableStatus.PENDING]: 'Due',
+  [AssayerPayableStatus.APPROVED]: 'Approved',
+  [AssayerPayableStatus.PAID]: 'Paid',
+};
+
+export const INVOICE_STATUS_LABELS: Record<InvoiceStatus, string> = {
+  [InvoiceStatus.DRAFT]: 'Draft',
+  [InvoiceStatus.ISSUED]: 'Sent',
+  [InvoiceStatus.PAID]: 'Paid',
+  [InvoiceStatus.CANCELLED]: 'Cancelled',
 };
 
 /**
@@ -200,9 +221,19 @@ export function contractStatusLabel(status?: string | null): string {
   return CONTRACT_STATUS_LABELS[status as ContractStatus] ?? humanize(status);
 }
 
-export function billingStatusLabel(status?: string | null): string {
+export function billingStateLabel(state?: string | null): string {
+  if (!state) return '—';
+  return BILLING_STATE_LABELS[state as BillingState] ?? humanize(state);
+}
+
+export function payableStatusLabel(status?: string | null): string {
   if (!status) return '—';
-  return BILLING_STATUS_LABELS[status as ClientBillingStatus] ?? humanize(status);
+  return PAYABLE_STATUS_LABELS[status as AssayerPayableStatus] ?? humanize(status);
+}
+
+export function invoiceStatusLabel(status?: string | null): string {
+  if (!status) return '—';
+  return INVOICE_STATUS_LABELS[status as InvoiceStatus] ?? humanize(status);
 }
 
 /**
@@ -526,6 +557,55 @@ export const ASSAYER_LIFECYCLE_LABELS: Record<AssayerLifecycleStatus, string> = 
 export function assayerLifecycleLabel(status?: string | null): string {
   if (!status) return '—';
   return ASSAYER_LIFECYCLE_LABELS[status as AssayerLifecycleStatus] ?? humanize(status);
+}
+
+/**
+ * The client-side ledger line for one assignment. Same values as `billingStateLabel` — named
+ * for the record the finance desk is actually looking at ("this billing entry"), because
+ * "state" is the schema's word and "status" is the one on the screen.
+ */
+export function billingEntryStatusLabel(status?: string | null): string {
+  return billingStateLabel(status);
+}
+
+/** Which ledger a billing history row belongs to. */
+export const BILLING_ENTITY_TYPE_LABELS: Record<BillingEntityType, string> = {
+  [BillingEntityType.ENTRY]: 'Billing Entry',
+  [BillingEntityType.INVOICE]: 'Invoice',
+  [BillingEntityType.PAYMENT]: 'Payment',
+  [BillingEntityType.PAYABLE]: 'Assayer Payable',
+};
+
+export function billingEntityTypeLabel(type?: string | null): string {
+  if (!type) return '—';
+  return BILLING_ENTITY_TYPE_LABELS[type as BillingEntityType] ?? humanize(type);
+}
+
+/** Which way the money moved, said from the business's side of the transaction. */
+export const PAYMENT_DIRECTION_LABELS: Record<PaymentDirection, string> = {
+  [PaymentDirection.INBOUND]: 'Received from Client',
+  [PaymentDirection.OUTBOUND]: 'Paid to Assayer',
+};
+
+export function paymentDirectionLabel(direction?: string | null): string {
+  if (!direction) return '—';
+  return PAYMENT_DIRECTION_LABELS[direction as PaymentDirection] ?? humanize(direction);
+}
+
+/** How a payment was made. The Indian rails keep their everyday initialisms. */
+export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
+  [PaymentMethod.BANK_TRANSFER]: 'Bank Transfer',
+  [PaymentMethod.NEFT]: 'NEFT',
+  [PaymentMethod.RTGS]: 'RTGS',
+  [PaymentMethod.UPI]: 'UPI',
+  [PaymentMethod.CHEQUE]: 'Cheque',
+  [PaymentMethod.CARD]: 'Card',
+  [PaymentMethod.OTHER]: 'Other',
+};
+
+export function paymentMethodLabel(method?: string | null): string {
+  if (!method) return '—';
+  return PAYMENT_METHOD_LABELS[method as PaymentMethod] ?? humanize(method);
 }
 
 /**

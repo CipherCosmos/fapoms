@@ -1,108 +1,87 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { FileText } from 'lucide-react';
-import { Modal, StyledInput, Select, useToast } from '../../components/ui';
+import { Modal, StyledInput, useToast } from '../../components/ui';
 import { useCreateBillingInvoice } from '../../hooks/useBilling';
-import { useClientsList } from '../../hooks/useClients';
-import { api } from '../../services/api';
+import type { InvoiceableClient } from '../../services/billing';
 import { userMessage } from '../../services/errors';
-import { InvoiceType, formatRupees } from '@fapoms/shared';
+import { moneyTotal as money } from '../../utils/money';
+import { HoldPill, fmtDate } from './shared';
 
-const TYPES = Object.values(InvoiceType);
-
-interface ApprovedEntry { id: string; entryNumber: string; clientId: string; totalAmount: number; }
-
-export const CreateInvoiceModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
+/**
+ * Invoice a client: tick the completed assignments to put on it. Totals are the server's line
+ * totals; the due date comes from the client's payment terms unless overridden.
+ */
+export const CreateInvoiceModal: React.FC<{ client: InvoiceableClient; onClose: () => void; onCreated: (invoiceId: string) => void }> = ({ client, onClose, onCreated }) => {
   const { toast } = useToast();
   const create = useCreateBillingInvoice();
-  const clients = useClientsList({ limit: 1000 });
-
-  const [clientId, setClientId] = useState('');
-  const [type, setType] = useState<InvoiceType>(InvoiceType.CONSOLIDATED);
-  const [entries, setEntries] = useState<ApprovedEntry[]>([]);
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
-  const [issueDate, setIssueDate] = useState('');
+  const eligible = useMemo(() => client.lines.filter((l) => !l.onHold), [client.lines]);
+  const [selected, setSelected] = useState<Set<string>>(() => new Set(eligible.map((l) => l.assignmentId)));
+  const [issueDate, setIssueDate] = useState(new Date().toISOString().slice(0, 10));
   const [dueDate, setDueDate] = useState('');
   const [notes, setNotes] = useState('');
-  const [loadingEntries, setLoadingEntries] = useState(false);
 
-  const clientOptions = clients.data?.items ?? [];
+  const chosen = eligible.filter((l) => selected.has(l.assignmentId));
+  const subtotal = chosen.reduce((s, l) => s + l.taxableAmount, 0);
+  const gst = chosen.reduce((s, l) => s + l.taxAmount, 0);
+  const tds = chosen.reduce((s, l) => s + l.tdsAmount, 0);
+  const total = chosen.reduce((s, l) => s + l.totalAmount, 0);
 
-  const loadEntries = async (cid: string) => {
-    if (!cid) { setEntries([]); setSelectedIds([]); return; }
-    setLoadingEntries(true);
-    try {
-      const res = await api.request<ApprovedEntry[]>(`/billing-engine/entries?clientId=${cid}&state=APPROVED`);
-      setEntries(res ?? []);
-      setSelectedIds([]);
-    } catch {
-      setEntries([]); setSelectedIds([]);
-    } finally { setLoadingEntries(false); }
-  };
+  const toggle = (id: string) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
-  const toggle = (id: string) =>
-    setSelectedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
-
-  const total = entries.filter((e) => selectedIds.includes(e.id)).reduce((s, e) => s + e.totalAmount, 0);
-
-  const handleSubmit = async (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!clientId) { toast('error', 'Select a client'); return; }
-    if (selectedIds.length === 0) { toast('error', 'Select at least one approved entry'); return; }
+    if (!chosen.length) { toast('error', 'Pick at least one assignment'); return; }
     try {
-      await create.mutateAsync({
-        clientId, type, entryIds: selectedIds,
+      const inv = await create.mutateAsync({
+        clientId: client.clientId, assignmentIds: chosen.map((l) => l.assignmentId),
         issueDate: issueDate || undefined, dueDate: dueDate || undefined, notes: notes || undefined,
       });
-      toast('success', 'Invoice created');
-      onClose();
-    } catch (err: any) { toast({ type: 'error', title: 'Failed to create invoice', message: userMessage(err) }); }
+      toast('success', `${inv.invoiceNumber} created as a draft`);
+      onCreated(inv.id);
+    } catch (err) { toast({ type: 'error', title: 'Could not create the invoice', message: userMessage(err) }); }
   };
 
   return (
-    <Modal open onClose={onClose} title={<><FileText size={18} /> Create Invoice</>} width="620px" maxHeight="90vh" asForm onSubmit={handleSubmit} footer={
+    <Modal open onClose={onClose} title={<><FileText size={18} /> Invoice {client.clientName}</>} width="680px" maxHeight="90vh" asForm onSubmit={submit} footer={
       <>
-        <span style={{ marginRight: 'auto', fontSize: 13, color: 'var(--text-secondary)' }}>Total: <strong>{formatRupees(total)}</strong> ({selectedIds.length} entries)</span>
+        <span style={{ marginRight: 'auto', fontSize: 12.5, color: 'var(--text-secondary)' }}>
+          {chosen.length} of {eligible.length} · taxable {money(subtotal)} + GST {money(gst)} − TDS {money(tds)} = <strong style={{ color: 'var(--text-primary)' }}>{money(total)}</strong>
+        </span>
         <button type="button" onClick={onClose} className="btn btn-secondary">Cancel</button>
-        <button type="submit" disabled={create.isPending} className="btn btn-primary">{create.isPending ? 'Creating...' : 'Create Invoice'}</button>
+        <button type="submit" disabled={create.isPending || !chosen.length} className="btn btn-primary">{create.isPending ? 'Creating…' : 'Create draft invoice'}</button>
       </>
     }>
-      <Select
-        value={clientId}
-        onChange={(v) => { setClientId(v); loadEntries(v); }}
-        placeholder="Select client…"
-        options={clientOptions.map((c) => ({ value: c.id, label: c.displayName ?? c.name }))}
-        style={{ width: '100%' }}
-      />
-      <Select
-        value={type}
-        onChange={(v) => setType(v as InvoiceType)}
-        options={TYPES.map((t) => ({ value: t, label: t }))}
-        style={{ width: '100%' }}
-      />
-
-      <div>
-        <label style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-          Approved entries {loadingEntries && '(loading…)'}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <label style={{ fontSize: 11, color: 'var(--text-muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.5px' }}>Completed assignments</label>
+        <span style={{ fontSize: 12 }}>
+          <button type="button" onClick={() => setSelected(new Set(eligible.map((l) => l.assignmentId)))} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 12 }}>All</button>
+          {' · '}
+          <button type="button" onClick={() => setSelected(new Set())} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: 12 }}>None</button>
+        </span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6, maxHeight: 300, overflowY: 'auto' }}>
+        {client.lines.map((l) => (
+          <label key={l.entryId} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', cursor: l.onHold ? 'not-allowed' : 'pointer', opacity: l.onHold ? 0.6 : 1 }}>
+            <input type="checkbox" disabled={l.onHold} checked={!l.onHold && selected.has(l.assignmentId)} onChange={() => toggle(l.assignmentId)} />
+            <span style={{ flex: 1, minWidth: 0 }}>
+              <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-primary)' }}>{l.assignmentNumber ?? l.entryNumber}</span>
+              <span style={{ fontSize: 11.5, color: 'var(--text-muted)', marginLeft: 8 }}>{[l.branchName, l.projectName, l.assayerName].filter(Boolean).join(' · ')}</span>
+              {l.onHold && <span style={{ marginLeft: 8 }}><HoldPill reason={l.holdReason} /></span>}
+            </span>
+            <span style={{ fontSize: 11.5, color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>{fmtDate(l.serviceDate)}</span>
+            <span style={{ fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap', fontVariantNumeric: 'tabular-nums' }}>{money(l.totalAmount)}</span>
+          </label>
+        ))}
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: 4 }}>Issue date
+          <StyledInput type="date" value={issueDate} onChange={(e) => setIssueDate(e.target.value)} style={{ width: '100%' }} />
         </label>
-        {entries.length === 0 && !loadingEntries && (
-          <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 6 }}>No APPROVED entries for this client yet.</div>
-        )}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 6, marginTop: 6, maxHeight: 220, overflowY: 'auto' }}>
-          {entries.map((en) => (
-            <label key={en.id} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 8, background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)', cursor: 'pointer' }}>
-              <input type="checkbox" checked={selectedIds.includes(en.id)} onChange={() => toggle(en.id)} />
-              <span style={{ fontSize: 13, flex: 1 }}>{en.entryNumber}</span>
-              <span style={{ fontSize: 13, fontWeight: 600 }}>{formatRupees(en.totalAmount)}</span>
-            </label>
-          ))}
-        </div>
+        <label style={{ fontSize: 12, color: 'var(--text-muted)', display: 'flex', flexDirection: 'column', gap: 4 }}>Due date <span style={{ fontWeight: 400 }}>(blank = client's payment terms)</span>
+          <StyledInput type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} style={{ width: '100%' }} />
+        </label>
       </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12 }}>
-        <StyledInput placeholder="Issue date" type="date" value={issueDate} onChange={(e) => setIssueDate(e.target.value)} style={{ width: '100%' }} />
-        <StyledInput placeholder="Due date" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} style={{ width: '100%' }} />
-      </div>
-      <StyledInput placeholder="Notes" value={notes} onChange={(e) => setNotes(e.target.value)} style={{ width: '100%' }} />
+      <StyledInput placeholder="Notes for the invoice" value={notes} onChange={(e) => setNotes(e.target.value)} style={{ width: '100%' }} />
     </Modal>
   );
 };

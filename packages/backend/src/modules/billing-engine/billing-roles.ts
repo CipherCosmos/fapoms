@@ -28,3 +28,14 @@ export const BILLING_ROLES = [
  * job; the export is a read.
  */
 export const BILLING_READ_ROLES = [...BILLING_ROLES, SystemRole.READ_ONLY_AUDITOR];
+
+/**
+ * Who may approve, pay, hold or reverse a payout — money leaving the business has one gate,
+ * and it is finance or an administrator. Operations may see the book and raise invoices; it
+ * may not release cash.
+ */
+export const DISBURSEMENT_ROLES = [
+  SystemRole.SUPER_ADMINISTRATOR,
+  SystemRole.ADMINISTRATOR,
+  SystemRole.FINANCE_MANAGER,
+];

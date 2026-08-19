@@ -49,15 +49,6 @@ export function useClientBilling(clientId: string | null) {
   });
 }
 
-export function useClientBillingHistory(clientId: string | null) {
-  return useQuery({
-    queryKey: queryKeys.clients.billingHistory(clientId ?? ''),
-    queryFn: () => clientApi.getBillingHistory(clientId!),
-    enabled: !!clientId,
-    staleTime: 60_000,
-  });
-}
-
 export function useCreateClient() {
   const qc = useQueryClient();
   return useMutation({
@@ -142,32 +133,7 @@ export function useUpdateBilling() {
       clientApi.updateBilling(clientId, payload),
     onSuccess: (_data, vars) => {
       qc.invalidateQueries({ queryKey: queryKeys.clients.billing(vars.clientId) });
-      qc.invalidateQueries({ queryKey: queryKeys.clients.billingHistory(vars.clientId) });
       qc.invalidateQueries({ queryKey: queryKeys.clients.detail(vars.clientId) });
-    },
-  });
-}
-
-export function useTransitionBillingStatus() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ clientId, status, remarks }: { clientId: string; status: Parameters<typeof clientApi.transitionBillingStatus>[1]; remarks?: string }) =>
-      clientApi.transitionBillingStatus(clientId, status, remarks),
-    onSuccess: (_data, vars) => {
-      qc.invalidateQueries({ queryKey: queryKeys.clients.billing(vars.clientId) });
-      qc.invalidateQueries({ queryKey: queryKeys.clients.billingHistory(vars.clientId) });
-      qc.invalidateQueries({ queryKey: queryKeys.clients.detail(vars.clientId) });
-    },
-  });
-}
-
-export function useAddBillingRemark() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: ({ clientId, remarks }: { clientId: string; remarks: string }) =>
-      clientApi.addBillingRemark(clientId, remarks),
-    onSuccess: (_data, vars) => {
-      qc.invalidateQueries({ queryKey: queryKeys.clients.billingHistory(vars.clientId) });
     },
   });
 }

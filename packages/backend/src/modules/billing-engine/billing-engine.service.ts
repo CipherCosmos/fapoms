@@ -3,19 +3,17 @@ import {
   NotFoundException,
   BadRequestException,
   ConflictException,
-  ForbiddenException,
   Logger,
   OnModuleInit,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, Between, EntityManager } from 'typeorm';
+import { Repository, In, IsNull, EntityManager } from 'typeorm';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { isUniqueViolation } from '../../infrastructure/database/unique-violation';
 import { BillingEntryEntity } from './billing-entry.entity';
 import { BillingInvoiceEntity } from './invoice.entity';
 import { BillingPaymentEntity } from './payment.entity';
 import { AssayerPayableEntity } from './payable.entity';
-import { BillingConflictEntity } from './conflict.entity';
 import { BillingHistoryEntity } from './history.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ProjectEntity } from '../project/project.entity';
@@ -26,70 +24,39 @@ import {
   EmitOptions,
 } from '../notifications/notification-dispatch.service';
 import {
-  BillingLevel,
   BillingState,
-  PaymentState,
   InvoiceStatus,
-  InvoiceType,
-  PaymentStatus,
   PaymentMethod,
   PaymentDirection,
   AssayerPayableStatus,
-  BillingConflictStatus,
-  BillingConflictSeverity,
   BillingEntityType,
-  BillingPricingModel,
   AssignmentStatus,
-} from '@fapoms/shared';
-import {
-  BILLING_STATE_TRANSITIONS,
-  INVOICE_TRANSITIONS,
-  PAYMENT_STATE_TRANSITIONS,
-  PAYABLE_TRANSITIONS,
-  isValidTransition,
+  BillingAttentionItem,
+  BillingOverview,
+  AssignmentMoneyLine,
 } from '@fapoms/shared';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
-import { payableCost, entryRevenue, totalPayableCost, totalEntryRevenue, margin, assignmentFee, applyTaxes } from './billing-money';
+import {
+  assignmentFee,
+  assignmentMoney,
+  applyTaxes,
+  margin,
+  round2,
+  MONEY_EPSILON,
+  MoneyContext,
+  AssignmentMoney,
+} from './assignment-money';
 import type { ProgressCallback } from '../../infrastructure/queue/queued-job';
 
-export interface CreateEntryDto {
-  level: BillingLevel;
-  clientId: string;
-  projectId?: string;
-  assignmentId?: string;
-  assayerId?: string;
-  pricingModel?: BillingPricingModel;
-  rate?: number;
-  quantity?: number;
-  billingPeriodStart?: string;
-  billingPeriodEnd?: string;
-  description?: string;
-  baseAmount?: number;
-  travelAmount?: number;
-  adjustmentAmount?: number;
-  discountAmount?: number;
-  taxRate?: number;
-  tdsRate?: number;
-  currency?: string;
-  initialState?: BillingState;
-}
-
-export interface SplitEntryDto {
-  amounts: number[];
-  notes?: string;
-}
-
-const round2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
-
-/** Rounding slack when comparing money. Two figures within this are equal. */
-const MONEY_EPSILON = 0.01;
+// ---------------------------------------------------------------------------
+// Shapes
+// ---------------------------------------------------------------------------
 
 /**
  * One page of a billing list, and the size of the set it was cut from.
  *
  * `total` is the count across ALL pages, not the length of `items` — the client needs it to
- * draw a pager and to say "50 of 85,733", and it is the only figure that stays right when the
- * window moves.
+ * draw a pager, and it is the only figure that stays right when the window moves.
  */
 export interface BillingPage<T> {
   items: T[];
@@ -98,73 +65,70 @@ export interface BillingPage<T> {
   limit: number;
 }
 
-/** Rows returned when a caller names no window. */
 const BILLING_PAGE_DEFAULT = 50;
-
-/**
- * The most rows any single billing list request can return.
- *
- * This clamp is the whole point of the change. Every list on this service used to run an
- * unbounded `find()`: `GET /billing-engine/entries` with no filters returned one row per
- * completed assignment — 85,733 on the scale book, and one of EIGHT queries the Billing page
- * fires on mount. A ceiling that the caller cannot raise is what stops a future `?limit=999999`
- * from quietly restoring exactly the behaviour being removed here.
- */
+/** The most rows any single billing list request can return; the caller cannot raise it. */
 const BILLING_PAGE_MAX = 100;
 
-/**
- * Resolve a `page`/`limit` pair into a clamped window.
- *
- * There is no shared paginator in this codebase — `document.service.ts`, `feedback.service.ts`
- * and `validation.service.ts` each clamp inline in the same shape — so this follows that local
- * convention rather than introducing a cross-cutting abstraction the rest of the repo would
- * not use. Junk input (`limit=abc`, `page=-3`, `limit=0`) resolves to the default rather than
- * to `NaN`, which as an OFFSET makes Postgres reject the query outright.
- */
-function billingPageWindow(page?: number | string, limit?: number | string): { skip: number; take: number; page: number; limit: number } {
+function billingPageWindow(page?: number | string, limit?: number | string) {
   const safeLimit = Math.min(BILLING_PAGE_MAX, Math.max(1, Number(limit) || BILLING_PAGE_DEFAULT));
   const safePage = Math.max(1, Math.trunc(Number(page)) || 1);
   return { skip: (safePage - 1) * safeLimit, take: safeLimit, page: safePage, limit: safeLimit };
 }
 
-/** Work that is real revenue but has not reached an invoice yet. */
-const UNBILLED_STATES: BillingState[] = [
-  BillingState.PENDING_BILLING,
-  BillingState.READY_FOR_BILLING,
-  BillingState.DRAFT,
-  BillingState.SUBMITTED,
-  BillingState.UNDER_REVIEW,
-  BillingState.APPROVED,
-];
+export interface BookingResult {
+  booked: boolean;
+  entryId?: string;
+  payableId?: string;
+  reason?: string;
+}
 
-/**
- * How often the backfill reports progress, in assignments.
- *
- * Each report is a Redis round trip. At one per row a 200,000-assignment scan would spend more
- * time telling the caller what it was doing than doing it; at one per 500 the poll endpoint still
- * moves visibly on any book large enough for the wait to matter.
- */
-const SYNC_PROGRESS_INTERVAL = 500;
+export interface PayoutActionResult {
+  done: string[];
+  refused: Array<{ id: string; reason: string }>;
+}
 
-@Injectable()
-/**
- * A second root billing entry for an assignment was refused by the database.
- * A ConflictException (409) for API callers; a distinguishable type for the auto-sync paths,
- * which treat it as "the other sync won" rather than as an error.
- */
+/** A second client line for an assignment was refused by the database. */
 export class DuplicateBillingEntryError extends ConflictException {
   constructor() {
-    super('This assignment already has a billing entry. Adjust or split the existing line rather than creating a second one.');
+    super('This assignment already has a client line.');
   }
 }
 
-/** A second fee payable for an assignment was refused by the database. See DuplicateBillingEntryError. */
+/** A second fee payable for an assignment was refused by the database. */
 export class DuplicateFeePayableError extends ConflictException {
   constructor() {
-    super('This assignment already has a fee payable. Record an adjustment or an expense reimbursement rather than a second fee.');
+    super('This assignment already has a fee payable.');
   }
 }
 
+/** A second reimbursement for the same expense claim was refused by the database. */
+export class DuplicateReimbursementError extends ConflictException {
+  constructor() {
+    super('This expense claim has already been reimbursed.');
+  }
+}
+
+/**
+ * How often the reconcile reports progress, in assignments. Each report is a Redis round trip.
+ */
+const RECONCILE_PROGRESS_INTERVAL = 200;
+
+/** How many items the overview's attention list carries per kind before it says "and more". */
+const ATTENTION_LIMIT = 25;
+
+/**
+ * The billing engine: the assignment is the ledger line.
+ *
+ * When an assignment completes, `bookAssignment` creates — in ONE transaction — the assayer's fee
+ * payable (what we owe them) and the client's line (what they owe us), both priced by
+ * `assignmentMoney`. Finance then approves and pays payouts, and collects completed assignments
+ * into invoices. Everything else on this class is a read over those rows.
+ *
+ * Every method that moves money or changes a billing state runs inside `inTx` with the rows it
+ * touches write-locked, and writes its history row on the same transaction, so the ledger can
+ * never hold half a change.
+ */
+@Injectable()
 export class BillingEngineService implements OnModuleInit {
   private readonly logger = new Logger(BillingEngineService.name);
 
@@ -177,8 +141,6 @@ export class BillingEngineService implements OnModuleInit {
     private readonly paymentRepository: Repository<BillingPaymentEntity>,
     @InjectRepository(AssayerPayableEntity)
     private readonly payableRepository: Repository<AssayerPayableEntity>,
-    @InjectRepository(BillingConflictEntity)
-    private readonly conflictRepository: Repository<BillingConflictEntity>,
     @InjectRepository(BillingHistoryEntity)
     private readonly historyRepository: Repository<BillingHistoryEntity>,
     @InjectRepository(AssignmentEntity)
@@ -192,2323 +154,636 @@ export class BillingEngineService implements OnModuleInit {
     private readonly settings: PlatformSettingsService,
   ) {}
 
-  /**
-   * Branch label for a billing row, resolved the same way `resolveNames` does it —
-   * assignments carry the project-branch link, billing rows only carry the assignment.
-   */
-  private async billingBranchName(assignmentId?: string | null): Promise<string> {
-    if (!assignmentId) return 'a branch';
-    const rows = await this.entryRepository.manager.query(
-      `SELECT b.name AS branch_name
-         FROM assignments a
-         LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
-         LEFT JOIN branches b ON b.id = pb.branch_id
-        WHERE a.id = $1`,
-      [assignmentId],
-    );
-    return rows?.[0]?.branch_name ?? 'a branch';
-  }
-
-  /**
-   * Fire-and-forget a notification whose body needs a branch label.
-   *
-   * Detached on purpose: the label costs a join, and neither that query nor the dispatch
-   * may be allowed to fail a payment or an approval that has already committed. Call sites
-   * invoke this only after `inTx` has returned, so nothing here can roll money back.
-   */
-  private notifyWithBranch(
-    assignmentId: string | null | undefined,
-    build: (branchName: string) => EmitOptions,
-  ): void {
-    void this.billingBranchName(assignmentId)
-      .then((branchName) => this.notificationDispatch.emitSafe(build(branchName)))
-      .catch((err) =>
-        this.logger.error(`Billing notification skipped: ${(err as Error).message}`),
-      );
-  }
-
   // -----------------------------------------------------------------------
-  // Transaction + row-locking primitives
-  //
-  // Every method in this file that moves money or changes a billing state runs
-  // inside `inTx`. Before this, each of them was a sequence of independent
-  // autocommitted saves: `recordPayment` wrote the payment row, then the invoice,
-  // then one row per entry — 2+N separate transactions. A crash, a statement
-  // timeout or a lost connection anywhere in that sequence left the ledger in a
-  // state no code could produce deliberately: a payment recorded against an
-  // unadjusted invoice, or an invoice marked PAID whose entries still showed the
-  // full amount outstanding. Nothing detected it and nothing could repair it,
-  // because there was no record of how far the sequence had got.
+  // The automatic path: completion books; a fee edit re-prices
   // -----------------------------------------------------------------------
 
-  /**
-   * Run `work` in one database transaction, releasing its domain events only after commit.
-   *
-   * The isolation level and the after-COMMIT event ordering now live in `UnitOfWork`, so this
-   * is a name rather than a mechanism — kept because the 16 call sites below read better as
-   * `inTx` than as `uow.run`, and because it keeps the locking helpers and the boundary they
-   * depend on adjacent in the file.
-   */
-  private inTx<T>(
-    work: (
-      manager: EntityManager,
-      emit: (event: string, payload: Record<string, unknown>) => void,
-    ) => Promise<T>,
-  ): Promise<T> {
-    return this.uow.run(work);
-  }
-
-  /**
-   * Load one billing entry with a write lock held for the rest of the transaction.
-   *
-   * `@VersionColumn()` has been on every one of these entities since the beginning and has
-   * never protected anything: TypeORM only compares versions when a caller explicitly asks
-   * for an optimistic lock, and no call site here ever did. The column incremented and the
-   * lost update happened anyway.
-   *
-   * A write lock is also the better fit than fixing that. Optimistic locking would let the
-   * second writer evaluate every guard against stale data and only then reject it. A lock
-   * makes the second writer wait and then evaluate the guards against what actually
-   * committed — so a transition that has become invalid, or a payment that would now
-   * overpay, is refused for the right reason instead of being refused as a version clash.
-   */
-  private async lockEntry(manager: EntityManager, entryId: string): Promise<BillingEntryEntity> {
-    const entry = await manager.findOne(BillingEntryEntity, {
-      where: { id: entryId },
-      lock: { mode: 'pessimistic_write' },
-    });
-    if (!entry) throw new NotFoundException(`Billing entry ${entryId} not found.`);
-    return entry;
-  }
-
-  /**
-   * Write-lock a set of entries, acquired in a stable order.
-   *
-   * The ordering is what keeps two overlapping operations from deadlocking: if a payment
-   * against invoice X and a merge both touch entries {A, B}, both take A before B and one
-   * simply waits. Without it they can take them in opposite orders and Postgres kills one
-   * with a deadlock (40P01).
-   *
-   * This makes the common deadlock impossible rather than merely unlikely — the executor
-   * is free to lock in scan order, so a 40P01 remains theoretically reachable. It surfaces
-   * as a failed request with the whole transaction rolled back, never as half-applied money.
-   */
-  private async lockEntriesById(
-    manager: EntityManager,
-    entryIds: string[],
-  ): Promise<BillingEntryEntity[]> {
-    if (!entryIds.length) return [];
-    return manager
-      .createQueryBuilder(BillingEntryEntity, 'e')
-      .setLock('pessimistic_write')
-      .where('e.id IN (:...entryIds)', { entryIds })
-      .orderBy('e.id', 'ASC')
-      .getMany();
-  }
-
-  /** Write-lock every entry attached to an invoice, in the same stable order. */
-  private async lockEntriesByInvoice(
-    manager: EntityManager,
-    invoiceId: string,
-  ): Promise<BillingEntryEntity[]> {
-    return manager
-      .createQueryBuilder(BillingEntryEntity, 'e')
-      .setLock('pessimistic_write')
-      .where('e.invoice_id = :invoiceId', { invoiceId })
-      .orderBy('e.id', 'ASC')
-      .getMany();
-  }
-
-  /**
-   * Write-lock one invoice, without its relations.
-   *
-   * Postgres refuses `FOR UPDATE` on the nullable side of an outer join, and `getInvoice`
-   * eager-loads `entries` and `payments` as LEFT JOINs — so locking and loading have to be
-   * two steps. Entries are locked separately by `lockEntriesByInvoice`.
-   */
-  private async lockInvoice(
-    manager: EntityManager,
-    invoiceId: string,
-  ): Promise<BillingInvoiceEntity> {
-    const invoice = await manager.findOne(BillingInvoiceEntity, {
-      where: { id: invoiceId },
-      lock: { mode: 'pessimistic_write' },
-    });
-    if (!invoice) throw new NotFoundException(`Invoice ${invoiceId} not found.`);
-    return invoice;
-  }
-
-  /** Write-lock one assayer payable. */
-  private async lockPayable(
-    manager: EntityManager,
-    payableId: string,
-  ): Promise<AssayerPayableEntity> {
-    const payable = await manager.findOne(AssayerPayableEntity, {
-      where: { id: payableId },
-      lock: { mode: 'pessimistic_write' },
-    });
-    if (!payable) throw new NotFoundException(`Payable ${payableId} not found.`);
-    return payable;
-  }
-
-  /** Auto-sync: when an assignment completes, create its billing entry automatically. */
   onModuleInit() {
     this.eventPublisher.subscribe('assignment:status-changed', async (payload: any) => {
-      const newState = payload?.newState;
-      if (newState !== AssignmentStatus.COMPLETED && newState !== AssignmentStatus.IN_PROGRESS && newState !== AssignmentStatus.CHECKED_IN) {
-        return;
-      }
+      if (payload?.newState !== AssignmentStatus.COMPLETED) return;
       const assignmentId = payload?.assignmentId;
       if (!assignmentId) return;
-
-      // Serialize concurrent syncs for the SAME assignment across all replicas. The event
-      // bus can deliver two status changes back-to-back (e.g. IN_PROGRESS then COMPLETED),
-      // and without this their check-then-create in syncAssignment / syncPayableForAssignment
-      // can interleave into a duplicate billing entry AND payable — a double-bill and a
-      // double-pay. Fail-open: if Redis is unavailable, the "already billed / already exists"
-      // guards inside the sync methods remain the correctness backstop.
-      await this.cache.withLock(`lock:billing:sync:${assignmentId}`, 30, async () => {
+      // Serialise concurrent bookings of the SAME assignment across replicas. Fail-open: if
+      // Redis is unavailable the two unique indexes are the backstop — the loser re-reads the
+      // winner's rows and reports them.
+      await this.cache.withLock(`lock:billing:book:${assignmentId}`, 30, async () => {
         try {
-          const result = await this.syncAssignment(assignmentId);
-          if (result.created) {
-            this.logger.log(`Auto-billed completed assignment ${assignmentId} (entry ${result.entryId}).`);
+          const result = await this.bookAssignment(assignmentId);
+          if (result.booked) {
+            this.logger.log(`Booked assignment ${assignmentId}: entry ${result.entryId}, payable ${result.payableId}.`);
+          } else if (result.reason && result.reason !== 'already booked') {
+            this.logger.warn(`Assignment ${assignmentId} completed but was not booked: ${result.reason}.`);
           }
         } catch (err) {
-          this.logger.error(`Auto-bill failed for assignment ${assignmentId}: ${(err as Error).message}`);
-        }
-        // Cost leg, recorded from the same event so revenue and cost can never drift
-        // apart. Failure here must not roll back the receivable above, hence separate.
-        try {
-          const payable = await this.syncPayableForAssignment(assignmentId);
-          if (payable.created) {
-            this.logger.log(`Auto-created assayer payable for assignment ${assignmentId} (payable ${payable.payableId}).`);
-          }
-        } catch (err) {
-          this.logger.error(`Auto-payable failed for assignment ${assignmentId}: ${(err as Error).message}`);
+          this.logger.error(`Booking failed for assignment ${assignmentId}: ${(err as Error).message}`);
         }
       });
     });
-  }
 
-  private seq(): string {
-    return Math.floor(100000 + Math.random() * 900000).toString();
-  }
-
-  private moneyOf(entry: BillingEntryEntity) {
-    return {
-      baseAmount: Number(entry.baseAmount),
-      travelAmount: Number(entry.travelAmount),
-      adjustmentAmount: Number(entry.adjustmentAmount),
-      discountAmount: Number(entry.discountAmount),
-      taxAmount: Number(entry.taxAmount),
-      taxRate: Number(entry.taxRate),
-      tdsAmount: Number(entry.tdsAmount),
-      totalAmount: Number(entry.totalAmount),
-      currency: entry.currency,
-    };
+    this.eventPublisher.subscribe('assignment:fee-updated', async (payload: any) => {
+      const assignmentId = payload?.assignmentId;
+      if (!assignmentId) return;
+      try {
+        await this.repriceAssignment(assignmentId, payload?.userId ?? 'system');
+      } catch (err) {
+        this.logger.error(`Re-pricing failed for assignment ${assignmentId}: ${(err as Error).message}`);
+      }
+    });
   }
 
   /**
-   * Recomputes tax/TDS/total from the current line values. Pure money math.
+   * Book one completed assignment: its fee payable and its client line, in one transaction.
    *
-   * GST is charged on the taxable value; TDS is withheld by the client from the
-   * same taxable value (not from the GST). So the invoice-payable figure is
-   * taxable + GST − TDS.
+   * Idempotent. A leg that already exists is left alone and the missing one is written, so the
+   * reconcile can repair a half-booked assignment with the same call the event path uses. The
+   * at-least-once event bus and the fail-open lock mean two bookings can race between the read
+   * and the insert; the unique indexes decide, and the loser reports the winner's rows.
    */
-  private recompute(entry: BillingEntryEntity): BillingEntryEntity {
-    const gross = round2(Number(entry.baseAmount) + Number(entry.travelAmount) + Number(entry.adjustmentAmount));
-    const taxable = round2(gross - Number(entry.discountAmount));
-    // Reads the dedicated rate columns. TDS previously read `tdsAmount` — a rupee
-    // figure — and divided it by 100 as though it were a percentage, which meant
-    // TDS evaluated to 0 on every entry that had not already been given a TDS amount.
-    const settled = applyTaxes(taxable, { taxRate: entry.taxRate, tdsRate: entry.tdsRate });
-    entry.taxableAmount = taxable;
-    entry.taxAmount = settled.taxAmount;
-    entry.tdsAmount = settled.tdsAmount;
-    entry.totalAmount = settled.totalAmount;
-    return entry;
+  async bookAssignment(assignmentId: string, userId = 'system'): Promise<BookingResult> {
+    try {
+      return await this.inTx(async (m, emit) => {
+        const a = await m.findOne(AssignmentEntity, { where: { id: assignmentId } });
+        if (!a) return { booked: false, reason: 'assignment not found' };
+        if (a.status !== AssignmentStatus.COMPLETED) return { booked: false, reason: 'assignment not completed' };
+        if (!a.assayerId) return { booked: false, reason: 'no assayer on assignment' };
+
+        const project = a.projectId
+          ? await m.findOne(ProjectEntity, { where: { id: a.projectId }, select: ['id', 'clientId'] })
+          : null;
+        const clientId = project?.clientId;
+        if (!clientId) return { booked: false, reason: 'no client for assignment' };
+
+        const [existingEntry, existingPayable] = await Promise.all([
+          m.findOne(BillingEntryEntity, { where: { assignmentId } }),
+          m.findOne(AssayerPayableEntity, { where: { assignmentId, expenseId: IsNull() } }),
+        ]);
+        if (existingEntry && existingPayable) {
+          return { booked: false, reason: 'already booked', entryId: existingEntry.id, payableId: existingPayable.id };
+        }
+
+        const ctx = await this.moneyContextFor(clientId, a.assayerId, a.quotedTravelFee, m);
+        const money = assignmentMoney(a, ctx);
+        if (money.fee.source === 'NONE') return { booked: false, reason: 'NO_FEE' };
+
+        const payable = existingPayable ?? await this.insertFeePayable(m, a, clientId, money, ctx, userId);
+        const entry = existingEntry ?? await this.insertClientLine(m, a, clientId, money, ctx, userId);
+
+        emit('billing:booked', {
+          assignmentId: a.id,
+          assignmentNumber: a.assignmentNumber,
+          assayerId: a.assayerId,
+          clientId,
+          entryId: entry.id,
+          payableId: payable.id,
+          settled: money.fee.settled,
+        });
+        return { booked: true, entryId: entry.id, payableId: payable.id };
+      });
+    } catch (err) {
+      if (
+        isUniqueViolation(err, 'UQ_billing_entries_root_per_assignment') ||
+        isUniqueViolation(err, 'UQ_assayer_payables_fee_per_assignment')
+      ) {
+        const [entry, payable] = await Promise.all([
+          this.entryRepository.findOne({ where: { assignmentId } }),
+          this.payableRepository.findOne({ where: { assignmentId, expenseId: IsNull() } }),
+        ]);
+        return { booked: false, reason: 'already booked (concurrent)', entryId: entry?.id, payableId: payable?.id };
+      }
+      throw err;
+    }
   }
 
   /**
-   * The client's contracted billing terms. `client_billing` has held these all
-   * along (payment terms, GSTIN, cycle) but the engine never read it, so every
-   * line was taxed at 0% and every invoice due date had to be typed by hand.
-   * Falls back to Indian audit-services defaults when a client has no billing
-   * record yet rather than failing the sale.
+   * Re-price a booked assignment after its fee moved.
+   *
+   * Fee edits are refused once an assignment leaves PENDING and booking happens at COMPLETED,
+   * so this is a safety net rather than a workflow. It re-prices what can still be re-priced —
+   * an UNBILLED line, an unpaid payable — and leaves the rest alone, because an invoiced line
+   * or a paid payable is a record of what was actually billed or paid. The attention list shows
+   * "fee changed after booking" for anything this could not touch.
    */
-  private async clientTaxRates(
-    clientId: string,
-    manager?: EntityManager,
-  ): Promise<{ gstRate: number; tdsRate: number; paymentTerms: string | null }> {
-    const rows = await (manager ?? this.entryRepository.manager).query(
-      `SELECT gst_rate, tds_rate, payment_terms FROM client_billing WHERE client_id = $1 AND is_active = true LIMIT 1`,
-      [clientId],
+  async repriceAssignment(assignmentId: string, userId = 'system'): Promise<{ repriced: boolean; reason?: string }> {
+    return this.inTx(async (m, emit) => {
+      const a = await m.findOne(AssignmentEntity, { where: { id: assignmentId } });
+      if (!a) return { repriced: false, reason: 'assignment not found' };
+      const [entry, payable] = await Promise.all([
+        m.findOne(BillingEntryEntity, { where: { assignmentId }, lock: { mode: 'pessimistic_write' } }),
+        m.findOne(AssayerPayableEntity, { where: { assignmentId, expenseId: IsNull() }, lock: { mode: 'pessimistic_write' } }),
+      ]);
+      if (!entry && !payable) return { repriced: false, reason: 'not booked' };
+
+      const clientId = entry?.clientId ?? payable?.clientId ?? null;
+      if (!clientId || !a.assayerId) return { repriced: false, reason: 'no client/assayer' };
+      const ctx = await this.moneyContextFor(clientId, a.assayerId, a.quotedTravelFee, m, Number(entry?.adjustmentAmount ?? 0));
+      const money = assignmentMoney(a, ctx);
+      if (money.fee.source === 'NONE') return { repriced: false, reason: 'NO_FEE' };
+
+      let touched = false;
+      if (payable && payable.status !== AssayerPayableStatus.PAID && Number(payable.paidAmount) === 0) {
+        const before = { baseAmount: Number(payable.baseAmount), travelAmount: Number(payable.travelAmount), tdsAmount: Number(payable.tdsAmount), totalAmount: Number(payable.totalAmount) };
+        payable.baseAmount = money.assayer.base;
+        payable.travelAmount = money.assayer.travel;
+        payable.taxAmount = 0;
+        payable.tdsAmount = money.assayer.tds;
+        payable.totalAmount = money.assayer.net;
+        payable.rateSnapshot = this.payableSnapshot(a, money, ctx);
+        payable.updatedBy = userId;
+        await m.save(payable);
+        await this.history(userId, {
+          clientId, projectId: a.projectId, assignmentId, assayerId: a.assayerId,
+          entityType: BillingEntityType.PAYABLE, entityId: payable.id, action: 'PAYABLE_REPRICED',
+          previousValue: before, newValue: { baseAmount: money.assayer.base, travelAmount: money.assayer.travel, tdsAmount: money.assayer.tds, totalAmount: money.assayer.net },
+          reason: 'Assignment fee changed',
+        }, m);
+        touched = true;
+      }
+      if (entry && entry.state === BillingState.UNBILLED) {
+        const before = this.moneyOf(entry);
+        entry.baseAmount = money.client.base;
+        entry.travelAmount = money.client.travel;
+        entry.taxableAmount = money.client.taxable;
+        entry.taxAmount = money.client.gst;
+        entry.tdsAmount = money.client.tds;
+        entry.totalAmount = money.client.total;
+        entry.updatedBy = userId;
+        await m.save(entry);
+        await this.history(userId, {
+          clientId, projectId: a.projectId, assignmentId, assayerId: a.assayerId,
+          entityType: BillingEntityType.ENTRY, entityId: entry.id, action: 'ENTRY_REPRICED',
+          previousValue: before, newValue: this.moneyOf(entry), reason: 'Assignment fee changed',
+        }, m);
+        touched = true;
+      }
+      if (touched) {
+        emit('billing:booked', { assignmentId, assayerId: a.assayerId, clientId, entryId: entry?.id, payableId: payable?.id, change: 'REPRICED' });
+      }
+      return { repriced: touched, reason: touched ? undefined : 'nothing re-priceable' };
+    });
+  }
+
+  /**
+   * The admin repair button: book every COMPLETED assignment that is missing a leg.
+   *
+   * The automatic path is the event; this exists for the day the event was lost, the lock failed
+   * open twice, or a database was restored. `since` limits it to assignments completed on or
+   * after a date, so a fresh deployment over an old assignment book does not book years of
+   * history nobody asked for.
+   */
+  async reconcile(
+    userId: string,
+    opts: { since?: string | null } = {},
+    onProgress?: ProgressCallback,
+  ): Promise<{ scanned: number; booked: number; skipped: number; errors: Array<{ assignmentId: string; reason: string }> }> {
+    const ids = await this.unbookedAssignmentIds(opts.since ?? null);
+    let booked = 0;
+    let skipped = 0;
+    const errors: Array<{ assignmentId: string; reason: string }> = [];
+    let scanned = 0;
+    for (const id of ids) {
+      scanned += 1;
+      if (onProgress && scanned % RECONCILE_PROGRESS_INTERVAL === 0) {
+        await onProgress(scanned, ids.length, `Booked ${booked} of ${scanned} scanned`);
+      }
+      try {
+        const r = await this.bookAssignment(id, userId);
+        if (r.booked) booked += 1;
+        else if (r.reason?.startsWith('already booked')) skipped += 1;
+        else errors.push({ assignmentId: id, reason: r.reason ?? 'not booked' });
+      } catch (err) {
+        errors.push({ assignmentId: id, reason: (err as Error).message });
+      }
+    }
+    if (onProgress) await onProgress(ids.length, ids.length, 'Complete');
+    if (booked > 0) this.logger.log(`Reconcile: booked ${booked} assignment(s), ${errors.length} error(s).`);
+    return { scanned: ids.length, booked, skipped, errors };
+  }
+
+  /** What a reconcile would touch — shown to the operator before they press the button. */
+  async reconcilePreview(opts: { since?: string | null } = {}): Promise<{ count: number; since: string | null }> {
+    const ids = await this.unbookedAssignmentIds(opts.since ?? null);
+    return { count: ids.length, since: opts.since ?? null };
+  }
+
+  private async unbookedAssignmentIds(since: string | null): Promise<string[]> {
+    const rows: Array<{ id: string }> = await this.assignmentRepository.manager.query(
+      `SELECT a.id
+         FROM assignments a
+         LEFT JOIN billing_entries e ON e.assignment_id = a.id
+         LEFT JOIN assayer_payables p ON p.assignment_id = a.id AND p.expense_id IS NULL
+        WHERE a.status = 'COMPLETED' AND a.is_active = true
+          AND (e.id IS NULL OR p.id IS NULL)
+          AND ($1::date IS NULL OR a.completion_date >= $1::date)
+        ORDER BY a.completion_date ASC NULLS LAST, a.created_at ASC`,
+      [since],
     );
-    const row = rows?.[0];
-    // The client's own billing profile wins; the platform defaults below are configurable
-    // rather than literals, so all three tax numbers in this file have one home and one
-    // direction stated on the label. Both are snapshotted onto the entry at creation, so a
-    // later change never restates an issued invoice.
-    const [gstDefault, tdsDefault] = await Promise.all([
+    return rows.map((r) => r.id);
+  }
+
+  // -----------------------------------------------------------------------
+  // Pricing context and the two inserts
+  // -----------------------------------------------------------------------
+
+  /**
+   * Everything `assignmentMoney` needs that is not on the assignment: the client's rate card and
+   * travel policy, both sides' tax rates, and the legacy reimbursement for pre-quote offers.
+   */
+  private async moneyContextFor(
+    clientId: string,
+    assayerId: string,
+    quotedTravelFee: unknown,
+    m: EntityManager,
+    adjustmentAmount = 0,
+  ): Promise<MoneyContext & { paymentTerms: string | null }> {
+    const needsLegacyTravel = quotedTravelFee === null || quotedTravelFee === undefined;
+    const [cfgRows, clientRows, billingRows, assayerTds, gstDefault, tdsDefault, profileRows] = await Promise.all([
+      m.query(
+        `SELECT default_base_fee FROM client_configurations
+          WHERE client_id = $1 AND is_active = true
+          ORDER BY effective_from DESC NULLS LAST LIMIT 1`,
+        [clientId],
+      ).catch(() => []),
+      m.query(`SELECT planning_preferences FROM clients WHERE id = $1 LIMIT 1`, [clientId]).catch(() => []),
+      m.query(`SELECT gst_rate, tds_rate, payment_terms FROM client_billing WHERE client_id = $1 AND is_active = true LIMIT 1`, [clientId]).catch(() => []),
+      this.settings.getNumber('billing.tdsRate', 10).catch(() => 10),
       this.settings.getNumber('billing.defaultClientGstRate', 18).catch(() => 18),
       this.settings.getNumber('billing.defaultClientTdsRate', 10).catch(() => 10),
+      needsLegacyTravel
+        ? m.query(
+            `SELECT travel_reimbursement FROM assayer_commercial_profiles
+              WHERE assayer_id = $1 AND is_active = true
+                AND (effective_end_date IS NULL OR effective_end_date >= NOW())
+              ORDER BY effective_start_date DESC LIMIT 1`,
+            [assayerId],
+          ).catch(() => [])
+        : Promise.resolve([]),
     ]);
+    const rate = cfgRows?.[0]?.default_base_fee;
+    const prefs = clientRows?.[0]?.planning_preferences ?? {};
+    const billing = billingRows?.[0];
     return {
-      gstRate: row ? Number(row.gst_rate) : gstDefault,
-      tdsRate: row ? Number(row.tds_rate) : tdsDefault,
-      paymentTerms: row?.payment_terms ?? null,
+      clientRate: rate != null && Number(rate) > 0 ? Number(rate) : null,
+      rechargeTravel: prefs?.rechargeTravel !== false,
+      gstRate: billing ? Number(billing.gst_rate) : gstDefault,
+      clientTdsRate: billing ? Number(billing.tds_rate) : tdsDefault,
+      assayerTdsRate: assayerTds,
+      legacyTravelReimbursement: needsLegacyTravel && profileRows?.[0]
+        ? Number(profileRows[0].travel_reimbursement ?? 0)
+        : null,
+      adjustmentAmount,
+      paymentTerms: billing?.payment_terms ?? null,
     };
   }
 
-  /**
-   * Turns contractual terms ("NET30", "NET45", "DUE_ON_RECEIPT") into a real due
-   * date. Invoices previously defaulted to no due date at all, which left nothing
-   * for ageing or overdue collection to work from.
-   */
-  private dueDateFromTerms(issueDate: string, terms: string | null): string {
-    const days = terms ? Number(/net\s*(\d+)/i.exec(terms)?.[1] ?? 0) : 0;
-    const d = new Date(`${issueDate}T00:00:00Z`);
-    d.setUTCDate(d.getUTCDate() + days);
-    return d.toISOString().slice(0, 10);
+  /** The snapshot must justify the amount booked — from the payable alone, forever. */
+  private payableSnapshot(a: AssignmentEntity, money: AssignmentMoney, ctx: MoneyContext): Record<string, unknown> {
+    return {
+      source: 'assignmentMoney',
+      feeAmount: money.fee.amount,
+      feeSource: money.fee.source,
+      settled: money.fee.settled,
+      agreedFee: a.agreedFee != null ? Number(a.agreedFee) : null,
+      proposedFee: a.proposedFee != null ? Number(a.proposedFee) : null,
+      quotedTravelFee: a.quotedTravelFee != null ? Number(a.quotedTravelFee) : null,
+      quotedTransportMode: a.quotedTransportMode ?? null,
+      quotedDistanceKm: a.quotedDistanceKm != null ? Number(a.quotedDistanceKm) : null,
+      quotedDistanceSource: a.quotedDistanceSource ?? null,
+      baseAmount: money.assayer.base,
+      travelAmount: money.assayer.travel,
+      tdsRate: ctx.assayerTdsRate,
+      legacyTravelReimbursement: ctx.legacyTravelReimbursement ?? null,
+      capturedAt: new Date().toISOString(),
+    };
   }
 
-  /** Small cache: the same operator writes many history rows per request. */
-  private readonly userNameCache = new Map<string, string>();
-
-  private async resolveUserName(userId: string, manager?: EntityManager): Promise<string> {
-    if (!userId || userId === 'system') return 'System (automated)';
-    const cached = this.userNameCache.get(userId);
-    if (cached) return cached;
-    try {
-      const rows = await (manager ?? this.entryRepository.manager).query(
-        `SELECT display_name FROM users WHERE id = $1 LIMIT 1`,
-        [userId],
-      );
-      const name = rows?.[0]?.display_name ?? userId;
-      this.userNameCache.set(userId, name);
-      return name;
-    } catch {
-      return userId;
-    }
-  }
-
-  /**
-   * Append one immutable row to the money trail.
-   *
-   * `manager` is not optional in spirit: every caller that changes money passes the
-   * transaction's manager, so the history row commits or rolls back with the change it
-   * describes. Writing it on its own connection is what previously allowed a state change
-   * to land with no record of who made it or what it replaced — the one thing an audit
-   * trail for a bank cannot do. The parameter stays optional only for the read-only and
-   * not-yet-transactional callers.
-   */
-  private async history(
-    userId: string,
-    h: Partial<BillingHistoryEntity>,
-    manager?: EntityManager,
-  ): Promise<BillingHistoryEntity> {
-    const rec = this.historyRepository.create({
-      ...h,
-      // The column existed but nothing ever wrote it, so the audit trail could only
-      // ever show a raw user id — useless for "who approved this invoice?".
-      userName: h.userName ?? (await this.resolveUserName(userId, manager)),
-      createdBy: userId,
-      updatedBy: userId,
-    } as BillingHistoryEntity);
-    return manager ? manager.save(rec) : this.historyRepository.save(rec);
-  }
-
-  private async publish(event: string, payload: Record<string, unknown>): Promise<void> {
-    try {
-      this.eventPublisher.publish(event, { ...payload, timestamp: new Date() });
-    } catch (err) {
-      this.logger.error(`Failed to publish ${event}:`, err);
-    }
-  }
-
-  // -----------------------------------------------------------------------
-  // Entries + state machine
-  // -----------------------------------------------------------------------
-
-  async createEntry(dto: CreateEntryDto, userId: string): Promise<BillingEntryEntity> {
-    if (!dto.clientId) throw new BadRequestException('clientId is required for any billing entry.');
-    if (dto.level === BillingLevel.PROJECT && !dto.projectId) {
-      throw new BadRequestException('projectId is required for PROJECT-level billing.');
-    }
-    if (dto.level === BillingLevel.ASSIGNMENT && !dto.assignmentId) {
-      throw new BadRequestException('assignmentId is required for ASSIGNMENT-level billing.');
-    }
-
-    return this.inTx(async (m, emit) => {
-      try {
-        return await this.createEntryInTx(dto, userId, m, emit);
-      } catch (err) {
-        if (isUniqueViolation(err, 'UQ_billing_entries_root_per_assignment')) {
-          throw new DuplicateBillingEntryError();
-        }
-        throw err;
-      }
-    });
-  }
-
-  private async createEntryInTx(
-    dto: CreateEntryDto,
-    userId: string,
+  private async insertFeePayable(
     m: EntityManager,
-    emit: (event: string, payload: Record<string, unknown>) => void,
-  ): Promise<BillingEntryEntity> {
-    {
-    // Tax treatment falls back to the client's contracted rates when the caller
-    // does not state them, so auto-generated lines are taxed the same as manual
-    // ones instead of silently going out at 0%.
-    const contract = await this.clientTaxRates(dto.clientId, m);
-
-    const entry = this.entryRepository.create({
-      entryNumber: `BE-${Date.now().toString(36).toUpperCase()}-${this.seq()}`,
-      level: dto.level,
-      clientId: dto.clientId,
-      projectId: dto.projectId ?? null,
-      assignmentId: dto.assignmentId ?? null,
-      assayerId: dto.assayerId ?? null,
-      pricingModel: dto.pricingModel ?? BillingPricingModel.FLAT_RATE,
-      rate: dto.rate ?? null,
-      quantity: dto.quantity ?? null,
-      billingPeriodStart: dto.billingPeriodStart ?? null,
-      billingPeriodEnd: dto.billingPeriodEnd ?? null,
-      description: dto.description ?? null,
-      baseAmount: dto.baseAmount ?? 0,
-      travelAmount: dto.travelAmount ?? 0,
-      adjustmentAmount: dto.adjustmentAmount ?? 0,
-      discountAmount: dto.discountAmount ?? 0,
-      taxRate: dto.taxRate ?? contract.gstRate,
-      tdsRate: dto.tdsRate ?? contract.tdsRate,
-      taxableAmount: 0,
-      tdsAmount: 0,
-      totalAmount: 0,
-      currency: dto.currency ?? 'INR',
-      state: dto.initialState ?? BillingState.PENDING_BILLING,
-      paymentState: PaymentState.UNPAID,
-      billedAmount: 0,
-      paidAmount: 0,
-      outstandingAmount: 0,
-      disputedAmount: 0,
-      cancelledAmount: 0,
-      adjustedAmount: 0,
-      createdBy: userId,
-      updatedBy: userId,
-    });
-    this.recompute(entry);
-    const saved = await m.save(entry);
-
-    await this.history(userId, {
-      clientId: saved.clientId,
-      projectId: saved.projectId,
-      assignmentId: saved.assignmentId,
-      assayerId: saved.assayerId,
-      entityType: BillingEntityType.ENTRY,
-      entityId: saved.id,
-      action: 'ENTRY_CREATED',
-      fromState: null,
-      toState: saved.state,
-      newValue: this.moneyOf(saved),
-      reason: dto.description ?? null,
-    }, m);
-    emit('billing:entry-created', { entryId: saved.id, level: saved.level, clientId: saved.clientId });
-
-    // Duplicate detection fires at creation (spec §7) — never silently. It runs in the
-    // same transaction as the entry it is about, so a line can never commit without the
-    // conflict that flags it.
-    const duplicates = await this.findDuplicates(saved, m);
-    for (const dup of duplicates) {
-      await this.raiseDuplicateConflict(saved, dup, userId, m, emit);
-    }
-
-    return saved;
-    }
-  }
-
-  /**
-   * Bridge: ingest real billable operational work into the billing engine.
-   * Scans assignments that carry an agreed fee in a billable state (CHECKED_IN /
-   * IN_PROGRESS / COMPLETED) and creates ASSIGNMENT-level billing entries linked
-   * to the real client (via project), project, assignment and assayer.
-   *
-   * Idempotent: an assignment that already has a billing entry is skipped, so
-   * repeated syncs never duplicate. This is the single source of truth that makes
-   * the Billing page reflect real field work instead of an empty engine.
-   */
-  /**
-   * Backfill: bring every billable assignment into the billing engine.
-   *
-   * ## What this had to stop doing
-   *
-   * It called `syncPayableForAssignment` for EVERY billable assignment before checking whether
-   * anything needed doing, and that method opens with its own lookups — the assignment, its fee
-   * payable, the project's client, the commercial profile. Three to four queries each, run for
-   * assignments that were fully billed months ago, on every invocation. At the 200k assignments
-   * the scale database holds, one press of the Sync button was on the order of 800,000 queries
-   * against a twenty-connection pool, inside a single HTTP request.
-   *
-   * Both legs now pre-load what already exists — receivable entries and fee payables — as two
-   * set queries, and an assignment that has both is skipped before any per-assignment work. On a
-   * settled book, which is the normal state, that is two queries and no loop at all.
-   *
-   * `onProgress` is optional so the queued path can report "1,240 / 200,000 scanned" while the
-   * synchronous path (small books, and the tests) stays a plain call.
-   */
-  async syncFromAssignments(
+    a: AssignmentEntity,
+    clientId: string,
+    money: AssignmentMoney,
+    ctx: MoneyContext,
     userId: string,
-    onProgress?: ProgressCallback,
-  ): Promise<{
-    scanned: number;
-    created: number;
-    skipped: number;
-    payablesCreated: number;
-    errors: Array<{ assignmentId: string; reason: string }>;
-  }> {
-    const billableStates = [
-      AssignmentStatus.CHECKED_IN,
-      AssignmentStatus.IN_PROGRESS,
-      AssignmentStatus.COMPLETED,
-    ];
-
-    const assignments = await this.assignmentRepository.find({
-      where: { status: In(billableStates) },
-      select: ['id', 'assignmentNumber', 'status', 'projectId', 'assayerId', 'agreedFee', 'completionDate'],
-    });
-
-    // Already-billed assignments (any state, so re-approval never double-charges).
-    const existing = await this.entryRepository.find({ select: ['assignmentId'] });
-    const existingIds = new Set(existing.filter((e) => e.assignmentId).map((e) => e.assignmentId as string));
-
-    /**
-     * Assignments that already carry a fee payable.
-     *
-     * The predicate is the one the database enforces uniqueness on
-     * (`UQ_assayer_payables_fee_per_assignment`): a payable counts as the fee payable unless it
-     * is an expense reimbursement, which is marked `rate_snapshot.source = 'EXPENSE_CLAIM'` and
-     * of which there can legitimately be several. Deriving the skip set from the same predicate
-     * as the constraint is what stops this loop from either re-doing settled work or, worse,
-     * treating a reimbursement as proof the fee was already raised.
-     */
-    const payableRows: Array<{ assignment_id: string }> = await this.payableRepository
-      .createQueryBuilder('p')
-      .select('p.assignment_id', 'assignment_id')
-      .where('p.assignment_id IS NOT NULL')
-      .andWhere(`(p.rate_snapshot->>'source') IS DISTINCT FROM 'EXPENSE_CLAIM'`)
-      .getRawMany();
-    const existingPayableIds = new Set(payableRows.map((r) => r.assignment_id));
-
-    // Resolve clientId for each project involved.
-    const projectIds = [...new Set(assignments.map((a) => a.projectId))];
-    const projects = projectIds.length
-      ? await this.projectRepository.find({ where: { id: In(projectIds) }, select: ['id', 'clientId'] })
-      : [];
-    const projectClient = new Map(projects.map((p) => [p.id, p.clientId]));
-
-    const created: BillingEntryEntity[] = [];
-    const errors: Array<{ assignmentId: string; reason: string }> = [];
-    let skipped = 0;
-    let payablesCreated = 0;
-    let scanned = 0;
-
-    for (const a of assignments) {
-      scanned += 1;
-      // Report every so often rather than every row: a progress write is a Redis round trip,
-      // and 200,000 of them would cost more than the work being reported on.
-      if (onProgress && scanned % SYNC_PROGRESS_INTERVAL === 0) {
-        await onProgress(scanned, assignments.length, `Scanned ${scanned} of ${assignments.length} assignments`);
-      }
-
-      const hasEntry = existingIds.has(a.id);
-      const hasPayable = existingPayableIds.has(a.id);
-
-      // Nothing owed on either leg. This is the overwhelming majority of a settled book, and
-      // skipping it here — before syncPayableForAssignment's own lookups — is the whole point.
-      if (hasEntry && hasPayable) {
-        skipped += 1;
-        continue;
-      }
-
-      if (!hasPayable) {
-        // Backfills the cost leg for work completed before payables were automated,
-        // independently of whether the receivable already exists.
-        try {
-          const payable = await this.syncPayableForAssignment(a.id, userId);
-          if (payable.created) payablesCreated += 1;
-        } catch (err) {
-          errors.push({ assignmentId: a.id, reason: `payable: ${(err as Error).message}` });
-        }
-      }
-
-      if (hasEntry) { skipped += 1; continue; }
-      const clientId = projectClient.get(a.projectId);
-      if (!clientId) { errors.push({ assignmentId: a.id, reason: 'no project/client mapping' }); continue; }
-      const fee = assignmentFee(a, 'REVENUE').fee;
-      if (fee <= 0) { errors.push({ assignmentId: a.id, reason: 'no agreed fee' }); continue; }
-
-      try {
-        const entry = await this.createEntryFromAssignment(a, clientId, userId);
-        created.push(entry);
-      } catch (err) {
-        errors.push({ assignmentId: a.id, reason: (err as Error).message });
-      }
-    }
-
-    if (created.length > 0 || payablesCreated > 0) {
-      this.logger.log(`Billing sync: ${created.length} receivable entries, ${payablesCreated} assayer payables.`);
-    }
-
-    if (onProgress) {
-      await onProgress(assignments.length, assignments.length, 'Complete');
-    }
-
-    return {
-      scanned: assignments.length,
-      created: created.length,
-      skipped,
-      payablesCreated,
-      errors,
-    };
-  }
-
-  /**
-   * Creates a billing entry for a single assignment. Used by the auto-sync
-   * subscription (assignment:status-changed → COMPLETED). Idempotent: returns
-   * { created: false } if the assignment is already billed or not billable.
-   */
-  async syncAssignment(assignmentId: string): Promise<{ created: boolean; entryId?: string; reason?: string }> {
-    const a = await this.assignmentRepository.findOne({ where: { id: assignmentId } });
-    if (!a) return { created: false, reason: 'assignment not found' };
-
-    const alreadyBilled = await this.entryRepository.findOne({ where: { assignmentId } });
-    if (alreadyBilled) {
-      // The entry was opened while the audit was still running. Now that the work
-      // is delivered it becomes billable — without this the line would sit in
-      // PENDING_BILLING forever and the revenue would never be invoiced.
-      if (a.status === AssignmentStatus.COMPLETED && alreadyBilled.state === BillingState.PENDING_BILLING) {
-        await this.transitionEntry(alreadyBilled.id, BillingState.READY_FOR_BILLING, 'system', 'Assignment completed — work delivered.');
-        return { created: false, entryId: alreadyBilled.id, reason: 'promoted to READY_FOR_BILLING' };
-      }
-      return { created: false, reason: 'already billed' };
-    }
-
-    const clientId = a.projectId
-      ? (await this.projectRepository.findOne({ where: { id: a.projectId }, select: ['id', 'clientId'] }))?.clientId
-      : undefined;
-    if (!clientId) return { created: false, reason: 'no project/client mapping' };
-
-    const fee = assignmentFee(a, 'REVENUE').fee;
-    if (fee <= 0) return { created: false, reason: 'no agreed fee' };
-
-    try {
-      const entry = await this.createEntryFromAssignment(a, clientId, 'system');
-      return { created: true, entryId: entry.id };
-    } catch (err) {
-      // Two syncs raced between the find above and this insert — the event bus delivers
-      // at-least-once and the lock around us fails open. The database's unique index on root
-      // entries per assignment (migration 1790500000000) is the real guard; the loser simply
-      // reports what the winner did. This is the double-invoice-line the audit found.
-      if (err instanceof DuplicateBillingEntryError || isUniqueViolation(err, 'UQ_billing_entries_root_per_assignment')) {
-        const winner = await this.entryRepository.findOne({ where: { assignmentId } });
-        return { created: false, entryId: winner?.id, reason: 'already billed (concurrent sync)' };
-      }
-      throw err;
-    }
-  }
-
-  /**
-   * The cost side of the same assignment: what we owe the assayer who did the work.
-   *
-   * This half of the engine existed as a manual data-entry form only — nothing in
-   * the system ever created a payable, so completed field work produced client
-   * receivables while the corresponding assayer cost stayed invisible. Since the
-   * platform's whole purpose is optimising cost per audit, the cost leg has to be
-   * captured automatically from the same operational event as the revenue leg.
-   *
-   * Idempotent per assignment.
-   */
-  async syncPayableForAssignment(assignmentId: string, userId = 'system'): Promise<{ created: boolean; payableId?: string; reason?: string }> {
-    const a = await this.assignmentRepository.findOne({ where: { id: assignmentId } });
-    if (!a) return { created: false, reason: 'assignment not found' };
-    if (a.status !== AssignmentStatus.COMPLETED) return { created: false, reason: 'assignment not completed' };
-    if (!a.assayerId) return { created: false, reason: 'no assayer on assignment' };
-
-    // The FEE payable only. Expense reimbursements are also payables against this assignment
-    // (one per approved claim, marked rate_snapshot.source = 'EXPENSE_CLAIM'); a claim approved
-    // before completion must not make the fee itself look "already paid" — that would leave the
-    // assayer's fee never raised.
-    const existing = await this.findFeePayable(assignmentId);
-    if (existing) return { created: false, reason: 'payable already exists', payableId: existing.id };
-
-    // The agreed fee is what the assayer negotiated and accepted for this job.
-    const resolvedFee = assignmentFee(a, 'COST');
-    const fee = resolvedFee.fee;
-    if (fee <= 0) return { created: false, reason: 'no agreed fee' };
-
-    const clientId = a.projectId
-      ? (await this.projectRepository.findOne({ where: { id: a.projectId }, select: ['id', 'clientId'] }))?.clientId
-      : undefined;
-
-    const profile = await this.payableRepository.manager.query(
-      `SELECT base_fee, travel_reimbursement, daily_rate, currency
-         FROM assayer_commercial_profiles
-        WHERE assayer_id = $1 AND is_active = true
-          AND (effective_end_date IS NULL OR effective_end_date >= NOW())
-        ORDER BY effective_start_date DESC LIMIT 1`,
-      [a.assayerId],
-    );
-    const rateCard = profile?.[0] ?? null;
-
-    /**
-     * The agreed fee already CONTAINS travel — the quote that became `proposedFee` was
-     * base + travel, and the mobile app tells the assayer so in as many words ("Your fee for
-     * this assignment already includes ₹X for travel"). Assignments now record that travel
-     * component at offer time (`quotedTravelFee`), so the payable can carve the agreed total
-     * into base and travel instead of paying the fee whole AND adding the commercial
-     * profile's flat travel reimbursement on top — which paid travel twice for any assayer
-     * whose profile carried one.
-     *
-     * The carve keeps gross = agreed fee exactly: negotiation moves the total, and whatever
-     * was negotiated lands in the base component while the travel attribution stays what was
-     * quoted (clamped so a fee negotiated below the travel figure can never produce a
-     * negative base). Offers made before the column existed keep the legacy behaviour —
-     * their fee's travel share is unknowable, and restating history is worse than the known
-     * flaw.
-     */
-    const quotedTravel = a.quotedTravelFee != null ? Number(a.quotedTravelFee) : null;
-    const travel = quotedTravel != null
-      ? Math.min(Math.max(0, quotedTravel), fee)
-      : (rateCard ? Number(rateCard.travel_reimbursement ?? 0) : 0);
-    const base = quotedTravel != null ? fee - travel : fee;
-
-    let payable: AssayerPayableEntity;
-    try {
-      payable = await this.createPayable({
-        assayerId: a.assayerId,
-        clientId: clientId ?? undefined,
-        projectId: a.projectId ?? undefined,
-        assignmentId: a.id,
-        baseAmount: base,
-        travelAmount: travel,
-        // Assayers are professional-service vendors: TDS is withheld from what we pay
-        // them, and no GST is added on our side unless they are registered. The withholding
-        // rate is configurable — it is set by tax law, which changes without this code changing
-        // — and it is captured on each payable, so a later change never restates an old one.
-        taxRate: 0,
-        tdsRate: await this.settings.getNumber('billing.tdsRate', 10).catch(() => 10),
-        // The snapshot must justify the amount actually booked. The payable is booked at the
-        // assignment's agreed fee, so `baseFee` here is that fee — not the assayer's standard
-        // profile rate, which was recorded before and disagreed with every payable (base_amount
-        // 2000 against a snapshot claiming 3406). The standard profile rate is kept alongside as
-        // context, clearly labelled, so "why did we pay this?" resolves to the agreed fee and the
-        // profile it was compared against, both immutable on the payable.
-        rateSnapshot: {
-          source: quotedTravel != null
-            ? 'assignment.agreedFee split by assignment.quotedTravelFee'
-            : 'assignment.agreedFee',
-          baseFee: base,
-          travelReimbursement: travel,
-          agreedFee: fee,
-          proposedFee: a.proposedFee != null ? Number(a.proposedFee) : null,
-          quotedTravelFee: quotedTravel,
-          quotedTransportMode: a.quotedTransportMode ?? null,
-          // The kilometres the travel component was priced from and how they were measured —
-          // 'OSRM' along the road, 'ESTIMATE' as a straight line while the router was down.
-          // The two differ by 11–56 % on real pairs; "why was travel paid on 164 km when the
-          // road is 213?" must be answerable from the payable alone. Null on offers that
-          // predate the columns.
-          quotedDistanceKm: a.quotedDistanceKm != null ? Number(a.quotedDistanceKm) : null,
-          quotedDistanceSource: a.quotedDistanceSource ?? null,
-          profileStandardBaseFee: rateCard ? Number(rateCard.base_fee) : null,
-          profileTravelReimbursement: rateCard ? Number(rateCard.travel_reimbursement ?? 0) : null,
-          profileDailyRate: rateCard ? Number(rateCard.daily_rate) : null,
-          capturedAt: new Date().toISOString(),
-        },
-        remarks: `Auto-generated on completion of ${a.assignmentNumber}.`,
-      }, userId);
-    } catch (err) {
-      // Same race as syncAssignment: at-least-once delivery under a fail-open lock. The
-      // unique index on fee payables per assignment (migration 1790500000000) is the guard
-      // against a double payout; the loser reports the winner.
-      if (err instanceof DuplicateFeePayableError || isUniqueViolation(err, 'UQ_assayer_payables_fee_per_assignment')) {
-        const winner = await this.findFeePayable(assignmentId);
-        return { created: false, reason: 'payable already exists (concurrent sync)', payableId: winner?.id };
-      }
-      throw err;
-    }
-
-    /**
-     * The one-sided-ledger guard.
-     *
-     * A payable can be booked from the *proposed* fee when no agreed one exists, while the
-     * client-billing side refuses an entry without an agreed fee. So this exact case books the
-     * cost and never the revenue: the assayer is paid, the client is never invoiced, and margin
-     * is quietly short by the whole job with nothing anywhere saying so.
-     *
-     * Every accept path writes `agreedFee`, so this should be unreachable — which is precisely
-     * why it needs to be loud rather than trusted. Raised as a conflict against the payable that
-     * was just written, so it lands on the billing desk's existing exception queue instead of
-     * being discovered at month end.
-     */
-    if (!resolvedFee.settled) {
-      await this.raiseConflict({
-        severity: BillingConflictSeverity.CRITICAL,
-        entityType: BillingEntityType.PAYABLE,
-        entryIds: [payable.id],
-        description:
-          `${a.assignmentNumber} was paid ${'\u20B9'}${fee} from its PROPOSED fee — no fee was ever agreed. ` +
-          `The client will NOT be billed for this assignment, so its full cost falls to margin.`,
-        reason: 'ASSIGNMENT_COMPLETED_WITHOUT_AGREED_FEE',
-        blocksBilling: false,
-      }, userId).catch((err) => {
-        // Never let the guard's own failure lose the payable that was already written.
-        this.logger.error(
-          `Payable ${payable.id} was booked from an unagreed fee and the conflict could not be ` +
-          `raised: ${err instanceof Error ? err.message : String(err)}`,
-        );
-      });
-    }
-
-    return { created: true, payableId: payable.id };
-  }
-
-  /**
-   * The fee payable for an assignment — never a reimbursement.
-   *
-   * Reimbursements are payables against the same assignment (one per approved expense claim),
-   * marked `rate_snapshot.source = 'EXPENSE_CLAIM'`. The predicate here is the same one the
-   * database enforces uniqueness on (`UQ_assayer_payables_fee_per_assignment`), so "does the fee
-   * payable exist" and "may another be inserted" can never disagree.
-   */
-  private findFeePayable(assignmentId: string): Promise<AssayerPayableEntity | null> {
-    return this.payableRepository
-      .createQueryBuilder('p')
-      .where('p.assignment_id = :assignmentId', { assignmentId })
-      .andWhere(`(p.rate_snapshot->>'source') IS DISTINCT FROM 'EXPENSE_CLAIM'`)
-      .orderBy('p.created_at', 'ASC')
-      .getOne();
-  }
-
-  private async createEntryFromAssignment(a: AssignmentEntity, clientId: string, userId: string): Promise<BillingEntryEntity> {
-    const assayerFee = assignmentFee(a, 'REVENUE').fee;
-    // What the CLIENT is billed comes from the client's own contracted rate card, not from
-    // what the assayer was paid. Billing the client the assayer's fee made revenue equal cost
-    // on every audit — margin was structurally zero. The spread between this rate and the
-    // assayer's fee is the margin the business earns.
-    //
-    // Falls back to the assayer fee only when the client has set no rate, so an unconfigured
-    // client keeps the old pass-through behaviour rather than being billed a platform default
-    // that might sit below cost. The Client Billing Settings page is where this rate is set.
-    const clientBase = await this.clientContractedBaseFor(clientId);
-    // Travel paid to the assayer is recovered from the client when their contract
-    // says it is rechargeable. Without this the assayer's travel was a pure cost
-    // absorbed on every job — the reason completed audits showed a negative margin
-    // exactly equal to the travel reimbursement.
-    const travel = await this.rechargeableTravelFor(a, clientId);
-    /**
-     * The two rates mean different things, and the base has to match the one in play.
-     *
-     * A client's contracted rate is a travel-exclusive audit fee, so `base + travel` is the
-     * correct invoice. The assayer fee is not: the agreed fee already CONTAINS travel (see the
-     * payable carve above, which splits the same figure into base + travel). Passing it through
-     * whole and then adding `travel` again billed the client for the journey twice — and the
-     * duplicate surfaced as margin, since revenue exceeded cost by exactly the travel amount, so
-     * the error read as profit rather than as a fault.
-     *
-     * On the fallback path we therefore carve the fee the same way the payable does, which keeps
-     * a genuine pass-through: base + travel === the agreed fee. Offers made before
-     * `quotedTravelFee` existed have no knowable split, so they keep the whole fee as base and
-     * `rechargeableTravelFor` returns the legacy profile figure for them.
-     */
-    const fee = clientBase ?? (a.quotedTravelFee != null ? Math.max(0, assayerFee - travel) : assayerFee);
-    // Only finished work is billable-ready. An assignment still CHECKED_IN or
-    // IN_PROGRESS is real revenue in the making, but invoicing it before the audit
-    // is delivered would bill the client for work not yet done — so it is recorded
-    // as PENDING_BILLING and promoted when the assignment completes.
-    const isComplete = a.status === AssignmentStatus.COMPLETED;
-    return this.createEntry({
-      level: BillingLevel.ASSIGNMENT,
+  ): Promise<AssayerPayableEntity> {
+    return this.insertPayable(m, {
+      assayerId: a.assayerId as string,
       clientId,
-      projectId: a.projectId,
+      projectId: a.projectId ?? null,
       assignmentId: a.id,
-      assayerId: a.assayerId,
-      pricingModel: BillingPricingModel.PER_ASSIGNMENT,
-      baseAmount: fee,
-      travelAmount: travel,
-      // taxRate/tdsRate intentionally omitted so the client's contracted rates apply.
-      billingPeriodEnd: a.completionDate ? this.toISO(a.completionDate) : undefined,
-      description: clientBase != null
-        ? `Auto-synced from ${a.assignmentNumber} (${a.status}) — billed at client contracted rate`
-        : `Auto-synced from ${a.assignmentNumber} (${a.status}) — no client rate set, billed at assayer cost`,
-      initialState: isComplete ? BillingState.READY_FOR_BILLING : BillingState.PENDING_BILLING,
+      expenseId: null,
+      baseAmount: money.assayer.base,
+      travelAmount: money.assayer.travel,
+      tdsAmount: money.assayer.tds,
+      totalAmount: money.assayer.net,
+      rateSnapshot: this.payableSnapshot(a, money, ctx),
+      remarks: money.fee.settled
+        ? `Fee for ${a.assignmentNumber}`
+        : `Fee for ${a.assignmentNumber} — booked from the PROPOSED fee; no fee was agreed`,
     }, userId);
   }
 
-  /**
-   * The client's contracted per-audit base fee, or null when they have not set one.
-   *
-   * This is the client rate card (client_configurations.default_base_fee), distinct from the
-   * assayer's commercial profile. Reading it here keeps the client-billed amount independent of
-   * the assayer's cost, which is what produces a real margin.
-   */
-  private async clientContractedBaseFor(clientId: string): Promise<number | null> {
-    const rows = await this.entryRepository.manager.query(
-      `SELECT cc.default_base_fee
-         FROM client_configurations cc
-        WHERE cc.client_id = $1
-        LIMIT 1`,
-      [clientId],
-    ).catch(() => []);
-    const value = rows?.[0]?.default_base_fee;
-    return value != null && Number(value) > 0 ? Number(value) : null;
-  }
-
-  /**
-   * Travel we can recharge to the client for this assignment.
-   *
-   * Controlled per client by `planningPreferences.rechargeTravel` (default true):
-   * some contracts are all-inclusive, in which case travel stays our cost and
-   * must not appear on the client's invoice.
-   */
-  private async rechargeableTravelFor(a: AssignmentEntity, clientId: string): Promise<number> {
-    const rows = await this.entryRepository.manager.query(
-      `SELECT planning_preferences FROM clients WHERE id = $1 LIMIT 1`, [clientId],
-    ).catch(() => []);
-    const prefs = rows?.[0]?.planning_preferences ?? {};
-    if (prefs?.rechargeTravel === false) return 0;
-
-    // Mirrors what the assayer is actually reimbursed, so the recharge and the cost cannot
-    // drift apart. That is the quoted travel component of the fee when the offer recorded one
-    // — the same figure the payable now carves out — and the legacy flat profile
-    // reimbursement for offers that predate the column.
-    if (a.quotedTravelFee != null) {
-      // COST, not REVENUE: this clamp exists to mirror the payable, so it has to resolve the fee
-      // the same way the payable does or the recharge could exceed what we actually paid out.
-      const fee = assignmentFee(a, 'COST').fee;
-      return Math.min(Math.max(0, Number(a.quotedTravelFee)), fee > 0 ? fee : Number(a.quotedTravelFee));
-    }
-
-    const profile = await this.payableRepository.manager.query(
-      `SELECT travel_reimbursement
-         FROM assayer_commercial_profiles
-        WHERE assayer_id = $1 AND is_active = true
-          AND (effective_end_date IS NULL OR effective_end_date >= NOW())
-        ORDER BY effective_start_date DESC LIMIT 1`,
-      [a.assayerId],
-    ).catch(() => []);
-    return Number(profile?.[0]?.travel_reimbursement ?? 0);
-  }
-
-  private toISO(d: Date | string): string {
-    if (d instanceof Date) return d.toISOString().slice(0, 10);
-    return String(d).slice(0, 10);
-  }
-
-  /**
-   * Move one billing entry to a new state.
-   *
-   * The read, the three guards and the write are now one atomic, serialized unit. They used
-   * to be a read-modify-write on an unlocked row: two operators approving the same entry
-   * both read `SUBMITTED`, both found the transition valid, and both wrote — the second
-   * silently overwriting the first, with two history rows claiming to describe the same
-   * change from the same starting state. Worse, the conflict-freeze check below could pass
-   * against a conflict raised microseconds later, letting a disputed line be invoiced.
-   *
-   * Holding the row lock across the guards is the point: the entry cannot change between
-   * "is this transition legal?" and "apply it".
-   */
-  async transitionEntry(entryId: string, targetState: BillingState, userId: string, reason?: string): Promise<BillingEntryEntity> {
-    return this.inTx(async (m, emit) => {
-      const { saved } = await this.transitionEntryLocked(m, emit, entryId, targetState, userId, reason);
-      return saved;
-    });
-  }
-
-  /**
-   * The transition itself, assuming an open transaction.
-   *
-   * Split out so `bulkTransitionEntries` can give each row its own transaction while still
-   * reporting the state each row actually moved *from* — read under the row lock rather
-   * than from an earlier unlocked glance that a concurrent writer may have invalidated.
-   */
-  private async transitionEntryLocked(
+  private async insertPayable(
     m: EntityManager,
-    emit: (event: string, payload: Record<string, unknown>) => void,
-    entryId: string,
-    targetState: BillingState,
-    userId: string,
-    reason?: string,
-  ): Promise<{ saved: BillingEntryEntity; fromState: BillingState }> {
-      const entry = await this.lockEntry(m, entryId);
-
-      if (entry.state === targetState) throw new ConflictException(`Entry is already ${targetState}.`);
-
-      // An unresolved blocking conflict freezes the entries it names (spec §8).
-      // This used to count every open blocking conflict in the system regardless of
-      // which entries it referenced, so a single disputed line halted billing for
-      // every client in the database. Only conflicts naming *this* entry may stop it.
-      if (![BillingState.ON_HOLD, BillingState.DISPUTED].includes(targetState)) {
-        const blocking = await m
-          .createQueryBuilder(BillingConflictEntity, 'c')
-          .where('c.status = :status', { status: BillingConflictStatus.OPEN })
-          .andWhere('c.blocks_billing = true')
-          .andWhere('c.entry_ids @> :entryId::jsonb', { entryId: JSON.stringify([entryId]) })
-          .getOne();
-        if (blocking) {
-          throw new ConflictException(
-            `Blocked by unresolved conflict ${blocking.conflictNumber}: ${blocking.description}. Resolve it first.`,
-          );
-        }
-      }
-
-      if (!isValidTransition(BILLING_STATE_TRANSITIONS, entry.state, targetState)) {
-        throw new BadRequestException(
-          `Cannot transition billing entry from ${entry.state} to ${targetState}.`,
-        );
-      }
-
-      const fromState = entry.state;
-      entry.state = targetState;
-      entry.updatedBy = userId;
-
-      // Keeping payment state in sync as money moves through the pipeline.
-      if (targetState === BillingState.PAID) entry.paymentState = PaymentState.PAID;
-      if (targetState === BillingState.PARTIALLY_PAID) entry.paymentState = PaymentState.PARTIALLY_PAID;
-      if (targetState === BillingState.CANCELLED) {
-        entry.paymentState = PaymentState.REVERSED;
-        entry.cancelledAmount = entry.totalAmount;
-        entry.outstandingAmount = 0;
-      }
-
-      const saved = await m.save(entry);
-      await this.history(userId, {
-        clientId: saved.clientId,
-        projectId: saved.projectId,
-        assignmentId: saved.assignmentId,
-        assayerId: saved.assayerId,
-        entityType: BillingEntityType.ENTRY,
-        entityId: saved.id,
-        action: 'ENTRY_STATE_CHANGED',
-        fromState,
-        toState: targetState,
-        reason: reason ?? null,
-      }, m);
-      emit('billing:entry-state-changed', { entryId: saved.id, fromState, toState: targetState });
-      return { saved, fromState };
-  }
-
-  /**
-   * Move a batch of billing entries to a target state as one operation. Each row
-   * runs through the normal transition rules (conflict freeze, valid transition)
-   * and is history-logged individually. Per-row errors are isolated so one bad
-   * entry never aborts the rest; rows already in the target state are skipped.
-   *
-   * Deliberately one transaction PER ROW rather than one around the batch. The
-   * per-row error isolation above is the documented contract — an operator selecting
-   * two hundred lines expects the hundred and ninety-eight valid ones to move — and a
-   * single enclosing transaction would roll all of them back on the first bad row.
-   * Each row is still atomic with its own history entry, which is the property that
-   * was missing.
-   */
-  async bulkTransitionEntries(
-    entryIds: string[],
-    targetState: BillingState,
-    userId: string,
-    reason?: string,
-  ): Promise<{
-    succeeded: { id: string; from: BillingState; to: BillingState }[];
-    skipped: { id: string; current: BillingState; reason: string }[];
-    failed: { id: string; reason: string }[];
-  }> {
-    const succeeded: { id: string; from: BillingState; to: BillingState }[] = [];
-    const skipped: { id: string; current: BillingState; reason: string }[] = [];
-    const failed: { id: string; reason: string }[] = [];
-
-    for (const entryId of entryIds) {
-      try {
-        // The from-state comes back from inside the row lock, so the report describes
-        // the transition that actually happened rather than one read beforehand.
-        const { fromState } = await this.inTx((m, emit) =>
-          this.transitionEntryLocked(m, emit, entryId, targetState, userId, reason),
-        );
-        succeeded.push({ id: entryId, from: fromState, to: targetState });
-      } catch (e) {
-        // "Already in the target state" is a skip, not a failure — the row is where the
-        // operator wanted it. It arrives here as the ConflictException raised under the
-        // lock, which is the only reading of "already" that cannot be stale.
-        const message = (e as Error).message;
-        if (e instanceof ConflictException && message.includes(`already ${targetState}`)) {
-          skipped.push({ id: entryId, current: targetState, reason: `Already ${targetState}` });
-          continue;
-        }
-        failed.push({ id: entryId, reason: message });
-      }
-    }
-
-    return { succeeded, skipped, failed };
-  }
-
-  /**
-   * Re-price an entry by `delta`.
-   *
-   * Locked because the "nothing collected yet" guard is a check-then-act against money:
-   * unlocked, a payment landing between the check and the save re-priced a line that had
-   * just been paid, leaving `paidAmount` above the new `totalAmount` — a negative balance
-   * owed to the client that no report expects to exist.
-   */
-  async adjustEntry(entryId: string, delta: number, reason: string, userId: string): Promise<BillingEntryEntity> {
-    return this.inTx(async (m, emit) => {
-    const entry = await this.lockEntry(m, entryId);
-
-    // Money that has already been collected cannot be quietly re-priced; that
-    // needs a credit note, not an in-place edit.
-    if (Number(entry.paidAmount) > 0) {
-      throw new ConflictException(
-        `Entry ${entry.entryNumber} has ₹${entry.paidAmount} collected against it — issue a credit note instead of adjusting it.`,
-      );
-    }
-
-    const fromState = entry.state;
-    const previousTotal = Number(entry.totalAmount);
-    const previousAdjustment = Number(entry.adjustmentAmount);
-
-    entry.adjustmentAmount = round2(previousAdjustment + delta);
-    entry.adjustedAmount = round2(Number(entry.adjustedAmount) + delta);
-    entry.state = BillingState.ADJUSTED;
-    entry.updatedBy = userId;
-    this.recompute(entry);
-    const saved = await m.save(entry);
-
-    await this.history(userId, {
-      clientId: saved.clientId,
-      projectId: saved.projectId,
-      assignmentId: saved.assignmentId,
-      assayerId: saved.assayerId,
-      entityType: BillingEntityType.ENTRY,
-      entityId: saved.id,
-      action: 'ENTRY_ADJUSTED',
-      // Was hardcoded to APPROVED, so the trail claimed every adjustment came from
-      // an approved line even when it came from DRAFT, DISPUTED or elsewhere.
-      fromState,
-      toState: BillingState.ADJUSTED,
-      previousValue: { adjustmentAmount: previousAdjustment, totalAmount: previousTotal },
-      newValue: { adjustmentAmount: Number(saved.adjustmentAmount), totalAmount: Number(saved.totalAmount) },
-      reason,
-    }, m);
-    emit('billing:entry-adjusted', { entryId: saved.id, delta, totalAmount: Number(saved.totalAmount) });
-    return saved;
-    });
-  }
-
-  /**
-   * Credit an entry that has already been paid.
-   *
-   * `adjustEntry` refuses a line with money against it and tells the operator to issue a credit
-   * note — and until now there was nothing to issue. So the one case the engine explicitly
-   * directs people towards was the one case the product could not do, and an over-charged client
-   * stayed over-charged.
-   *
-   * What this does, and the reasoning behind each choice — all three are finance decisions and
-   * should be confirmed before this is relied on for real money:
-   *
-   *  1. **It reduces what is owed; it does not move money.** A credit note is a document, a
-   *     refund is a payment. The note lowers the entry's value, and where that falls below what
-   *     has already been collected the difference is reported as `refundDue` for the finance team
-   *     to settle however they settle things — offset against the next invoice or paid back.
-   *     Nothing here pretends to have returned any money.
-   *
-   *  2. **Tax reverses in proportion, at the entry's own rates.** The credit is applied as a
-   *     negative adjustment and the line is then recomputed through the same `recompute` used
-   *     everywhere else, so GST and TDS come off at exactly the rates that were charged. Hand-
-   *     computing the tax on a credit is how a credit note ends up disagreeing with the invoice
-   *     it corrects.
-   *
-   *  3. **Large credits are held for approval.** Above `billing.creditNoteApprovalThreshold`
-   *     (default ₹10,000) the note is refused rather than applied, because a credit is the one
-   *     operation that reduces revenue and no other control stands behind it.
-   */
-  async creditEntry(
-    entryId: string,
-    amount: number,
-    reason: string,
-    userId: string,
-  ): Promise<{ entry: BillingEntryEntity; creditedTotal: number; refundDue: number }> {
-    if (!(amount > 0)) {
-      throw new BadRequestException('A credit note must be for a positive amount.');
-    }
-    if (!reason?.trim()) {
-      throw new BadRequestException(
-        'Say why this credit is being issued — it is the record the client and the auditor both read.',
-      );
-    }
-
-    const threshold = await this.settings
-      .getNumber('billing.creditNoteApprovalThreshold', 10000)
-      .catch(() => 10000);
-
-    return this.inTx(async (m, emit) => {
-      const entry = await this.lockEntry(m, entryId);
-
-      // Only the taxable value can be credited; crediting more than was charged would invent a
-      // negative sale rather than correct an over-charge.
-      const creditableTaxable = round2(Number(entry.taxableAmount));
-      if (amount > creditableTaxable) {
-        throw new BadRequestException(
-          `Cannot credit ₹${round2(amount)} against ${entry.entryNumber}: only ₹${creditableTaxable} was charged.`,
-        );
-      }
-      if (amount > threshold) {
-        throw new ForbiddenException(
-          `A credit of ₹${round2(amount)} is above the ₹${threshold} limit that can be issued directly. `
-          + 'Raise it with finance, or change the limit in Platform Settings.',
-        );
-      }
-
-      const fromState = entry.state;
-      const previousTotal = round2(Number(entry.totalAmount));
-      const previousAdjustment = round2(Number(entry.adjustmentAmount));
-
-      entry.adjustmentAmount = round2(previousAdjustment - amount);
-      entry.adjustedAmount = round2(Number(entry.adjustedAmount) - amount);
-      entry.updatedBy = userId;
-      this.recompute(entry);
-
-      const newTotal = round2(Number(entry.totalAmount));
-      const paid = round2(Number(entry.paidAmount));
-      const refundDue = round2(Math.max(0, paid - newTotal));
-
-      /**
-       * The payment state follows the new total. There is deliberately no "overpaid" state used
-       * here: `PaymentState` has no such member, and adding one would have to be understood by
-       * every report, filter and invoice roll-up that reads it. An over-collection is instead
-       * reported as `refundDue` — returned to the caller and written into the history entry — so
-       * the money owed back is visible without changing the meaning of an existing state.
-       */
-      if (paid >= newTotal) {
-        entry.paymentState = PaymentState.PAID;
-      } else if (paid > 0) {
-        entry.paymentState = PaymentState.PARTIALLY_PAID;
-      } else {
-        entry.paymentState = PaymentState.UNPAID;
-      }
-
-      const saved = await m.save(entry);
-
-      await this.history(userId, {
-        clientId: saved.clientId,
-        projectId: saved.projectId,
-        assignmentId: saved.assignmentId,
-        assayerId: saved.assayerId,
-        entityType: BillingEntityType.ENTRY,
-        entityId: saved.id,
-        action: 'CREDIT_NOTE_ISSUED',
-        fromState,
-        toState: saved.state,
-        previousValue: { totalAmount: previousTotal, adjustmentAmount: previousAdjustment },
-        newValue: {
-          totalAmount: newTotal,
-          adjustmentAmount: round2(Number(saved.adjustmentAmount)),
-          creditAmount: round2(amount),
-          // What the client's bill actually fell by, tax and TDS included. Recorded rather than
-          // derived so the trail does not depend on re-deriving the rates later.
-          totalReduction: round2(previousTotal - newTotal),
-          refundDue,
-        },
-        reason,
-      }, m);
-
-      emit('billing:credit-note-issued', {
-        entryId: saved.id,
-        amount: round2(amount),
-        totalAmount: newTotal,
-        refundDue,
-      });
-
-      return { entry: saved, creditedTotal: round2(previousTotal - newTotal), refundDue };
-    });
-  }
-
-  async findEntries(filters: {
-    clientId?: string;
-    projectId?: string;
-    assignmentId?: string;
-    assayerId?: string;
-    level?: BillingLevel;
-    state?: BillingState;
-  } = {}): Promise<BillingEntryEntity[]> {
-    return this.entryRepository.find({ where: this.entryWhere(filters), order: { createdAt: 'DESC' } });
-  }
-
-  /** The TypeORM `where` every entry list shares, so the paged and unpaged paths cannot drift. */
-  private entryWhere(filters: {
-    clientId?: string; projectId?: string; assignmentId?: string;
-    assayerId?: string; level?: BillingLevel; state?: BillingState;
-  }): Record<string, unknown> {
-    const where: Record<string, unknown> = {};
-    if (filters.clientId) where.clientId = filters.clientId;
-    if (filters.projectId) where.projectId = filters.projectId;
-    if (filters.assignmentId) where.assignmentId = filters.assignmentId;
-    if (filters.assayerId) where.assayerId = filters.assayerId;
-    if (filters.level) where.level = filters.level;
-    if (filters.state) where.state = filters.state;
-    return where;
-  }
-
-  /**
-   * One clamped page of billing entries, plus the total the filter matches.
-   *
-   * The unpaged {@link findEntries} above is kept for the bulk export in `reports.service`,
-   * which genuinely needs every row and runs on a background export path with progress
-   * reporting. Nothing reached from an interactive request may use it: this is the method the
-   * controller calls.
-   */
-  async findEntriesPage(filters: Parameters<BillingEngineService['findEntries']>[0] & { page?: number | string; limit?: number | string } = {}): Promise<BillingPage<BillingEntryEntity>> {
-    const w = billingPageWindow(filters.page, filters.limit);
-    const [items, total] = await this.entryRepository.findAndCount({
-      where: this.entryWhere(filters),
-      order: { createdAt: 'DESC' },
-      skip: w.skip,
-      take: w.take,
-    });
-    return { items, total, page: w.page, limit: w.limit };
-  }
-
-  /**
-   * Entries with their client/project/assignment/assayer labels attached. The raw
-   * rows only carry foreign keys, so the entries table could not show which client
-   * or project a line belonged to — the first thing anyone needs to know about a
-   * billing line.
-   */
-  async findEntriesEnriched(filters: Parameters<BillingEngineService['findEntries']>[0] = {}) {
-    const entries = await this.findEntries(filters);
-    return this.attachEntryNames(entries);
-  }
-
-  /**
-   * A page of entries, enriched — what `GET /billing-engine/entries` serves.
-   *
-   * The name lookups run against the PAGE, not the table: `resolveNames` issues four
-   * `id = ANY($1)` queries whose parameter arrays used to hold one id per row in the whole
-   * book, so the enrichment step scaled with the table exactly as badly as the list did.
-   */
-  async findEntriesPageEnriched(
-    filters: Parameters<BillingEngineService['findEntriesPage']>[0] = {},
-  ): Promise<BillingPage<Awaited<ReturnType<BillingEngineService['attachEntryNames']>>[number]>> {
-    const { items, total, page, limit } = await this.findEntriesPage(filters);
-    return { items: await this.attachEntryNames(items), total, page, limit };
-  }
-
-  private async attachEntryNames(entries: BillingEntryEntity[]) {
-    const names = await this.resolveNames(entries);
-    return entries.map((e) => ({
-      ...e,
-      clientName: names.clients.get(e.clientId) ?? null,
-      projectName: e.projectId ? names.projects.get(e.projectId) ?? null : null,
-      projectNumber: e.projectId ? names.projectNumbers.get(e.projectId) ?? null : null,
-      assignmentNumber: e.assignmentId ? names.assignments.get(e.assignmentId) ?? null : null,
-      branchName: e.assignmentId ? names.branches.get(e.assignmentId) ?? null : null,
-      assayerName: e.assayerId ? names.assayers.get(e.assayerId) ?? null : null,
-    }));
-  }
-
-  /** Payables with assayer/project labels — the table rendered raw UUIDs before. */
-  async findPayablesEnriched(filters: { assayerId?: string; clientId?: string; status?: AssayerPayableStatus } = {}) {
-    return this.attachPayableNames(await this.findPayables(filters));
-  }
-
-  /**
-   * A page of payables, enriched — what `GET /billing-engine/payables` serves.
-   *
-   * Same shape and the same reason as {@link findEntriesPageEnriched}: the label lookups now
-   * cover a page rather than every payable ever raised.
-   */
-  async findPayablesPageEnriched(
-    filters: { assayerId?: string; clientId?: string; status?: AssayerPayableStatus; page?: number | string; limit?: number | string } = {},
-  ): Promise<BillingPage<Awaited<ReturnType<BillingEngineService['attachPayableNames']>>[number]>> {
-    const w = billingPageWindow(filters.page, filters.limit);
-    const where: Record<string, unknown> = {};
-    if (filters.assayerId) where.assayerId = filters.assayerId;
-    if (filters.clientId) where.clientId = filters.clientId;
-    if (filters.status) where.status = filters.status;
-
-    const [payables, total] = await this.payableRepository.findAndCount({
-      where,
-      order: { createdAt: 'DESC' },
-      skip: w.skip,
-      take: w.take,
-    });
-    return { items: await this.attachPayableNames(payables), total, page: w.page, limit: w.limit };
-  }
-
-  private async attachPayableNames(payables: AssayerPayableEntity[]) {
-    const names = await this.resolveNames([], payables);
-    // Payables reference projects/assignments that the entry-based lookup above
-    // does not cover, so those labels are resolved directly.
-    const projectIds = [...new Set(payables.map((p) => p.projectId).filter(Boolean))] as string[];
-    const assignmentIds = [...new Set(payables.map((p) => p.assignmentId).filter(Boolean))] as string[];
-    const [projects, assignments] = await Promise.all([
-      projectIds.length ? this.entryRepository.manager.query(`SELECT id, name FROM projects WHERE id = ANY($1)`, [projectIds]) : [],
-      assignmentIds.length ? this.entryRepository.manager.query(`SELECT id, assignment_number FROM assignments WHERE id = ANY($1)`, [assignmentIds]) : [],
-    ]);
-    const projectName = new Map<string, string>(projects.map((r: any) => [r.id, r.name]));
-    const assignmentNumber = new Map<string, string>(assignments.map((r: any) => [r.id, r.assignment_number]));
-
-    return payables.map((p) => ({
-      ...p,
-      assayerName: names.assayers.get(p.assayerId) ?? null,
-      assayerCode: names.assayerCodes.get(p.assayerId) ?? null,
-      projectName: p.projectId ? projectName.get(p.projectId) ?? null : null,
-      assignmentNumber: p.assignmentId ? assignmentNumber.get(p.assignmentId) ?? null : null,
-    }));
-  }
-
-  async getEntry(entryId: string): Promise<BillingEntryEntity> {
-    const entry = await this.entryRepository.findOne({ where: { id: entryId } });
-    if (!entry) throw new NotFoundException(`Billing entry ${entryId} not found.`);
-    return entry;
-  }
-
-  // -----------------------------------------------------------------------
-  // Duplicate detection (spec §7)
-  // -----------------------------------------------------------------------
-
-  /**
-   * Duplicates are structurally-identical money lines that should not both be
-   * billed. Compared per level:
-   *   - ASSIGNMENT: same assignment twice (also caught via parentEntryId).
-   *   - PROJECT: same project + period + amount.
-   *   - CLIENT: same period + amount, no project tie.
-   * An entry that is a split/merge child (parentEntryId set) is excluded.
-   */
-  private async findDuplicates(
-    entry: BillingEntryEntity,
-    manager?: EntityManager,
-  ): Promise<BillingEntryEntity[]> {
-    const q = (manager
-      ? manager.createQueryBuilder(BillingEntryEntity, 'e')
-      : this.entryRepository.createQueryBuilder('e'))
-      .where('e.is_active = :ia', { ia: true })
-      .andWhere('e.id != :id', { id: entry.id })
-      .andWhere('e.parent_entry_id IS NULL')
-      .andWhere('e.state IN (:...states)', {
-        states: [BillingState.PENDING_BILLING, BillingState.READY_FOR_BILLING, BillingState.DRAFT, BillingState.SUBMITTED, BillingState.APPROVED, BillingState.INVOICED],
-      });
-
-    if (entry.level === BillingLevel.ASSIGNMENT) {
-      q.andWhere('e.assignment_id = :asn', { asn: entry.assignmentId });
-    } else if (entry.level === BillingLevel.PROJECT) {
-      q.andWhere('e.project_id = :pid', { pid: entry.projectId });
-      q.andWhere('e.total_amount = :amt', { amt: entry.totalAmount });
-    } else {
-      q.andWhere('e.project_id IS NULL');
-      q.andWhere('e.total_amount = :amt', { amt: entry.totalAmount });
-    }
-    return q.getMany();
-  }
-
-  private async raiseDuplicateConflict(
-    entry: BillingEntryEntity,
-    duplicateOf: BillingEntryEntity,
-    userId: string,
-    manager: EntityManager,
-    emit: (event: string, payload: Record<string, unknown>) => void,
-  ): Promise<void> {
-    const conflict = this.conflictRepository.create({
-      conflictNumber: `BC-${Date.now().toString(36).toUpperCase()}-${this.seq()}`,
-      severity: BillingConflictSeverity.WARNING,
-      entityType: BillingEntityType.ENTRY,
-      entryIds: [entry.id, duplicateOf.id],
-      description: `Duplicate billing detected: ${entry.entryNumber} duplicates ${duplicateOf.entryNumber} (level=${entry.level}).`,
-      reason: 'Automatic duplicate detection on entry creation.',
-      createdById: userId,
-      status: BillingConflictStatus.OPEN,
-      blocksBilling: false,
-      createdBy: userId,
-      updatedBy: userId,
-    });
-    const saved = await manager.save(conflict);
-    await this.history(userId, {
-      clientId: entry.clientId,
-      projectId: entry.projectId,
-      assignmentId: entry.assignmentId,
-      entityType: BillingEntityType.CONFLICT,
-      entityId: saved.id,
-      action: 'DUPLICATE_FLAGGED',
-      newValue: { entryIds: [entry.id, duplicateOf.id] },
-      reason: conflict.description,
-    }, manager);
-    emit('billing:duplicate-detected', { conflictId: saved.id, entryIds: conflict.entryIds });
-  }
-
-  // -----------------------------------------------------------------------
-  // Conflict management (spec §8)
-  // -----------------------------------------------------------------------
-
-  async raiseConflict(
-    dto: {
-      severity: BillingConflictSeverity;
-      entityType: BillingEntityType;
-      entryIds: string[];
-      description: string;
-      reason?: string;
-      blocksBilling?: boolean;
+    p: {
+      assayerId: string; clientId: string | null; projectId: string | null; assignmentId: string;
+      expenseId: string | null; baseAmount: number; travelAmount: number; tdsAmount: number;
+      totalAmount: number; rateSnapshot: Record<string, unknown> | null; remarks: string | null;
     },
     userId: string,
-  ): Promise<BillingConflictEntity> {
-    if (!dto.entryIds?.length) throw new BadRequestException('At least one entryId is required.');
-    const { conflict: raised, assignmentId } = await this.inTx(async (m) => {
-    const conflict = this.conflictRepository.create({
-      conflictNumber: `BC-${Date.now().toString(36).toUpperCase()}-${this.seq()}`,
-      severity: dto.severity,
-      entityType: dto.entityType,
-      entryIds: dto.entryIds,
-      description: dto.description,
-      reason: dto.reason ?? null,
-      createdById: userId,
-      status: BillingConflictStatus.OPEN,
-      blocksBilling: dto.blocksBilling ?? dto.severity === BillingConflictSeverity.CRITICAL,
-      createdBy: userId,
-      updatedBy: userId,
-    });
-    const saved = await m.save(conflict);
-    await this.history(userId, {
-      entityType: BillingEntityType.CONFLICT,
-      entityId: saved.id,
-      action: 'CONFLICT_RAISED',
-      toState: BillingConflictStatus.OPEN,
-      newValue: { entryIds: dto.entryIds, severity: dto.severity },
-      reason: dto.description,
-    }, m);
-    // Read on the transaction's own connection: the conflict names entries, and the branch
-    // label the notification needs hangs off whichever of them is assignment-level.
-    const conflicted = await m.find(BillingEntryEntity, { where: { id: In(dto.entryIds) } });
-    return {
-      conflict: saved,
-      assignmentId: conflicted.find((e) => e.assignmentId)?.assignmentId ?? null,
-    };
-    });
-
-    // A blocking conflict stops billing silently; finance and ops found out by noticing.
-    this.notifyWithBranch(assignmentId, (branchName) => ({
-      type: 'BILLING_CONFLICT_RAISED',
-      entityType: 'BILLING_CONFLICT',
-      entityId: raised.id,
-      actorUserId: userId,
-      dedupeKey: `BILLING_CONFLICT_RAISED:${raised.id}`,
-      payload: {
-        conflictId: raised.id,
-        conflictNumber: raised.conflictNumber,
-        severity: dto.severity,
-        branchName,
-        description: dto.description,
-      },
-    }));
-
-    return raised;
-  }
-
-  async resolveConflict(
-    conflictId: string,
-    dto: {
-      status: BillingConflictStatus;
-      action: string;
-      note: string;
-    },
-    userId: string,
-  ): Promise<BillingConflictEntity> {
-    return this.inTx(async (m, emit) => {
-    // Locked: resolving a conflict is what unfreezes the entries it names, so two
-    // resolvers racing here could otherwise both believe they released the block.
-    const conflict = await m.findOne(BillingConflictEntity, {
-      where: { id: conflictId },
-      lock: { mode: 'pessimistic_write' },
-    });
-    if (!conflict) throw new NotFoundException(`Conflict ${conflictId} not found.`);
-
-    const fromStatus = conflict.status;
-    conflict.status = dto.status;
-    conflict.resolutionAction = dto.action as any;
-    conflict.resolutionNote = dto.note;
-    conflict.resolvedById = userId;
-    conflict.resolvedAt = new Date();
-    conflict.updatedBy = userId;
-    const saved = await m.save(conflict);
-
-    await this.history(userId, {
-      entityType: BillingEntityType.CONFLICT,
-      entityId: saved.id,
-      action: 'CONFLICT_RESOLVED',
-      fromState: fromStatus,
-      toState: saved.status,
-      newValue: { action: dto.action },
-      reason: dto.note,
-    }, m);
-    emit('billing:conflict-resolved', { conflictId: saved.id, status: saved.status });
-    return saved;
-    });
-  }
-
-  async findConflicts(status?: BillingConflictStatus): Promise<any[]> {
-    return (await this.findConflictsPage(status)).items;
-  }
-
-  /**
-   * One clamped page of conflicts, newest first.
-   *
-   * Conflicts are raised automatically by duplicate detection on every entry created, so this
-   * table grows with the billing book rather than with operator activity — an unbounded read
-   * here was the same defect as on entries, just less obvious.
-   */
-  async findConflictsPage(
-    status?: BillingConflictStatus,
-    pageParams: { page?: number | string; limit?: number | string } = {},
-  ): Promise<BillingPage<any>> {
-    const w = billingPageWindow(pageParams.page, pageParams.limit);
-    const [conflicts, total] = await this.conflictRepository.findAndCount({
-      where: status ? { status } : {},
-      order: { createdAt: 'DESC' },
-      skip: w.skip,
-      take: w.take,
-    });
-
-    const userIds = [...new Set([
-      ...conflicts.map((c) => c.createdById).filter(Boolean),
-      ...conflicts.map((c) => c.resolvedById).filter(Boolean),
-    ])];
-
-    const users = userIds.length
-      ? await this.conflictRepository.manager.query(
-          `SELECT id, display_name FROM users WHERE id = ANY($1)`,
-          [userIds],
-        )
-      : [];
-
-    const userNameById = new Map<string, string>(users.map((u: any) => [u.id, u.display_name]));
-
-    return {
-      items: conflicts.map((c) => ({
-        ...c,
-        createdByName: c.createdById ? userNameById.get(c.createdById) ?? null : null,
-        resolvedByName: c.resolvedById ? userNameById.get(c.resolvedById) ?? null : null,
-      })),
-      total,
-      page: w.page,
-      limit: w.limit,
-    };
-  }
-
-  // -----------------------------------------------------------------------
-  // Split / Merge (spec §9)
-  // -----------------------------------------------------------------------
-
-  /**
-   * Replace one entry with N children whose amounts sum to its total.
-   *
-   * Atomic because a partial split is unbillable in both directions: children created but
-   * the parent left billable double-counts the revenue, and a parent retired before its
-   * children exist loses it. Both were reachable — the children were saved one autocommit
-   * at a time and the parent was retired in a separate one at the end.
-   */
-  async splitEntry(entryId: string, dto: SplitEntryDto, userId: string): Promise<BillingEntryEntity[]> {
-    return this.inTx(async (m) => {
-    const entry = await this.lockEntry(m, entryId);
-    if (entry.parentEntryId) throw new BadRequestException('Cannot split an entry that is itself a split/merge child.');
-    if (!dto.amounts?.length || dto.amounts.some((a) => a <= 0)) {
-      throw new BadRequestException('Split requires a non-empty list of positive amounts.');
-    }
-    const total = round2(dto.amounts.reduce((a, b) => a + b, 0));
-    if (Math.abs(total - Number(entry.totalAmount)) > MONEY_EPSILON) {
-      throw new BadRequestException(`Split amounts (${total}) must sum to the entry total (${entry.totalAmount}).`);
-    }
-    // A line that has been invoiced or part-paid is already attached to money that has
-    // moved; splitting it would detach that money from the rows recording it. `mergeEntries`
-    // has always refused this — the split path did not, so the same line could be split
-    // after invoicing and the invoice would reference a parent no longer billable.
-    if (entry.invoiceId || Number(entry.paidAmount) > 0) {
-      throw new ConflictException(
-        `Cannot split ${entry.entryNumber}: it is already invoiced or part-paid.`,
-      );
-    }
-
-    // Mark the parent as split into children (kept for traceability, no longer billable itself).
-    const savedChildren: BillingEntryEntity[] = [];
-    for (const amount of dto.amounts) {
-      const child = this.entryRepository.create({
-        entryNumber: `BE-${Date.now().toString(36).toUpperCase()}-${this.seq()}`,
-        level: entry.level,
-        clientId: entry.clientId,
-        projectId: entry.projectId,
-        assignmentId: entry.assignmentId,
-        assayerId: entry.assayerId,
-        pricingModel: entry.pricingModel,
-        rate: entry.rate,
-        quantity: entry.quantity,
-        billingPeriodStart: entry.billingPeriodStart,
-        billingPeriodEnd: entry.billingPeriodEnd,
-        description: `${entry.description ?? 'Split'} (split part)`,
-        baseAmount: amount,
-        travelAmount: 0,
-        adjustmentAmount: 0,
-        discountAmount: 0,
-        taxRate: entry.taxRate,
-        tdsAmount: 0,
-        totalAmount: 0,
-        currency: entry.currency,
-        state: entry.state,
-        paymentState: entry.paymentState,
-        parentEntryId: entry.id,
-        billedAmount: 0,
-        paidAmount: 0,
-        outstandingAmount: 0,
-        disputedAmount: 0,
-        cancelledAmount: 0,
-        adjustedAmount: 0,
-        createdBy: userId,
-        updatedBy: userId,
-      });
-      this.recompute(child);
-      const saved = await m.save(child);
-      savedChildren.push(saved);
-      await this.history(userId, {
-        clientId: child.clientId,
-        projectId: child.projectId,
-        assignmentId: child.assignmentId,
-        entityType: BillingEntityType.ENTRY,
-        entityId: saved.id,
-        action: 'ENTRY_SPLIT',
-        fromState: entry.state,
-        toState: child.state,
-        previousValue: { parentEntryId: entry.id, totalAmount: entry.totalAmount },
-        newValue: { totalAmount: Number(child.totalAmount) },
-        reason: dto.notes ?? null,
-      }, m);
-    }
-
-    // Preserve traceability on the parent: it is superseded by its children.
-    entry.state = BillingState.ADJUSTED;
-    entry.updatedBy = userId;
-    await m.save(entry);
-
-    return savedChildren;
-    });
-  }
-
-  async mergeEntries(entryIds: string[], userId: string, note?: string): Promise<BillingEntryEntity> {
-    if (!entryIds?.length || entryIds.length < 2) {
-      throw new BadRequestException('Merge requires at least two entries.');
-    }
-    return this.inTx(async (m) => {
-    // Locked in id order so a merge and a payment touching the same lines serialize
-    // instead of deadlocking. The invoiced/part-paid guard below is a check-then-act
-    // against money, so it is only sound while these rows are held.
-    const entries = await this.lockEntriesById(m, entryIds);
-    if (entries.length !== entryIds.length) throw new NotFoundException('One or more entries not found.');
-
-    // Merging across clients would move one client's money onto another's ledger,
-    // and merging invoiced/paid lines would silently detach money that has already
-    // been billed or collected.
-    const clientIds = new Set(entries.map((e) => e.clientId));
-    if (clientIds.size > 1) {
-      throw new BadRequestException('Cannot merge billing entries belonging to different clients.');
-    }
-    const locked = entries.filter((e) => e.invoiceId || Number(e.paidAmount) > 0);
-    if (locked.length) {
-      throw new ConflictException(
-        `Cannot merge already-invoiced or part-paid entries: ${locked.map((e) => e.entryNumber).join(', ')}.`,
-      );
-    }
-
-    // The merged line inherits level, client, project and tax rate from one source entry.
-    // That used to be whichever row Postgres returned first from an unordered `find`, so
-    // the same merge could produce a different `projectId` on a retry. It is now explicitly
-    // the first id the caller listed — the one an operator would name as the line they are
-    // merging the others into. (Rows are locked in id order, which is a different order and
-    // deliberately so: lock ordering is about deadlocks, not about semantics.)
-    const byId = new Map(entries.map((e) => [e.id, e]));
-    const first = byId.get(entryIds[0]) ?? entries[0];
-    const total = round2(entries.reduce((a, e) => a + Number(e.totalAmount), 0));
-    const baseTotal = round2(entries.reduce((a, e) => a + Number(e.baseAmount), 0));
-    const taxTotal = round2(entries.reduce((a, e) => a + Number(e.taxAmount), 0));
-    const tdsTotal = round2(entries.reduce((a, e) => a + Number(e.tdsAmount), 0));
-
-    const merged = this.entryRepository.create({
-      entryNumber: `BE-${Date.now().toString(36).toUpperCase()}-${this.seq()}`,
-      level: first.level,
-      clientId: first.clientId,
-      projectId: first.projectId,
-      assignmentId: first.assignmentId,
-      assayerId: first.assayerId,
-      pricingModel: first.pricingModel,
-      description: note ?? `Merged ${entryIds.length} entries`,
-      baseAmount: baseTotal,
-      travelAmount: 0,
-      adjustmentAmount: 0,
-      discountAmount: 0,
-      taxRate: first.taxRate,
-      taxAmount: taxTotal,
-      tdsAmount: tdsTotal,
-      totalAmount: total,
-      currency: first.currency,
-      state: first.state,
-      paymentState: first.paymentState,
-      // The merged line is the new parent, so it has no parent of its own. It
-      // previously pointed at its own first child while that child pointed back at
-      // it, producing a two-node cycle that would hang any recursive walk of the
-      // split/merge lineage.
-      parentEntryId: null,
-      billedAmount: 0,
-      paidAmount: 0,
-      outstandingAmount: 0,
-      disputedAmount: 0,
-      cancelledAmount: 0,
-      adjustedAmount: 0,
-      createdBy: userId,
-      updatedBy: userId,
-    });
-    const saved = await m.save(merged);
-
-    // Source entries become children of the merge (traceable, not separately billable).
-    for (const e of entries) {
-      // Captured before mutating: this was read after the assignment below, so every
-      // merge logged "ADJUSTED → ADJUSTED" and the real prior state was lost.
-      const fromState = e.state;
-      e.parentEntryId = saved.id;
-      e.state = BillingState.ADJUSTED;
-      e.updatedBy = userId;
-      await m.save(e);
-      await this.history(userId, {
-        clientId: e.clientId,
-        projectId: e.projectId,
-        assignmentId: e.assignmentId,
-        entityType: BillingEntityType.ENTRY,
-        entityId: e.id,
-        action: 'ENTRY_MERGED',
-        fromState,
-        toState: BillingState.ADJUSTED,
-        previousValue: { totalAmount: Number(e.totalAmount) },
-        newValue: { mergedInto: saved.id },
-        reason: note ?? null,
-      }, m);
-    }
-
-    await this.history(userId, {
-      clientId: saved.clientId,
-      projectId: saved.projectId,
-      assignmentId: saved.assignmentId,
-      entityType: BillingEntityType.ENTRY,
-      entityId: saved.id,
-      action: 'ENTRY_MERGED',
-      fromState: first.state,
-      toState: first.state,
-      newValue: { sourceEntryIds: entryIds, totalAmount: total },
-      reason: note ?? null,
-    }, m);
-    return saved;
-    });
-  }
-
-  // -----------------------------------------------------------------------
-  // Invoices (spec §2/§3/§9)
-  // -----------------------------------------------------------------------
-
-  async createInvoice(dto: {
-    clientId: string;
-    projectId?: string;
-    type: InvoiceType;
-    entryIds: string[];
-    issueDate?: string;
-    dueDate?: string;
-    notes?: string;
-  }, userId: string): Promise<BillingInvoiceEntity> {
-    if (!dto.entryIds?.length) throw new BadRequestException('At least one entry is required to invoice.');
-    return this.inTx(async (m, emit) => {
-    // Every entry is write-locked before the guards run. The `alreadyInvoiced` check is the
-    // one that matters: unlocked, two operators invoicing overlapping selections both read
-    // `invoiceId = null`, both passed, and the same work was billed to the client twice on
-    // two invoices — the second silently overwriting the first's `invoiceId` on the shared
-    // entries, so the first invoice's total no longer matched any entry pointing at it.
-    const entries = await this.lockEntriesById(m, dto.entryIds);
-    if (entries.length !== dto.entryIds.length) throw new NotFoundException('One or more entries not found.');
-
-    // Only APPROVED entries may be invoiced.
-    const notApproved = entries.filter((e) => e.state !== BillingState.APPROVED);
-    if (notApproved.length) {
-      throw new BadRequestException(`Only APPROVED entries can be invoiced. ${notApproved.map((e) => e.entryNumber).join(', ')} are in ${notApproved.map((e) => e.state).join(', ')}.`);
-    }
-    // Prevent duplicate invoicing of the same entry.
-    const alreadyInvoiced = entries.filter((e) => e.invoiceId);
-    if (alreadyInvoiced.length) {
-      throw new ConflictException(`Entry ${alreadyInvoiced[0].entryNumber} is already on invoice ${alreadyInvoiced[0].invoiceId}.`);
-    }
-
-    // All entries on one invoice must belong to the invoice's client, or the
-    // document would bill one client for another's work.
-    const foreign = entries.filter((e) => e.clientId !== dto.clientId);
-    if (foreign.length) {
-      throw new BadRequestException(
-        `Entries ${foreign.map((e) => e.entryNumber).join(', ')} do not belong to client ${dto.clientId}.`,
-      );
-    }
-
-    // Subtotal is the pre-tax taxable value; tax and TDS are shown separately and
-    // the payable total is subtotal + GST − TDS. Previously `subtotal` was the sum
-    // of entry *totals* (already tax-inclusive) while `taxAmount` was also listed
-    // beside it, so the invoice appeared to double-count tax and ignored TDS entirely.
-    const subtotal = totalEntryRevenue(entries);
-    const tax = round2(entries.reduce((a, e) => a + Number(e.taxAmount), 0));
-    const tds = round2(entries.reduce((a, e) => a + Number(e.tdsAmount), 0));
-    const discount = round2(entries.reduce((a, e) => a + Number(e.discountAmount), 0));
-    const total = round2(entries.reduce((a, e) => a + Number(e.totalAmount), 0));
-
-    const contract = await this.clientTaxRates(dto.clientId, m);
-    const issueDate = dto.issueDate ?? new Date().toISOString().slice(0, 10);
-
-    const invoice = this.invoiceRepository.create({
-      invoiceNumber: `INV-${Date.now().toString(36).toUpperCase()}-${this.seq()}`,
-      clientId: dto.clientId,
-      projectId: dto.projectId ?? null,
-      type: dto.type,
-      status: InvoiceStatus.DRAFT,
-      issueDate,
-      // Derived from the client's contracted payment terms (NET30/NET45/…) when the
-      // caller does not override it, so ageing and collections have a real deadline.
-      dueDate: dto.dueDate ?? this.dueDateFromTerms(issueDate, contract.paymentTerms),
-      currency: entries[0].currency,
-      subtotal,
-      taxAmount: tax,
-      tdsAmount: tds,
-      discountAmount: discount,
-      total,
-      paidAmount: 0,
-      outstandingAmount: total,
-      notes: dto.notes ?? null,
-      createdBy: userId,
-      updatedBy: userId,
-    });
-    const saved = await m.save(invoice);
-
-    for (const e of entries) {
-      e.invoiceId = saved.id;
-      e.state = BillingState.INVOICED;
-      e.billedAmount = Number(e.totalAmount);
-      e.outstandingAmount = Number(e.totalAmount);
-      e.updatedBy = userId;
-      await m.save(e);
-      await this.history(userId, {
-        clientId: e.clientId,
-        projectId: e.projectId,
-        assignmentId: e.assignmentId,
-        entityType: BillingEntityType.ENTRY,
-        entityId: e.id,
-        action: 'ENTRY_INVOICED',
-        fromState: BillingState.APPROVED,
-        toState: BillingState.INVOICED,
-        newValue: { invoiceId: saved.id, billedAmount: e.billedAmount },
-      }, m);
-    }
-
-    await this.history(userId, {
-      clientId: saved.clientId,
-      projectId: saved.projectId,
-      entityType: BillingEntityType.INVOICE,
-      entityId: saved.id,
-      action: 'INVOICE_CREATED',
-      fromState: null,
-      toState: InvoiceStatus.DRAFT,
-      newValue: { total: saved.total, entryIds: dto.entryIds },
-    }, m);
-    emit('billing:invoice-created', { invoiceId: saved.id, clientId: saved.clientId });
-    return saved;
-    });
-  }
-
-  async transitionInvoice(invoiceId: string, target: InvoiceStatus, userId: string, reason?: string): Promise<BillingInvoiceEntity> {
-    return this.inTx(async (m, emit) => {
-    // Locked against `recordPayment`, which also moves this row's status. Unlocked, an
-    // operator cancelling an invoice at the moment a payment lands could overwrite the
-    // PAID status the payment had just written, leaving collected money against a
-    // CANCELLED invoice.
-    const invoice = await this.lockInvoice(m, invoiceId);
-    if (invoice.status === target) throw new ConflictException(`Invoice is already ${target}.`);
-    if (!isValidTransition(INVOICE_TRANSITIONS, invoice.status, target)) {
-      throw new BadRequestException(`Cannot transition invoice from ${invoice.status} to ${target}.`);
-    }
-    const fromState = invoice.status;
-    invoice.status = target;
-    if (target === InvoiceStatus.ISSUED && !invoice.issueDate) invoice.issueDate = new Date().toISOString().slice(0, 10);
-    invoice.updatedBy = userId;
-    const saved = await m.save(invoice);
-    await this.history(userId, {
-      clientId: saved.clientId,
-      projectId: saved.projectId,
-      entityType: BillingEntityType.INVOICE,
-      entityId: saved.id,
-      action: 'INVOICE_STATUS_CHANGED',
-      fromState,
-      toState: target,
-      reason: reason ?? null,
-    }, m);
-    emit('billing:invoice-status-changed', { invoiceId: saved.id, fromState, toState: target });
-    return saved;
-    });
-  }
-
-  /**
-   * Every invoice matching the filter, each with its entries hydrated.
-   *
-   * Retained for the bulk export in `reports.service`, which prints an entry count per invoice
-   * and so genuinely needs the relation. Interactive callers must use {@link findInvoicesPage}:
-   * this one loads the whole invoice book AND every billing line hanging off it.
-   */
-  async findInvoices(filters: { clientId?: string; projectId?: string; status?: InvoiceStatus } = {}): Promise<BillingInvoiceEntity[]> {
-    return this.invoiceRepository.find({ where: this.invoiceWhere(filters), relations: ['entries'], order: { createdAt: 'DESC' } });
-  }
-
-  private invoiceWhere(filters: { clientId?: string; projectId?: string; status?: InvoiceStatus }): Record<string, unknown> {
-    const where: Record<string, unknown> = {};
-    if (filters.clientId) where.clientId = filters.clientId;
-    if (filters.projectId) where.projectId = filters.projectId;
-    if (filters.status) where.status = filters.status;
-    return where;
-  }
-
-  /**
-   * One clamped page of invoices — what `GET /billing-engine/invoices` serves.
-   *
-   * Deliberately WITHOUT `relations: ['entries']`. The list screen renders an invoice's number,
-   * status, dates and money columns; it never opens the lines, which are fetched by
-   * {@link getInvoice} when a row is expanded. Hydrating them for the list meant every invoice
-   * dragged its entire set of billing entries across the wire to be discarded — the single
-   * largest multiplier on this endpoint. `entryCount` replaces the one thing a list could want
-   * from them, at the cost of a grouped count rather than N hydrated rows.
-   */
-  async findInvoicesPage(
-    filters: { clientId?: string; projectId?: string; status?: InvoiceStatus; page?: number | string; limit?: number | string } = {},
-  ): Promise<BillingPage<BillingInvoiceEntity & { entryCount: number }>> {
-    const w = billingPageWindow(filters.page, filters.limit);
-    const [invoices, total] = await this.invoiceRepository.findAndCount({
-      where: this.invoiceWhere(filters),
-      order: { createdAt: 'DESC' },
-      skip: w.skip,
-      take: w.take,
-    });
-
-    // One grouped count for the page, rather than one hydrated relation per invoice.
-    const ids = invoices.map((i) => i.id);
-    const countRows: Array<{ invoice_id: string; n: string }> = ids.length
-      ? await this.invoiceRepository.manager.query(
-          `SELECT invoice_id, COUNT(*) AS n FROM billing_entries WHERE invoice_id = ANY($1) GROUP BY invoice_id`,
-          [ids],
-        )
-      : [];
-    const countById = new Map(countRows.map((r) => [r.invoice_id, Number(r.n)]));
-
-    return {
-      items: invoices.map((i) => Object.assign(i, { entryCount: countById.get(i.id) ?? 0 })),
-      total,
-      page: w.page,
-      limit: w.limit,
-    };
-  }
-
-  async getInvoice(invoiceId: string): Promise<BillingInvoiceEntity> {
-    const invoice = await this.invoiceRepository.findOne({
-      where: { id: invoiceId },
-      relations: ['entries', 'payments'],
-    });
-    if (!invoice) throw new NotFoundException(`Invoice ${invoiceId} not found.`);
-    return invoice;
-  }
-
-  // -----------------------------------------------------------------------
-  // Payments (spec §10)
-  // -----------------------------------------------------------------------
-
-  /**
-   * Record money received against an invoice.
-   *
-   * This was the worst of the untransacted paths: 2 + N autocommitted writes — the payment
-   * row, then the invoice, then one row per entry. Anything that interrupted the sequence
-   * left a ledger no code could produce on purpose. A statement timeout after the invoice
-   * save committed an invoice marked PAID whose entries still carried the full amount
-   * outstanding; a crash before it recorded cash received against an invoice that still
-   * looked unpaid. Both survive a restart and neither is detectable afterwards, because the
-   * partial trail looks exactly like a completed one.
-   *
-   * Concurrency was the other half. Two finance users allocating against the same invoice
-   * both read the same `outstandingAmount`, both passed the overpayment guard, and both
-   * wrote — collecting more than the invoice was for, with the second write erasing the
-   * first's arithmetic. The invoice row is now write-locked before the guard, so the second
-   * user waits and is refused against the balance the first actually left.
-   */
-  async recordPayment(dto: {
-    invoiceId: string;
-    paymentReference: string;
-    method: PaymentMethod;
-    amount: number;
-    receivedDate?: string;
-    allocatedToEntryIds?: string[];
-    notes?: string;
-  }, userId: string): Promise<BillingPaymentEntity> {
-    if (dto.amount <= 0) throw new BadRequestException('Payment amount must be positive.');
-
-    return this.inTx(async (m, emit) => {
-      const invoice = await this.lockInvoice(m, dto.invoiceId);
-
-      // Idempotency. A retried POST carries the same `paymentReference`, so if this invoice
-      // already has an INBOUND payment under it, this call is that retry and returns the
-      // original rather than recording a second one. The invoice write lock above makes this
-      // safe under concurrency: a racing retry blocks until the first commits, then re-reads
-      // here and finds it. `UQ_billing_payments_inbound_ref` is the backstop for any path that
-      // reaches an INSERT without this lock — it turns a double-insert into a failed request
-      // instead of a double-payment. The check precedes the overpayment guard deliberately: on
-      // a retry the balance is already reduced, so that guard would otherwise reject the retry
-      // with a misleading "exceeds outstanding" rather than treating it as the no-op it is.
-      const existingPayment = await m.findOne(BillingPaymentEntity, {
-        where: {
-          invoice: { id: invoice.id },
-          paymentReference: dto.paymentReference,
-          direction: PaymentDirection.INBOUND,
-        },
-      });
-      if (existingPayment) return existingPayment;
-
-      const remaining = round2(Number(invoice.outstandingAmount) - dto.amount);
-      if (remaining < -MONEY_EPSILON) {
-        throw new BadRequestException(`Payment exceeds outstanding (${invoice.outstandingAmount}).`);
-      }
-
-      // Locked in the same id order every other multi-entry operation uses.
-      const entries = await this.lockEntriesByInvoice(m, invoice.id);
-
-      const payment = this.paymentRepository.create({
-        invoice,
-        paymentReference: dto.paymentReference,
-        direction: PaymentDirection.INBOUND,
-        method: dto.method,
-        amount: dto.amount,
-        currency: invoice.currency,
-        receivedDate: dto.receivedDate ?? new Date().toISOString().slice(0, 10),
-        status: PaymentStatus.RECEIVED,
-        allocatedToEntryIds: dto.allocatedToEntryIds ?? null,
-        notes: dto.notes ?? null,
-        createdBy: userId,
-        updatedBy: userId,
-      });
-      const saved = await m.save(payment);
-
-      // Captured before the mutation below. The history row used to infer the prior status
-      // from the new one ("PAID now, so it must have been PARTIALLY_PAID"), which was simply
-      // wrong whenever a single payment settled an ISSUED invoice outright — the common case.
-      const fromStatus = invoice.status;
-
-      // Update invoice money and status.
-      invoice.paidAmount = round2(Number(invoice.paidAmount) + dto.amount);
-      invoice.outstandingAmount = round2(Number(invoice.outstandingAmount) - dto.amount);
-      if (Math.abs(invoice.outstandingAmount) < MONEY_EPSILON) invoice.outstandingAmount = 0;
-      invoice.status = invoice.outstandingAmount <= 0 ? InvoiceStatus.PAID : InvoiceStatus.PARTIALLY_PAID;
-      invoice.updatedBy = userId;
-      await m.save(invoice);
-
-      // Reflect payment across the invoice's entries (pro-rata unless allocated).
-      if (entries.length) {
-        const totalOutstanding = entries.reduce((a, e) => a + Number(e.outstandingAmount), 0) || 1;
-        let totalApplied = 0;
-        for (const e of entries) {
-          const share = dto.allocatedToEntryIds?.includes(e.id)
-            ? (dto.amount / (dto.allocatedToEntryIds.length || 1))
-            : round2(Number(e.outstandingAmount) * (dto.amount / totalOutstanding));
-          const applied = Math.min(share, Number(e.outstandingAmount));
-          totalApplied = round2(totalApplied + applied);
-          e.paidAmount = round2(Number(e.paidAmount) + applied);
-          e.outstandingAmount = round2(Number(e.outstandingAmount) - applied);
-          if (e.outstandingAmount < MONEY_EPSILON) e.outstandingAmount = 0;
-          e.paymentState = e.outstandingAmount <= 0 ? PaymentState.PAID : PaymentState.PARTIALLY_PAID;
-          e.updatedBy = userId;
-          await m.save(e);
-        }
-
-        /**
-         * The entries must never absorb more than the payment was worth.
-         *
-         * The allocation rule above does not enforce that on its own. When
-         * `allocatedToEntryIds` names only some of the invoice's entries, the named ones
-         * each take `amount / count` while the unnamed ones *still* take a pro-rata slice of
-         * the full amount, so the two allocations overlap. The `Math.min(share, outstanding)`
-         * clamp hides this whenever the payment settles the invoice outright — each entry can
-         * only absorb its own balance and those sum to the invoice — which is why it went
-         * unnoticed. On a part-payment the clamp does not bind: ₹500 allocated to one of two
-         * entries outstanding ₹600 and ₹400 credits ₹500 + ₹200 = ₹700.
-         *
-         * Deciding what partial allocation *should* mean is a product question, not a
-         * transactional one, so the semantics are left exactly as they were. What changes is
-         * that the transaction now refuses to commit an over-allocation instead of silently
-         * persisting one. Raising it as a hard failure is the point: it surfaces the case the
-         * moment someone hits it, with the money still intact.
-         */
-        if (totalApplied - dto.amount > MONEY_EPSILON) {
-          throw new ConflictException(
-            `Allocation error: ₹${totalApplied} would be credited across entries for a ₹${dto.amount} payment. ` +
-            `This happens when 'allocatedToEntryIds' names only some of the invoice's entries. ` +
-            `Either allocate across every entry or omit the allocation to split pro-rata.`,
-          );
-        }
-      }
-
-      await this.history(userId, {
-        clientId: invoice.clientId,
-        projectId: invoice.projectId,
-        entityType: BillingEntityType.PAYMENT,
-        entityId: saved.id,
-        action: 'PAYMENT_RECEIVED',
-        fromState: fromStatus,
-        toState: invoice.status,
-        newValue: { amount: dto.amount, paymentReference: dto.paymentReference, invoiceId: invoice.id },
-        reason: dto.notes ?? null,
-      }, m);
-      emit('billing:payment-received', { paymentId: saved.id, invoiceId: invoice.id, amount: dto.amount });
-      return saved;
-    });
-  }
-
-  // -----------------------------------------------------------------------
-  // Assayer payable (spec §5) — kept fully separate from client billing
-  // -----------------------------------------------------------------------
-
-  async createPayable(dto: {
-    assayerId: string;
-    clientId?: string;
-    projectId?: string;
-    assignmentId?: string;
-    baseAmount: number;
-    travelAmount?: number;
-    taxRate?: number;
-    tdsRate?: number;
-    rateSnapshot?: Record<string, unknown>;
-    remarks?: string;
-  }, userId: string): Promise<AssayerPayableEntity> {
-    if (!dto.assayerId) throw new BadRequestException('assayerId is required.');
-    // Fee and travel are kept as the distinct figures they are. They used to be
-    // summed into `baseAmount` while travel was *also* stored separately, so the
-    // payables table showed base and travel as two independent amounts that did
-    // not add up to the total.
-    const fee = Number(dto.baseAmount);
-    const travel = Number(dto.travelAmount || 0);
-    // Same two helpers the dashboards read this payable back through, so what is stored and what
-    // is later reported can never disagree about the same row.
-    const gross = payableCost({ baseAmount: fee, travelAmount: travel });
-    const { taxAmount: tax, tdsAmount: tds, totalAmount: total } =
-      applyTaxes(gross, { taxRate: dto.taxRate, tdsRate: dto.tdsRate });
-
-    return this.inTx(async (m) => {
-    try {
+  ): Promise<AssayerPayableEntity> {
     const payable = this.payableRepository.create({
       payableNumber: `PY-${Date.now().toString(36).toUpperCase()}-${this.seq()}`,
-      assayerId: dto.assayerId,
-      clientId: dto.clientId ?? null,
-      projectId: dto.projectId ?? null,
-      assignmentId: dto.assignmentId ?? null,
+      assayerId: p.assayerId,
+      clientId: p.clientId,
+      projectId: p.projectId,
+      assignmentId: p.assignmentId,
+      expenseId: p.expenseId,
       status: AssayerPayableStatus.PENDING,
-      baseAmount: fee,
-      travelAmount: travel,
-      taxAmount: tax,
-      tdsAmount: tds,
-      totalAmount: total,
+      onHold: false,
+      holdReason: null,
+      baseAmount: p.baseAmount,
+      travelAmount: p.travelAmount,
+      taxAmount: 0,
+      tdsAmount: p.tdsAmount,
+      totalAmount: p.totalAmount,
       currency: 'INR',
       paidAmount: 0,
-      rateSnapshot: dto.rateSnapshot ?? null,
-      remarks: dto.remarks ?? null,
+      rateSnapshot: p.rateSnapshot,
+      remarks: p.remarks,
       createdBy: userId,
       updatedBy: userId,
     });
     const saved = await m.save(payable);
     await this.history(userId, {
-      clientId: dto.clientId ?? null,
-      projectId: dto.projectId ?? null,
-      assignmentId: dto.assignmentId ?? null,
-      assayerId: dto.assayerId,
+      clientId: p.clientId,
+      projectId: p.projectId,
+      assignmentId: p.assignmentId,
+      assayerId: p.assayerId,
       entityType: BillingEntityType.PAYABLE,
       entityId: saved.id,
       action: 'PAYABLE_CREATED',
       fromState: null,
       toState: AssayerPayableStatus.PENDING,
-      newValue: { totalAmount: total },
-      reason: dto.remarks ?? null,
+      newValue: { baseAmount: p.baseAmount, travelAmount: p.travelAmount, tdsAmount: p.tdsAmount, totalAmount: p.totalAmount, expenseId: p.expenseId },
+      reason: p.remarks,
     }, m);
     return saved;
-    } catch (err) {
-      // The auto-sync callers catch this themselves and report the winner; a manual creation
-      // through the API gets a clear refusal instead of a 500.
-      if (isUniqueViolation(err, 'UQ_assayer_payables_fee_per_assignment')) {
-        throw new DuplicateFeePayableError();
-      }
-      throw err;
-    }
-    });
   }
 
-  async transitionPayable(payableId: string, target: AssayerPayableStatus, userId: string, reason?: string): Promise<AssayerPayableEntity> {
-    const saved = await this.inTx(async (m, emit) => {
-    // Locked against `recordDisbursement`, which also writes `status` and `paidAmount` on
-    // this row. Approval is the control that gates money leaving the business, so the two
-    // must not interleave.
-    const payable = await this.lockPayable(m, payableId);
-    if (payable.status === target) throw new ConflictException(`Payable is already ${target}.`);
-    if (!isValidTransition(PAYABLE_TRANSITIONS, payable.status, target)) {
-      throw new BadRequestException(`Cannot transition payable from ${payable.status} to ${target}.`);
-    }
-    const fromState = payable.status;
-    payable.status = target;
-    if (target === AssayerPayableStatus.APPROVED) { payable.approvedAt = new Date(); payable.approvedBy = userId; }
-    if (target === AssayerPayableStatus.PAID) { payable.paidAt = new Date(); payable.paidBy = userId; payable.paidAmount = payable.totalAmount; }
-    payable.updatedBy = userId;
-    const saved = await m.save(payable);
-    await this.history(userId, {
-      clientId: payable.clientId,
-      projectId: payable.projectId,
-      assignmentId: payable.assignmentId,
-      assayerId: payable.assayerId,
-      entityType: BillingEntityType.PAYABLE,
-      entityId: saved.id,
-      action: 'PAYABLE_STATUS_CHANGED',
-      fromState,
-      toState: target,
-      reason: reason ?? null,
-    }, m);
-    emit('billing:payable-status-changed', { payableId: saved.id, fromState, toState: target });
-    return saved;
+  private async insertClientLine(
+    m: EntityManager,
+    a: AssignmentEntity,
+    clientId: string,
+    money: AssignmentMoney,
+    ctx: MoneyContext,
+    userId: string,
+  ): Promise<BillingEntryEntity> {
+    const entry = this.entryRepository.create({
+      entryNumber: `BE-${Date.now().toString(36).toUpperCase()}-${this.seq()}`,
+      clientId,
+      projectId: a.projectId ?? null,
+      assignmentId: a.id,
+      assayerId: a.assayerId ?? null,
+      state: BillingState.UNBILLED,
+      onHold: false,
+      holdReason: null,
+      serviceDate: a.completionDate ? this.toISO(a.completionDate) : null,
+      description: money.client.pricedFrom === 'CLIENT_RATE'
+        ? `${a.assignmentNumber} — billed at the client rate`
+        : `${a.assignmentNumber} — no client rate set, billed at the assayer fee`,
+      baseAmount: money.client.base,
+      travelAmount: money.client.travel,
+      adjustmentAmount: 0,
+      adjustmentReason: null,
+      taxRate: ctx.gstRate,
+      taxableAmount: money.client.taxable,
+      taxAmount: money.client.gst,
+      tdsRate: ctx.clientTdsRate,
+      tdsAmount: money.client.tds,
+      totalAmount: money.client.total,
+      currency: 'INR',
+      paidAmount: 0,
+      outstandingAmount: 0,
+      invoiceId: null,
+      createdBy: userId,
+      updatedBy: userId,
     });
-
-    // The assayer only learned their fee had been approved by checking the earnings screen.
-    if (saved.status === AssayerPayableStatus.APPROVED) {
-      this.notifyWithBranch(saved.assignmentId, (branchName) => ({
-        type: 'PAYABLE_APPROVED',
-        entityType: 'PAYABLE',
-        entityId: saved.id,
-        actorUserId: userId,
-        assayerId: saved.assayerId,
-        dedupeKey: `PAYABLE_APPROVED:${saved.id}`,
-        payload: {
-          payableId: saved.id,
-          amount: Number(saved.totalAmount),
-          branchName,
-        },
-      }));
-    }
-
+    const saved = await m.save(entry);
+    await this.history(userId, {
+      clientId,
+      projectId: a.projectId ?? null,
+      assignmentId: a.id,
+      assayerId: a.assayerId ?? null,
+      entityType: BillingEntityType.ENTRY,
+      entityId: saved.id,
+      action: 'ENTRY_CREATED',
+      fromState: null,
+      toState: BillingState.UNBILLED,
+      newValue: this.moneyOf(saved),
+      reason: saved.description,
+    }, m);
     return saved;
   }
 
   /**
-   * Disburses money against an approved payable — the outbound half of the
-   * engine.
+   * Turn an approved expense claim into money the assayer is owed.
    *
-   * This replaces a separate ledger module that credited a `running_balance`
-   * column on the assayer with no link to what was being paid for, no payment
-   * reference and no partial-payment support. Disbursements are recorded as
-   * ordinary payment rows (direction OUTBOUND) so every rupee in and out of the
-   * business is one table.
+   * Takes the caller's manager: `ExpenseService.review` runs the approval and this insert in one
+   * transaction, so an approval can never exist without its payable. `expenseId` is a real column
+   * with a unique index, so a retried approval is refused by the database rather than paid twice.
+   * No TDS on a reimbursement — this is the assayer's own money being returned, not income.
+   */
+  async createReimbursementPayable(
+    expense: { id: string; assayerId: string; assignmentId: string; amount: number | string; category: string; description?: string | null },
+    m: EntityManager,
+    userId: string,
+  ): Promise<AssayerPayableEntity> {
+    const a = await m.findOne(AssignmentEntity, { where: { id: expense.assignmentId }, select: ['id', 'projectId', 'assignmentNumber'] });
+    const project = a?.projectId
+      ? await m.findOne(ProjectEntity, { where: { id: a.projectId }, select: ['id', 'clientId'] })
+      : null;
+    const amount = round2(Number(expense.amount));
+    try {
+      return await this.insertPayable(m, {
+        assayerId: expense.assayerId,
+        clientId: project?.clientId ?? null,
+        projectId: a?.projectId ?? null,
+        assignmentId: expense.assignmentId,
+        expenseId: expense.id,
+        baseAmount: amount,
+        travelAmount: 0,
+        tdsAmount: 0,
+        totalAmount: amount,
+        rateSnapshot: { source: 'EXPENSE_CLAIM', expenseId: expense.id, category: expense.category },
+        remarks: `Expense reimbursement — ${expense.category}${expense.description ? `: ${expense.description}` : ''}`,
+      }, userId);
+    } catch (err) {
+      if (isUniqueViolation(err, 'UQ_assayer_payables_expense')) throw new DuplicateReimbursementError();
+      throw err;
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // The client line: adjust and hold, while unbilled
+  // -----------------------------------------------------------------------
+
+  async editClientLine(
+    assignmentId: string,
+    patch: { adjustmentAmount?: number; adjustmentReason?: string; onHold?: boolean; holdReason?: string },
+    userId: string,
+  ): Promise<BillingEntryEntity> {
+    return this.inTx(async (m, emit) => {
+      const entry = await m.findOne(BillingEntryEntity, { where: { assignmentId }, lock: { mode: 'pessimistic_write' } });
+      if (!entry) throw new NotFoundException('This assignment has no client line yet.');
+      if (entry.state !== BillingState.UNBILLED) {
+        throw new BadRequestException(
+          `This line is ${entry.state.toLowerCase()}. Adjustments and holds apply only before invoicing — cancel the invoice first.`,
+        );
+      }
+      const before = { ...this.moneyOf(entry), onHold: entry.onHold, holdReason: entry.holdReason, adjustmentReason: entry.adjustmentReason };
+      const actions: string[] = [];
+
+      if (patch.adjustmentAmount !== undefined) {
+        const amount = round2(Number(patch.adjustmentAmount));
+        if (!Number.isFinite(amount)) throw new BadRequestException('Adjustment must be a number.');
+        if (amount !== 0 && !patch.adjustmentReason?.trim()) {
+          throw new BadRequestException('Say why the line is being adjusted.');
+        }
+        entry.adjustmentAmount = amount;
+        entry.adjustmentReason = amount === 0 ? null : patch.adjustmentReason!.trim();
+        entry.taxableAmount = round2(Number(entry.baseAmount) + Number(entry.travelAmount) + amount);
+        const t = applyTaxes(entry.taxableAmount, { taxRate: entry.taxRate, tdsRate: entry.tdsRate });
+        entry.taxAmount = t.taxAmount;
+        entry.tdsAmount = t.tdsAmount;
+        entry.totalAmount = t.totalAmount;
+        actions.push('ENTRY_ADJUSTED');
+      }
+      if (patch.onHold !== undefined) {
+        if (patch.onHold && !patch.holdReason?.trim()) throw new BadRequestException('Say why the line is on hold.');
+        entry.onHold = patch.onHold;
+        entry.holdReason = patch.onHold ? patch.holdReason!.trim() : null;
+        actions.push('ENTRY_HOLD_CHANGED');
+      }
+      if (!actions.length) return entry;
+
+      entry.updatedBy = userId;
+      const saved = await m.save(entry);
+      for (const action of actions) {
+        await this.history(userId, {
+          clientId: saved.clientId, projectId: saved.projectId, assignmentId: saved.assignmentId, assayerId: saved.assayerId,
+          entityType: BillingEntityType.ENTRY, entityId: saved.id, action,
+          previousValue: before,
+          newValue: { ...this.moneyOf(saved), onHold: saved.onHold, holdReason: saved.holdReason, adjustmentReason: saved.adjustmentReason },
+          reason: action === 'ENTRY_ADJUSTED' ? saved.adjustmentReason : saved.holdReason,
+        }, m);
+      }
+      emit('billing:booked', { assignmentId, clientId: saved.clientId, assayerId: saved.assayerId, entryId: saved.id, change: 'LINE_EDITED' });
+      return saved;
+    });
+  }
+
+  // -----------------------------------------------------------------------
+  // Payouts: approve → pay, and hold
+  // -----------------------------------------------------------------------
+
+  /**
+   * The one approval gate. Each id gets its own transaction, so one refused payable does not
+   * undo the others; the result says exactly which were approved and which were refused, and why.
+   * An already-approved payable is a no-op, not an error — the bulk button may be pressed twice.
+   */
+  async approvePayouts(payableIds: string[], userId: string): Promise<PayoutActionResult> {
+    const done: string[] = [];
+    const refused: Array<{ id: string; reason: string }> = [];
+    for (const id of [...new Set(payableIds)]) {
+      try {
+        const approved = await this.inTx(async (m, emit) => {
+          const p = await this.lockPayable(m, id);
+          if (p.status === AssayerPayableStatus.APPROVED) return null;
+          if (p.status === AssayerPayableStatus.PAID) throw new ConflictException(`${p.payableNumber} is already paid.`);
+          if (p.onHold) throw new ConflictException(`${p.payableNumber} is on hold: ${p.holdReason ?? 'no reason given'}.`);
+          p.status = AssayerPayableStatus.APPROVED;
+          p.approvedAt = new Date();
+          p.approvedBy = userId;
+          p.updatedBy = userId;
+          const saved = await m.save(p);
+          await this.history(userId, {
+            clientId: p.clientId, projectId: p.projectId, assignmentId: p.assignmentId, assayerId: p.assayerId,
+            entityType: BillingEntityType.PAYABLE, entityId: saved.id, action: 'PAYABLE_STATUS_CHANGED',
+            fromState: AssayerPayableStatus.PENDING, toState: AssayerPayableStatus.APPROVED,
+          }, m);
+          emit('billing:payout-changed', { payableId: saved.id, assayerId: saved.assayerId, status: saved.status, onHold: saved.onHold });
+          return saved;
+        });
+        done.push(id);
+        if (approved) {
+          this.notifyWithBranch(approved.assignmentId, (branchName) => ({
+            type: 'PAYABLE_APPROVED',
+            entityType: 'PAYABLE',
+            entityId: approved.id,
+            actorUserId: userId,
+            assayerId: approved.assayerId,
+            dedupeKey: `PAYABLE_APPROVED:${approved.id}`,
+            payload: { payableId: approved.id, amount: Number(approved.totalAmount), branchName },
+          }));
+        }
+      } catch (err) {
+        refused.push({ id, reason: (err as Error).message });
+      }
+    }
+    return { done, refused };
+  }
+
+  /**
+   * Pay approved payouts, each in full, each as a real disbursement row. The only path to PAID.
+   *
+   * One bank reference may settle many payables (a batch transfer), so the same reference is
+   * allowed across payables; per payable it is the idempotency key.
+   */
+  async payPayouts(
+    payableIds: string[],
+    dto: { paymentReference: string; method: PaymentMethod; paidDate?: string; notes?: string },
+    userId: string,
+  ): Promise<{ done: Array<{ payableId: string; paymentId: string }>; refused: Array<{ id: string; reason: string }> }> {
+    const done: Array<{ payableId: string; paymentId: string }> = [];
+    const refused: Array<{ id: string; reason: string }> = [];
+    for (const id of [...new Set(payableIds)]) {
+      try {
+        const payment = await this.recordDisbursement({ payableId: id, ...dto }, userId);
+        done.push({ payableId: id, paymentId: payment.id });
+      } catch (err) {
+        refused.push({ id, reason: (err as Error).message });
+      }
+    }
+    return { done, refused };
+  }
+
+  async holdPayout(payableId: string, onHold: boolean, reason: string | undefined, userId: string): Promise<AssayerPayableEntity> {
+    if (onHold && !reason?.trim()) throw new BadRequestException('Say why the payout is on hold.');
+    return this.inTx(async (m, emit) => {
+      const p = await this.lockPayable(m, payableId);
+      if (p.status === AssayerPayableStatus.PAID) throw new ConflictException(`${p.payableNumber} is already paid.`);
+      if (p.onHold === onHold) return p;
+      const before = { onHold: p.onHold, holdReason: p.holdReason };
+      p.onHold = onHold;
+      p.holdReason = onHold ? reason!.trim() : null;
+      p.updatedBy = userId;
+      const saved = await m.save(p);
+      await this.history(userId, {
+        clientId: p.clientId, projectId: p.projectId, assignmentId: p.assignmentId, assayerId: p.assayerId,
+        entityType: BillingEntityType.PAYABLE, entityId: saved.id, action: 'PAYABLE_HOLD_CHANGED',
+        previousValue: before, newValue: { onHold: saved.onHold, holdReason: saved.holdReason }, reason: saved.holdReason,
+      }, m);
+      emit('billing:payout-changed', { payableId: saved.id, assayerId: saved.assayerId, status: saved.status, onHold: saved.onHold });
+      return saved;
+    });
+  }
+
+  /**
+   * Disburse money against an approved payable — the outbound half of the engine, and the only
+   * way a payable becomes PAID.
+   *
+   * Write-locked before the balance guard so two operators cannot both pay the same obligation;
+   * idempotent by `paymentReference` so a retried POST returns the original payment rather than
+   * paying a second time (`UQ_billing_payments_outbound_ref` backstops any unlocked path).
    */
   async recordDisbursement(dto: {
     payableId: string;
@@ -2518,118 +793,75 @@ export class BillingEngineService implements OnModuleInit {
     paidDate?: string;
     notes?: string;
   }, userId: string): Promise<BillingPaymentEntity> {
-    // Set only on the path that genuinely moves money; the idempotent early-return leaves it
-    // null, so a retried disbursement cannot tell the assayer they were paid a second time.
     let notify: { assignmentId: string | null; assayerId: string; amount: number } | null = null;
 
     const result = await this.inTx(async (m, emit) => {
-    // Write-locked before the outstanding-balance guard. Unlocked, two operators
-    // disbursing the same approved payable both read the same `paidAmount`, both computed
-    // the same outstanding, both passed the "does not exceed what is owed" check, and both
-    // paid — money out of the business twice against one obligation, with the second
-    // `paidAmount` write erasing the first.
-    const payable = await this.lockPayable(m, dto.payableId);
+      const payable = await this.lockPayable(m, dto.payableId);
 
-    // Idempotency, mirroring `recordPayment`: a retried disbursement carries the same
-    // `paymentReference`, so if this payable already has an OUTBOUND payment under that
-    // reference, return it rather than paying the assayer a second time. The payable write
-    // lock serialises a concurrent retry; `UQ_billing_payments_outbound_ref` backstops any
-    // unlocked path. Placed before the balance guard so a retry is not rejected as exceeding
-    // what is now (post-first-payment) owed.
-    const existingDisbursement = await m.findOne(BillingPaymentEntity, {
-      where: {
-        payableId: payable.id,
+      const existing = await m.findOne(BillingPaymentEntity, {
+        where: { payableId: payable.id, paymentReference: dto.paymentReference, direction: PaymentDirection.OUTBOUND, isActive: true },
+      });
+      if (existing) return existing;
+
+      if (payable.onHold) {
+        throw new ConflictException(`${payable.payableNumber} is on hold: ${payable.holdReason ?? 'no reason given'}.`);
+      }
+      if (payable.status !== AssayerPayableStatus.APPROVED) {
+        throw new BadRequestException(
+          payable.status === AssayerPayableStatus.PAID
+            ? `${payable.payableNumber} is already paid.`
+            : `${payable.payableNumber} has not been approved yet.`,
+        );
+      }
+      const outstanding = round2(Number(payable.totalAmount) - Number(payable.paidAmount));
+      if (outstanding <= 0) throw new ConflictException(`${payable.payableNumber} is already fully paid.`);
+      const amount = round2(dto.amount ?? outstanding);
+      if (amount <= 0) throw new BadRequestException('Disbursement amount must be positive.');
+      if (amount - outstanding > MONEY_EPSILON) {
+        throw new BadRequestException(`₹${amount} exceeds the ₹${outstanding} still owed on ${payable.payableNumber}.`);
+      }
+
+      const fromStatus = payable.status;
+      payable.paidAmount = round2(Number(payable.paidAmount) + amount);
+      const fullyPaid = Number(payable.totalAmount) - payable.paidAmount <= MONEY_EPSILON;
+      if (fullyPaid) {
+        payable.status = AssayerPayableStatus.PAID;
+        payable.paidAt = new Date();
+        payable.paidBy = userId;
+      }
+      payable.updatedBy = userId;
+      await m.save(payable);
+
+      // Computed on the transaction's own connection so it sees the `paidAmount` just written.
+      const balance = (await this.assayerTotals(payable.assayerId, m)).outstanding;
+
+      const payment = this.paymentRepository.create({
         paymentReference: dto.paymentReference,
         direction: PaymentDirection.OUTBOUND,
-      },
-    });
-    if (existingDisbursement) return existingDisbursement;
-
-    // Paying out unapproved work is how duplicate and fraudulent payments happen;
-    // approval is the control that has to precede money leaving the business.
-    if (payable.status !== AssayerPayableStatus.APPROVED && payable.status !== AssayerPayableStatus.PAID) {
-      throw new BadRequestException(
-        `Payable ${payable.payableNumber} is ${payable.status}. Only APPROVED payables can be disbursed.`,
-      );
-    }
-
-    const outstanding = round2(Number(payable.totalAmount) - Number(payable.paidAmount));
-    if (outstanding <= 0) {
-      throw new ConflictException(`Payable ${payable.payableNumber} is already fully paid.`);
-    }
-    const amount = round2(dto.amount ?? outstanding);
-    if (amount <= 0) throw new BadRequestException('Disbursement amount must be positive.');
-    if (amount - outstanding > MONEY_EPSILON) {
-      throw new BadRequestException(`Disbursement ₹${amount} exceeds the ₹${outstanding} still owed on this payable.`);
-    }
-
-    const fromStatus = payable.status;
-    payable.paidAmount = round2(Number(payable.paidAmount) + amount);
-    const fullyPaid = Number(payable.totalAmount) - payable.paidAmount <= MONEY_EPSILON;
-    if (fullyPaid) {
-      payable.status = AssayerPayableStatus.PAID;
-      payable.paidAt = new Date();
-      payable.paidBy = userId;
-    }
-    payable.updatedBy = userId;
-    await m.save(payable);
-
-    // Balance still owed to this assayer across all their payables, after this
-    // payment — the running statement the old ledger tried to maintain, now
-    // derived from real obligations instead of a free-floating counter.
-    //
-    // Computed on the transaction's own connection so it sees the `paidAmount` written a
-    // few lines above. On a separate connection it would read the pre-payment figure and
-    // stamp a running balance onto the payment row that was stale the moment it was written.
-    const balance = await this.assayerOutstanding(payable.assayerId, m);
-
-    const payment = this.paymentRepository.create({
-      paymentReference: dto.paymentReference,
-      direction: PaymentDirection.OUTBOUND,
-      method: dto.method,
-      amount,
-      currency: payable.currency,
-      receivedDate: dto.paidDate ?? new Date().toISOString().slice(0, 10),
-      status: PaymentStatus.RECEIVED,
-      payableId: payable.id,
-      assayerId: payable.assayerId,
-      runningBalance: balance,
-      invoice: null,
-      notes: dto.notes ?? null,
-      createdBy: userId,
-      updatedBy: userId,
-    });
-    const saved = await m.save(payment);
-
-    await this.history(userId, {
-      clientId: payable.clientId,
-      projectId: payable.projectId,
-      assignmentId: payable.assignmentId,
-      assayerId: payable.assayerId,
-      entityType: BillingEntityType.PAYMENT,
-      entityId: saved.id,
-      action: 'DISBURSEMENT_PAID',
-      // Was hardcoded to APPROVED. A second, settling disbursement against a payable that
-      // was already PAID recorded the same false starting point, so the trail could not
-      // distinguish a first payment from a top-up.
-      fromState: fromStatus,
-      toState: payable.status,
-      newValue: { amount, paymentReference: dto.paymentReference, payableId: payable.id, balanceAfter: balance },
-      reason: dto.notes ?? null,
-    }, m);
-    emit('billing:disbursement-paid', {
-      paymentId: saved.id, payableId: payable.id, assayerId: payable.assayerId, amount,
-    });
-    // Only the settling disbursement is "you have been paid" — a partial one still leaves a
-    // balance owed, and announcing it as paid would be wrong.
-    if (fullyPaid) {
-      notify = {
-        assignmentId: payable.assignmentId,
+        method: dto.method,
+        amount,
+        currency: payable.currency,
+        receivedDate: dto.paidDate ?? new Date().toISOString().slice(0, 10),
+        payableId: payable.id,
         assayerId: payable.assayerId,
-        amount: Number(payable.paidAmount),
-      };
-    }
-    return saved;
+        runningBalance: balance,
+        invoiceId: null,
+        notes: dto.notes ?? null,
+        createdBy: userId,
+        updatedBy: userId,
+      });
+      const saved = await m.save(payment);
+
+      await this.history(userId, {
+        clientId: payable.clientId, projectId: payable.projectId, assignmentId: payable.assignmentId, assayerId: payable.assayerId,
+        entityType: BillingEntityType.PAYMENT, entityId: saved.id, action: 'DISBURSEMENT_PAID',
+        fromState: fromStatus, toState: payable.status,
+        newValue: { amount, paymentReference: dto.paymentReference, payableId: payable.id, balanceAfter: balance },
+        reason: dto.notes ?? null,
+      }, m);
+      emit('billing:payout-changed', { payableId: payable.id, assayerId: payable.assayerId, status: payable.status, onHold: payable.onHold, paymentId: saved.id, amount });
+      if (fullyPaid) notify = { assignmentId: payable.assignmentId, assayerId: payable.assayerId, amount: Number(payable.paidAmount) };
+      return saved;
     });
 
     if (notify) {
@@ -2640,80 +872,414 @@ export class BillingEngineService implements OnModuleInit {
         entityId: result.id,
         actorUserId: userId,
         assayerId,
-        // Keyed on the reference rather than the payment row, so any retry that slipped past
-        // the early-return still collapses onto the one notification.
         dedupeKey: `PAYABLE_PAID:${dto.payableId}:${dto.paymentReference}`,
-        payload: {
-          paymentId: result.id,
-          payableId: dto.payableId,
-          amount,
-          branchName,
-          paymentReference: dto.paymentReference,
-        },
+        payload: { paymentId: result.id, payableId: dto.payableId, amount, branchName, paymentReference: dto.paymentReference },
       }));
     }
-
     return result;
   }
 
-  /** Total still owed to an assayer across every payable not yet fully paid. */
-  private async assayerOutstanding(assayerId: string, manager?: EntityManager): Promise<number> {
-    const rows = await (manager ?? this.payableRepository.manager).query(
-      `SELECT COALESCE(SUM(total_amount - paid_amount), 0) AS owed
-         FROM assayer_payables
-        WHERE assayer_id = $1 AND is_active = true
-          AND status NOT IN ('DISPUTED', 'ON_HOLD')`,
-      [assayerId],
-    );
-    return round2(Number(rows?.[0]?.owed ?? 0));
+  // -----------------------------------------------------------------------
+  // Invoices: create → send → collect, and cancel
+  // -----------------------------------------------------------------------
+
+  /**
+   * Invoice a set of completed assignments for one client.
+   *
+   * The lines are write-locked by assignment so two operators invoicing overlapping selections
+   * cannot both bill the same work; every guard runs against what actually committed.
+   */
+  async createInvoice(dto: {
+    clientId: string;
+    assignmentIds: string[];
+    issueDate?: string;
+    dueDate?: string;
+    notes?: string;
+  }, userId: string): Promise<BillingInvoiceEntity> {
+    const assignmentIds = [...new Set(dto.assignmentIds ?? [])];
+    if (!assignmentIds.length) throw new BadRequestException('Pick at least one assignment to invoice.');
+
+    return this.inTx(async (m, emit) => {
+      const entries = await m
+        .createQueryBuilder(BillingEntryEntity, 'e')
+        .setLock('pessimistic_write')
+        .where('e.assignment_id IN (:...assignmentIds)', { assignmentIds })
+        .orderBy('e.id', 'ASC')
+        .getMany();
+      if (entries.length !== assignmentIds.length) {
+        const found = new Set(entries.map((e) => e.assignmentId));
+        const missing = assignmentIds.filter((id) => !found.has(id));
+        throw new NotFoundException(`${missing.length} assignment(s) have no client line yet: ${missing.join(', ')}.`);
+      }
+      const foreign = entries.filter((e) => e.clientId !== dto.clientId);
+      if (foreign.length) throw new BadRequestException(`${foreign.length} line(s) belong to a different client.`);
+      const held = entries.filter((e) => e.onHold);
+      if (held.length) throw new ConflictException(`${held.map((e) => e.entryNumber).join(', ')} on hold — release before invoicing.`);
+      const notUnbilled = entries.filter((e) => e.state !== BillingState.UNBILLED || e.invoiceId);
+      if (notUnbilled.length) {
+        throw new ConflictException(`${notUnbilled.map((e) => e.entryNumber).join(', ')} already invoiced.`);
+      }
+
+      const subtotal = round2(entries.reduce((s, e) => s + Number(e.taxableAmount), 0));
+      const tax = round2(entries.reduce((s, e) => s + Number(e.taxAmount), 0));
+      const tds = round2(entries.reduce((s, e) => s + Number(e.tdsAmount), 0));
+      const total = round2(entries.reduce((s, e) => s + Number(e.totalAmount), 0));
+      const projectIds = new Set(entries.map((e) => e.projectId).filter(Boolean));
+
+      const terms = await this.clientPaymentTerms(dto.clientId, m);
+      const issueDate = dto.issueDate ?? new Date().toISOString().slice(0, 10);
+
+      const invoice = this.invoiceRepository.create({
+        invoiceNumber: `INV-${Date.now().toString(36).toUpperCase()}-${this.seq()}`,
+        clientId: dto.clientId,
+        projectId: projectIds.size === 1 ? ([...projectIds][0] as string) : null,
+        status: InvoiceStatus.DRAFT,
+        issueDate,
+        dueDate: dto.dueDate ?? this.dueDateFromTerms(issueDate, terms),
+        currency: entries[0].currency,
+        subtotal,
+        taxAmount: tax,
+        tdsAmount: tds,
+        total,
+        paidAmount: 0,
+        outstandingAmount: total,
+        notes: dto.notes ?? null,
+        createdBy: userId,
+        updatedBy: userId,
+      });
+      const saved = await m.save(invoice);
+
+      for (const e of entries) {
+        e.invoiceId = saved.id;
+        e.state = BillingState.INVOICED;
+        e.outstandingAmount = Number(e.totalAmount);
+        e.updatedBy = userId;
+        await m.save(e);
+        await this.history(userId, {
+          clientId: e.clientId, projectId: e.projectId, assignmentId: e.assignmentId, assayerId: e.assayerId,
+          entityType: BillingEntityType.ENTRY, entityId: e.id, action: 'ENTRY_INVOICED',
+          fromState: BillingState.UNBILLED, toState: BillingState.INVOICED,
+          newValue: { invoiceId: saved.id, invoiceNumber: saved.invoiceNumber, totalAmount: Number(e.totalAmount) },
+        }, m);
+      }
+      await this.history(userId, {
+        clientId: saved.clientId, projectId: saved.projectId,
+        entityType: BillingEntityType.INVOICE, entityId: saved.id, action: 'INVOICE_CREATED',
+        fromState: null, toState: InvoiceStatus.DRAFT,
+        newValue: { total: saved.total, assignmentIds },
+      }, m);
+      emit('billing:invoice-changed', { invoiceId: saved.id, clientId: saved.clientId, status: saved.status });
+      return saved;
+    });
+  }
+
+  async sendInvoice(invoiceId: string, userId: string): Promise<BillingInvoiceEntity> {
+    return this.inTx(async (m, emit) => {
+      const invoice = await this.lockInvoice(m, invoiceId);
+      if (invoice.status === InvoiceStatus.ISSUED) return invoice;
+      if (invoice.status !== InvoiceStatus.DRAFT) {
+        throw new ConflictException(`${invoice.invoiceNumber} is ${invoice.status.toLowerCase()} and cannot be sent.`);
+      }
+      invoice.status = InvoiceStatus.ISSUED;
+      if (!invoice.issueDate) invoice.issueDate = new Date().toISOString().slice(0, 10);
+      if (!invoice.dueDate) {
+        invoice.dueDate = this.dueDateFromTerms(invoice.issueDate, await this.clientPaymentTerms(invoice.clientId, m));
+      }
+      invoice.updatedBy = userId;
+      const saved = await m.save(invoice);
+      await this.history(userId, {
+        clientId: saved.clientId, projectId: saved.projectId,
+        entityType: BillingEntityType.INVOICE, entityId: saved.id, action: 'INVOICE_STATUS_CHANGED',
+        fromState: InvoiceStatus.DRAFT, toState: InvoiceStatus.ISSUED,
+      }, m);
+      emit('billing:invoice-changed', { invoiceId: saved.id, clientId: saved.clientId, status: saved.status });
+      return saved;
+    });
+  }
+
+  /** Cancel an unpaid invoice. Its lines go back to UNBILLED — the work is still billable. */
+  async cancelInvoice(invoiceId: string, reason: string, userId: string): Promise<BillingInvoiceEntity> {
+    if (!reason?.trim()) throw new BadRequestException('Say why the invoice is being cancelled.');
+    return this.inTx(async (m, emit) => {
+      const invoice = await this.lockInvoice(m, invoiceId);
+      if (invoice.status === InvoiceStatus.CANCELLED) return invoice;
+      if (invoice.status === InvoiceStatus.PAID || Number(invoice.paidAmount) > 0) {
+        throw new ConflictException(
+          `${invoice.invoiceNumber} has ₹${Number(invoice.paidAmount)} collected against it. Reverse the payment(s) first.`,
+        );
+      }
+      const entries = await this.lockEntriesByInvoice(m, invoice.id);
+      const fromStatus = invoice.status;
+      invoice.status = InvoiceStatus.CANCELLED;
+      invoice.outstandingAmount = 0;
+      invoice.updatedBy = userId;
+      const saved = await m.save(invoice);
+      for (const e of entries) {
+        e.invoiceId = null;
+        e.state = BillingState.UNBILLED;
+        e.paidAmount = 0;
+        e.outstandingAmount = 0;
+        e.updatedBy = userId;
+        await m.save(e);
+        await this.history(userId, {
+          clientId: e.clientId, projectId: e.projectId, assignmentId: e.assignmentId, assayerId: e.assayerId,
+          entityType: BillingEntityType.ENTRY, entityId: e.id, action: 'ENTRY_UNINVOICED',
+          fromState: BillingState.INVOICED, toState: BillingState.UNBILLED,
+          newValue: { invoiceId: saved.id, invoiceNumber: saved.invoiceNumber }, reason: reason.trim(),
+        }, m);
+      }
+      await this.history(userId, {
+        clientId: saved.clientId, projectId: saved.projectId,
+        entityType: BillingEntityType.INVOICE, entityId: saved.id, action: 'INVOICE_STATUS_CHANGED',
+        fromState: fromStatus, toState: InvoiceStatus.CANCELLED, reason: reason.trim(),
+      }, m);
+      emit('billing:invoice-changed', { invoiceId: saved.id, clientId: saved.clientId, status: saved.status });
+      return saved;
+    });
   }
 
   /**
-   * An assayer's financial statement: what they earned, what we have paid, what
-   * is still owed, and the transaction history behind it.
+   * Record money received against a sent invoice.
    *
-   * Replaces the standalone ledger endpoint, which reported a running balance
-   * that no longer reconciled to anything because nothing kept it in step with
-   * the work actually completed.
+   * The invoice is write-locked before the overpayment guard; idempotent by `paymentReference`.
+   * Collection is spread across the invoice's lines in proportion to their totals (see
+   * `applyInvoiceCollection`) — there is no per-line allocation to get wrong.
+   */
+  async recordPayment(dto: {
+    invoiceId: string;
+    paymentReference: string;
+    method: PaymentMethod;
+    amount: number;
+    receivedDate?: string;
+    notes?: string;
+  }, userId: string): Promise<BillingPaymentEntity> {
+    if (!(Number(dto.amount) > 0)) throw new BadRequestException('Payment amount must be positive.');
+    const amount = round2(Number(dto.amount));
+
+    return this.inTx(async (m, emit) => {
+      const invoice = await this.lockInvoice(m, dto.invoiceId);
+
+      const existing = await m.findOne(BillingPaymentEntity, {
+        where: { invoiceId: invoice.id, paymentReference: dto.paymentReference, direction: PaymentDirection.INBOUND, isActive: true },
+      });
+      if (existing) return existing;
+
+      if (invoice.status !== InvoiceStatus.ISSUED) {
+        throw new BadRequestException(
+          invoice.status === InvoiceStatus.DRAFT
+            ? `${invoice.invoiceNumber} has not been sent yet.`
+            : `${invoice.invoiceNumber} is ${invoice.status.toLowerCase()}.`,
+        );
+      }
+      const remaining = round2(Number(invoice.outstandingAmount) - amount);
+      if (remaining < -MONEY_EPSILON) {
+        throw new BadRequestException(`₹${amount} exceeds the ₹${Number(invoice.outstandingAmount)} outstanding on ${invoice.invoiceNumber}.`);
+      }
+
+      const entries = await this.lockEntriesByInvoice(m, invoice.id);
+
+      const payment = this.paymentRepository.create({
+        invoiceId: invoice.id,
+        paymentReference: dto.paymentReference,
+        direction: PaymentDirection.INBOUND,
+        method: dto.method,
+        amount,
+        currency: invoice.currency,
+        receivedDate: dto.receivedDate ?? new Date().toISOString().slice(0, 10),
+        notes: dto.notes ?? null,
+        createdBy: userId,
+        updatedBy: userId,
+      });
+      const saved = await m.save(payment);
+
+      const fromStatus = invoice.status;
+      invoice.paidAmount = round2(Number(invoice.paidAmount) + amount);
+      await this.applyInvoiceCollection(m, invoice, entries, userId);
+
+      await this.history(userId, {
+        clientId: invoice.clientId, projectId: invoice.projectId,
+        entityType: BillingEntityType.PAYMENT, entityId: saved.id, action: 'PAYMENT_RECEIVED',
+        fromState: fromStatus, toState: invoice.status,
+        newValue: { amount, paymentReference: dto.paymentReference, invoiceId: invoice.id, invoiceNumber: invoice.invoiceNumber },
+        reason: dto.notes ?? null,
+      }, m);
+      emit('billing:invoice-changed', { invoiceId: invoice.id, clientId: invoice.clientId, status: invoice.status, paymentId: saved.id, amount });
+      return saved;
+    });
+  }
+
+  /**
+   * Reverse a payment: the row is retired (`isActive = false`), and the invoice or payable it
+   * settled has its paid total recomputed from the payments that remain. Nothing is deleted and
+   * nothing goes negative — the trail shows the payment, the reversal, and the reason.
+   */
+  async reversePayment(paymentId: string, reason: string, userId: string): Promise<BillingPaymentEntity> {
+    if (!reason?.trim()) throw new BadRequestException('Say why the payment is being reversed.');
+    return this.inTx(async (m, emit) => {
+      // The parent (invoice or payable) is the lock that serialises reversal against recording;
+      // the payment itself is re-read under that lock so two concurrent reversals cannot both
+      // find it active.
+      const probe = await m.findOne(BillingPaymentEntity, { where: { id: paymentId } });
+      if (!probe) throw new NotFoundException(`Payment ${paymentId} not found.`);
+
+      if (probe.direction === PaymentDirection.INBOUND && probe.invoiceId) {
+        const invoice = await this.lockInvoice(m, probe.invoiceId);
+        const payment = await m.findOne(BillingPaymentEntity, { where: { id: paymentId } });
+        if (!payment?.isActive) throw new ConflictException('This payment has already been reversed.');
+        payment.isActive = false;
+        payment.updatedBy = userId;
+        await m.save(payment);
+
+        const entries = await this.lockEntriesByInvoice(m, invoice.id);
+        const sumRows = await m.query(
+          `SELECT COALESCE(SUM(amount), 0) AS paid FROM billing_payments
+            WHERE invoice_id = $1 AND direction = 'INBOUND' AND is_active = true`,
+          [invoice.id],
+        );
+        const fromStatus = invoice.status;
+        invoice.paidAmount = round2(Number(sumRows?.[0]?.paid ?? 0));
+        if (invoice.status === InvoiceStatus.PAID) invoice.status = InvoiceStatus.ISSUED;
+        await this.applyInvoiceCollection(m, invoice, entries, userId);
+        await this.history(userId, {
+          clientId: invoice.clientId, projectId: invoice.projectId,
+          entityType: BillingEntityType.PAYMENT, entityId: payment.id, action: 'PAYMENT_REVERSED',
+          fromState: fromStatus, toState: invoice.status,
+          newValue: { amount: Number(payment.amount), paymentReference: payment.paymentReference, invoiceId: invoice.id },
+          reason: reason.trim(),
+        }, m);
+        emit('billing:invoice-changed', { invoiceId: invoice.id, clientId: invoice.clientId, status: invoice.status, reversedPaymentId: payment.id });
+        return payment;
+      }
+
+      if (probe.direction === PaymentDirection.OUTBOUND && probe.payableId) {
+        const payable = await this.lockPayable(m, probe.payableId);
+        const payment = await m.findOne(BillingPaymentEntity, { where: { id: paymentId } });
+        if (!payment?.isActive) throw new ConflictException('This payment has already been reversed.');
+        payment.isActive = false;
+        payment.updatedBy = userId;
+        await m.save(payment);
+
+        const sumRows = await m.query(
+          `SELECT COALESCE(SUM(amount), 0) AS paid FROM billing_payments
+            WHERE payable_id = $1 AND direction = 'OUTBOUND' AND is_active = true`,
+          [payable.id],
+        );
+        const fromStatus = payable.status;
+        payable.paidAmount = round2(Number(sumRows?.[0]?.paid ?? 0));
+        if (payable.status === AssayerPayableStatus.PAID && Number(payable.totalAmount) - payable.paidAmount > MONEY_EPSILON) {
+          payable.status = AssayerPayableStatus.APPROVED;
+          payable.paidAt = null;
+          payable.paidBy = null;
+        }
+        payable.updatedBy = userId;
+        await m.save(payable);
+        await this.history(userId, {
+          clientId: payable.clientId, projectId: payable.projectId, assignmentId: payable.assignmentId, assayerId: payable.assayerId,
+          entityType: BillingEntityType.PAYMENT, entityId: payment.id, action: 'PAYMENT_REVERSED',
+          fromState: fromStatus, toState: payable.status,
+          newValue: { amount: Number(payment.amount), paymentReference: payment.paymentReference, payableId: payable.id },
+          reason: reason.trim(),
+        }, m);
+        emit('billing:payout-changed', { payableId: payable.id, assayerId: payable.assayerId, status: payable.status, onHold: payable.onHold, reversedPaymentId: payment.id });
+        return payment;
+      }
+
+      throw new ConflictException('This payment is not attached to an invoice or a payable and cannot be reversed.');
+    });
+  }
+
+  /**
+   * Spread what an invoice has collected across its lines, in proportion to each line's total,
+   * and settle the states. Used after every payment and every reversal, so the lines are always
+   * a pure function of the invoice's paid total — never the residue of a sequence of allocations.
+   */
+  private async applyInvoiceCollection(
+    m: EntityManager,
+    invoice: BillingInvoiceEntity,
+    entries: BillingEntryEntity[],
+    userId: string,
+  ): Promise<void> {
+    const total = Number(invoice.total);
+    const paid = round2(Number(invoice.paidAmount));
+    invoice.outstandingAmount = round2(total - paid);
+    if (Math.abs(invoice.outstandingAmount) < MONEY_EPSILON) invoice.outstandingAmount = 0;
+    if (invoice.outstandingAmount <= 0 && invoice.status === InvoiceStatus.ISSUED) invoice.status = InvoiceStatus.PAID;
+    invoice.updatedBy = userId;
+    await m.save(invoice);
+
+    let allocated = 0;
+    for (let i = 0; i < entries.length; i += 1) {
+      const e = entries[i];
+      const lineTotal = Number(e.totalAmount);
+      const share = i === entries.length - 1
+        ? round2(paid - allocated)
+        : (total > 0 ? round2((lineTotal / total) * paid) : 0);
+      const linePaid = Math.min(Math.max(0, share), lineTotal);
+      allocated = round2(allocated + linePaid);
+      e.paidAmount = linePaid;
+      e.outstandingAmount = round2(lineTotal - linePaid);
+      if (e.outstandingAmount < MONEY_EPSILON) e.outstandingAmount = 0;
+      e.state = e.outstandingAmount <= 0 && lineTotal > 0 ? BillingState.PAID : BillingState.INVOICED;
+      e.updatedBy = userId;
+      await m.save(e);
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Reads
+  // -----------------------------------------------------------------------
+
+  /** The one predicate for "what is owed to this assayer", used by every screen that says so. */
+  async assayerTotals(assayerId: string, manager?: EntityManager): Promise<{
+    earned: number; paid: number; outstanding: number; awaitingApproval: number; onHoldOrDisputed: number; payableCount: number;
+  }> {
+    const rows = await (manager ?? this.payableRepository.manager).query(
+      `SELECT COALESCE(SUM(total_amount), 0)                                                         AS earned,
+              COALESCE(SUM(paid_amount), 0)                                                          AS paid,
+              COALESCE(SUM(total_amount - paid_amount) FILTER (WHERE on_hold = false), 0)            AS outstanding,
+              COALESCE(SUM(total_amount) FILTER (WHERE status = 'PENDING' AND on_hold = false), 0)   AS awaiting_approval,
+              COALESCE(SUM(total_amount - paid_amount) FILTER (WHERE on_hold = true), 0)             AS on_hold,
+              COUNT(*)::int                                                                          AS payable_count
+         FROM assayer_payables
+        WHERE assayer_id = $1 AND is_active = true`,
+      [assayerId],
+    );
+    const r = rows?.[0] ?? {};
+    return {
+      earned: round2(Number(r.earned ?? 0)),
+      paid: round2(Number(r.paid ?? 0)),
+      outstanding: round2(Number(r.outstanding ?? 0)),
+      awaitingApproval: round2(Number(r.awaiting_approval ?? 0)),
+      onHoldOrDisputed: round2(Number(r.on_hold ?? 0)),
+      payableCount: Number(r.payable_count ?? 0),
+    };
+  }
+
+  /**
+   * An assayer's financial statement: what they earned, what we have paid, what is still owed,
+   * and the rows behind it. The mobile app's Earnings screen is this, verbatim — it never
+   * computes money of its own.
    */
   async assayerStatement(assayerId: string): Promise<any> {
-    const [payables, payments, assayer] = await Promise.all([
-      this.payableRepository.find({ where: { assayerId }, order: { createdAt: 'DESC' } }),
-      this.paymentRepository.find({
-        where: { assayerId, direction: PaymentDirection.OUTBOUND },
-        order: { createdAt: 'DESC' },
-      }),
-      this.payableRepository.manager.query(
-        `SELECT display_name, assayer_code FROM assayers WHERE id = $1 LIMIT 1`, [assayerId],
-      ),
+    const [totals, payables, payments, assayer] = await Promise.all([
+      this.assayerTotals(assayerId),
+      this.payableRepository.find({ where: { assayerId, isActive: true }, order: { createdAt: 'DESC' } }),
+      this.paymentRepository.find({ where: { assayerId, direction: PaymentDirection.OUTBOUND, isActive: true }, order: { createdAt: 'DESC' } }),
+      this.payableRepository.manager.query(`SELECT display_name, assayer_code FROM assayers WHERE id = $1 LIMIT 1`, [assayerId]),
     ]);
-
-    const earned = round2(payables.reduce((a, p) => a + Number(p.totalAmount), 0));
-    const paid = round2(payables.reduce((a, p) => a + Number(p.paidAmount), 0));
-
     return {
       assayerId,
       assayerName: assayer?.[0]?.display_name ?? null,
       assayerCode: assayer?.[0]?.assayer_code ?? null,
-      totals: {
-        earned,
-        paid,
-        outstanding: round2(earned - paid),
-        awaitingApproval: round2(
-          payables.filter((p) => p.status === AssayerPayableStatus.PENDING).reduce((a, p) => a + Number(p.totalAmount), 0),
-        ),
-        onHoldOrDisputed: round2(
-          payables
-            .filter((p) => p.status === AssayerPayableStatus.ON_HOLD || p.status === AssayerPayableStatus.DISPUTED)
-            .reduce((a, p) => a + Number(p.totalAmount), 0),
-        ),
-        payableCount: payables.length,
-      },
+      totals,
       payables: payables.map((p) => ({
         id: p.id,
         payableNumber: p.payableNumber,
         status: p.status,
+        onHold: p.onHold,
+        holdReason: p.holdReason,
         assignmentId: p.assignmentId,
+        expenseId: p.expenseId,
         baseAmount: Number(p.baseAmount),
         travelAmount: Number(p.travelAmount),
         tdsAmount: Number(p.tdsAmount),
@@ -2734,397 +1300,389 @@ export class BillingEngineService implements OnModuleInit {
     };
   }
 
-  async findPayables(filters: { assayerId?: string; clientId?: string; status?: AssayerPayableStatus } = {}): Promise<AssayerPayableEntity[]> {
-    const where: Record<string, unknown> = {};
+  /** A page of payouts with their labels — what the Payouts tab renders. */
+  async listPayouts(filters: {
+    assayerId?: string; clientId?: string; status?: AssayerPayableStatus; onHold?: boolean;
+    page?: number | string; limit?: number | string;
+  } = {}): Promise<BillingPage<any>> {
+    const w = billingPageWindow(filters.page, filters.limit);
+    const where: Record<string, unknown> = { isActive: true };
     if (filters.assayerId) where.assayerId = filters.assayerId;
     if (filters.clientId) where.clientId = filters.clientId;
     if (filters.status) where.status = filters.status;
-    return this.payableRepository.find({ where, order: { createdAt: 'DESC' } });
+    if (filters.onHold !== undefined) where.onHold = filters.onHold;
+    const [payables, total] = await this.payableRepository.findAndCount({
+      where, order: { createdAt: 'DESC' }, skip: w.skip, take: w.take,
+    });
+    return { items: await this.attachPayableNames(payables), total, page: w.page, limit: w.limit };
   }
 
-  // -----------------------------------------------------------------------
-  // History / audit trail (spec §10)
-  // -----------------------------------------------------------------------
-
-  async getHistory(filters: { clientId?: string; projectId?: string; assignmentId?: string; assayerId?: string; entityType?: BillingEntityType } = {}): Promise<BillingHistoryEntity[]> {
-    return this.historyRepository.find({ where: this.historyWhere(filters), order: { createdAt: 'DESC' }, take: 200 });
+  /**
+   * Completed work not yet on an invoice, grouped by client — the left-hand side of the Invoices
+   * tab. Held lines are listed too (greyed by the UI) so finance can see why a client's total is
+   * short; the create call refuses them.
+   */
+  async listInvoiceable(filters: { clientId?: string } = {}): Promise<{
+    clients: Array<{ clientId: string; clientName: string; total: number; count: number; lines: any[] }>;
+    total: number;
+  }> {
+    const rows = await this.entryRepository.manager.query(
+      `SELECT e.id, e.entry_number, e.client_id, c.name AS client_name, e.project_id, p.name AS project_name,
+              e.assignment_id, a.assignment_number, b.name AS branch_name, e.assayer_id, s.display_name AS assayer_name,
+              e.service_date, e.on_hold, e.hold_reason, e.base_amount, e.travel_amount, e.adjustment_amount,
+              e.taxable_amount, e.tax_amount, e.tds_amount, e.total_amount
+         FROM billing_entries e
+         JOIN clients c ON c.id = e.client_id
+         LEFT JOIN projects p ON p.id = e.project_id
+         LEFT JOIN assignments a ON a.id = e.assignment_id
+         LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
+         LEFT JOIN branches b ON b.id = pb.branch_id
+         LEFT JOIN assayers s ON s.id = e.assayer_id
+        WHERE e.is_active = true AND e.state = 'UNBILLED'
+          AND ($1::uuid IS NULL OR e.client_id = $1::uuid)
+        ORDER BY c.name ASC, e.service_date DESC NULLS LAST, e.created_at DESC
+        LIMIT 2000`,
+      [filters.clientId ?? null],
+    );
+    const byClient = new Map<string, { clientId: string; clientName: string; total: number; count: number; lines: any[] }>();
+    for (const r of rows) {
+      const g = byClient.get(r.client_id) ?? { clientId: r.client_id, clientName: r.client_name, total: 0, count: 0, lines: [] as any[] };
+      const line = {
+        entryId: r.id,
+        entryNumber: r.entry_number,
+        assignmentId: r.assignment_id,
+        assignmentNumber: r.assignment_number,
+        projectId: r.project_id,
+        projectName: r.project_name,
+        branchName: r.branch_name,
+        assayerId: r.assayer_id,
+        assayerName: r.assayer_name,
+        serviceDate: r.service_date,
+        onHold: !!r.on_hold,
+        holdReason: r.hold_reason,
+        baseAmount: Number(r.base_amount),
+        travelAmount: Number(r.travel_amount),
+        adjustmentAmount: Number(r.adjustment_amount),
+        taxableAmount: Number(r.taxable_amount),
+        taxAmount: Number(r.tax_amount),
+        tdsAmount: Number(r.tds_amount),
+        totalAmount: Number(r.total_amount),
+      };
+      g.lines.push(line);
+      if (!line.onHold) { g.total = round2(g.total + line.totalAmount); g.count += 1; }
+      byClient.set(r.client_id, g);
+    }
+    return { clients: [...byClient.values()], total: rows.length };
   }
 
-  private historyWhere(filters: { clientId?: string; projectId?: string; assignmentId?: string; assayerId?: string; entityType?: BillingEntityType }): Record<string, unknown> {
+  /** Client lines with their labels — the export and the assignment filter read this. */
+  async listClientLines(filters: {
+    clientId?: string; projectId?: string; assignmentId?: string; assayerId?: string; state?: BillingState; onHold?: boolean;
+  } = {}): Promise<any[]> {
     const where: Record<string, unknown> = {};
     if (filters.clientId) where.clientId = filters.clientId;
     if (filters.projectId) where.projectId = filters.projectId;
     if (filters.assignmentId) where.assignmentId = filters.assignmentId;
     if (filters.assayerId) where.assayerId = filters.assayerId;
-    if (filters.entityType) where.entityType = filters.entityType;
+    if (filters.state) where.state = filters.state;
+    if (filters.onHold !== undefined) where.onHold = filters.onHold;
+    const entries = await this.entryRepository.find({ where, order: { createdAt: 'DESC' } });
+    return this.attachEntryNames(entries);
+  }
+
+  async findInvoices(filters: { clientId?: string; projectId?: string; status?: InvoiceStatus } = {}): Promise<BillingInvoiceEntity[]> {
+    return this.invoiceRepository.find({ where: this.invoiceWhere(filters), relations: ['entries'], order: { createdAt: 'DESC' } });
+  }
+
+  private invoiceWhere(filters: { clientId?: string; projectId?: string; status?: InvoiceStatus }): Record<string, unknown> {
+    const where: Record<string, unknown> = {};
+    if (filters.clientId) where.clientId = filters.clientId;
+    if (filters.projectId) where.projectId = filters.projectId;
+    if (filters.status) where.status = filters.status;
     return where;
   }
 
-  /**
-   * One clamped page of the audit trail, plus the true number of matching events.
-   *
-   * This list was already bounded at 200 rows, so it was never the memory problem the others
-   * were — but a fixed `take` with no `total` and no way to reach row 201 is a silent truncation
-   * rather than a page: the trail simply stopped, with nothing on screen to say more existed.
-   */
-  async getHistoryPage(
-    filters: { clientId?: string; projectId?: string; assignmentId?: string; assayerId?: string; entityType?: BillingEntityType; page?: number | string; limit?: number | string } = {},
-  ): Promise<BillingPage<BillingHistoryEntity>> {
+  /** One page of invoices, with a line count and the client's name, and never the lines. */
+  async findInvoicesPage(
+    filters: { clientId?: string; projectId?: string; status?: InvoiceStatus; page?: number | string; limit?: number | string } = {},
+  ): Promise<BillingPage<BillingInvoiceEntity & { entryCount: number; clientName: string | null }>> {
     const w = billingPageWindow(filters.page, filters.limit);
-    const [items, total] = await this.historyRepository.findAndCount({
-      where: this.historyWhere(filters),
-      order: { createdAt: 'DESC' },
-      skip: w.skip,
-      take: w.take,
+    const [invoices, total] = await this.invoiceRepository.findAndCount({
+      where: this.invoiceWhere(filters), order: { createdAt: 'DESC' }, skip: w.skip, take: w.take,
     });
-    return { items, total, page: w.page, limit: w.limit };
+    const ids = invoices.map((i) => i.id);
+    const clientIds = [...new Set(invoices.map((i) => i.clientId))];
+    const [countRows, clientRows] = await Promise.all([
+      ids.length
+        ? this.invoiceRepository.manager.query(`SELECT invoice_id, COUNT(*) AS n FROM billing_entries WHERE invoice_id = ANY($1) GROUP BY invoice_id`, [ids])
+        : [],
+      clientIds.length
+        ? this.invoiceRepository.manager.query(`SELECT id, name FROM clients WHERE id = ANY($1)`, [clientIds])
+        : [],
+    ]);
+    const countById = new Map<string, number>(countRows.map((r: any) => [r.invoice_id, Number(r.n)]));
+    const clientName = new Map<string, string>(clientRows.map((r: any) => [r.id, r.name]));
+    return {
+      items: invoices.map((i) => Object.assign(i, { entryCount: countById.get(i.id) ?? 0, clientName: clientName.get(i.clientId) ?? null })),
+      total, page: w.page, limit: w.limit,
+    };
   }
 
-  // -----------------------------------------------------------------------
-  // Dashboard & reports (spec §11)
-  // -----------------------------------------------------------------------
-
-  /**
-   * Receivables ageing, computed in SQL over the whole invoice book.
-   *
-   * The buckets are the ones {@link ageInvoices} produced row by row in JS. The day count is
-   * reproduced exactly: `daysOverdue` measures from UTC midnight on the due date to now and
-   * treats anything not yet past due — and anything fully paid — as `current`.
-   */
-  private static readonly AGEING_SELECT = `
-    COALESCE(SUM(outstanding_amount) FILTER (WHERE outstanding_amount > 0 AND (due_date IS NULL OR $OD <= 0)), 0) AS current,
-    COALESCE(SUM(outstanding_amount) FILTER (WHERE outstanding_amount > 0 AND due_date IS NOT NULL AND $OD > 0  AND $OD <= 30), 0) AS d1_30,
-    COALESCE(SUM(outstanding_amount) FILTER (WHERE outstanding_amount > 0 AND due_date IS NOT NULL AND $OD > 30 AND $OD <= 60), 0) AS d31_60,
-    COALESCE(SUM(outstanding_amount) FILTER (WHERE outstanding_amount > 0 AND due_date IS NOT NULL AND $OD > 60 AND $OD <= 90), 0) AS d61_90,
-    COALESCE(SUM(outstanding_amount) FILTER (WHERE outstanding_amount > 0 AND due_date IS NOT NULL AND $OD > 90), 0) AS d90_plus
-  `.replace(/\$OD/g, `FLOOR(EXTRACT(EPOCH FROM (NOW() - ((due_date::text || ' 00:00:00+00')::timestamptz))) / 86400)`);
-
-  /**
-   * The billing overview, assembled from SQL aggregates rather than from the table.
-   *
-   * It previously loaded EVERY billing entry, EVERY invoice and EVERY payable into the process
-   * and reduced them in JavaScript — five `Array.filter` passes over the entry list alone. On
-   * the scale book that is 85,733 entries hydrated into entity objects to produce fourteen
-   * scalars. Every figure below is now one grouped pass in Postgres over an index, and the
-   * numbers are unchanged: the same columns, the same state predicates, the same rounding.
-   *
-   * The scoping asymmetry is preserved deliberately, not overlooked. A client-scoped call has
-   * never filtered on `is_active` while the org-wide call always has, so a soft-deleted entry
-   * counts towards one dashboard and not the other. That is a real defect, but correcting it
-   * here would move numbers finance reads, which this change is explicitly not allowed to do —
-   * it is called out in the handover instead.
-   */
-  async dashboard(clientId?: string): Promise<any> {
-    const mgr = this.entryRepository.manager;
-    // Client-scoped: filter on the client and nothing else. Org-wide: active rows only.
-    const scope = (col = 'client_id') => (clientId ? `${col} = $1` : 'is_active = true');
-    const params = clientId ? [clientId] : [];
-    const unbilled = UNBILLED_STATES.map((s) => `'${s}'`).join(',');
-
-    const [entryRows, levelRows, payableRows, invoiceRows, ageRows, conflictRows, history] = await Promise.all([
-      mgr.query(`
-        SELECT COALESCE(SUM(billed_amount), 0)      AS billed,
-               COALESCE(SUM(paid_amount), 0)        AS paid,
-               COALESCE(SUM(outstanding_amount), 0) AS outstanding,
-               COALESCE(SUM(total_amount) FILTER (WHERE state IN (${unbilled})), 0)                     AS pending,
-               COALESCE(SUM(disputed_amount) FILTER (WHERE state = '${BillingState.DISPUTED}'), 0)      AS disputed,
-               COALESCE(SUM(total_amount) FILTER (WHERE state IN ('${BillingState.CANCELLED}','${BillingState.ADJUSTED}')), 0) AS cancelled_adjusted,
-               COALESCE(SUM(taxable_amount), 0)     AS revenue
-          FROM billing_entries WHERE ${scope()}`, params),
-
-      mgr.query(`
-        SELECT level,
-               COALESCE(SUM(billed_amount), 0)      AS billed,
-               COALESCE(SUM(paid_amount), 0)        AS paid,
-               COALESCE(SUM(outstanding_amount), 0) AS outstanding
-          FROM billing_entries WHERE ${scope()} GROUP BY level`, params),
-
-      mgr.query(`
-        SELECT COALESCE(SUM(total_amount) FILTER (WHERE status = '${AssayerPayableStatus.PENDING}'), 0)  AS pending,
-               COALESCE(SUM(total_amount) FILTER (WHERE status = '${AssayerPayableStatus.APPROVED}'), 0) AS approved,
-               COALESCE(SUM(total_amount) FILTER (WHERE status = '${AssayerPayableStatus.PAID}'), 0)     AS paid,
-               COALESCE(SUM(total_amount) FILTER (WHERE status = '${AssayerPayableStatus.DISPUTED}'), 0) AS disputed,
-               COALESCE(SUM(total_amount) FILTER (WHERE status = '${AssayerPayableStatus.ON_HOLD}'), 0)  AS on_hold,
-               COALESCE(SUM(base_amount + travel_amount), 0)                                            AS assayer_cost
-          FROM assayer_payables WHERE ${scope()}`, params),
-
-      mgr.query(`
-        SELECT COUNT(*)::int AS total,
-               COUNT(*) FILTER (WHERE status IN ('${InvoiceStatus.ISSUED}','${InvoiceStatus.PARTIALLY_PAID}'))::int AS issued,
-               COUNT(*) FILTER (WHERE status = '${InvoiceStatus.PAID}')::int                                        AS paid,
-               COALESCE(SUM(outstanding_amount), 0) AS outstanding
-          FROM billing_invoices WHERE ${scope()}`, params),
-
-      mgr.query(`SELECT ${BillingEngineService.AGEING_SELECT} FROM billing_invoices WHERE ${scope()}`, params),
-
-      mgr.query(`SELECT COUNT(*)::int AS n FROM billing_conflicts WHERE status = '${BillingConflictStatus.OPEN}'`),
-
-      this.historyRepository.find({ where: clientId ? { clientId } : {}, order: { createdAt: 'DESC' }, take: 50 }),
+  async getInvoice(invoiceId: string): Promise<any> {
+    const invoice = await this.invoiceRepository.findOne({ where: { id: invoiceId }, relations: ['entries', 'payments'] });
+    if (!invoice) throw new NotFoundException(`Invoice ${invoiceId} not found.`);
+    const [entries, clientRows] = await Promise.all([
+      this.attachEntryNames(invoice.entries ?? []),
+      this.invoiceRepository.manager.query(`SELECT name FROM clients WHERE id = $1`, [invoice.clientId]),
     ]);
+    return { ...invoice, entries, clientName: clientRows?.[0]?.name ?? null, payments: (invoice.payments ?? []).filter((p) => p.isActive) };
+  }
 
+  /** Everything money-related about one assignment — the one line the assignment detail shows. */
+  async assignmentMoneyLine(assignmentId: string): Promise<AssignmentMoneyLine> {
+    const a = await this.assignmentRepository.findOne({ where: { id: assignmentId } });
+    if (!a) throw new NotFoundException(`Assignment ${assignmentId} not found.`);
+    const [entry, payables, history] = await Promise.all([
+      this.entryRepository.findOne({ where: { assignmentId } }),
+      this.payableRepository.find({ where: { assignmentId, isActive: true }, order: { createdAt: 'ASC' } }),
+      this.historyRepository.find({ where: { assignmentId }, order: { createdAt: 'DESC' }, take: 50 }),
+    ]);
+    const payable = payables.find((p) => !p.expenseId) ?? null;
+    const reimbursements = payables.filter((p) => !!p.expenseId);
+    const payableIds = payables.map((p) => p.id);
+    const [invoice, outbound, inbound] = await Promise.all([
+      entry?.invoiceId ? this.invoiceRepository.findOne({ where: { id: entry.invoiceId } }) : null,
+      payableIds.length ? this.paymentRepository.find({ where: { payableId: In(payableIds), isActive: true }, order: { createdAt: 'DESC' } }) : [],
+      entry?.invoiceId ? this.paymentRepository.find({ where: { invoiceId: entry.invoiceId, isActive: true }, order: { createdAt: 'DESC' } }) : [],
+    ]);
+    const fee = assignmentFee(a);
+    return {
+      assignmentId,
+      assignmentNumber: a.assignmentNumber ?? null,
+      assignmentStatus: a.status ?? null,
+      booked: !!(entry && payable),
+      fee: fee.source === 'NONE' ? null : fee,
+      payable: payable as any,
+      reimbursements: reimbursements as any,
+      entry: entry as any,
+      invoice: invoice
+        ? { id: invoice.id, invoiceNumber: invoice.invoiceNumber, status: invoice.status, issueDate: invoice.issueDate, dueDate: invoice.dueDate, total: Number(invoice.total), paidAmount: Number(invoice.paidAmount), outstandingAmount: Number(invoice.outstandingAmount) }
+        : null,
+      payments: [...outbound, ...inbound] as any,
+      history: history as any,
+    };
+  }
+
+  /**
+   * The finance overview — every headline figure, from one endpoint, off one set of rows. Each
+   * figure is one grouped pass in Postgres; the attention list is derived, never stored.
+   */
+  async overview(): Promise<BillingOverview> {
+    const mgr = this.entryRepository.manager;
     const n = (v: any) => round2(Number(v ?? 0));
+    const [payRows, entryRows, invRows, ageRows, cashRows, clientRows, history, attention] = await Promise.all([
+      mgr.query(`
+        SELECT COALESCE(SUM(total_amount - paid_amount) FILTER (WHERE status = 'PENDING'  AND on_hold = false), 0) AS due,
+               COALESCE(SUM(total_amount - paid_amount) FILTER (WHERE status = 'APPROVED' AND on_hold = false), 0) AS approved,
+               COALESCE(SUM(paid_amount), 0)                                                                    AS paid,
+               COALESCE(SUM(total_amount - paid_amount) FILTER (WHERE on_hold = true), 0)                        AS held,
+               COUNT(*) FILTER (WHERE status = 'PENDING'  AND on_hold = false)::int                              AS due_count,
+               COUNT(*) FILTER (WHERE status = 'APPROVED' AND on_hold = false)::int                              AS approved_count,
+               COUNT(*) FILTER (WHERE on_hold = true)::int                                                       AS held_count,
+               COALESCE(SUM(base_amount + travel_amount), 0)                                                     AS gross_cost,
+               COALESCE(SUM(tds_amount), 0)                                                                      AS tds_from_assayers
+          FROM assayer_payables WHERE is_active = true`),
+      mgr.query(`
+        SELECT COALESCE(SUM(total_amount) FILTER (WHERE state = 'UNBILLED' AND on_hold = false), 0) AS unbilled,
+               COALESCE(SUM(total_amount) FILTER (WHERE on_hold = true AND state <> 'CANCELLED'), 0) AS held,
+               COALESCE(SUM(taxable_amount) FILTER (WHERE state <> 'CANCELLED'), 0)                AS revenue,
+               COALESCE(SUM(tax_amount) FILTER (WHERE state <> 'CANCELLED'), 0)                    AS gst,
+               COALESCE(SUM(tds_amount) FILTER (WHERE state <> 'CANCELLED'), 0)                    AS tds_by_clients
+          FROM billing_entries WHERE is_active = true`),
+      mgr.query(`
+        SELECT COALESCE(SUM(total) FILTER (WHERE status IN ('ISSUED','PAID')), 0)            AS invoiced,
+               COALESCE(SUM(paid_amount) FILTER (WHERE status <> 'CANCELLED'), 0)            AS collected,
+               COALESCE(SUM(outstanding_amount) FILTER (WHERE status = 'ISSUED'), 0)         AS outstanding
+          FROM billing_invoices WHERE is_active = true`),
+      mgr.query(`SELECT ${BillingEngineService.AGEING_SELECT} FROM billing_invoices WHERE is_active = true AND status = 'ISSUED'`),
+      mgr.query(`
+        SELECT COALESCE(SUM(amount) FILTER (WHERE direction = 'INBOUND'), 0)  AS cash_in,
+               COALESCE(SUM(amount) FILTER (WHERE direction = 'OUTBOUND'), 0) AS cash_out
+          FROM billing_payments WHERE is_active = true`),
+      mgr.query(`
+        SELECT c.id AS client_id, c.name AS client_name,
+               (SELECT cc.default_base_fee FROM client_configurations cc
+                 WHERE cc.client_id = c.id AND cc.is_active = true
+                 ORDER BY cc.effective_from DESC NULLS LAST LIMIT 1) AS client_rate,
+               COALESCE(e.unbilled, 0) AS unbilled, COALESCE(e.revenue, 0) AS revenue, COALESCE(e.assignment_count, 0) AS assignment_count,
+               COALESCE(i.invoiced, 0) AS invoiced, COALESCE(i.outstanding, 0) AS outstanding,
+               COALESCE(p.cost, 0) AS cost
+          FROM clients c
+          LEFT JOIN (SELECT client_id,
+                            SUM(total_amount) FILTER (WHERE state = 'UNBILLED' AND on_hold = false) AS unbilled,
+                            SUM(taxable_amount) FILTER (WHERE state <> 'CANCELLED') AS revenue,
+                            COUNT(*) AS assignment_count
+                       FROM billing_entries WHERE is_active = true GROUP BY client_id) e ON e.client_id = c.id
+          LEFT JOIN (SELECT client_id,
+                            SUM(total) FILTER (WHERE status IN ('ISSUED','PAID')) AS invoiced,
+                            SUM(outstanding_amount) FILTER (WHERE status = 'ISSUED') AS outstanding
+                       FROM billing_invoices WHERE is_active = true GROUP BY client_id) i ON i.client_id = c.id
+          LEFT JOIN (SELECT client_id, SUM(base_amount + travel_amount) AS cost
+                       FROM assayer_payables WHERE is_active = true GROUP BY client_id) p ON p.client_id = c.id
+         WHERE c.is_active = true AND (e.client_id IS NOT NULL OR i.client_id IS NOT NULL OR p.client_id IS NOT NULL)
+         ORDER BY c.name`),
+      this.historyRepository.find({ order: { createdAt: 'DESC' }, take: 30 }),
+      this.attentionItems(),
+    ]);
+    const p = payRows[0] ?? {};
     const e = entryRows[0] ?? {};
-    const p = payableRows[0] ?? {};
-    const inv = invoiceRows[0] ?? {};
+    const inv = invRows[0] ?? {};
     const ag = ageRows[0] ?? {};
-
-    const billed = n(e.billed);
-    const paid = n(e.paid);
-    const outstanding = n(e.outstanding);
-    // The one definition of unbilled — the shared UNBILLED_STATES, which every other finance
-    // figure uses. This inlined a 5-state list that omitted APPROVED, so the moment finance
-    // approved an entry the Overview KPI dropped it while the Finance tab still counted it: the
-    // same rupees, two numbers, on two tabs of one screen.
-    const pending = n(e.pending);
-    const disputed = n(e.disputed);
-    const cancelledAdjusted = n(e.cancelled_adjusted);
-
-    // Every level is present even when it has no rows: the client iterates `Object.keys(byLevel)`
-    // to lay out its columns, so a level dropping out because nothing was billed at it would
-    // silently remove a column rather than show a zero.
-    const levelById = new Map(levelRows.map((r: any) => [r.level, r]));
-    const byLevel: Record<string, { billed: number; paid: number; outstanding: number }> = {};
-    for (const lvl of Object.values(BillingLevel)) {
-      const row: any = levelById.get(lvl) ?? {};
-      byLevel[lvl] = { billed: n(row.billed), paid: n(row.paid), outstanding: n(row.outstanding) };
-    }
-
-    const payableTotals = {
-      pending: n(p.pending),
-      approved: n(p.approved),
-      paid: n(p.paid),
-      disputed: n(p.disputed),
-      onHold: n(p.on_hold),
-    };
-
-    const invoiceTotals = {
-      total: Number(inv.total ?? 0),
-      issued: Number(inv.issued ?? 0),
-      paid: Number(inv.paid ?? 0),
-      outstanding: n(inv.outstanding),
-    };
-
-    // Net revenue (taxable value, ex-GST) against gross assayer cost (fee + travel).
-    // GST is a pass-through and TDS a withheld tax credit, so neither side is netted.
-    const assayerCost = n(p.assayer_cost);
+    const cash = cashRows[0] ?? {};
     const revenue = n(e.revenue);
-
+    const cost = n(p.gross_cost);
     return {
       currency: 'INR',
-      totals: {
-        billed, paid, outstanding, pending, disputed, cancelledAdjusted,
-        // Revenue earned in the field but not yet on an invoice — the number that
-        // shows how much cash is stuck in the billing pipeline.
-        unbilledRevenue: pending,
-        revenue,
-        assayerCost,
-        ...margin(revenue, assayerCost),
+      payouts: {
+        due: n(p.due), approved: n(p.approved), paid: n(p.paid), held: n(p.held),
+        dueCount: Number(p.due_count ?? 0), approvedCount: Number(p.approved_count ?? 0), heldCount: Number(p.held_count ?? 0),
       },
-      aging: {
-        current: n(ag.current),
-        d1_30: n(ag.d1_30),
-        d31_60: n(ag.d31_60),
-        d61_90: n(ag.d61_90),
-        d90_plus: n(ag.d90_plus),
+      receivables: {
+        unbilled: n(e.unbilled), invoiced: n(inv.invoiced), collected: n(inv.collected), outstanding: n(inv.outstanding), held: n(e.held),
+        aging: { current: n(ag.current), d1_30: n(ag.d1_30), d31_60: n(ag.d31_60), d61_90: n(ag.d61_90), d90_plus: n(ag.d90_plus) },
       },
-      byLevel,
-      payable: payableTotals,
-      invoices: invoiceTotals,
-      openConflicts: Number(conflictRows[0]?.n ?? 0),
+      margin: { revenue, cost, ...margin(revenue, cost) },
+      tax: { gstCollected: n(e.gst), tdsWithheldByClients: n(e.tds_by_clients), tdsWithheldFromAssayers: n(p.tds_from_assayers) },
+      cashflow: { in: n(cash.cash_in), out: n(cash.cash_out), net: round2(n(cash.cash_in) - n(cash.cash_out)) },
+      attention,
+      byClient: clientRows.map((r: any) => ({
+        clientId: r.client_id,
+        clientName: r.client_name,
+        clientRate: r.client_rate != null && Number(r.client_rate) > 0 ? Number(r.client_rate) : null,
+        unbilled: n(r.unbilled), invoiced: n(r.invoiced), outstanding: n(r.outstanding),
+        revenue: n(r.revenue), cost: n(r.cost), margin: round2(n(r.revenue) - n(r.cost)),
+        assignmentCount: Number(r.assignment_count ?? 0),
+      })),
       recentActivity: history.map((h) => ({
-        id: h.id,
-        action: h.action,
-        entityType: h.entityType,
-        entityId: h.entityId,
-        fromState: h.fromState,
-        toState: h.toState,
-        reason: h.reason,
-        occurredAt: h.createdAt,
-        userName: h.userName,
+        id: h.id, action: h.action, entityType: h.entityType, entityId: h.entityId,
+        fromState: h.fromState, toState: h.toState, reason: h.reason,
+        occurredAt: h.createdAt as unknown as string, userName: h.userName,
       })),
     };
   }
 
   /**
-   * Full billing picture for a client, as the business actually reads it:
-   * Client → Projects → Assignments, each with its own money and state, plus the
-   * assayer cost booked against the same work.
-   *
-   * The previous version grouped by a bare `projectId` string with no names, so
-   * the report was a list of UUIDs and unusable for answering "which project is
-   * unbilled?" without cross-referencing another screen.
+   * What finance should look at. Each kind is a query over the live rows — there is no
+   * "conflict" object to raise, resolve, or forget. Fix the cause and the item disappears.
    */
-  async clientReport(clientId: string): Promise<any> {
-    await this.ensureClient(clientId);
-    const [entries, invoices, history, payables] = await Promise.all([
-      this.findEntries({ clientId }),
-      this.findInvoices({ clientId }),
-      this.getHistory({ clientId }),
-      this.findPayables({ clientId }),
+  private async attentionItems(): Promise<BillingAttentionItem[]> {
+    const mgr = this.entryRepository.manager;
+    const [unbooked, unsettled, feeChanged, heldPayables, heldLines, overdue] = await Promise.all([
+      mgr.query(`
+        SELECT a.id, a.assignment_number, c.name AS client_name, s.display_name AS assayer_name,
+               (e.id IS NULL) AS no_entry, (p.id IS NULL) AS no_payable,
+               CASE WHEN a.agreed_fee > 0 THEN a.agreed_fee WHEN a.proposed_fee > 0 THEN a.proposed_fee ELSE 0 END AS fee
+          FROM assignments a
+          LEFT JOIN billing_entries e ON e.assignment_id = a.id
+          LEFT JOIN assayer_payables p ON p.assignment_id = a.id AND p.expense_id IS NULL
+          LEFT JOIN projects pr ON pr.id = a.project_id
+          LEFT JOIN clients c ON c.id = pr.client_id
+          LEFT JOIN assayers s ON s.id = a.assayer_id
+         WHERE a.status = 'COMPLETED' AND a.is_active = true AND (e.id IS NULL OR p.id IS NULL)
+         ORDER BY a.completion_date DESC NULLS LAST LIMIT ${ATTENTION_LIMIT}`).catch(() => []),
+      mgr.query(`
+        SELECT p.id, p.assignment_id, a.assignment_number, s.display_name AS assayer_name, p.total_amount
+          FROM assayer_payables p
+          JOIN assignments a ON a.id = p.assignment_id
+          LEFT JOIN assayers s ON s.id = p.assayer_id
+         WHERE p.is_active = true AND p.expense_id IS NULL AND (p.rate_snapshot->>'settled') = 'false'
+         ORDER BY p.created_at DESC LIMIT ${ATTENTION_LIMIT}`).catch(() => []),
+      mgr.query(`
+        SELECT p.id, p.assignment_id, a.assignment_number, s.display_name AS assayer_name,
+               (p.rate_snapshot->>'feeAmount')::numeric AS booked_fee,
+               CASE WHEN a.agreed_fee > 0 THEN a.agreed_fee WHEN a.proposed_fee > 0 THEN a.proposed_fee ELSE 0 END AS current_fee
+          FROM assayer_payables p
+          JOIN assignments a ON a.id = p.assignment_id
+          LEFT JOIN assayers s ON s.id = p.assayer_id
+         WHERE p.is_active = true AND p.expense_id IS NULL
+           AND (p.rate_snapshot->>'feeAmount') IS NOT NULL
+           AND (p.rate_snapshot->>'feeAmount')::numeric <>
+               CASE WHEN a.agreed_fee > 0 THEN a.agreed_fee WHEN a.proposed_fee > 0 THEN a.proposed_fee ELSE 0 END
+         ORDER BY p.created_at DESC LIMIT ${ATTENTION_LIMIT}`).catch(() => []),
+      mgr.query(`
+        SELECT p.id, p.assignment_id, a.assignment_number, s.display_name AS assayer_name, p.total_amount - p.paid_amount AS amount, p.hold_reason
+          FROM assayer_payables p
+          LEFT JOIN assignments a ON a.id = p.assignment_id
+          LEFT JOIN assayers s ON s.id = p.assayer_id
+         WHERE p.is_active = true AND p.on_hold = true
+         ORDER BY p.updated_at DESC LIMIT ${ATTENTION_LIMIT}`).catch(() => []),
+      mgr.query(`
+        SELECT e.id, e.assignment_id, a.assignment_number, c.name AS client_name, e.total_amount, e.hold_reason
+          FROM billing_entries e
+          LEFT JOIN assignments a ON a.id = e.assignment_id
+          LEFT JOIN clients c ON c.id = e.client_id
+         WHERE e.is_active = true AND e.on_hold = true
+         ORDER BY e.updated_at DESC LIMIT ${ATTENTION_LIMIT}`).catch(() => []),
+      mgr.query(`
+        SELECT i.id, i.invoice_number, c.name AS client_name, i.outstanding_amount, i.due_date,
+               (CURRENT_DATE - i.due_date) AS days_overdue
+          FROM billing_invoices i
+          LEFT JOIN clients c ON c.id = i.client_id
+         WHERE i.is_active = true AND i.status = 'ISSUED' AND i.due_date < CURRENT_DATE AND i.outstanding_amount > 0
+         ORDER BY i.due_date ASC LIMIT ${ATTENTION_LIMIT}`).catch(() => []),
     ]);
-
-    const names = await this.resolveNames(entries, payables);
-
-    // Assignment-level rollup, nested under its project.
-    const byProject = new Map<string, any>();
-    for (const e of entries) {
-      const pid = e.projectId ?? 'unassigned';
-      if (!byProject.has(pid)) {
-        byProject.set(pid, {
-          projectId: e.projectId,
-          projectName: names.projects.get(pid) ?? (e.projectId ? 'Unknown project' : 'Not project-linked'),
-          projectNumber: names.projectNumbers.get(pid) ?? null,
-          billed: 0, paid: 0, outstanding: 0, pending: 0, entryCount: 0,
-          assignments: new Map<string, any>(),
-        });
-      }
-      const p = byProject.get(pid);
-      p.billed = round2(p.billed + Number(e.billedAmount));
-      p.paid = round2(p.paid + Number(e.paidAmount));
-      p.outstanding = round2(p.outstanding + Number(e.outstandingAmount));
-      if (UNBILLED_STATES.includes(e.state)) p.pending = round2(p.pending + Number(e.totalAmount));
-      p.entryCount += 1;
-
-      if (e.assignmentId) {
-        const cur = p.assignments.get(e.assignmentId) ?? {
-          assignmentId: e.assignmentId,
-          assignmentNumber: names.assignments.get(e.assignmentId) ?? null,
-          branchName: names.branches.get(e.assignmentId) ?? null,
-          assayerId: e.assayerId,
-          assayerName: e.assayerId ? names.assayers.get(e.assayerId) ?? null : null,
-          revenue: 0, billedToClient: 0, cost: 0, margin: 0, state: e.state, entryIds: [] as string[],
-        };
-        // Margin is measured on net revenue (the taxable value we actually earn).
-        // GST is collected on the government's behalf and TDS is a withheld tax
-        // credit, so neither belongs in a profitability figure.
-        cur.revenue = round2(cur.revenue + entryRevenue(e));
-        cur.billedToClient = round2(cur.billedToClient + Number(e.totalAmount));
-        cur.entryIds.push(e.id);
-        cur.state = e.state;
-        p.assignments.set(e.assignmentId, cur);
-      }
+    const items: BillingAttentionItem[] = [];
+    for (const r of unbooked) {
+      const missing = r.no_entry && r.no_payable ? 'no payout and no client line' : r.no_entry ? 'no client line' : 'no payout';
+      items.push({
+        kind: 'UNBOOKED', assignmentId: r.id, assignmentNumber: r.assignment_number, clientName: r.client_name, assayerName: r.assayer_name,
+        amount: Number(r.fee ?? 0) || null,
+        detail: Number(r.fee ?? 0) > 0 ? `Completed but ${missing} — run Reconcile.` : 'Completed with no fee on the assignment — nothing to book.',
+      });
     }
-
-    // Book the assayer cost against its assignment so per-job margin is visible —
-    // the reason this platform exists is cost per audit, which needs both legs.
-    for (const py of payables) {
-      if (!py.assignmentId) continue;
-      for (const p of byProject.values()) {
-        const asn = p.assignments.get(py.assignmentId);
-        if (asn) {
-          // Gross cost: fee + travel. The TDS we withhold is still money owed on
-          // the assayer's behalf, so netting it out would understate what the job costs.
-          asn.cost = round2(asn.cost + payableCost(py));
-          asn.payableStatus = py.status;
-        }
-      }
+    for (const r of unsettled) {
+      items.push({
+        kind: 'UNSETTLED_FEE', payableId: r.id, assignmentId: r.assignment_id, assignmentNumber: r.assignment_number, assayerName: r.assayer_name,
+        amount: Number(r.total_amount), detail: 'Booked from the proposed fee — no fee was ever agreed.',
+      });
     }
-
-    const projects = Array.from(byProject.values()).map((p) => {
-      const assignments = Array.from(p.assignments.values()).map((a: any) => ({
-        ...a,
-        ...margin(a.revenue, a.cost),
-      }));
-      const cost = round2(assignments.reduce((s: number, a: any) => s + a.cost, 0));
-      const revenue = round2(assignments.reduce((s: number, a: any) => s + a.revenue, 0));
-      return {
-        ...p,
-        assignments,
-        cost,
-        revenue,
-        margin: round2(revenue - cost),
-        marginPct: revenue > 0 ? round2(((revenue - cost) / revenue) * 100) : null,
-      };
-    });
-
-    // Net revenue (ex-GST) against gross assayer cost — see the per-assignment note.
-    const totalRevenue = totalEntryRevenue(entries);
-    const totalCost = totalPayableCost(payables);
-
-    return {
-      clientId,
-      clientName: names.clients.get(clientId) ?? null,
-      totals: {
-        billed: round2(entries.reduce((a, e) => a + Number(e.billedAmount), 0)),
-        paid: round2(entries.reduce((a, e) => a + Number(e.paidAmount), 0)),
-        outstanding: round2(entries.reduce((a, e) => a + Number(e.outstandingAmount), 0)),
-        pending: round2(entries.filter((e) => UNBILLED_STATES.includes(e.state)).reduce((a, e) => a + Number(e.totalAmount), 0)),
-        revenue: totalRevenue,
-        assayerCost: totalCost,
-        ...margin(totalRevenue, totalCost),
-        entryCount: entries.length,
-      },
-      projects,
-      aging: this.ageInvoices(invoices),
-      invoices: invoices.map((i) => ({
-        id: i.id,
-        invoiceNumber: i.invoiceNumber,
-        status: i.status,
-        subtotal: Number(i.subtotal),
-        taxAmount: Number(i.taxAmount),
-        tdsAmount: Number(i.tdsAmount ?? 0),
-        total: Number(i.total),
-        paidAmount: Number(i.paidAmount),
-        outstandingAmount: Number(i.outstandingAmount),
-        issueDate: i.issueDate,
-        dueDate: i.dueDate,
-        daysOverdue: this.daysOverdue(i),
-      })),
-      recentHistory: history.slice(0, 30).map((h) => ({
-        id: h.id,
-        action: h.action,
-        entityType: h.entityType,
-        fromState: h.fromState,
-        toState: h.toState,
-        reason: h.reason,
-        userName: h.userName,
-        occurredAt: h.createdAt,
-      })),
-    };
+    for (const r of feeChanged) {
+      items.push({
+        kind: 'FEE_CHANGED', payableId: r.id, assignmentId: r.assignment_id, assignmentNumber: r.assignment_number, assayerName: r.assayer_name,
+        amount: Number(r.current_fee), detail: `Booked at ₹${Number(r.booked_fee)}, the assignment now says ₹${Number(r.current_fee)}.`,
+      });
+    }
+    for (const r of heldPayables) {
+      items.push({
+        kind: 'HELD', payableId: r.id, assignmentId: r.assignment_id, assignmentNumber: r.assignment_number, assayerName: r.assayer_name,
+        amount: Number(r.amount), detail: `Payout on hold: ${r.hold_reason ?? 'no reason given'}`,
+      });
+    }
+    for (const r of heldLines) {
+      items.push({
+        kind: 'HELD', entryId: r.id, assignmentId: r.assignment_id, assignmentNumber: r.assignment_number, clientName: r.client_name,
+        amount: Number(r.total_amount), detail: `Client line on hold: ${r.hold_reason ?? 'no reason given'}`,
+      });
+    }
+    for (const r of overdue) {
+      items.push({
+        kind: 'OVERDUE_INVOICE', invoiceId: r.id, invoiceNumber: r.invoice_number, clientName: r.client_name,
+        amount: Number(r.outstanding_amount), detail: `${Number(r.days_overdue)} day(s) overdue (due ${r.due_date}).`,
+      });
+    }
+    return items;
   }
 
-  /** Days past due for an unpaid invoice; null when not yet due or fully paid. */
-  private daysOverdue(i: BillingInvoiceEntity): number | null {
-    if (!i.dueDate || Number(i.outstandingAmount) <= 0) return null;
-    const diff = Math.floor((Date.now() - new Date(`${i.dueDate}T00:00:00Z`).getTime()) / 86400000);
-    return diff > 0 ? diff : null;
-  }
+  // -----------------------------------------------------------------------
+  // Labels
+  // -----------------------------------------------------------------------
 
-  /**
-   * Standard receivables ageing. Collections work is driven off these buckets and
-   * there was previously no due-date-aware reporting at all.
-   */
-  private ageInvoices(invoices: BillingInvoiceEntity[]) {
-    const buckets = { current: 0, d1_30: 0, d31_60: 0, d61_90: 0, d90_plus: 0 };
-    for (const i of invoices) {
-      const outstanding = Number(i.outstandingAmount);
-      if (outstanding <= 0) continue;
-      const od = this.daysOverdue(i);
-      if (od === null) buckets.current = round2(buckets.current + outstanding);
-      else if (od <= 30) buckets.d1_30 = round2(buckets.d1_30 + outstanding);
-      else if (od <= 60) buckets.d31_60 = round2(buckets.d31_60 + outstanding);
-      else if (od <= 90) buckets.d61_90 = round2(buckets.d61_90 + outstanding);
-      else buckets.d90_plus = round2(buckets.d90_plus + outstanding);
-    }
-    return buckets;
-  }
-
-  /**
-   * Batch-resolves the human labels the billing screens need. Billing rows carry
-   * only foreign keys, so without this the UI can only render UUIDs — which is
-   * exactly how the payables and history tables looked.
-   */
   private async resolveNames(entries: BillingEntryEntity[], payables: AssayerPayableEntity[] = []) {
-    const clientIds = [...new Set(entries.map((e) => e.clientId).filter(Boolean))];
-    const projectIds = [...new Set(entries.map((e) => e.projectId).filter(Boolean))] as string[];
-    const assignmentIds = [...new Set(entries.map((e) => e.assignmentId).filter(Boolean))] as string[];
-    const assayerIds = [...new Set([
-      ...entries.map((e) => e.assayerId),
-      ...payables.map((p) => p.assayerId),
-    ].filter(Boolean))] as string[];
-
+    const clientIds = [...new Set([...entries.map((e) => e.clientId), ...payables.map((p) => p.clientId)].filter(Boolean))] as string[];
+    const projectIds = [...new Set([...entries.map((e) => e.projectId), ...payables.map((p) => p.projectId)].filter(Boolean))] as string[];
+    const assignmentIds = [...new Set([...entries.map((e) => e.assignmentId), ...payables.map((p) => p.assignmentId)].filter(Boolean))] as string[];
+    const assayerIds = [...new Set([...entries.map((e) => e.assayerId), ...payables.map((p) => p.assayerId)].filter(Boolean))] as string[];
     const q = (sql: string, ids: string[]) => (ids.length ? this.entryRepository.manager.query(sql, [ids]) : Promise.resolve([]));
-
     const [clients, projects, assignments, assayers] = await Promise.all([
       q(`SELECT id, name FROM clients WHERE id = ANY($1)`, clientIds),
       q(`SELECT id, name, project_number FROM projects WHERE id = ANY($1)`, projectIds),
@@ -3135,7 +1693,6 @@ export class BillingEngineService implements OnModuleInit {
           WHERE a.id = ANY($1)`, assignmentIds),
       q(`SELECT id, display_name, assayer_code FROM assayers WHERE id = ANY($1)`, assayerIds),
     ]);
-
     return {
       clients: new Map<string, string>(clients.map((r: any) => [r.id, r.name])),
       projects: new Map<string, string>(projects.map((r: any) => [r.id, r.name])),
@@ -3147,352 +1704,172 @@ export class BillingEngineService implements OnModuleInit {
     };
   }
 
+  private async attachEntryNames(entries: BillingEntryEntity[]) {
+    const names = await this.resolveNames(entries);
+    return entries.map((e) => ({
+      ...e,
+      clientName: names.clients.get(e.clientId) ?? null,
+      projectName: e.projectId ? names.projects.get(e.projectId) ?? null : null,
+      projectNumber: e.projectId ? names.projectNumbers.get(e.projectId) ?? null : null,
+      assignmentNumber: names.assignments.get(e.assignmentId) ?? null,
+      branchName: names.branches.get(e.assignmentId) ?? null,
+      assayerName: e.assayerId ? names.assayers.get(e.assayerId) ?? null : null,
+    }));
+  }
+
+  private async attachPayableNames(payables: AssayerPayableEntity[]) {
+    const names = await this.resolveNames([], payables);
+    return payables.map((p) => ({
+      ...p,
+      assayerName: names.assayers.get(p.assayerId) ?? null,
+      assayerCode: names.assayerCodes.get(p.assayerId) ?? null,
+      clientName: p.clientId ? names.clients.get(p.clientId) ?? null : null,
+      projectName: p.projectId ? names.projects.get(p.projectId) ?? null : null,
+      assignmentNumber: names.assignments.get(p.assignmentId) ?? null,
+      branchName: names.branches.get(p.assignmentId) ?? null,
+    }));
+  }
+
+  // -----------------------------------------------------------------------
+  // Primitives
+  // -----------------------------------------------------------------------
+
   /**
-   * The complete financial record for any entity in the business — one endpoint
-   * answering "show me everything about the money for this X", where X is a
-   * client, project, branch, assayer or assignment.
-   *
-   * Finance questions arrive framed around whatever entity is in front of the
-   * person asking ("what have we earned at this branch?", "what do we owe this
-   * assayer?"), but the money was previously only queryable by client. Each
-   * entity resolves to the same shape so one UI can render any of them.
+   * Run `work` in one database transaction, releasing its domain events only after commit.
+   * A name for `uow.run`, kept because the call sites read better as `inTx`.
    */
-  async entityLedger(
-    entityType: 'client' | 'project' | 'branch' | 'assayer' | 'assignment',
-    entityId: string,
-  ): Promise<any> {
-    const mgr = this.entryRepository.manager;
+  private inTx<T>(
+    work: (manager: EntityManager, emit: (event: string, payload: Record<string, unknown>) => void) => Promise<T>,
+  ): Promise<T> {
+    return this.uow.run(work);
+  }
 
-    // Branches and assignments are not columns on billing rows, so they resolve
-    // through the assignments that touched them.
-    let entryWhere = '';
-    let payableWhere = '';
-    const params: any[] = [entityId];
+  /** Write-lock every line attached to an invoice, in a stable order (deadlock-free with peers). */
+  private async lockEntriesByInvoice(manager: EntityManager, invoiceId: string): Promise<BillingEntryEntity[]> {
+    return manager
+      .createQueryBuilder(BillingEntryEntity, 'e')
+      .setLock('pessimistic_write')
+      .where('e.invoice_id = :invoiceId', { invoiceId })
+      .orderBy('e.id', 'ASC')
+      .getMany();
+  }
 
-    switch (entityType) {
-      case 'client':
-        entryWhere = 'e.client_id = $1';
-        payableWhere = 'p.client_id = $1';
-        break;
-      case 'project':
-        entryWhere = 'e.project_id = $1';
-        payableWhere = 'p.project_id = $1';
-        break;
-      case 'assayer':
-        entryWhere = 'e.assayer_id = $1';
-        payableWhere = 'p.assayer_id = $1';
-        break;
-      case 'assignment':
-        entryWhere = 'e.assignment_id = $1';
-        payableWhere = 'p.assignment_id = $1';
-        break;
-      case 'branch':
-        entryWhere = `e.assignment_id IN (
-          SELECT a.id FROM assignments a
-            JOIN project_branches pb ON pb.id = a.project_branch_id
-           WHERE pb.branch_id = $1)`;
-        payableWhere = `p.assignment_id IN (
-          SELECT a.id FROM assignments a
-            JOIN project_branches pb ON pb.id = a.project_branch_id
-           WHERE pb.branch_id = $1)`;
-        break;
-      default:
-        throw new BadRequestException(`Unsupported entity type '${entityType}'.`);
-    }
+  /**
+   * Write-lock one invoice, without its relations. Postgres refuses `FOR UPDATE` on the nullable
+   * side of an outer join, so locking and loading are two steps.
+   */
+  private async lockInvoice(manager: EntityManager, invoiceId: string): Promise<BillingInvoiceEntity> {
+    const invoice = await manager.findOne(BillingInvoiceEntity, { where: { id: invoiceId }, lock: { mode: 'pessimistic_write' } });
+    if (!invoice) throw new NotFoundException(`Invoice ${invoiceId} not found.`);
+    return invoice;
+  }
 
-    const [entries, payables, subject] = await Promise.all([
-      mgr.query(
-        `SELECT e.* FROM billing_entries e WHERE e.is_active = true AND ${entryWhere} ORDER BY e.created_at DESC`,
-        params,
-      ),
-      mgr.query(
-        `SELECT p.* FROM assayer_payables p WHERE p.is_active = true AND ${payableWhere} ORDER BY p.created_at DESC`,
-        params,
-      ),
-      this.describeEntity(entityType, entityId),
-    ]);
+  private async lockPayable(manager: EntityManager, payableId: string): Promise<AssayerPayableEntity> {
+    const payable = await manager.findOne(AssayerPayableEntity, { where: { id: payableId }, lock: { mode: 'pessimistic_write' } });
+    if (!payable) throw new NotFoundException(`Payable ${payableId} not found.`);
+    return payable;
+  }
 
-    const entryIds = entries.map((e: any) => e.id);
-    const payableIds = payables.map((p: any) => p.id);
+  private seq(): string {
+    return Math.floor(100000 + Math.random() * 900000).toString();
+  }
 
-    // Everything that has happened to this entity's money, and every rupee that
-    // actually moved because of it.
-    const [history, payments] = await Promise.all([
-      mgr.query(
-        `SELECT * FROM billing_history
-          WHERE (entity_id = ANY($1) OR entity_id = ANY($2) OR ${entityType === 'branch' ? 'false' : `${entityType}_id = $3`})
-          ORDER BY created_at DESC LIMIT 200`,
-        entityType === 'branch' ? [entryIds, payableIds, null] : [entryIds, payableIds, entityId],
-      ).catch(() => []),
-      mgr.query(
-        `SELECT * FROM billing_payments
-          WHERE is_active = true
-            AND (payable_id = ANY($1)
-                 OR invoice_id IN (SELECT DISTINCT invoice_id FROM billing_entries WHERE id = ANY($2) AND invoice_id IS NOT NULL))
-          ORDER BY created_at DESC`,
-        [payableIds, entryIds],
-      ).catch(() => []),
-    ]);
+  private toISO(d: Date | string): string {
+    if (d instanceof Date) return d.toISOString().slice(0, 10);
+    return String(d).slice(0, 10);
+  }
 
-    const n = (v: any) => Number(v ?? 0);
-    const revenue = round2(entries.reduce((a: number, e: any) => a + n(e.taxable_amount), 0));
-    const cost = totalPayableCost(payables);
-    const inbound = payments.filter((p: any) => p.direction === PaymentDirection.INBOUND);
-    const outbound = payments.filter((p: any) => p.direction === PaymentDirection.OUTBOUND);
-
+  private moneyOf(entry: BillingEntryEntity) {
     return {
-      entityType,
-      entityId,
-      subject,
-      totals: {
-        revenue,
-        billedToClient: round2(entries.reduce((a: number, e: any) => a + n(e.total_amount), 0)),
-        collected: round2(entries.reduce((a: number, e: any) => a + n(e.paid_amount), 0)),
-        outstanding: round2(entries.reduce((a: number, e: any) => a + n(e.outstanding_amount), 0)),
-        unbilled: round2(
-          entries.filter((e: any) => UNBILLED_STATES.includes(e.state)).reduce((a: number, e: any) => a + n(e.total_amount), 0),
-        ),
-        assayerCost: cost,
-        assayerPaid: round2(payables.reduce((a: number, p: any) => a + n(p.paid_amount), 0)),
-        assayerOwed: round2(payables.reduce((a: number, p: any) => a + (n(p.total_amount) - n(p.paid_amount)), 0)),
-        margin: round2(revenue - cost),
-        marginPct: revenue > 0 ? round2(((revenue - cost) / revenue) * 100) : null,
-        gst: round2(entries.reduce((a: number, e: any) => a + n(e.tax_amount), 0)),
-        tds: round2(entries.reduce((a: number, e: any) => a + n(e.tds_amount), 0)),
-        cashIn: round2(inbound.reduce((a: number, p: any) => a + n(p.amount), 0)),
-        cashOut: round2(outbound.reduce((a: number, p: any) => a + n(p.amount), 0)),
-        entryCount: entries.length,
-        payableCount: payables.length,
-      },
-      // Money earned over time, so trends are visible rather than just a total.
-      monthly: this.monthlyTrend(entries, payables),
-      entries: entries.map((e: any) => ({
-        id: e.id, entryNumber: e.entry_number, level: e.level, state: e.state,
-        description: e.description, taxableAmount: n(e.taxable_amount), taxAmount: n(e.tax_amount),
-        tdsAmount: n(e.tds_amount), totalAmount: n(e.total_amount), paidAmount: n(e.paid_amount),
-        outstandingAmount: n(e.outstanding_amount), invoiceId: e.invoice_id, createdAt: e.created_at,
-      })),
-      payables: payables.map((p: any) => ({
-        id: p.id, payableNumber: p.payable_number, status: p.status,
-        baseAmount: n(p.base_amount), travelAmount: n(p.travel_amount), tdsAmount: n(p.tds_amount),
-        totalAmount: n(p.total_amount), paidAmount: n(p.paid_amount),
-        outstanding: round2(n(p.total_amount) - n(p.paid_amount)), createdAt: p.created_at,
-      })),
-      payments: payments.map((p: any) => ({
-        id: p.id, direction: p.direction, reference: p.payment_reference, method: p.method,
-        amount: n(p.amount), date: p.received_date, notes: p.notes,
-      })),
-      history: history.map((h: any) => ({
-        id: h.id, action: h.action, entityType: h.entity_type,
-        fromState: h.from_state, toState: h.to_state, reason: h.reason,
-        userName: h.user_name, occurredAt: h.created_at,
-      })),
+      baseAmount: Number(entry.baseAmount),
+      travelAmount: Number(entry.travelAmount),
+      adjustmentAmount: Number(entry.adjustmentAmount),
+      taxRate: Number(entry.taxRate),
+      taxableAmount: Number(entry.taxableAmount),
+      taxAmount: Number(entry.taxAmount),
+      tdsRate: Number(entry.tdsRate),
+      tdsAmount: Number(entry.tdsAmount),
+      totalAmount: Number(entry.totalAmount),
+      currency: entry.currency,
     };
   }
 
-  /** Human identity of whatever the ledger is being read for. */
-  private async describeEntity(entityType: string, entityId: string): Promise<any> {
-    const mgr = this.entryRepository.manager;
-    const q: Record<string, string> = {
-      client: `SELECT name AS label, client_code AS ref FROM clients WHERE id = $1`,
-      project: `SELECT name AS label, project_number AS ref FROM projects WHERE id = $1`,
-      branch: `SELECT name AS label, branch_code AS ref FROM branches WHERE id = $1`,
-      assayer: `SELECT display_name AS label, assayer_code AS ref FROM assayers WHERE id = $1`,
-      assignment: `SELECT assignment_number AS label, status AS ref FROM assignments WHERE id = $1`,
-    };
-    const rows = await mgr.query(q[entityType], [entityId]).catch(() => []);
-    return rows?.[0] ?? { label: null, ref: null };
+  private async clientPaymentTerms(clientId: string, m: EntityManager): Promise<string | null> {
+    const rows = await m.query(`SELECT payment_terms FROM client_billing WHERE client_id = $1 AND is_active = true LIMIT 1`, [clientId]).catch(() => []);
+    return rows?.[0]?.payment_terms ?? null;
   }
 
-  /** Revenue/cost/margin per calendar month, oldest first. */
-  private monthlyTrend(entries: any[], payables: any[]) {
-    const buckets = new Map<string, { month: string; revenue: number; cost: number; margin: number }>();
-    const key = (d: any) => new Date(d).toISOString().slice(0, 7);
-    const bucket = (m: string) => {
-      if (!buckets.has(m)) buckets.set(m, { month: m, revenue: 0, cost: 0, margin: 0 });
-      return buckets.get(m)!;
-    };
-    for (const e of entries) {
-      const b = bucket(key(e.created_at));
-      b.revenue = round2(b.revenue + Number(e.taxable_amount ?? 0));
+  /** "NET30" → issue date + 30 days; anything else → the issue date. */
+  private dueDateFromTerms(issueDate: string, terms: string | null): string {
+    const days = terms ? Number(/net\s*(\d+)/i.exec(terms)?.[1] ?? 0) : 0;
+    const d = new Date(`${issueDate}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + days);
+    return d.toISOString().slice(0, 10);
+  }
+
+  /** Small cache: the same operator writes many history rows per request. */
+  private readonly userNameCache = new Map<string, string>();
+
+  private async resolveUserName(userId: string, manager?: EntityManager): Promise<string> {
+    if (!userId || userId === 'system') return 'System (automated)';
+    const cached = this.userNameCache.get(userId);
+    if (cached) return cached;
+    try {
+      const rows = await (manager ?? this.entryRepository.manager).query(`SELECT display_name FROM users WHERE id = $1 LIMIT 1`, [userId]);
+      const name = rows?.[0]?.display_name ?? userId;
+      this.userNameCache.set(userId, name);
+      return name;
+    } catch {
+      return userId;
     }
-    for (const p of payables) {
-      const b = bucket(key(p.created_at));
-      b.cost = round2(b.cost + Number(p.base_amount ?? 0) + Number(p.travel_amount ?? 0));
-    }
-    return [...buckets.values()]
-      .map((b) => ({ ...b, margin: round2(b.revenue - b.cost) }))
-      .sort((a, b) => a.month.localeCompare(b.month));
   }
 
   /**
-   * The finance team's single view of the business: what is owed to us, what we
-   * owe, what actually moved, and where money is stuck.
-   *
-   * Built as one call because finance questions cross the receivable/payable
-   * boundary ("can we cover this month's assayer run from collections?") and the
-   * data previously lived in three unconnected modules.
+   * Append one immutable row to the money trail, on the caller's transaction so it commits or
+   * rolls back with the change it describes.
    */
-  async financeDashboard(): Promise<any> {
-    const mgr = this.entryRepository.manager;
-    const unbilled = UNBILLED_STATES.map((s) => `'${s}'`).join(',');
-
-    /**
-     * Five aggregate queries in place of four whole-table reads.
-     *
-     * This endpoint used to load every entry, every invoice, every payable AND every payment
-     * ever recorded — the last of those with no bound at all — purely to produce twenty
-     * scalars and a fifteen-row recent-payments strip. Only that strip needs rows, and it now
-     * asks for the fifteen it renders instead of sorting the entire payment history in memory.
-     */
-    const [entryRows, invoiceRows, ageRows, payableRows, cashRows, conflictRows, recent] = await Promise.all([
-      mgr.query(`
-        SELECT COALESCE(SUM(total_amount) FILTER (WHERE state IN (${unbilled})), 0)                AS unbilled,
-               COALESCE(SUM(total_amount) FILTER (WHERE state = '${BillingState.DISPUTED}'), 0)    AS disputed,
-               COALESCE(SUM(taxable_amount), 0) AS net_revenue,
-               COALESCE(SUM(tax_amount), 0)     AS gst_collected,
-               COALESCE(SUM(tds_amount), 0)     AS tds_by_clients
-          FROM billing_entries WHERE is_active = true`),
-
-      mgr.query(`
-        SELECT COALESCE(SUM(total), 0)              AS invoiced,
-               COALESCE(SUM(paid_amount), 0)        AS collected,
-               COALESCE(SUM(outstanding_amount), 0) AS outstanding
-          FROM billing_invoices WHERE is_active = true`),
-
-      mgr.query(`SELECT ${BillingEngineService.AGEING_SELECT} FROM billing_invoices WHERE is_active = true`),
-
-      mgr.query(`
-        SELECT COALESCE(SUM(total_amount) FILTER (WHERE status = '${AssayerPayableStatus.PENDING}'), 0)  AS awaiting_approval,
-               COALESCE(SUM(total_amount - paid_amount) FILTER (WHERE status = '${AssayerPayableStatus.APPROVED}'), 0) AS approved_unpaid,
-               COALESCE(SUM(paid_amount), 0)                                                            AS paid,
-               COALESCE(SUM(total_amount) FILTER (WHERE status = '${AssayerPayableStatus.ON_HOLD}'), 0)  AS on_hold,
-               COALESCE(SUM(total_amount) FILTER (WHERE status = '${AssayerPayableStatus.DISPUTED}'), 0) AS disputed,
-               COALESCE(SUM(total_amount), 0)                                                           AS total,
-               COALESCE(SUM(base_amount + travel_amount), 0)                                            AS gross_cost,
-               COALESCE(SUM(tds_amount), 0)                                                             AS tds_from_assayers
-          FROM assayer_payables WHERE is_active = true`),
-
-      mgr.query(`
-        SELECT COALESCE(SUM(amount) FILTER (WHERE direction = '${PaymentDirection.INBOUND}'), 0)  AS cash_in,
-               COALESCE(SUM(amount) FILTER (WHERE direction = '${PaymentDirection.OUTBOUND}'), 0) AS cash_out,
-               COUNT(*) FILTER (WHERE direction = '${PaymentDirection.INBOUND}')::int             AS inbound_count,
-               COUNT(*) FILTER (WHERE direction = '${PaymentDirection.OUTBOUND}')::int            AS outbound_count
-          FROM billing_payments WHERE is_active = true`),
-
-      mgr.query(`SELECT COUNT(*)::int AS n FROM billing_conflicts WHERE status = '${BillingConflictStatus.OPEN}'`),
-
-      // Only the rows the strip actually renders. `.slice(0, 15)` over every payment ever taken
-      // was the whole reason this endpoint read the payments table at all.
-      this.paymentRepository.find({ where: { isActive: true }, order: { createdAt: 'DESC' }, take: 15 }),
-    ]);
-
-    const n = (v: any) => round2(Number(v ?? 0));
-    const e = entryRows[0] ?? {};
-    const inv = invoiceRows[0] ?? {};
-    const ag = ageRows[0] ?? {};
-    const p = payableRows[0] ?? {};
-    const cash = cashRows[0] ?? {};
-
-    // Accounts receivable — money clients owe us.
-    const receivable = {
-      unbilled: n(e.unbilled),
-      invoiced: n(inv.invoiced),
-      collected: n(inv.collected),
-      outstanding: n(inv.outstanding),
-      disputed: n(e.disputed),
-      aging: {
-        current: n(ag.current),
-        d1_30: n(ag.d1_30),
-        d31_60: n(ag.d31_60),
-        d61_90: n(ag.d61_90),
-        d90_plus: n(ag.d90_plus),
-      },
-    };
-
-    // Accounts payable — money we owe assayers for completed work.
-    const payable = {
-      awaitingApproval: n(p.awaiting_approval),
-      approvedUnpaid: n(p.approved_unpaid),
-      paid: n(p.paid),
-      onHold: n(p.on_hold),
-      disputed: n(p.disputed),
-      total: n(p.total),
-    };
-
-    const netRevenue = n(e.net_revenue);
-    const grossCost = n(p.gross_cost);
-
-    // Statutory positions finance has to file: GST collected on sales, TDS
-    // withheld by clients from us, and TDS we withheld from assayers.
-    const taxPosition = {
-      gstCollected: n(e.gst_collected),
-      tdsWithheldByClients: n(e.tds_by_clients),
-      tdsWithheldFromAssayers: n(p.tds_from_assayers),
-    };
-
-    return {
-      currency: 'INR',
-      receivable,
-      payable,
-      cashflow: {
-        // Real movements, not accruals — what actually hit the bank.
-        in: n(cash.cash_in),
-        out: n(cash.cash_out),
-        net: round2(n(cash.cash_in) - n(cash.cash_out)),
-        inboundCount: Number(cash.inbound_count ?? 0),
-        outboundCount: Number(cash.outbound_count ?? 0),
-      },
-      profitability: {
-        netRevenue,
-        assayerCost: grossCost,
-        margin: round2(netRevenue - grossCost),
-        marginPct: netRevenue > 0 ? round2(((netRevenue - grossCost) / netRevenue) * 100) : null,
-      },
-      taxPosition,
-      // Working capital: collections still to come, less what we must pay out.
-      workingCapital: round2(receivable.outstanding - payable.approvedUnpaid),
-      openConflicts: Number(conflictRows[0]?.n ?? 0),
-      recentPayments: recent.map((pm) => ({
-        id: pm.id,
-        direction: pm.direction,
-        reference: pm.paymentReference,
-        method: pm.method,
-        amount: Number(pm.amount),
-        date: pm.receivedDate,
-      })),
-    };
+  private async history(userId: string, h: Partial<BillingHistoryEntity>, manager?: EntityManager): Promise<BillingHistoryEntity> {
+    const rec = this.historyRepository.create({
+      ...h,
+      userName: h.userName ?? (await this.resolveUserName(userId, manager)),
+      createdBy: userId,
+      updatedBy: userId,
+    } as BillingHistoryEntity);
+    return manager ? manager.save(rec) : this.historyRepository.save(rec);
   }
 
-  /**
-   * Clients that have billing activity, with a headline figure each. Drives the
-   * client selector — previously the UI had no way to scope billing to a client
-   * at all, even though every backend filter supported it.
-   */
-  async clientsWithBilling(): Promise<any[]> {
-    return this.entryRepository.manager.query(`
-      SELECT c.id                                            AS "clientId",
-             c.name                                          AS "clientName",
-             cb.payment_terms                                AS "paymentTerms",
-             cb.gst_rate                                     AS "gstRate",
-             cb.tds_rate                                     AS "tdsRate",
-             COUNT(e.id)                                     AS "entryCount",
-             COALESCE(SUM(e.total_amount), 0)                AS "revenue",
-             COALESCE(SUM(e.outstanding_amount), 0)          AS "outstanding"
-        FROM clients c
-        LEFT JOIN client_billing cb ON cb.client_id = c.id AND cb.is_active = true
-        LEFT JOIN billing_entries e ON e.client_id = c.id AND e.is_active = true
-       WHERE c.is_active = true
-       GROUP BY c.id, c.name, cb.payment_terms, cb.gst_rate, cb.tds_rate
-       ORDER BY c.name
-    `);
-  }
-
-  private async ensureClient(clientId: string): Promise<void> {
-    const c = await this.entryRepository.manager.query(
-      `SELECT id FROM clients WHERE id = $1 AND is_active = true`,
-      [clientId],
+  private async billingBranchName(assignmentId?: string | null): Promise<string> {
+    if (!assignmentId) return 'a branch';
+    const rows = await this.entryRepository.manager.query(
+      `SELECT b.name AS branch_name
+         FROM assignments a
+         LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
+         LEFT JOIN branches b ON b.id = pb.branch_id
+        WHERE a.id = $1`,
+      [assignmentId],
     );
-    if (!c?.length) throw new NotFoundException(`Client ${clientId} not found.`);
+    return rows?.[0]?.branch_name ?? 'a branch';
   }
+
+  /**
+   * Fire-and-forget a notification whose body needs a branch label. Detached on purpose: neither
+   * the label query nor the dispatch may fail a payment that has already committed.
+   */
+  private notifyWithBranch(assignmentId: string | null | undefined, build: (branchName: string) => EmitOptions): void {
+    void this.billingBranchName(assignmentId)
+      .then((branchName) => this.notificationDispatch.emitSafe(build(branchName)))
+      .catch((err) => this.logger.error(`Billing notification skipped: ${(err as Error).message}`));
+  }
+
+  /**
+   * Receivables ageing, computed in SQL over sent invoices. Days past due, measured from UTC
+   * midnight on the due date; anything not yet due is `current`.
+   */
+  private static readonly AGEING_SELECT = `
+    COALESCE(SUM(outstanding_amount) FILTER (WHERE outstanding_amount > 0 AND (due_date IS NULL OR $OD <= 0)), 0) AS current,
+    COALESCE(SUM(outstanding_amount) FILTER (WHERE outstanding_amount > 0 AND due_date IS NOT NULL AND $OD > 0  AND $OD <= 30), 0) AS d1_30,
+    COALESCE(SUM(outstanding_amount) FILTER (WHERE outstanding_amount > 0 AND due_date IS NOT NULL AND $OD > 30 AND $OD <= 60), 0) AS d31_60,
+    COALESCE(SUM(outstanding_amount) FILTER (WHERE outstanding_amount > 0 AND due_date IS NOT NULL AND $OD > 60 AND $OD <= 90), 0) AS d61_90,
+    COALESCE(SUM(outstanding_amount) FILTER (WHERE outstanding_amount > 0 AND due_date IS NOT NULL AND $OD > 90), 0) AS d90_plus
+  `.replace(/\$OD/g, `FLOOR(EXTRACT(EPOCH FROM (NOW() - ((due_date::text || ' 00:00:00+00')::timestamptz))) / 86400)`);
 }

@@ -2,22 +2,27 @@ import { Entity, Column, Index, ManyToOne, JoinColumn } from 'typeorm';
 import { BaseEntity } from '../../core/entities/base.entity';
 import { BillingInvoiceEntity } from './invoice.entity';
 import { AssayerPayableEntity } from './payable.entity';
-import { PaymentMethod, PaymentStatus, PaymentDirection } from '@fapoms/shared';
+import { PaymentMethod, PaymentDirection } from '@fapoms/shared';
 
 /**
- * Every movement of money, in either direction.
+ * Every real movement of money, in either direction.
  *
- * INBOUND rows are client payments against an invoice; OUTBOUND rows are
- * disbursements against an approved assayer payable. Keeping both in one table
- * is what makes this the single financial record: cash-flow, the assayer's
- * running balance and the payment history are all reads over this one place.
+ * INBOUND rows are client payments against an invoice; OUTBOUND rows are disbursements against
+ * an approved assayer payable. Keeping both in one table is what makes this the single financial
+ * record: cash-flow, the assayer's statement and the payment history are all reads over one
+ * place.
  *
- * Previously only inbound client payments were modelled here, while money paid
- * *out* to assayers lived in a separate `assayer_financial_ledger` maintained by
- * a different module — so no single query could answer "what did we pay out?".
+ * A payment has no status. It happened, or it was reversed — and a reversal is `isActive = false`
+ * plus a history row, after which the invoice's or payable's paid total is recomputed from the
+ * active rows. Every aggregate already filters on `is_active`, and a negative row would break
+ * both "Σ amount = cash" and the per-reference uniqueness below.
+ *
+ * `UQ_billing_payments_inbound_ref` / `UQ_billing_payments_outbound_ref` (migration
+ * 1791500000000) make a retried POST under the same reference a no-op rather than a second
+ * payment.
  */
 @Entity('billing_payments')
-@Index(['invoice'])
+@Index(['invoiceId'])
 @Index(['paymentReference'])
 @Index(['direction'])
 @Index(['payableId'])
@@ -38,17 +43,16 @@ export class BillingPaymentEntity extends BaseEntity {
   @Column({ length: 3, default: 'INR' })
   currency: string;
 
+  /** The date the money moved — received (INBOUND) or paid out (OUTBOUND). */
   @Column({ name: 'received_date', type: 'date', nullable: true })
   receivedDate: string | null;
 
-  @Column({ type: 'varchar', length: 20, default: PaymentStatus.PENDING })
-  status: PaymentStatus;
-
-  @Column({ name: 'allocated_to_entry_ids', type: 'jsonb', nullable: true })
-  allocatedToEntryIds: string[] | null;
-
   @Column({ type: 'text', nullable: true })
   notes: string | null;
+
+  // ── INBOUND leg: which invoice this settles ───────────────────────────────
+  @Column({ name: 'invoice_id', type: 'uuid', nullable: true })
+  invoiceId: string | null;
 
   // ── OUTBOUND leg: what we paid an assayer ────────────────────────────────
   @Column({ name: 'payable_id', type: 'uuid', nullable: true })

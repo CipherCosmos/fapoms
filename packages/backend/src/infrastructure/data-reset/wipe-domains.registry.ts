@@ -57,7 +57,7 @@ export const WIPE_DOMAINS: WipeDomain[] = [
     key: 'clients',
     label: 'Clients & contracts',
     description: 'Client master records, contacts, contracts and their billing profile.',
-    tables: ['client_billing_history', 'client_billing', 'client_contracts', 'client_contacts', 'client_configurations', 'clients'],
+    tables: ['client_billing', 'client_contracts', 'client_contacts', 'client_configurations', 'clients'],
   },
   {
     key: 'branches',
@@ -104,7 +104,7 @@ export const WIPE_DOMAINS: WipeDomain[] = [
     label: 'Billing & payments',
     description: 'Invoices, payments, payables and billing history. These records are protected by the database itself (ON DELETE RESTRICT) — clearing this data needs its own confirmation below.',
     requiresBillingConfirmation: true,
-    tables: ['billing_payments', 'billing_conflicts', 'billing_history', 'assayer_payables', 'billing_entries', 'billing_invoices'],
+    tables: ['billing_payments', 'billing_history', 'assayer_payables', 'billing_entries', 'billing_invoices'],
   },
   {
     key: 'feedback',

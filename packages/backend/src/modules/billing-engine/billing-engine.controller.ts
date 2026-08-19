@@ -1,165 +1,122 @@
-import { Controller, Get, Post, Patch, Query, Param, Body, UseGuards, Req, ParseUUIDPipe, ForbiddenException, HttpCode, HttpStatus } from '@nestjs/common';
+import {
+  Controller, Get, Post, Patch, Query, Param, Body, UseGuards, Req, ParseUUIDPipe,
+  ForbiddenException, HttpCode, HttpStatus,
+} from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { BillingEngineService, CreateEntryDto, SplitEntryDto } from './billing-engine.service';
+import { Type } from 'class-transformer';
+import {
+  IsString, IsNotEmpty, IsOptional, IsNumber, IsEnum, IsArray, IsUUID, IsBoolean, IsBooleanString,
+  ArrayNotEmpty, Min,
+} from 'class-validator';
+import { BillingEngineService } from './billing-engine.service';
 import { BillingJobsService } from './billing-jobs.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
-import { BILLING_ROLES, BILLING_READ_ROLES } from './billing-roles';
-import {
-  SystemRole,
-  BillingLevel,
-  BillingState,
-  InvoiceStatus,
-  InvoiceType,
-  PaymentMethod,
-  AssayerPayableStatus,
-  BillingConflictSeverity,
-  BillingConflictStatus,
-  BillingEntityType,
-} from '@fapoms/shared';
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsEnum, IsArray, IsUUID, IsObject, Min } from 'class-validator';
+import { BILLING_ROLES, BILLING_READ_ROLES, DISBURSEMENT_ROLES } from './billing-roles';
+import { SystemRole, BillingState, InvoiceStatus, PaymentMethod, AssayerPayableStatus } from '@fapoms/shared';
 
 // ---- DTOs ---------------------------------------------------------------
 
-class CreateEntryRequestDto implements CreateEntryDto {
-  @IsEnum(BillingLevel) level: BillingLevel;
-  @IsUUID() clientId: string;
-  @IsOptional() @IsUUID() projectId?: string;
-  @IsOptional() @IsUUID() assignmentId?: string;
-  @IsOptional() @IsUUID() assayerId?: string;
-  @IsOptional() @IsString() pricingModel?: any;
-  @IsOptional() @IsNumber() @Min(0) rate?: number;
-  @IsOptional() @IsNumber() @Min(0) quantity?: number;
-  @IsOptional() @IsString() billingPeriodStart?: string;
-  @IsOptional() @IsString() billingPeriodEnd?: string;
-  @IsOptional() @IsString() description?: string;
-  @IsOptional() @IsNumber() @Min(0) baseAmount?: number;
-  @IsOptional() @IsNumber() @Min(0) travelAmount?: number;
-  @IsOptional() @IsNumber() adjustmentAmount?: number;
-  @IsOptional() @IsNumber() @Min(0) discountAmount?: number;
-  @IsOptional() @IsNumber() @Min(0) taxRate?: number;
-  @IsOptional() @IsNumber() @Min(0) tdsRate?: number;
-  @IsOptional() @IsString() currency?: string;
-  @IsOptional() @IsEnum(BillingState) initialState?: BillingState;
+class PayoutIdsDto {
+  @IsArray() @ArrayNotEmpty() @IsUUID('4', { each: true })
+  payableIds: string[];
 }
 
-class TransitionEntryDto {
-  @IsEnum(BillingState) status: BillingState;
-  @IsOptional() @IsString() reason?: string;
-}
-
-class BulkTransitionEntriesDto {
-  @IsArray() @IsNotEmpty()
-  @IsUUID('4', { each: true })
-  entryIds: string[];
-
-  @IsEnum(BillingState) status: BillingState;
-  @IsOptional() @IsString() reason?: string;
-}
-
-class AdjustEntryDto {
-  @IsNumber() delta: number;
-  @IsString() @IsNotEmpty() reason: string;
-}
-
-class CreditEntryDto {
-  /** Taxable value to credit back. Tax and TDS come off with it, at the entry's own rates. */
-  @IsNumber() @Min(0.01) amount: number;
-  @IsString() @IsNotEmpty() reason: string;
-}
-
-class SplitEntryRequestDto implements SplitEntryDto {
-  @IsArray() @IsNumber({}, { each: true }) amounts: number[];
+class PayPayoutsDto extends PayoutIdsDto {
+  @IsString() @IsNotEmpty() paymentReference: string;
+  @IsEnum(PaymentMethod) method: PaymentMethod;
+  @IsOptional() @IsString() paidDate?: string;
   @IsOptional() @IsString() notes?: string;
 }
 
-class MergeEntriesDto {
-  @IsArray() @IsUUID('4', { each: true }) entryIds: string[];
-  @IsOptional() @IsString() note?: string;
+class HoldDto {
+  @IsBoolean() onHold: boolean;
+  @IsOptional() @IsString() reason?: string;
+}
+
+class ClientLineDto {
+  @IsOptional() @IsNumber() adjustmentAmount?: number;
+  @IsOptional() @IsString() adjustmentReason?: string;
+  @IsOptional() @IsBoolean() onHold?: boolean;
+  @IsOptional() @IsString() holdReason?: string;
 }
 
 class CreateInvoiceDto {
   @IsUUID() clientId: string;
-  @IsOptional() @IsUUID() projectId?: string;
-  @IsEnum(InvoiceType) type: InvoiceType;
-  @IsArray() @IsUUID('4', { each: true }) entryIds: string[];
+  @IsArray() @ArrayNotEmpty() @IsUUID('4', { each: true }) assignmentIds: string[];
   @IsOptional() @IsString() issueDate?: string;
   @IsOptional() @IsString() dueDate?: string;
   @IsOptional() @IsString() notes?: string;
 }
 
-class TransitionInvoiceDto {
-  @IsEnum(InvoiceStatus) status: InvoiceStatus;
-  @IsOptional() @IsString() reason?: string;
-}
-
-class RecordPaymentDto {
-  @IsUUID() invoiceId: string;
+class InvoicePaymentDto {
   @IsString() @IsNotEmpty() paymentReference: string;
   @IsEnum(PaymentMethod) method: PaymentMethod;
   @IsNumber() @Min(0.01) amount: number;
   @IsOptional() @IsString() receivedDate?: string;
-  @IsOptional() @IsArray() @IsUUID('4', { each: true }) allocatedToEntryIds?: string[];
   @IsOptional() @IsString() notes?: string;
 }
 
-class CreatePayableDto {
-  @IsUUID() assayerId: string;
+class ReasonDto {
+  @IsString() @IsNotEmpty() reason: string;
+}
+
+class ReconcileDto {
+  /** Only assignments completed on or after this date (YYYY-MM-DD). Omit for the whole book. */
+  @IsOptional() @IsString() since?: string;
+}
+
+/**
+ * The list endpoints take their filters as one DTO rather than as loose `@Query('x')` params.
+ *
+ * A bare `@Query()` binds the WHOLE query string and validates it, and this app's global pipe
+ * runs with `forbidNonWhitelisted` — so mixing a `@Query() page: PageQuery` with sibling
+ * `@Query('status')` params made `?status=PENDING` a 400 ("property status should not exist"),
+ * while `?page=2` alone worked. One DTO per endpoint, listing everything it accepts.
+ */
+class PayoutsQuery {
+  @IsOptional() @IsUUID() assayerId?: string;
+  @IsOptional() @IsUUID() clientId?: string;
+  @IsOptional() @IsEnum(AssayerPayableStatus) status?: AssayerPayableStatus;
+  /** `?onHold=true` narrows to held payouts; omit for both. */
+  @IsOptional() @IsBooleanString() onHold?: string;
+  @IsOptional() @Type(() => Number) @IsNumber() page?: number;
+  @IsOptional() @Type(() => Number) @IsNumber() limit?: number;
+}
+
+class InvoicesQuery {
+  @IsOptional() @IsUUID() clientId?: string;
+  @IsOptional() @IsUUID() projectId?: string;
+  @IsOptional() @IsEnum(InvoiceStatus) status?: InvoiceStatus;
+  @IsOptional() @Type(() => Number) @IsNumber() page?: number;
+  @IsOptional() @Type(() => Number) @IsNumber() limit?: number;
+}
+
+class LinesQuery {
   @IsOptional() @IsUUID() clientId?: string;
   @IsOptional() @IsUUID() projectId?: string;
   @IsOptional() @IsUUID() assignmentId?: string;
-  @IsNumber() @Min(0) baseAmount: number;
-  @IsOptional() @IsNumber() @Min(0) travelAmount?: number;
-  @IsOptional() @IsNumber() @Min(0) taxRate?: number;
-  @IsOptional() @IsNumber() @Min(0) tdsRate?: number;
-  @IsOptional() @IsObject() rateSnapshot?: Record<string, unknown>;
-  @IsOptional() @IsString() remarks?: string;
+  @IsOptional() @IsUUID() assayerId?: string;
+  @IsOptional() @IsEnum(BillingState) state?: BillingState;
 }
 
-class TransitionPayableDto {
-  @IsEnum(AssayerPayableStatus) status: AssayerPayableStatus;
-  @IsOptional() @IsString() reason?: string;
+class InvoiceableQuery {
+  @IsOptional() @IsUUID() clientId?: string;
 }
 
-class DisbursePayableDto {
-  @IsString() @IsNotEmpty() paymentReference: string;
-  @IsEnum(PaymentMethod) method: PaymentMethod;
-  /** Omit to settle the full outstanding balance on the payable. */
-  @IsOptional() @IsNumber() @Min(0.01) amount?: number;
-  @IsOptional() @IsString() paidDate?: string;
-  @IsOptional() @IsString() notes?: string;
-}
-
-class RaiseConflictDto {
-  @IsEnum(BillingConflictSeverity) severity: BillingConflictSeverity;
-  @IsEnum(BillingEntityType) entityType: BillingEntityType;
-  @IsArray() @IsUUID('4', { each: true }) entryIds: string[];
-  @IsString() @IsNotEmpty() description: string;
-  @IsOptional() @IsString() reason?: string;
-  @IsOptional() blocksBilling?: boolean;
-}
-
-class ResolveConflictDto {
-  @IsEnum(BillingConflictStatus) status: BillingConflictStatus;
-  @IsString() action: string;
-  @IsString() @IsNotEmpty() note: string;
+class ReconcilePreviewQuery {
+  @IsOptional() @IsString() since?: string;
 }
 
 // ---- Controller ---------------------------------------------------------
 
 /**
- * Finance owns the money. OPERATIONS_MANAGER is retained because operations
- * raised billing lines before a finance role existed, but disbursing money is
- * deliberately narrower — see DISBURSEMENT_ROLES.
+ * The billing API: the assignment is the ledger line.
+ *
+ * Eighteen routes. Reads for everyone who may see the book; invoicing for billing staff;
+ * approving, paying and holding payouts for finance and administrators only — money leaving
+ * the business has one gate.
  */
-
-/** Paying money out is restricted to finance and administrators. */
-const DISBURSEMENT_ROLES = [
-  SystemRole.SUPER_ADMINISTRATOR,
-  SystemRole.ADMINISTRATOR,
-  SystemRole.FINANCE_MANAGER,
-];
-
-@ApiTags('Billing Engine')
+@ApiTags('Billing')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('billing-engine')
@@ -169,203 +126,67 @@ export class BillingEngineController {
     private readonly jobs: BillingJobsService,
   ) {}
 
-  // Sync
-  /**
-   * The synchronous backfill. Kept because it is what the Billing screen calls today and what a
-   * small book wants: on anything under a few thousand assignments it returns before a queued
-   * run would even be picked up.
-   *
-   * On a large book, use the queued form below. This route walks every billable assignment, and
-   * while the pre-filter means a settled book costs two queries and no per-row work, the first
-   * run against an unbilled backlog is genuinely long — that is what the queue is for.
-   */
-  @Post('sync/assignments')
-  @Roles(...BILLING_ROLES)
-  @ApiOperation({ summary: 'Ingest real billable assignments into billing entries' })
-  async syncAssignments(@Req() req: any) {
-    return this.service.syncFromAssignments(req.user?.id ?? req.user?.userId ?? 'system');
+  private userId(req: any): string {
+    return req.user?.id ?? req.user?.userId ?? 'system';
   }
 
-  /**
-   * The same backfill, queued: returns a job id immediately and does the work on the billing
-   * queue at concurrency 1, reporting progress as it scans.
-   */
-  @Post('sync/assignments/jobs')
-  @Roles(...BILLING_ROLES)
-  @ApiOperation({ summary: 'Queue a full billing backfill and return a job id to poll' })
-  @HttpCode(HttpStatus.ACCEPTED)
-  async queueSyncAssignments(@Req() req: any) {
-    const userId = req.user?.id ?? req.user?.userId ?? 'system';
-    return { success: true, data: await this.jobs.enqueueSyncAssignments(userId) };
-  }
+  // ── Overview ──────────────────────────────────────────────────────────────
 
-  /** Poll a queued billing job for progress and, once done, its summary. */
-  @Get('jobs/:jobId')
-  @Roles(...BILLING_ROLES)
-  @ApiOperation({ summary: 'Poll a queued billing job' })
-  async billingJobStatus(@Param('jobId') jobId: string, @Req() req: any) {
-    const userId = req.user?.id ?? req.user?.userId;
-    return { success: true, data: await this.jobs.status(jobId, userId) };
-  }
-
-  // Entries
-  @Post('entries')
-  @Roles(...BILLING_ROLES)
-  @ApiOperation({ summary: 'Create a billing entry (client/project/assignment)' })
-  async createEntry(@Body() dto: CreateEntryRequestDto, @Req() req: any) {
-    const entry = await this.service.createEntry(dto, req.user.id);
-    return { success: true, data: entry };
-  }
-
-  @Get('entries')
+  @Get('overview')
   @Roles(...BILLING_READ_ROLES)
-  @ApiOperation({ summary: 'List billing entries with filters, including client/project/assignment names' })
-  async findEntries(
-    @Query('clientId') clientId?: string,
-    @Query('projectId') projectId?: string,
-    @Query('assignmentId') assignmentId?: string,
-    @Query('assayerId') assayerId?: string,
-    @Query('level') level?: BillingLevel,
-    @Query('state') state?: BillingState,
-  ) {
-    const entries = await this.service.findEntriesEnriched({ clientId, projectId, assignmentId, assayerId, level, state });
-    return { success: true, data: entries };
+  @ApiOperation({ summary: 'The finance overview: payouts, receivables, margin, tax, cash, attention, by client' })
+  async overview() {
+    return { success: true, data: await this.service.overview() };
   }
 
-  @Get('entries/:id')
+  // ── Payouts ───────────────────────────────────────────────────────────────
+
+  @Get('payouts')
   @Roles(...BILLING_READ_ROLES)
-  @ApiOperation({ summary: 'Get a billing entry' })
-  async getEntry(@Param('id', ParseUUIDPipe) id: string) {
-    return { success: true, data: await this.service.getEntry(id) };
-  }
-
-  @Patch('entries/state')
-  @Roles(...BILLING_ROLES)
-  @ApiOperation({ summary: 'Transition a batch of billing entries to a target state' })
-  async bulkTransitionEntries(@Body() dto: BulkTransitionEntriesDto, @Req() req: any) {
-    return { success: true, data: await this.service.bulkTransitionEntries(dto.entryIds, dto.status, req.user.id, dto.reason) };
-  }
-
-  @Patch('entries/:id/state')
-  @Roles(...BILLING_ROLES)
-  @ApiOperation({ summary: 'Transition a billing entry state' })
-  async transitionEntry(@Param('id', ParseUUIDPipe) id: string, @Body() dto: TransitionEntryDto, @Req() req: any) {
-    return { success: true, data: await this.service.transitionEntry(id, dto.status, req.user.id, dto.reason) };
-  }
-
-  @Patch('entries/:id/adjust')
-  @Roles(...BILLING_ROLES)
-  @ApiOperation({ summary: 'Apply an adjustment to a billing entry' })
-  async adjustEntry(@Param('id', ParseUUIDPipe) id: string, @Body() dto: AdjustEntryDto, @Req() req: any) {
-    return { success: true, data: await this.service.adjustEntry(id, dto.delta, dto.reason, req.user.id) };
-  }
-
-  /**
-   * Issue a credit note against an entry that has already been paid.
-   *
-   * Separate from `adjust` on purpose: adjusting re-prices a line that nobody has paid yet, while
-   * crediting corrects one that has been settled and therefore owes the client money back. The
-   * engine has always told operators to do this — it just had nowhere to send them.
-   */
-  @Post('entries/:id/credit-note')
-  @Roles(...BILLING_ROLES)
-  @ApiOperation({ summary: 'Issue a credit note against a paid billing entry' })
-  async creditEntry(@Param('id', ParseUUIDPipe) id: string, @Body() dto: CreditEntryDto, @Req() req: any) {
-    return { success: true, data: await this.service.creditEntry(id, dto.amount, dto.reason, req.user.id) };
-  }
-
-  @Post('entries/:id/split')
-  @Roles(...BILLING_ROLES)
-  @ApiOperation({ summary: 'Split a billing entry into multiple parts' })
-  async splitEntry(@Param('id', ParseUUIDPipe) id: string, @Body() dto: SplitEntryRequestDto, @Req() req: any) {
-    return { success: true, data: await this.service.splitEntry(id, dto, req.user.id) };
-  }
-
-  @Post('entries/merge')
-  @Roles(...BILLING_ROLES)
-  @ApiOperation({ summary: 'Merge multiple billing entries into one' })
-  async mergeEntries(@Body() dto: MergeEntriesDto, @Req() req: any) {
-    return { success: true, data: await this.service.mergeEntries(dto.entryIds, req.user.id, dto.note) };
-  }
-
-  // Invoices
-  @Post('invoices')
-  @Roles(...BILLING_ROLES)
-  @ApiOperation({ summary: 'Create an invoice from approved entries' })
-  async createInvoice(@Body() dto: CreateInvoiceDto, @Req() req: any) {
-    return { success: true, data: await this.service.createInvoice(dto, req.user.id) };
-  }
-
-  @Get('invoices')
-  @Roles(...BILLING_READ_ROLES)
-  @ApiOperation({ summary: 'List invoices' })
-  async findInvoices(@Query('clientId') clientId?: string, @Query('projectId') projectId?: string, @Query('status') status?: InvoiceStatus) {
-    return { success: true, data: await this.service.findInvoices({ clientId, projectId, status }) };
-  }
-
-  @Get('invoices/:id')
-  @Roles(...BILLING_READ_ROLES)
-  @ApiOperation({ summary: 'Get an invoice with entries and payments' })
-  async getInvoice(@Param('id', ParseUUIDPipe) id: string) {
-    return { success: true, data: await this.service.getInvoice(id) };
-  }
-
-  @Patch('invoices/:id/status')
-  @Roles(...BILLING_ROLES)
-  @ApiOperation({ summary: 'Transition an invoice status' })
-  async transitionInvoice(@Param('id', ParseUUIDPipe) id: string, @Body() dto: TransitionInvoiceDto, @Req() req: any) {
-    return { success: true, data: await this.service.transitionInvoice(id, dto.status, req.user.id, dto.reason) };
-  }
-
-  // Payments
-  @Post('payments')
-  @Roles(...BILLING_ROLES)
-  @ApiOperation({ summary: 'Record a payment against an invoice' })
-  async recordPayment(@Body() dto: RecordPaymentDto, @Req() req: any) {
-    return { success: true, data: await this.service.recordPayment(dto, req.user.id) };
-  }
-
-  // Assayer payables
-  @Post('payables')
-  @Roles(...BILLING_ROLES)
-  @ApiOperation({ summary: 'Create an assayer payable (separate from client billing)' })
-  async createPayable(@Body() dto: CreatePayableDto, @Req() req: any) {
-    return { success: true, data: await this.service.createPayable(dto, req.user.id) };
-  }
-
-  @Get('payables')
-  @Roles(...BILLING_READ_ROLES)
-  @ApiOperation({ summary: 'List assayer payables with assayer/project names' })
-  async findPayables(@Query('assayerId') assayerId?: string, @Query('clientId') clientId?: string, @Query('status') status?: AssayerPayableStatus) {
-    return { success: true, data: await this.service.findPayablesEnriched({ assayerId, clientId, status }) };
-  }
-
-  @Patch('payables/:id/status')
-  @Roles(...BILLING_ROLES)
-  @ApiOperation({ summary: 'Transition an assayer payable status' })
-  async transitionPayable(@Param('id', ParseUUIDPipe) id: string, @Body() dto: TransitionPayableDto, @Req() req: any) {
-    return { success: true, data: await this.service.transitionPayable(id, dto.status, req.user.id, dto.reason) };
-  }
-
-  @Post('payables/:id/disburse')
-  @Roles(...DISBURSEMENT_ROLES)
-  @RequirePermissions('billing:approve:organization')
-  @ApiOperation({ summary: 'Disburse money against an approved assayer payable' })
-  async disburse(@Param('id', ParseUUIDPipe) id: string, @Body() dto: DisbursePayableDto, @Req() req: any) {
+  @ApiOperation({ summary: 'Assayer payouts (fee and reimbursement payables) with labels, paged' })
+  async payouts(@Query() q: PayoutsQuery) {
     return {
       success: true,
-      data: await this.service.recordDisbursement({ ...dto, payableId: id }, req.user.id),
+      data: await this.service.listPayouts({
+        assayerId: q.assayerId,
+        clientId: q.clientId,
+        status: q.status,
+        onHold: q.onHold === undefined ? undefined : q.onHold === 'true',
+        page: q.page,
+        limit: q.limit,
+      }),
     };
+  }
+
+  @Post('payouts/approve')
+  @Roles(...DISBURSEMENT_ROLES)
+  @RequirePermissions('billing:approve:organization')
+  @ApiOperation({ summary: 'Approve payouts (the one gate before payment)' })
+  async approvePayouts(@Body() dto: PayoutIdsDto, @Req() req: any) {
+    return { success: true, data: await this.service.approvePayouts(dto.payableIds, this.userId(req)) };
+  }
+
+  @Post('payouts/pay')
+  @Roles(...DISBURSEMENT_ROLES)
+  @RequirePermissions('billing:approve:organization')
+  @ApiOperation({ summary: 'Pay approved payouts in full, each as a recorded disbursement' })
+  async payPayouts(@Body() dto: PayPayoutsDto, @Req() req: any) {
+    const { payableIds, ...payment } = dto;
+    return { success: true, data: await this.service.payPayouts(payableIds, payment, this.userId(req)) };
+  }
+
+  @Patch('payouts/:id/hold')
+  @Roles(...DISBURSEMENT_ROLES)
+  @ApiOperation({ summary: 'Put a payout on hold, or release it' })
+  async holdPayout(@Param('id', ParseUUIDPipe) id: string, @Body() dto: HoldDto, @Req() req: any) {
+    return { success: true, data: await this.service.holdPayout(id, dto.onHold, dto.reason, this.userId(req)) };
   }
 
   @Get('assayers/:assayerId/statement')
   @Roles(...BILLING_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Assayer financial statement: earned, paid, outstanding and history' })
   async assayerStatement(@Param('assayerId', ParseUUIDPipe) assayerId: string, @Req() req: any) {
-    // An assayer may read only their own statement. The route allows both billing staff and
-    // ASSAYER, and the path id is attacker-controlled — without this an assayer could read any
-    // colleague's full earnings and payment history by changing the id. Billing roles are
-    // unrestricted; an assayer is forced to their own id.
+    // An assayer may read only their own statement; the path id is attacker-controlled.
     const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean);
     const isBillingStaff = roles.some((r) => (BILLING_ROLES as string[]).includes(r));
     if (!isBillingStaff && req.user?.id !== assayerId) {
@@ -374,78 +195,108 @@ export class BillingEngineController {
     return { success: true, data: await this.service.assayerStatement(assayerId) };
   }
 
-  // Conflicts
-  @Post('conflicts')
+  // ── Invoices ──────────────────────────────────────────────────────────────
+
+  @Get('invoiceable')
+  @Roles(...BILLING_READ_ROLES)
+  @ApiOperation({ summary: 'Completed work not yet invoiced, grouped by client' })
+  async invoiceable(@Query() q: InvoiceableQuery) {
+    return { success: true, data: await this.service.listInvoiceable({ clientId: q.clientId }) };
+  }
+
+  @Post('invoices')
   @Roles(...BILLING_ROLES)
-  @ApiOperation({ summary: 'Raise a billing conflict' })
-  async raiseConflict(@Body() dto: RaiseConflictDto, @Req() req: any) {
-    return { success: true, data: await this.service.raiseConflict(dto, req.user.id) };
+  @ApiOperation({ summary: 'Invoice a set of completed assignments for one client' })
+  async createInvoice(@Body() dto: CreateInvoiceDto, @Req() req: any) {
+    return { success: true, data: await this.service.createInvoice(dto, this.userId(req)) };
   }
 
-  @Get('conflicts')
+  @Get('invoices')
   @Roles(...BILLING_READ_ROLES)
-  @ApiOperation({ summary: 'List conflicts' })
-  async findConflicts(@Query('status') status?: BillingConflictStatus) {
-    return { success: true, data: await this.service.findConflicts(status) };
+  @ApiOperation({ summary: 'Invoices, paged' })
+  async invoices(@Query() q: InvoicesQuery) {
+    return { success: true, data: await this.service.findInvoicesPage(q) };
   }
 
-  @Patch('conflicts/:id/resolve')
+  @Get('invoices/:id')
+  @Roles(...BILLING_READ_ROLES)
+  @ApiOperation({ summary: 'One invoice with its lines and payments' })
+  async invoice(@Param('id', ParseUUIDPipe) id: string) {
+    return { success: true, data: await this.service.getInvoice(id) };
+  }
+
+  @Patch('invoices/:id/send')
   @Roles(...BILLING_ROLES)
-  @ApiOperation({ summary: 'Resolve a billing conflict' })
-  async resolveConflict(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ResolveConflictDto, @Req() req: any) {
-    return { success: true, data: await this.service.resolveConflict(id, dto, req.user.id) };
+  @ApiOperation({ summary: 'Mark an invoice as sent to the client' })
+  async sendInvoice(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+    return { success: true, data: await this.service.sendInvoice(id, this.userId(req)) };
   }
 
-  // History
-  @Get('history')
-  @Roles(...BILLING_READ_ROLES)
-  @ApiOperation({ summary: 'Billing history / audit trail' })
-  async getHistory(
-    @Query('clientId') clientId?: string,
-    @Query('projectId') projectId?: string,
-    @Query('assignmentId') assignmentId?: string,
-    @Query('assayerId') assayerId?: string,
-    @Query('entityType') entityType?: BillingEntityType,
-  ) {
-    return { success: true, data: await this.service.getHistory({ clientId, projectId, assignmentId, assayerId, entityType }) };
-  }
-
-  // Dashboard & reports
-  @Get('dashboard')
-  @Roles(...BILLING_READ_ROLES)
-  @ApiOperation({ summary: 'Billing dashboard summary (optionally per client)' })
-  async dashboard(@Query('clientId') clientId?: string) {
-    return { success: true, data: await this.service.dashboard(clientId) };
-  }
-
-  @Get('ledger/:entityType/:entityId')
+  @Post('invoices/:id/payment')
   @Roles(...BILLING_ROLES)
-  @ApiOperation({ summary: 'Complete financial record for any client, project, branch, assayer or assignment' })
-  async entityLedger(
-    @Param('entityType') entityType: 'client' | 'project' | 'branch' | 'assayer' | 'assignment',
-    @Param('entityId', ParseUUIDPipe) entityId: string,
-  ) {
-    return { success: true, data: await this.service.entityLedger(entityType, entityId) };
+  @ApiOperation({ summary: 'Record money received against a sent invoice' })
+  async recordPayment(@Param('id', ParseUUIDPipe) id: string, @Body() dto: InvoicePaymentDto, @Req() req: any) {
+    return { success: true, data: await this.service.recordPayment({ ...dto, invoiceId: id }, this.userId(req)) };
   }
 
-  @Get('finance/dashboard')
+  @Patch('invoices/:id/cancel')
   @Roles(...BILLING_ROLES)
-  @ApiOperation({ summary: 'Finance console: receivables, payables, cash-flow, margin and tax position' })
-  async financeDashboard() {
-    return { success: true, data: await this.service.financeDashboard() };
+  @ApiOperation({ summary: 'Cancel an unpaid invoice; its lines become invoiceable again' })
+  async cancelInvoice(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ReasonDto, @Req() req: any) {
+    return { success: true, data: await this.service.cancelInvoice(id, dto.reason, this.userId(req)) };
   }
 
-  @Get('clients')
-  @Roles(...BILLING_READ_ROLES)
-  @ApiOperation({ summary: 'Clients with billing activity, for scoping the billing workspace' })
-  async clientsWithBilling() {
-    return { success: true, data: await this.service.clientsWithBilling() };
+  @Post('payments/:id/reverse')
+  @Roles(...DISBURSEMENT_ROLES)
+  @ApiOperation({ summary: 'Reverse a recorded payment (either direction)' })
+  async reversePayment(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ReasonDto, @Req() req: any) {
+    return { success: true, data: await this.service.reversePayment(id, dto.reason, this.userId(req)) };
   }
 
-  @Get('reports/client/:clientId')
+  // ── The assignment's money ────────────────────────────────────────────────
+
+  @Get('assignments/:id/money')
   @Roles(...BILLING_READ_ROLES)
-  @ApiOperation({ summary: 'Client → projects → assignments billing report with margin and ageing' })
-  async clientReport(@Param('clientId', ParseUUIDPipe) clientId: string) {
-    return { success: true, data: await this.service.clientReport(clientId) };
+  @ApiOperation({ summary: 'Everything money-related about one assignment' })
+  async assignmentMoney(@Param('id', ParseUUIDPipe) id: string) {
+    return { success: true, data: await this.service.assignmentMoneyLine(id) };
+  }
+
+  @Patch('assignments/:id/client-line')
+  @Roles(...BILLING_ROLES)
+  @ApiOperation({ summary: 'Adjust or hold the client line for an assignment (before invoicing)' })
+  async editClientLine(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ClientLineDto, @Req() req: any) {
+    return { success: true, data: await this.service.editClientLine(id, dto, this.userId(req)) };
+  }
+
+  @Get('lines')
+  @Roles(...BILLING_READ_ROLES)
+  @ApiOperation({ summary: 'Client lines with labels (unpaged; for exports and filters)' })
+  async lines(@Query() q: LinesQuery) {
+    return { success: true, data: await this.service.listClientLines(q) };
+  }
+
+  // ── Reconcile (admin repair) ──────────────────────────────────────────────
+
+  @Get('reconcile/preview')
+  @Roles(...BILLING_ROLES)
+  @ApiOperation({ summary: 'How many completed assignments a reconcile would book' })
+  async reconcilePreview(@Query() q: ReconcilePreviewQuery) {
+    return { success: true, data: await this.service.reconcilePreview({ since: q.since || null }) };
+  }
+
+  @Post('reconcile')
+  @Roles(...BILLING_ROLES)
+  @ApiOperation({ summary: 'Queue a reconcile: book every completed assignment missing a payout or client line' })
+  @HttpCode(HttpStatus.ACCEPTED)
+  async reconcile(@Body() dto: ReconcileDto, @Req() req: any) {
+    return { success: true, data: await this.jobs.enqueueReconcile(this.userId(req), dto.since || null) };
+  }
+
+  @Get('jobs/:jobId')
+  @Roles(...BILLING_ROLES)
+  @ApiOperation({ summary: 'Poll a queued billing job' })
+  async jobStatus(@Param('jobId') jobId: string, @Req() req: any) {
+    return { success: true, data: await this.jobs.status(jobId, this.userId(req)) };
   }
 }

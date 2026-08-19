@@ -3,26 +3,34 @@ import { BaseEntity } from '../../core/entities/base.entity';
 import { AssayerPayableStatus } from '@fapoms/shared';
 
 /**
- * Assayer compensation — deliberately separate from client billing (spec §5/§12).
+ * What we owe an assayer for one assignment — the assayer-side line.
  *
- * Client billing says "what the client owes us". This says "what we owe the
- * assayer". Rates are snapshotted at payable time so historical amounts are
- * immutable even if a master rate changes later (spec §5: historical payable
- * rates).
+ * One fee payable per assignment, created by `bookAssignment` when the assignment completes and
+ * priced by `assignmentMoney`. Approved expense claims are payables against the same assignment
+ * too (one per claim, `expenseId` set), because an expense payout is the same act as a fee
+ * payout and a second route to "pay an assayer" would mean two places to look.
+ *
+ *   PENDING ("Due") → APPROVED → PAID   and the `onHold` flag, which blocks approval and payment.
+ *
+ * PAID is reached only by `recordDisbursement`; nothing sets it by hand. Rates are snapshotted
+ * at booking so the amount is immutable even if a master rate changes later.
  */
 @Entity('assayer_payables')
 @Index(['assayerId'])
 @Index(['clientId'])
 @Index(['projectId'])
-@Index(['assignmentId'])
 @Index(['status'])
-// One FEE payable per assignment, enforced by the database. Expense reimbursements are payables
-// against the same assignment too (one per approved claim) and are marked by
-// rate_snapshot.source = 'EXPENSE_CLAIM', so they are excluded. Also in migration
-// 1790500000000-BillingUniquenessPerAssignment.
+// One FEE payable per assignment, enforced by the database. Reimbursements carry `expense_id`
+// and are excluded. The name is load-bearing: `isUniqueViolation` matches on it.
 @Index('UQ_assayer_payables_fee_per_assignment', ['assignmentId'], {
   unique: true,
-  where: `"assignment_id" IS NOT NULL AND ("rate_snapshot"->>'source') IS DISTINCT FROM 'EXPENSE_CLAIM'`,
+  where: '"expense_id" IS NULL',
+})
+// One payable per approved expense claim — the database's answer to the double-reimbursement
+// window a retried approval used to open.
+@Index('UQ_assayer_payables_expense', ['expenseId'], {
+  unique: true,
+  where: '"expense_id" IS NOT NULL',
 })
 export class AssayerPayableEntity extends BaseEntity {
   @Column({ name: 'payable_number', length: 50, unique: true })
@@ -37,11 +45,22 @@ export class AssayerPayableEntity extends BaseEntity {
   @Column({ name: 'project_id', type: 'uuid', nullable: true })
   projectId: string | null;
 
-  @Column({ name: 'assignment_id', type: 'uuid', nullable: true })
-  assignmentId: string | null;
+  @Column({ name: 'assignment_id', type: 'uuid' })
+  assignmentId: string;
+
+  /** Set on reimbursement payables; null on the fee payable. */
+  @Column({ name: 'expense_id', type: 'uuid', nullable: true })
+  expenseId: string | null;
 
   @Column({ type: 'varchar', length: 20, default: AssayerPayableStatus.PENDING })
   status: AssayerPayableStatus;
+
+  /** A held payable cannot be approved or paid. */
+  @Column({ name: 'on_hold', type: 'boolean', default: false })
+  onHold: boolean;
+
+  @Column({ name: 'hold_reason', type: 'text', nullable: true })
+  holdReason: string | null;
 
   @Column({ name: 'base_amount', type: 'decimal', precision: 14, scale: 2, default: 0 })
   baseAmount: number;
@@ -55,6 +74,7 @@ export class AssayerPayableEntity extends BaseEntity {
   @Column({ name: 'tds_amount', type: 'decimal', precision: 14, scale: 2, default: 0 })
   tdsAmount: number;
 
+  /** base + travel − TDS: what the assayer actually receives. */
   @Column({ name: 'total_amount', type: 'decimal', precision: 14, scale: 2, default: 0 })
   totalAmount: number;
 

@@ -286,7 +286,7 @@ export class CommandCenterService {
            FROM billing_entries e
            JOIN assignments a ON a.id = e.assignment_id
            JOIN scoped s ON s.project_branch_id = a.project_branch_id
-          WHERE e.is_active = true AND e.project_id = s.project_id
+          WHERE e.is_active = true AND e.state <> 'CANCELLED' AND e.project_id = s.project_id
           GROUP BY a.project_branch_id
        ),
        -- The distinct places, so the KNN below runs once per branch rather than once per

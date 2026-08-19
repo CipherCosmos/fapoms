@@ -7,15 +7,18 @@ import { assignmentStatusTone } from '../utils/statusTone';
 import { relativeDay, RelativeDay } from '../utils/dates';
 import { StatsScreen } from './StatsScreen';
 import { countOpenQueries, countResolvedQueries } from '../utils/queries';
-import { getAssignmentTotalFee } from '../utils/fees';
-import type { AssayerAssignment, ExpenseSummary } from '../types/mobile-app';
+import { assignmentFeeValue } from '../utils/fees';
+import type { AssayerAssignment, AssayerStatement, ExpenseSummary } from '../types/mobile-app';
 
 export interface HomeScreenProps {
   assignments: AssayerAssignment[];
   totalAssignments: number;
   completedAssignments: number;
   averageRating?: number;
-  runningBalance: number;
+  /** The assayer's statement — the one source for what they are owed. Null while it loads. */
+  statement?: AssayerStatement | null;
+  /** True when the last statement read failed: show a dash, never a stale or invented figure. */
+  statementError?: boolean;
   expenseSummary: ExpenseSummary;
   onOpenAssignment: (a: AssayerAssignment) => void;
   onCheckIn: (a: AssayerAssignment) => void;
@@ -61,7 +64,8 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   totalAssignments,
   completedAssignments,
   averageRating,
-  runningBalance,
+  statement,
+  statementError,
   expenseSummary,
   onOpenAssignment,
   onCheckIn,
@@ -258,7 +262,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             icon="wallet-outline"
             tone="accent"
             label="Balance due to you"
-            value={money(runningBalance)}
+            value={statement ? money(statement.totals.outstanding) : statementError ? '—' : '…'}
           />
           {expenseSummary.pending > 0 && (
             <GroupedRow
@@ -340,7 +344,7 @@ const OfferCard: React.FC<{
   onDecline: () => void;
 }> = ({ assignment, busy, onAccept, onDecline }) => {
   const t = useTheme();
-  const fee = getAssignmentTotalFee(assignment);
+  const fee = assignmentFeeValue(assignment);
   const subtitle = [assignment.bankName, assignment.branchCode].filter(Boolean).join(' · ');
   // Accepting an offer is a commitment to a date; "Tomorrow" and "In 3 days" are different
   // decisions, and the bare date left that arithmetic to the assayer.
