@@ -17,6 +17,7 @@ import { AssessmentEntity } from './assessment.entity';
 import { ProjectQueryService } from './project-query.service';
 import { ZoneEntity } from '../zone/zone.entity';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { GeoPrecisionService } from '../geo/geo-precision.service';
 import * as xlsx from 'xlsx';
 
 /**
@@ -62,6 +63,9 @@ describe('ProjectService', () => {
   const mockClientRepo = {
     findOne: jest.fn(),
   };
+
+  // The precision hand-off at the end of an import. Resolved, never awaited by the importer.
+  const mockGeoPrecision = { enqueueBackfill: jest.fn().mockResolvedValue(undefined) };
 
   const mockAssessmentRepo = {
     findOne: jest.fn(),
@@ -169,6 +173,10 @@ describe('ProjectService', () => {
         {
           provide: ProjectQueryService,
           useValue: mockProjectQueryService,
+        },
+        {
+          provide: GeoPrecisionService,
+          useValue: mockGeoPrecision,
         },
         {
           provide: DataSource,
@@ -527,6 +535,23 @@ describe('ProjectService', () => {
           }),
           'user-1',
         );
+      });
+
+      it('hands coarsely placed branches to the precision worker when the import finishes', async () => {
+        // The stub geocoder answers at the pincode tier (2.5 km) — below the "needs a better fix"
+        // threshold — so first prove the clean case enqueues nothing…
+        mockGeoPrecision.enqueueBackfill.mockClear();
+        await service.uploadBranchesFromExcel('p-1', sheetBuffer([plainRow()]), 'user-1');
+        expect(mockGeoPrecision.enqueueBackfill).toHaveBeenCalledWith('branch', [], expect.stringContaining('p-1'));
+
+        // …then a district-centroid placement (15 km), which is the common real outcome.
+        mockGeoPrecision.enqueueBackfill.mockClear();
+        mockGeocode.mockResolvedValueOnce({ lat: 10.7, lng: 76.6, accuracyMeters: 15000, source: 'locality' });
+        const report = await service.uploadBranchesFromExcel('p-1', sheetBuffer([plainRow()]), 'user-1');
+
+        expect(report.imprecise).toHaveLength(1);
+        expect(report.imprecise[0].reason).toMatch(/precise lookup is queued/);
+        expect(mockGeoPrecision.enqueueBackfill).toHaveBeenCalledWith('branch', ['b-new'], expect.stringContaining('p-1'));
       });
 
       it('still honours a coordinate pair a sheet happens to carry, and skips the geocoder for it', async () => {

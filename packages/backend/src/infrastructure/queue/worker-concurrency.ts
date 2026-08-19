@@ -8,7 +8,8 @@
  * and billing sync — joining the queues that were already there. Every one of them chose its own
  * concurrency, sensibly, as a local decision: "this scan is heavy, so one at a time".
  *
- * Nobody added them up. Counted 2026-08-17, across eleven `@Processor` classes:
+ * Nobody added them up. Counted 2026-08-17, across eleven `@Processor` classes (twelve since the
+ * geo-precision worker joined on 2026-08-19, taking the total to 31):
  *
  *   | queue / worker                        | slots |
  *   |---------------------------------------|-------|
@@ -59,7 +60,7 @@ import { Logger } from '@nestjs/common';
  * Slots per worker, keyed by the queue each belongs to.
  *
  * **This is a mirror, not the definition.** The running values are the `@Process` decorators in
- * the eleven worker classes, where each sits next to the comment explaining why it is what it is;
+ * the worker classes, where each sits next to the comment explaining why it is what it is;
  * moving them here would separate every number from its reasoning to satisfy a bookkeeping need.
  *
  * A mirror that can drift is worse than no mirror, so it cannot drift: `worker-concurrency.spec.ts`
@@ -94,6 +95,15 @@ export const WORKER_CONCURRENCY = {
   documents: { autoDispatch: 1 },
   imports: { branchImport: 1 },
   generic: { catchAll: 1 },
+  /**
+   * Coordinate precision. Two named handlers (an import's targeted backfill, the nightly sweep),
+   * one slot each — and the slot count is a rate-limit decision, not a pool one: the free OSM
+   * providers allow ~1 request/second per client, and `politely()` serialises within a process,
+   * so one job at a time per handler keeps every geocode inside the providers' published limits.
+   * These slots are idle almost all the time and spend their active time waiting on HTTP, not
+   * holding a connection.
+   */
+  geoPrecision: { backfillIds: 1, sweep: 1 },
 } as const;
 
 /**

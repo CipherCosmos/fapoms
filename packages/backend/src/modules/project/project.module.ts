@@ -24,6 +24,7 @@ import { UserEntity } from '../user/user.entity';
 import { ZoneEntity } from '../zone/zone.entity';
 import { PlatformModule } from '../platform/platform.module';
 import { BranchModule } from '../branch/branch.module';
+import { GeoModule } from '../geo/geo.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 
 @Module({
@@ -44,6 +45,10 @@ import { NotificationsModule } from '../notifications/notifications.module';
     PlatformModule,
     BranchModule,
     NotificationsModule,
+    // For `GeoPrecisionService.enqueueBackfill`: the importer hands its coarsely placed branches
+    // to the precision worker the moment an import finishes. GeoModule is a leaf — it imports no
+    // feature module — so this cannot close a cycle.
+    GeoModule,
   ],
   controllers: [ProjectController, CallLogController],
   providers: [ProjectService, ProjectQueryService, CallLogService, ImportJobService, ImportJobWorker],

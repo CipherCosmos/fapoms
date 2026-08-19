@@ -15,7 +15,8 @@ import { EventCategory, resolveRegion, canonicalStateName } from '@fapoms/shared
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { autocompleteIndia, isPlaceLookupConfigured } from '../geo/india-autocomplete.helper';
 import { geocodeIndia } from '../geo/india-geocoder';
-import { resolveCoordinates, GeoFields } from '../geo/coordinate-resolution';
+import { resolveCoordinates, needsBetterFix, GeoFields } from '../geo/coordinate-resolution';
+import { GeoPrecisionService } from '../geo/geo-precision.service';
 
 async function geocodeAddress(address: string, city: string, district: string, state: string, pincode?: string | null): Promise<{ lat: number; lng: number } | null> {
   const res = await geocodeIndia(address, city, district, state, pincode);
@@ -131,6 +132,7 @@ export class BranchService {
     private readonly auditService: AuditService,
     private readonly branchQueryService: BranchQueryService,
     private readonly eventPublisher: DomainEventPublisher,
+    private readonly geoPrecision: GeoPrecisionService,
     @InjectDataSource()
     private readonly dataSource: DataSource,
   ) {}
@@ -576,6 +578,10 @@ export class BranchService {
     const rows = XLSX.utils.sheet_to_json<Record<string, any>>(worksheet);
 
     const errors: string[] = [];
+
+    // Rows that landed on a coarse tier, handed to the precision worker once the loop is done.
+
+    const coarseIds: string[] = [];
     let importedCount = 0;
 
     for (let index = 0; index < rows.length; index++) {
@@ -610,6 +616,34 @@ export class BranchService {
           where: { branchCode, clientId, isActive: true },
         });
 
+        /**
+         * Located through the same chain as every other branch write.
+         *
+         * This importer used to store `null` coordinates whenever the sheet had none — no
+         * geocode, no precision stamp — so a branch brought in this way had no pin at all: absent
+         * from the planning map, distance "unknown", and invisible to the precision sweep
+         * because it carried no `geo_source` to be judged by. The project importer, a different
+         * door into the same table, geocoded every row. Two importers, two answers.
+         *
+         * Same trade as the project importer: the fast tiers here (`precise: false`), because
+         * this is a bulk loop and the free providers allow about one lookup a second; the rows
+         * that land coarse are handed to the precision worker below, so they are upgraded in the
+         * background instead of waiting to be noticed. A coordinate pair the sheet does carry is
+         * honoured (`resolveCoordinates` rule 1), and a manual pin on an existing row is never
+         * overwritten (rule 2) — which is why `existing` is passed.
+         */
+        const geo = await resolveCoordinates(
+          {
+            address, city, district, state, pincode: pincode || null, name, brand: client.name,
+            suppliedLat: isNaN(latitude) ? null : latitude,
+            suppliedLng: isNaN(longitude) ? null : longitude,
+            precise: false,
+          },
+          existing ?? null,
+        );
+        const geoFields: Partial<GeoFields> = geo ?? {};
+
+        let saved: BranchEntity;
         if (existing) {
           existing.name = name;
           existing.address = address;
@@ -617,13 +651,9 @@ export class BranchService {
           existing.district = district;
           existing.city = city;
           existing.pincode = pincode || null;
-          existing.latitude = isNaN(latitude) ? null : latitude;
-          existing.longitude = isNaN(longitude) ? null : longitude;
           existing.updatedBy = userId;
-          if (!isNaN(latitude) && !isNaN(longitude)) {
-            existing.location = { type: 'Point', coordinates: [longitude, latitude] };
-          }
-          await this.branchRepository.save(existing);
+          Object.assign(existing, geoFields);
+          saved = await this.branchRepository.save(existing);
         } else {
           const branch = this.branchRepository.create({
             branchCode,
@@ -634,14 +664,15 @@ export class BranchService {
             district,
             city,
             pincode: pincode || null,
-            latitude: isNaN(latitude) ? null : latitude,
-            longitude: isNaN(longitude) ? null : longitude,
             clientId,
-            location: (!isNaN(latitude) && !isNaN(longitude)) ? { type: 'Point', coordinates: [longitude, latitude] } : null,
+            ...geoFields,
             createdBy: userId,
             updatedBy: userId,
           });
-          await this.branchRepository.save(branch);
+          saved = await this.branchRepository.save(branch);
+        }
+        if (saved?.id && needsBetterFix(saved.geoSource ?? null, saved.geoAccuracyMeters ?? null)) {
+          coarseIds.push(saved.id);
         }
 
         importedCount++;
@@ -660,6 +691,10 @@ export class BranchService {
         remarks: `Bulk imported/updated ${importedCount} branches. Errors: ${errors.length}`,
       });
     }
+
+    // Same hand-off as the project importer: coarse rows are upgraded in the background, and the
+    // nightly sweep catches anything this enqueue cannot. Fire-and-forget on purpose.
+    void this.geoPrecision.enqueueBackfill('branch', coarseIds, `client import ${clientId}`);
 
     return { importedCount, errors };
   }

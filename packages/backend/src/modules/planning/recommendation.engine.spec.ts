@@ -1106,3 +1106,32 @@ describe('commercial profile selection is the same for every scorer', () => {
     await expect(profitability.calculate(assayer, contextFor(expired))).resolves.toBe(50);
   });
 });
+
+/**
+ * `riskScore` is 0–10 (the importer writes LOW 2 / MEDIUM 4 / HIGH 7 / CRITICAL 9, and the
+ * planning map reads >= 7 as high). This calculator used to test `risk < 50` — a 0–100 threshold
+ * the data never used — so it returned 100 for every branch and never told a critical branch from
+ * a trivial one.
+ */
+describe('RiskScoreCalculator — reads the 0–10 scale the data is actually on', () => {
+  const calc = new RiskScoreCalculator();
+  const ctx = (riskScore: number) =>
+    ({ branch: { id: 'b', riskScore } as any, client: null, scheduledDate: new Date(), weights: {} }) as any;
+  const junior = { id: 'a-junior', experienceYears: 1, performanceRating: 4.0 } as any;
+  const senior = { id: 'a-senior', experienceYears: 6, performanceRating: 4.8 } as any;
+
+  it('lets anyone take a LOW or MEDIUM branch', async () => {
+    await expect(calc.calculate(junior, ctx(2))).resolves.toBe(100);
+    await expect(calc.calculate(junior, ctx(4))).resolves.toBe(100);
+  });
+
+  it('prefers a senior assayer for a HIGH branch and penalises a junior by ten points per risk point', async () => {
+    await expect(calc.calculate(senior, ctx(7))).resolves.toBe(100);
+    await expect(calc.calculate(junior, ctx(7))).resolves.toBe(30);
+  });
+
+  it('nearly zeroes a junior on a CRITICAL branch without disqualifying them outright', async () => {
+    await expect(calc.calculate(senior, ctx(9))).resolves.toBe(100);
+    await expect(calc.calculate(junior, ctx(9))).resolves.toBe(10);
+  });
+});

@@ -29,6 +29,7 @@ import { parseSheet, rowReader, identifyTemplate, ParsedSheet, RowReader } from 
 import { BranchEntity } from '../branch/branch.entity';
 import { geocodeIndiaRobust, GeocodeResult } from '../geo/india-geocoder';
 import { needsBetterFix } from '../geo/coordinate-resolution';
+import { GeoPrecisionService } from '../geo/geo-precision.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 
@@ -246,6 +247,7 @@ export class ProjectService implements OnModuleInit {
       private readonly eventPublisher: DomainEventPublisher,
       private readonly projectQueryService: ProjectQueryService,
       private readonly notificationDispatch: NotificationDispatchService,
+      private readonly geoPrecision: GeoPrecisionService,
       @InjectDataSource()
       private readonly dataSource: DataSource,
    ) {}
@@ -802,6 +804,8 @@ export class ProjectService implements OnModuleInit {
      * planned or checked into until someone corrects where they are.
      */
     const imprecise: { row: number; branchCode?: string; reason: string }[] = [];
+    // The branch ids behind `imprecise`, handed to the precision worker when the import is done.
+    const impreciseBranchIds: string[] = [];
 
     /**
      * ## Why this is two passes rather than one
@@ -1079,15 +1083,20 @@ export class ProjectService implements OnModuleInit {
            * Reported rather than skipped: the branch is still wanted, it just needs its location
            * corrected before anyone plans against it. The assayer import already warns this way.
            */
-          if (needsBetterFix(coords.geoSource, coords.geoAccuracyMeters)) {
+          const landedCoarse = needsBetterFix(coords.geoSource, coords.geoAccuracyMeters);
+          if (landedCoarse) {
             const km = Math.round(coords.geoAccuracyMeters / 1000);
             imprecise.push({
               row: rowNumber,
               branchCode,
+              // Honest about the placement AND about what happens next. The import takes the
+              // fast tiers on purpose (see geocodeIndiaRobust); the precise lookup is queued the
+              // moment this import finishes and usually lands within minutes. The operator is
+              // not being asked to do anything — only told where the pin stands right now.
               reason:
                 coords.geoSource === 'none'
-                  ? `"${branchName}" could not be located from its address — it has been placed on a fallback point and needs its location set before planning.`
-                  : `"${branchName}" could only be placed to about ${km} km (${coords.geoSource}) — set its location for accurate travel costs and check-in.`,
+                  ? `"${branchName}" could not be located from its address yet — placed on a fallback point for now; a precise lookup is queued and runs in the background.`
+                  : `"${branchName}" placed to about ${km} km for now (${coords.geoSource}); a precise lookup is queued and runs in the background.`,
             });
           }
 
@@ -1158,6 +1167,7 @@ export class ProjectService implements OnModuleInit {
             updatedBy: userId,
           }, userId);
           createdCount++;
+          if (landedCoarse && branch?.id) impreciseBranchIds.push(branch.id);
         } else {
           /**
            * Re-importing a branch corrects it, rather than only touching its hours.
@@ -1263,6 +1273,17 @@ export class ProjectService implements OnModuleInit {
     // Forced, so the last partial batch of rows is always reflected before the job completes —
     // otherwise an import of 2,004 rows would sit at 2,000 in the UI until the result appeared.
     publishProgress(prepared.length, true);
+
+    /**
+     * Hand the coarsely placed rows to the precision worker now, not "whenever the nightly sweep
+     * gets to them". The import deliberately took the fast geocoding tiers to stay out of the
+     * request path (district centroid ~15 km, state centroid ~100 km — measured on a real client
+     * file: 62 of 72 at 15 km, 10 on the state centroid). Those are placeholders, and the
+     * geocoder's own contract is that the backfill upgrades them afterwards. This is the
+     * "afterwards". Fire-and-forget: a Redis hiccup must not fail an import that has already
+     * landed, and the nightly sweep selects by precision, so nothing is lost if the enqueue is.
+     */
+    void this.geoPrecision.enqueueBackfill('branch', impreciseBranchIds, `import into project ${project.id}`);
 
     return {
       branches: await this.findProjectBranches(project.id),

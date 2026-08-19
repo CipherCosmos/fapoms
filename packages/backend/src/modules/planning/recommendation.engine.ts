@@ -1215,17 +1215,30 @@ export class RiskScoreCalculator implements ScoreCalculator {
   name = 'riskScore';
 
   async calculate(assayer: AssayerEntity, context: PlanningContext): Promise<number> {
+    /**
+     * `riskScore` is on a 0–10 scale — `riskScoreFromCategory` in the importer writes
+     * LOW 2 / MEDIUM 4 / HIGH 7 / CRITICAL 9, and the SLA scorer above and the planning map both
+     * read "high" as >= 7.
+     *
+     * This used to test `risk < 50`, a threshold from a 0–100 scale the data never used. Every
+     * branch scored below 50 by definition, so this returned 100 for everybody and the one
+     * calculator named after risk never distinguished a critical branch from a trivial one.
+     * The penalty was `100 - risk` on the same wrong scale — a 9 would have cost one point.
+     */
     const risk = Number(context.branch.riskScore) || 0;
-    if (risk < 50) return 100; // Low-risk branch
+    if (risk < 7) return 100; // Not a high-risk branch: anyone qualified may take it.
 
-    // High risk branch requires senior experience (years > 5) & high rating (> 4.5)
+    // High risk branch requires senior experience (years >= 5) & high rating (>= 4.5)
     const exp = assayer.experienceYears || 0;
     const rating = assayer.performanceRating || 5.0;
 
     if (exp >= 5 && rating >= 4.5) {
       return 100;
     }
-    return Math.max(0, 100 - risk); // Penalty otherwise
+    // Ten points off per risk point: HIGH (7) costs a junior 70, CRITICAL (9) costs 90 — a steep
+    // enough cliff that the senior candidate wins whenever one exists, without zeroing the only
+    // candidate when nobody senior is free.
+    return Math.max(0, 100 - risk * 10);
   }
 }
 

@@ -7,6 +7,7 @@ import { BranchService } from './branch.service';
 import { BranchQueryService } from './branch-query.service';
 import { BranchController } from './branch.controller';
 import { ClientModule } from '../client/client.module';
+import { GeoModule } from '../geo/geo.module';
 import { ZoneEntity } from '../zone/zone.entity';
 import { GeoStateEntity, GeoDistrictEntity, GeoCityEntity } from '../geo/geo.entities';
 
@@ -22,6 +23,9 @@ import { GeoStateEntity, GeoDistrictEntity, GeoCityEntity } from '../geo/geo.ent
       GeoCityEntity,
     ]),
     ClientModule,
+    // For `GeoPrecisionService.enqueueBackfill` — the bulk importer hands coarsely placed rows to
+    // the precision worker. GeoModule is a leaf; no cycle.
+    GeoModule,
   ],
   controllers: [BranchController],
   providers: [BranchService, BranchQueryService],

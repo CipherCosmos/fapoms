@@ -18,7 +18,10 @@
 
 import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
+import { InjectQueue } from '@nestjs/bull';
+import { Queue } from 'bull';
 import { Repository, IsNull, Not } from 'typeorm';
+import { GEO_PRECISION_QUEUE, GEO_PRECISION_TARGETED_JOB, GeoPrecisionTargetedJobData } from './geo-precision.constants';
 import { BranchEntity } from '../branch/branch.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
 import { AuditService } from '../../core/audit/audit.service';
@@ -59,7 +62,39 @@ export class GeoPrecisionService {
     @InjectRepository(AssayerEntity)
     private readonly assayerRepository: Repository<AssayerEntity>,
     private readonly auditService: AuditService,
+    @InjectQueue(GEO_PRECISION_QUEUE) private readonly queue: Queue,
   ) {}
+
+  /**
+   * Hand a set of rows to the background precision worker.
+   *
+   * Fire-and-forget by design: this is called at the end of an import, and a Redis hiccup must
+   * not turn a completed import into a failed request. The rows are not lost if the enqueue
+   * fails — the nightly sweep selects by precision, not by who asked, so it picks them up.
+   * Chunked so one 2,000-branch import does not become one job that holds the worker for hours
+   * with nothing to show for it in the meantime.
+   */
+  async enqueueBackfill(target: GeoTarget, ids: string[], reason?: string): Promise<void> {
+    const unique = [...new Set(ids.filter(Boolean))];
+    if (unique.length === 0) return;
+    const CHUNK = 50;
+    try {
+      for (let i = 0; i < unique.length; i += CHUNK) {
+        const data: GeoPrecisionTargetedJobData = { target, ids: unique.slice(i, i + CHUNK), reason };
+        await this.queue.add(GEO_PRECISION_TARGETED_JOB, data, {
+          attempts: 1,
+          removeOnComplete: { age: 24 * 60 * 60, count: 500 },
+          removeOnFail: { age: 7 * 24 * 60 * 60, count: 200 },
+        });
+      }
+      this.logger.log(`Queued precision backfill for ${unique.length} ${target} row(s)${reason ? ` (${reason})` : ''}.`);
+    } catch (err: any) {
+      this.logger.warn(
+        `Could not queue precision backfill for ${unique.length} ${target} row(s): ${err?.message ?? err}. ` +
+          `The nightly sweep will pick them up.`,
+      );
+    }
+  }
 
   /** What precision the current data actually has — the number that justifies a backfill. */
   async summary(target: GeoTarget): Promise<PrecisionSummary> {
@@ -84,20 +119,49 @@ export class GeoPrecisionService {
    * Re-resolve the rows whose coordinate is too coarse to plan against.
    *
    * `limit` is a real bound, not a page size: the free providers allow about one request per
-   * second, so a thousand-row estate is a twenty-minute job and the caller should be able to
-   * take it in bites. Every row is independent — one failure never stops the run, for the same
-   * reason the import does not.
+   * second (and a row costs several lookups — around nine seconds each, measured), so a
+   * thousand-row estate is hours of work and the caller should be able to take it in bites.
+   * Every row is independent — one failure never stops the run, for the same reason the import
+   * does not.
+   *
+   * `ids` narrows the sweep to specific records — how an import hands over exactly the rows it
+   * just placed coarsely, so they are upgraded minutes later instead of whenever the nightly
+   * sweep gets round to them.
+   *
+   * ## Why the selection is a query and not a filter
+   *
+   * This used to `find({ isActive: true, take: limit * 4 })` and skip rows in memory. No filter,
+   * no order: on a table where the first few hundred rows happen to be precise already, a
+   * `limit=50` run examined none of them, found nothing to do, and returned — without ever
+   * reaching the coarse rows further down. The backfill looked healthy and was a no-op. Now the
+   * database hands back only rows that need work, worst placed first, then the ones that have
+   * waited longest, and the bound applies to rows actually worked.
    */
-  async backfill(target: GeoTarget, limit = 50): Promise<BackfillReport> {
+  async backfill(target: GeoTarget, limit = 50, ids?: string[]): Promise<BackfillReport> {
     const report: BackfillReport = { examined: 0, improved: 0, unchanged: 0, protectedManual: 0, movedKm: [] };
 
-    const rows: any[] =
-      target === 'branch'
-        ? await this.branchRepository.find({ where: { isActive: true }, take: limit * 4 })
-        : await this.assayerRepository.find({ where: { isActive: true }, take: limit * 4 });
+    const repo: Repository<any> = target === 'branch' ? this.branchRepository : this.assayerRepository;
+    const qb = repo
+      .createQueryBuilder('r')
+      .where('r.is_active = true')
+      // Manual pins are never re-resolved; excluded in the query rather than counted and skipped.
+      .andWhere("(r.geo_source IS NULL OR r.geo_source <> 'manual')")
+      // The same predicate as `needsBetterFix`, expressed in SQL: never resolved, or coarser
+      // than the pincode tier.
+      .andWhere('(r.geo_source IS NULL OR r.geo_accuracy_meters IS NULL OR r.geo_accuracy_meters > :pin)', {
+        pin: PRECISION_METERS.pincode,
+      })
+      // Worst first — a state centroid is a bigger lie than a district one — then oldest first,
+      // so a row that failed last night is not starved by rows that arrived today.
+      .orderBy('r.geo_accuracy_meters', 'DESC', 'NULLS FIRST')
+      .addOrderBy('r.geo_resolved_at', 'ASC', 'NULLS FIRST')
+      .take(limit);
+    if (ids && ids.length > 0) qb.andWhere('r.id IN (:...ids)', { ids });
+
+    const rows: any[] = await qb.getMany();
 
     for (const row of rows) {
-      if (report.examined >= limit) break;
+      // Belt and braces against a stale row: the query already excluded these.
       if (row.geoSource === 'manual') {
         report.protectedManual++;
         continue;

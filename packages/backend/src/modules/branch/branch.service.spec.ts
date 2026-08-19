@@ -12,6 +12,7 @@ import { GeoStateEntity, GeoDistrictEntity, GeoCityEntity } from '../geo/geo.ent
 import { AuditService } from '../../core/audit/audit.service';
 import { BranchQueryService } from './branch-query.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { GeoPrecisionService } from '../geo/geo-precision.service';
 
 describe('BranchService', () => {
   let service: BranchService;
@@ -69,6 +70,8 @@ describe('BranchService', () => {
         { provide: AuditService, useValue: mockAuditService },
         { provide: BranchQueryService, useValue: mockBranchQueryService },
         { provide: DomainEventPublisher, useValue: { publish: jest.fn() } },
+        // The bulk importer's hand-off to the precision worker; fire-and-forget, never awaited.
+        { provide: GeoPrecisionService, useValue: { enqueueBackfill: jest.fn().mockResolvedValue(undefined) } },
         { provide: getDataSourceToken(), useValue: { query: jest.fn().mockResolvedValue([]) } },
       ],
     }).compile();
