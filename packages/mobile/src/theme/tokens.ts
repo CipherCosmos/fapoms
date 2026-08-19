@@ -55,6 +55,8 @@ export interface Palette {
   warningSoft: string;
   danger: string;
   dangerSoft: string;
+  /** Ink on a solid `danger` fill — the count in a red badge. Same rule as onPrimary. */
+  onDanger: string;
   info: string;
   infoSoft: string;
 
@@ -102,6 +104,9 @@ const dark: Palette = {
   warningSoft: 'rgba(251,191,36,0.13)',
   danger: '#FB7185',
   dangerSoft: 'rgba(251,113,133,0.13)',
+  /* Dark ink, not white: white on this rose is ~2.4:1 and fails AA for the one thing a badge
+     exists to show — a number. The near-black ink used on the violet button clears ~8.5:1. */
+  onDanger: '#0E1016',
   info: '#60A5FA',
   infoSoft: 'rgba(96,165,250,0.13)',
 
@@ -142,6 +147,8 @@ const light: Palette = {
   warningSoft: 'rgba(161,98,7,0.12)',
   danger: '#E11D48',
   dangerSoft: 'rgba(225,29,72,0.10)',
+  /* The crimson is deep enough for white (~4.7:1). */
+  onDanger: '#FFFFFF',
   info: '#2563EB',
   infoSoft: 'rgba(37,99,235,0.10)',
 

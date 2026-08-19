@@ -98,7 +98,7 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
             <AppText variant="h3">
               Notifications{unreadCount > 0 ? ` (${unreadCount})` : ''}
             </AppText>
-            <IconButton icon="close" onPress={onClose} />
+            <IconButton icon="close" onPress={onClose} accessibilityLabel="Close notifications" />
           </View>
 
           {/* Clearing the badge was previously one tap per item. An assayer back from a week in

@@ -165,12 +165,15 @@ export const TabDock: React.FC<{
                 />
                 {tab.badge != null && tab.badge > 0 && (
                   <View style={{
-                    position: 'absolute', top: -4, right: -8, minWidth: 16, height: 16, borderRadius: 8,
+                    // 18px, not 16: the count inside was 9pt, below every size in the type scale
+                    // (overline is the floor at 11). 10pt with `onDanger` ink matches the
+                    // IconButton badge in primitives, so the two badges are one badge.
+                    position: 'absolute', top: -5, right: -9, minWidth: 18, height: 18, borderRadius: 9,
                     paddingHorizontal: 4, backgroundColor: t.colors.danger,
                     alignItems: 'center', justifyContent: 'center',
                     borderWidth: 2, borderColor: t.colors.surface,
                   }}>
-                    <Text style={{ color: '#fff', fontSize: 9, fontWeight: '800' }}>
+                    <Text style={{ color: t.colors.onDanger, fontSize: 10, fontWeight: '800' }}>
                       {tab.badge > 9 ? '9+' : tab.badge}
                     </Text>
                   </View>
@@ -178,7 +181,8 @@ export const TabDock: React.FC<{
               </View>
               <Text style={[
                 t.type.caption as TextStyle,
-                { fontSize: 10.5, color: active ? t.colors.primary : t.colors.textFaint },
+                // 11 is the smallest size in the scale (overline); 10.5 sat below it.
+                { fontSize: 11, color: active ? t.colors.primary : t.colors.textFaint },
               ]}>
                 {tab.label}
               </Text>

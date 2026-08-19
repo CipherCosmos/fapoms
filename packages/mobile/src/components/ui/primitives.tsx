@@ -149,7 +149,7 @@ export const Tappable: React.FC<{
   scaleTo?: number;
   /** Passed through to Pressable so icon-only controls announce themselves to screen readers. */
   accessibilityLabel?: string;
-  accessibilityRole?: 'button' | 'link' | 'switch';
+  accessibilityRole?: 'button' | 'link' | 'switch' | 'tab';
   /** Override the default 8px touch expansion for small controls that need a larger tap area. */
   hitSlop?: number | { top?: number; bottom?: number; left?: number; right?: number };
   /** Passed through for controls (e.g. GroupedSwitch) that need to announce checked/expanded state. */
@@ -435,7 +435,7 @@ export const IconButton: React.FC<{
             alignItems: 'center', justifyContent: 'center',
             borderWidth: 2, borderColor: t.colors.bg,
           }}>
-            <Text style={{ color: '#fff', fontSize: 10, fontWeight: '800' }}>{badge > 99 ? '99+' : badge}</Text>
+            <Text style={{ color: t.colors.onDanger, fontSize: 10, fontWeight: '800' }}>{badge > 99 ? '99+' : badge}</Text>
           </View>
         )}
       </View>

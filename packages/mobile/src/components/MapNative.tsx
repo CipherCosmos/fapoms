@@ -133,8 +133,9 @@ export const InteractiveMapNative: React.FC<MapRenderProps> = ({
         showsMyLocationButton
         showsCompass
         loadingEnabled
-        loadingBackgroundColor="#090d16"
-        loadingIndicatorColor="#2563eb"
+        // The loading canvas follows the theme; a fixed near-black flashed under light mode.
+        loadingBackgroundColor={t.colors.bg}
+        loadingIndicatorColor={t.colors.primary}
         initialRegion={{
           latitude: destination.latitude,
           longitude: destination.longitude,

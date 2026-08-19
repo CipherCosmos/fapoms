@@ -189,7 +189,7 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
             borderColor: t.colors.border,
           }}
         >
-          <IconButton icon="close" onPress={dismiss} />
+          <IconButton icon="close" onPress={dismiss} accessibilityLabel="Close scanner" />
           <View style={{ flex: 1 }}>
             <AppText variant="h3">{hasScan ? 'Save document' : 'Scan document'}</AppText>
             {purpose ? (

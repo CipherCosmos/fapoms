@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { View, Text } from 'react-native';
 import { Icon } from './ui/primitives';
+import { useTheme } from '../theme/ThemeProvider';
 
 // Web implementation of the in-app map. Uses Leaflet + OpenStreetMap tiles with an
 // optional OSRM route polyline. Kept free with no API key. Native uses react-native-maps.
@@ -17,6 +18,7 @@ export interface MapRenderProps {
 }
 
 export const InteractiveMapWeb: React.FC<MapRenderProps> = ({ origin, destination, routeCoords, fitKey, passedIndex }) => {
+  const t = useTheme();
   const containerRef = useRef<any>(null);
   const mapRef = useRef<any>(null);
   const routeRef = useRef<any>(null);
@@ -131,8 +133,12 @@ export const InteractiveMapWeb: React.FC<MapRenderProps> = ({ origin, destinatio
     }
   }, [routeCoords, passedIndex]);
 
+  // The canvas under the tiles follows the theme — it is what shows while tiles load, and a
+  // fixed slate slab flashed dark under a light-mode screen. The attribution chip below is
+  // deliberately NOT themed: it sits over the map imagery, whose brightness does not follow the
+  // app's setting, so a light chip would vanish on a bright tile.
   return (
-    <View style={{ position: 'relative', flex: 1, overflow: 'hidden', backgroundColor: '#0f172a' }}>
+    <View style={{ position: 'relative', flex: 1, overflow: 'hidden', backgroundColor: t.colors.bg }}>
       <View ref={containerRef} style={{ width: '100%', height: '100%' }} />
       <View
         style={{

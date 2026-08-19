@@ -166,13 +166,13 @@ export const AvailabilityModal: React.FC<AvailabilityModalProps> = ({
           <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: t.space.sm }}>
             {/* Month header */}
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: t.space.md }}>
-              <Tappable onPress={() => setMonthOffset((v) => Math.max(0, v - 1))}>
+              <Tappable onPress={() => setMonthOffset((v) => Math.max(0, v - 1))} disabled={monthOffset === 0} accessibilityRole="button" accessibilityLabel="Previous month">
                 <View style={{ padding: t.space.sm, opacity: monthOffset === 0 ? 0.35 : 1 }}>
                   <Icon name="chevron-back" size={20} color={t.colors.text} />
                 </View>
               </Tappable>
               <AppText variant="bodyStrong">{monthLabel}</AppText>
-              <Tappable onPress={() => setMonthOffset((v) => v + 1)}>
+              <Tappable onPress={() => setMonthOffset((v) => v + 1)} accessibilityRole="button" accessibilityLabel="Next month">
                 <View style={{ padding: t.space.sm }}>
                   <Icon name="chevron-forward" size={20} color={t.colors.text} />
                 </View>
@@ -213,6 +213,11 @@ export const AvailabilityModal: React.FC<AvailabilityModalProps> = ({
                       key={di}
                       onPress={() => onTapDay(day)}
                       style={{ flex: 1, height: 46, padding: 3 }}
+                      accessibilityRole="button"
+                      // A bare "46" tells a screen-reader user nothing about which day it is or
+                      // whether it is already marked; the visible state is colour alone.
+                      accessibilityLabel={`${day} ${monthLabel}${isToday ? ', today' : ''}${onLeave ? ', marked as time off' : isPending ? ', selected as start' : ''}`}
+                      accessibilityState={{ selected: onLeave || isPending, disabled: past }}
                     >
                       <View
                         style={{

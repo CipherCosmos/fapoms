@@ -57,7 +57,13 @@ interface ThemeContextValue extends Theme {
   cyclePreference: () => void;
 }
 
-const ThemeContext = createContext<ThemeContextValue | null>(null);
+/**
+ * Exported for the one consumer that cannot call a hook: `AppErrorBoundary` in App.tsx is a
+ * class component (React error boundaries have no function-component form) and reads this via
+ * `static contextType` so its fallback follows the theme instead of being pinned dark. Everything
+ * else should use `useTheme()`.
+ */
+export const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 export const ThemeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const systemScheme = useColorScheme();

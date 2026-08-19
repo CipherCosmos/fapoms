@@ -207,7 +207,7 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
           borderBottomWidth: 1,
           borderColor: t.colors.border,
         }}>
-          <IconButton icon="arrow-back" onPress={onClose} />
+          <IconButton icon="arrow-back" onPress={onClose} accessibilityLabel="Back" />
           <View style={{
             width: 40, height: 40, borderRadius: 20,
             backgroundColor: t.colors.primarySoft,
