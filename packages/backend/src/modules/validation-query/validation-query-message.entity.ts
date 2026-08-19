@@ -43,7 +43,7 @@ export class ValidationQueryMessageEntity extends BaseEntity {
   body: string | null;
 
   @Column({ name: 'attachments', type: 'jsonb', nullable: true })
-  attachments: { url: string; fileName: string; fileType: string }[] | null;
+  attachments: { url: string; fileName: string; fileType: string; s3Key?: string }[] | null;
 
   /** 1-based page of the returned PDF this message refers to. */
   @Column({ name: 'page_number', type: 'int', nullable: true })

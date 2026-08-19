@@ -82,6 +82,82 @@ describe('QueryThreadService.postMessage', () => {
     expect(dispatch.emitSafe).not.toHaveBeenCalled();
   });
 
+  /**
+   * The desk's marked crop, and where it has to be for the assayer to see it.
+   *
+   * A validator circles a figure on the returned packet and asks "what is this?". The crop was
+   * saved as `snapshot_path` on the message — which the web renders — and mirrored onto the
+   * *query* row's attachment list. The phone reads attachments off each message and nothing
+   * else, so it saw neither: the assayer got the question with no picture, which is the one
+   * thing that made it answerable. The crop travels with its own message now.
+   */
+  describe("the desk's marked crop", () => {
+    const CROP = '/api/v1/validation-queries/attachment/chat%2Fregion-p3.png';
+
+    it("rides on the message the assayer's app actually reads", async () => {
+      await service.postMessage('q-1', QueryMessageAuthor.STAFF, 'user-9', 'Priya', {
+        body: 'What is this figure?', snapshotPath: CROP, pageNumber: 3,
+      });
+
+      const created = messageRepo.create.mock.calls.at(-1)![0];
+      expect(created.attachments).toEqual([
+        expect.objectContaining({ url: CROP, fileType: 'image/png', fileName: 'Marked area on page 3' }),
+      ]);
+    });
+
+    it('carries the storage key, which is what the phone signs before it can load an image', async () => {
+      await service.postMessage('q-1', QueryMessageAuthor.STAFF, 'user-9', 'Priya', {
+        snapshotPath: CROP, pageNumber: 3,
+      });
+
+      // The crop arrives wrapped in its download URL; the key inside is what gets signed.
+      expect(messageRepo.create.mock.calls.at(-1)![0].attachments[0].s3Key).toBe('chat/region-p3.png');
+    });
+
+    it('keeps the files the sender attached alongside it', async () => {
+      await service.postMessage('q-1', QueryMessageAuthor.STAFF, 'user-9', 'Priya', {
+        body: 'see both', snapshotPath: CROP, pageNumber: 1,
+        attachments: [{ url: '/a.pdf', fileName: 'a.pdf', fileType: 'application/pdf' }],
+      });
+
+      const attachments = messageRepo.create.mock.calls.at(-1)![0].attachments;
+      expect(attachments.map((a: any) => a.fileName)).toEqual(['a.pdf', 'Marked area on page 1']);
+    });
+
+    it('is not copied back onto the query row, which no client reads', async () => {
+      let savedQuery: any;
+      queryRepo.save.mockImplementation(async (q: any) => { savedQuery = q; return q; });
+
+      await service.postMessage('q-1', QueryMessageAuthor.STAFF, 'user-9', 'Priya', {
+        snapshotPath: CROP, pageNumber: 2,
+      });
+
+      // The fixture starts with `attachments: null` and must still be null: the crop is not
+      // copied here, so this column has nothing to accumulate.
+      expect(savedQuery.attachments).toBeNull();
+    });
+
+    it('leaves an assayer message alone — only the desk marks up the packet', async () => {
+      await service.postMessage('q-1', QueryMessageAuthor.ASSAYER, 'as-1', 'Belekar', {
+        body: 'It is 412 grams.',
+      });
+
+      expect(messageRepo.create.mock.calls.at(-1)![0].attachments).toBeNull();
+    });
+  });
+
+  it('records that an answer arrived without copying the answer onto the query row', async () => {
+    let savedQuery: any;
+    queryRepo.save.mockImplementation(async (q: any) => { savedQuery = q; return q; });
+
+    await service.postMessage('q-1', QueryMessageAuthor.ASSAYER, 'as-1', 'Belekar', { body: 'Corrected.' });
+
+    expect(savedQuery.status).toBe(ValidationQueryStatus.RESPONDED);
+    expect(savedQuery.lastMessageAt).toBeDefined();
+    // The message text has one home. This column used to hold a second, corrupted copy.
+    expect(savedQuery.assayerResponse).toBeUndefined();
+  });
+
   it("refuses to add to a resolved clarification", async () => {
     queryRepo.findOne.mockResolvedValue({ ...query, status: ValidationQueryStatus.RESOLVED });
     await expect(

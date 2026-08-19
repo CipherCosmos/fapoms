@@ -25,7 +25,6 @@ export interface ValidationQuery {
   fieldId: string;
   validatorName: string;
   queryText: string;
-  assayerResponse?: string;
   // RESPONDED = assayer has submitted a response but a validator hasn't closed it yet.
   // Derived from the shared enum (as a string union, so `=== 'RESOLVED'` comparisons still typecheck)
   // rather than a hand-copied literal set that could drift from @fapoms/shared.

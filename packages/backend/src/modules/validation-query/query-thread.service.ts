@@ -12,7 +12,7 @@ import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 
 export interface PostMessageDto {
   body?: string;
-  attachments?: { url: string; fileName: string; fileType: string }[];
+  attachments?: { url: string; fileName: string; fileType: string; s3Key?: string }[];
   pageNumber?: number;
   region?: { x: number; y: number; w: number; h: number };
   snapshotPath?: string;
@@ -29,6 +29,15 @@ export interface PostMessageDto {
  */
 @Injectable()
 export class QueryThreadService {
+  /** `/api/v1/validation-queries/attachment/<encoded key>` → `<key>`. Anything else is already a key. */
+  private static readonly ATTACHMENT_MARKER = '/validation-queries/attachment/';
+  static storageKeyFromUrl(url: string): string {
+    const i = url.indexOf(QueryThreadService.ATTACHMENT_MARKER);
+    if (i === -1) return url;
+    const enc = url.slice(i + QueryThreadService.ATTACHMENT_MARKER.length).split('?')[0];
+    try { return decodeURIComponent(enc); } catch { return enc; }
+  }
+
   constructor(
     @InjectRepository(ValidationQueryEntity)
     private readonly queryRepository: Repository<ValidationQueryEntity>,
@@ -111,13 +120,38 @@ export class QueryThreadService {
       }
     }
 
+    /**
+     * The desk's marked crop, carried where both clients look for files.
+     *
+     * When a validator anchors a question to a region of the returned packet, the crop is
+     * saved as `snapshotPath` — and the web renders it from there, but the assayer's phone
+     * never did: it reads `attachments` off each message, and the crop was not in it. The
+     * server mirrored the crop onto the *query* row instead, a column no client reads at all.
+     * So the desk would circle a figure, ask "what is this?", and the assayer got the question
+     * with no picture — the one thing that made it answerable.
+     *
+     * It travels with its message now. The existing app renders it without needing an update.
+     */
+    const cropAttachment = authorType === QueryMessageAuthor.STAFF && dto.snapshotPath
+      ? [{
+          url: dto.snapshotPath,
+          // Both clients sign a storage key before they can load the image, and the crop
+          // arrives as the download URL that key is wrapped in. Unwrap it here so the phone
+          // has the same handle on it that every other attachment carries.
+          s3Key: QueryThreadService.storageKeyFromUrl(dto.snapshotPath),
+          fileName: dto.pageNumber ? `Marked area on page ${dto.pageNumber}` : 'Marked area',
+          fileType: 'image/png',
+        }]
+      : [];
+    const messageAttachments = [...(dto.attachments ?? []), ...cropAttachment];
+
     const message = this.messageRepository.create({
       validationQueryId: queryId,
       authorType,
       authorId,
       authorName,
       body: dto.body?.trim() || null,
-      attachments: dto.attachments ?? null,
+      attachments: messageAttachments.length > 0 ? messageAttachments : null,
       pageNumber: dto.pageNumber ?? null,
       region: dto.region ?? null,
       snapshotPath: dto.snapshotPath ?? null,
@@ -130,29 +164,12 @@ export class QueryThreadService {
     });
     const saved = await this.messageRepository.save(message);
 
+    // The only thing the query row keeps about a message is when the last one arrived, so a
+    // thread list can sort by activity without joining. The message itself lives in one place.
     query.lastMessageAt = saved.createdAt;
-    // The desk points the assayer at a marked crop on the packet. That lives on the
-    // *message* (snapshotPath), but the mobile chat reads attachments off the query —
-    // so mirror the crop onto the query's attachment list, otherwise the assayer
-    // never sees the image the desk is talking about.
-    if (authorType === QueryMessageAuthor.STAFF && saved.snapshotPath) {
-      const existing = Array.isArray(query.attachments) ? query.attachments : [];
-      query.attachments = [
-        ...existing,
-        {
-          url: saved.snapshotPath,
-          fileName: saved.pageNumber ? `Marked area on page ${saved.pageNumber}` : 'Marked area',
-          fileType: 'image/png',
-          uploadedBy: 'VALIDATOR',
-          timestamp: saved.createdAt?.toISOString?.() ?? new Date().toISOString(),
-        },
-      ];
-    }
     if (authorType === QueryMessageAuthor.ASSAYER) {
       query.status = ValidationQueryStatus.RESPONDED;
       query.respondedAt = saved.createdAt;
-      // Keep the legacy single-answer field aligned so older readers still work.
-      if (saved.body) query.assayerResponse = saved.body;
     } else if (query.status === ValidationQueryStatus.RESPONDED) {
       query.status = ValidationQueryStatus.OPEN;
     }

@@ -89,7 +89,6 @@ export class ValidationQueryService {
       // Who on the desk raised it — this was never set, so no clarification could be attributed
       // to a staffer or counted toward their throughput.
       raisedByUserId: userId,
-      attachments: rawAttachments.length > 0 ? rawAttachments : null,
       status: ValidationQueryStatus.OPEN,
       slaDueDate,
       createdBy: userId,
@@ -206,24 +205,17 @@ export class ValidationQueryService {
       throw new BadRequestException(`Cannot respond to query in status ${query.status}.`);
     }
 
-    // Append new response as a timestamped chat message if text exists, preserving conversation history
-    if (assayerResponse && assayerResponse.trim().length > 0) {
-      const timestamp = new Date().toISOString();
-      const newMessage = `[${timestamp}] ${assayerResponse.trim()}`;
-      query.assayerResponse = query.assayerResponse
-        ? `${query.assayerResponse}\n${newMessage}`
-        : newMessage;
-    }
+    /**
+     * The reply itself goes to the thread below, not onto this row.
+     *
+     * This used to append `[timestamp] text` lines into an `assayer_response` column while the
+     * web route overwrote that same column with just the latest body — two writers, two
+     * incompatible formats, and no screen rendering either of them. Attachments were copied
+     * here too, alongside the copies already hanging off their own messages. The row now
+     * records only that an answer arrived and when.
+     */
     query.respondedAt = new Date();
     query.status = ValidationQueryStatus.RESPONDED;
-    if (attachments && attachments.length > 0) {
-      const existing = (Array.isArray(query.attachments) ? query.attachments : []).flat(Infinity).filter((a: any) => a && a.url);
-      const incoming = attachments.flat(Infinity).filter((a: any) => a && a.url);
-      query.attachments = [...existing, ...incoming];
-      console.log(`[respondToQuery] Saved ${incoming.length} attachments for query ${queryId}`);
-    } else {
-      console.log(`[respondToQuery] No attachments received for query ${queryId} (attachments=${JSON.stringify(attachments)})`);
-    }
     query.updatedBy = userId;
 
     const saved = await this.queryRepository.save(query);
@@ -320,7 +312,6 @@ export class ValidationQueryService {
         assayerId: query.assayerId,
         validatorId: (query as any).validatorId || userId,
         assayerResponse,
-        attachments: saved.attachments,
         userId,
         timestamp: new Date(),
       });

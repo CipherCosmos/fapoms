@@ -14,20 +14,24 @@ export class ValidationQueryEntity extends BaseEntity {
   @Column({ name: 'assayer_id', type: 'uuid' })
   assayerId: string;
 
+  /**
+   * The question, as it was asked. Written once and never appended to — the back-and-forth
+   * lives in `validation_query_messages`, which is what both clients render.
+   *
+   * This row used to carry the conversation as well: an `assayer_response` column that the
+   * mobile route appended `[timestamp] text` lines to while the web route overwrote the whole
+   * thing with the latest message body, and an `attachments` array that accumulated copies of
+   * files already hanging off their own messages. Nothing rendered either of them. They are
+   * gone; a message has one home.
+   */
   @Column({ name: 'query_text', type: 'text' })
   queryText: string;
 
   @Column({ name: 'target_field', type: 'varchar', length: 150, nullable: true })
   targetField: string | null;
 
-  @Column({ name: 'assayer_response', type: 'text', nullable: true })
-  assayerResponse: string | null;
-
   @Column({ name: 'responded_at', type: 'timestamptz', nullable: true })
   respondedAt: Date | null;
-
-  @Column({ name: 'attachments', type: 'jsonb', nullable: true })
-  attachments: { url: string; fileName: string; fileType: string; uploadedBy: string; timestamp: string }[] | null;
 
   @Column({
     type: 'enum',

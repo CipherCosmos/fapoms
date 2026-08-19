@@ -308,7 +308,13 @@ export const ThreadPanel: React.FC<Props> = ({
 
                 {m.body && <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{m.body}</div>}
 
-                {(m.attachments ?? []).map((a) => (
+                {/*
+                  * The crop now travels as an attachment on its own message, so the assayer's
+                  * app can find it — that app reads attachments and nothing else. It is drawn
+                  * above as an image, which is the point of it, so it is skipped here rather
+                  * than repeated as a file link underneath.
+                  */}
+                {(m.attachments ?? []).filter((a) => a.url !== m.snapshotPath).map((a) => (
                   <a key={a.url} href={signed[a.url] ?? a.url} target="_blank" rel="noreferrer"
                     style={{
                       display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11.5px',
