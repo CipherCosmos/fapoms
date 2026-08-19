@@ -53,6 +53,29 @@ function formatDuration(seconds: number): string {
 const DIRECTIONS_URL = 'https://maps.googleapis.com/maps/api/directions/json';
 const OSRM_URL = 'https://router.project-osrm.org/route/v1/driving';
 
+/**
+ * Both routing providers are reached with a bare `fetch`, which has no timeout of its own — a
+ * request to a host that accepted the connection and then went silent never settles.
+ *
+ * That is the ordinary field failure, not an exotic one: a handset holding a bar of signal on a
+ * congested rural tower, or sitting behind a bank's captive portal. The whole route build is
+ * awaited between `setLoading(true)` and the `applyResult`/estimate that clears it, so a hung
+ * socket leaves the sheet spinning forever AND keeps `canNavigate` false — the assayer can
+ * neither see how far the branch is nor start navigation, with nothing on screen saying why.
+ * Aborting hands control back to the straight-line estimate below, which needs no network.
+ */
+const ROUTE_FETCH_TIMEOUT_MS = 12000;
+
+async function fetchWithTimeout(url: string, timeoutMs = ROUTE_FETCH_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Route cache: keyed by "provider|mode|originLng,originLat|destLng,destLat". Prevents
 // redundant network calls when the same origin→destination is re-requested
 // (e.g. modal re-open, StrictMode double-invoke, or re-render).
@@ -306,7 +329,7 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
           params.set('alternatives', 'true');
         }
         try {
-          const res = await fetch(`${DIRECTIONS_URL}?${params.toString()}`);
+          const res = await fetchWithTimeout(`${DIRECTIONS_URL}?${params.toString()}`);
           const data = await res.json();
           if (data.status === 'OK' && data.routes?.length) {
             const route = data.routes[0];
@@ -351,7 +374,7 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
           const url =
             `${OSRM_URL}/${from.longitude},${from.latitude};${destination.longitude},${destination.latitude}` +
             `?overview=full&geometries=polyline&steps=false`;
-          const res = await fetch(url);
+          const res = await fetchWithTimeout(url);
           const data = await res.json();
           if (data.code === 'Ok' && data.routes?.length) {
             const route = data.routes[0];

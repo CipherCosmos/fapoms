@@ -65,8 +65,24 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
    */
   const [signed, setSigned] = useState<Record<string, string>>({});
 
+  /**
+   * Which load is allowed to write. Bumped by every new load and by the effect's cleanup, so a
+   * response that arrives late is dropped instead of applied.
+   *
+   * A branch can carry several clarifications and the parent switches between them in place —
+   * this component is not remounted, only handed a different `query`. On a branch connection a
+   * fetch routinely takes several seconds, so tapping query A and then query B while A is still
+   * in flight used to end with A's messages rendered under B's question, and the assayer
+   * answering the wrong desk request. The same window opens on its own: `refreshKey` is bumped
+   * once per incoming socket message, so a desk sending three in a row starts three overlapping
+   * loads whose completion order is not the order they were issued.
+   */
+  const loadSeqRef = useRef(0);
+
   const load = useCallback(async () => {
+    const seq = ++loadSeqRef.current;
     const list = await MobileApiService.getQueryMessages(query.id);
+    if (seq !== loadSeqRef.current) return;
     setMessages(list);
     setLoading(false);
 
@@ -75,12 +91,17 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
     const pairs = await Promise.all(
       keys.map(async (k) => [k, await MobileApiService.getAttachmentUrl(k)] as const),
     );
+    if (seq !== loadSeqRef.current) return;
     setSigned(Object.fromEntries(pairs.filter(([, v]) => !!v) as [string, string][]));
   }, [query.id]);
 
   useEffect(() => {
     setLoading(true);
     load();
+    // Invalidates whatever is still in flight when the query changes or the thread closes.
+    return () => {
+      loadSeqRef.current++;
+    };
   }, [load, refreshKey]);
 
   // Land on the newest message, which is what the assayer opened the thread to read.

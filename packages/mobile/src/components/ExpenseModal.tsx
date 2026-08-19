@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Modal, View, TextInput, TextStyle, KeyboardAvoidingView, Platform } from 'react-native';
-import { travelModeLabel } from '@fapoms/shared';
+import { travelModeLabel, parseRupeeInput } from '@fapoms/shared';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Card, Tappable } from './ui/primitives';
 
@@ -95,8 +95,11 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
     onChangeDescription?.(val);
   };
 
-  const amountValue = parseFloat(amt);
-  const amountValid = !Number.isNaN(amountValue) && amountValue > 0;
+  // The same parse the submit uses. These were two different readings of one string — `parseFloat`
+  // here, `Number` at the call site — and they disagreed on exactly the input an Indian user is
+  // most likely to type: "1,000" validated as 1 and submitted as NaN. See `parseRupeeInput`.
+  const amountValue = parseRupeeInput(amt);
+  const amountValid = amountValue !== null;
 
   const handleSubmit = async () => {
     // Block empty/zero claims and double-taps; the parent only validated the assignment.

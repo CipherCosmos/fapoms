@@ -1293,21 +1293,36 @@ export class MobileApiService {
     };
   }
 
+  /**
+   * Push "where are they now" to the server.
+   *
+   * Resolves `true` on success and **throws** on failure, rather than the older
+   * swallow-and-return-`false`. That shape silently disabled the degraded-tracking indicator:
+   * `LocationContext` pushes with `.then(reset failures).catch(increment failures)`, and a
+   * promise that always resolves means the counter was reset on every push and the `.catch` was
+   * unreachable. An assayer whose position feed was failing — the feed a travel claim is later
+   * checked against — was told nothing, and neither was the desk.
+   *
+   * Callers that genuinely do not care whether it landed should say so with `.catch(() => {})`
+   * at the call site, where the decision is visible.
+   */
   static async updateLiveLocation(lat: number, lng: number): Promise<boolean> {
     const id = this.currentUserId;
+    // Not an error: no session means nothing to push yet. The caller treats this as "nothing
+    // happened", which must not count as a failure against the degraded-tracking threshold.
     if (!id) return false;
-    try {
-      const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/${id}/live-location`, {
-        method: 'PUT',
-        // `trailSelfManaged` tells the server not to mirror this into the movement trail: this
-        // build queues its own fixes and uploads them through `uploadLocationPings`, so mirroring
-        // would store the same position twice under two different clocks.
-        body: JSON.stringify({ latitude: lat, longitude: lng, trailSelfManaged: true }),
-      });
-      return response.ok;
-    } catch {
-      return false;
+
+    const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/${id}/live-location`, {
+      method: 'PUT',
+      // `trailSelfManaged` tells the server not to mirror this into the movement trail: this
+      // build queues its own fixes and uploads them through `uploadLocationPings`, so mirroring
+      // would store the same position twice under two different clocks.
+      body: JSON.stringify({ latitude: lat, longitude: lng, trailSelfManaged: true }),
+    });
+    if (!response.ok) {
+      throw new Error(`Live position rejected by the server (HTTP ${response.status}).`);
     }
+    return true;
   }
 
   /**

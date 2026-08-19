@@ -1,7 +1,8 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { AppState, AppStateStatus } from 'react-native';
 import * as Location from 'expo-location';
-import { queueFix, flushQueue, queuedCount, persistQueue } from '../services/location-queue';
+import { queueFix, flushQueue, queuedCount, persistQueue, clearQueue } from '../services/location-queue';
+import { useAuth } from './AuthContext';
 import {
   decideFix,
   shouldUpload,
@@ -150,6 +151,7 @@ const flushLocationQueue = () =>
 const TRACKING_SYNC_MIN_INTERVAL_MS = 60_000;
 
 export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const { isAuthenticated } = useAuth();
   const [location, setLocation] = useState<LocationCoords | null>(null);
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
   const [loadingLocation, setLoadingLocation] = useState<boolean>(true);
@@ -226,31 +228,21 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       if (state === 'active') void syncTrackingFlag();
     });
 
-    /**
-     * And once the session actually exists.
-     *
-     * This provider cannot import the auth context (it sits above it in the tree), so it polls
-     * briefly for the id instead of subscribing to it: a few cheap checks at start-up, stopping
-     * the moment the flag is known. Without this the sync above returns immediately on a cold
-     * start and nothing asks again until the app is backgrounded.
-     */
-    let attempts = 0;
-    const waitForSession = setInterval(() => {
-      attempts += 1;
-      if (MobileApiService.currentUserId) {
-        clearInterval(waitForSession);
-        void syncTrackingFlag();
-      } else if (attempts >= 20) {
-        // ~20s: either nobody signed in, or they will, and the next foreground will catch it.
-        clearInterval(waitForSession);
-      }
-    }, 1000);
-
     return () => {
       sub.remove();
-      clearInterval(waitForSession);
     };
-  }, [syncTrackingFlag]);
+    /**
+     * `isAuthenticated` is a real dependency, not decoration: the sync above returns immediately
+     * on a cold start (no session yet), so something has to ask again once there is one. Signing
+     * in re-runs this effect and asks.
+     *
+     * This used to poll `MobileApiService.currentUserId` once a second for twenty seconds,
+     * justified by a comment claiming this provider "cannot import the auth context (it sits
+     * above it in the tree)". That is backwards — `AuthProvider` wraps `LocationProvider` (see
+     * App.tsx), so the context was always readable here. The same mistaken belief is why nothing
+     * stopped tracking at sign-out; see the stand-down effect below.
+     */
+  }, [syncTrackingFlag, isAuthenticated]);
 
   /** Drain the queue only when a batch has built up or the oldest fix has waited long enough. */
   const uploadIfDue = useCallback(async () => {
@@ -305,7 +297,10 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       if (shouldPushLive(decision.reason, now - lastLivePushAtRef.current)) {
         lastLivePushAtRef.current = now;
         MobileApiService.updateLiveLocation(candidate.latitude, candidate.longitude)
-          .then(() => setLiveTrackingFailures(0))
+          // Only a confirmed push clears the streak. `false` means "no session yet, nothing was
+          // sent" — neither a success to celebrate nor a failure to count against the threshold,
+          // so the streak is left exactly as it was.
+          .then((pushed) => { if (pushed) setLiveTrackingFailures(0); })
           .catch((err: any) => {
             setLiveTrackingFailures((n) => {
               const next = n + 1;
@@ -581,6 +576,39 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     // cleanup drops our subscription, and `start` declines to open another. When it closes, the
     // effect runs again and the watch resumes.
   }, [liveTrackingEnabled, externalFeedActive, requestLocationPermission, recordFix]);
+
+  /**
+   * Stop recording the moment the session ends.
+   *
+   * `logout()` clears the token, socket, cache and queue — but it cannot reach this provider to
+   * stop the watcher, so tracking survived sign-out: `liveEnabledRef` stayed true, the
+   * `watchPositionAsync` subscription stayed up, and `recordFix` kept queueing. Those fixes then
+   * flushed under whoever signed in next. On a shared handset that attributes one assayer's
+   * movements to another, and the trail is the evidence a travel claim is checked against — so
+   * this is a chain-of-custody defect, not a battery one.
+   *
+   * Deliberately a LOCAL stand-down, not `setLiveTrackingEnabled(false)`: that call asks the
+   * server first and only flips local state when the server agrees. By this point the session is
+   * already gone, so it would 401, `ok` would be false, and tracking would stay on — the exact
+   * failure this exists to prevent. The server-side flag is left alone on purpose; it belongs to
+   * that assayer's job, is re-read from `getSelfProfile()` on the next sign-in, and signing out
+   * of the app is not the same statement as "I have stopped working".
+   *
+   * The queue is cleared again here because `logout()` clears it *before* React re-renders this
+   * effect, leaving a narrow window in which the still-live watcher can queue one more fix after
+   * the wipe. Clearing after standing down closes it.
+   */
+  useEffect(() => {
+    if (isAuthenticated) return;
+    liveEnabledRef.current = false;
+    setLiveTrackingEnabledState(false);
+    // Back to "unknown", so the next session re-reads the real flag from the server rather than
+    // showing the previous user's answer as though it were settled.
+    setLiveTrackingReady(false);
+    setLiveTrackingFailures(0);
+    lastKeptFixRef.current = null;
+    void clearQueue();
+  }, [isAuthenticated]);
 
   const setLiveTrackingEnabled = useCallback(
     async (enabled: boolean): Promise<boolean> => {

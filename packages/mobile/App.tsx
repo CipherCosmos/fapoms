@@ -12,7 +12,8 @@ import { useReturnPaperwork } from './src/hooks/useReturnPaperwork';
 import { getAssignmentTotalFee } from './src/utils/fees';
 import { connectMobileSocket } from './src/services/socket';
 import { handleIncomingCall, handleCallAnswered, handleCallEnded } from './src/services/calls';
-import { countOpenQueries } from './src/utils/queries';
+import { countOpenQueries, countResolvedQueries } from './src/utils/queries';
+import { parseRupeeInput, formatRupees } from '@fapoms/shared';
 
 // Context Providers
 import { ThemeProvider, useTheme } from './src/theme/ThemeProvider';
@@ -762,6 +763,16 @@ function AppMain() {
           />
         )}
 
+        {/*
+          `openQueries`/`resolvedQueries` below use the same helpers the tab badge and Home use.
+          They were hand-rolled here with a `(q: any)` cast and an inverted test —
+          `status !== 'RESOLVED' && !== 'CLOSED'` — which counted RESPONDED as open, so a query
+          the assayer had already answered showed on Profile but not in the badge: the same data,
+          two different numbers. 'CLOSED' is not a status the platform has at all
+          (ValidationQueryStatus is OPEN | RESPONDED | RESOLVED), and the `any` is what let that
+          go unnoticed. If RESPONDED is ever worth showing here, `countAwaitingDesk` names it
+          rather than folding it into "open".
+        */}
         {selectedTab === 'MY_PROFILE' && (
           <ProfileScreen
             assayerName={assayerName}
@@ -769,8 +780,8 @@ function AppMain() {
             profile={profile}
             savingProfile={savingProfile}
             profileDirty={profileDirty}
-            openQueries={assignments.reduce((n, a) => n + (a.queries || []).filter((q: any) => q.status !== 'RESOLVED' && q.status !== 'CLOSED').length, 0)}
-            resolvedQueries={assignments.reduce((n, a) => n + (a.queries || []).filter((q: any) => q.status === 'RESOLVED' || q.status === 'CLOSED').length, 0)}
+            openQueries={countOpenQueries(assignments)}
+            resolvedQueries={countResolvedQueries(assignments)}
             onUpdateProfileField={handleUpdateProfileField}
             onSaveProfile={handleSaveProfile}
             onOpenAvailability={() => overlay.open({ name: 'availability' })}
@@ -894,13 +905,30 @@ function AppMain() {
               );
               return;
             }
+            /**
+             * Parsed once, here, and refused rather than coerced.
+             *
+             * This was `Number(amount) || 0`, which files ₹0 for any input `Number` cannot read —
+             * "1,000" among them, which the modal's own `parseFloat` check had already waved
+             * through as valid. The claim was then confirmed back to the assayer as
+             * "₹1,000 awaiting approval", because the toast interpolated the raw text instead of
+             * the number actually sent. Money on screen must be the money that was filed.
+             */
+            const parsedAmount = parseRupeeInput(amount);
+            if (parsedAmount === null) {
+              feedback.error(
+                'Enter a valid amount',
+                'Use digits only, for example 1000 or 1,000.',
+              );
+              return;
+            }
             const res = await submitExpense(expense.assignment.id, {
               category: category as any,
-              amount: Number(amount) || 0,
+              amount: parsedAmount,
               description,
             });
             if (res.success) {
-              feedback.success('Claim filed', `₹${amount} for ${category} is awaiting approval.`);
+              feedback.success('Claim filed', `${formatRupees(parsedAmount)} for ${category} is awaiting approval.`);
               overlay.close();
               // Pull the totals back so the new claim shows on Home immediately rather
               // than only after the next manual pull-to-refresh.

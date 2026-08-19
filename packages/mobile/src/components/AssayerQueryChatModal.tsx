@@ -43,6 +43,18 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
   const [attachments, setAttachments] = useState<{ url: string; fileName: string; fileType: string; uploadedBy: string; timestamp: string }[]>([]);
   const scrollViewRef = useRef<ScrollView>(null);
 
+  /**
+   * Which query load is allowed to write, so a late response cannot land on the wrong branch.
+   *
+   * This modal is mounted once and re-pointed at whichever assignment the assayer opened, and
+   * the socket handlers below re-run `loadQueries` on every `query:message` — so several loads
+   * are routinely in flight at once on a branch connection. Without this, closing the chat for
+   * branch A while its list was still loading and opening branch B put A's clarifications on
+   * screen under B's header: the assayer then replies to a question raised about a different
+   * bank branch, and the desk receives it on that other thread.
+   */
+  const loadSeqRef = useRef(0);
+
   useEffect(() => {
     if (visible && assignment) {
       loadQueries();
@@ -60,12 +72,15 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
         socket?.off('query:raised', handleQueryUpdate);
         socket?.off('query:responded', handleQueryUpdate);
         socket?.off('query:message', handleQueryUpdate);
+        // Invalidates any load still in flight for the assignment being left.
+        loadSeqRef.current++;
       };
     }
   }, [visible, assignment]);
 
   const loadQueries = async () => {
     if (!assignment) return;
+    const seq = ++loadSeqRef.current;
     try {
       const assayerId = assignment.assayerId || MobileApiService.getCurrentUserId();
       if (!assayerId) return;
@@ -93,14 +108,22 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
         return false;
       });
 
+      if (seq !== loadSeqRef.current) return;
       setQueries(filtered);
       if (filtered.length > 0) {
-        const openQ = filtered.find((q: any) => q.status === 'OPEN') || filtered[0];
-        setActiveQueryId(openQ.id);
+        // Only pick a thread when nothing is chosen yet. Re-selecting on every refresh yanked
+        // the assayer off the thread they had tapped — the desk posting a message anywhere on
+        // the branch bumps this, and mid-reply the composer would jump to a different query.
+        setActiveQueryId((current) =>
+          current && filtered.some((q: any) => q.id === current)
+            ? current
+            : (filtered.find((q: any) => q.status === 'OPEN') || filtered[0]).id,
+        );
       } else {
         setActiveQueryId(null);
       }
     } catch (err) {
+      if (seq !== loadSeqRef.current) return;
       setQueries([]);
       setActiveQueryId(null);
     }

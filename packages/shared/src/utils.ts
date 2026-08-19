@@ -156,6 +156,43 @@ export interface RupeeFormatOptions {
   emptyAs?: string;
 }
 
+/**
+ * Read a rupee amount a human typed. The counterpart to `formatRupees`, and the only thing that
+ * should turn an amount field into a number.
+ *
+ * Returns `null` for anything that is not a positive amount, deliberately — the alternative is
+ * the `Number(x) || 0` idiom, which is how a claim for "1,000" came to be filed as ₹0. That path
+ * had three separate faults reinforcing each other: the form validated with `parseFloat`, which
+ * reads "1,000" as 1 and passes; the submit used `Number`, which reads it as `NaN`; and `|| 0`
+ * turned the NaN into a silent zero that the success toast then reported back using the raw
+ * text the user typed. The assayer was told "₹1,000 awaiting approval" and had filed nothing.
+ *
+ * `null` rather than 0 because "they typed something unusable" and "they meant zero" are
+ * different answers and the caller has to handle them differently — one is an error to show, the
+ * other is a value to store. A type that cannot express the difference is what let this hide.
+ *
+ * Grouping separators are accepted rather than rejected: this is an Indian product, "1,00,000"
+ * is how the amount is written, and some Android keyboards emit a comma on a numeric field
+ * whether the form wants one or not.
+ */
+export function parseRupeeInput(raw: string | number | null | undefined): number | null {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw === 'number') {
+    return Number.isFinite(raw) && raw > 0 ? raw : null;
+  }
+
+  // Strip only what is unambiguously decoration: the currency mark, whitespace and the grouping
+  // commas. Anything else left over makes it invalid rather than being quietly discarded.
+  const cleaned = raw.replace(/[₹,\s]/g, '');
+  if (cleaned === '') return null;
+  // One optional decimal point, digits either side. Rejects "1.2.3", "1e5", "--5" and "12abc",
+  // all of which `parseFloat` would happily read a prefix out of.
+  if (!/^\d*\.?\d+$/.test(cleaned)) return null;
+
+  const n = Number(cleaned);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
 export function formatRupees(
   value: number | string | null | undefined,
   options: RupeeFormatOptions = {},
