@@ -16,7 +16,7 @@ import { AssessmentEntity } from '../project/assessment.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
-import { SystemRole, DocumentStatus, DocumentType, AssessmentStatus, AssignmentStatus } from '@fapoms/shared';
+import { SystemRole, DocumentStatus, DocumentType, AssignmentStatus } from '@fapoms/shared';
 
 import { ValidationService } from '../validation/validation.service';
 import { DocumentAccessTokenService } from './document-access-token.service';
@@ -1247,9 +1247,7 @@ export class DocumentController {
 
     await this.documentService.updateStatus(doc.id, DocumentStatus.COMPLETED, req?.user?.id || 'SYSTEM');
 
-    await this.assessmentRepository.update(assessmentId, { status: AssessmentStatus.COMPLETED });
-
-    return { success: true, data: doc, message: 'Excel report uploaded successfully. Assessment marked COMPLETED.' };
+    return { success: true, data: doc, message: 'Excel report uploaded. The document is marked completed.' };
   }
 
   // ── Data entry desk ───────────────────────────────────────────────────────

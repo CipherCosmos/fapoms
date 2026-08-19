@@ -10,7 +10,7 @@ import { ValidationStateMachine } from './validation.state-machine';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { EventCategory, ValidationStatus, ProjectBranchStatus, AssessmentStatus, SystemRole, VALIDATION_TRANSITIONS, isValidTransition, ValidationQueryStatus, toWorkflowTransitions } from '@fapoms/shared';
+import { EventCategory, ValidationStatus, ProjectBranchStatus, SystemRole, VALIDATION_TRANSITIONS, isValidTransition, ValidationQueryStatus, toWorkflowTransitions } from '@fapoms/shared';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 
@@ -487,17 +487,6 @@ export class ValidationService implements OnModuleInit {
           await this.projectService.initiateBranchPlanning(validationCase.projectBranch.id, userId);
         }
 
-        if (validationCase.assessmentId && validationCase.assessment) {
-          if (targetStatus === ValidationStatus.APPROVED) {
-            validationCase.assessment.status = AssessmentStatus.REPORT_FINALIZED;
-          } else if (targetStatus === ValidationStatus.CORRECTION_REQUIRED) {
-            validationCase.assessment.status = AssessmentStatus.DATA_ENTRY_IN_PROGRESS;
-          } else if (targetStatus === ValidationStatus.SUBMITTED) {
-            validationCase.assessment.status = AssessmentStatus.PENDING_HEAD_APPROVAL;
-          }
-          validationCase.assessment.updatedBy = userId;
-          await this.assessmentRepository.save(validationCase.assessment);
-        }
 
         validationCase.updatedBy = userId;
         const saved = await this.validationCaseRepository.save(validationCase);

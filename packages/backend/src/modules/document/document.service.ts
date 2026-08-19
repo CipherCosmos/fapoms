@@ -12,7 +12,7 @@ import { NotificationService } from '../notifications/notification.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { PushNotificationService } from '../notifications/push-notification.service';
 import {
-  EventCategory, DocumentStatus, DocumentType, AssessmentStatus, DispatchMethod, businessTodayDateKey,
+  EventCategory, DocumentStatus, DocumentType, DispatchMethod, businessTodayDateKey,
   DOCUMENT_TRANSITIONS, canTransitionDocument,
 } from '@fapoms/shared';
 
@@ -375,7 +375,6 @@ export class DocumentService {
             this.assessmentRepository.create({
               projectId: pb.projectId,
               branchId: pb.branchId,
-              status: AssessmentStatus.PENDING_PLANNING,
               createdBy: userId,
               updatedBy: userId,
             }),
@@ -435,8 +434,6 @@ export class DocumentService {
     }
 
     // Spec §8.1: uploading the pre-field PDF puts the assessment at READY_FOR_DISPATCH.
-    await this.syncAssessmentFromDocument(saved, userId);
-
     return saved;
   }
 
@@ -1289,8 +1286,6 @@ export class DocumentService {
     saved.dispatchedBy = userId === 'SYSTEM' ? null : userId;
     await this.documentRepository.save(saved);
 
-    await this.syncAssessmentFromDocument(saved, userId);
-
     if (!doc.assessmentId) {
       this.logger.warn(
         `Document ${id} dispatched but has no assessmentId — the assayer cannot be resolved or notified.`,
@@ -1374,8 +1369,6 @@ export class DocumentService {
     saved.receivedAt = new Date();
     await this.documentRepository.save(saved);
 
-    await this.syncAssessmentFromDocument(saved, userId);
-
     try {
       this.eventPublisher.publish('document:received', {
         eventType: 'document:received',
@@ -1417,106 +1410,6 @@ export class DocumentService {
     });
 
     return saved;
-  }
-
-  /**
-   * Advances the Assessment lifecycle from a document event.
-   *
-   * The Assessment is the authoritative record of "where is this branch's audit", and twelve
-   * of its eighteen states describe the document pipeline exclusively — ProjectBranchStatus
-   * collapses that entire span into AUDIT_COMPLETED → VALIDATION_COMPLETED → CLOSED. Those
-   * twelve states were unreachable because nothing ever wrote them, which is why the system
-   * could not answer "where is branch X's paperwork right now".
-   *
-   * Single owner of that mapping, on purpose: the drift repaired earlier in this work came
-   * from several code paths each writing status their own way.
-   *
-   * Only ever moves forward. `PIPELINE_ORDER` guards against a late-arriving event dragging an
-   * assessment backwards (e.g. a stray dispatch after the paperwork is already at data entry).
-   */
-  private static readonly PIPELINE_ORDER: AssessmentStatus[] = [
-    AssessmentStatus.PENDING_PLANNING,
-    AssessmentStatus.ASSESSOR_RECOMMENDED,
-    AssessmentStatus.IN_NEGOTIATION,
-    AssessmentStatus.ASSIGNED_AND_SCHEDULED,
-    AssessmentStatus.AWAITING_CLIENT_DATA,
-    AssessmentStatus.CLIENT_DATA_RECEIVED,
-    AssessmentStatus.PDF_GENERATED,
-    AssessmentStatus.READY_FOR_DISPATCH,
-    AssessmentStatus.DISPATCHED_TO_ASSESSOR,
-    AssessmentStatus.AUDITED_PDF_RECEIVED,
-    AssessmentStatus.SENT_TO_DATA_ENTRY,
-    AssessmentStatus.DATA_ENTRY_IN_PROGRESS,
-    AssessmentStatus.REPORT_FINALIZED,
-    AssessmentStatus.PENDING_HEAD_APPROVAL,
-    AssessmentStatus.DELIVERED_TO_CLIENT,
-    AssessmentStatus.COMPLETED,
-  ];
-
-  /** Which assessment state each document state implies. */
-  private static readonly DOCUMENT_TO_ASSESSMENT: Partial<Record<DocumentStatus, AssessmentStatus>> = {
-    [DocumentStatus.UPLOADED]: AssessmentStatus.READY_FOR_DISPATCH,
-    [DocumentStatus.DISPATCHED]: AssessmentStatus.DISPATCHED_TO_ASSESSOR,
-    [DocumentStatus.RECEIVED]: AssessmentStatus.AUDITED_PDF_RECEIVED,
-    [DocumentStatus.SENT_TO_DATA_ENTRY]: AssessmentStatus.SENT_TO_DATA_ENTRY,
-    [DocumentStatus.SENT_TO_EXTERNAL_OCR]: AssessmentStatus.DATA_ENTRY_IN_PROGRESS,
-    [DocumentStatus.EXCEL_GENERATED]: AssessmentStatus.REPORT_FINALIZED,
-    [DocumentStatus.COMPLETED]: AssessmentStatus.DELIVERED_TO_CLIENT,
-  };
-
-  async syncAssessmentFromDocument(doc: DocumentEntity, userId: string): Promise<void> {
-    if (!doc.assessmentId) return;
-
-    // Only the two PDFs that actually move through the field/data-entry pipeline drive the
-    // assessment. Excel reports and client master data are inputs/outputs, not transport
-    // milestones, and would otherwise skew the state.
-    const drivesPipeline =
-      doc.type === DocumentType.PRE_FIELD_AUDIT_PDF || doc.type === DocumentType.AUDITED_RETURN_PDF;
-    if (!drivesPipeline) return;
-
-    const target = DocumentService.DOCUMENT_TO_ASSESSMENT[doc.status];
-    if (!target) return;
-
-    const assessment = await this.assessmentRepository
-      .findOne({ where: { id: doc.assessmentId, isActive: true } })
-      .catch(() => null);
-    if (!assessment) return;
-
-    const currentIdx = DocumentService.PIPELINE_ORDER.indexOf(assessment.status);
-    const targetIdx = DocumentService.PIPELINE_ORDER.indexOf(target);
-    // Unknown (e.g. UNASSIGNED / CLARIFICATION_NEEDED, which sit outside the linear pipeline)
-    // or backwards — leave alone.
-    if (targetIdx === -1 || currentIdx === -1 || targetIdx <= currentIdx) return;
-
-    const previous = assessment.status;
-    assessment.status = target;
-    assessment.updatedBy = userId;
-    await this.assessmentRepository.save(assessment);
-
-    await this.auditService.recordEvent({
-      category: EventCategory.WORKFLOW,
-      eventType: 'ASSESSMENT_PIPELINE_ADVANCED',
-      entityType: 'ASSESSMENT',
-      entityId: assessment.id,
-      previousState: previous,
-      newState: target,
-      userId,
-      remarks: `Advanced by document "${doc.fileName}" (${doc.type} → ${doc.status}).`,
-    });
-
-    try {
-      this.eventPublisher.publish('assessment:status-changed', {
-        eventType: 'assessment:status-changed',
-        assessmentId: assessment.id,
-        previousStatus: previous,
-        status: target,
-        documentId: doc.id,
-        userId,
-        timestamp: new Date(),
-      });
-    } catch (err: any) {
-      this.logger.error('Failed to publish assessment:status-changed event:', err?.message);
-    }
   }
 
   /**
@@ -1611,7 +1504,6 @@ export class DocumentService {
     if (!saved.sentToDataEntryAt) saved.sentToDataEntryAt = new Date();
     await this.documentRepository.save(saved);
 
-    await this.syncAssessmentFromDocument(saved, userId);
     return saved;
   }
 

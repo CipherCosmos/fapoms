@@ -37,7 +37,7 @@ import { RoutingService, RouteResult } from '../geo/routing.provider';
 import { ValidationService } from '../validation/validation.service';
 import { DocumentService } from '../document/document.service';
 import { FeePolicyService } from '../pricing/fee-policy.service';
-import { EventCategory, ScheduleStatus, AssignmentStatus, AssessmentStatus, ProjectBranchStatus, CustomerMasterStatus, Priority, SystemRole, calculateHaversineDistance, assignmentIssueCategoryLabel, isAssignmentTerminal, BypassableRule, businessDateKey, businessTodayDateKey } from '@fapoms/shared';
+import { EventCategory, ScheduleStatus, AssignmentStatus, ProjectBranchStatus, CustomerMasterStatus, Priority, SystemRole, calculateHaversineDistance, assignmentIssueCategoryLabel, isAssignmentTerminal, BypassableRule, businessDateKey, businessTodayDateKey } from '@fapoms/shared';
 import { applyBranchScope, branchScopeWhere, needsBranchJoin } from '../../infrastructure/scope/apply-scope';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { CacheService } from '../../infrastructure/cache/cache.service';
@@ -45,21 +45,6 @@ import { CacheService } from '../../infrastructure/cache/cache.service';
 // Fee rates are no longer declared here. They resolve per client contract through
 // FeePolicyService — see packages/backend/src/modules/pricing/fee-policy.service.ts.
 
-const ASSESSMENT_STATUS_MAP: Record<ProjectBranchStatus, AssessmentStatus> = {
-  [ProjectBranchStatus.IMPORTED]: AssessmentStatus.PENDING_PLANNING,
-  [ProjectBranchStatus.PLANNING]: AssessmentStatus.PENDING_PLANNING,
-  [ProjectBranchStatus.CANDIDATE_SEARCH]: AssessmentStatus.ASSESSOR_RECOMMENDED,
-  [ProjectBranchStatus.CONTACT_INITIATED]: AssessmentStatus.IN_NEGOTIATION,
-  [ProjectBranchStatus.NEGOTIATION]: AssessmentStatus.IN_NEGOTIATION,
-  [ProjectBranchStatus.ASSIGNMENT_CONFIRMED]: AssessmentStatus.ASSIGNED_AND_SCHEDULED,
-  [ProjectBranchStatus.SCHEDULED]: AssessmentStatus.ASSIGNED_AND_SCHEDULED,
-  [ProjectBranchStatus.AUDIT_COMPLETED]: AssessmentStatus.AUDITED_PDF_RECEIVED,
-  [ProjectBranchStatus.VALIDATION_COMPLETED]: AssessmentStatus.SENT_TO_DATA_ENTRY,
-  [ProjectBranchStatus.CLOSED]: AssessmentStatus.COMPLETED,
-  [ProjectBranchStatus.UNABLE_TO_COVER]: AssessmentStatus.UNASSIGNED,
-  [ProjectBranchStatus.ON_HOLD]: AssessmentStatus.PENDING_PLANNING,
-  [ProjectBranchStatus.CANCELLED]: AssessmentStatus.UNASSIGNED,
-};
 
 export interface CreateAssignmentDto {
   projectBranchId: string;
@@ -257,19 +242,6 @@ export class AssignmentService {
     existing.isActive = false;
     existing.updatedBy = userId;
     await scheduleRepo.save(existing);
-  }
-
-  private async syncAssessmentStatus(assignment: AssignmentEntity): Promise<void> {
-    if (assignment.assessment && assignment.projectBranch) {
-      const mapped = ASSESSMENT_STATUS_MAP[assignment.projectBranch.status];
-      if (mapped && assignment.assessment.status !== mapped) {
-        assignment.assessment.status = mapped;
-        assignment.assessment.auditDate = assignment.projectBranch.scheduledDate;
-        assignment.assessment.assignedAssessorId = assignment.assayerId;
-        assignment.assessment.agreedFee = assignment.agreedFee;
-        await this.assessmentRepository.save(assignment.assessment);
-      }
-    }
   }
 
   /**
@@ -928,7 +900,6 @@ export class AssignmentService {
 
     assignment.updatedBy = userId;
 
-    await this.syncAssessmentStatus(assignment);
 
     const saved = await this.uow.run(async (manager, emit) => {
       if (assignment.projectBranch) {
@@ -1577,10 +1548,6 @@ export class AssignmentService {
       assignment.projectBranch.status = ProjectBranchStatus.SCHEDULED;
       assignment.projectBranch.scheduledDate = new Date(scheduledDate);
       assignment.projectBranch.updatedBy = userId;
-    }
-    if (assignment.assessment) {
-      assignment.assessment.auditDate = new Date(scheduledDate);
-      assignment.assessment.status = AssessmentStatus.ASSIGNED_AND_SCHEDULED;
     }
     assignment.scheduledDate = new Date(scheduledDate);
     assignment.updatedBy = userId;
@@ -2692,11 +2659,6 @@ export class AssignmentService {
       }
       assignment.projectBranch.updatedBy = userId || assignment.assayerId || id;
     }
-    if (assignment.assessment) {
-      assignment.assessment.status = AssessmentStatus.ASSIGNED_AND_SCHEDULED;
-      assignment.assessment.auditDate = assignment.scheduledDate || new Date();
-    }
-
     const saved = await this.dataSource.transaction(async (manager) => {
       if (assignment.projectBranch) {
         await manager.save(assignment.projectBranch);

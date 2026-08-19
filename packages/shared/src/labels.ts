@@ -18,7 +18,6 @@ import {
   ProjectBranchStatus,
   AssignmentStatus,
   ScheduleStatus,
-  AssessmentStatus,
   ClientLifecycleStatus,
   ClientType,
   ContractStatus,
@@ -67,28 +66,6 @@ const ASSIGNMENT_STATUS_LABELS: Record<AssignmentStatus, string> = {
   [AssignmentStatus.COMPLETED]: 'Completed',
   [AssignmentStatus.REJECTED]: 'Rejected',
   [AssignmentStatus.CANCELLED]: 'Cancelled',
-};
-
-/** Where the assessment (the document/data-entry pipeline) sits. */
-const ASSESSMENT_STATUS_LABELS: Record<AssessmentStatus, string> = {
-  [AssessmentStatus.PENDING_PLANNING]: 'Pending Planning',
-  [AssessmentStatus.ASSESSOR_RECOMMENDED]: 'Assayer Recommended',
-  [AssessmentStatus.IN_NEGOTIATION]: 'In Negotiation',
-  [AssessmentStatus.ASSIGNED_AND_SCHEDULED]: 'Assigned & Scheduled',
-  [AssessmentStatus.UNASSIGNED]: 'Unassigned',
-  [AssessmentStatus.AWAITING_CLIENT_DATA]: 'Awaiting Client Data',
-  [AssessmentStatus.CLIENT_DATA_RECEIVED]: 'Client Data Received',
-  [AssessmentStatus.PDF_GENERATED]: 'PDF Generated',
-  [AssessmentStatus.READY_FOR_DISPATCH]: 'Ready for Dispatch',
-  [AssessmentStatus.DISPATCHED_TO_ASSESSOR]: 'Dispatched to Assayer',
-  [AssessmentStatus.AUDITED_PDF_RECEIVED]: 'Audited PDF Received',
-  [AssessmentStatus.SENT_TO_DATA_ENTRY]: 'Sent to Data Entry',
-  [AssessmentStatus.DATA_ENTRY_IN_PROGRESS]: 'Data Entry in Progress',
-  [AssessmentStatus.CLARIFICATION_NEEDED]: 'Clarification Needed',
-  [AssessmentStatus.REPORT_FINALIZED]: 'Report Finalized',
-  [AssessmentStatus.PENDING_HEAD_APPROVAL]: 'Pending Head Approval',
-  [AssessmentStatus.DELIVERED_TO_CLIENT]: 'Delivered to Client',
-  [AssessmentStatus.COMPLETED]: 'Completed',
 };
 
 /** Where the dispatch/visit booking sits. */
@@ -202,11 +179,6 @@ export function assignmentStatusLabel(status?: string | null): string {
 export function scheduleStatusLabel(status?: string | null): string {
   if (!status) return '—';
   return SCHEDULE_STATUS_LABELS[status as ScheduleStatus] ?? humanize(status);
-}
-
-export function assessmentStatusLabel(status?: string | null): string {
-  if (!status) return '—';
-  return ASSESSMENT_STATUS_LABELS[status as AssessmentStatus] ?? humanize(status);
 }
 
 export function clientLifecycleLabel(status?: string | null): string {

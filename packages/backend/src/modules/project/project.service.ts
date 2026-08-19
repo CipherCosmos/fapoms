@@ -20,7 +20,7 @@ import { BranchQueryService } from '../branch/branch-query.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { AssignmentStatus, EventCategory, ProjectStatus, ProjectBranchStatus, AssessmentStatus, SystemRole, resolveRegion, PROJECT_TRANSITIONS, toWorkflowTransitions } from '@fapoms/shared';
+import { AssignmentStatus, EventCategory, ProjectStatus, ProjectBranchStatus, SystemRole, resolveRegion, PROJECT_TRANSITIONS, toWorkflowTransitions } from '@fapoms/shared';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import * as xlsx from 'xlsx';
 // One implementation of "read a spreadsheet column", shared with the assayer roster upload —
@@ -631,8 +631,6 @@ export class ProjectService implements OnModuleInit {
             const asmt = this.assessmentRepository.create({
               projectId: project.id,
               branchId: branch.id,
-              zoneId: branch.zoneId,
-              status: AssessmentStatus.PENDING_PLANNING,
               createdBy: userId,
               updatedBy: userId,
             });
@@ -1352,9 +1350,6 @@ export class ProjectService implements OnModuleInit {
             const asmt = this.assessmentRepository.create({
               projectId: project.id,
               branchId: branch.id,
-              zoneId: branch.zoneId,
-              status: AssessmentStatus.PENDING_PLANNING,
-              packetSize: !isNaN(packetCount) && packetCount > 0 ? packetCount : null,
               createdBy: userId,
               updatedBy: userId,
             });

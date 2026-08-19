@@ -11,7 +11,6 @@ export {
   branchStatusLabel,
   assignmentStatusLabel,
   scheduleStatusLabel,
-  assessmentStatusLabel,
   clientLifecycleLabel,
   clientTypeLabel,
   contractStatusLabel,

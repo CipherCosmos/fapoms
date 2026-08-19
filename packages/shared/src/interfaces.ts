@@ -22,7 +22,6 @@
  */
 
 import {
-  AssessmentStatus,
   AssayerStatus,
   AssayerLifecycleStatus,
   AssignmentStatus,
@@ -260,19 +259,19 @@ export interface BranchDocument extends AuditMetadata {
 // Assessment (Section 4, Section 9 — Proposed Data Model)
 // ---------------------------------------------------------------------------
 
+/**
+ * The row a project's paperwork for one branch hangs off.
+ *
+ * It used to carry a lifecycle of its own — eighteen states — plus a scheduled audit date, an
+ * assigned assayer, an agreed fee, a packet size, a priority, a zone and remarks. All of it was
+ * written and none of it was ever read: no query filtered on it, no screen showed it, and three
+ * services spent their own code keeping it in step with the branch and the assignment that
+ * actually hold those facts. What is left is what documents are attached to.
+ */
 export interface Assessment extends ExtendedAuditMetadata {
   id: string;
   projectId: string;
   branchId: string;
-  status: AssessmentStatus;
-  packetSize?: number;
-  assignedAssessorId?: string;
-  auditDate?: string;
-  agreedFee?: number;
-  coverageFlag?: boolean;
-  priority: Priority;
-  zoneId?: string;
-  remarks?: string;
 
   // Denormalized for display (populated from Branch)
   branchName?: string;
