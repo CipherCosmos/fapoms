@@ -464,6 +464,20 @@ export class AssignmentController {
       }
       const accuracy = Number.isFinite(Number(body.accuracy)) ? Number(body.accuracy) : undefined;
       const checkInRes = await this.assignmentService.recordCheckIn(id, lat, lng, body.syncToken, userId, accuracy);
+      /**
+       * A refused check-in is a failure, on this route too.
+       *
+       * `recordCheckIn` reports a refusal — TOO_FAR_FROM_BRANCH, NOT_SCHEDULED_TODAY,
+       * NOT_YOUR_ASSIGNMENT, CONFLICT_ASSIGNMENT_MODIFIED — in its return value rather than by
+       * throwing. This route discarded it and fell through to `{ success: true }`, so an assayer
+       * fifty kilometres from the branch was told they had checked in while nothing was written.
+       * Check-in is the evidence that a person stood inside the vault; reporting one that did not
+       * happen is the worst failure this endpoint has, and the dedicated `POST :id/check-in`
+       * route has always returned the refusal properly. The two now agree.
+       */
+      if (!checkInRes.success) {
+        return { success: false, error: checkInRes.error, message: checkInRes.message };
+      }
       assignment = checkInRes.assignment || (await this.assignmentService.findOne(id));
     } else if (targetStatus === 'CANCELLED') {
       assignment = await this.assignmentService.cancelAssignment(id, userId, body.reason ?? body.remarks);

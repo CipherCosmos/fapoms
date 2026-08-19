@@ -327,6 +327,23 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     link: '/assignments?id=${assignmentId}',
     skipActor: true,
   },
+  /**
+   * The desk closed the clarification. The assayer is told because from their side the thread
+   * simply goes quiet — and worse, `QueryThreadService` refuses further messages on a resolved
+   * query with a 403, so someone still typing an answer hits a wall with no explanation. Raising
+   * and answering both notified; closing did not.
+   */
+  VALIDATION_QUERY_RESOLVED: {
+    category: NotificationCategory.VALIDATION,
+    priority: NotificationPriority.NORMAL,
+    roles: [],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'Clarification closed',
+    body: 'The desk has closed the question on ${branchName}. No reply is needed.',
+    link: '/assignments?id=${assignmentId}',
+    skipActor: true,
+  },
   VALIDATION_QUERY_ANSWERED: {
     category: NotificationCategory.VALIDATION,
     priority: NotificationPriority.NORMAL,

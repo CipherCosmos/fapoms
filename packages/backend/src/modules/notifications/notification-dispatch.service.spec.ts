@@ -155,6 +155,61 @@ describe('NotificationDispatchService', () => {
     expect(insertedRows).toHaveLength(3);
   });
 
+  /**
+   * On the live deployment exactly two roles have an active holder, so twelve catalogued event
+   * types resolved to nobody and were dropped with a log line. These are SLA breaches and
+   * overdue desk queues — work whose entire purpose is to make a human act.
+   */
+  describe('an event whose desk has nobody in it', () => {
+    it('falls back to administrators rather than vanishing', async () => {
+      // First call (the catalogued VALIDATION roles) finds nobody; the fallback call finds an admin.
+      mockUserQb.getMany
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([{ id: 'admin-1' }]);
+
+      const res = await service.emit({
+        type: 'VALIDATION_QUERY_ANSWERED',
+        entityType: 'VALIDATION_QUERY',
+        entityId: 'q-1',
+        payload: { assayerName: 'Nilesh', branchName: 'Thrissur' },
+      });
+
+      expect(res.created).toBe(1);
+      expect(res.recipients.userIds).toEqual(['admin-1']);
+    });
+
+    it('does not fall back when the desk is staffed', async () => {
+      mockUserQb.getMany.mockResolvedValue([{ id: 'validator-1' }]);
+
+      const res = await service.emit({
+        type: 'VALIDATION_QUERY_ANSWERED',
+        entityType: 'VALIDATION_QUERY',
+        entityId: 'q-2',
+        payload: { assayerName: 'Nilesh', branchName: 'Thrissur' },
+      });
+
+      expect(res.recipients.userIds).toEqual(['validator-1']);
+      // One lookup only — the fallback query is never issued.
+      expect(mockUserQb.getMany).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not fall back for an event aimed at an individual, not a desk', async () => {
+      // ASSIGNMENT_OFFERED has `roles: []` — its audience is the assayer. A missing assayer is a
+      // different fault, and routing every offer to an administrator would be noise.
+      mockUserQb.getMany.mockResolvedValue([]);
+
+      const res = await service.emit({
+        type: 'ASSIGNMENT_OFFERED',
+        entityType: 'ASSIGNMENT',
+        entityId: 'asn-9',
+        payload: { branchName: 'Thrissur', scheduledDate: '2026-09-01' },
+      });
+
+      expect(res.recipients.userIds).toEqual([]);
+      expect(res.created).toBe(0);
+    });
+  });
+
   it('does not notify the person who performed the action', async () => {
     mockUserQb.getMany.mockResolvedValue([{ id: 'ops-1' }, { id: 'ops-2' }]);
 

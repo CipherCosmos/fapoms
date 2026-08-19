@@ -79,6 +79,13 @@ export class NotificationDispatchService {
   ) {}
 
   /**
+   * Who receives an event whose own desk has nobody in it. The platform administrators — the
+   * only roles guaranteed to exist on a running deployment, and the people who can either act
+   * on the work or create the account that should have received it.
+   */
+  private static readonly FALLBACK_ROLES = ['SUPER_ADMINISTRATOR', 'ADMINISTRATOR'];
+
+  /**
    * Every active user holding any of these roles.
    *
    * Locked and inactive accounts are excluded — notifying a suspended user
@@ -256,6 +263,37 @@ export class NotificationDispatchService {
     // ── Resolve recipients ────────────────────────────────────────────────
     const roleUsers = await this.usersInRoles(def.roles);
     const userIds = new Set(roleUsers.map((u) => u.id));
+
+    /**
+     * A staffed-desk event must never reach nobody.
+     *
+     * The catalog names the desk that owns each event — VALIDATION_MANAGER, DATA_ENTRY_HEAD,
+     * FINANCE_MANAGER and so on. That is right for a fully staffed organisation and wrong for
+     * every real one before it gets there: on the live deployment exactly two roles have an
+     * active holder (OPERATIONS_MANAGER and SUPER_ADMINISTRATOR), so twelve event types resolved
+     * to zero recipients and were dropped with a log line nobody reads. The boot-time check
+     * reports the same count and has been reporting it for weeks.
+     *
+     * Dropping the work is the one unacceptable outcome: these are SLA breaches, overdue desk
+     * queues and correction requests — things whose entire purpose is to make a human act. So
+     * when a type that *names* roles resolves to none of them, it falls back to whoever
+     * administers the platform, who can then act or staff the role.
+     *
+     * Deliberately narrow. It does not fire for a type whose audience is purely an individual
+     * (`roles: []` with `special: ['ASSIGNED_ASSAYER']`) — a missing assayer there is a
+     * different fault, and routing every offer to an administrator would be noise. Nor does it
+     * override a type that reached somebody, however few.
+     */
+    if (def.roles.length > 0 && userIds.size === 0) {
+      const fallback = await this.usersInRoles(NotificationDispatchService.FALLBACK_ROLES);
+      for (const u of fallback) userIds.add(u.id);
+      if (fallback.length > 0) {
+        this.logger.warn(
+          `"${opts.type}" reaches nobody holding ${def.roles.join('/')} — routed to ` +
+            `${fallback.length} administrator(s) instead. Staff those roles to route it properly.`,
+        );
+      }
+    }
 
     if (def.special?.includes('RECORD_OWNER') && opts.ownerUserId) {
       userIds.add(opts.ownerUserId);

@@ -390,6 +390,10 @@ export class ValidationQueryService {
     const query = await this.queryRepository.findOne({ where: { id: queryId, isActive: true } });
     if (!query) throw new NotFoundException(`ValidationQuery ${queryId} not found.`);
 
+    // Resolving an already-resolved query was silently repeated: a second audit row, a second
+    // socket event, and now a second notification to the assayer for a thread that closed once.
+    if (query.status === ValidationQueryStatus.RESOLVED) return query;
+
     query.status = ValidationQueryStatus.RESOLVED;
     query.updatedBy = userId;
 
@@ -402,6 +406,42 @@ export class ValidationQueryService {
       entityId: saved.id,
       userId,
       remarks: `Validator marked query ${queryId} as RESOLVED.`,
+    });
+
+    /**
+     * Tell the assayer it is closed.
+     *
+     * Raising a query notified them and answering notified the desk, but closing told nobody —
+     * so from the field the thread just stopped, and `QueryThreadService` then refuses any
+     * further message on it with a 403. Same resolution the raise path uses, so the notification
+     * carries the branch name and opens the same screen.
+     */
+    const closedCase = await this.validationCaseRepository
+      .findOne({ where: { id: saved.validationCaseId } })
+      .catch(() => null);
+    const closedOn = closedCase?.projectBranchId
+      ? await this.assignmentRepository
+          .findOne({
+            where: { projectBranchId: closedCase.projectBranchId, isActive: true },
+            relations: ['projectBranch', 'projectBranch.branch'],
+            order: { createdAt: 'DESC' },
+          })
+          .catch(() => null)
+      : null;
+
+    this.notificationDispatch.emitSafe({
+      type: 'VALIDATION_QUERY_RESOLVED',
+      entityType: 'VALIDATION_QUERY',
+      entityId: saved.id,
+      actorUserId: userId,
+      assayerId: saved.assayerId,
+      dedupeKey: `VALIDATION_QUERY_RESOLVED:${saved.id}`,
+      payload: {
+        queryId: saved.id,
+        validationCaseId: saved.validationCaseId,
+        branchName: closedOn?.projectBranch?.branch?.name ?? 'a branch',
+        assignmentId: closedOn?.id ?? '',
+      },
     });
 
     try {

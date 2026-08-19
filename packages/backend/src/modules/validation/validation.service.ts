@@ -129,10 +129,18 @@ export class ValidationService implements OnModuleInit {
       );
     }
 
+    /**
+     * A page is a page. `limit` arrives straight from the query string, so `?limit=999999`
+     * returned every validation case in the table with four relations joined — one request able
+     * to pull the whole desk into memory. 200 is above any real page this board renders.
+     */
+    const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 200);
+    const safePage = Math.max(Number(page) || 1, 1);
+
     const [validationCases, total] = await qb
       .orderBy('vc.createdAt', 'DESC')
-      .skip((page - 1) * limit)
-      .take(limit)
+      .skip((safePage - 1) * safeLimit)
+      .take(safeLimit)
       .getManyAndCount();
 
     // The board shows WHO is validating each case, so the uuid alone is useless to it.
