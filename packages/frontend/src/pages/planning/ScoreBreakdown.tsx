@@ -31,13 +31,40 @@ export const SCORE_DIMENSION_LABELS: Record<string, string> = {
  * — "Proximity: 62/100 — 213 km by road", "Travel time: 40/100 — ~4 h 6 min (estimate)" — so a
  * score is never a bare number, and an estimate is never dressed up as a road figure.
  */
-export const ScoreBreakdown: React.FC<{ breakdown?: Record<string, number>; route?: Partial<CandidateRoute> | null }> = ({ breakdown, route }) => {
+export const ScoreBreakdown: React.FC<{
+  breakdown?: Record<string, number>;
+  /**
+   * Points each dimension actually added to the final score, from the engine. When present the
+   * reason sentence is built from these rather than from the raw 0–100 scores — see below.
+   */
+  contribution?: Record<string, number> | null;
+  route?: Partial<CandidateRoute> | null;
+}> = ({ breakdown, contribution, route }) => {
   if (!breakdown || Object.keys(breakdown).length === 0) return null;
   const entries = Object.entries(breakdown)
     .filter(([k]) => SCORE_DIMENSION_LABELS[k])
     .sort((a, b) => b[1] - a[1]);
   if (entries.length === 0) return null;
-  const strengths = entries.slice(0, 3);
+
+  /**
+   * What actually decided the ranking, in points — not what merely scored high.
+   *
+   * A raw score says how the candidate did on a dimension; it says nothing about how much that
+   * dimension counted. Ranking the explanation by raw score led with dimensions weighted at
+   * zero: `customerDensity` returns ~100 for almost everyone and carries a weight of 0.00, so
+   * "right size for this branch" was quoted as the reason for a ranking it contributed nothing
+   * to. Anything contributing nothing is not a reason and is dropped.
+   */
+  const byContribution = contribution
+    ? Object.entries(contribution)
+        .filter(([k, v]) => SCORE_DIMENSION_LABELS[k] && v > 0)
+        .sort((a, b) => b[1] - a[1])
+    : null;
+  const strengths = byContribution && byContribution.length > 0
+    ? byContribution.slice(0, 3).map(([k]) => [k, breakdown[k] ?? 0] as [string, number])
+    : entries.slice(0, 3);
+  // The weakest dimension is still judged on its own score — "turnaround speed is low" is about
+  // the candidate, not about how much turnaround counted.
   const weakest = entries[entries.length - 1];
 
   const basis = (k: string): string => {
@@ -67,7 +94,10 @@ export const ScoreBreakdown: React.FC<{ breakdown?: Record<string, number>; rout
     match is questioned the full breakdown is exactly what settles it.
   */
   const PLAIN_REASONS: Record<string, string> = {
-    slaCompliance: 'far enough from the branch',
+    // The engine scores this HIGHER the closer the assayer is (+20 at =<15 km, -30 beyond
+    // 50 km) — it is arrival-time risk, not separation. The old wording said the opposite of
+    // what was measured, which is worse than no explanation.
+    slaCompliance: 'close enough to arrive on time',
     acceptanceRate: 'usually accepts',
     workload: 'has room in their diary',
     distance: 'closest',

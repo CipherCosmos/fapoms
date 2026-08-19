@@ -16,9 +16,15 @@ import { PlatformSettingsService } from '../settings/platform-settings.service';
 describe('EmailDigestService', () => {
   let service: EmailDigestService;
 
+  /**
+   * Each bucket is `{ items, total }`: the sample shown on screen, and the real breach count.
+   * The digest reports `total`, so a brief cannot understate a backlog by quoting the row cap.
+   */
+  const bucket = (total = 0) => ({ items: Array.from({ length: Math.min(total, 50) }, (_, i) => ({ id: `d${i}` })), total });
   const emptyDesk = {
-    slaHours: {}, unassignedOverdue: [], entryOverdue: [], reworkStale: [],
-    reviewOverdue: [], submitOverdue: [], ocrStuck: [], clarificationsOverdue: [],
+    slaHours: {},
+    unassignedOverdue: bucket(), entryOverdue: bucket(), reworkStale: bucket(),
+    reviewOverdue: bucket(), submitOverdue: bucket(), ocrStuck: bucket(), clarificationsOverdue: bucket(),
   };
   const desk = { attention: jest.fn() };
   const feedback = { attention: jest.fn() };
@@ -77,7 +83,7 @@ describe('EmailDigestService', () => {
 
   it('does nothing at all when email is not configured', async () => {
     email.isEnabled.mockReturnValue(false);
-    desk.attention.mockResolvedValue({ ...emptyDesk, entryOverdue: [{ id: 'd1' }] });
+    desk.attention.mockResolvedValue({ ...emptyDesk, entryOverdue: bucket(1) });
     const result = await service.run();
     expect(result.sent).toBe(0);
     expect(desk.attention).not.toHaveBeenCalled();
@@ -86,8 +92,8 @@ describe('EmailDigestService', () => {
   it('emails the desk heads when the desk has stalled items', async () => {
     desk.attention.mockResolvedValue({
       ...emptyDesk,
-      entryOverdue: [{ id: 'd1' }, { id: 'd2' }],
-      submitOverdue: [{ id: 'd3' }],
+      entryOverdue: bucket(2),
+      submitOverdue: bucket(1),
     });
     audience([{ id: 'u-1', email: 'head@x.in', role_name: 'DATA_ENTRY_HEAD' }]);
 
@@ -101,7 +107,7 @@ describe('EmailDigestService', () => {
   });
 
   it('merges sections for a person whose roles span audiences — one email, not two', async () => {
-    desk.attention.mockResolvedValue({ ...emptyDesk, entryOverdue: [{ id: 'd1' }] });
+    desk.attention.mockResolvedValue({ ...emptyDesk, entryOverdue: bucket(1) });
     feedback.attention.mockResolvedValue({
       firstResponseOverdue: [{ id: 'f1', title: 'Broken export', ageHours: 30 }],
       resolutionOverdue: [],
@@ -120,7 +126,7 @@ describe('EmailDigestService', () => {
   });
 
   it('only sends people the sections their roles entitle them to', async () => {
-    desk.attention.mockResolvedValue({ ...emptyDesk, entryOverdue: [{ id: 'd1' }] });
+    desk.attention.mockResolvedValue({ ...emptyDesk, entryOverdue: bucket(1) });
     feedback.attention.mockResolvedValue({
       firstResponseOverdue: [{ id: 'f1', title: 'X', ageHours: 30 }],
       resolutionOverdue: [],

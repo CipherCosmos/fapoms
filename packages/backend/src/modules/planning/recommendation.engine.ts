@@ -2266,22 +2266,42 @@ export class RecommendationEngine {
       let weightedSum = 0;
       let totalWeight = 0;
       const scoreBreakdown: Record<string, number> = {};
+      const weightUsed: Record<string, number> = {};
 
       for (const calculator of this.calculators) {
         const score = await calculator.calculate(assayer, context);
         scoreBreakdown[calculator.name] = score;
 
         const weight = context.weights[calculator.name] ?? 0;
+        weightUsed[calculator.name] = weight;
         weightedSum += score * weight;
         totalWeight += weight;
       }
 
       const finalScore = totalWeight > 0 ? weightedSum / totalWeight : 0;
 
+      /**
+       * What each dimension actually contributed to the final score, in points.
+       *
+       * The raw 0–100 breakdown says how the candidate did on a dimension, not how much that
+       * mattered. Explaining a match by the highest raw scores therefore led with dimensions
+       * carrying a weight of zero — `customerDensity` is near-always 100 and weighted 0.00, so
+       * "right size for this branch" was routinely quoted as the reason for a ranking it had no
+       * part in. These sum to the final score, so the card can say which three dimensions
+       * actually produced it.
+       */
+      const contribution: Record<string, number> = {};
+      for (const [name, score] of Object.entries(scoreBreakdown)) {
+        contribution[name] = totalWeight > 0
+          ? parseFloat(((score * (weightUsed[name] ?? 0)) / totalWeight).toFixed(2))
+          : 0;
+      }
+
       candidates.push({
         assayer,
         score: parseFloat(finalScore.toFixed(2)),
         breakdown: scoreBreakdown,
+        contribution,
         pendingOnThisBranch: pendingOffer?.assayerId === assayer.id,
         // Only set when the date checks were relaxed and this candidate would otherwise have
         // been dropped. Relaxing the filter must not quietly hide the clash — the operator

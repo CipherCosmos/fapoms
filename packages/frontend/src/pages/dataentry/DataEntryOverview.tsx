@@ -39,11 +39,13 @@ interface AttentionItem {
   id: string; projectBranchId: string | null; branchName: string | null;
   ageHours: number; who: string | null; whoId: string | null;
 }
+/** The sample shown, and how many there really are. Mirrors AttentionBucket on the server. */
+interface AttentionBucket { items: AttentionItem[]; total: number }
 interface DeskAttention {
   slaHours: Record<string, number>;
-  unassignedOverdue: AttentionItem[]; entryOverdue: AttentionItem[]; reworkStale: AttentionItem[];
-  reviewOverdue: AttentionItem[]; submitOverdue: AttentionItem[]; ocrStuck: AttentionItem[];
-  clarificationsOverdue: AttentionItem[];
+  unassignedOverdue: AttentionBucket; entryOverdue: AttentionBucket; reworkStale: AttentionBucket;
+  reviewOverdue: AttentionBucket; submitOverdue: AttentionBucket; ocrStuck: AttentionBucket;
+  clarificationsOverdue: AttentionBucket;
 }
 
 /** Breach buckets, ordered by how loudly they should shout. */
@@ -115,9 +117,13 @@ export const DataEntryOverview: React.FC = () => {
   if (legacyBranch) return <Navigate to={`/data-entry/case/${legacyBranch}`} replace />;
 
   const totals = workload?.totals;
+  // `total` is the real breach count; `items` is the sample the server sends for the preview.
+  // The banner used to add up `items.length`, so it reported the server's 50-row cap as the
+  // size of the backlog — "50 items past their due date" on a desk with four hundred.
   const breachedBuckets = attention
-    ? ATTENTION_BUCKETS.filter((b) => (attention[b.key] ?? []).length > 0)
+    ? ATTENTION_BUCKETS.filter((b) => (attention[b.key]?.total ?? 0) > 0)
     : [];
+  const breachedTotal = breachedBuckets.reduce((n, b) => n + (attention![b.key]?.total ?? 0), 0);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
@@ -126,16 +132,17 @@ export const DataEntryOverview: React.FC = () => {
       {isHead && breachedBuckets.length > 0 && (
         <section style={{ ...deskCard, border: '1px solid var(--danger)' }}>
           <div style={{ ...deskLabel, color: 'var(--danger)', marginBottom: '8px' }}>
-            ⚠ Needs attention — {breachedBuckets.reduce((n, b) => n + attention![b.key].length, 0)} item{breachedBuckets.reduce((n, b) => n + attention![b.key].length, 0) > 1 ? 's' : ''} past their due date
+            ⚠ Needs attention — {breachedTotal} item{breachedTotal === 1 ? '' : 's'} past their due date
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {breachedBuckets.map((b) => {
-              const items = attention![b.key];
+              const bucket = attention![b.key];
+              const items = bucket.items;
               return (
                 <div key={b.key} style={{ display: 'flex', alignItems: 'baseline', gap: '8px', flexWrap: 'wrap' }}>
                   <button onClick={() => navigate(b.link)}
                     style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: b.tone, fontSize: '12.5px', fontWeight: 700, width: 'auto' }}>
-                    {b.label} ({items.length}) →
+                    {b.label} ({bucket.total}) →
                   </button>
                   <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
                     {items.slice(0, 3).map((i, idx) => (
@@ -150,7 +157,7 @@ export const DataEntryOverview: React.FC = () => {
                         {' '}{i.ageHours}h{i.who ? ` · ${i.who}` : ''}
                       </span>
                     ))}
-                    {items.length > 3 && ` · +${items.length - 3} more`}
+                    {bucket.total > 3 && ` · +${bucket.total - 3} more`}
                   </span>
                 </div>
               );

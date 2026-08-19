@@ -33,6 +33,44 @@ describe('AssayerStateMachine', () => {
    * workforce header's "0 exited" therefore stayed at zero however many people left, and someone
    * plainly shown as RESIGNED was counted in neither Active nor Exited.
    */
+  /**
+   * The operational status is what planning filters on. Leave has to reach it, or the two ways
+   * of saying "away" — the HR lifecycle and the dated leave rows — disagree, and the planner
+   * respects only the second.
+   */
+  describe('leave reaches the status planning reads', () => {
+    const active = () => ({
+      id: 'asr-1',
+      lifecycleStatus: AssayerLifecycleStatus.ACTIVE,
+      status: 'ACTIVE',
+      isActive: true,
+    } as AssayerEntity);
+
+    it('stops offering work to someone put on leave', () => {
+      const a = active();
+      AssayerStateMachine.putOnLeave(a, 'user-1');
+
+      expect(a.lifecycleStatus).toBe(AssayerLifecycleStatus.ON_LEAVE);
+      // Was ACTIVE: on-leave assayers stayed in the candidate pool and in daily capacity.
+      expect(a.status).toBe('INACTIVE');
+    });
+
+    it('puts them back in the pool when they return', () => {
+      const a = active();
+      AssayerStateMachine.putOnLeave(a, 'user-1');
+      AssayerStateMachine.activate(a, 'user-1');
+
+      expect(a.lifecycleStatus).toBe(AssayerLifecycleStatus.ACTIVE);
+      expect(a.status).toBe('ACTIVE');
+    });
+
+    it('keeps suspension distinct from leave', () => {
+      const a = active();
+      AssayerStateMachine.suspend(a, 'user-1');
+      expect(a.status).toBe('SUSPENDED');
+    });
+  });
+
   describe('recording the day someone left', () => {
     const activeAssayer = () => ({ lifecycleStatus: 'ACTIVE', isActive: true }) as any;
 

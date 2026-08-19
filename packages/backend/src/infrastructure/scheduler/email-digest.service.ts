@@ -128,15 +128,17 @@ export class EmailDigestService {
   }
 
   private async deskSection(): Promise<DigestSection | null> {
+    // Counts, not row counts. These are the true breach totals — the digest used to report the
+    // screen's fifty-row cap, so a morning brief could say "50 unassigned" on a desk with 400.
     const a = await this.deskEscalation.attention();
     const buckets: Array<[string, number]> = [
-      ['unassigned past SLA', a.unassignedOverdue.length],
-      ['entry overdue', a.entryOverdue.length],
-      ['rework stale', a.reworkStale.length],
-      ['review overdue', a.reviewOverdue.length],
-      ['submission to client overdue', a.submitOverdue.length],
-      ['OCR stuck', a.ocrStuck.length],
-      ['clarifications overdue', a.clarificationsOverdue.length],
+      ['unassigned past SLA', a.unassignedOverdue.total],
+      ['entry overdue', a.entryOverdue.total],
+      ['rework stale', a.reworkStale.total],
+      ['review overdue', a.reviewOverdue.total],
+      ['submission to client overdue', a.submitOverdue.total],
+      ['OCR stuck', a.ocrStuck.total],
+      ['clarifications overdue', a.clarificationsOverdue.total],
     ];
     const nonEmpty = buckets.filter(([, n]) => n > 0);
     if (!nonEmpty.length) return null;

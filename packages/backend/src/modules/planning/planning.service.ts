@@ -44,6 +44,8 @@ export interface AssayerRecommendation {
   readableReasons?: ExplanationReason[];
   /** Per-dimension scores (distance, acceptanceRate, queryVolume, …) behind the total. */
   scoreBreakdown?: Record<string, number>;
+  /** Points each dimension contributed to the score — see RecommendationEngine. */
+  scoreContribution?: Record<string, number>;
   pendingOnThisBranch?: boolean;
   /** The assayer's own weekly cap, so downstream planners need not assume a platform default. */
   maxWeeklyWorkload?: number;
@@ -249,6 +251,7 @@ export class PlanningService {
         // Per-dimension scores so ops can see *why* this candidate ranked where they did,
         // rather than being handed an unexplained number.
         scoreBreakdown: r.breakdown,
+        scoreContribution: r.contribution,
         pendingOnThisBranch: r.pendingOnThisBranch,
         maxWeeklyWorkload: r.assayer.maxWeeklyWorkload ?? undefined,
         // Present only when the date checks were relaxed and this candidate has a clash on the

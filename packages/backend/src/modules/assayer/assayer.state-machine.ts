@@ -18,8 +18,21 @@ import {
  * this machine will refuse. See packages/shared/src/assayer-lifecycle.ts. */
 const LIFECYCLE_TRANSITIONS = ASSAYER_LIFECYCLE_TRANSITIONS;
 
+/**
+ * The operational status planning reads, derived from the HR lifecycle.
+ *
+ * `ON_LEAVE` used to fold into ACTIVE. Every planner filters on this projection — the
+ * recommendation engine, the day planner, the command centre's daily capacity, the operations
+ * snapshot — so marking someone on leave in HR left them in the candidate pool and still
+ * counted them as available capacity, while the roster showed them as not active. Two ways to
+ * say "away", one of which the planner ignored.
+ *
+ * Leave now means not available. The dated rows in `leaves` remain the per-date check
+ * (`ConstraintEvaluator.checkLeaves`) — they answer "is this person away on the 14th", which is
+ * a different question from "is this person away at all".
+ */
 function mapLifecycleToOperationalStatus(lifecycle: string): AssayerStatus {
-  if (lifecycle === AssayerLifecycleStatus.ACTIVE || lifecycle === AssayerLifecycleStatus.ON_LEAVE) return AssayerStatus.ACTIVE;
+  if (lifecycle === AssayerLifecycleStatus.ACTIVE) return AssayerStatus.ACTIVE;
   if (lifecycle === AssayerLifecycleStatus.SUSPENDED) return AssayerStatus.SUSPENDED;
   return AssayerStatus.INACTIVE;
 }

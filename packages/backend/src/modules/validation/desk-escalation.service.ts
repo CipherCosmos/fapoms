@@ -53,17 +53,30 @@ export interface AttentionItem {
   whoId: string | null;
 }
 
-export interface DeskAttention {
-  slaHours: typeof DESK_SLA;
-  unassignedOverdue: AttentionItem[];
-  entryOverdue: AttentionItem[];
-  reworkStale: AttentionItem[];
-  reviewOverdue: AttentionItem[];
-  submitOverdue: AttentionItem[];
-  ocrStuck: AttentionItem[];
-  clarificationsOverdue: AttentionItem[];
+/**
+ * One bucket of breached work: the rows being shown, and how many there actually are.
+ *
+ * `total` is the whole breach count, not `items.length`. Without it the banner read "50 items
+ * past their due date" whether there were 50 or 400 — a silent cap presented as a fact, on the
+ * one screen whose job is to say how bad the backlog is.
+ */
+export interface AttentionBucket {
+  items: AttentionItem[];
+  total: number;
 }
 
+export interface DeskAttention {
+  slaHours: typeof DESK_SLA;
+  unassignedOverdue: AttentionBucket;
+  entryOverdue: AttentionBucket;
+  reworkStale: AttentionBucket;
+  reviewOverdue: AttentionBucket;
+  submitOverdue: AttentionBucket;
+  ocrStuck: AttentionBucket;
+  clarificationsOverdue: AttentionBucket;
+}
+
+/** Rows returned per bucket for the screen. The count comes back regardless — see AttentionBucket. */
 const PER_BUCKET_LIMIT = 50;
 
 @Injectable()
@@ -80,9 +93,26 @@ export class DeskEscalationService {
     return this.validationCaseRepository.manager.query(sql, params);
   }
 
+  /**
+   * Split a bucket query's rows into the page and the true total.
+   *
+   * `COUNT(*) OVER()` is evaluated across the whole matching set before LIMIT applies, so the
+   * count costs no extra round trip — the alternative was seven more queries or, as before,
+   * reporting the cap as if it were the answer.
+   */
+  private bucket(rows: any[]): AttentionBucket {
+    const total = rows.length > 0 ? Number(rows[0].totalMatching ?? rows.length) : 0;
+    return {
+      items: rows.map(({ totalMatching, ...item }) => item as AttentionItem),
+      total,
+    };
+  }
+
   /** The head's exception buckets — everything currently in breach, oldest first. */
-  async attention(): Promise<DeskAttention> {
+  async attention(perBucketLimit: number | null = PER_BUCKET_LIMIT): Promise<DeskAttention> {
     const nameExpr = `COALESCE(NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''), u.username)`;
+    // `null` means "every breach", which is what the notification scan needs — see scan().
+    const limitSql = perBucketLimit === null ? '' : `LIMIT ${Math.max(1, Math.trunc(perBucketLimit))}`;
 
     const [unassignedOverdue, entryOverdue, reworkStale, reviewOverdue, submitOverdue, ocrStuck, clarificationsOverdue] =
       await Promise.all([
@@ -90,7 +120,7 @@ export class DeskEscalationService {
         this.q(`
           SELECT d.id, d.project_branch_id AS "projectBranchId", b.name AS "branchName",
                  EXTRACT(EPOCH FROM NOW() - d.received_at)::int / 3600 AS "ageHours",
-                 NULL AS who, NULL AS "whoId"
+                 NULL AS who, NULL AS "whoId", COUNT(*) OVER() AS "totalMatching"
           FROM documents d
           LEFT JOIN project_branches pb ON pb.id = d.project_branch_id
           LEFT JOIN branches b ON b.id = pb.branch_id
@@ -100,13 +130,13 @@ export class DeskEscalationService {
             AND d.status IN ('RECEIVED', 'SENT_TO_DATA_ENTRY')
             AND NOT EXISTS (SELECT 1 FROM validation_cases vc WHERE vc.project_branch_id = d.project_branch_id
                               AND vc.is_active = true AND vc.status IN ('HUMAN_REVIEW','APPROVED','SUBMITTED'))
-          ORDER BY d.received_at ASC LIMIT ${PER_BUCKET_LIMIT}`, [DESK_SLA.assignHours]),
+          ORDER BY d.received_at ASC ${limitSql}`, [DESK_SLA.assignHours]),
 
         // Delegated and silent: no hand-back, and not the rework case (its own bucket).
         this.q(`
           SELECT d.id, d.project_branch_id AS "projectBranchId", b.name AS "branchName",
                  EXTRACT(EPOCH FROM NOW() - d.assigned_at)::int / 3600 AS "ageHours",
-                 ${nameExpr} AS who, u.id AS "whoId"
+                 ${nameExpr} AS who, u.id AS "whoId", COUNT(*) OVER() AS "totalMatching"
           FROM documents d
           LEFT JOIN project_branches pb ON pb.id = d.project_branch_id
           LEFT JOIN branches b ON b.id = pb.branch_id
@@ -116,14 +146,14 @@ export class DeskEscalationService {
             AND d.assigned_at < NOW() - make_interval(hours => $1)
             AND NOT EXISTS (SELECT 1 FROM validation_cases vc WHERE vc.project_branch_id = d.project_branch_id
                               AND vc.is_active = true AND vc.status IN ('CORRECTION_REQUIRED','HUMAN_REVIEW','APPROVED','SUBMITTED'))
-          ORDER BY d.assigned_at ASC LIMIT ${PER_BUCKET_LIMIT}`, [DESK_SLA.entryHours]),
+          ORDER BY d.assigned_at ASC ${limitSql}`, [DESK_SLA.entryHours]),
 
         // Bounced back for rework and not resolved. The responsible member is whoever
         // the branch's packet was last delegated to.
         this.q(`
           SELECT vc.id, vc.project_branch_id AS "projectBranchId", b.name AS "branchName",
                  EXTRACT(EPOCH FROM NOW() - vc.updated_at)::int / 3600 AS "ageHours",
-                 ${nameExpr} AS who, u.id AS "whoId"
+                 ${nameExpr} AS who, u.id AS "whoId", COUNT(*) OVER() AS "totalMatching"
           FROM validation_cases vc
           LEFT JOIN project_branches pb ON pb.id = vc.project_branch_id
           LEFT JOIN branches b ON b.id = pb.branch_id
@@ -135,45 +165,45 @@ export class DeskEscalationService {
           LEFT JOIN users u ON u.id = owner.assigned_to_user_id
           WHERE vc.is_active = true AND vc.status = 'CORRECTION_REQUIRED'
             AND vc.updated_at < NOW() - make_interval(hours => $1)
-          ORDER BY vc.updated_at ASC LIMIT ${PER_BUCKET_LIMIT}`, [DESK_SLA.reworkHours]),
+          ORDER BY vc.updated_at ASC ${limitSql}`, [DESK_SLA.reworkHours]),
 
         // In review with no decision; carries the routed reviewer when there is one.
         this.q(`
           SELECT vc.id, vc.project_branch_id AS "projectBranchId", b.name AS "branchName",
                  EXTRACT(EPOCH FROM NOW() - vc.updated_at)::int / 3600 AS "ageHours",
-                 ${nameExpr} AS who, u.id AS "whoId"
+                 ${nameExpr} AS who, u.id AS "whoId", COUNT(*) OVER() AS "totalMatching"
           FROM validation_cases vc
           LEFT JOIN project_branches pb ON pb.id = vc.project_branch_id
           LEFT JOIN branches b ON b.id = pb.branch_id
           LEFT JOIN users u ON u.id = vc.reviewer_id
           WHERE vc.is_active = true AND vc.status = 'HUMAN_REVIEW'
             AND vc.updated_at < NOW() - make_interval(hours => $1)
-          ORDER BY vc.updated_at ASC LIMIT ${PER_BUCKET_LIMIT}`, [DESK_SLA.reviewHours]),
+          ORDER BY vc.updated_at ASC ${limitSql}`, [DESK_SLA.reviewHours]),
 
         // Approved and still not sent to the client — the breach the client feels.
         this.q(`
           SELECT vc.id, vc.project_branch_id AS "projectBranchId", b.name AS "branchName",
                  EXTRACT(EPOCH FROM NOW() - COALESCE(vc.reviewed_at, vc.updated_at))::int / 3600 AS "ageHours",
-                 NULL AS who, NULL AS "whoId"
+                 NULL AS who, NULL AS "whoId", COUNT(*) OVER() AS "totalMatching"
           FROM validation_cases vc
           LEFT JOIN project_branches pb ON pb.id = vc.project_branch_id
           LEFT JOIN branches b ON b.id = pb.branch_id
           WHERE vc.is_active = true AND vc.status = 'APPROVED'
             AND COALESCE(vc.reviewed_at, vc.updated_at) < NOW() - make_interval(hours => $1)
-          ORDER BY COALESCE(vc.reviewed_at, vc.updated_at) ASC LIMIT ${PER_BUCKET_LIMIT}`, [DESK_SLA.submitHours]),
+          ORDER BY COALESCE(vc.reviewed_at, vc.updated_at) ASC ${limitSql}`, [DESK_SLA.submitHours]),
 
         // Handed to the external OCR app and never came back to the desk.
         this.q(`
           SELECT d.id, d.project_branch_id AS "projectBranchId", b.name AS "branchName",
                  EXTRACT(EPOCH FROM NOW() - d.sent_to_external_ocr_at)::int / 3600 AS "ageHours",
-                 NULL AS who, NULL AS "whoId"
+                 NULL AS who, NULL AS "whoId", COUNT(*) OVER() AS "totalMatching"
           FROM documents d
           LEFT JOIN project_branches pb ON pb.id = d.project_branch_id
           LEFT JOIN branches b ON b.id = pb.branch_id
           WHERE d.is_active = true AND d.status = 'SENT_TO_EXTERNAL_OCR'
             AND d.data_entry_completed_at IS NULL
             AND d.sent_to_external_ocr_at < NOW() - make_interval(hours => $1)
-          ORDER BY d.sent_to_external_ocr_at ASC LIMIT ${PER_BUCKET_LIMIT}`, [DESK_SLA.ocrHours]),
+          ORDER BY d.sent_to_external_ocr_at ASC ${limitSql}`, [DESK_SLA.ocrHours]),
 
         // A clarification past its own due date, or simply old with no resolution.
         // The audit report cannot ship while one of these is open, so a stale one is
@@ -181,20 +211,25 @@ export class DeskEscalationService {
         this.q(`
           SELECT vq.id, vc.project_branch_id AS "projectBranchId", b.name AS "branchName",
                  EXTRACT(EPOCH FROM NOW() - vq.created_at)::int / 3600 AS "ageHours",
-                 NULL AS who, NULL AS "whoId"
+                 NULL AS who, NULL AS "whoId", COUNT(*) OVER() AS "totalMatching"
           FROM validation_queries vq
           LEFT JOIN validation_cases vc ON vc.id = vq.validation_case_id
           LEFT JOIN project_branches pb ON pb.id = vc.project_branch_id
           LEFT JOIN branches b ON b.id = pb.branch_id
           WHERE vq.status IN ('OPEN', 'RESPONDED')
             AND (vq.sla_due_date < NOW() OR vq.created_at < NOW() - make_interval(hours => $1))
-          ORDER BY vq.created_at ASC LIMIT ${PER_BUCKET_LIMIT}`, [DESK_SLA.clarificationHours]),
+          ORDER BY vq.created_at ASC ${limitSql}`, [DESK_SLA.clarificationHours]),
       ]);
 
     return {
       slaHours: DESK_SLA,
-      unassignedOverdue, entryOverdue, reworkStale, reviewOverdue,
-      submitOverdue, ocrStuck, clarificationsOverdue,
+      unassignedOverdue: this.bucket(unassignedOverdue),
+      entryOverdue: this.bucket(entryOverdue),
+      reworkStale: this.bucket(reworkStale),
+      reviewOverdue: this.bucket(reviewOverdue),
+      submitOverdue: this.bucket(submitOverdue),
+      ocrStuck: this.bucket(ocrStuck),
+      clarificationsOverdue: this.bucket(clarificationsOverdue),
     };
   }
 
@@ -204,7 +239,16 @@ export class DeskEscalationService {
    * day for as long as the breach persists, and a fresh alert if it recurs later.
    */
   async scan(): Promise<number> {
-    const a = await this.attention();
+    /**
+     * Every breach, not the screen's first fifty.
+     *
+     * The scan used to walk the same capped, oldest-first list the banner shows, so on a
+     * backed-up desk the oldest fifty were re-notified every fifteen minutes while the
+     * fifty-first was never escalated to anyone — the escalation engine stopped escalating
+     * exactly when escalation mattered. Volume is bounded by the day-bucketed dedupe key
+     * below, not by truncating the work.
+     */
+    const a = await this.attention(null);
     const day = new Date().toISOString().slice(0, 10);
     let emitted = 0;
 
@@ -230,13 +274,13 @@ export class DeskEscalationService {
       emitted++;
     };
 
-    for (const i of a.unassignedOverdue) emit('DESK_PACKET_UNASSIGNED_SLA', 'DOCUMENT', i);
-    for (const i of a.entryOverdue) emit('DESK_ENTRY_OVERDUE', 'DOCUMENT', i, i.whoId);
-    for (const i of a.reworkStale) emit('DESK_REWORK_STALE', 'VALIDATION', i, i.whoId);
-    for (const i of a.reviewOverdue) emit('DESK_REVIEW_OVERDUE', 'VALIDATION', i, i.whoId);
-    for (const i of a.submitOverdue) emit('DESK_SUBMIT_OVERDUE', 'VALIDATION', i);
-    for (const i of a.ocrStuck) emit('DESK_OCR_STUCK', 'DOCUMENT', i);
-    for (const i of a.clarificationsOverdue) emit('DESK_CLARIFICATION_OVERDUE', 'VALIDATION_QUERY', i);
+    for (const i of a.unassignedOverdue.items) emit('DESK_PACKET_UNASSIGNED_SLA', 'DOCUMENT', i);
+    for (const i of a.entryOverdue.items) emit('DESK_ENTRY_OVERDUE', 'DOCUMENT', i, i.whoId);
+    for (const i of a.reworkStale.items) emit('DESK_REWORK_STALE', 'VALIDATION', i, i.whoId);
+    for (const i of a.reviewOverdue.items) emit('DESK_REVIEW_OVERDUE', 'VALIDATION', i, i.whoId);
+    for (const i of a.submitOverdue.items) emit('DESK_SUBMIT_OVERDUE', 'VALIDATION', i);
+    for (const i of a.ocrStuck.items) emit('DESK_OCR_STUCK', 'DOCUMENT', i);
+    for (const i of a.clarificationsOverdue.items) emit('DESK_CLARIFICATION_OVERDUE', 'VALIDATION_QUERY', i);
 
     if (emitted > 0) this.logger.log(`Desk escalation scan: ${emitted} breach notification(s) emitted.`);
     return emitted;

@@ -121,6 +121,8 @@ interface Candidate {
   /** Backend already computes these; the UI previously discarded them. */
   readableReasons?: { label: string; detail?: string; sentiment?: string }[];
   scoreBreakdown?: Record<string, number>;
+  /** What each dimension actually added to the score, in points. */
+  scoreContribution?: Record<string, number>;
   /**
    * Set only when "Ignore date availability" is on and this candidate has a clash on the
    * planned date ("Already booked that day on ASG-0042.", "On leave 2026-08-10 to 2026-08-14.").
@@ -1978,6 +1980,10 @@ export const PlanningWorkspace: React.FC = () => {
 
               <ScoreBreakdown
                 breakdown={c.scoreBreakdown}
+                // Points each dimension actually added to the score. Without it the card
+                // explained the match by whichever dimension scored highest, including ones
+                // weighted at zero.
+                contribution={c.scoreContribution ?? null}
                 route={{ distanceKm: c.distanceKm, durationMinutes: c.durationMinutes ?? null, distanceSource: c.distanceSource ?? null }}
               />
 
