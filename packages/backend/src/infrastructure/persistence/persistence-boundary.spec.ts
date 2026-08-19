@@ -38,6 +38,16 @@ const IMPORTS_TYPEORM = [
   // how long each statement holds locks on append-only tables, which the repository API cannot
   // express; it owns no domain concept and reads no entity.
   'infrastructure/retention/retention.service.ts',
+  // The operator-invoked data reset. It clears whole tables named by the wipe registry, in an
+  // order derived from the live foreign-key graph — a statement about *tables*, not entities, and
+  // one no repository can express: routing it through the ~40 repositories whose tables it
+  // touches would still not say "empty these, children first". Reads no entity and owns no
+  // aggregate.
+  'infrastructure/data-reset/data-reset.service.ts',
+  // Reads foreign-key constraints out of information_schema. There is no entity to go through —
+  // the subject is the schema itself, which is precisely why it is queried live rather than
+  // transcribed into a list that would drift from it.
+  'infrastructure/data-reset/fk-graph.service.ts',
   'core/audit/unified-audit.service.ts',
   // The region ceiling on detail routes. Read-only, and single-column region lookups by id
   // across five tables (branch, project_branch, assignment, assayer, schedule) — it exists
@@ -150,6 +160,13 @@ const OPENS_ITS_OWN_TRANSACTIONS = [
   // Batched deletes, each its own short statement. Deliberately NOT one transaction: the whole
   // design is that a purge never holds locks on an append-only table for long.
   'infrastructure/retention/retention.service.ts',
+  // The opposite choice to retention above, for the opposite reason: a wipe spans many tables and
+  // must be all-or-nothing, so it holds one transaction on purpose. Its audit row is written
+  // inside that transaction unguarded — a reset that cannot be recorded must not commit — which
+  // is exactly the coupling `UnitOfWork` could not express here.
+  'infrastructure/data-reset/data-reset.service.ts',
+  // Holds a DataSource to read information_schema; opens no transaction.
+  'infrastructure/data-reset/fk-graph.service.ts',
   // Takes a DataSource for read-only region lookups only; opens no transaction.
   'infrastructure/scope/region-guard.service.ts',
   // Read-only morning-digest aggregates (pending payables/expenses/overdue invoices) and the
