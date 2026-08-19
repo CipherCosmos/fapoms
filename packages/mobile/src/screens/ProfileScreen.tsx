@@ -1,5 +1,6 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { View, TextInput, TextStyle, Modal, Alert, Dimensions } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { View, TextInput, TextStyle, Modal, Alert, Dimensions, ScrollView, ActivityIndicator } from 'react-native';
+import * as Location from 'expo-location';
 import { useTheme, ThemePreference } from '../theme/ThemeProvider';
 import {
   AppText, Avatar, Badge, Button, Card, GroupedRow, GroupedSection, GroupedSwitch,
@@ -8,7 +9,11 @@ import {
 import { SubScreen, useStackNav } from '../components/ui/SimpleStack';
 import { ChangePasswordScreen } from './ChangePasswordScreen';
 import { useLocation } from '../context/LocationContext';
-import { formatRupees as money } from '@fapoms/shared';
+// INDIAN_STATES and canonicalStateName are the SAME canonical list the backend validates a saved
+// address against (assayer.service.ts → assertAddressConsistent rejects anything else outright), so
+// the state field is a picker over that list rather than a free-text box that can only fail.
+import { formatRupees as money, INDIAN_STATES, canonicalStateName } from '@fapoms/shared';
+import { MapPicker, isPlausibleIndianCoord, INDIA_CENTRE } from '../components/ui/MapPicker';
 import { getPreference, setPreference as setDevicePreference } from '../services/preferences';
 import { MobileApiService, NotificationPreference, getApiBaseUrl } from '../services/api.service';
 import { probeServerUrl } from '../services/server-config';
@@ -257,6 +262,409 @@ const FieldInput: React.FC<{
           paddingVertical: 0,
         } as TextStyle}
       />
+    </View>
+  );
+};
+
+/* ── Address ─────────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * State, chosen from the canonical list rather than typed.
+ *
+ * The server refuses a save outright when the state is not one it recognises
+ * (assayer.service.ts → `assertAddressConsistent`: `"X" is not a state we recognise`). A free-text
+ * box made that the single most likely reason an assayer's address save bounced — "Karnatka",
+ * "TN", "Maharastra" all look fine to the person typing them. `INDIAN_STATES` here is the very
+ * same list the validator reads, so a picked value cannot be rejected for spelling.
+ */
+const StatePicker: React.FC<{ value: string; onChange: (v: string) => void; readOnly?: boolean }> = ({
+  value, onChange, readOnly,
+}) => {
+  const t = useTheme();
+  const [open, setOpen] = useState(false);
+
+  if (readOnly) {
+    return <FieldInput label="State" value={value} onChange={() => {}} readOnly />;
+  }
+
+  return (
+    <View style={{ gap: t.space.sm }}>
+      <AppText variant="overline" tone="faint">STATE</AppText>
+      <Tappable onPress={() => setOpen(true)} accessibilityRole="button" accessibilityLabel="Choose state">
+        <View style={{
+          backgroundColor: t.colors.bg,
+          borderRadius: t.radius.md,
+          borderWidth: 1.5,
+          borderColor: t.colors.border,
+          paddingHorizontal: t.space.lg,
+          height: 50,
+          flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+        }}>
+          <AppText variant="small" tone={value ? 'default' : 'faint'}>{value || 'Choose a state'}</AppText>
+          <Icon name="chevron-down" size={14} color={t.colors.textFaint} />
+        </View>
+      </Tappable>
+
+      <Modal visible={open} transparent animationType="slide" onRequestClose={() => setOpen(false)}>
+        <View style={{ flex: 1, backgroundColor: t.colors.scrim, justifyContent: 'flex-end' }}>
+          <View style={{
+            backgroundColor: t.colors.surface,
+            borderTopLeftRadius: t.radius['2xl'], borderTopRightRadius: t.radius['2xl'],
+            maxHeight: '75%', paddingTop: t.space.lg,
+          }}>
+            <View style={{
+              flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+              paddingHorizontal: t.space.lg, paddingBottom: t.space.md,
+            }}>
+              <AppText variant="h3">State</AppText>
+              <Tappable onPress={() => setOpen(false)} accessibilityRole="button" accessibilityLabel="Close">
+                <AppText variant="bodyStrong" style={{ color: t.colors.primary }}>Done</AppText>
+              </Tappable>
+            </View>
+            <ScrollView>
+              {INDIAN_STATES.map((s) => (
+                <Tappable
+                  key={s.value}
+                  onPress={() => { onChange(s.value); setOpen(false); }}
+                  accessibilityRole="button"
+                  accessibilityLabel={s.label}
+                >
+                  <View style={{
+                    paddingHorizontal: t.space.lg, paddingVertical: t.space.md,
+                    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+                    borderBottomWidth: 1, borderBottomColor: t.colors.border,
+                  }}>
+                    <AppText variant="body" tone={s.value === value ? 'primary' : 'default'}>{s.label}</AppText>
+                    {s.value === value && <Icon name="checkmark-circle" size={16} color={t.colors.primary} />}
+                  </View>
+                </Tappable>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+};
+
+/**
+ * The assayer's home address, and the coordinate that goes with it.
+ *
+ * ## Why the pin matters more than it looks
+ *
+ * These coordinates are not decoration on a form. They are the origin the platform measures every
+ * travel distance from: routing, the travel-cost calculation behind offer recommendations, and the
+ * verification of the assayer's own travel claims all start from this point. A home pin that is
+ * wrong by thirty kilometres produces a travel claim that looks inflated when it is honest, and a
+ * job-matching radius centred on the wrong town.
+ *
+ * That is also why nothing here ever invents a coordinate. useAssayerProfile.ts carries the
+ * history: a hardcoded New Delhi default silently became the stored home location for every worker
+ * who never touched the field, and fed exactly these calculations. When no pin is known this screen
+ * says so and asks for a deliberate action — it does not centre the map somewhere plausible and
+ * quietly save it.
+ *
+ * ## Why a coordinate sent from here is durable
+ *
+ * When the app supplies latitude+longitude, the server records it as a manual pin
+ * (coordinate-resolution.ts: `geoSource: 'manual'`, "Placed by hand") and never overwrites a manual
+ * pin with later automatic geocoding. So what the assayer places here is authoritative from then
+ * on — worth getting right once, and worth validating before it leaves the phone.
+ */
+const AddressEditor: React.FC<{
+  profile: ProfileDataState;
+  onUpdateProfileField: (field: keyof ProfileDataState, value: any) => void;
+  editing: boolean;
+}> = ({ profile, onUpdateProfileField, editing }) => {
+  const t = useTheme();
+
+  const [busy, setBusy] = useState<null | 'gps' | 'pin' | 'pincode'>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
+  /** Manual placement mode: a draft coordinate the user is dragging, NOT yet written to the
+   *  profile. Kept out of `profile` on purpose so an abandoned placement saves nothing. */
+  const [draft, setDraft] = useState<{ latitude: number; longitude: number } | null>(null);
+  /** The pincode we last ran a lookup for, so re-rendering or a programmatic fill does not
+   *  re-trigger the network round trip. */
+  const lastPincodeLookup = useRef<string>('');
+
+  const hasPin = isPlausibleIndianCoord(profile.latitude, profile.longitude);
+
+  /**
+   * Which fields a reverse geocode is allowed to overwrite.
+   *
+   * Overwritten (`fromPin: true`): city, district, state, pincode. These are pure administrative
+   * facts about the point on the map — if the pin says Pune and the form says Nashik, the form is
+   * simply wrong, and silently keeping the stale value is what produces the pincode↔state mismatch
+   * the server rejects on save.
+   *
+   * Preserved: the free-text `address` line, once the assayer has typed anything into it. That
+   * line is where "Flat 3B, Shanti Apartments, above the SBI branch" lives — a device geocoder
+   * cannot know a flat number, and overwriting it with "Baner Road" would destroy the only part of
+   * the address a courier or a desk officer actually needs. It is filled from the geocoder ONLY
+   * when it is still empty, as a helpful first draft the user can then edit.
+   */
+  const applyPlace = useCallback((place: Location.LocationGeocodedAddress) => {
+    const city = place.city || place.subregion || '';
+    const district = place.subregion || place.district || '';
+    // Run the geocoder's region name through the same canonicaliser the server uses; a device that
+    // returns "Maharastra" or "NCT of Delhi" must not become an unsaveable profile.
+    const state = canonicalStateName(place.region) || '';
+    const pincode = (place.postalCode || '').replace(/\D/g, '').slice(0, 6);
+
+    if (city) onUpdateProfileField('city', city);
+    if (district) onUpdateProfileField('district', district);
+    if (state) onUpdateProfileField('state', state);
+    if (pincode.length === 6) {
+      onUpdateProfileField('pincode', pincode);
+      lastPincodeLookup.current = pincode;
+    }
+
+    if (!String(profile.address || '').trim()) {
+      const street = [place.name, place.street].filter(Boolean).join(', ');
+      if (street) onUpdateProfileField('address', street);
+    }
+
+    if (!state && place.region) {
+      setNote(`Your device reported the state as “${place.region}”, which isn't one we recognise — please pick it below.`);
+    }
+  }, [onUpdateProfileField, profile.address]);
+
+  /**
+   * Reverse geocode a coordinate.
+   *
+   * `reverseGeocodeAsync` uses the DEVICE's own geocoder — no API key, no network service of ours.
+   * On an Android build without Google Play Services it can legitimately return `[]`; that is not
+   * an error worth blocking on, the pin is still good, so we say so and leave the fields to the
+   * user rather than stranding them.
+   */
+  const fillFromCoord = useCallback(async (latitude: number, longitude: number) => {
+    try {
+      const places = await Location.reverseGeocodeAsync({ latitude, longitude });
+      if (!places || places.length === 0) {
+        setNote('Pin saved. This phone could not look up the address for it — please fill the fields below yourself.');
+        return;
+      }
+      applyPlace(places[0]);
+    } catch {
+      setNote('Pin saved. The address lookup did not respond — please fill the fields below yourself.');
+    }
+  }, [applyPlace]);
+
+  /** Write a coordinate to the profile, refusing anything the server would drop anyway. */
+  const commitPin = useCallback(async (latitude: number, longitude: number, reverse: boolean) => {
+    if (!isPlausibleIndianCoord(latitude, longitude)) {
+      setError('That point is outside India. Move the pin to your home address before saving.');
+      return;
+    }
+    setError(null);
+    setNote(null);
+    onUpdateProfileField('latitude', latitude);
+    onUpdateProfileField('longitude', longitude);
+    if (!reverse) return;
+    setBusy('pin');
+    await fillFromCoord(latitude, longitude);
+    setBusy(null);
+  }, [fillFromCoord, onUpdateProfileField]);
+
+  /** The one-tap path: an assayer standing at their own front door should not have to type. */
+  const useCurrentLocation = useCallback(async () => {
+    setBusy('gps');
+    setError(null);
+    setNote(null);
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        setError('Location permission is off. Allow location for Orbit in your phone settings, or place the pin on the map instead.');
+        return;
+      }
+      const fix = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const { latitude, longitude } = fix.coords;
+      if (!isPlausibleIndianCoord(latitude, longitude)) {
+        setError('Your phone reported a position outside India. Place the pin on the map instead.');
+        return;
+      }
+      setDraft(null);
+      onUpdateProfileField('latitude', latitude);
+      onUpdateProfileField('longitude', longitude);
+      await fillFromCoord(latitude, longitude);
+    } catch {
+      setError('Could not get a location fix. Step outside or near a window and try again, or place the pin on the map.');
+    } finally {
+      setBusy(null);
+    }
+  }, [fillFromCoord, onUpdateProfileField]);
+
+  /**
+   * Pincode is the server's anchor of truth for an address (it cross-checks pincode against
+   * state/district on save), so a valid six-digit code is the highest-value thing to resolve:
+   * forward geocode it, then reverse geocode the result to fill district/state and move the pin.
+   */
+  const onPincodeChange = useCallback(async (raw: string) => {
+    const value = raw.replace(/\D/g, '').slice(0, 6);
+    onUpdateProfileField('pincode', value);
+    if (value.length !== 6 || value === lastPincodeLookup.current) return;
+    lastPincodeLookup.current = value;
+    setBusy('pincode');
+    setError(null);
+    setNote(null);
+    try {
+      const hits = await Location.geocodeAsync(`${value}, India`);
+      const hit = hits?.[0];
+      if (!hit || !isPlausibleIndianCoord(hit.latitude, hit.longitude)) {
+        setNote('Could not look that pincode up on this phone — fill the district and state yourself.');
+        return;
+      }
+      onUpdateProfileField('latitude', hit.latitude);
+      onUpdateProfileField('longitude', hit.longitude);
+      setDraft(null);
+      const places = await Location.reverseGeocodeAsync({ latitude: hit.latitude, longitude: hit.longitude });
+      // A pincode centroid is a neighbourhood, not a doorstep: take the administrative fields but
+      // leave the street line alone, and tell the user to nudge the pin to their actual home.
+      if (places?.[0]) {
+        const place = places[0];
+        const district = place.subregion || place.district || '';
+        const state = canonicalStateName(place.region) || '';
+        if (place.city) onUpdateProfileField('city', place.city);
+        if (district) onUpdateProfileField('district', district);
+        if (state) onUpdateProfileField('state', state);
+      }
+      setNote('Pin moved to the centre of that pincode — drag the map to your exact home.');
+    } catch {
+      setNote('Pincode lookup failed on this phone — fill the district and state yourself.');
+    } finally {
+      setBusy(null);
+    }
+  }, [onUpdateProfileField]);
+
+  const coordLine = hasPin
+    ? `${Number(profile.latitude).toFixed(5)}, ${Number(profile.longitude).toFixed(5)}`
+    : null;
+
+  return (
+    <View style={{ padding: t.space.lg, gap: t.space.lg }}>
+      <Card level={1} style={{ gap: t.space.md }}>
+        <AppText variant="overline" tone="faint">HOME LOCATION</AppText>
+
+        {editing && (
+          <Button
+            label={busy === 'gps' ? 'Finding you…' : 'Use my current location'}
+            icon="navigate"
+            onPress={useCurrentLocation}
+            loading={busy === 'gps'}
+            disabled={busy !== null}
+            full
+          />
+        )}
+
+        {hasPin ? (
+          <>
+            <MapPicker
+              latitude={profile.latitude}
+              longitude={profile.longitude}
+              editable={editing && busy === null}
+              onChange={(lat, lng) => { void commitPin(lat, lng, true); }}
+              initialZoom={16}
+            />
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm }}>
+              {busy === 'pin' && <ActivityIndicator size="small" color={t.colors.primary} />}
+              <AppText variant="caption" tone="muted">{coordLine}</AppText>
+            </View>
+          </>
+        ) : draft ? (
+          <>
+            {/* Explicit placement mode. The draft is deliberately NOT in the profile yet, so
+                backing out of this screen saves nothing and leaves the pin honestly unset. */}
+            <MapPicker
+              latitude={draft.latitude}
+              longitude={draft.longitude}
+              editable={busy === null}
+              onChange={(lat, lng) => setDraft({ latitude: lat, longitude: lng })}
+              initialZoom={INDIA_CENTRE.zoom}
+            />
+            <View style={{ flexDirection: 'row', gap: t.space.sm }}>
+              <View style={{ flex: 1 }}>
+                <Button label="Cancel" variant="neutral" onPress={() => { setDraft(null); setError(null); }} full />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Button
+                  label="Use this pin"
+                  onPress={() => { void commitPin(draft.latitude, draft.longitude, true); }}
+                  disabled={busy !== null}
+                  full
+                />
+              </View>
+            </View>
+          </>
+        ) : (
+          <View style={{
+            borderRadius: t.radius.lg,
+            borderWidth: 1,
+            borderStyle: 'dashed',
+            borderColor: t.colors.borderStrong,
+            backgroundColor: t.colors.surfaceAlt,
+            padding: t.space.lg,
+            gap: t.space.sm,
+            alignItems: 'center',
+          }}>
+            <Icon name="location-outline" size={22} color={t.colors.textFaint} />
+            <AppText variant="small" tone="muted" style={{ textAlign: 'center' }}>
+              No home location on file yet.
+            </AppText>
+            {editing && (
+              <Button label="Place the pin on a map" variant="neutral" icon="map" onPress={() => setDraft({ ...INDIA_CENTRE })} />
+            )}
+          </View>
+        )}
+
+        {error && <AppText variant="caption" style={{ color: t.colors.danger }}>{error}</AppText>}
+        {!error && note && <AppText variant="caption" tone="muted">{note}</AppText>}
+
+        <AppText variant="caption" tone="faint">
+          Your travel distance and travel claims are measured from this pin, so it decides which
+          audits you are offered and what you are paid to reach them.
+        </AppText>
+      </Card>
+
+      <Card level={1} style={{ gap: t.space.lg }}>
+        <FieldInput
+          label="Address"
+          value={profile.address}
+          onChange={(v) => onUpdateProfileField('address', v)}
+          placeholder="Flat / house, building, street"
+          autoCapitalize="words"
+          readOnly={!editing}
+        />
+        <View style={{ flexDirection: 'row', gap: t.space.md }}>
+          <View style={{ flex: 1 }}>
+            <FieldInput label="City" value={profile.city} onChange={(v) => onUpdateProfileField('city', v)} autoCapitalize="words" readOnly={!editing} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <FieldInput
+              label="Pincode"
+              value={profile.pincode}
+              onChange={(v) => { void onPincodeChange(v); }}
+              keyboardType="numeric"
+              placeholder="6 digits"
+              readOnly={!editing}
+            />
+          </View>
+        </View>
+        <View style={{ flexDirection: 'row', gap: t.space.md }}>
+          <View style={{ flex: 1 }}>
+            <FieldInput label="District" value={profile.district} onChange={(v) => onUpdateProfileField('district', v)} autoCapitalize="words" readOnly={!editing} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <StatePicker value={profile.state} onChange={(v) => onUpdateProfileField('state', v)} readOnly={!editing} />
+          </View>
+        </View>
+        {busy === 'pincode' && (
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm }}>
+            <ActivityIndicator size="small" color={t.colors.primary} />
+            <AppText variant="caption" tone="muted">Looking up that pincode…</AppText>
+          </View>
+        )}
+      </Card>
     </View>
   );
 };
@@ -704,27 +1112,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
         active={stackNav.current === 'address'} title="Address" onBack={stackNav.pop}
         trailing={<EditToggle editing={editing} onToggle={() => setEditing((e) => !e)} />}
       >
-        <View style={{ padding: t.space.lg, gap: t.space.lg }}>
-          <Card level={1} style={{ gap: t.space.lg }}>
-            <FieldInput label="Address" value={profile.address} onChange={(v) => onUpdateProfileField('address', v)} autoCapitalize="words" readOnly={!editing} />
-            <View style={{ flexDirection: 'row', gap: t.space.md }}>
-              <View style={{ flex: 1 }}>
-                <FieldInput label="City" value={profile.city} onChange={(v) => onUpdateProfileField('city', v)} autoCapitalize="words" readOnly={!editing} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <FieldInput label="Pincode" value={profile.pincode} onChange={(v) => onUpdateProfileField('pincode', v)} keyboardType="numeric" readOnly={!editing} />
-              </View>
-            </View>
-            <View style={{ flexDirection: 'row', gap: t.space.md }}>
-              <View style={{ flex: 1 }}>
-                <FieldInput label="District" value={profile.district} onChange={(v) => onUpdateProfileField('district', v)} autoCapitalize="words" readOnly={!editing} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <FieldInput label="State" value={profile.state} onChange={(v) => onUpdateProfileField('state', v)} autoCapitalize="words" readOnly={!editing} />
-              </View>
-            </View>
-          </Card>
-        </View>
+        <AddressEditor profile={profile} onUpdateProfileField={onUpdateProfileField} editing={editing} />
       </SubScreen>
 
       <SubScreen
