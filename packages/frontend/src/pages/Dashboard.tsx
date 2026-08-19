@@ -265,7 +265,7 @@ export const Dashboard: React.FC = () => {
             {/* 3. Funnel — where the book is piling up. */}
             {data.funnel && (
             <div>
-              <SectionLabel>Where the book stands</SectionLabel>
+              <SectionLabel>Branches by status</SectionLabel>
               <div className="glass-card" style={{ padding: 14 }}>
                 {funnelBars.length === 0 ? (
                   <div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>No branches loaded yet.</div>
@@ -283,7 +283,7 @@ export const Dashboard: React.FC = () => {
               stay as their own callouts beside it. */}
           {data.validation && (
             <div>
-              <SectionLabel>Validation queue</SectionLabel>
+              <SectionLabel>Audits waiting to be checked</SectionLabel>
               <div className="glass-card" style={{ padding: 16, display: 'flex', gap: 24, flexWrap: 'wrap', alignItems: 'center' }}>
                 {validationSegments.every((s) => s.value === 0) ? (
                   <div style={{ fontSize: 12.5, color: 'var(--text-muted)' }}>Nothing in the queue.</div>
@@ -310,7 +310,7 @@ export const Dashboard: React.FC = () => {
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: 16 }}>
               {data.capacity && (
                 <div>
-                  <SectionLabel>Assayer capacity</SectionLabel>
+                  <SectionLabel>Assayers available</SectionLabel>
                   <div className="glass-card" style={{ padding: 16, display: 'flex', justifyContent: 'center' }}>
                     <DonutChart
                       segments={capacitySegments.map((s) => ({ ...s, onClick: () => navigate('/hr/roster') }))}
@@ -321,7 +321,7 @@ export const Dashboard: React.FC = () => {
               )}
               {data.documents && (
                 <div>
-                  <SectionLabel>Paperwork in flight</SectionLabel>
+                  <SectionLabel>Documents by stage</SectionLabel>
                   <div className="glass-card" style={{ padding: 16 }}>
                     <HBarChart data={documentBars} valueColumnWidth={56} />
                   </div>
@@ -329,7 +329,7 @@ export const Dashboard: React.FC = () => {
               )}
               {data.money && (
                 <div>
-                  <SectionLabel>Revenue position</SectionLabel>
+                  <SectionLabel>Money billed and received</SectionLabel>
                   <div className="glass-card" style={{ padding: 16 }}>
                     <HBarChart data={moneyBars} valueColumnWidth={104} />
                   </div>

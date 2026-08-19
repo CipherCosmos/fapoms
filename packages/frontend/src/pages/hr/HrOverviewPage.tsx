@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { card, label, Stat, Bar, SEVERITY } from './hr-ui';
 import type { HrAction, HrWorkforceOverview } from '../../hooks/useHrWorkforce';
-import { useHr } from './HrLayout';
+import { useHr, resolveHrDestination } from './HrLayout';
 
 /**
  * The workforce position at a glance, and the worklist that comes out of it.
@@ -13,7 +13,7 @@ import { useHr } from './HrLayout';
  * that job needs without competing for room with seven other concerns.
  */
 
-const OverviewTabBody = ({ d, onJump }: { d: HrWorkforceOverview; onJump: (page: string) => void }) => (
+const OverviewTabBody = ({ d, onJump }: { d: HrWorkforceOverview; onJump: (to: string) => void }) => (
   <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
     <section>
       <div style={{ ...label, marginBottom: '8px' }}>Needs attention</div>
@@ -25,7 +25,13 @@ const OverviewTabBody = ({ d, onJump }: { d: HrWorkforceOverview; onJump: (page:
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(330px, 1fr))', gap: '10px' }}>
           {d.actions.map((a: HrAction, i) => {
             const s = SEVERITY[a.severity] ?? SEVERITY.low;
-            const target = (a.link.split('tab=')[1] as string) || 'overview';
+            // The backend hands these as paths (`/hr/records`, `/hr/compliance`, …) — see
+            // hr-workforce.service.ts. This used to parse them for a `?tab=` value that has not
+            // been in them for a long while, so every card silently fell back to 'overview' and
+            // the worklist bounced you back to the page you were already on. Resolve the link
+            // properly instead, through the same map that forwards legacy URLs, so a card now
+            // lands on the merged page with the right filter chip already selected.
+            const target = resolveHrDestination(a.link);
             return (
               <button
                 key={i}
@@ -106,5 +112,5 @@ const OverviewTabBody = ({ d, onJump }: { d: HrWorkforceOverview; onJump: (page:
 export const HrOverviewPage: React.FC = () => {
   const { data: d } = useHr();
   const navigate = useNavigate();
-  return <OverviewTabBody d={d} onJump={(t: string) => navigate(t === "overview" ? "/hr" : `/hr/${t}`)} />;
+  return <OverviewTabBody d={d} onJump={(to: string) => navigate(to)} />;
 };

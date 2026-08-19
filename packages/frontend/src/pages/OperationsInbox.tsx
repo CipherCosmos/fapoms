@@ -10,7 +10,9 @@ import { api } from '../services/api';
 import { queryClient } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
 import { useSocketConnection } from '../hooks/useSocketConnection';
-import { getRecommendations } from '../services/planning';
+import { getRecommendations, suggestAuditDate, describeSuggestedDate } from '../services/planning';
+import { userMessage } from '../services/errors';
+import { todayDateKey, formatDateOnly } from '../utils/statusLabels';
 import { formatRouteDistance, type RouteSource } from '@fapoms/shared';
 import { AlertBanner } from '../components/ui';
 
@@ -132,6 +134,19 @@ export const OperationsInbox: React.FC = () => {
   const [reasonInput, setReasonInput] = useState('');
   // Reassign drawer target.
   const [reassignFor, setReassignFor] = useState<InboxItem | null>(null);
+  /**
+   * Inline booking for the "Accepted, not scheduled" lane.
+   *
+   * "Put on calendar" used to only navigate. The desk then re-found the very assignment it had
+   * just acted on in a dropdown of every unscheduled offer, and picked a date with no help — four
+   * screens to record a decision that had already been made on the phone. This holds the one card
+   * being booked, the date proposed for it, and the plain-language reason for that date.
+   */
+  const [bookFor, setBookFor] = useState<InboxItem | null>(null);
+  const [bookDate, setBookDate] = useState(todayDateKey());
+  const [bookNote, setBookNote] = useState<string | null>(null);
+  const [bookLoadingDate, setBookLoadingDate] = useState(false);
+  const openBookingIdRef = useRef<string | null>(null);
 
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: queryKeys.desk.inbox });
@@ -165,7 +180,9 @@ export const OperationsInbox: React.FC = () => {
       setOpenForm(null);
       refresh();
     } catch (err: any) {
-      setMessage({ type: 'error', text: err?.message || 'Action failed.' });
+      // `userMessage` is the one place that turns a NestJS validation array or a bare 500 into a
+      // sentence the desk can act on; raw `err.message` reached this banner as endpoint text.
+      setMessage({ type: 'error', text: userMessage(err) || 'Action failed.' });
     } finally {
       setBusyId(null);
     }
@@ -209,6 +226,55 @@ export const OperationsInbox: React.FC = () => {
     void act(item, async () => {
       await logCall(item, 'NO_ANSWER');
     }, `No-answer logged for ${item.assayerName} (${item.callAttempts + 1} attempt${item.callAttempts ? 's' : ''}).`);
+  };
+
+  /**
+   * Open the inline booking confirmation for one accepted offer.
+   *
+   * The suggested date is fetched, not assumed: the server already skips Sundays, that state's
+   * holidays, the assayer's leave and their existing bookings. If that lookup fails or the row
+   * carries no branch id, the panel still opens on today — a date the operator can change — because
+   * an unreachable suggestion must never stand between the desk and a booking they can make.
+   *
+   * `item.branchId` is the underlying branch record, which is what the date rules are keyed to;
+   * `projectBranchId` is a different id on the same card and matches nothing here.
+   */
+  const startBooking = (item: InboxItem) => {
+    setBookFor(item);
+    openBookingIdRef.current = item.id;
+    setBookDate(item.scheduledDate || todayDateKey());
+    setBookNote(null);
+    setMessage(null);
+    if (!item.branchId) return;
+    setBookLoadingDate(true);
+    void suggestAuditDate(item.branchId)
+      .then((res) => {
+        if (!res?.date) return;
+        // Guarded on the card still being the open one, via the ref rather than the state value:
+        // a slow reply must not retarget a panel the operator has since reopened on another branch,
+        // and the closure captured here would otherwise still be reading the old one.
+        if (openBookingIdRef.current !== item.id) return;
+        setBookDate(res.date);
+        setBookNote(describeSuggestedDate(res.date, res.skipped ?? []));
+      })
+      .catch(() => setBookNote(null))
+      .finally(() => setBookLoadingDate(false));
+  };
+
+  /**
+   * Book it. One call: the assignment is already accepted, so all that is missing is its schedule
+   * row — the same POST the scheduling page makes, minus the two screens of re-identification.
+   */
+  const confirmBooking = (item: InboxItem) => {
+    if (!bookDate) { setMessage({ type: 'error', text: 'Choose a date first.' }); return; }
+    void act(item, async () => {
+      await api.request('/schedules', {
+        method: 'POST',
+        body: JSON.stringify({ assignmentId: item.id, scheduledDate: bookDate, remarks: 'Booked from the Operations Inbox' }),
+      });
+      setBookFor(null);
+      openBookingIdRef.current = null;
+    }, `${item.branchName || item.assignmentNumber} booked for ${formatDateOnly(bookDate)} with ${item.assayerName || 'the assayer'}.`);
   };
 
   const lane = (title: string, icon: React.ReactNode, count: number, tone: string, children: React.ReactNode) =>
@@ -474,9 +540,38 @@ export const OperationsInbox: React.FC = () => {
           {lane('Accepted, not scheduled', <CalendarClock size={14} />, data0.unscheduled.length, 'var(--accent)', (
             data0.unscheduled.map((item) => (
               <CardShell key={item.id} item={item}>
-                <button onClick={() => navigate(`/scheduling?assignmentId=${item.id}`)} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
-                  Put on calendar
-                </button>
+                {bookFor?.id !== item.id ? (
+                  <button onClick={() => startBooking(item)} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
+                    Put on calendar
+                  </button>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                    <div style={{ fontSize: '12px', color: 'var(--text-primary)' }}>
+                      {bookLoadingDate
+                        ? 'Finding the earliest date that works…'
+                        : <>Book <b>{item.assayerName || 'the assayer'}</b> for <b>{formatDateOnly(bookDate)}</b>?</>}
+                    </div>
+                    {bookNote && !bookLoadingDate && (
+                      <div style={{ fontSize: '10.5px', color: 'var(--text-secondary)' }}>{bookNote}</div>
+                    )}
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <button onClick={() => confirmBooking(item)} disabled={busyId === item.id || bookLoadingDate}
+                        className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
+                        {busyId === item.id ? 'Booking…' : 'Confirm'}
+                      </button>
+                      {/* Changing anything hands the operator the full scheduling page, with this
+                          assignment already chosen — the old behaviour, kept as the escape hatch
+                          rather than the default. */}
+                      <button onClick={() => navigate(`/scheduling?assignmentId=${item.id}`)}
+                        className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
+                        Change date
+                      </button>
+                      <button onClick={() => { setBookFor(null); openBookingIdRef.current = null; }} className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
               </CardShell>
             ))
           ))}

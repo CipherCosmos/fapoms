@@ -71,6 +71,21 @@ interface TransportOption {
   reason?: string | null;
 }
 
+/**
+ * The six arrangements this workspace can take, and the plain names shown for them.
+ *
+ * Module-level so the `Layout ▾` button can name the current arrangement without duplicating
+ * the list; previously the labels existed only inside the six buttons that rendered them.
+ */
+const PLANNING_LAYOUTS: ReadonlyArray<readonly [string, string]> = [
+  ['default', 'Map + Drawer'],
+  ['two-col-branch-recom', 'Branch + Match'],
+  ['two-col-branch-map', 'Branch + Map'],
+  ['three-col', '3 Column'],
+  ['map-only', 'Map Only'],
+  ['day-plans', 'Day Plans'],
+];
+
 interface ProjectOption {
   id: string;
   name: string;
@@ -369,6 +384,27 @@ export const PlanningWorkspace: React.FC = () => {
   const [routePoints, setRoutePoints] = useState<{ latitude: number; longitude: number }[] | undefined>(undefined);
   const [isOptimizing, setIsOptimizing] = useState(false);
   const [optimizedSummary, setOptimizedSummary] = useState<{ totalDistanceKm: number; totalDurationMinutes: number } | null>(null);
+  /**
+   * The visit order the solver actually returned, kept as project-branch ids in the order they
+   * should be driven.
+   *
+   * "Optimise route" always called a real TSP solver, but the answer was used only to bend the
+   * blue line on the map — the branch queue underneath stayed in whatever order it happened to
+   * be in, so the coordinator re-sorted by hand the very stops the solver had just sorted. The
+   * order is now first-class state: the queue is re-ordered by it (see `filteredBranches`) and
+   * the route card lists the stops as "1 → 2 → 3", so pressing the button changes the plan
+   * rather than only the picture.
+   *
+   * Cleared whenever the project changes, or a different assayer is routed, because an order is
+   * only meaningful for the set of branches it was computed over.
+   */
+  const [optimizedStops, setOptimizedStops] = useState<{
+    candidateId: string;
+    /** projectBranch ids, first stop first. */
+    branchIds: string[];
+    /** Display names in the same order, so the card need not re-look-them-up. */
+    stopNames: string[];
+  } | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [stateFilter, setStateFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState('ALL');
@@ -818,6 +854,9 @@ export const PlanningWorkspace: React.FC = () => {
   useEffect(() => {
     setRoutePoints(undefined);
     setOptimizedSummary(null);
+    // The visit order belongs to the previous project's branches; leaving it would re-sort a
+    // queue it knows nothing about.
+    setOptimizedStops(null);
   }, [selectedProjectId]);
 
   /**
@@ -854,17 +893,36 @@ export const PlanningWorkspace: React.FC = () => {
     setIsOptimizing(true);
     setOptimizedSummary(null);
     setRoutePoints(undefined);
+    setOptimizedStops(null);
     try {
       const data = await optimizeRoute({ origin: { latitude: originLat, longitude: originLng }, destinations, roundTrip: true, mode: 'driving' });
       const { optimizedSequence, totalDistanceKm, totalDurationMinutes } = data;
       const points = [{ latitude: originLat, longitude: originLng }];
+      // Same walk over the solver's answer now records the order as well as the geometry. The
+      // solver speaks in *branch* ids; the queue and every selection on this page are keyed by
+      // *project-branch* id, so translate once here rather than at each place that consumes it.
+      const orderedBranchIds: string[] = [];
+      const orderedStopNames: string[] = [];
       for (const destId of optimizedSequence) {
         const matchedBranch = assignedBranches.find(b => b.branch.id === destId);
-        if (matchedBranch?.branch.latitude && matchedBranch.branch.longitude) points.push({ latitude: matchedBranch.branch.latitude, longitude: matchedBranch.branch.longitude });
+        if (!matchedBranch) continue;
+        orderedBranchIds.push(matchedBranch.id);
+        orderedStopNames.push(matchedBranch.branch.name);
+        if (matchedBranch.branch.latitude && matchedBranch.branch.longitude) points.push({ latitude: matchedBranch.branch.latitude, longitude: matchedBranch.branch.longitude });
       }
       points.push({ latitude: originLat, longitude: originLng });
       setRoutePoints(points);
       setOptimizedSummary({ totalDistanceKm, totalDurationMinutes });
+      // Only worth keeping when there is genuinely something to order: a single stop has no
+      // sequence, and pretending otherwise would re-sort the queue for no reason.
+      if (orderedBranchIds.length > 1) {
+        setOptimizedStops({ candidateId: candidate.id, branchIds: orderedBranchIds, stopNames: orderedStopNames });
+        toast({
+          type: 'success',
+          title: 'Visit order applied',
+          message: `The ${orderedBranchIds.length} branches are now listed in the shortest driving order, starting with ${orderedStopNames[0]}.`,
+        });
+      }
     } catch { toast({ type: 'error', title: 'Route could not be calculated', message: 'Could not reach the routing service. Check your connection and try again.' }); }
     finally { setIsOptimizing(false); }
   };
@@ -1207,7 +1265,7 @@ export const PlanningWorkspace: React.FC = () => {
       });
       refreshBranches();
     } catch (err: any) {
-      setMessage({ type: 'error', text: err.message || 'Scheduling failed due to validation rules.' });
+      setMessage({ type: 'error', text: userMessage(err) });
     }
   };
 
@@ -1305,16 +1363,32 @@ export const PlanningWorkspace: React.FC = () => {
    * like "the branches changed", and it responded by removing and rebuilding every Leaflet marker
    * on screen and re-adding the tile layer.
    */
-  const filteredBranches = useMemo(() => branches.filter(b => {
-    const q = searchTerm.toLowerCase();
-    return (b.branch?.name.toLowerCase().includes(q) || b.branch?.branchCode.toLowerCase().includes(q)) &&
-      (stateFilter === 'ALL' || b.branch?.state === stateFilter) &&
-      (statusFilter === 'ALL' || b.status === statusFilter) &&
-      (cityFilter === '' || (b.branch?.city || '').toLowerCase().includes(cityFilter.toLowerCase())) &&
-      (districtFilter === '' || (b.branch?.district || '').toLowerCase().includes(districtFilter.toLowerCase())) &&
-      (priorityFilter === 'ALL' || b.priority === priorityFilter) &&
-      (zoneFilter === 'ALL' || b.zoneId === zoneFilter);
-  }), [branches, searchTerm, stateFilter, statusFilter, cityFilter, districtFilter, priorityFilter, zoneFilter]);
+  const filteredBranches = useMemo(() => {
+    const matched = branches.filter(b => {
+      const q = searchTerm.toLowerCase();
+      return (b.branch?.name.toLowerCase().includes(q) || b.branch?.branchCode.toLowerCase().includes(q)) &&
+        (stateFilter === 'ALL' || b.branch?.state === stateFilter) &&
+        (statusFilter === 'ALL' || b.status === statusFilter) &&
+        (cityFilter === '' || (b.branch?.city || '').toLowerCase().includes(cityFilter.toLowerCase())) &&
+        (districtFilter === '' || (b.branch?.district || '').toLowerCase().includes(districtFilter.toLowerCase())) &&
+        (priorityFilter === 'ALL' || b.priority === priorityFilter) &&
+        (zoneFilter === 'ALL' || b.zoneId === zoneFilter);
+    });
+    if (!optimizedStops) return matched;
+    // "Optimise route" solved the visit order; this is where that answer reaches the list the
+    // coordinator actually works down. Routed branches float to the top in driving order and
+    // everything else keeps its existing relative position, so the screen never silently
+    // reshuffles branches the solver said nothing about.
+    const rank = new Map(optimizedStops.branchIds.map((id, i) => [id, i]));
+    return [...matched].sort((a, b) => {
+      const ra = rank.get(a.id);
+      const rb = rank.get(b.id);
+      if (ra == null && rb == null) return 0;
+      if (ra == null) return 1;
+      if (rb == null) return -1;
+      return ra - rb;
+    });
+  }, [branches, searchTerm, stateFilter, statusFilter, cityFilter, districtFilter, priorityFilter, zoneFilter, optimizedStops]);
 
   /**
    * The branch points the map actually draws, derived once instead of inline at four call sites.
@@ -1342,6 +1416,69 @@ export const PlanningWorkspace: React.FC = () => {
   const [layout, setLayout] = useState(layoutMode);
   const setLayoutMode = (m: string) => { setLayout(m); localStorage.setItem('planning_layout', m); };
 
+  /**
+   * Simple vs Advanced.
+   *
+   * On first load this screen offered roughly thirty-five controls, six layout buttons and no
+   * primary action — the only instruction was a sentence asking the coordinator to click
+   * something. Simple is the everyday shape of the job: the branch queue, the matches for the
+   * branch you are on, and one button that starts the work. Advanced is exactly what the screen
+   * has always been; nothing has been removed, only moved behind that switch. Persisted the same
+   * way the layout preference already is, so a coordinator who prefers Advanced keeps it.
+   */
+  const [viewMode, setViewMode] = useState<'simple' | 'advanced'>(
+    () => (localStorage.getItem('planning_viewMode') === 'advanced' ? 'advanced' : 'simple'),
+  );
+  const setViewModePersisted = (m: 'simple' | 'advanced') => { setViewMode(m); localStorage.setItem('planning_viewMode', m); };
+  const advanced = viewMode === 'advanced';
+  /**
+   * Simple mode always uses the queue + matches pairing, whatever layout Advanced was left on.
+   * The stored layout is untouched, so switching back to Advanced restores the arrangement the
+   * coordinator had chosen rather than resetting it.
+   */
+  const effectiveLayout = advanced ? layout : 'two-col-branch-recom';
+  /** Whether the six-way layout picker is open (Advanced only — one `Layout ▾` button now). */
+  const [layoutMenuOpen, setLayoutMenuOpen] = useState(false);
+
+  /**
+   * The one obvious starting point.
+   *
+   * "Which branch do I do next?" was previously answered by reading a queue of dozens and
+   * judging priority by eye. This picks the highest-priority branch that still has nobody on it
+   * and opens it, then scrolls its best match into view so the next click is the assign button.
+   */
+  const PRIORITY_ORDER: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
+  const nextUnassignedBranch = useMemo(() => {
+    const pending = filteredBranches.filter(b =>
+      !b.assignment &&
+      !['AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED', 'UNABLE_TO_COVER', 'CANCELLED'].includes(b.status) &&
+      b.id !== selectedBranchId);
+    if (pending.length === 0) return null;
+    // Stable ordering: priority first, then the queue's own order, so pressing the button
+    // repeatedly walks down the list instead of bouncing between two equally urgent branches.
+    return [...pending].sort((a, b) =>
+      (PRIORITY_ORDER[a.priority ?? ''] ?? 9) - (PRIORITY_ORDER[b.priority ?? ''] ?? 9))[0] ?? null;
+  }, [filteredBranches, selectedBranchId]);
+
+  /**
+   * Set when the coordinator pressed "Next branch to staff", so the effect below knows to scroll
+   * to the top match once the candidate list for the newly selected branch has rendered. A plain
+   * scroll at click time would run against the previous branch's list.
+   */
+  const [scrollToTopMatch, setScrollToTopMatch] = useState(false);
+  const topCandidateRef = useRef<HTMLDivElement>(null);
+  const handleNextUnassigned = () => {
+    if (!nextUnassignedBranch) return;
+    setSelectedBranchId(nextUnassignedBranch.id);
+    setScrollToTopMatch(true);
+  };
+  useEffect(() => {
+    if (!scrollToTopMatch) return;
+    if (!topCandidateRef.current) return;
+    topCandidateRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    setScrollToTopMatch(false);
+  }, [scrollToTopMatch, displayCandidates]);
+
   // ── Counter-offer negotiation handlers ──────────────────────────────────────────
   // Previously this exact logic (and the banner that triggers it) was hand-duplicated in the
   // "default" and "three-col" layouts, with the two copies already drifted apart in wording —
@@ -1357,7 +1494,7 @@ export const PlanningWorkspace: React.FC = () => {
       setMessage({ type: 'success', text: `Counter fee ₹${proposedFee.toLocaleString()} approved! Branch confirmed.` });
       refreshBranches();
     } catch (err: any) {
-      setMessage({ type: 'error', text: err.message || 'Failed to approve counter offer' });
+      setMessage({ type: 'error', text: userMessage(err) });
     }
   };
 
@@ -1403,7 +1540,7 @@ export const PlanningWorkspace: React.FC = () => {
       setMessage({ type: 'success', text: `Countered at ₹${fee.toLocaleString()}. The assayer will see your counter on their app.` });
       refreshBranches();
     } catch (err: any) {
-      setMessage({ type: 'error', text: err.message || 'Failed to send the counter offer.' });
+      setMessage({ type: 'error', text: userMessage(err) });
     } finally {
       setCounterOfferAssignmentId(null);
     }
@@ -1418,7 +1555,7 @@ export const PlanningWorkspace: React.FC = () => {
       setMessage({ type: 'success', text: 'Counter offer rejected. Branch returned to candidate search.' });
       refreshBranches();
     } catch (err: any) {
-      setMessage({ type: 'error', text: err.message || 'Failed to reject counter offer' });
+      setMessage({ type: 'error', text: userMessage(err) });
     }
   };
 
@@ -1637,7 +1774,7 @@ export const PlanningWorkspace: React.FC = () => {
           </div>
         )}
         <div style={{ display: 'flex', gap: '12px', overflowX: horizontal ? 'auto' : 'hidden', flexDirection: horizontal ? 'row' : 'column', paddingBottom: '4px' }}>
-        {displayCandidates.map(c => {
+        {displayCandidates.map((c, ci) => {
           // The real weighted score, or nothing. This used to invent 98/88/74 from distance when the
           // server returned no score, showing ops a confident match % the engine never produced.
           const conf = c.score != null ? Math.round(c.score) : null;
@@ -1649,8 +1786,10 @@ export const PlanningWorkspace: React.FC = () => {
             : null;
           const cardBorderColor = slaStatus === 'compliant' ? 'var(--status-active-bg)' : slaStatus === 'breach' ? 'var(--status-cancelled-bg)' : 'var(--border-color)';
           const cardBg = slaStatus === 'compliant' ? 'var(--status-active-bg)' : slaStatus === 'breach' ? 'var(--status-cancelled-bg)' : 'var(--bg-surface-2)';
+          // The top match carries a ref so "Next branch to staff" can scroll straight to the
+          // person it is recommending, rather than leaving the coordinator to hunt for them.
           return (
-            <div key={c.id} style={{
+            <div key={c.id} ref={ci === 0 ? topCandidateRef : undefined} style={{
               minWidth: horizontal ? '320px' : 'auto', maxWidth: horizontal ? '340px' : 'auto', flexShrink: horizontal ? 0 : undefined,
               background: cardBg, border: `1px solid ${cardBorderColor}`, borderRadius: 'var(--radius-md)', padding: '14px',
               display: 'flex', flexDirection: 'column', gap: '10px'
@@ -1733,7 +1872,7 @@ export const PlanningWorkspace: React.FC = () => {
                     )}
                   </div>
                 </div>
-                <span title="Weighted across 15 dimensions including SLA compliance, acceptance history, proximity, workload, paperwork quality and cost." style={{ cursor: 'help', padding: '3px 8px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: conf != null && conf >= 90 ? 'var(--status-active-bg)' : 'var(--status-pending-bg)', color: conf != null && conf >= 90 ? 'var(--status-active)' : 'var(--warning)', flexShrink: 0 }}>
+                <span title="Based on 15 checks including distance rules, past acceptance, workload and cost." style={{ cursor: 'help', padding: '3px 8px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: conf != null && conf >= 90 ? 'var(--status-active-bg)' : 'var(--status-pending-bg)', color: conf != null && conf >= 90 ? 'var(--status-active)' : 'var(--warning)', flexShrink: 0 }}>
                   {conf != null ? `${conf}% Match` : 'Match n/a'}
                 </span>
               </div>
@@ -1885,7 +2024,7 @@ export const PlanningWorkspace: React.FC = () => {
                     setMessage({ type: 'success', text: `App invitation dispatched directly to ${c.displayName}!` });
                     refreshBranches();
                   } catch (err: any) {
-                    setMessage({ type: 'error', text: err.message || 'Direct dispatch failed' });
+                    setMessage({ type: 'error', text: userMessage(err) });
                   }
                 }}
                   className="btn btn-secondary"
@@ -1922,7 +2061,20 @@ export const PlanningWorkspace: React.FC = () => {
                         : `₹${feeQuote.travelFee} (₹${feeQuote.rates.travelFeePerKm}/km beyond ${feeQuote.rates.freeTravelAllowanceKm} km)`
                       : '—'}
                   </div>
-                  <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Path covers multiple branch locations with TSP roundtrip routing optimization.</div>
+                  {/* The solver's answer, written out. Previously the order existed only as the
+                      shape of the line on the map, which the coordinator then had to reproduce
+                      by hand in the queue. Numbering it here makes it readable, and the queue
+                      above is already sorted to match. */}
+                  {optimizedStops && optimizedStops.candidateId === c.id && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', marginTop: '2px' }}>
+                      <div style={{ fontWeight: 700 }}>Visit in this order:</div>
+                      {optimizedStops.stopNames.map((name, i) => (
+                        <div key={`${name}-${i}`} style={{ color: 'var(--text-secondary)' }}>{i + 1}. {name}</div>
+                      ))}
+                      <div style={{ color: 'var(--text-secondary)' }}>↩ back to start</div>
+                    </div>
+                  )}
+                  <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Shortest round trip covering all these branches. The branch list on the left is now in this order.</div>
                 </div>
               )}
             </div>
@@ -2070,24 +2222,76 @@ export const PlanningWorkspace: React.FC = () => {
         flexShrink: 0,
         zIndex: 25,
       }}>
-        {s(stateFilter, setStateFilter, [{ value: 'ALL', label: 'All States' }, ...statesList.map(s => ({ value: s, label: s }))])}
-        {s(statusFilter, setStatusFilter, STATUS_OPTIONS)}
-        {s(priorityFilter, setPriorityFilter, [{ value: 'ALL', label: 'All Priorities' }, { value: 'LOW', label: 'Low' }, { value: 'MEDIUM', label: 'Medium' }, { value: 'HIGH', label: 'High' }, { value: 'CRITICAL', label: 'Critical' }])}
-        {s(zoneFilter, setZoneFilter, [{ value: 'ALL', label: 'All Zones' }, ...zones.map(z => ({ value: z.id, label: z.name }))])}
-        <input
-          type="text"
-          placeholder="Filter city..."
-          value={cityFilter}
-          onChange={e => setCityFilter(e.target.value)}
-          style={{ width: '100px', padding: '4px 8px', background: 'var(--bg-input)', border: '1px solid var(--border-hair)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none', fontSize: '11px' }}
-        />
-        <input
-          type="text"
-          placeholder="Filter district..."
-          value={districtFilter}
-          onChange={e => setDistrictFilter(e.target.value)}
-          style={{ width: '100px', padding: '4px 8px', background: 'var(--bg-input)', border: '1px solid var(--border-hair)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none', fontSize: '11px' }}
-        />
+        {/*
+          The everyday task, as a button.
+          Before this the screen's only starting instruction was a sentence of prose in the empty
+          panel ("select a branch from the left queue…"), which is a hint, not an action. This
+          picks the most urgent unstaffed branch, opens it, and scrolls its best match into view.
+        */}
+        <button
+          type="button"
+          onClick={handleNextUnassigned}
+          disabled={!nextUnassignedBranch}
+          className="btn btn-primary"
+          style={{ padding: '4px 10px', fontSize: '11px', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap' }}
+          title={nextUnassignedBranch
+            ? `Open ${nextUnassignedBranch.branch?.name} — the most urgent branch with nobody on it yet`
+            : 'Every branch in this list already has someone on it'}
+        >
+          <Zap size={12} /> {nextUnassignedBranch ? 'Next branch to staff' : 'All branches staffed'}
+        </button>
+
+        {/*
+          Simple / Advanced. Simple is the default because the everyday job needs the queue, the
+          matches and one assign action; everything else is still here, one click away, and the
+          choice is remembered.
+        */}
+        <div style={{ display: 'flex', gap: '2px', background: 'var(--bg-primary)', padding: '2px', borderRadius: '4px', border: '1px solid var(--border-hair)' }}>
+          {([['simple', 'Simple'], ['advanced', 'Advanced']] as const).map(([mode, label]) => (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => setViewModePersisted(mode)}
+              aria-pressed={viewMode === mode}
+              title={mode === 'simple'
+                ? 'Branch queue, the best matches, and one assign action'
+                : 'Every filter, map layer and layout this screen offers'}
+              style={{
+                background: viewMode === mode ? 'var(--accent)' : 'transparent',
+                color: viewMode === mode ? 'var(--on-accent)' : 'var(--text-muted)',
+                border: 'none', borderRadius: '3px', cursor: 'pointer',
+                padding: '3px 9px', fontSize: '10px', fontWeight: viewMode === mode ? 700 : 500,
+              }}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {/* Everything below is Advanced-only. Nothing is removed — Simple simply does not draw
+            the controls the everyday task never touches. */}
+        {advanced && s(stateFilter, setStateFilter, [{ value: 'ALL', label: 'All States' }, ...statesList.map(s => ({ value: s, label: s }))])}
+        {advanced && s(statusFilter, setStatusFilter, STATUS_OPTIONS)}
+        {advanced && s(priorityFilter, setPriorityFilter, [{ value: 'ALL', label: 'All Priorities' }, { value: 'LOW', label: 'Low' }, { value: 'MEDIUM', label: 'Medium' }, { value: 'HIGH', label: 'High' }, { value: 'CRITICAL', label: 'Critical' }])}
+        {advanced && s(zoneFilter, setZoneFilter, [{ value: 'ALL', label: 'All Zones' }, ...zones.map(z => ({ value: z.id, label: z.name }))])}
+        {advanced && (
+          <input
+            type="text"
+            placeholder="Filter city..."
+            value={cityFilter}
+            onChange={e => setCityFilter(e.target.value)}
+            style={{ width: '100px', padding: '4px 8px', background: 'var(--bg-input)', border: '1px solid var(--border-hair)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none', fontSize: '11px' }}
+          />
+        )}
+        {advanced && (
+          <input
+            type="text"
+            placeholder="Filter district..."
+            value={districtFilter}
+            onChange={e => setDistrictFilter(e.target.value)}
+            style={{ width: '100px', padding: '4px 8px', background: 'var(--bg-input)', border: '1px solid var(--border-hair)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none', fontSize: '11px' }}
+          />
+        )}
 
         {(() => {
           const activeCount = [stateFilter !== 'ALL', statusFilter !== 'ALL', priorityFilter !== 'ALL', zoneFilter !== 'ALL', cityFilter !== '', districtFilter !== '', searchTerm !== ''].filter(Boolean).length;
@@ -2104,33 +2308,59 @@ export const PlanningWorkspace: React.FC = () => {
           );
         })()}
 
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: '3px', alignItems: 'center' }}>
-          {[
-            ['default', 'Map + Drawer'],
-            ['two-col-branch-recom', 'Branch + Match'],
-            ['two-col-branch-map', 'Branch + Map'],
-            ['three-col', '3 Column'],
-            ['map-only', 'Map Only'],
-            ['day-plans', 'Day Plans']
-          ].map(([k, lbl]) => (
+        {/*
+          Six always-visible layout buttons were six competing answers to a question the
+          coordinator had not asked. In Advanced they live behind one `Layout ▾` menu that names
+          the arrangement currently in use; all six remain, and the choice is persisted exactly
+          as before. Simple pins the queue + matches arrangement and shows no picker at all.
+        */}
+        {advanced && (
+          <div style={{ marginLeft: 'auto', position: 'relative' }}>
             <button
-              key={k}
-              onClick={() => { setLayoutMode(k); if (k === 'day-plans' && selectedProjectId && !dayPlanData) loadDayPlans(); }}
+              type="button"
+              onClick={() => setLayoutMenuOpen(o => !o)}
+              aria-expanded={layoutMenuOpen}
+              aria-haspopup="menu"
+              title="Choose how the queue, map and match panel are arranged"
               style={{
-                background: layout === k ? 'rgba(216,174,71,0.2)' : 'transparent',
-                border: `1px solid ${layout === k ? 'var(--accent)' : 'var(--border-hair)'}`,
-                borderRadius: '4px',
-                color: layout === k ? 'var(--text-primary)' : 'var(--text-muted)',
-                cursor: 'pointer',
-                padding: '3px 7px',
-                fontSize: '10px',
-                fontWeight: layout === k ? 700 : 400,
+                background: 'transparent', border: '1px solid var(--border-hair)', borderRadius: '4px',
+                color: 'var(--text-secondary)', cursor: 'pointer', padding: '3px 9px', fontSize: '10px',
+                fontWeight: 600, display: 'flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap',
               }}
             >
-              {lbl}
+              <Layers size={11} /> Layout: {PLANNING_LAYOUTS.find(([k]) => k === layout)?.[1] ?? 'Map + Drawer'} ▾
             </button>
-          ))}
-        </div>
+            {layoutMenuOpen && (
+              <div role="menu" style={{
+                position: 'absolute', top: '100%', right: 0, marginTop: '4px', zIndex: 60,
+                background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)',
+                borderRadius: 'var(--radius-md)', boxShadow: '0 4px 16px rgba(0,0,0,0.4)',
+                display: 'flex', flexDirection: 'column', minWidth: '170px', overflow: 'hidden',
+              }}>
+                {PLANNING_LAYOUTS.map(([k, lbl]) => (
+                  <button
+                    key={k}
+                    role="menuitemradio"
+                    aria-checked={layout === k}
+                    onClick={() => {
+                      setLayoutMode(k);
+                      setLayoutMenuOpen(false);
+                      if (k === 'day-plans' && selectedProjectId && !dayPlanData) loadDayPlans();
+                    }}
+                    style={{
+                      background: layout === k ? 'rgba(216,174,71,0.2)' : 'transparent',
+                      border: 'none', textAlign: 'left', cursor: 'pointer', padding: '6px 10px',
+                      fontSize: '11px', color: layout === k ? 'var(--text-primary)' : 'var(--text-secondary)',
+                      fontWeight: layout === k ? 700 : 500,
+                    }}
+                  >
+                    {lbl}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── Message Banner ── */}
@@ -2224,7 +2454,7 @@ export const PlanningWorkspace: React.FC = () => {
       )}
 
       {/* ── Layout: 2-Column (Branch Queue + Assayer Recommendations Panel) ── */}
-      {layout === 'two-col-branch-recom' && (
+      {effectiveLayout === 'two-col-branch-recom' && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'row', minHeight: 0, gap: '10px', padding: '8px', overflow: 'hidden' }}>
           {/* Column 1: Branch Queue */}
           <BranchListPanel
@@ -2260,7 +2490,10 @@ export const PlanningWorkspace: React.FC = () => {
               onPlanDateChange={pinPlanDate}
               ignoreDateAvailability={ignoreDateAvailability}
               onToggleIgnoreDateAvailability={setIgnoreDateAvailability}
-              onRefresh={refreshCandidates}
+              advanced={advanced}
+            onNextUnassigned={handleNextUnassigned}
+            nextBranchName={nextUnassignedBranch?.branch?.name ?? null}
+            onRefresh={refreshCandidates}
             onAccept={handleAcceptCounterOffer}
             onCounter={handleOpenCounterProposal}
             onDecline={handleDeclineCounterOffer}
@@ -2269,7 +2502,7 @@ export const PlanningWorkspace: React.FC = () => {
       )}
 
       {/* ── Layout: 2-Column (Branch Queue + Interactive Map) ── */}
-      {(layout === 'two-col-branch-map' || (layout as any) === 'two-col') && (
+      {(effectiveLayout === 'two-col-branch-map' || (effectiveLayout as any) === 'two-col') && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'row', minHeight: 0, gap: '10px', padding: '8px', overflow: 'hidden' }}>
           {/* Column 1: Branch Queue */}
           <BranchListPanel
@@ -2306,7 +2539,7 @@ export const PlanningWorkspace: React.FC = () => {
       )}
 
       {/* ── Layout: Default (Branch queue + Map + Assayer Match Drawer) ── */}
-      {layout === 'default' && (
+      {effectiveLayout === 'default' && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'row', minHeight: 0, gap: '8px', padding: '8px', overflow: 'hidden' }}>
           <BranchListPanel
             branches={filteredBranches}
@@ -2365,7 +2598,10 @@ export const PlanningWorkspace: React.FC = () => {
               onPlanDateChange={pinPlanDate}
               ignoreDateAvailability={ignoreDateAvailability}
               onToggleIgnoreDateAvailability={setIgnoreDateAvailability}
-                    onRefresh={refreshCandidates}
+                    advanced={advanced}
+            onNextUnassigned={handleNextUnassigned}
+            nextBranchName={nextUnassignedBranch?.branch?.name ?? null}
+            onRefresh={refreshCandidates}
                     onAccept={handleAcceptCounterOffer}
                     onCounter={handleOpenCounterProposal}
                     onDecline={handleDeclineCounterOffer}
@@ -2378,7 +2614,7 @@ export const PlanningWorkspace: React.FC = () => {
       )}
 
       {/* ── Layout: 3-Column (Branch list + Map + Match Detail panel) ── */}
-      {layout === 'three-col' && (
+      {effectiveLayout === 'three-col' && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'row', minHeight: 0, gap: '10px', padding: '8px', overflow: 'hidden' }}>
           {/* Column 1: Branch Queue Panel */}
           <BranchListPanel
@@ -2432,6 +2668,9 @@ export const PlanningWorkspace: React.FC = () => {
               onPlanDateChange={pinPlanDate}
               ignoreDateAvailability={ignoreDateAvailability}
               onToggleIgnoreDateAvailability={setIgnoreDateAvailability}
+            advanced={advanced}
+            onNextUnassigned={handleNextUnassigned}
+            nextBranchName={nextUnassignedBranch?.branch?.name ?? null}
             onRefresh={refreshCandidates}
             onAccept={handleAcceptCounterOffer}
             onCounter={handleOpenCounterProposal}
@@ -2441,7 +2680,7 @@ export const PlanningWorkspace: React.FC = () => {
       )}
 
       {/* ── Layout: Map Only ── */}
-      {layout === 'map-only' && (
+      {effectiveLayout === 'map-only' && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, padding: '0 0 32px' }}>
           <InteractivePlanningMap fillContainer
             branches={mapBranches}
@@ -2821,7 +3060,7 @@ export const PlanningWorkspace: React.FC = () => {
         )}
 
       {/* ── Layout: Day Plans (Multi-Branch Cluster View) ── */}
-      {layout === 'day-plans' && (
+      {effectiveLayout === 'day-plans' && (
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minHeight: 0, padding: '0 32px 32px', overflowY: 'auto' }}>
           {/* Header & Refresh */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 0 8px', flexWrap: 'wrap', gap: '10px' }}>
@@ -3214,7 +3453,7 @@ export const PlanningWorkspace: React.FC = () => {
                                 {/* Route Stops Timeline */}
                                 <div style={{ borderTop: '1px solid var(--border-color)', paddingTop: '10px' }}>
                                   <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '8px', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                                    <Route size={12} /> Route Schedule (Optimized TSP)
+                                    <Route size={12} /> Route Schedule (shortest path)
                                   </div>
                                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0' }}>
                                     {plan.stops.map((stop, si) => (

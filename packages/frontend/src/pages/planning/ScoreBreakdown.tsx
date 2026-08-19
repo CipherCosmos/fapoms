@@ -57,10 +57,55 @@ export const ScoreBreakdown: React.FC<{ breakdown?: Record<string, number>; rout
     </span>
   );
 
+  /*
+    One sentence first, the seventeen numbers second.
+
+    Seventeen 0–100 dimensions is the engine's own vocabulary, and a coordinator was left to
+    reverse-engineer "why this person?" out of a row of coloured pills. The strongest two
+    dimensions already contain that answer; PLAIN_REASONS just says them the way a person would
+    ("Closest, and free that day"). The pills are unchanged and one click away, because when a
+    match is questioned the full breakdown is exactly what settles it.
+  */
+  const PLAIN_REASONS: Record<string, string> = {
+    slaCompliance: 'far enough from the branch',
+    acceptanceRate: 'usually accepts',
+    workload: 'has room in their diary',
+    distance: 'closest',
+    travelTime: 'quickest to get there',
+    performance: 'rated well',
+    queryVolume: 'clean paperwork',
+    deliverySpeed: 'fast turnaround',
+    branchFamiliarity: 'knows this branch',
+    experience: 'experienced',
+    cost: 'cheapest',
+    clientPreference: 'a good fit for this client',
+    customerDensity: 'right size for this branch',
+    profitability: 'good for the budget',
+    riskScore: 'low risk',
+    remarksScore: 'well spoken of by staff',
+    fairness: 'due for their turn',
+  };
+  // Only dimensions the person genuinely scores well on may be quoted as a reason; a top-three
+  // place on a weak card would otherwise read as praise the engine never gave.
+  const reasonParts = strengths.filter(([, v]) => v >= 60).slice(0, 2).map(([k]) => PLAIN_REASONS[k]).filter(Boolean);
+  const reasonLine = reasonParts.length > 0
+    ? `${reasonParts.join(', and ')}`.replace(/^./, ch => ch.toUpperCase())
+    : 'The best of the people available for this branch';
+  const weakLine = weakest[1] < 50 ? ` — but ${(SCORE_DIMENSION_LABELS[weakest[0]] ?? '').toLowerCase()} is low` : '';
+
   return (
-    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '2px' }}>
-      {strengths.map(([k, v]) => pill(k, v, true))}
-      {weakest[1] < 50 && pill(weakest[0], weakest[1], false)}
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '2px' }}>
+      <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--text-secondary)', lineHeight: 1.4 }}>
+        {reasonLine}{weakLine}.
+      </div>
+      <details>
+        <summary style={{ cursor: 'pointer', userSelect: 'none', fontSize: '10px', fontWeight: 600, color: 'var(--accent)' }}>
+          Why this match?
+        </summary>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px', marginTop: '4px' }}>
+          {entries.map(([k, v]) => pill(k, v, v >= 50))}
+        </div>
+      </details>
     </div>
   );
 };

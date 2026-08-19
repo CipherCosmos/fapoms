@@ -34,29 +34,29 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
       category: 'Overview',
       items: [
         { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
-        { name: 'Command Room', path: '/executive-map', icon: Map },
+        { name: 'Live Map', path: '/executive-map', icon: Map },
         { name: 'Feedback', path: '/feedback', icon: MessageSquare },
       ],
     },
     {
       category: 'Operations',
       items: [
-        { name: 'Ops Inbox', path: '/inbox', icon: Inbox },
+        { name: 'My Work Today', path: '/inbox', icon: Inbox },
         { name: 'Projects', path: '/projects', icon: FolderKanban },
-        { name: 'Stage 1: Planning', path: '/planning', icon: Map },
-        { name: 'Stage 2: Schedule Dispatch', path: '/scheduling', icon: CalendarDays },
-        { name: 'Stage 3: Field Execution', path: '/assignments', icon: ClipboardList },
+        { name: 'Audit Planning', path: '/planning', icon: Map },
+        { name: 'Visit Scheduling', path: '/scheduling', icon: CalendarDays },
+        { name: 'Field Work', path: '/assignments', icon: ClipboardList },
       ],
     },
     {
-      category: 'Management',
+      category: 'Business Records',
       items: [
         { name: 'Clients', path: '/clients', icon: Building2 },
         { name: 'Billing', path: '/billing', icon: Receipt },
         { name: 'Branches', path: '/branches', icon: GitMerge },
         { name: 'Workforce', path: '/hr', icon: UserCog },
-        { name: 'Documents', path: '/documents', icon: Files },
-        { name: 'Data Entry & Validation', path: '/data-entry', icon: Inbox },
+        { name: 'Branch Paperwork', path: '/documents', icon: Files },
+        { name: 'Audit Data Entry', path: '/data-entry', icon: Inbox },
       ],
     },
     /**
@@ -72,9 +72,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
       category: 'Operational Setup',
       items: [
         { name: 'Holiday Calendar', path: '/holidays', icon: CalendarDays },
-        { name: 'Territorial Zones', path: '/zones', icon: Map },
+        { name: 'Service Areas', path: '/zones', icon: Map },
         { name: 'Transport Costs', path: '/transport-costs', icon: Bus },
-        { name: 'Rule Engine', path: '/rules', icon: Sliders },
+        { name: 'Business Rules', path: '/rules', icon: Sliders },
       ],
     },
     {
@@ -85,7 +85,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
         { name: 'User Management', path: '/users', icon: Users },
         // Administrators only — filtered by canAccessRoute against route-permissions, same as
         // every other item here.
-        { name: 'Rule Bypass (Testing)', path: '/admin/rule-bypass', icon: ShieldOff },
+        { name: 'Rule Bypass', path: '/admin/rule-bypass', icon: ShieldOff },
       ],
     },
   ];

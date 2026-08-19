@@ -204,7 +204,10 @@ export class EmailDigestService {
     return {
       heading: `Workforce: ${expiring.length} credential(s) expiring within 30 days`,
       lines: [
-        `${expiring.length} assayer document(s) fall due this month`,
+        // "credential(s)", not "document(s)": this list now covers professional certifications
+        // as well as identity documents (see credentialsExpiringWithin). Calling a certification
+        // a document would send HR looking in the wrong place on the compliance page.
+        `${expiring.length} assayer credential(s) fall due this month`,
         ...(soonest ? [`Soonest: ${soonest.documentName} of ${soonest.assayerName} on ${soonest.expiryDate}`] : []),
       ],
       link: '/hr',

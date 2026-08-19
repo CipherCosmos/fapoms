@@ -54,6 +54,31 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
     'CLOSED', 'UNABLE_TO_COVER', 'ON_HOLD', 'CANCELLED',
   ];
 
+  /**
+   * Thirteen raw workflow states is the pipeline's own vocabulary; a coordinator filtering the
+   * map is asking a four-way question — is this branch waiting for me, under way, finished, or
+   * called off? These four groups answer that in one click each, and every individual state is
+   * still there under "Show all statuses", so nothing has been taken away.
+   */
+  const STATUS_GROUPS: ReadonlyArray<{ label: string; statuses: string[] }> = [
+    { label: 'To do', statuses: ['IMPORTED', 'PLANNING', 'CANDIDATE_SEARCH', 'ON_HOLD'] },
+    { label: 'In progress', statuses: ['CONTACT_INITIATED', 'NEGOTIATION', 'ASSIGNMENT_CONFIRMED', 'SCHEDULED'] },
+    { label: 'Done', statuses: ['AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'] },
+    { label: 'Cancelled', statuses: ['UNABLE_TO_COVER', 'CANCELLED'] },
+  ];
+  /** Every status in the group is on — the only state in which the group chip reads as "on". */
+  const groupActive = (statuses: string[]) => statuses.every(st => branchStatusFilter.includes(st));
+  const toggleGroup = (statuses: string[]) => {
+    setBranchStatusFilter(
+      groupActive(statuses)
+        ? branchStatusFilter.filter(st => !statuses.includes(st))
+        : Array.from(new Set([...branchStatusFilter, ...statuses])),
+    );
+  };
+  const [allStatusesOpen, setAllStatusesOpen] = useState(false);
+  /** Analytics layers and raw radius boxes: real tools, but not part of the everyday job. */
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+
   const toggleStatus = (status: string) => {
     setBranchStatusFilter(
       branchStatusFilter.includes(status)
@@ -91,8 +116,10 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', borderTop: '1px solid var(--border-hair)', paddingTop: '8px' }}>
-        <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Proximity Search</span>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px', background: 'var(--bg-primary)', padding: '4px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
+        {/* Raw kilometre box — an Advanced control; the everyday distance question is answered by
+            the "Nearby only" menu on the match panel. Kept here in full, just not up front. */}
+        <span style={{ display: advancedOpen ? 'block' : 'none', fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Proximity Search</span>
+        <div style={{ display: advancedOpen ? 'flex' : 'none', alignItems: 'center', gap: '6px', background: 'var(--bg-primary)', padding: '4px 8px', borderRadius: 'var(--radius-sm)', border: '1px solid var(--border-color)' }}>
           <span style={{ color: 'var(--text-secondary)' }}>Radius:</span>
           <input type="number" min="10" max="2000" value={radiusKm}
             onChange={(e) => setRadiusKm(Math.max(1, Number(e.target.value)))}
@@ -119,7 +146,32 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
               style={{ width: '100%', padding: '4px 8px', fontSize: '11px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }}
             />
             <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Branch Status</span>
+            {/* The everyday four-way question first. */}
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px' }}>
+              {STATUS_GROUPS.map(g => {
+                const active = branchStatusFilter.length === 0 || groupActive(g.statuses);
+                return (
+                  <button key={g.label} type="button" onClick={() => toggleGroup(g.statuses)}
+                    title={`${g.label}: ${g.statuses.map(branchStatusLabel).join(', ')}`}
+                    style={{
+                      padding: '3px 8px', fontSize: '10px', fontWeight: 700,
+                      background: active ? 'var(--status-pending-bg)' : 'transparent',
+                      color: active ? 'var(--text-primary)' : 'var(--text-muted)',
+                      border: active ? '1px solid var(--accent-primary)' : '1px solid var(--border-hair)',
+                      borderRadius: 'var(--radius-xs)', cursor: 'pointer',
+                    }}
+                  >
+                    {g.label}
+                  </button>
+                );
+              })}
+            </div>
+            {/* …and every individual state, unchanged, for the times the groups are too coarse. */}
+            <button type="button" onClick={() => setAllStatusesOpen(o => !o)} aria-expanded={allStatusesOpen}
+              style={{ alignSelf: 'flex-start', padding: 0, fontSize: '10px', background: 'none', border: 'none', color: 'var(--accent-primary)', cursor: 'pointer', textDecoration: 'underline' }}>
+              {allStatusesOpen ? 'Hide individual statuses' : 'Show all statuses'}
+            </button>
+            <div style={{ display: allStatusesOpen ? 'flex' : 'none', flexWrap: 'wrap', gap: '3px' }}>
               {BRANCH_STATUSES.map(s => {
                 const active = branchStatusFilter.length === 0 || branchStatusFilter.includes(s);
                 return (
@@ -162,14 +214,25 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', borderTop: '1px solid var(--border-hair)', paddingTop: '8px' }}>
-        <span style={{ fontSize: '10px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Geographic Analytics</span>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: 'var(--text-secondary)' }}>
-          <input type="checkbox" checked={showSlaRisk} onChange={(e) => setShowSlaRisk(e.target.checked)} /> ⚠️ SLA Breach Risk
+        {/*
+          "SLA Breach Risk" named the opposite of what this layer draws. The circle marks the
+          zone in which someone lives TOO CLOSE to a branch to audit it independently — a
+          minimum-distance rule, nothing to do with service levels, as its own tooltip on the
+          planning screen already said. Renamed to what it shows.
+        */}
+        <button type="button" onClick={() => setAdvancedOpen(o => !o)} aria-expanded={advancedOpen}
+          style={{ display: 'flex', alignItems: 'center', gap: '6px', cursor: 'pointer', userSelect: 'none', color: 'var(--text-muted)', fontSize: '10px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', background: 'none', border: 'none', padding: 0, width: '100%', font: 'inherit' }}>
+          <span>Advanced</span>
+          <span style={{ marginLeft: 'auto' }}>{advancedOpen ? '−' : '+'}</span>
+        </button>
+        <label style={{ display: advancedOpen ? 'flex' : 'none', alignItems: 'center', gap: '8px', cursor: 'pointer', color: 'var(--text-secondary)' }}
+          title="Shades the area around each branch in which a person lives too close to audit it independently.">
+          <input type="checkbox" checked={showSlaRisk} onChange={(e) => setShowSlaRisk(e.target.checked)} /> ⚠️ Too close to branch
         </label>
-        {showSlaRisk && setSlaRadiusKm && (
+        {advancedOpen && showSlaRisk && setSlaRadiusKm && (
           <div style={{ marginLeft: '22px', display: 'flex', flexDirection: 'column', gap: '4px', padding: '6px 8px', backgroundColor: 'var(--status-cancelled-bg)', borderRadius: '6px', border: '1px solid var(--status-cancelled)', marginBottom: '4px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', color: 'var(--danger)' }}>
-              <span>SLA Radius: <strong>{slaRadiusKm || 15} km</strong></span>
+              <span>Minimum distance: <strong>{slaRadiusKm || 15} km</strong></span>
             </div>
             <input
               type="range"
@@ -204,10 +267,10 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
             </div>
           </div>
         )}
-        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: 'var(--text-secondary)' }}>
+        <label style={{ display: advancedOpen ? 'flex' : 'none', alignItems: 'center', gap: '8px', cursor: 'pointer', color: 'var(--text-secondary)' }}>
           <input type="checkbox" checked={showWorkforceDensity} onChange={(e) => setShowWorkforceDensity(e.target.checked)} /> 👥 Workforce Density
         </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: 'var(--text-secondary)' }}>
+        <label style={{ display: advancedOpen ? 'flex' : 'none', alignItems: 'center', gap: '8px', cursor: 'pointer', color: 'var(--text-secondary)' }}>
           <input type="checkbox" checked={showRevenueDensity} onChange={(e) => setShowRevenueDensity(e.target.checked)} /> 💰 Revenue Density
         </label>
       </div>

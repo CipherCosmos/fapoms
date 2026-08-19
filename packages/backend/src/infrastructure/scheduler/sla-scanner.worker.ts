@@ -79,29 +79,50 @@ export class SlaScannerWorker {
       }
     });
 
-    await runPhase('document expiry scan', async () => {
+    /**
+     * Credential expiry — identity documents AND professional certifications.
+     *
+     * Certifications used to be missing from this sweep entirely, because
+     * `credentialsExpiringWithin` read `assayer_government_documents` alone while
+     * certifications live in `workforce_attributes` (`type = 'CERTIFICATION'`). That was the
+     * expensive half to lose: an expired certification BLOCKS assignment (assayer.service.ts
+     * refuses it), so the silence ended with dispatch being told, on the morning of the job,
+     * that the only qualified assayer was ineligible. The same 30-day lead applies to both —
+     * the figure was chosen for "long enough to actually renew, short enough that HR keeps
+     * reading", and that reasoning does not change with the kind of credential.
+     */
+    await runPhase('credential expiry scan', async () => {
       const expiring = await this.hrWorkforceService.credentialsExpiringWithin(
         SlaScannerWorker.DOCUMENT_EXPIRY_LEAD_DAYS,
       );
+      let certifications = 0;
       for (const doc of expiring) {
+        const isCertification = doc.credentialKind === 'CERTIFICATION';
+        if (isCertification) certifications += 1;
         // This scan runs every 15 minutes, so the key has to survive repetition: one
-        // notification per document per expiry date. A renewed document carries a new
-        // expiry and so legitimately warns again the next time it comes due.
+        // notification per credential per expiry date. A renewed credential carries a new
+        // expiry and so legitimately warns again the next time it comes due. The type is part
+        // of the key by construction, so a document and a certification can never collide even
+        // if their primary keys ever did.
+        const type = isCertification ? 'ASSAYER_CERTIFICATION_EXPIRING' : 'ASSAYER_DOCUMENT_EXPIRING';
         this.notificationDispatch.emitSafe({
-          type: 'ASSAYER_DOCUMENT_EXPIRING',
+          type,
           entityType: 'ASSAYER',
           entityId: doc.assayerId,
           assayerId: doc.assayerId,
-          dedupeKey: `ASSAYER_DOCUMENT_EXPIRING:${doc.id}:${doc.expiryDate}`,
+          dedupeKey: `${type}:${doc.id}:${doc.expiryDate}`,
           payload: {
             assayerName: doc.assayerName,
+            // Both keys are populated for both kinds: the templates differ, but a payload that
+            // silently lacks the placeholder its template needs renders "${…}" at the user.
             documentName: doc.documentName,
+            certificationName: doc.documentName,
             expiryDate: doc.expiryDate,
           },
         });
       }
       if (expiring.length > 0) {
-        this.logger.log(`Flagged ${expiring.length} assayer document(s) expiring within ${SlaScannerWorker.DOCUMENT_EXPIRY_LEAD_DAYS} days.`);
+        this.logger.log(`Flagged ${expiring.length} assayer credential(s) (${certifications} certification(s)) expiring within ${SlaScannerWorker.DOCUMENT_EXPIRY_LEAD_DAYS} days.`);
       }
     });
 

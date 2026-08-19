@@ -2,10 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useUrlSelection } from '../hooks/useUrlSelection';
 import { Upload, Building2, Globe, ShieldAlert, Activity, Plus, Edit2, Trash2, Phone, FileText, User, Filter, ChevronDown, Map, X } from 'lucide-react';
 import { SearchInput, FilterSelect, StatusBadge, AlertBanner, Modal, Select, useToast } from '../components/ui';
+import { Autocomplete } from '../components/ui/Autocomplete';
+import type { IndiaPlaceResult } from '../components/ui/Autocomplete';
 import { api } from '../services/api';
 import { GeoPrecisionBadge, geoNeedsFixing } from '../components/GeoPrecisionBadge';
 import { PinCoordinateControl } from '../components/PinCoordinateControl';
-import { INDIAN_STATES, REGION_ORDER, REGION_LABELS, regionLabel, canonicalStateName } from '@fapoms/shared';
+import { INDIAN_STATES, REGION_ORDER, REGION_LABELS, regionLabel, canonicalStateName, resolveRegion } from '@fapoms/shared';
 import { useScope, withScope } from '../context/ScopeContext';
 import { connectSocket } from '../services/socket';
 import { useCurrentRoles, canManageBranches, canDeleteBranches } from '../hooks/useCurrentRoles';
@@ -113,9 +115,92 @@ const emptyForm: BranchFormData = {
   requiredCompetencies: '', clientId: '',
 };
 
+/**
+ * `98765 43210`, `+91-9876543210` and `09876543210` are one phone number, and the database should
+ * hold one spelling of it. Same rule the assayer form applies (`AssayerForms.handleSubmit`):
+ * digits only, then a `+91` unless the number already carries the country code.
+ */
+const normalisePhone = (raw: string): string => {
+  const digits = (raw || '').replace(/\D/g, '');
+  if (!digits) return '';
+  return digits.startsWith('91') ? `+${digits}` : `+91${digits}`;
+};
+
 const RISK_CATEGORIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
 const COMPLEXITIES = ['STANDARD', 'COMPLEX', 'VERY_COMPLEX'];
 const BRANCH_TYPES = ['MAIN', 'BRANCH', 'SUB_BRANCH', 'EXTENSION', 'MICRO'];
+
+/**
+ * Risk score and risk category are one idea, not two.
+ *
+ * They used to be two unlinked inputs — a free number "0.00 - 100.00" and a four-value picker —
+ * so the office had to know both the banding and the number behind it, and nothing stopped a
+ * branch being saved as CRITICAL with a score of 3. The band is the part a person can actually
+ * judge; the number is derived from it. The exact score is still editable under Advanced for the
+ * rare branch that carries a real scored assessment, and editing it re-bands the category so the
+ * two can never disagree again.
+ */
+const RISK_BANDS: { category: string; min: number; max: number; score: number; hint: string }[] = [
+  { category: 'LOW', min: 0, max: 25, score: 12.5, hint: 'Routine branch, no history of exceptions' },
+  { category: 'MEDIUM', min: 25, max: 50, score: 37.5, hint: 'Ordinary exposure' },
+  { category: 'HIGH', min: 50, max: 75, score: 62.5, hint: 'Large holdings or past exceptions' },
+  { category: 'CRITICAL', min: 75, max: 100, score: 90, hint: 'Escalated — needs senior assayer' },
+];
+
+const scoreForCategory = (category: string): string => {
+  const band = RISK_BANDS.find((b) => b.category === category);
+  return band ? String(band.score) : '';
+};
+
+const categoryForScore = (score: string): string => {
+  const n = parseFloat(score);
+  if (!Number.isFinite(n)) return '';
+  // Upper bound inclusive on the top band so 100 is CRITICAL rather than nothing.
+  const band = RISK_BANDS.find((b) => n >= b.min && (n < b.max || b.max === 100));
+  return band?.category ?? '';
+};
+
+/**
+ * A day's work is what the complexity says it is, unless someone says otherwise.
+ *
+ * "Est. Duration (hours)" is a number the office has no way to know for a branch they have never
+ * visited; the planner does. These are the same durations planning already assumes per
+ * complexity, so leaving the field alone now produces the right answer instead of a typed guess.
+ */
+const DEFAULT_HOURS_BY_COMPLEXITY: Record<string, string> = {
+  STANDARD: '8',
+  COMPLEX: '12',
+  VERY_COMPLEX: '16',
+};
+
+/**
+ * Applies a real place picked from the geo lookup across the whole address block, so state,
+ * district, city and pincode stay consistent with one another.
+ *
+ * Same mechanism the assayer form uses (`Autocomplete` → `/geo/autocomplete`), applied to the
+ * branch form's field names. Typing a pincode therefore fills district, city and state — four
+ * fields the system already knows the moment it knows one of them.
+ */
+const applyPlaceToBranch = (fieldKey: 'city' | 'district' | 'pincode', place: IndiaPlaceResult, form: BranchFormData): BranchFormData => {
+  const primary = (place.label || '').split(',')[0].trim();
+  const next = { ...form };
+  if (place.state) {
+    // Canonicalised, because State is rendered as a <select> that matches its options by exact
+    // string — a raw "MAHARASHTRA" from the lookup would land on "Select…" and read as unset.
+    next.state = canonicalStateName(place.state) ?? place.state;
+  }
+  if (place.district) next.district = place.district;
+  if (fieldKey === 'city') next.city = primary;
+  if (fieldKey === 'district') {
+    next.district = place.district || primary;
+    if (!next.city) next.city = primary;
+  }
+  if (fieldKey === 'pincode') {
+    if (place.pincode) next.pincode = place.pincode;
+    if (!next.city) next.city = primary;
+  }
+  return next;
+};
 
 
 
@@ -627,21 +712,88 @@ const BranchFormModal: React.FC<{
       : [...INDIAN_STATES, { value: form.state, label: `${form.state} (as recorded)` }]
   ), [form.state]);
 
+  /**
+   * Everything the branch controller does not require is behind this. Only branchCode, name and
+   * state are mandatory server-side (and branchCode is now allocated when left blank), so a
+   * short everyday form costs nothing functionally — every field is still here, one click away,
+   * and an edit that already carries advanced values opens with the section expanded so nothing
+   * a branch holds is ever hidden from the person changing it.
+   */
+  const [showAdvanced, setShowAdvanced] = useState(() => Boolean(
+    initial.solId || initial.territory || initial.zoneId || initial.region || initial.email ||
+    initial.managerName || initial.requiredCompetencies || initial.openingDate || initial.lastAuditDate
+  ));
+
+  /**
+   * The distinct skills and certifications already in use across the roster — the same list the
+   * HR capability page picks from, so a branch can only require a competency somebody could
+   * actually hold. This was comma-separated free text, where "KYC Audits" silently became a
+   * fifth competency nobody has and the branch became unplannable against it.
+   *
+   * The endpoint is HR-scoped; when the current user cannot read it the field falls back to the
+   * old free-text box rather than losing the ability to record a competency at all.
+   */
+  const [competencyOptions, setCompetencyOptions] = useState<string[] | null>(null);
+
+  useEffect(() => {
+    api.request<{ SKILL?: { name: string }[]; CERTIFICATION?: { name: string }[] }>('/assayers/workforce-attribute/vocabulary')
+      .then((v) => {
+        const names = [...(v?.SKILL ?? []), ...(v?.CERTIFICATION ?? [])].map((x) => x.name).filter(Boolean);
+        setCompetencyOptions(Array.from(new Set(names)).sort((a, b) => a.localeCompare(b)));
+      })
+      .catch(() => setCompetencyOptions([]));   // not permitted / unavailable → free text fallback
+  }, []);
+
+  const selectedCompetencies = React.useMemo(
+    () => form.requiredCompetencies.split(',').map((c) => c.trim()).filter(Boolean),
+    [form.requiredCompetencies],
+  );
+
+  const toggleCompetency = (name: string) => {
+    const next = selectedCompetencies.includes(name)
+      ? selectedCompetencies.filter((c) => c !== name)
+      : [...selectedCompetencies, name];
+    setForm((f) => ({ ...f, requiredCompetencies: next.join(', ') }));
+  };
+
   const set = (key: keyof BranchFormData) => (v: string) => setForm(f => ({ ...f, [key]: v }));
 
-  const field = (label: string, key: keyof BranchFormData, opts?: { type?: string; required?: boolean; full?: boolean; options?: {value: string; label: string}[]; placeholder?: string }) => (
+  /** Picking a band writes the score with it; typing a score re-bands. One idea, one input. */
+  const setRiskCategory = (v: string) => setForm(f => ({ ...f, riskCategory: v, riskScore: scoreForCategory(v) }));
+  const setRiskScore = (v: string) => setForm(f => ({ ...f, riskScore: v, riskCategory: categoryForScore(v) || f.riskCategory }));
+  /** Complexity carries its own typical duration, unless the user has already overridden it. */
+  const setComplexity = (v: string) => setForm(f => ({
+    ...f,
+    complexity: v,
+    estimatedDurationHours: Object.values(DEFAULT_HOURS_BY_COMPLEXITY).includes(f.estimatedDurationHours) || !f.estimatedDurationHours
+      ? (DEFAULT_HOURS_BY_COMPLEXITY[v] ?? f.estimatedDurationHours)
+      : f.estimatedDurationHours,
+  }));
+
+  const field = (label: string, key: keyof BranchFormData, opts?: { type?: string; required?: boolean; full?: boolean; options?: {value: string; label: string}[]; placeholder?: string; hint?: string; geo?: 'city' | 'district' | 'pincode'; onChange?: (v: string) => void }) => (
     <div key={key} style={opts?.full ? { gridColumn: '1 / -1' } : {}}>
       <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '3px', fontWeight: 500 }}>{label}{opts?.required && ' *'}</label>
       {opts?.options ? (
-        <Select value={form[key]} onChange={set(key)}
-          placeholder="Select..."
+        <Select value={form[key]} onChange={opts.onChange ?? set(key)}
+          placeholder={opts?.placeholder || 'Select...'}
           options={opts.options}
           style={{ width: '100%' }}
         />
+      ) : opts?.geo ? (
+        /* The lookup the assayer form already uses. Selecting a real place fills the rest of the
+           address block, so the four location fields are answered by one of them. */
+        <Autocomplete
+          value={form[key]}
+          onChange={set(key)}
+          onSelect={(place) => setForm((f) => applyPlaceToBranch(opts.geo!, place, f))}
+          placeholder={opts.placeholder || (opts.geo === 'pincode' ? 'Type a pincode — the rest fills in' : `Type to search ${label.toLowerCase()}…`)}
+          filterType={(r) => (opts.geo === 'pincode' ? !!r.pincode : true)}
+        />
       ) : (
-        <input type={opts?.type || 'text'} value={form[key]} onChange={(e) => set(key)(e.target.value)} required={opts?.required} placeholder={opts?.placeholder}
+        <input type={opts?.type || 'text'} value={form[key]} onChange={(e) => (opts?.onChange ?? set(key))(e.target.value)} required={opts?.required} placeholder={opts?.placeholder}
           style={{ width: '100%', padding: '7px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px' }} />
       )}
+      {opts?.hint && <span style={{ display: 'block', fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '3px' }}>{opts.hint}</span>}
     </div>
   );
 
@@ -657,17 +809,21 @@ const BranchFormModal: React.FC<{
     setSubmitting(true);
     try {
       const body: any = {
-        branchCode: form.branchCode, name: form.name, address: form.address,
+        name: form.name, address: form.address,
         state: form.state, district: form.district, city: form.city,
         clientId: form.clientId || undefined,
       };
+      // Omitted when blank so the server allocates the next free code. Sent verbatim when the
+      // user typed one — a code that came off a client's own list must survive untouched.
+      if (form.branchCode.trim()) body.branchCode = form.branchCode.trim();
       if (form.solId) body.solId = form.solId;
       if (form.pincode) body.pincode = form.pincode;
       if (form.region) body.region = form.region;
       if (form.territory) body.territory = form.territory;
       if (form.zoneId) body.zoneId = form.zoneId;
       if (form.branchType) body.branchType = form.branchType;
-      if (form.phone) body.phone = form.phone;
+      // Normalised on the way out, like every other phone this product stores.
+      if (form.phone) body.phone = normalisePhone(form.phone);
       if (form.email) body.email = form.email;
       if (form.managerName) body.managerName = form.managerName;
       if (form.openingDate) body.openingDate = form.openingDate;
@@ -678,7 +834,7 @@ const BranchFormModal: React.FC<{
       if (form.riskCategory) body.riskCategory = form.riskCategory;
       if (form.complexity) body.complexity = form.complexity;
       if (form.estimatedDurationHours) body.estimatedDurationHours = parseFloat(form.estimatedDurationHours);
-      if (form.requiredCompetencies) body.requiredCompetencies = form.requiredCompetencies.split(',').map(s => s.trim());
+      if (form.requiredCompetencies) body.requiredCompetencies = form.requiredCompetencies.split(',').map(s => s.trim()).filter(Boolean);
       body.operatingHours = { default: "09:00 - 18:00" };
 
       if (branchId) {
@@ -702,44 +858,104 @@ const BranchFormModal: React.FC<{
     }>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
         <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>IDENTIFICATION</span>
-        {field('Branch Code *', 'branchCode', { required: true })}
-        {field('SOL ID', 'solId', { placeholder: 'e.g. 12345' })}
-        {field('Branch Name *', 'name', { required: true, full: true })}
-        {field('Branch Type', 'branchType', { options: BRANCH_TYPES.map(t => ({ value: t, label: t })) })}
-        {field('Client *', 'clientId', { options: clientOptions.map(c => ({ value: c.id, label: `${c.name} (${c.clientCode})` })), required: true })}
-        {field('Manager Name', 'managerName', { placeholder: 'Branch manager name', full: true })}
+        {field('Client', 'clientId', { options: clientOptions.map(c => ({ value: c.id, label: `${c.name} (${c.clientCode})` })), required: true })}
+        {field('Branch Name', 'name', { required: true })}
+        {/* Not required. The server allocates the next free BR-#### when this is blank — the same
+            treatment the assayer form gives assayer codes. The office keeps no code register, so
+            asking them to invent one only produced duplicates and typos. */}
+        {field('Branch Code', 'branchCode', { placeholder: 'Left blank, one is assigned for you', full: true })}
 
         <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>LOCATION</span>
-        {/* State is the only mandatory one: it sets the region, zone and holiday calendar this
-            branch is planned against. Address, city and district were marked required here while
-            the branch importer accepted rows without them — so a branch that imported cleanly
-            could not be typed in by hand, and the workaround was to invent a town. */}
-        {field('Address', 'address', { full: true })}
-        {field('City', 'city')}
-        {field('District', 'district')}
+        {/* Pincode first, and deliberately so: it is the one thing on a branch letterhead that
+            identifies the place, and picking a result fills district, city and state with it.
+            State is the only mandatory one — it sets the region, zone and holiday calendar the
+            branch is planned against. */}
+        {field('Pincode', 'pincode', { geo: 'pincode', hint: 'Pick a result and district, city and state fill in for you' })}
+        {field('City', 'city', { geo: 'city' })}
+        {field('District', 'district', { geo: 'district' })}
         {field('State', 'state', { required: true, options: stateOptions })}
-        {field('Pincode', 'pincode', { placeholder: 'e.g. 400001' })}
-        {/* A closed list, not free text. Leaving it blank is fine and usually best — the
-            server derives the region from the state, which is what keeps the column filterable. */}
-        {field('Region', 'region', {
-          options: REGION_ORDER.map(r => ({ value: r, label: REGION_LABELS[r] })),
-          placeholder: 'Derived from state',
-        })}
-        {field('Territory', 'territory')}
-        {field('Zone', 'zoneId', { options: zoneOptions })}
+        {field('Address', 'address', { full: true })}
 
-        <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>CONTACT</span>
+        <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>CONTACT & RISK</span>
         {field('Phone', 'phone', { placeholder: 'e.g. +91-22-12345678' })}
-        {field('Email', 'email', { type: 'email' })}
+        {/* One input for one idea. The score is derived from the band and shown read-only here;
+            it stays directly editable under Advanced for a branch with a real scored assessment. */}
+        {field('Risk Category', 'riskCategory', {
+          options: RISK_BANDS.map(b => ({ value: b.category, label: `${b.category} — ${b.hint}` })),
+          onChange: setRiskCategory,
+          hint: form.riskScore ? `Risk score ${Number(form.riskScore).toFixed(2)} — set from this band` : 'Sets the risk score for you',
+        })}
 
-        <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>AUDIT & RISK</span>
-        {field('Risk Category', 'riskCategory', { options: RISK_CATEGORIES.map(r => ({ value: r, label: r })) })}
-        {field('Risk Score', 'riskScore', { type: 'number', placeholder: '0.00 - 100.00' })}
-        {field('Complexity', 'complexity', { options: COMPLEXITIES.map(c => ({ value: c, label: c })) })}
-        {field('Est. Duration (hours)', 'estimatedDurationHours', { type: 'number' })}
-        {field('Required Competencies', 'requiredCompetencies', { full: true, placeholder: 'Comma-separated, e.g. Gold Valuation, KYC Audit' })}
-        {field('Opening Date', 'openingDate', { type: 'date' })}
-        {field('Last Audit Date', 'lastAuditDate', { type: 'date' })}
+        <button
+          type="button"
+          onClick={() => setShowAdvanced(v => !v)}
+          style={{ gridColumn: '1 / -1', marginTop: '6px', display: 'flex', alignItems: 'center', gap: '6px', background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent-primary)', fontSize: '12px', fontWeight: 600 }}
+        >
+          <ChevronDown size={13} style={{ transform: showAdvanced ? 'rotate(180deg)' : '' }} />
+          {showAdvanced ? 'Hide advanced details' : 'Advanced details (SOL ID, zone, competencies, dates)'}
+        </button>
+
+        {showAdvanced && <>
+          <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>IDENTIFICATION</span>
+          {field('SOL ID', 'solId', { placeholder: 'e.g. 12345' })}
+          {field('Branch Type', 'branchType', { options: BRANCH_TYPES.map(t => ({ value: t, label: t })) })}
+          {field('Manager Name', 'managerName', { placeholder: 'Branch manager name', full: true })}
+          {field('Email', 'email', { type: 'email', full: true })}
+
+          <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>PLANNING GEOGRAPHY</span>
+          {/* Region is derived from state on the server (`resolveRegion`) and always has been —
+              the picker used to sit in the everyday form under the label "Derived from state",
+              which is a field asking to be left alone. It stays here, and only here, for the
+              rare branch whose planning region genuinely differs from its postal state. */}
+          {field('Region', 'region', {
+            options: REGION_ORDER.map(r => ({ value: r, label: REGION_LABELS[r] })),
+            placeholder: `Derived from state${form.state ? ` — ${regionLabel(resolveRegion(form.state))}` : ''}`,
+            hint: 'Leave blank unless this branch is planned against a different region than its state.',
+          })}
+          {field('Territory', 'territory')}
+          {field('Zone', 'zoneId', { options: zoneOptions, full: true })}
+
+          <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>AUDIT & RISK</span>
+          {field('Complexity', 'complexity', { options: COMPLEXITIES.map(c => ({ value: c, label: c })), onChange: setComplexity })}
+          {field('Est. Duration (hours)', 'estimatedDurationHours', {
+            type: 'number',
+            hint: `Defaults to ${DEFAULT_HOURS_BY_COMPLEXITY[form.complexity] ?? '8'}h for ${form.complexity || 'STANDARD'}`,
+          })}
+          {field('Risk Score', 'riskScore', {
+            type: 'number', onChange: setRiskScore, placeholder: '0.00 - 100.00', full: true,
+            hint: 'Override only if you hold a scored assessment — the category re-bands to match.',
+          })}
+
+          <div style={{ gridColumn: '1 / -1' }}>
+            <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '3px', fontWeight: 500 }}>Required Competencies</label>
+            {competencyOptions === null ? (
+              <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Loading competencies…</span>
+            ) : competencyOptions.length > 0 ? (
+              /* Picked, never typed: a typo here used to invent a competency no assayer holds,
+                 which silently made the branch unmatchable during planning. */
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                {Array.from(new Set([...competencyOptions, ...selectedCompetencies])).map((name) => {
+                  const on = selectedCompetencies.includes(name);
+                  return (
+                    <button key={name} type="button" onClick={() => toggleCompetency(name)} aria-pressed={on}
+                      style={{ padding: '4px 10px', fontSize: '11.5px', borderRadius: '999px', cursor: 'pointer',
+                        border: `1px solid ${on ? 'var(--accent-primary)' : 'var(--border-color)'}`,
+                        background: on ? 'rgba(216,174,71,0.12)' : 'var(--bg-primary)',
+                        color: on ? 'var(--accent-primary)' : 'var(--text-secondary)' }}>
+                      {name}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : (
+              /* The vocabulary is unavailable to this user — free text rather than no field. */
+              field('', 'requiredCompetencies', { full: true, placeholder: 'Comma-separated, e.g. Gold Valuation, KYC Audit' })
+            )}
+          </div>
+
+          {field('Opening Date', 'openingDate', { type: 'date' })}
+          {field('Last Audit Date', 'lastAuditDate', { type: 'date' })}
+        </>}
       </div>
     </Modal>
   );
@@ -763,7 +979,10 @@ const AddBranchContactModal: React.FC<{ branchId: string; onClose: () => void; o
     try {
       await api.request(`/branches/${branchId}/contacts`, {
         method: 'POST',
-        body: JSON.stringify({ name, email, phone, designation, department: department || undefined, isPrimary, notes: notes || undefined }),
+        // Normalised the same way the assayer form does it, so one person's number is one string
+        // in the database rather than five spellings of it — dialling, de-duplication and the
+        // SMS/WhatsApp channels all key off this.
+        body: JSON.stringify({ name, email, phone: normalisePhone(phone), designation: designation || undefined, department: department || undefined, isPrimary, notes: notes || undefined }),
       });
       onAdded();
     } catch (err) { toast({ type: 'error', title: 'Could not add contact', message: userMessage(err) }); }
@@ -778,18 +997,33 @@ const AddBranchContactModal: React.FC<{ branchId: string; onClose: () => void; o
       </>
     }>
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+        {/* Real <label> elements, not placeholders standing in for them. A placeholder disappears
+            the moment the user types, so the form the user is checking before saving had no
+            labels at all on it — and screen readers had nothing to announce. */}
         {[
-          { placeholder: 'Name *', val: name, set: setName, required: true },
-          { placeholder: 'Email *', val: email, set: setEmail, type: 'email', required: true },
-          { placeholder: 'Phone *', val: phone, set: setPhone, required: true },
-          { placeholder: 'Designation *', val: designation, set: setDesignation, required: true },
-          { placeholder: 'Department', val: department, set: setDepartment },
+          { label: 'Name', val: name, set: setName, required: true, placeholder: 'e.g. Anita Rao' },
+          { label: 'Email', val: email, set: setEmail, type: 'email', required: true, placeholder: 'name@example.com' },
+          { label: 'Phone', val: phone, set: (v: string) => setPhone(v.replace(/\D/g, '')), required: true, tel: true, placeholder: '9876543210' },
+          // Not required: a contact you only have a number for is still worth recording, and
+          // the branch contact API no longer insists on one either.
+          { label: 'Designation', val: designation, set: setDesignation, placeholder: 'e.g. Branch Manager' },
+          { label: 'Department', val: department, set: setDepartment, placeholder: 'e.g. Operations' },
         ].map(f => (
-          <input key={f.placeholder} placeholder={f.placeholder} type={f.type || 'text'} value={f.val} onChange={(e) => f.set(e.target.value)} required={f.required}
-            style={{ padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px' }} />
+          <div key={f.label}>
+            <label htmlFor={`branch-contact-${f.label}`} style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '3px', fontWeight: 500 }}>
+              {f.label}{f.required && <span style={{ color: 'var(--danger)', marginLeft: '2px' }}>*</span>}
+            </label>
+            <div style={{ position: 'relative' }}>
+              {f.tel && <span aria-hidden style={{ position: 'absolute', left: '8px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: '12px', pointerEvents: 'none' }}>+91</span>}
+              <input id={`branch-contact-${f.label}`} placeholder={f.placeholder} type={f.tel ? 'tel' : f.type || 'text'} inputMode={f.tel ? 'numeric' : undefined}
+                value={f.val} onChange={(e) => f.set(e.target.value)} required={f.required}
+                style={{ width: '100%', boxSizing: 'border-box', padding: '8px', paddingLeft: f.tel ? '38px' : '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px' }} />
+            </div>
+          </div>
         ))}
         <div style={{ gridColumn: '1 / -1' }}>
-          <textarea placeholder="Notes (optional)" value={notes} onChange={(e) => setNotes(e.target.value)} rows={2}
+          <label htmlFor="branch-contact-notes" style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '3px', fontWeight: 500 }}>Notes</label>
+          <textarea id="branch-contact-notes" placeholder="Anything worth remembering about this contact" value={notes} onChange={(e) => setNotes(e.target.value)} rows={2}
             style={{ width: '100%', padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px', resize: 'vertical' }} />
         </div>
         <label style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '13px', color: 'var(--text-secondary)' }}>

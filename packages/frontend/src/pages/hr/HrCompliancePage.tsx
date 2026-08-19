@@ -34,7 +34,7 @@ const ComplianceTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate: 
             <strong>No identity document has been recorded for anyone on the roster.</strong>
             <div style={{ color: 'var(--text-muted)', marginTop: '3px' }}>
               Field staff visit client bank branches; identity verification is normally a precondition of that access.
-              {' '}<Link to="/hr/documents" style={{ color: 'var(--accent)', fontWeight: 600 }}>Open the document register</Link> to record and verify them.
+              {' '}<Link to="/hr/paperwork?view=ids" style={{ color: 'var(--accent)', fontWeight: 600 }}>Open the document register</Link> to record and verify them.
             </div>
           </div>
         </div>

@@ -16,6 +16,7 @@ import { queryClient } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
 import { useScope, withScope } from '../context/ScopeContext';
 import { Modal, FilterSelect, AlertBanner, Select } from '../components/ui';
+import { suggestAuditDate, describeSuggestedDate } from '../services/planning';
 
 import { assignmentFee, assignmentFeeValue } from '../utils/money';
 interface Schedule {
@@ -57,7 +58,9 @@ interface AssignmentOption {
   assignmentNumber: string;
   assayerId: string;
   assayer: { displayName: string; };
-  projectBranch: { branch: { name: string; city: string; state: string; }; };
+  /** `branch.id` is the underlying branch record — what the date suggester keys off, and NOT
+   *  the project-branch id. Optional because a malformed row must not break the dropdown. */
+  projectBranch: { branch: { id?: string; name: string; city: string; state: string; }; };
   project: { name: string; };
   proposedFee: number;
   status: string;
@@ -116,6 +119,16 @@ export const Scheduling: React.FC = () => {
     }, { replace: true });
   }, [searchParams, setSearchParams]);
   const [scheduleDate, setScheduleDate] = useState(todayDateKey());
+  /**
+   * The plain-language "why this date" note under the picker, and whether the operator has
+   * since moved the date themselves.
+   *
+   * The suggestion arrives asynchronously, so without the second flag a slow reply could land
+   * after the operator had already picked a date and quietly overwrite their choice — the exact
+   * behaviour that makes a helpful default feel like the form fighting you.
+   */
+  const [suggestedDateNote, setSuggestedDateNote] = useState<string | null>(null);
+  const [dateChosenByUser, setDateChosenByUser] = useState(false);
   const [scheduleRemarks, setScheduleRemarks] = useState('');
   const [isCreating, setIsCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -242,6 +255,8 @@ export const Scheduling: React.FC = () => {
       setShowCreateModal(false);
       setSuccessMsg('Schedule created! Audit confirmed on calendar.');
       setSelectedAssignmentId('');
+      setSuggestedDateNote(null);
+      setDateChosenByUser(false);
       setScheduleRemarks('');
       invalidateAll();
     } catch (err: any) {
@@ -249,10 +264,54 @@ export const Scheduling: React.FC = () => {
     } finally { setIsCreating(false); }
   };
 
+  /**
+   * Ask the server for the first date this audit could actually be worked, and seed the picker.
+   *
+   * The backend has always known this — it skips Sundays, that state's public holidays, the
+   * assayer's leave and their existing bookings — but nothing on this page asked. The operator
+   * picked a date unaided and only learned it was wrong after submitting, or from the weekly-load
+   * warning that appears once the damage is done.
+   *
+   * Deliberately best-effort and never awaited by the form: if the call fails, is slow, or the
+   * assignment carries no branch id, today's default simply stands. A smarter default is not
+   * worth a form that cannot be used when one endpoint is down.
+   */
+  const applySuggestedDate = async (assignmentId: string) => {
+    const sel = scopedAssignments.find(a => a.id === assignmentId);
+    const branchId = sel?.projectBranch?.branch?.id;
+    if (!branchId) { setSuggestedDateNote(null); return; }
+    try {
+      const res = await suggestAuditDate(branchId);
+      if (!res?.date) return;
+      // The operator wins any race: once they have touched the date, the suggestion is only a note.
+      setScheduleDate(prev => (dateChosenByUser ? prev : res.date));
+      setSuggestedDateNote(describeSuggestedDate(res.date, res.skipped ?? []));
+      if (sel?.assayerId && !dateChosenByUser) loadAssayerWorkload(sel.assayerId, res.date);
+    } catch {
+      // Silent by design — the date field still works, so there is nothing for the desk to act on.
+      setSuggestedDateNote(null);
+    }
+  };
+
+  /**
+   * The same seeding for operators who arrive from elsewhere — the inbox's "Change date", the
+   * assignment panel's Schedule link — where the assignment is chosen by the URL before the
+   * assignment list has finished loading. Re-runs when the list arrives, which is the only moment
+   * the branch id becomes known; it stops asking once a note is showing or the operator has
+   * picked their own date.
+   */
+  useEffect(() => {
+    if (!showCreateModal || !selectedAssignmentId || dateChosenByUser || suggestedDateNote) return;
+    void applySuggestedDate(selectedAssignmentId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showCreateModal, selectedAssignmentId, assignments.length]);
+
   const handleQuickScheduleFromQueue = (assignmentId: string) => {
     setSelectedAssignmentId(assignmentId);
     setScheduleDate(selectedDate || todayDateKey());
     setShowCreateModal(true);
+    setDateChosenByUser(false);
+    setSuggestedDateNote(null);
     const sel = scopedAssignments.find(a => a.id === assignmentId);
     if (sel?.assayerId) loadAssayerWorkload(sel.assayerId, selectedDate);
   };
@@ -441,7 +500,7 @@ export const Scheduling: React.FC = () => {
           </div>
 
           {canManageSchedules && (
-          <button onClick={() => { setShowCreateModal(true); setScheduleDate(todayDateKey()); setAssayerWorkload(null); }}
+          <button onClick={() => { setShowCreateModal(true); setScheduleDate(todayDateKey()); setAssayerWorkload(null); setDateChosenByUser(false); setSuggestedDateNote(null); }}
             className="btn btn-primary" style={{ padding: '6px 12px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '5px', background: 'var(--success)', borderColor: 'var(--success)' }}>
             <Plus size={13} /> + Schedule Audit
           </button>
@@ -900,6 +959,11 @@ export const Scheduling: React.FC = () => {
                 setSelectedAssignmentId(v);
                 const sel = scopedAssignments.find(a => a.id === v);
                 if (sel?.assayerId && scheduleDate) loadAssayerWorkload(sel.assayerId, scheduleDate);
+                // Changing the assignment changes which branch's calendar applies, so the previous
+                // branch's suggestion must not be left standing next to the new one's date.
+                setSuggestedDateNote(null);
+                // The effect below re-seeds from the new branch — one place asks, so the two paths
+                // cannot drift apart.
               }}
               options={scopedAssignments.map(a => ({
                 value: a.id,
@@ -933,12 +997,21 @@ export const Scheduling: React.FC = () => {
             <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Audit Date *</label>
             <input type="date" value={scheduleDate} onChange={e => {
               setScheduleDate(e.target.value);
+              // From here on the date is theirs. The note stays only if it still describes the
+              // value in the box; a suggestion caption above a hand-picked date is a lie.
+              setDateChosenByUser(true);
+              setSuggestedDateNote(null);
               if (selectedAssignmentId) {
                 const sel = scopedAssignments.find(a => a.id === selectedAssignmentId);
                 if (sel?.assayerId) loadAssayerWorkload(sel.assayerId, e.target.value);
               }
             }} required
               style={{ width: '100%', padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '12px' }} />
+            {suggestedDateNote && (
+              <div style={{ fontSize: '10.5px', color: 'var(--text-secondary)', padding: '4px 8px', borderRadius: '4px', background: 'var(--status-active-bg)' }}>
+                {suggestedDateNote} You can change it.
+              </div>
+            )}
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>

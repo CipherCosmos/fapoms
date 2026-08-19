@@ -1,5 +1,5 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { Users, ExternalLink } from 'lucide-react';
 import type { HrWorkforceOverview, HrAction } from '../../hooks/useHrWorkforce';
 
@@ -141,3 +141,70 @@ export const ExpiryChip: React.FC<{ days: number }> = ({ days }) => {
     </span>
   );
 };
+
+/**
+ * Plain-language filter chips for the merged HR pages.
+ *
+ * Paperwork and "Where people are" each absorbed three former tabs (see HrPaperworkPage and
+ * HrWherePeopleArePage for why). The concerns did not go away, so they need a way to be narrowed
+ * down to — but as a filter *inside* one destination, not as three destinations that all badge
+ * off the same number.
+ *
+ * The choice lives in the `?view=` query string rather than component state so a chip is
+ * linkable and bookmarkable, which is what the old separate URLs bought and what the legacy
+ * redirects in HrLayout aim at. Labels are written the way an HR manager would say them out
+ * loud; the keys are never shown.
+ */
+export const ViewChips = <K extends string>({ options, value, onChange }: {
+  options: ReadonlyArray<{ key: K; label: string; hint?: string; count?: number | null }>;
+  value: K;
+  onChange: (key: K) => void;
+}) => (
+  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '16px' }} role="tablist">
+    {options.map((o) => {
+      const active = o.key === value;
+      return (
+        <button
+          key={o.key}
+          role="tab"
+          aria-selected={active}
+          title={o.hint}
+          onClick={() => onChange(o.key)}
+          style={{
+            display: 'inline-flex', alignItems: 'center', gap: '7px',
+            padding: '7px 14px', fontSize: '12.5px', fontWeight: 600, cursor: 'pointer',
+            borderRadius: '999px',
+            border: `1px solid ${active ? 'var(--accent)' : 'var(--border-color)'}`,
+            background: active ? 'rgba(216,174,71,0.12)' : 'var(--bg-surface-2)',
+            color: active ? 'var(--accent)' : 'var(--text-secondary)',
+          }}
+        >
+          {o.label}
+          {o.count !== null && o.count !== undefined && (
+            <span style={{
+              fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '9px',
+              background: o.count > 0 ? 'var(--status-cancelled-bg)' : 'var(--bg-surface-2)',
+              color: o.count > 0 ? 'var(--danger)' : 'var(--text-muted)',
+            }}>{o.count}</span>
+          )}
+        </button>
+      );
+    })}
+  </div>
+);
+
+/**
+ * Reads and writes the `?view=` chip selection, falling back to `fallback` for anything
+ * unrecognised (an old link, a typo) so a bad value shows a page rather than a blank.
+ */
+export function useViewParam<K extends string>(keys: ReadonlyArray<K>, fallback: K): [K, (k: K) => void] {
+  const [params, setParams] = useSearchParams();
+  const raw = params.get('view') as K | null;
+  const value = raw && keys.includes(raw) ? raw : fallback;
+  const set = (k: K) => {
+    const next = new URLSearchParams(params);
+    next.set('view', k);
+    setParams(next, { replace: true });
+  };
+  return [value, set];
+}

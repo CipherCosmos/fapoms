@@ -1,13 +1,14 @@
 import React from 'react';
 import { NavLink, Navigate, Outlet, useOutletContext, useSearchParams } from 'react-router-dom';
 import {
-  Users, UserPlus, ShieldCheck, MapPin, Activity, ClipboardList, TrendingDown, Wallet, Award, FileCheck,
+  Users, UserPlus, MapPin, ClipboardList, Wallet, Award, FileCheck,
 } from 'lucide-react';
 
 import { useHrWorkforce } from '../../hooks/useHrWorkforce';
 import type { HrWorkforceOverview } from '../../hooks/useHrWorkforce';
 import { useCurrentRoles, canManageAssayers } from '../../hooks/useCurrentRoles';
 import { HrHeader } from './hr-ui';
+import { userMessage } from '../../services/errors';
 
 /**
  * The shell every HR page sits in.
@@ -16,6 +17,11 @@ import { HrHeader } from './hr-ui';
  * expressed in one screen and each concern got a fraction of it. Each of those concerns is now
  * its own page with its own URL — linkable, bookmarkable, and free to grow the controls the job
  * actually needs rather than the ones that fitted.
+ *
+ * Splitting it produced the opposite problem — eleven tabs for what is really six or seven jobs,
+ * three of which badged off the same number — so the closely related ones have since been merged
+ * back into single destinations with filter chips. See the comment above PAGES for which, and
+ * why, before adding a twelfth.
  *
  * The overview payload is fetched once here and shared through the outlet, because every page
  * reads some part of it and refetching per page would show the same numbers moving between
@@ -32,33 +38,97 @@ export function useHr(): HrContext {
   return useOutletContext<HrContext>();
 }
 
+/**
+ * ELEVEN TABS BECAME SEVEN — the WHY, so nobody re-splits them.
+ *
+ * Records, Compliance and Documents all badged off the same underlying number: Records and
+ * Compliance both showed `compliance.incompleteCount`, and Documents showed the government-
+ * document gap, which is the other half of the same "this person's file is incomplete" problem.
+ * An HR manager reading "26 missing bank accounts" on the Overview therefore had three tabs to
+ * guess between, and no way to tell which one fixed it. Records made that worse: it was built
+ * and routed but left out of this list entirely, so the only way in was an old `?tab=records`
+ * bookmark — the alert the Overview shouts loudest about had no reachable answer at all.
+ * The three are now one destination, **Paperwork**, with plain-language filter chips.
+ *
+ * Utilisation, Deployment and Activity carried no badge between them and answered one question
+ * asked in one breath — "where is everybody, and are they busy?" — across three visits. They are
+ * now **Where people are**, again with chips.
+ *
+ * Capability is renamed **Skills & Certificates**: the audience is non-technical HR staff, and
+ * "capability" is not a word they use for "does this person's certificate still hold".
+ *
+ * Pay & Terms is deliberately left on its own. It is the only screen backed by the commercial-
+ * profile API rather than the workforce overview, and "what is this person paid" is not a
+ * question anyone asks while chasing a missing bank account or a lapsed licence — folding it
+ * into Paperwork would have recreated exactly the ambiguity the merge removed.
+ *
+ * BADGE RULE, now that badges are the navigation: a number appears on exactly one tab — the one
+ * that can resolve it. Paperwork counts incomplete personnel fields plus people with no identity
+ * document. Expired certifications stay on Skills & Certificates because that is the only screen
+ * that can record a renewal, even though Paperwork also *shows* the expiry list.
+ */
 const PAGES = [
   { to: '/hr', end: true, label: 'Overview', icon: ClipboardList, badge: () => null },
   { to: '/hr/roster', label: 'Roster', icon: Users, badge: (d: HrWorkforceOverview) => d.headcount.total },
   { to: '/hr/onboarding', label: 'Onboarding', icon: UserPlus, badge: (d: HrWorkforceOverview) => d.pipeline.stalled.length },
-  /**
-   * Records was built, routed and kept in LEGACY_TABS, but was left out of this list — so the
-   * only ways in were an old `?tab=records` bookmark or typing the URL. Nothing in the app
-   * linked to it. That is the page which fixes exactly what the Overview shouts about
-   * ("26 of 26 missing Bank account — Blocks payouts"), so the alert had no reachable answer.
-   * Badge counts the incomplete records, matching how the other tabs quantify their own backlog.
-   */
-  { to: '/hr/records', label: 'Records', icon: ClipboardList, badge: (d: HrWorkforceOverview) => d.compliance.incompleteCount },
-  { to: '/hr/compliance', label: 'Compliance', icon: ShieldCheck, badge: (d: HrWorkforceOverview) => d.compliance.incompleteCount },
-  { to: '/hr/capability', label: 'Capability', icon: Award, badge: (d: HrWorkforceOverview) => d.expiries.certifications.expired },
-  { to: '/hr/documents', label: 'Documents', icon: FileCheck, badge: (d: HrWorkforceOverview) => d.compliance.roster - d.compliance.governmentDocuments.withGovDoc },
+  {
+    to: '/hr/paperwork',
+    label: 'Paperwork',
+    icon: FileCheck,
+    badge: (d: HrWorkforceOverview) =>
+      d.compliance.incompleteCount + Math.max(d.compliance.roster - d.compliance.governmentDocuments.withGovDoc, 0),
+  },
+  { to: '/hr/skills', label: 'Skills & Certificates', icon: Award, badge: (d: HrWorkforceOverview) => d.expiries.certifications.expired },
   { to: '/hr/pay', label: 'Pay & Terms', icon: Wallet, badge: () => null },
-  { to: '/hr/deployment', label: 'Deployment', icon: MapPin, badge: () => null },
-  { to: '/hr/utilisation', label: 'Utilisation', icon: TrendingDown, badge: () => null },
-  { to: '/hr/activity', label: 'Activity', icon: Activity, badge: () => null },
+  { to: '/hr/where', label: 'Where people are', icon: MapPin, badge: () => null },
 ] as const;
 
-/** The tab keys the single-page version used, mapped to the pages that replaced them. */
+/**
+ * Old URLs must keep resolving: `?tab=` values live in notification payloads and bookmarks, and
+ * the per-concern paths (`/hr/records`, `/hr/compliance`, …) are what the backend's worklist
+ * actions link to (hr-workforce.service.ts). Each one lands on the merged page with the chip it
+ * used to be already selected, so an old link still shows the same content, not just the same
+ * neighbourhood.
+ */
 const LEGACY_TABS: Record<string, string> = {
-  overview: '/hr', roster: '/hr/roster', onboarding: '/hr/onboarding', records: '/hr/records',
-  compliance: '/hr/compliance', capability: '/hr/capability', deployment: '/hr/deployment',
-  documents: '/hr/documents', pay: '/hr/pay', utilisation: '/hr/utilisation', activity: '/hr/activity',
+  overview: '/hr',
+  roster: '/hr/roster',
+  onboarding: '/hr/onboarding',
+  records: '/hr/paperwork?view=details',
+  compliance: '/hr/paperwork?view=certificates',
+  documents: '/hr/paperwork?view=ids',
+  capability: '/hr/skills',
+  pay: '/hr/pay',
+  deployment: '/hr/where?view=coverage',
+  utilisation: '/hr/where?view=workload',
+  activity: '/hr/where?view=changes',
 };
+
+/** The retired paths, keyed without the `/hr/` prefix — same destinations as the tab keys. */
+export const LEGACY_PATHS: Record<string, string> = {
+  records: LEGACY_TABS.records,
+  compliance: LEGACY_TABS.compliance,
+  documents: LEGACY_TABS.documents,
+  capability: LEGACY_TABS.capability,
+  deployment: LEGACY_TABS.deployment,
+  utilisation: LEGACY_TABS.utilisation,
+  activity: LEGACY_TABS.activity,
+};
+
+/**
+ * Resolves anything that used to identify an HR screen — a bare tab key (`compliance`), a path
+ * (`/hr/compliance`), or a full legacy link with a query string — to a live destination.
+ *
+ * The Overview worklist needs this: the backend hands it `link: '/hr/records'` and friends, and
+ * those paths no longer exist as pages.
+ */
+export function resolveHrDestination(raw: string): string {
+  if (!raw) return '/hr';
+  const path = raw.split('?')[0].replace(/\/+$/, '');
+  const key = path.startsWith('/hr/') ? path.slice(4) : path.replace(/^\//, '');
+  if (!key || key === 'hr' || key === 'overview') return '/hr';
+  return LEGACY_PATHS[key] ?? LEGACY_TABS[key] ?? (path.startsWith('/hr/') ? path : `/hr/${key}`);
+}
 
 export const HrLayout: React.FC = () => {
   const { data, isLoading, error, refetch } = useHrWorkforce();
@@ -77,7 +147,7 @@ export const HrLayout: React.FC = () => {
     return (
       <div style={{ padding: '24px', color: 'var(--danger)' }}>
         <div style={{ fontWeight: 600 }}>Could not load the workforce overview.</div>
-        <div style={{ fontSize: 12, marginTop: 4 }}>{(error as Error)?.message}</div>
+        <div style={{ fontSize: 12, marginTop: 4 }}>{userMessage(error)}</div>
         <button onClick={() => refetch()} className="btn btn-primary" style={{ marginTop: 14, padding: '8px 16px', fontSize: 12 }}>
           Retry
         </button>

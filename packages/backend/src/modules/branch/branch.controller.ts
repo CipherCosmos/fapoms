@@ -27,7 +27,13 @@ import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole } from '@fapoms/shared';
 
 class CreateBranchRequestDto implements CreateBranchDto {
-  @IsString() @IsNotEmpty() branchCode: string;
+  /**
+   * Optional: left blank, the service allocates the next free `BR-####`.
+   *
+   * Backward-compatible — every existing caller (Excel import, the mobile app, scripts) sends a
+   * code and that code is still used verbatim. Only the *absence* of one is newly accepted.
+   */
+  @IsOptional() @IsString() branchCode?: string;
   @IsOptional() @IsString() solId?: string;
   @IsString() @IsNotEmpty() name: string;
   /**
@@ -103,7 +109,9 @@ class CreateContactRequestDto implements CreateContactDto {
   @IsString() @IsNotEmpty() name: string;
   @IsString() @IsNotEmpty() email: string;
   @IsString() @IsNotEmpty() phone: string;
-  @IsString() @IsNotEmpty() designation: string;
+  // Relaxed, not removed: a contact known only by a phone number can now be recorded. Callers
+  // that send a designation are unaffected.
+  @IsOptional() @IsString() designation?: string;
   @IsOptional() @IsString() department?: string;
   @IsOptional() @IsBoolean() isPrimary?: boolean;
   @IsOptional() @IsString() notes?: string;

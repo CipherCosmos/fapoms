@@ -614,21 +614,6 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     link: '/earnings',
     skipActor: true,
   },
-  /** A CRITICAL conflict freezes billing — nobody was told the money had stopped. */
-  BILLING_CONFLICT_RAISED: {
-    category: NotificationCategory.BILLING,
-    priority: NotificationPriority.HIGH,
-    // OPERATIONS_MANAGER, not all of OPS. OPERATIONS_EXECUTIVE is refused every billing read by
-    // BILLING_ROLES, so this sent them a HIGH-priority email about a conflict they could open
-    // neither in the UI nor through the API. Telling someone urgently about something they are
-    // not permitted to see is not a notification, it is noise they cannot act on.
-    roles: ['FINANCE_MANAGER', 'OPERATIONS_MANAGER', ...ADMINS],
-    channels: ALL_CHANNELS,
-    title: 'Billing conflict raised',
-    body: '${severity} conflict on ${branchName}: ${description}',
-    link: '/billing',
-    skipActor: true,
-  },
 
   // ── Calls ───────────────────────────────────────────────────────────────
   /** An unanswered clarification call left no trace anywhere the callee would look. */
@@ -652,6 +637,31 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     channels: IN_APP,
     title: 'Assayer document expiring',
     body: "${assayerName}'s ${documentName} expires on ${expiryDate}.",
+    link: '/hr',
+  },
+  /**
+   * The certification half of the expiry sweep.
+   *
+   * Deliberately its own type rather than more rows through ASSAYER_DOCUMENT_EXPIRING. A
+   * government document is renewed by the assayer at a government office; a professional
+   * certification is renewed through a certifying body, often with a re-examination, and it is
+   * the only one of the two that blocks work: `assayer.service.ts` refuses to assign an assayer
+   * whose certification has lapsed. Nothing warned about it before — the sweep read only
+   * `assayer_government_documents` — so the first anyone heard was an assignment being refused
+   * on the day it was needed. The body says so in as many words, because the recipient is an HR
+   * coordinator who should not have to know that "expired certification" and "cannot be
+   * assigned" are the same fact.
+   *
+   * HIGH like its document sibling, in-app to the same HR audience, linking to the same `/hr`
+   * page whose "Certifications falling due" panel already lists these.
+   */
+  ASSAYER_CERTIFICATION_EXPIRING: {
+    category: NotificationCategory.WORKFORCE,
+    priority: NotificationPriority.HIGH,
+    roles: ['HR_MANAGER'],
+    channels: IN_APP,
+    title: 'Assayer certification expiring',
+    body: "${assayerName}'s ${certificationName} certification expires on ${expiryDate}. Once it lapses they cannot be assigned to work that requires it, so please start the renewal.",
     link: '/hr',
   },
   ASSAYER_ONBOARDED: {

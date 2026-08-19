@@ -355,20 +355,68 @@ export class HrWorkforceService {
    * Painting a panel only helps whoever opens it; renewals were being missed because
    * nothing ever pushed this at HR. Already-expired rows are included — those are the
    * ones that most need chasing.
+   *
+   * ## Why certifications are in here now
+   *
+   * This used to read `assayer_government_documents` alone, and certifications live in
+   * `workforce_attributes` with `type = 'CERTIFICATION'`. That produced the worst possible
+   * split: `assayer.service.ts` REFUSES to assign an assayer whose certification has expired,
+   * `HrCompliancePage` paints a panel titled "Certifications falling due", and the only thing
+   * that actually pushes a warning at anybody — this method, via the SLA scanner and the
+   * morning digest — could not see certifications at all. A certification therefore lapsed in
+   * complete silence until the day an assignment was refused, at which point the renewal that
+   * needed a month's notice had not been started. The dashboard's own `expiries()` below has
+   * always read both tables; only the actionable list was missing half its subject.
+   *
+   * `credentialKind` is what lets a caller warn in the right words — an identity document and
+   * a professional certification are renewed by different people through different processes,
+   * so they are two notification types, not one. It is an added field, never a removed one:
+   * existing callers that read `documentName`/`expiryDate`/`assayerName` (the email digest)
+   * keep working unchanged, and `documentName` carries the certification's `name` so those
+   * callers render something meaningful for the new rows without knowing they exist.
+   *
+   * One `LIMIT 200` over the union rather than 200 each: the cap exists to bound a single
+   * scanner tick, and the soonest-expiring rows are the ones worth spending it on regardless
+   * of which table they came from.
    */
   async credentialsExpiringWithin(days: number): Promise<
-    { id: string; documentName: string; expiryDate: string; assayerId: string; assayerName: string }[]
+    {
+      id: string;
+      documentName: string;
+      expiryDate: string;
+      assayerId: string;
+      assayerName: string;
+      credentialKind: 'DOCUMENT' | 'CERTIFICATION';
+    }[]
   > {
     return this.dataSource.query(
       `
-      SELECT g.id, g.document_type AS "documentName", g.expiry_date::date::text AS "expiryDate",
-             a.id AS "assayerId", a.display_name AS "assayerName"
-      FROM assayer_government_documents g
-      JOIN assayers a ON a.id = g.assayer_id
-      WHERE g.is_active = true AND g.expiry_date IS NOT NULL
-        AND ${ON_ROSTER_A}
-        AND g.expiry_date::date <= CURRENT_DATE + ($1 || ' days')::interval
-      ORDER BY g.expiry_date ASC
+      SELECT * FROM (
+        SELECT g.id, g.document_type AS "documentName", g.expiry_date::date::text AS "expiryDate",
+               a.id AS "assayerId", a.display_name AS "assayerName",
+               'DOCUMENT' AS "credentialKind"
+        FROM assayer_government_documents g
+        JOIN assayers a ON a.id = g.assayer_id
+        WHERE g.is_active = true AND g.expiry_date IS NOT NULL
+          AND ${ON_ROSTER_A}
+          AND g.expiry_date::date <= CURRENT_DATE + ($1 || ' days')::interval
+
+        UNION ALL
+
+        -- Certifications are workforce attributes, not documents; the type column is the plain
+        -- varchar discriminator (SKILL | CERTIFICATION | LANGUAGE) that assayer.service.ts
+        -- writes on import and reads back when it enforces expiry. Skills and languages have no
+        -- expiry to chase, so only CERTIFICATION rows belong in a renewal queue.
+        SELECT w.id, w.name AS "documentName", w.expiry_date::date::text AS "expiryDate",
+               a.id AS "assayerId", a.display_name AS "assayerName",
+               'CERTIFICATION' AS "credentialKind"
+        FROM workforce_attributes w
+        JOIN assayers a ON a.id = w.assayer_id
+        WHERE w.is_active = true AND w.type = 'CERTIFICATION' AND w.expiry_date IS NOT NULL
+          AND ${ON_ROSTER_A}
+          AND w.expiry_date::date <= CURRENT_DATE + ($1 || ' days')::interval
+      ) credentials
+      ORDER BY "expiryDate" ASC
       LIMIT 200
     `,
       [days],

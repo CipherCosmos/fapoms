@@ -24,7 +24,13 @@ async function geocodeAddress(address: string, city: string, district: string, s
 }
 
 export interface CreateBranchDto {
-  branchCode: string;
+  /**
+   * Optional. Blank means "allocate the next free one" — see `allocateBranchCode()`.
+   *
+   * Still typed as possibly-present because every existing caller (the Excel importer, the
+   * mobile app, the seed) supplies one, and a supplied code is always honoured.
+   */
+  branchCode?: string;
   solId?: string;
   name: string;
   address?: string;
@@ -86,7 +92,11 @@ export interface CreateContactDto {
   name: string;
   email: string;
   phone: string;
-  designation: string;
+  /**
+   * Optional. A contact you only have a phone number for is still worth recording — refusing the
+   * save until a job title is invented is how "Manager" ends up against half the roster.
+   */
+  designation?: string;
   department?: string;
   isPrimary?: boolean;
   notes?: string;
@@ -141,7 +151,59 @@ export class BranchService {
   // Branch Profile
   // -----------------------------------------------------------------------
 
+  /**
+   * The next free `BR-####`, allocated server-side.
+   *
+   * The office does not hold a branch-code register — the number only has to be unique and
+   * ordered, which is exactly the sort of fact the database already knows and the person filling
+   * in the form does not. Mirrors `AssayerService.allocateAssayerCode`, deliberately: one house
+   * style for "left blank, one is assigned for you".
+   *
+   * `withDeleted` matters. A soft-deleted branch still occupies its code, and a highest-of-the-
+   * living scan re-issues the code of the last branch anyone removed — which then collides with
+   * it in every report that reads deleted rows.
+   *
+   * Concurrency: the scan-and-increment is racy on its own (two simultaneous creates read the
+   * same highest), so the caller retries — see `create`. There is no unique index on
+   * `branch_code` to lean on (branch codes repeat across clients by design: two banks each have
+   * their own "BR-0001"), so uniqueness is asserted by an explicit re-check inside the retry
+   * rather than by the database.
+   */
+  private async allocateBranchCode(): Promise<string> {
+    const rows = await this.branchRepository.find({ select: ['branchCode'], withDeleted: true } as any);
+    const highest = rows.reduce((max, r) => {
+      const m = /^BR-(\d+)$/.exec(r.branchCode ?? '');
+      return m ? Math.max(max, Number(m[1])) : max;
+    }, 0);
+    return `BR-${String(highest + 1).padStart(4, '0')}`;
+  }
+
   async create(dto: CreateBranchDto, userId: string, organizationId?: string | null): Promise<BranchEntity> {
+    /**
+     * A hand-typed code is honoured as-is; a blank one is allocated here, and only here.
+     *
+     * The retry exists for the two-people-at-once case: both read the same highest code, the
+     * first save wins, and the second finds its allocation taken and simply asks for the next
+     * one. A user-supplied code never retries — that must still surface as a conflict rather
+     * than silently save under a different code than the one that was typed.
+     */
+    const supplied = dto.branchCode?.trim();
+    if (supplied) {
+      dto = { ...dto, branchCode: supplied };
+    } else {
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const candidate = await this.allocateBranchCode();
+        const taken = await this.branchRepository.findOne({
+          where: { branchCode: candidate },
+          withDeleted: true,
+        });
+        if (!taken) { dto = { ...dto, branchCode: candidate }; break; }
+      }
+      if (!dto.branchCode) {
+        throw new BadRequestException('Could not allocate a branch code just now. Please try again.');
+      }
+    }
+
     await this.validateGeography(dto.state, dto.district, dto.city);
 
     if (dto.zoneId) {
@@ -175,7 +237,7 @@ export class BranchService {
 
     const geoFields: Partial<GeoFields> = geo ?? {};
     const branch = this.branchRepository.create({
-      branchCode: dto.branchCode,
+      branchCode: dto.branchCode!,   // guaranteed above: supplied, or allocated
       solId: dto.solId ?? null,
       name: dto.name,
       // NOT NULL columns that are optional on admission — empty is what the importer already
@@ -434,7 +496,9 @@ export class BranchService {
       name: dto.name,
       email: dto.email,
       phone: dto.phone,
-      designation: dto.designation,
+      // NOT NULL column, optional on admission — empty reads as blank everywhere, the same
+      // treatment `address` already gets on the branch itself.
+      designation: dto.designation ?? '',
       department: dto.department ?? null,
       isPrimary: dto.isPrimary ?? false,
       notes: dto.notes ?? null,

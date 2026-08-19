@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ShieldCheck, ShieldAlert, ShieldQuestion, Plus, Search, Check, X, Trash2 } from 'lucide-react';
 import { api } from '../../services/api';
+import { userMessage } from '../../services/errors';
 import { Select } from '../../components/ui';
 import { card, label, Empty, ExpiryChip, fmtDate } from './hr-ui';
 import { useCurrentRoles, canManageAssayers } from '../../hooks/useCurrentRoles';
@@ -92,7 +93,7 @@ export const HrDocumentsPage: React.FC = () => {
         setRoster(people);
         setSelectedId((prev) => prev ?? people[0]?.id ?? null);
       } catch (e) {
-        if (!cancelled) setError((e as Error).message);
+        if (!cancelled) setError(userMessage(e));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -105,7 +106,7 @@ export const HrDocumentsPage: React.FC = () => {
     try {
       setDocs(await api.request<GovDocument[]>(`/assayers/${assayerId}/government-document`));
     } catch (e) {
-      setError((e as Error).message);
+      setError(userMessage(e));
     } finally {
       setDocsLoading(false);
     }

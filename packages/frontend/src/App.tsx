@@ -48,14 +48,10 @@ const HrLayout = React.lazy(() => import('./pages/hr/HrLayout').then((m) => ({ d
 const HrOverviewPage = React.lazy(() => import('./pages/hr/HrOverviewPage').then((m) => ({ default: m.HrOverviewPage })));
 const HrRosterPage = React.lazy(() => import('./pages/hr/HrRosterPage').then((m) => ({ default: m.HrRosterPage })));
 const HrOnboardingPage = React.lazy(() => import('./pages/hr/HrOnboardingPage').then((m) => ({ default: m.HrOnboardingPage })));
-const HrRecordsPage = React.lazy(() => import('./pages/hr/HrRecordsPage').then((m) => ({ default: m.HrRecordsPage })));
-const HrCompliancePage = React.lazy(() => import('./pages/hr/HrCompliancePage').then((m) => ({ default: m.HrCompliancePage })));
 const HrCapabilityPage = React.lazy(() => import('./pages/hr/HrCapabilityPage').then((m) => ({ default: m.HrCapabilityPage })));
-const HrDocumentsPage = React.lazy(() => import('./pages/hr/HrDocumentsPage').then((m) => ({ default: m.HrDocumentsPage })));
 const HrPayPage = React.lazy(() => import('./pages/hr/HrPayPage').then((m) => ({ default: m.HrPayPage })));
-const HrDeploymentPage = React.lazy(() => import('./pages/hr/HrDeploymentPage').then((m) => ({ default: m.HrDeploymentPage })));
-const HrUtilisationPage = React.lazy(() => import('./pages/hr/HrUtilisationPage').then((m) => ({ default: m.HrUtilisationPage })));
-const HrActivityPage = React.lazy(() => import('./pages/hr/HrActivityPage').then((m) => ({ default: m.HrActivityPage })));
+const HrPaperworkPage = React.lazy(() => import('./pages/hr/HrPaperworkPage').then((m) => ({ default: m.HrPaperworkPage })));
+const HrWherePeopleArePage = React.lazy(() => import('./pages/hr/HrWherePeopleArePage').then((m) => ({ default: m.HrWherePeopleArePage })));
 const DataEntryOverview = React.lazy(() => import('./pages/dataentry/DataEntryOverview'));
 const PacketsQueue = React.lazy(() => import('./pages/dataentry/PacketsQueue'));
 const ReviewsQueue = React.lazy(() => import('./pages/dataentry/ReviewsQueue'));
@@ -335,19 +331,33 @@ export const App: React.FC = () => {
             <Route path="clarifications" element={<ClarificationsPage />} />
           </Route>
           <Route path="/users" element={<Users />} />
-          {/* HR is a section, not a page: each concern has its own URL under the shared shell. */}
+          {/*
+            HR is a section, not a page. It briefly had eleven URLs, three of which badged off the
+            same number — Records, Compliance and Documents all pointed at "this person's file is
+            incomplete" — so closely related concerns are now merged into one destination each with
+            plain-language filter chips. See the comment above PAGES in HrLayout.tsx for the full
+            reasoning; the retired paths below redirect to the chip they used to be, because the
+            backend worklist links to them by path and people have them bookmarked.
+          */}
           <Route path="/hr" element={<HrLayout />}>
             <Route index element={<HrOverviewPage />} />
             <Route path="roster" element={<HrRosterPage />} />
             <Route path="onboarding" element={<HrOnboardingPage />} />
-            <Route path="records" element={<HrRecordsPage />} />
-            <Route path="compliance" element={<HrCompliancePage />} />
-            <Route path="capability" element={<HrCapabilityPage />} />
-            <Route path="documents" element={<HrDocumentsPage />} />
+            <Route path="paperwork" element={<HrPaperworkPage />} />
+            <Route path="skills" element={<HrCapabilityPage />} />
             <Route path="pay" element={<HrPayPage />} />
-            <Route path="deployment" element={<HrDeploymentPage />} />
-            <Route path="utilisation" element={<HrUtilisationPage />} />
-            <Route path="activity" element={<HrActivityPage />} />
+            <Route path="where" element={<HrWherePeopleArePage />} />
+
+            {/* Retired URLs — kept resolving, each landing on the chip that replaced it.
+                These duplicate LEGACY_PATHS in HrLayout.tsx on purpose: importing it here as a
+                value would drag HrLayout out of its lazy chunk. Keep the two in step. */}
+            <Route path="records" element={<Navigate to="/hr/paperwork?view=details" replace />} />
+            <Route path="compliance" element={<Navigate to="/hr/paperwork?view=certificates" replace />} />
+            <Route path="documents" element={<Navigate to="/hr/paperwork?view=ids" replace />} />
+            <Route path="capability" element={<Navigate to="/hr/skills" replace />} />
+            <Route path="deployment" element={<Navigate to="/hr/where?view=coverage" replace />} />
+            <Route path="utilisation" element={<Navigate to="/hr/where?view=workload" replace />} />
+            <Route path="activity" element={<Navigate to="/hr/where?view=changes" replace />} />
           </Route>
           <Route path="/clients" element={<Clients />} />
           <Route path="/billing" element={<Billing />} />

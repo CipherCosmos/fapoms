@@ -21,20 +21,20 @@ interface HeaderProps {
 
 const BREADCRUMBS: { prefix: string; category: string; label: string }[] = [
   { prefix: '/dashboard', category: 'Overview', label: 'Dashboard' },
-  { prefix: '/executive-map', category: 'Overview', label: 'Command Room' },
+  { prefix: '/executive-map', category: 'Overview', label: 'Live Map' },
   { prefix: '/feedback', category: 'Overview', label: 'Feedback' },
   { prefix: '/projects', category: 'Operations', label: 'Projects' },
-  { prefix: '/planning', category: 'Operations', label: 'Stage 1: Planning' },
-  { prefix: '/scheduling', category: 'Operations', label: 'Stage 2: Schedule Dispatch' },
-  { prefix: '/assignments', category: 'Operations', label: 'Stage 3: Field Execution' },
-  { prefix: '/clients', category: 'Management', label: 'Clients' },
-  { prefix: '/billing', category: 'Management', label: 'Billing' },
-  { prefix: '/branches', category: 'Management', label: 'Branches' },
-  { prefix: '/hr', category: 'Management', label: 'Workforce' },
-  { prefix: '/documents', category: 'Management', label: 'Documents' },
-  { prefix: '/data-entry', category: 'Management', label: 'Data Entry & Validation' },
+  { prefix: '/planning', category: 'Operations', label: 'Audit Planning' },
+  { prefix: '/scheduling', category: 'Operations', label: 'Visit Scheduling' },
+  { prefix: '/assignments', category: 'Operations', label: 'Field Work' },
+  { prefix: '/clients', category: 'Business Records', label: 'Clients' },
+  { prefix: '/billing', category: 'Business Records', label: 'Billing' },
+  { prefix: '/branches', category: 'Business Records', label: 'Branches' },
+  { prefix: '/hr', category: 'Business Records', label: 'Workforce' },
+  { prefix: '/documents', category: 'Business Records', label: 'Branch Paperwork' },
+  { prefix: '/data-entry', category: 'Business Records', label: 'Audit Data Entry' },
   { prefix: '/holidays', category: 'Operational Setup', label: 'Holiday Calendar' },
-  { prefix: '/rules', category: 'Operational Setup', label: 'Rule Engine' },
+  { prefix: '/rules', category: 'Operational Setup', label: 'Business Rules' },
   { prefix: '/users', category: 'Administration', label: 'User Management' },
   /**
    * The personal page, filed under "My Account" rather than "Administration".
@@ -49,7 +49,7 @@ const BREADCRUMBS: { prefix: string; category: string; label: string }[] = [
   { prefix: '/admin/notifications', category: 'Administration', label: 'Notification Rules' },
   { prefix: '/admin/rule-bypass', category: 'Administration', label: 'Rule Bypass' },
   { prefix: '/transport-costs', category: 'Operational Setup', label: 'Transport Costs' },
-  { prefix: '/zones', category: 'Operational Setup', label: 'Territorial Zones' },
+  { prefix: '/zones', category: 'Operational Setup', label: 'Service Areas' },
   { prefix: '/notifications', category: 'My Account', label: 'Notifications' },
 ];
 

@@ -595,8 +595,8 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
           if (effectiveSlaEnabled && (isSelectedForSla || (isHighRiskSla && !selectedBranchId))) {
             const slaColor = slaEnabledProp ? '#f97316' : '#ef4444';
             const slaLabel = slaEnabledProp
-              ? `🛡️ SLA Boundary: Beyond ${effectiveSlaRadius}km\nCurrent branch: ${b.name}`
-              : `⚠️ SLA Breach Risk Zone (${effectiveSlaRadius}km): ${b.name}`;
+              ? `🛡️ Minimum distance met: more than ${effectiveSlaRadius} km away\nCurrent branch: ${b.name}`
+              : `⚠️ Too close to branch — inside the ${effectiveSlaRadius} km minimum distance: ${b.name}`;
             const riskCircle = L.circle([lat, lng], {
               radius: effectiveSlaRadius * 1000,
               color: slaColor,
@@ -743,8 +743,8 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             const routeTarget = selectedBranchLatLng;
             const routeBranchName = selectedBranch?.name || 'Target Branch';
             const slaStatus = slaCompliant === null ? '' : slaCompliant
-              ? `<div style="color:#10b981;font-weight:600;margin-top:2px;">✅ Beyond ${effectiveSlaRadius}km SLA</div>`
-              : `<div style="color:#ef4444;font-weight:600;margin-top:2px;">❌ Within ${effectiveSlaRadius}km SLA — Breach Risk</div>`;
+              ? `<div style="color:#10b981;font-weight:600;margin-top:2px;">✅ More than ${effectiveSlaRadius} km away — minimum distance met</div>`
+              : `<div style="color:#ef4444;font-weight:600;margin-top:2px;">❌ Too close to branch — within ${effectiveSlaRadius} km</div>`;
             // Surface the engine's verdict on the pin itself — rank and score when eligible,
             // the blocking reason when not. A breach always wins over a stale ranking: an
             // assayer can be in `rankedCandidates` (unfiltered by radius, e.g. when only the
@@ -1072,24 +1072,32 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
           </div>
 
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '4px', background: 'var(--bg-primary)', padding: '2px', borderRadius: 'var(--radius-sm)' }}>
-            {(['driving', 'two-wheeler', 'walking'] as const).map(mode => (
-              <button
-                key={mode}
-                onClick={() => setTravelMode(mode)}
-                style={{
-                  padding: '4px',
-                  background: travelMode === mode ? 'var(--status-pending-bg)' : 'transparent',
-                  border: 'none',
-                  borderRadius: 'var(--radius-sm)',
-                  color: travelMode === mode ? 'var(--text-primary)' : 'var(--text-secondary)',
-                  fontSize: '11px',
-                  cursor: 'pointer',
-                  textAlign: 'center'
-                }}
-              >
-                {mode === 'driving' ? '🚗' : mode === 'two-wheeler' ? '🏍️' : '🚶'}
-              </button>
-            ))}
+            {(['driving', 'two-wheeler', 'walking'] as const).map(mode => {
+              const label = mode === 'driving' ? 'Car' : mode === 'two-wheeler' ? 'Bike' : 'Walk';
+              return (
+                <button
+                  key={mode}
+                  onClick={() => setTravelMode(mode)}
+                  aria-pressed={travelMode === mode}
+                  aria-label={`Travel by ${label.toLowerCase()}`}
+                  style={{
+                    padding: '4px 2px',
+                    background: travelMode === mode ? 'var(--status-pending-bg)' : 'transparent',
+                    border: 'none',
+                    borderRadius: 'var(--radius-sm)',
+                    color: travelMode === mode ? 'var(--text-primary)' : 'var(--text-secondary)',
+                    fontSize: '10px',
+                    fontWeight: travelMode === mode ? 700 : 500,
+                    cursor: 'pointer',
+                    textAlign: 'center',
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '1px',
+                  }}
+                >
+                  <span aria-hidden="true" style={{ fontSize: '12px' }}>{mode === 'driving' ? '🚗' : mode === 'two-wheeler' ? '🏍️' : '🚶'}</span>
+                  {label}
+                </button>
+              );
+            })}
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', fontSize: '11px', color: 'var(--text-secondary)' }}>

@@ -69,7 +69,11 @@ class EndsAfterStartConstraint implements ValidatorConstraintInterface {
 
 export class CreateProjectRequestDto implements CreateProjectDto {
   @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(255) name: string;
-  @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(50) projectNumber: string;
+  /**
+   * Optional: left blank, the service allocates the next `PRJ-<year>-###`. Backward-compatible —
+   * a number that is sent is still used verbatim; only its absence is newly accepted.
+   */
+  @IsOptional() @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(50) projectNumber?: string;
   @IsOptional() @IsString() @MaxLength(2000) description?: string;
   @IsUUID() clientId: string;
   @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(50) priority: string;

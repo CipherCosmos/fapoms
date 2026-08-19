@@ -162,7 +162,12 @@ export type UpdateProjectDto = Partial<CreateProjectDto>;
 
 export interface CreateProjectDto {
   name: string;
-  projectNumber: string;
+  /**
+   * Optional. Blank means "allocate the next free `PRJ-<year>-###`" — see
+   * `allocateProjectNumber()`. A supplied number is always honoured, so every existing caller
+   * (the mobile app, imports, scripts) behaves exactly as before.
+   */
+  projectNumber?: string;
   description?: string;
   clientId: string;
   priority: string;
@@ -279,9 +284,54 @@ export class ProjectService implements OnModuleInit {
     this.workflowEngine.registerWorkflow('project', toWorkflowTransitions(PROJECT_TRANSITIONS));
   }
 
+  /**
+   * The next free project number for the current year, in the `PRJ-2026-001` house format.
+   *
+   * The web form used to pre-fill this with `PRJ-<year>-<random 4 digits>` — a guess. The number
+   * is unique in the database, so a collision was not caught until save, at which point the user
+   * had already filled in the whole form and got it rejected for a field they never chose a value
+   * for. The server is the only side that can see every number, including those held by
+   * soft-deleted projects.
+   */
+  private async allocateProjectNumber(): Promise<string> {
+    const year = new Date().getFullYear();
+    const rows = await this.projectRepository.find({ select: ['projectNumber'], withDeleted: true } as any);
+    const prefix = `PRJ-${year}-`;
+    const highest = rows.reduce((max, r) => {
+      const n = r.projectNumber ?? '';
+      if (!n.startsWith(prefix)) return max;
+      const m = /(\d+)$/.exec(n.slice(prefix.length));
+      return m ? Math.max(max, Number(m[1])) : max;
+    }, 0);
+    return `${prefix}${String(highest + 1).padStart(3, '0')}`;
+  }
+
   async create(dto: CreateProjectDto, userId: string, organizationId?: string | null): Promise<ProjectEntity> {
+    /**
+     * Allocated here when the caller left it blank, and retried on the unique-constraint
+     * violation that two simultaneous creates produce: `project_number` is UNIQUE in the
+     * database, so the loser of the race is told so by Postgres rather than by a guess, and
+     * simply takes the next number. A number the user typed themselves is never retried —
+     * saving it under a different number than the one on screen would be worse than the error.
+     */
+    if (!dto.projectNumber?.trim()) {
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const candidate = await this.allocateProjectNumber();
+        try {
+          return await this.persistNewProject({ ...dto, projectNumber: candidate }, userId, organizationId);
+        } catch (err: any) {
+          // 23505 = unique_violation. Anything else is a real failure and must surface.
+          if (err?.code !== '23505' && err?.driverError?.code !== '23505') throw err;
+        }
+      }
+      throw new BadRequestException('Could not allocate a project number just now. Please try again.');
+    }
+    return this.persistNewProject({ ...dto, projectNumber: dto.projectNumber.trim() }, userId, organizationId);
+  }
+
+  private async persistNewProject(dto: CreateProjectDto, userId: string, organizationId?: string | null): Promise<ProjectEntity> {
     const project = this.projectRepository.create({
-      projectNumber: dto.projectNumber,
+      projectNumber: dto.projectNumber!,
       name: dto.name,
       description: dto.description ?? null,
       clientId: dto.clientId,

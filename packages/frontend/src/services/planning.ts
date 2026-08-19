@@ -101,6 +101,46 @@ export const suggestAuditDate = (branchId: string, signal?: AbortSignal) =>
   );
 
 /**
+ * Turns the raw `skipped[]` reasons into one sentence an office operator can read.
+ *
+ * The server's reasons are written for the rule engine — "Holiday Conflict: Target date is a
+ * holiday in KA.", "Sunday", "Double Booking: …". Those strings were never meant for a screen;
+ * showing them verbatim is how a desk ends up asking what a "conflict" is. They are matched
+ * loosely on purpose: the wording of a rule message changes over time, and a suggestion that
+ * silently stops explaining itself is worse than one that says "not a working day".
+ *
+ * Returns null when nothing was skipped — the suggestion is simply tomorrow and needs no excuse.
+ */
+export const describeSuggestedDate = (
+  suggested: string,
+  skipped: Array<{ date: string; reason: string }> = [],
+): string | null => {
+  const day = (key: string) => {
+    // The keys are plain YYYY-MM-DD calendar dates. Parsed as-is, a browser west of UTC reads
+    // them as midnight UTC and prints the day before — the one thing this note must never do.
+    const [y, m, d] = key.split('-').map(Number);
+    if (!y || !m || !d) return key;
+    return new Date(y, m - 1, d).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
+  };
+  const plain = (reason: string) => {
+    const r = (reason || '').toLowerCase();
+    if (r.includes('sunday')) return 'is a Sunday';
+    if (r.includes('holiday')) return 'is a holiday';
+    if (r.includes('leave')) return 'the assayer is on leave';
+    if (r.includes('book')) return 'the assayer is already booked';
+    if (r.includes('timeline') || r.includes('project')) return 'is outside the project dates';
+    return 'is not a working day';
+  };
+  const suggestedDay = day(suggested);
+  if (skipped.length === 0) return `${suggestedDay} is the earliest date this audit can be worked.`;
+  // Only the first few, and only from the front: a long holiday run would otherwise produce a
+  // paragraph nobody reads, and the days nearest today are the ones the operator is wondering about.
+  const shown = skipped.slice(0, 3).map((s) => `${day(s.date)} ${plain(s.reason)}`);
+  const more = skipped.length > shown.length ? `, and ${skipped.length - shown.length} more` : '';
+  return `Earliest free date — ${shown.join(', ')}${more}.`;
+};
+
+/**
  * Candidate recommendations for a branch. Response carries `data` + `meta.excluded`.
  * `date` (YYYY-MM-DD) is the audit date availability/fees are evaluated against —
  * omitted, the backend assumes today, which is rarely the day being planned.

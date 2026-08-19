@@ -178,10 +178,17 @@ const getInitialProjectForm = (clientId = ''): FormData => {
   const nextMonth = new Date();
   nextMonth.setDate(today.getDate() + 30);
   const formatDate = (d: Date) => localDateKey(d);
-  const rand = Math.floor(1000 + Math.random() * 9000);
   return {
     name: '',
-    projectNumber: `PRJ-${today.getFullYear()}-${rand}`,
+    /**
+     * Blank on purpose: the server allocates the next `PRJ-<year>-###`.
+     *
+     * This used to be pre-filled with `PRJ-<year>-<random 4 digits>` — a guess at a number that
+     * is UNIQUE in the database. A collision was therefore not discovered until save, after the
+     * whole form had been filled in, and the user was rejected over a field they never chose.
+     * Only the server can see every number, including those held by deleted projects.
+     */
+    projectNumber: '',
     clientId,
     priority: Priority.MEDIUM,
     startDate: formatDate(today),
@@ -414,7 +421,8 @@ export const Projects: React.FC = () => {
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     setMessage(null);
-    if (!form.name || !form.projectNumber || !form.clientId) {
+    // projectNumber is no longer checked here: blank means "allocate one".
+    if (!form.name || !form.clientId) {
       setMessage({ type: 'error', text: 'Please fill in all mandatory fields.' });
       return;
     }
@@ -424,7 +432,8 @@ export const Projects: React.FC = () => {
         method: 'POST',
         body: JSON.stringify({
           name: form.name,
-          projectNumber: form.projectNumber,
+          // Omitted when blank so the server allocates it; sent verbatim when the user typed one.
+          projectNumber: form.projectNumber.trim() || undefined,
           clientId: form.clientId,
           priority: form.priority,
           startDate: form.startDate || undefined,
@@ -436,7 +445,7 @@ export const Projects: React.FC = () => {
           description: form.description || undefined,
         })
       });
-      setMessage({ type: 'success', text: `Project "${response.name}" successfully created!` });
+      setMessage({ type: 'success', text: `Project "${response.name}" (${response.projectNumber}) successfully created!` });
       setShowCreateModal(false);
       setForm(getInitialProjectForm());
       loadProjects();
@@ -647,8 +656,8 @@ export const Projects: React.FC = () => {
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Project Number *</label>
-            <input type="text" value={form.projectNumber} onChange={(e) => setForm(f => ({ ...f, projectNumber: e.target.value }))} placeholder="e.g. PRJ-2026-002" required style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }} />
+            <label htmlFor="project-number" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Project Number</label>
+            <input id="project-number" type="text" value={form.projectNumber} onChange={(e) => setForm(f => ({ ...f, projectNumber: e.target.value }))} placeholder="Left blank, one is assigned for you" style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }} />
           </div>
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>

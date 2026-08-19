@@ -38,6 +38,19 @@ export const RecommendationPanel: React.FC<{
    */
   ignoreDateAvailability?: boolean;
   onToggleIgnoreDateAvailability?: (v: boolean) => void;
+  /**
+   * Advanced view. Simple shows the handful of controls the everyday task needs and states the
+   * independence rule in words; Advanced adds the raw numeric overrides back. No control is
+   * removed by Simple — each one is still reachable one click away.
+   */
+  advanced?: boolean;
+  /**
+   * Starts the everyday task from the empty state: opens the most urgent branch nobody is on.
+   * The empty panel used to offer only a sentence of instruction, which is a hint, not an action.
+   */
+  onNextUnassigned?: () => void;
+  /** Name of the branch that button would open, so the empty state can say where it leads. */
+  nextBranchName?: string | null;
   onRefresh: () => void;
   onAccept: (assignmentId: string, proposedFee: number) => void;
   onCounter: (assignment: NonNullable<ProjectBranch['assignment']>) => void;
@@ -49,8 +62,37 @@ export const RecommendationPanel: React.FC<{
   maxRadiusEnabled, onToggleMaxRadius, maxRadius, onMaxRadiusChange,
   planDate, onPlanDateChange,
   ignoreDateAvailability = false, onToggleIgnoreDateAvailability,
+  advanced = false, onNextUnassigned, nextBranchName,
   onRefresh, onAccept, onCounter, onDecline, onViewHistory,
 }) => {
+  /**
+   * The single "Nearby only" answer, derived from the two pieces of state that used to be two
+   * controls. `showAllCandidates` (no limit) and a disabled max radius mean the same thing to the
+   * coordinator — "any distance" — so both map to the same option rather than to two.
+   */
+  const nearbyValue = showAllCandidates || !maxRadiusEnabled ? 'ANY' : String(maxRadius);
+  /** 50 / 100 / Any, plus whatever custom figure is already in force, so nothing is lost. */
+  const nearbyOptions = React.useMemo(() => {
+    const presets = [50, 100];
+    const opts = presets.map(v => ({ value: String(v), label: `${v} km` }));
+    if (nearbyValue !== 'ANY' && !presets.includes(maxRadius)) {
+      opts.push({ value: String(maxRadius), label: `${maxRadius} km` });
+      opts.sort((a, b) => Number(a.value) - Number(b.value));
+    }
+    return [...opts, { value: 'ANY', label: 'Any distance' }];
+  }, [nearbyValue, maxRadius]);
+  const onNearbyChange = (v: string) => {
+    if (v === 'ANY') {
+      // "Any distance" is the old "Show all distances" tick — it lifts the limit outright rather
+      // than leaving a stale radius that quietly contradicts the menu.
+      onToggleShowAll(true);
+      return;
+    }
+    onToggleShowAll(false);
+    onToggleMaxRadius(true);
+    onMaxRadiusChange(Number(v));
+  };
+
   const isDone = selectedPb && (
     ['AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'].includes(selectedPb.status) ||
     selectedPb.assignment?.status === 'COMPLETED'
@@ -147,53 +189,92 @@ export const RecommendationPanel: React.FC<{
                     />
                   </label>
                 )}
-                {/* Sits with the date because it qualifies the date, not the distance filters:
-                    it turns "who is free that day" into "who could cover this branch at all".
-                    Kept candidates still show their clash, so this reveals rather than hides. */}
+                {/* Plain words for what this actually does. "Ignore date availability" read as a
+                    switch that discards a rule; it in fact widens the list to people who are
+                    booked or on leave that day, and each clash is still printed on the row. */}
                 {onToggleIgnoreDateAvailability && (
                   <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: ignoreDateAvailability ? 'var(--accent-secondary)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}
-                    title="Rank everyone nearby even if they are booked or on leave that day. Each clash is still shown on the candidate.">
+                    title="Ranks everyone nearby even if they are booked or on leave that day. Each clash is still shown on the person's card.">
                     <input type="checkbox" checked={ignoreDateAvailability} onChange={(e) => onToggleIgnoreDateAvailability(e.target.checked)} />
-                    Ignore date availability
+                    Also show people who are busy that day
                   </label>
                 )}
-                {/* Max radius: "show assayers WITHIN X km" — the intuitive service-radius filter. */}
-                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: maxRadiusEnabled ? 'var(--accent)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
-                  <input type="checkbox" checked={maxRadiusEnabled} onChange={(e) => onToggleMaxRadius(e.target.checked)} />
-                  Within
+
+                {/*
+                  One distance control instead of two contradictory ones.
+
+                  "Within [n] km" and "Show all distances" were separate and could be set to
+                  disagree — a radius typed in one box and silently overridden by a tick in the
+                  other. They are one question with one answer, so they are now one menu, and the
+                  two pieces of state behind it are always set together and consistently.
+                */}
+                <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--text-secondary)', userSelect: 'none' }}
+                  title="How far from the branch to look. 'Any distance' lists everyone, however far away.">
+                  <span style={{ fontWeight: 700 }}>Nearby only</span>
+                  <select
+                    aria-label="How far from the branch to look for people"
+                    value={nearbyValue}
+                    onChange={e => onNearbyChange(e.target.value)}
+                    style={{ fontSize: '10.5px', padding: '2px 6px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--accent)', fontWeight: 600, outline: 'none' }}
+                  >
+                    {nearbyOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                  </select>
                 </label>
-                {maxRadiusEnabled && (
-                  <span style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
-                    <input
-                      type="number" min={0} step={10} value={maxRadius} list="radius-presets"
-                      aria-label="Maximum radius in kilometres — show assayers within this distance"
-                      onChange={e => onMaxRadiusChange(Math.max(0, Number(e.target.value) || 0))}
-                      style={{ width: '60px', fontSize: '10px', padding: '2px 5px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--accent)', outline: 'none' }}
-                    />
-                    <span style={{ fontSize: '10px', color: 'var(--accent)' }}>km</span>
-                  </span>
-                )}
-                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}
-                  title="Ignore the max-radius bound and show every candidate regardless of distance">
-                  <input type="checkbox" checked={showAllCandidates} onChange={(e) => onToggleShowAll(e.target.checked)} />
-                  Show all distances
-                </label>
-                {/* Min radius: the audit-independence floor (hide assayers TOO CLOSE to the branch). */}
-                <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: slaEnabled ? 'var(--warning)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}
-                  title="Independence floor: hide assayers closer than this to the branch">
-                  <input type="checkbox" checked={slaEnabled} onChange={(e) => onToggleSla(e.target.checked)} />
-                  Min radius
-                </label>
-                {slaEnabled && (
-                  <span style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
-                    <input
-                      type="number" min={0} step={5} value={slaRadius} list="radius-presets"
-                      aria-label="Minimum radius in kilometres — independence floor"
-                      onChange={e => onSlaRadiusChange(Math.max(0, Number(e.target.value) || 0))}
-                      style={{ width: '56px', fontSize: '10px', padding: '2px 5px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--warning)', outline: 'none' }}
-                    />
-                    <span style={{ fontSize: '10px', color: 'var(--warning)' }}>km</span>
-                  </span>
+
+                {/*
+                  The independence floor is a CLIENT COMPLIANCE RULE, not a taste setting: an
+                  assayer may not audit a branch on their own doorstep. Asking a coordinator to
+                  invent the kilometre figure ("Min radius [__] km") put a rule they do not own
+                  in a box they had to fill in. Simple therefore states the rule as policy and
+                  explains who it hides; Advanced keeps the full override, unchanged.
+                */}
+                {advanced ? (
+                  <>
+                    <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: slaEnabled ? 'var(--warning)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}
+                      title="Override the independence rule: hide people closer than this to the branch">
+                      <input type="checkbox" checked={slaEnabled} onChange={(e) => onToggleSla(e.target.checked)} />
+                      Minimum distance rule
+                    </label>
+                    {slaEnabled && (
+                      <span style={{ display: 'flex', alignItems: 'center', gap: '3px' }}>
+                        <input
+                          type="number" min={0} step={5} value={slaRadius} list="radius-presets"
+                          aria-label="Minimum distance in kilometres a person must be from the branch"
+                          onChange={e => onSlaRadiusChange(Math.max(0, Number(e.target.value) || 0))}
+                          style={{ width: '56px', fontSize: '10px', padding: '2px 5px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--warning)', outline: 'none' }}
+                        />
+                        <span style={{ fontSize: '10px', color: 'var(--warning)' }}>km</span>
+                      </span>
+                    )}
+                    {/* The exact service-radius figure, for the cases the three-option menu above
+                        cannot express. Editing it keeps the menu in step. */}
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '3px' }} title="Exact distance limit, when the menu's options do not fit">
+                      <input
+                        type="number" min={0} step={10} value={maxRadius} list="radius-presets"
+                        aria-label="Exact distance limit in kilometres"
+                        onChange={e => { const v = Math.max(0, Number(e.target.value) || 0); onMaxRadiusChange(v); onToggleMaxRadius(true); onToggleShowAll(false); }}
+                        style={{ width: '60px', fontSize: '10px', padding: '2px 5px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--accent)', outline: 'none' }}
+                      />
+                      <span style={{ fontSize: '10px', color: 'var(--accent)' }}>km</span>
+                    </span>
+                  </>
+                ) : (
+                  <details style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>
+                    <summary style={{ cursor: 'pointer', userSelect: 'none', color: 'var(--accent)', fontWeight: 600 }}>
+                      Why is someone hidden?
+                    </summary>
+                    <div style={{ marginTop: '6px', padding: '8px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-hair)', borderRadius: '6px', lineHeight: 1.6, maxWidth: '340px', fontWeight: 500 }}>
+                      {slaEnabled
+                        ? <>Someone you expected may be missing because of the <b>independence rule</b>: a person living within <b>{slaRadius} km</b> of a branch may not audit it. That distance comes from the client's contract, not from a setting here.</>
+                        : <>The independence rule — which hides people living too close to the branch to audit it independently — is currently switched off, so everyone nearby is listed.</>}
+                      <div style={{ marginTop: '6px' }}>
+                        People can also be missing because they are booked or on leave on the audit date (tick “Also show people who are busy that day”), because they are further away than the “Nearby only” limit, or because they lack a skill or certification the project requires — the latter is listed under the candidates.
+                      </div>
+                      <div style={{ marginTop: '6px', color: 'var(--text-muted)' }}>
+                        Switch to <b>Advanced</b> at the top of the screen to change the minimum distance yourself.
+                      </div>
+                    </div>
+                  </details>
                 )}
                 <datalist id="radius-presets">
                   {[0, 25, 50, 75, 100, 150, 200, 300, 500, 700].map(v => <option key={v} value={v} />)}
@@ -207,8 +288,32 @@ export const RecommendationPanel: React.FC<{
           </>
         )
       ) : (
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', padding: '24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
-          👈 Select a branch from the left queue or click a map marker to inspect candidate matches.
+        /*
+          The empty state now offers the action instead of describing it. "Select a branch from
+          the left queue" told a coordinator facing thirty-five controls what to do but gave them
+          nothing to press; this opens the most urgent branch nobody is on and scrolls its best
+          match into view. The old instruction stays underneath, because picking a specific
+          branch by hand is still perfectly valid.
+        */
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'center', gap: '10px', padding: '24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
+          <div style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-primary)' }}>Ready to staff a branch</div>
+          {onNextUnassigned && (
+            <button
+              type="button"
+              onClick={onNextUnassigned}
+              className="btn btn-primary"
+              style={{ padding: '8px 16px', fontSize: '13px', fontWeight: 700 }}
+              title={nextBranchName ? `Opens ${nextBranchName}` : undefined}
+            >
+              Start with the next branch
+            </button>
+          )}
+          {nextBranchName && (
+            <div style={{ fontSize: '11.5px' }}>Next up: <b style={{ color: 'var(--text-secondary)' }}>{nextBranchName}</b></div>
+          )}
+          <div style={{ fontSize: '11.5px', maxWidth: '300px', lineHeight: 1.5 }}>
+            Or pick any branch from the queue on the left, or click a marker on the map.
+          </div>
         </div>
       )}
     </div>

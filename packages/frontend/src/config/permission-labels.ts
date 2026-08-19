@@ -34,13 +34,13 @@ export const PERMISSION_AREAS: AreaSpec[] = [
   },
   {
     key: 'field',
-    label: 'Field & Documents',
+    label: 'Assayers & Branch Paperwork',
     hint: 'The assayer workforce and audit paperwork',
     resources: ['ASSAYER', 'DOCUMENT', 'OCR'],
   },
   {
     key: 'validation',
-    label: 'Validation & Data Entry',
+    label: 'Audit Data Entry',
     hint: 'Checking returned audits and raising clarifications',
     resources: ['VALIDATION', 'AUDIT'],
   },
@@ -66,13 +66,13 @@ export const PERMISSION_AREAS: AreaSpec[] = [
 
 const RESOURCE_LABELS: Record<string, string> = {
   PROJECT: 'Projects',
-  PLANNING: 'Planning',
+  PLANNING: 'Audit planning',
   ASSIGNMENT: 'Assignments',
-  SCHEDULING: 'Scheduling',
+  SCHEDULING: 'Visit scheduling',
   BRANCH: 'Branches',
-  ZONE: 'Territorial zones',
+  ZONE: 'Service areas',
   ASSAYER: 'Assayers',
-  DOCUMENT: 'Documents',
+  DOCUMENT: 'Branch paperwork',
   OCR: 'Document scanning',
   VALIDATION: 'Validation',
   AUDIT: 'Audit records',
