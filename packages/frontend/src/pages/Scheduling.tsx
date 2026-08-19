@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
   CalendarDays, RefreshCw, Calendar, CheckCircle2,
   Plus, Download, ChevronLeft, ChevronRight,
-  X, Sun, Landmark, Umbrella, Filter, List, Grid, ArrowRight,
+  X, Sun, Landmark, Umbrella, Filter, List, Grid,
   MapPin, User, Check
 } from 'lucide-react';
 import { ScheduleStatus, SystemRole, formatRupees } from '@fapoms/shared';
@@ -105,7 +105,6 @@ export const Scheduling: React.FC = () => {
    * Consumed once and then cleared from the URL, because it describes an intent ("schedule this")
    * rather than a state worth restoring — leaving it would reopen the modal on every refresh.
    */
-  const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   useEffect(() => {
     const wanted = searchParams.get('assignmentId');
@@ -576,9 +575,16 @@ export const Scheduling: React.FC = () => {
           </button>
           )}
 
-          <button onClick={() => navigate('/assignments')} className="btn btn-secondary" style={{ padding: '6px 10px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-            Stage 3: Field Execution <ArrowRight size={12} />
-          </button>
+          {/*
+            The "Stage 3: Field Execution →" button that stood here has been removed.
+
+            It was the last surviving piece of the per-screen stepper: a second control that did
+            exactly what the "Field work" tab above it does, but named the stage by its lifecycle
+            number instead of by what a coordinator calls it. Two controls for one job, disagreeing
+            about what the destination is even called, is the confusion the merge exists to end —
+            and this one was worse than harmless, because it navigated to a bare `/assignments` and
+            so threw away the filter and page the tab strip now restores for you.
+          */}
         </div>
       </div>
 

@@ -167,9 +167,37 @@ export const Assignments: React.FC = () => {
   const [selectedAsnId, selectAssignment] = useUrlSelection('id');
   const [newComment, setNewComment] = useState('');
 
+  /**
+   * The chip filter and the page number live in the URL, beside the selection above.
+   *
+   * They used to be plain `useState`. That was survivable while this list was its own sidebar
+   * entry that people arrived at and stayed on. It stopped being survivable when the four stages
+   * became tabs of one screen: an operator now steps to Scheduling to book one visit and comes
+   * straight back, and every one of those round trips unmounts this component and throws the
+   * filter and the page away. Coming back to "Everything, page 1" after each booking — when you
+   * had been working down "Declined — needs a replacement", page 3 — is exactly the "it lost my
+   * place" complaint, and it is the same class of bug `useUrlSelection` was written for.
+   *
+   * In the URL they survive the unmount (AuditWork's tab strip remembers each tab's query string
+   * and restores it), a refresh, and being pasted to a colleague — one source of truth, no local
+   * mirror to disagree with the address bar.
+   *
+   * `searchTerm` is deliberately NOT here: it only narrows the rows already fetched for the
+   * current page, it changes on every keystroke, and writing the address bar that often would
+   * cost more than the small thing it saves.
+   */
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<string>('ALL');
-  const [page, setPage] = useState(1);
+  const [statusParam, setStatusParam] = useUrlSelection('status');
+  const statusFilter = statusParam ?? 'ALL';
+  const [pageParam, setPageParam] = useUrlSelection('page');
+  // A hand-edited or stale `?page=` must not wedge the list on a non-number.
+  const parsedPage = Number(pageParam);
+  const page = Number.isFinite(parsedPage) && parsedPage >= 1 ? Math.floor(parsedPage) : 1;
+  const setPage = (next: number | ((current: number) => number)) => {
+    const value = typeof next === 'function' ? next(page) : next;
+    // Page 1 is the default, so it is left out of the URL rather than written as noise.
+    setPageParam(value <= 1 ? null : String(value));
+  };
   // The in-app confirmation dialog. `window.confirm` renders the browser's own pop-up, which the
   // office staff who run this desk have been trained to dismiss unread, and whose "OK" button
   // never names the action it is about to take.
@@ -187,7 +215,8 @@ export const Assignments: React.FC = () => {
   useEffect(() => { setShowMoreActions(false); }, [selectedAsnId]);
 
   const applyFilter = (value: string) => {
-    setStatusFilter(value);
+    // 'ALL' is the default view, so it clears the parameter instead of writing `?status=ALL`.
+    setStatusParam(value === 'ALL' ? null : value);
     setPage(1);
   };
 

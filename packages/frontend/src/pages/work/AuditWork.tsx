@@ -1,4 +1,4 @@
-import React, { Suspense, useEffect, useMemo } from 'react';
+import React, { Suspense, useEffect, useMemo, useRef } from 'react';
 import { NavLink, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { Inbox, Map as MapIcon, CalendarDays, ClipboardList } from 'lucide-react';
@@ -142,14 +142,31 @@ export const AuditWork: React.FC = () => {
   const { enabled: isLocating, data: resolvedTab, isLoading, error } = useResolvedWorkTab(activeTab, searchParams);
 
   /**
+   * Is there a hand-over to make, and may this role actually be sent there?
+   *
+   * These two are derived ONCE and used by both the effect below and the screen state further
+   * down, because the bug that made this screen unusable was the two disagreeing. The effect
+   * returned early — without navigating — when the target tab was not permitted for the role, but
+   * the loading flag was still computed from `resolvedTab !== activeTab`, which in that case stays
+   * true for ever. The result was a screen stuck on "Finding where this work has got to…" with no
+   * content, no error and no way forward: the one state a person cannot get themselves out of.
+   *
+   * So permission is part of the condition, not a separate early return: either we hand over, or
+   * we say why we did not and render the tab they are on.
+   */
+  const canOpenResolvedTab = Boolean(resolvedTab && visibleTabs.some((tab) => tab.path === resolvedTab));
+  const shouldHandOver = Boolean(isLocating && resolvedTab && resolvedTab !== activeTab && canOpenResolvedTab);
+  /** The work is elsewhere, but this role cannot follow it there. Say so; never spin. */
+  const blockedTab = isLocating && resolvedTab && resolvedTab !== activeTab && !canOpenResolvedTab ? resolvedTab : null;
+  const blockedTabLabel = blockedTab ? WORK_TABS.find((tab) => tab.path === blockedTab)?.label : null;
+
+  /**
    * Hand over to the tab the work is actually on, carrying the identifying parameters with it so
    * the destination still opens on that item — `replace` so the browser Back button returns to
    * wherever the person came from rather than bouncing them through the redirect again.
    */
   useEffect(() => {
-    if (!isLocating || !resolvedTab || resolvedTab === activeTab) return;
-    // Never land somebody on a tab their role cannot open.
-    if (!visibleTabs.some((tab) => tab.path === resolvedTab)) return;
+    if (!shouldHandOver || !resolvedTab) return;
 
     const next = new URLSearchParams(searchParams);
     // The field-work list selects on `id`, not `assignmentId`; translate so following the link
@@ -161,7 +178,43 @@ export const AuditWork: React.FC = () => {
     }
     const qs = next.toString();
     navigate(qs ? `${resolvedTab}?${qs}` : resolvedTab, { replace: true });
-  }, [isLocating, resolvedTab, activeTab, visibleTabs, searchParams, navigate]);
+  }, [shouldHandOver, resolvedTab, searchParams, navigate]);
+
+  /**
+   * Each tab remembers where you were on it.
+   *
+   * Switching tabs unmounts one page component and mounts another, so anything those pages hold
+   * in `useState` is destroyed. That was tolerable when these were four separate sidebar entries
+   * people rarely crossed between; as adjacent tabs they are crossed constantly — book a visit,
+   * come back to the list you were working down — and losing the filter, the page number and the
+   * open item on every crossing is the "it keeps forgetting what I was doing" complaint.
+   *
+   * The pages already keep that state where it belongs: in their own query string (see
+   * `useUrlSelection`). What was missing is that the tab strip linked to the bare path, so
+   * returning to a tab threw its query string away and reset it to the default view. Remembering
+   * the last query string per tab and restoring it here fixes the round trip without keeping any
+   * page mounted — no background queries, no second copy of the map, no state to get stale.
+   *
+   * A ref, not state: this is written during render-driven effects and only ever read when
+   * building the links, so re-rendering on every keystroke that touched the URL would be waste.
+   */
+  const lastSearchByTab = useRef<Partial<Record<WorkTabPath, string>>>({});
+  useEffect(() => {
+    const remembered = new URLSearchParams(location.search);
+    /*
+     * The locating parameters are deliberately forgotten.
+     *
+     * They are a one-shot instruction ("find this branch"), not a view. Remembering them on
+     * `/inbox` would mean that clicking back to today's actions re-ran the lookup and threw the
+     * person straight back out to whichever tab the branch is on — a tab they could never leave.
+     */
+    if (activeTab === '/inbox') {
+      remembered.delete('assignmentId');
+      remembered.delete('projectId');
+      remembered.delete('branchId');
+    }
+    lastSearchByTab.current[activeTab] = remembered.toString();
+  }, [activeTab, location.search]);
 
   const ActivePage = PAGE_FOR_TAB[activeTab];
 
@@ -169,8 +222,12 @@ export const AuditWork: React.FC = () => {
    * While we are looking the item up, hold the screen rather than painting today's queue and then
    * yanking it away a moment later — a flash of the wrong screen is what made the old split feel
    * like the app had lost the branch.
+   *
+   * Every branch of this ends: we are still asking the server (`isLoading`), we are about to
+   * navigate (`shouldHandOver`), or we are rendering the current tab — with a note if the answer
+   * was one we could not act on. There is no fourth state in which this stays true.
    */
-  const isHandingOver = isLocating && (isLoading || Boolean(resolvedTab && resolvedTab !== activeTab));
+  const isHandingOver = isLocating && (isLoading || shouldHandOver);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column' }}>
@@ -195,10 +252,12 @@ export const AuditWork: React.FC = () => {
       >
         {visibleTabs.map((tab) => {
           const Icon = ICON_FOR_TAB[tab.path];
+          // Back to where you left that tab, not to its default view.
+          const remembered = tab.path === activeTab ? '' : lastSearchByTab.current[tab.path];
           return (
             <NavLink
               key={tab.path}
-              to={tab.path}
+              to={remembered ? `${tab.path}?${remembered}` : tab.path}
               title={tab.hint}
               style={({ isActive }) => ({
                 display: 'flex',
@@ -226,6 +285,13 @@ export const AuditWork: React.FC = () => {
           </div>
         ) : (
           <>
+            {blockedTabLabel && (
+              <QuietNote tone="warning">
+                This work has moved on to “{blockedTabLabel}”, which you do not have access to. You
+                are on today's actions instead — ask the desk that handles that stage if you need it
+                moved.
+              </QuietNote>
+            )}
             {isLocating && error && (
               <div>
                 <QuietNote tone="warning">
