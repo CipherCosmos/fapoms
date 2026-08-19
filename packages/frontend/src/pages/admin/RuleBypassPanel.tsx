@@ -8,6 +8,8 @@ import {
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { useConfirm } from '../../components/ui';
+import { useCurrentRoles } from '../../hooks/useCurrentRoles';
+import { canAccessRoute } from '../../config/route-permissions';
 
 /**
  * Where an administrator suspends operational rules for testing.
@@ -42,6 +44,22 @@ function formatCountdown(iso: string | null): string | null {
 export const RuleBypassPanel: React.FC = () => {
   const queryClient = useQueryClient();
   const { confirm, confirmDialog } = useConfirm();
+  /**
+   * Who may be here, answered from the one list that already knows: ROUTE_PERMISSIONS, via
+   * `canAccessRoute`. ProtectedRoute asks it the same question for the same path, so the two
+   * cannot drift, and a hardcoded role array here would have become a fourth opinion on a
+   * question the config file exists to settle.
+   *
+   * The gate is deliberately defensive rather than the primary control. It matters because
+   * every request this screen makes is administrator-only on the backend too: without it, any
+   * route the user reaches with the wrong roles — a stale cached role list, a widened route
+   * entry, a direct render of this component — gets the catalogue 403 and, since the queries
+   * below have no error branch, a screen that either sits on "Loading…" through the retries or
+   * settles into an empty checklist that looks like "there are no rules". Both are the app
+   * apparently broken rather than a permission boundary stated out loud.
+   */
+  const roles = useCurrentRoles();
+  const mayUse = canAccessRoute(roles, '/admin/rule-bypass');
   const [selected, setSelected] = useState<Set<BypassableRule>>(new Set());
   const [reason, setReason] = useState('');
   const [hours, setHours] = useState(DEFAULT_BYPASS_HOURS);
@@ -61,11 +79,13 @@ export const RuleBypassPanel: React.FC = () => {
     queryKey: ['rule-bypass', 'state'],
     queryFn: () => api.request<RuleBypassState>('/admin/rule-bypass'),
     refetchInterval: 30_000,
+    enabled: mayUse,
   });
-  const { data: catalogue, isLoading: catalogueLoading } = useQuery({
+  const { data: catalogue, isLoading: catalogueLoading, error: catalogueError } = useQuery({
     queryKey: ['rule-bypass', 'catalogue'],
     queryFn: () => api.request<{ rules: BypassableRuleInfo[] }>('/admin/rule-bypass/catalogue'),
     staleTime: Infinity,
+    enabled: mayUse,
   });
 
   const current = state ?? INACTIVE_BYPASS;
@@ -174,6 +194,21 @@ export const RuleBypassPanel: React.FC = () => {
     );
   };
 
+  if (!mayUse) {
+    return (
+      <div style={{ ...card, maxWidth: '620px', display: 'flex', gap: '11px', alignItems: 'flex-start' }}>
+        <ShieldCheck size={18} style={{ color: 'var(--success)', flexShrink: 0, marginTop: '1px' }} />
+        <div style={{ fontSize: '13px', lineHeight: 1.6 }}>
+          <div style={{ fontWeight: 700, marginBottom: '4px' }}>This screen is for administrators only.</div>
+          Suspending the platform's operational rules is limited to administrators, because it
+          changes what every record created during the suspension can be trusted to prove.
+          Nothing is wrong with your account — you simply cannot make this change from here.
+          If a rule is blocking work you need to do, ask an administrator.
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '900px' }}>
       {confirmDialog}
@@ -273,6 +308,12 @@ export const RuleBypassPanel: React.FC = () => {
 
         {catalogueLoading ? (
           <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', padding: '8px 0' }}>Loading the rule catalogue…</div>
+        ) : catalogueError ? (
+          /* The list of rules could not be read. Saying so beats an empty checklist, which
+             reads as "this platform has no rules to suspend" — the opposite of the truth. */
+          <div style={{ fontSize: '12.5px', color: 'var(--danger)', padding: '8px 0' }}>
+            The list of rules could not be loaded, so there is nothing to choose from. {userMessage(catalogueError)}
+          </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
             <RuleGroup

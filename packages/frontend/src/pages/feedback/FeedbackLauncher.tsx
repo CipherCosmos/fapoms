@@ -7,6 +7,8 @@ import { FeedbackCategory } from '@fapoms/shared';
 import { createFeedback, getSimilarFeedback, voteFeedback, type SimilarFeedback } from '../../services/feedback';
 import { userMessage } from '../../services/errors';
 import { CATEGORY, areaFromPath } from './feedbackUi';
+import { useCurrentRoles } from '../../hooks/useCurrentRoles';
+import { canAccessRoute } from '../../config/route-permissions';
 
 /**
  * The always-available "send feedback" entry point.
@@ -19,6 +21,24 @@ import { CATEGORY, areaFromPath } from './feedbackUi';
 export const FeedbackLauncher: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
+  /**
+   * Whether this user can actually open /feedback, asked of ROUTE_PERMISSIONS rather than
+   * assumed. The channel was narrowed to super administrators (2026-08-17) while the launcher
+   * stayed available to everyone who can reach it — so "View my feedback" is a link that
+   * ProtectedRoute would bounce straight back to the dashboard for anybody else, silently.
+   *
+   * Today Header.tsx only mounts this launcher when the same check passes, so the bounce is
+   * not reachable in the shipped app. The check is repeated here because the component cannot
+   * assume where it is mounted, and because the reporter view it links to is explicitly kept
+   * "for the day the desk is widened again" (FeedbackPage.tsx) — the day one of those two
+   * lists moves is exactly when a dead link would appear with nothing to catch it.
+   *
+   * When the user cannot follow the link, the reassurance it carried is given as text instead:
+   * the report was received and a reply will arrive as a notification. Sending feedback stays
+   * available to everyone — only *browsing the channel* is restricted.
+   */
+  const roles = useCurrentRoles();
+  const canOpenChannel = canAccessRoute(roles, '/feedback');
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
@@ -117,10 +137,14 @@ export const FeedbackLauncher: React.FC = () => {
                 <CheckCircle2 size={40} style={{ color: 'var(--success)' }} />
                 <div style={{ fontSize: '15px', fontWeight: 700 }}>Thanks — the product team has it.</div>
                 <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', maxWidth: '320px' }}>
-                  You'll be notified when they reply. You can follow the conversation any time.
+                  {canOpenChannel
+                    ? "You'll be notified when they reply. You can follow the conversation any time."
+                    : "You'll get a notification here when the team replies — there is nothing else you need to do."}
                 </div>
                 <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
-                  <button className="btn btn-secondary" onClick={() => { const id = doneId; close(); navigate(`/feedback?id=${id}`); }}>View my feedback</button>
+                  {canOpenChannel && (
+                    <button className="btn btn-secondary" onClick={() => { const id = doneId; close(); navigate(`/feedback?id=${id}`); }}>View my feedback</button>
+                  )}
                   <button className="btn btn-primary" onClick={reset}>Send another</button>
                 </div>
               </div>

@@ -1,4 +1,4 @@
-import { Controller, Logger, Get, Post, Put, Param, Query, UseGuards, ParseUUIDPipe, Req, Patch, UseInterceptors, UploadedFile, UploadedFiles, Res, Body, BadRequestException, NotFoundException, ForbiddenException, Inject } from '@nestjs/common';
+import { Controller, Logger, Get, Post, Put, Param, Query, UseGuards, ParseUUIDPipe, Req, Patch, UseInterceptors, UploadedFile, UploadedFiles, Res, Body, BadRequestException, NotImplementedException, NotFoundException, ForbiddenException, Inject } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiQuery } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsInt, IsUUID, IsEnum, IsArray, ArrayNotEmpty, Min, MaxLength } from 'class-validator';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
@@ -21,6 +21,7 @@ import { SystemRole, DocumentStatus, DocumentType, AssessmentStatus, AssignmentS
 import { ValidationService } from '../validation/validation.service';
 import { DocumentAccessTokenService } from './document-access-token.service';
 import { ChunkedUploadService } from './chunked-upload.service';
+import { assertUploadAllowed } from './upload-validation';
 import { AssignmentService } from '../assignment/assignment.service';
 
 
@@ -68,22 +69,7 @@ class AssignDataEntryRequestDto {
   assigneeId: string;
 }
 
-/**
- * Content types the document pipeline accepts: audit PDFs, the photo formats field devices produce,
- * and the spreadsheet/CSV formats customer-master imports use. Anything else (executables, archives,
- * HTML) is refused at the point a presigned URL is minted. `application/octet-stream` is tolerated as a
- * generic fallback but is still size-capped on finalize — full magic-byte + malware scanning is the
- * next layer (see docs/integration-audit-handoff.md).
- */
-const ALLOWED_UPLOAD_TYPES = new Set([
-  'application/pdf',
-  'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif',
-  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  'application/vnd.ms-excel',
-  'text/csv', 'application/csv',
-  'application/octet-stream',
-]);
-const MAX_UPLOAD_BYTES = (Number(process.env.DOCUMENT_MAX_UPLOAD_MB) || 50) * 1024 * 1024;
+
 
 /** Request a presigned URL to upload a large file straight to object storage. */
 class PresignUploadRequestDto {
@@ -163,9 +149,42 @@ export class DocumentController {
     // report how many of its branches have had their PDF produced.
     @Query('customerMasterVersionId') customerMasterVersionId?: string,
   ) {
-    const savedPath = await this.storage.saveFile(file.originalname, file.buffer, file.mimetype);
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('No file content received.');
+    }
+
+    /**
+     * The content-type allow-list and size cap, on the path that had neither.
+     *
+     * This is the door the web client walks through whenever the presigned upload fails for any
+     * reason — `uploadDocumentSmart` in Documents.tsx catches *everything* and retries here — so a
+     * file that /documents/upload/presign had just refused as a disallowed type was accepted and
+     * stored on the very next request. The refusal only ever cost the caller a round trip.
+     *
+     * Enforced through the shared `assertUploadAllowed` rather than a copy of the rules, because
+     * the rules being declared in one place and applied in four was how the paths came to disagree.
+     */
+    assertUploadAllowed({ contentType: file.mimetype, size: file.size });
+
+    /**
+     * An unrecognised `type` is an error, not a default.
+     *
+     * This used to fall back to PRE_FIELD_AUDIT_PDF, so a typo'd or stale query parameter did not
+     * fail — it silently relabelled the document as outbound pre-field paperwork. The file was then
+     * routed, dispatched and reported as something it is not, with nothing anywhere recording that a
+     * guess had been made. For a system whose product is audit evidence, mislabelling a document is
+     * strictly worse than refusing it: the caller can retry a rejection, but nobody can spot a
+     * confident wrong label months later. Name the valid values so the caller can fix it.
+     */
     const validTypes = Object.values(DocumentType) as string[];
-    const targetType = validTypes.includes(type as any) ? type : DocumentType.PRE_FIELD_AUDIT_PDF;
+    if (!type || !validTypes.includes(type as any)) {
+      throw new BadRequestException(
+        `"${type ?? ''}" is not a valid document type. Valid types: ${validTypes.join(', ')}.`,
+      );
+    }
+    const targetType = type;
+
+    const savedPath = await this.storage.saveFile(file.originalname, file.buffer, file.mimetype);
 
     // Customer master data upload endpoint accepts documents of type CUSTOMER_MASTER_DATA
 
@@ -199,16 +218,20 @@ export class DocumentController {
   @ApiOperation({ summary: 'Get a presigned URL to upload a file directly to object storage' })
   async presignUpload(@Body() body: PresignUploadRequestDto) {
     if (typeof this.storage.getSignedUploadUrl !== 'function') {
-      throw new BadRequestException(
+      /**
+       * 501, not 400 — this says nothing is wrong with the *request*, the deployment simply has no
+       * object store. The distinction is load-bearing now that the web client stops falling back to
+       * the multipart route on a 4xx: a 400 here would be read as "this file was refused" and the
+       * upload would fail outright on every local-disk deployment, where falling back is correct.
+       */
+      throw new NotImplementedException(
         'Direct-to-storage upload is not available on this storage backend. Use POST /documents/upload or the resumable chunked upload endpoints.',
       );
     }
     const contentType = body.contentType || 'application/octet-stream';
-    if (!ALLOWED_UPLOAD_TYPES.has(contentType.toLowerCase())) {
-      throw new BadRequestException(
-        `Files of type "${contentType}" are not accepted. Allowed: PDF, images (JPEG/PNG/WebP/HEIC), Excel and CSV.`,
-      );
-    }
+    // No bytes exist yet, so only the declared type is checkable here; finalize re-applies the
+    // same helper with the object's real size once it has landed.
+    assertUploadAllowed({ contentType });
     const safeName = (body.fileName || 'upload.bin').replace(/[^\w.-]+/g, '_').slice(0, 120) || 'upload.bin';
     const objectKey = `documents/direct/${randomUUID()}/${safeName}`;
     const expiresIn = 900; // 15 minutes to complete the PUT
@@ -239,12 +262,15 @@ export class DocumentController {
     if (!size || size <= 0) {
       throw new BadRequestException('Uploaded object is empty.');
     }
-    if (size > MAX_UPLOAD_BYTES) {
-      // Delete the oversized object so an over-limit PUT can't leave a costly orphan behind.
+    try {
+      // Both halves, not just the size: the presign step vouched for a declared content type, but
+      // finalize accepts an objectKey and a contentType as separate fields, so nothing tied the
+      // finalized document's type back to the one that was presigned.
+      assertUploadAllowed({ contentType: body.contentType, size });
+    } catch (err) {
+      // Delete the rejected object so an over-limit or wrong-type PUT can't leave a costly orphan.
       await this.storage.deleteFile(body.objectKey).catch(() => undefined);
-      throw new BadRequestException(
-        `Uploaded file is ${(size / 1024 / 1024).toFixed(1)} MB, over the ${(MAX_UPLOAD_BYTES / 1024 / 1024).toFixed(0)} MB limit.`,
-      );
+      throw err;
     }
     // Malware-scan the object the client PUT straight to storage — the presigned upload bypassed the
     // API, so this is the first point the bytes can be inspected. Delete + reject on a hit (or when a
@@ -305,6 +331,14 @@ export class DocumentController {
     if (buffer.length === 0) {
       throw new BadRequestException('Uploaded file is empty.');
     }
+    // The binary sibling below caps its uploads; this one did not, so the *larger* of the two
+    // encodings (base64 inflates by a third) was the unbounded one. The type is fixed at PDF by
+    // this route, so only the size is in question here.
+    assertUploadAllowed({
+      contentType: 'application/pdf',
+      size: buffer.length,
+      hint: 'Scan at a lower quality, or split it.',
+    });
 
     const savedFilePath = await this.storage.saveFile(fileName, buffer, 'application/pdf');
 
@@ -385,17 +419,11 @@ export class DocumentController {
      * as the note on `ALLOWED_UPLOAD_TYPES` says. This closes the gap between the two upload
      * routes; it does not pretend to be content verification.
      */
-    const declaredType = (file.mimetype || 'application/pdf').toLowerCase();
-    if (!ALLOWED_UPLOAD_TYPES.has(declaredType)) {
-      throw new BadRequestException(
-        `${declaredType} files are not accepted here. Submit the audited return as a PDF or a photo.`,
-      );
-    }
-    if (file.size > MAX_UPLOAD_BYTES) {
-      throw new BadRequestException(
-        `That file is ${(file.size / 1024 / 1024).toFixed(1)} MB, over the ${(MAX_UPLOAD_BYTES / 1024 / 1024).toFixed(0)} MB limit. Scan at a lower quality, or split it.`,
-      );
-    }
+    assertUploadAllowed({
+      contentType: file.mimetype || 'application/pdf',
+      size: file.size,
+      hint: 'Scan at a lower quality, or split it.',
+    });
 
     await this.assertMaySubmitReturnFor(req.user, assignmentId);
 

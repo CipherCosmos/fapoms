@@ -183,10 +183,30 @@ export const DataResetModal: React.FC<{
               </div>
             ))}
           </div>
-          {result.backup && (
-            <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', background: 'var(--bg-secondary)', padding: '10px', borderRadius: '6px' }}>
-              A backup was taken first: <b>{result.backup.filename}</b> ({Math.round(result.backup.sizeBytes / 1024)} KB).
-              To restore it manually: <code>./deploy/restore.sh --to-production {result.backup.filename}</code>
+          {/*
+            What "recovery" actually means, said in the words of the person reading it.
+            This used to hand an office administrator a shell command
+            (`./deploy/restore.sh --to-production <file>`) as the sole route back — a path they
+            cannot run, on a machine they have no access to, offered at the one moment they most
+            need to know whether the data is gone. The filename is still shown, because it is the
+            thing whoever runs the server will ask for; what changed is that it is presented as
+            something to pass on, not something to type.
+          */}
+          {result.backup ? (
+            <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', background: 'var(--bg-secondary)', padding: '10px', borderRadius: '6px', lineHeight: 1.65 }}>
+              A backup was saved on the server first, named <b>{result.backup.filename}</b> ({Math.round(result.backup.sizeBytes / 1024)} KB).
+              <div style={{ marginTop: '6px' }}>
+                The records listed above are no longer in the system, and nothing in this app can
+                bring them back. Putting them back means restoring that backup on the server
+                itself, which only the person who runs the server can do. If you need it,
+                contact them and give them the file name above.
+              </div>
+            </div>
+          ) : (
+            <div style={{ fontSize: '11.5px', color: 'var(--danger)', background: 'var(--bg-secondary)', padding: '10px', borderRadius: '6px', lineHeight: 1.65 }}>
+              No backup was taken. The records listed above are gone and nothing in this app can
+              bring them back. If they are needed, contact whoever runs the server — recovery
+              would depend on a separate backup of their own, taken before this wipe.
             </div>
           )}
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>

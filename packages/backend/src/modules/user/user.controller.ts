@@ -81,8 +81,13 @@ class CreateUserRequestDto implements CreateUserDto {
   @IsEmail() @MaxLength(255)
   email: string;
 
-  @IsString() @MinLength(8)
-  password: string;
+  /**
+   * Optional: leave it out and the server generates the initial password, returning it once in
+   * the response. Still accepted (and still length-checked) so callers that set a password
+   * deliberately are unaffected.
+   */
+  @IsOptional() @IsString() @MinLength(8)
+  password?: string;
 
   @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(100)
   firstName: string;
@@ -223,10 +228,16 @@ export class UserController {
   @RequirePermissions('user:create:organization')
   @ApiOperation({ summary: 'Create a new user' })
   async create(@Body() dto: CreateUserRequestDto, @Req() req: any) {
-    const user = await this.userService.createUser(dto, req.user.id);
+    const { user, generatedPassword } = await this.userService.createUser(dto, req.user.id);
+    /**
+     * The only moment this password is ever readable. It is deliberately not stored, not
+     * logged and not retrievable from any other endpoint, so the admin must pass it on from
+     * this response; if it is lost, the recovery path is POST /users/:id/reset-password.
+     * The field is absent when the caller supplied their own password.
+     */
     return {
       success: true,
-      data: this.sanitizeUser(user),
+      data: { ...this.sanitizeUser(user), initialPassword: generatedPassword },
     };
   }
 

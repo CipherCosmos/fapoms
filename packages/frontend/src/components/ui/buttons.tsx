@@ -33,6 +33,15 @@ export const PrimaryButton: React.FC<{
 /**
  * Shared "Upload Excel" label + hidden file input + "Download Template" button pair,
  * duplicated across Assayers.tsx and Projects.tsx.
+ *
+ * `busy` is optional and defaults to false, so every existing call site keeps working
+ * unchanged. It exists because a roster or branch-sheet import runs for as long as the
+ * server takes to read the file, and until now the control gave no sign of that: the file
+ * dialog closed, nothing on screen changed, and the operator picked the file a second time.
+ * Two overlapping imports of the same sheet is not harmless — the second one re-runs every
+ * row against a roster the first is still writing. A `<label>` cannot be disabled the way a
+ * button can, so while busy we take the hidden input out of play (`disabled`), stop pointer
+ * events on the label, and say what is happening on its face.
  */
 export const UploadExcelControls: React.FC<{
   onUpload: (file: File) => void;
@@ -40,11 +49,25 @@ export const UploadExcelControls: React.FC<{
   accept?: string;
   uploadLabel?: string;
   templateLabel?: string;
-}> = ({ onUpload, onDownloadTemplate, accept = '.xlsx,.xls,.csv', uploadLabel = 'Upload Excel', templateLabel = 'Download Template' }) => {
+  /** An import is running: the control stops accepting a second file and shows a working state. */
+  busy?: boolean;
+  /** Disabled for a reason of the caller's own (no permission, nothing selected yet). */
+  disabled?: boolean;
+  /** Shown in place of `uploadLabel` while `busy`. */
+  busyLabel?: string;
+}> = ({
+  onUpload, onDownloadTemplate, accept = '.xlsx,.xls,.csv',
+  uploadLabel = 'Upload Excel', templateLabel = 'Download Template',
+  busy = false, disabled = false, busyLabel = 'Uploading…',
+}) => {
+  const off = busy || disabled;
   return (
     <>
       <label
+        aria-disabled={off}
         style={{
+          opacity: off ? 0.6 : 1,
+          pointerEvents: off ? 'none' : undefined,
           display: 'flex',
           alignItems: 'center',
           gap: '8px',
@@ -54,15 +77,16 @@ export const UploadExcelControls: React.FC<{
           padding: '9px 16px',
           borderRadius: 'var(--radius-md)',
           fontWeight: 600,
-          cursor: 'pointer',
+          cursor: off ? 'not-allowed' : 'pointer',
           fontSize: '13px',
         }}
       >
         <Upload size={16} />
-        {uploadLabel}
+        {busy ? busyLabel : uploadLabel}
         <input
           type="file"
           accept={accept}
+          disabled={off}
           style={{ display: 'none' }}
           onChange={(e) => {
             const file = e.target.files?.[0];
@@ -73,6 +97,7 @@ export const UploadExcelControls: React.FC<{
       </label>
       <button
         onClick={onDownloadTemplate}
+        disabled={off}
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -83,7 +108,8 @@ export const UploadExcelControls: React.FC<{
           padding: '9px 16px',
           borderRadius: 'var(--radius-md)',
           fontWeight: 600,
-          cursor: 'pointer',
+          opacity: off ? 0.6 : 1,
+          cursor: off ? 'not-allowed' : 'pointer',
           fontSize: '13px',
         }}
       >

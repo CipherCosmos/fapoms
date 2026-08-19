@@ -1,11 +1,12 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Calendar, Plus, Trash2, Edit2, ShieldAlert, X, ChevronLeft, ChevronRight, List, Grid3x3, Info } from 'lucide-react';
+import { Calendar, Plus, Trash2, Edit2, ShieldAlert, X, ChevronLeft, ChevronRight, List, Grid3x3, Info, CopyPlus } from 'lucide-react';
 import { INDIAN_STATES } from '@fapoms/shared';
 import { api } from '../services/api';
 import { useClientOptions } from '../hooks/useClients';
 import { userMessage } from '../services/errors';
 import { StatusBadge, Modal, AlertBanner, Select, useConfirm } from '../components/ui';
+import type { ConfirmOptions } from '../components/ui';
 import { useCurrentRoles, canManageHolidays } from '../hooks/useCurrentRoles';
 
 interface Holiday {
@@ -64,6 +65,7 @@ export const Holidays: React.FC = () => {
   const yearFilter = monthCursor.getFullYear();
   const [clientFilter, setClientFilter] = useState<string>('ALL');
   const [showModal, setShowModal] = useState(false);
+  const [showCopy, setShowCopy] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
@@ -231,9 +233,16 @@ export const Holidays: React.FC = () => {
             ]}
           />
           {canManage && (
-            <button onClick={() => handleOpenCreate()} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 14px' }}>
-              <Plus size={14} /> Add Holiday
-            </button>
+            <>
+              {/* Most of a year's calendar is last year's calendar with new dates. Retyping
+                  forty holidays each January is where the typos and the omissions came from. */}
+              <button onClick={() => setShowCopy(true)} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 14px' }}>
+                <CopyPlus size={14} /> Copy from {yearFilter - 1}
+              </button>
+              <button onClick={() => handleOpenCreate()} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 14px' }}>
+                <Plus size={14} /> Add Holiday
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -312,6 +321,13 @@ export const Holidays: React.FC = () => {
             <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>
               <ShieldAlert size={36} style={{ margin: '0 auto 10px', opacity: 0.4 }} />
               <p>No holidays registered for {yearFilter}.</p>
+              {/* An empty year is exactly the moment the copy is wanted, so offer it here
+                  rather than making the user find the button in the toolbar. */}
+              {canManage && (
+                <button onClick={() => setShowCopy(true)} className="btn btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 14px' }}>
+                  <CopyPlus size={14} /> Copy {yearFilter - 1}'s holidays into {yearFilter}
+                </button>
+              )}
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
@@ -360,6 +376,21 @@ export const Holidays: React.FC = () => {
             </div>
           )}
         </div>
+      )}
+
+      {showCopy && canManage && (
+        <CopyLastYearModal
+          targetYear={yearFilter}
+          clientFilter={clientFilter}
+          existing={holidays}
+          confirm={confirm}
+          onClose={() => setShowCopy(false)}
+          onDone={(msg, tone) => {
+            if (tone === 'error') setError(msg); else setSuccess(msg);
+            setShowCopy(false);
+            refetch();
+          }}
+        />
       )}
 
       {showModal && canManage && (
@@ -440,6 +471,211 @@ export const Holidays: React.FC = () => {
         </Modal>
       )}
     </div>
+  );
+};
+
+/**
+ * Bring last year's holidays forward.
+ *
+ * Nearly every holiday on the calendar is the same holiday it was last year, so each January
+ * somebody retyped forty records — which is where the omissions and the misspelt names came
+ * from, and there was nothing on the empty year to suggest a better way.
+ *
+ * Three things this deliberately does NOT do:
+ *
+ * - It does not create anything on open. The list is a *preview*: every row can be unticked,
+ *   and nothing is written until the confirm dialog is accepted.
+ * - It does not guess a date. A holiday is copied to the same calendar day (same month, same
+ *   date) of the target year, and the new weekday is shown beside it, because many Indian
+ *   holidays follow a lunar calendar and genuinely move. Silently shifting them to "the same
+ *   Monday" would be inventing a fact; showing the weekday lets the person fix the ones that
+ *   moved, afterwards, in the normal edit form.
+ * - It does not re-create what is already there. A holiday whose name is already registered in
+ *   the target year is listed as already present and cannot be ticked, so pressing the button
+ *   twice cannot double the calendar.
+ *
+ * Records are created one at a time (the API takes one holiday per request) which is why the
+ * button counts "12 of 40" rather than spinning — the count is real, so it is shown.
+ */
+const CopyLastYearModal: React.FC<{
+  targetYear: number;
+  clientFilter: string;
+  existing: Holiday[];
+  confirm: (options: ConfirmOptions) => Promise<boolean>;
+  onClose: () => void;
+  onDone: (message: string, tone: 'success' | 'error') => void;
+}> = ({ targetYear, clientFilter, existing, confirm, onClose, onDone }) => {
+  const sourceYear = targetYear - 1;
+  const [source, setSource] = useState<Holiday[] | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [chosen, setChosen] = useState<Set<string>>(new Set());
+  /** `null` = not running. Otherwise the honest "n of total" the create loop has reached. */
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
+
+  // Same client scope as the page behind it — copying a global calendar into a client-specific
+  // one (or the reverse) would put holidays where nobody asked for them.
+  useEffect(() => {
+    let cancelled = false;
+    api.request<Holiday[]>(`/holidays?year=${sourceYear}${clientFilter !== 'ALL' ? `&clientId=${clientFilter}` : ''}&limit=200`)
+      .then((r) => { if (!cancelled) setSource(Array.isArray(r) ? r : []); })
+      .catch((e) => { if (!cancelled) { setSource([]); setLoadError(userMessage(e)); } });
+    return () => { cancelled = true; };
+  }, [sourceYear, clientFilter]);
+
+  /** Names already registered in the target year, compared case-insensitively and trimmed. */
+  const alreadyThere = useMemo(
+    () => new Set(existing.map((h) => h.name.trim().toLowerCase())),
+    [existing],
+  );
+
+  const rows = useMemo(() => {
+    return (source ?? [])
+      .map((h) => {
+        const d = new Date(h.date);
+        // Same month and date, next year. `new Date(y, m, d)` rolls 29 Feb into 1 March by
+        // itself, which is the right answer here: the holiday still needs a day, and the
+        // person can move it.
+        const moved = new Date(targetYear, d.getMonth(), d.getDate());
+        return { source: h, newDate: moved, exists: alreadyThere.has(h.name.trim().toLowerCase()) };
+      })
+      .sort((a, b) => a.newDate.getTime() - b.newDate.getTime());
+  }, [source, targetYear, alreadyThere]);
+
+  // Everything that is not already registered starts ticked — the common case is "bring all of
+  // it forward" — but the ticks are the user's to change before anything happens.
+  useEffect(() => {
+    setChosen(new Set(rows.filter((r) => !r.exists).map((r) => r.source.id)));
+  }, [rows]);
+
+  const copyable = rows.filter((r) => !r.exists);
+  const selected = rows.filter((r) => chosen.has(r.source.id) && !r.exists);
+
+  const toggle = (id: string) =>
+    setChosen((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+
+  const run = async () => {
+    const ok = await confirm({
+      title: `Create ${selected.length} holiday${selected.length === 1 ? '' : 's'} for ${targetYear}?`,
+      message: `Each one is copied to the same calendar day of ${targetYear}. Nothing already registered for ${targetYear} is touched, and any date that moved this year can be edited afterwards.`,
+      confirmLabel: `Create ${selected.length}`,
+    });
+    if (!ok) return;
+
+    setProgress({ done: 0, total: selected.length });
+    const failed: string[] = [];
+    for (let i = 0; i < selected.length; i++) {
+      const r = selected[i];
+      try {
+        await api.request('/holidays', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: r.source.name,
+            date: toISODate(r.newDate),
+            type: r.source.type,
+            applicableStates: r.source.type === 'STATE' ? (r.source.applicableStates ?? []) : [],
+            clientId: r.source.clientId || null,
+          }),
+        });
+      } catch (e) {
+        // Keep going: one rejected row should not abandon the other thirty-nine, and the names
+        // that failed are reported so they can be added by hand.
+        failed.push(`${r.source.name} (${userMessage(e)})`);
+      }
+      setProgress({ done: i + 1, total: selected.length });
+    }
+    setProgress(null);
+
+    const created = selected.length - failed.length;
+    if (failed.length === 0) {
+      onDone(`${created} holiday${created === 1 ? '' : 's'} created for ${targetYear}.`, 'success');
+    } else {
+      onDone(`${created} of ${selected.length} created. Could not create: ${failed.slice(0, 5).join('; ')}${failed.length > 5 ? '…' : ''}`, 'error');
+    }
+  };
+
+  return (
+    <Modal
+      open
+      onClose={progress ? () => undefined : onClose}
+      title={`Copy ${sourceYear} holidays into ${targetYear}`}
+      width="620px"
+      closeIcon={<X size={18} />}
+      footer={
+        <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', alignItems: 'center', marginTop: '10px' }}>
+          {progress && (
+            <span style={{ fontSize: '12px', color: 'var(--text-muted)', marginRight: 'auto', fontVariantNumeric: 'tabular-nums' }}>
+              Creating {progress.done} of {progress.total}…
+            </span>
+          )}
+          <button type="button" onClick={onClose} className="btn btn-secondary" disabled={!!progress}>Cancel</button>
+          <button type="button" onClick={run} className="btn btn-primary" disabled={!!progress || selected.length === 0}>
+            {progress ? `${progress.done} of ${progress.total}…` : `Create ${selected.length} holiday${selected.length === 1 ? '' : 's'}`}
+          </button>
+        </div>
+      }
+    >
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: 0, lineHeight: 1.5 }}>
+          Nothing is created until you press the button below. Each holiday is copied to the same
+          calendar day of {targetYear} — check the weekday, since holidays that follow the lunar
+          calendar move from year to year and will need editing afterwards.
+        </p>
+
+        {loadError && <AlertBanner type="error">{`Could not read ${sourceYear}'s holidays. ${loadError}`}</AlertBanner>}
+
+        {source === null ? (
+          <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>Reading {sourceYear}…</div>
+        ) : rows.length === 0 ? (
+          <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
+            Nothing registered for {sourceYear} in this client scope, so there is nothing to bring forward.
+          </div>
+        ) : (
+          <>
+            <div style={{ display: 'flex', gap: '10px', alignItems: 'center', fontSize: '12px' }}>
+              <button type="button" disabled={!!progress}
+                onClick={() => setChosen(new Set(copyable.map((r) => r.source.id)))}
+                className="btn btn-secondary" style={{ fontSize: '11px', padding: '5px 10px' }}>Select all</button>
+              <button type="button" disabled={!!progress}
+                onClick={() => setChosen(new Set())}
+                className="btn btn-secondary" style={{ fontSize: '11px', padding: '5px 10px' }}>Select none</button>
+              <span style={{ color: 'var(--text-muted)', marginLeft: 'auto' }}>
+                {selected.length} of {copyable.length} selected
+                {rows.length - copyable.length > 0 && ` · ${rows.length - copyable.length} already registered for ${targetYear}`}
+              </span>
+            </div>
+
+            <div style={{ maxHeight: '340px', overflowY: 'auto', border: '1px solid var(--border-color)', borderRadius: '6px' }}>
+              {rows.map((r) => {
+                const tone = TYPE_TONE[r.source.type] ?? TYPE_TONE.STATE;
+                return (
+                  <label key={r.source.id}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: '10px', padding: '8px 12px', fontSize: '12.5px',
+                      borderBottom: '1px solid var(--border-hair)',
+                      cursor: r.exists || progress ? 'default' : 'pointer',
+                      opacity: r.exists ? 0.55 : 1,
+                    }}>
+                    <input type="checkbox" checked={chosen.has(r.source.id) && !r.exists}
+                      disabled={r.exists || !!progress}
+                      onChange={() => toggle(r.source.id)} />
+                    <span style={{ fontWeight: 600, flex: 1 }}>{r.source.name}</span>
+                    <StatusBadge label={r.source.type} bg={tone.bg} color={tone.color} />
+                    <span style={{ color: 'var(--accent)', fontWeight: 600, whiteSpace: 'nowrap', minWidth: '150px', textAlign: 'right' }}>
+                      {r.newDate.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
+                    </span>
+                    {r.exists && <span style={{ fontSize: '11px', color: 'var(--text-muted)', whiteSpace: 'nowrap' }}>already registered</span>}
+                  </label>
+                );
+              })}
+            </div>
+          </>
+        )}
+      </div>
+    </Modal>
   );
 };
 

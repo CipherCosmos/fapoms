@@ -321,7 +321,7 @@ export const Assignments: React.FC = () => {
 
   // Export mirrors whatever the current view is filtered to (same status/priority axis),
   // so what lands in the spreadsheet matches the rows on screen.
-  const { download: downloadExcel } = useExcelExport();
+  const { download: downloadExcel, busy: exporting } = useExcelExport();
   const handleExport = () => {
     const params: Record<string, string> = { ...scopeParams };
     if (queryString) {
@@ -680,10 +680,14 @@ export const Assignments: React.FC = () => {
         </button>
         <button
           onClick={handleExport}
+          disabled={exporting}
           className="btn btn-secondary"
           style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--success)' }}
         >
-          <FileSpreadsheet size={16} /> Export
+          {/* Building the sheet server-side takes as long as the filtered set is large, and
+              nothing on screen moves meanwhile. Say so, and refuse the repeat click that
+              would queue a second identical report. */}
+          <FileSpreadsheet size={16} /> {exporting ? 'Preparing…' : 'Export'}
         </button>
       </div>
 

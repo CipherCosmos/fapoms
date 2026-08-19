@@ -6,6 +6,7 @@ import { Repository } from 'typeorm';
 import { DocumentEntity } from './document.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { DocumentService } from './document.service';
+import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { DocumentStatus, DocumentType, AssignmentStatus, DispatchMethod, businessDateKey } from '@fapoms/shared';
 
 @Injectable()
@@ -19,6 +20,7 @@ export class DocumentDispatchWorker {
     @InjectRepository(AssignmentEntity)
     private readonly assignmentRepository: Repository<AssignmentEntity>,
     private readonly documentService: DocumentService,
+    private readonly settings: PlatformSettingsService,
   ) {}
 
   @Process('auto-dispatch')
@@ -93,6 +95,71 @@ export class DocumentDispatchWorker {
     }
 
     this.logger.log(`Auto-dispatch complete: ${dispatchedCount} documents dispatched.`);
-    return { dispatchedCount };
+
+    const ocrSentCount = await this.autoSendToOcr();
+    return { dispatchedCount, ocrSentCount };
+  }
+
+  /**
+   * Push returned audit packets onward to the external OCR application without a person
+   * pressing "Send to OCR" per document — but only where an operator has asked for it.
+   *
+   * **Why this is opt-in and not simply automatic.** The obvious trigger exists: `receiveDocument`
+   * already publishes `document:received` the moment an assayer's return lands, and hanging the
+   * hand-off off that event would remove the manual step entirely. It is the wrong thing to do by
+   * default, because `markSentToExternalOcr` does not send anything. The OCR application is out of
+   * scope (spec §1) and unintegrated; the endpoint is a *chain-of-custody stamp* recording that a
+   * human carried the packet across. Firing it on receipt would write "sent to external OCR, by
+   * SYSTEM" into the audit trail of a bank collateral audit for a hand-off nobody made, and — worse
+   * operationally — empty the SEND_TO_OCR queue that is the only thing telling the desk there is
+   * carrying to do. The packets would sit in nobody's inbox while every screen showed them in
+   * progress. So the behaviour lives behind `document.autoSendToExternalOcr`, default off, for the
+   * deployment that puts a real integration behind that endpoint.
+   *
+   * **Why the hourly sweep rather than the event.** Receipt is not the only way a document reaches
+   * RECEIVED, and an event handler only sees the documents that happen to pass through while it is
+   * listening — anything received during a restart, or moved by an operator, would be missed
+   * forever. A sweep over "documents that are RECEIVED right now" is idempotent by construction and
+   * self-healing: it converges on the correct set whatever route a document took to get there, and
+   * a document already SENT_TO_EXTERNAL_OCR (or beyond) simply is not in the query.
+   *
+   * The manual button is untouched and remains the recovery path — which is also why failures here
+   * need no new surface: a document this fails on stays at RECEIVED, so it reappears in the desk's
+   * SEND_TO_OCR queue on the next refresh, exactly where an operator is already looking.
+   */
+  private async autoSendToOcr(): Promise<number> {
+    const enabled = await this.settings
+      .get<boolean>('document.autoSendToExternalOcr')
+      .catch(() => false); // A settings lookup that cannot answer must not start acting on its own.
+    if (!enabled) return 0;
+
+    // The eligibility filter *is* the idempotency guard: only RECEIVED packets are picked up, and
+    // markSentToExternalOcr moves them to SENT_TO_EXTERNAL_OCR, so a document already sent, in
+    // progress or processed can never be selected a second time. (markSentToExternalOcr re-checks
+    // the source status itself, so even two overlapping sweeps cannot double-stamp one document.)
+    const received = await this.documentRepository.find({
+      where: {
+        type: DocumentType.AUDITED_RETURN_PDF,
+        status: DocumentStatus.RECEIVED,
+        isActive: true,
+      },
+    });
+
+    let sentCount = 0;
+    for (const doc of received) {
+      try {
+        await this.documentService.markSentToExternalOcr(doc.id, 'SYSTEM');
+        sentCount++;
+      } catch (err) {
+        // Not swallowed, and not fatal to the rest of the batch: the document stays at RECEIVED and
+        // so remains in the operator's "Send to OCR" queue, which is the visible symptom.
+        this.logger.error(`Failed to auto-send document ${doc.id} to external OCR:`, err);
+      }
+    }
+
+    if (sentCount > 0) {
+      this.logger.log(`Auto-OCR complete: ${sentCount} returned packets marked sent to external OCR.`);
+    }
+    return sentCount;
   }
 }

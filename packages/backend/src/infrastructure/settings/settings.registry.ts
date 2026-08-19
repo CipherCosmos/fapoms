@@ -559,6 +559,33 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     min: 1, max: 100, unit: 'offers / 30 days',
     applies: 'immediately',
   },
+
+  // ── Document pipeline ───────────────────────────────────────────────────
+  {
+    /**
+     * Off by default, and deliberately opt-*in* rather than opt-out.
+     *
+     * "Send to OCR" does not send anything. The external OCR application is out of scope
+     * (spec §1) and there is no integration with it: the endpoint only records that a person
+     * has carried the packet across by hand. Flipping that stamp automatically when a return
+     * arrives would therefore write "sent to external OCR, by SYSTEM, at 14:02" into the chain
+     * of custody of a bank collateral audit for a hand-off nobody performed — the document
+     * would sit untouched in the OCR app's inbox while every screen reported it in progress,
+     * and the operator would lose the queue that tells them there is work to carry across.
+     *
+     * The automation is still built and ready (DocumentDispatchWorker.autoSendToOcr) for the
+     * deployment that *does* wire a real OCR integration behind this endpoint; until then a
+     * site turns it on knowingly rather than inheriting it.
+     */
+    key: 'document.autoSendToExternalOcr',
+    label: 'Auto-send returned packets to OCR',
+    description: 'When an audited return is received, mark it sent to the external OCR application without waiting for someone to press "Send to OCR". Leave this off unless your OCR application is genuinely fed automatically — the stamp is a chain-of-custody record of a hand-off, and turning it on where the hand-off is still manual records something that did not happen. The manual button keeps working either way.',
+    group: 'schedule',
+    type: 'boolean',
+    default: false,
+    envVar: 'DOCUMENT_AUTO_SEND_TO_OCR',
+    applies: 'next-run',
+  },
 ];
 
 export const SETTING_BY_KEY: Record<string, SettingDef> = Object.fromEntries(

@@ -37,6 +37,18 @@ const LANE_CHIP: Record<string, { label: string; color: string }> = {
 
 const PAGE_SIZE = 25;
 
+/**
+ * The slice of `/validation/workload` this screen needs. The Overview reads the same shape;
+ * only the fields that make up "how much is this person holding" are declared here.
+ */
+interface WorkloadMember {
+  id: string;
+  openPackets: number;
+  reworkPackets: number;
+  casesInReview: number;
+  clearedThisWeek: number;
+}
+
 export const PacketsQueue: React.FC = () => {
   const roles = useCurrentRoles();
   const { isHead } = deskRole(roles);
@@ -54,6 +66,22 @@ export const PacketsQueue: React.FC = () => {
   const [team, setTeam] = useState<TeamMember[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  /**
+   * Who the head has picked for each waiting packet, before they press Assign.
+   *
+   * Rows fall back to `leastLoadedId` when they have no entry, so the dropdown opens on a
+   * sensible name instead of an empty "Assign to…". Keyed by packet id because the head works
+   * down the list assigning several in a row, and a single shared value would have each pick
+   * silently change the row above it.
+   */
+  const [pick, setPick] = useState<Record<string, string>>({});
+
+  /**
+   * The desk's per-member workload, from the same `/validation/workload` the Overview's team
+   * strip reads — one endpoint, one definition of "load", so the two screens cannot disagree
+   * about who is busiest.
+   */
+  const [workload, setWorkload] = useState<WorkloadMember[] | null>(null);
 
   // Debounced search so typing doesn't fire a request per keystroke.
   useEffect(() => {
@@ -79,7 +107,42 @@ export const PacketsQueue: React.FC = () => {
     api.request<TeamMember[]>('/documents/data-entry/team')
       .then((t) => setTeam(Array.isArray(t) ? t : []))
       .catch(() => setTeam([]));
+    // A failure here is not worth a banner: without it the dropdown simply opens unset, which
+    // is exactly how this screen behaved before the default existed.
+    api.request<{ members: WorkloadMember[] }>('/validation/workload')
+      .then((w) => setWorkload(Array.isArray(w?.members) ? w.members : []))
+      .catch(() => setWorkload([]));
   }, [isHead]);
+
+  /**
+   * The least-loaded member of the desk — the app working out a default a head would otherwise
+   * reach by reading the Overview's workload strip and coming back here.
+   *
+   * "Load" is everything a person is currently holding: packets open, packets in rework and
+   * cases they hold for review. Ties break on the person who has cleared least this week, so
+   * repeated assignments spread out instead of all landing on whoever sorts first. Only people
+   * actually on the assignable team are considered — the workload endpoint covers the whole
+   * desk, including reviewers this queue never assigns to.
+   *
+   * This is a *default*, not an allocation: the dropdown stays fully editable and nothing is
+   * assigned until the head presses Assign. Handing someone else's day out automatically is
+   * not a decision this screen gets to make.
+   */
+  const leastLoadedId = useMemo(() => {
+    if (!workload || team.length === 0) return '';
+    const assignable = new Set(team.map((t) => t.id));
+    const held = (m: WorkloadMember) => m.openPackets + m.reworkPackets + m.casesInReview;
+    const ranked = workload
+      .filter((m) => assignable.has(m.id))
+      .sort((a, b) => held(a) - held(b) || a.clearedThisWeek - b.clearedThisWeek);
+    return ranked[0]?.id ?? '';
+  }, [workload, team]);
+
+  const loadOf = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const w of workload ?? []) m.set(w.id, w.openPackets + w.reworkPackets + w.casesInReview);
+    return m;
+  }, [workload]);
 
   const setLane = (l: string) => {
     const next = new URLSearchParams(params);
@@ -93,6 +156,9 @@ export const PacketsQueue: React.FC = () => {
     setBusy(docId);
     try {
       await api.request(`/documents/${docId}/assign-data-entry`, { method: 'POST', body: JSON.stringify({ assigneeId }) });
+      // Drop the row's pick — the packet has left the waiting lane, and a stale entry would
+      // survive to a later page where the same id no longer means anything.
+      setPick((p) => { const next = { ...p }; delete next[docId]; return next; });
       load();
     } catch (e) { setErr(userMessage(e)); }
     setBusy(null);
@@ -176,14 +242,30 @@ export const PacketsQueue: React.FC = () => {
                   <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{fmtWhen(d.receivedAt)}</td>
                   <td style={{ padding: '9px 14px', whiteSpace: 'nowrap' }}>
                     {d.lane === 'unassigned' && isHead ? (
-                      <Select
-                        compact
-                        value=""
-                        disabled={busy === d.id}
-                        onChange={(v) => assign(d.id, v)}
-                        placeholder="Assign to…"
-                        options={team.map((t) => ({ value: t.id, label: t.name }))}
-                      />
+                      /* Pre-set to whoever is holding least, and assigned only when the head
+                         presses the button — the dropdown proposes, the person decides. */
+                      <span style={{ display: 'inline-flex', gap: '6px', alignItems: 'center' }}>
+                        <Select
+                          compact
+                          value={pick[d.id] ?? leastLoadedId}
+                          disabled={busy === d.id}
+                          onChange={(v) => setPick((p) => ({ ...p, [d.id]: v }))}
+                          placeholder="Assign to…"
+                          options={team.map((t) => {
+                            const n = loadOf.get(t.id);
+                            // The count is on the option so the head can see why this name came
+                            // up first, and pick a different one knowingly.
+                            return { value: t.id, label: n == null ? t.name : `${t.name} · ${n} held` };
+                          })}
+                        />
+                        <button
+                          onClick={() => assign(d.id, pick[d.id] ?? leastLoadedId)}
+                          disabled={busy === d.id || !(pick[d.id] ?? leastLoadedId)}
+                          className="btn btn-secondary"
+                          style={{ fontSize: '11.5px', padding: '5px 10px', width: 'auto', fontWeight: 700 }}>
+                          {busy === d.id ? 'Assigning…' : 'Assign'}
+                        </button>
+                      </span>
                     ) : (
                       <span style={{ color: d.assigneeName ? 'inherit' : 'var(--text-muted)' }}>{d.assigneeName ?? '—'}</span>
                     )}

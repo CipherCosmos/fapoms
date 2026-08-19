@@ -1,20 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { Modal, Select, useToast } from '../../components/ui';
 import { useTransitionLifecycle } from '../../hooks/useClients';
 import { clientLifecycleLabel } from '../../utils/statusLabels';
-import { ClientLifecycleStatus } from '@fapoms/shared';
+import { ClientLifecycleStatus, CLIENT_LIFECYCLE_TRANSITIONS } from '@fapoms/shared';
 import { userMessage } from '../../services/errors';
-
-const LIFECYCLE_OPTIONS: Record<string, string[]> = {
-  [ClientLifecycleStatus.PROSPECT]: [ClientLifecycleStatus.ONBOARDING, ClientLifecycleStatus.ARCHIVED],
-  [ClientLifecycleStatus.ONBOARDING]: [ClientLifecycleStatus.ACTIVE, ClientLifecycleStatus.INACTIVE],
-  [ClientLifecycleStatus.ACTIVE]: [ClientLifecycleStatus.SUSPENDED, ClientLifecycleStatus.UNDER_REVIEW, ClientLifecycleStatus.INACTIVE],
-  [ClientLifecycleStatus.SUSPENDED]: [ClientLifecycleStatus.ACTIVE, ClientLifecycleStatus.UNDER_REVIEW, ClientLifecycleStatus.TERMINATED],
-  [ClientLifecycleStatus.UNDER_REVIEW]: [ClientLifecycleStatus.ACTIVE, ClientLifecycleStatus.SUSPENDED, ClientLifecycleStatus.TERMINATED],
-  [ClientLifecycleStatus.INACTIVE]: [ClientLifecycleStatus.ACTIVE, ClientLifecycleStatus.ARCHIVED],
-  [ClientLifecycleStatus.TERMINATED]: [ClientLifecycleStatus.ARCHIVED],
-  [ClientLifecycleStatus.ARCHIVED]: [],
-};
 
 export const LifecycleModal: React.FC<{
   open: boolean;
@@ -28,7 +17,39 @@ export const LifecycleModal: React.FC<{
   const { toast } = useToast();
   const transition = useTransitionLifecycle();
 
-  const options = LIFECYCLE_OPTIONS[currentStatus] ?? [];
+  /**
+   * Where a client may move next, read from the shared table rather than a copy.
+   *
+   * This modal used to keep its own hand-written transition map — a fourth copy of a graph
+   * `state-machines.ts` was created to own after three others were found drifting apart. It
+   * happened to be identical, which is the dangerous case: nothing failed, nothing warned, and
+   * the next edit to the real table would have left the screen users actually click offering
+   * moves the backend rejects (or hiding moves it allows). The shapes match exactly —
+   * `TransitionMap<ClientLifecycleStatus>`, keyed by the same enum — so this is an import, not
+   * an adaptation. `currentStatus` arrives as a plain string, hence the cast at the lookup.
+   */
+  const options = CLIENT_LIFECYCLE_TRANSITIONS[currentStatus as ClientLifecycleStatus] ?? [];
+
+  /**
+   * Preselect when there is nothing to choose. From TERMINATED the only legal move is to
+   * ARCHIVED, and the picker was still opening empty with the Confirm button disabled — asking
+   * the user to make a decision that has exactly one answer. Where several moves are legal the
+   * picker stays as it was, with no default, so nobody confirms a transition by reflex.
+   *
+   * This also clears `reason` and the target on close. Both used to survive a cancel: opening
+   * the modal on the next client re-used the same component instance and carried the previous
+   * client's typed reason with it, so a justification written for one client could be recorded
+   * against another. `open` drives it so that both closing paths — Cancel and a completed
+   * transition — reset the same way.
+   */
+  useEffect(() => {
+    if (!open) { setTargetLifecycle(''); setReason(''); return; }
+    setTargetLifecycle(options.length === 1 ? options[0] : '');
+    setReason('');
+    // `options` is derived from currentStatus; depending on the status keeps this to one run
+    // per opening rather than one per render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, currentStatus]);
   const colorMap: Record<string, string> = {
     [ClientLifecycleStatus.PROSPECT]: 'var(--warning)',
     [ClientLifecycleStatus.ONBOARDING]: 'var(--accent)',

@@ -144,9 +144,15 @@ export const AssayerRoster: React.FC = () => {
   const [editing, setEditing] = useState<Assayer | null>(null);
   const [creating, setCreating] = useState(false);
   const [bulkTarget, setBulkTarget] = useState('');
-  const { download: downloadExcel } = useExcelExport();
+  const { download: downloadExcel, busy: exporting } = useExcelExport();
   const handleExportExcel = () => void downloadExcel('/reports/assayer-roster');
   const [busy, setBusy] = useState(false);
+  /**
+   * A roster import runs for as long as the server takes to read the sheet, and nothing on
+   * screen said so — the file dialog simply closed. Operators picked the file again, and two
+   * overlapping imports re-run every row against a roster the first is still writing.
+   */
+  const [uploading, setUploading] = useState(false);
   const [bulkReport, setBulkReport] = useState<{ target: string; succeeded: string[]; skipped: { id: string; current: string; reason: string }[]; failed: { id: string; reason: string }[] } | null>(null);
   const RENDER_CHUNK = 200;
   const [visibleCount, setVisibleCount] = useState(RENDER_CHUNK);
@@ -341,6 +347,7 @@ export const AssayerRoster: React.FC = () => {
   const handleUpload = async (file: File) => {
     const fd = new FormData();
     fd.append('file', file);
+    setUploading(true);
     try {
       const result = await api.request<{
         importedCount: number;
@@ -402,6 +409,9 @@ export const AssayerRoster: React.FC = () => {
       refresh();
     } catch (e) {
       setNotice({ tone: 'err', text: userMessage(e) });
+    } finally {
+      // Cleared even on failure, so a rejected sheet can be corrected and re-uploaded.
+      setUploading(false);
     }
   };
 
@@ -501,14 +511,16 @@ export const AssayerRoster: React.FC = () => {
           style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 12px' }}>
           <Download size={13} /> Export {rows.length}
         </button>
-        <button onClick={handleExportExcel} className="btn btn-secondary"
+        {/* The payroll-rate-card sheet is assembled over the whole roster; until it lands
+            nothing on screen moves, which is why this used to be clicked repeatedly. */}
+        <button onClick={handleExportExcel} disabled={exporting} className="btn btn-secondary"
           style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 12px', color: 'var(--success)' }}
           title="Full roster with payroll rate card (roles applied)">
-          <FileSpreadsheet size={13} /> Excel
+          <FileSpreadsheet size={13} /> {exporting ? 'Preparing…' : 'Excel'}
         </button>
         {canManage && (
           <>
-            <UploadExcelControls onUpload={handleUpload} onDownloadTemplate={downloadTemplate} accept=".xlsx,.xls" />
+            <UploadExcelControls onUpload={handleUpload} onDownloadTemplate={downloadTemplate} accept=".xlsx,.xls" busy={uploading} busyLabel="Importing roster…" />
             <button onClick={() => setCreating(true)} className="btn btn-primary"
               style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', padding: '8px 14px' }}>
               <Plus size={14} /> Add assayer

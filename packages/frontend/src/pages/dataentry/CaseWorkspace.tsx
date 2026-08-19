@@ -62,6 +62,90 @@ const panel: React.CSSProperties = {
   borderRadius: '10px', overflow: 'hidden', minHeight: 0,
 };
 
+/**
+ * Turns an OCR field name into something a data-entry clerk can read: `accountNumber` and
+ * `account_number` both become "Account number". The payload is untyped jsonb end to end
+ * (`ocrResult` is `any` on the entity and in the API), so there is no field list to map
+ * against — humanising the key we were given is the most this can honestly do.
+ */
+function ocrFieldLabel(key: string): string {
+  const spaced = key
+    .replace(/[_-]+/g, ' ')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .trim();
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1).toLowerCase();
+}
+
+/** A single OCR value as text. Nested objects/arrays have no sensible row form — say so. */
+function ocrFieldValue(value: unknown): { text: string; nested: boolean } {
+  if (value === null || value === undefined || value === '') return { text: '—', nested: false };
+  if (typeof value === 'boolean') return { text: value ? 'Yes' : 'No', nested: false };
+  if (typeof value === 'number') return { text: value.toLocaleString('en-IN'), nested: false };
+  if (typeof value === 'string') return { text: value, nested: false };
+  if (Array.isArray(value)) {
+    // A list of plain values reads fine on one line; a list of objects does not.
+    if (value.every((v) => v === null || ['string', 'number', 'boolean'].includes(typeof v))) {
+      return { text: value.map((v) => String(v)).join(', ') || '—', nested: false };
+    }
+    return { text: `${value.length} item${value.length === 1 ? '' : 's'} — see the raw data below`, nested: true };
+  }
+  return { text: 'See the raw data below', nested: true };
+}
+
+/**
+ * What the scanner read, for the person doing the data entry.
+ *
+ * This used to be `JSON.stringify(ocrResult, null, 2)` in a 90px-tall <pre>: braces, quotes and
+ * camelCase keys shown to a clerk whose job is to compare those values against the packet in
+ * front of them. Plain rows are what that job needs.
+ *
+ * The raw payload is kept, not deleted, behind its own disclosure — the field set is whatever
+ * the scanner happened to emit, so when a value looks wrong the only way to tell "the scanner
+ * did not read it" from "we are not showing it" is to look at the original. That check is the
+ * reason the raw dump was here in the first place.
+ */
+const OcrExtraction: React.FC<{ result: any }> = ({ result }) => {
+  const entries = result && typeof result === 'object' && !Array.isArray(result)
+    ? Object.entries(result as Record<string, unknown>)
+    : [];
+
+  return (
+    <details style={{ marginBottom: '8px' }}>
+      <summary style={{ ...label, cursor: 'pointer' }}>What the scanner read</summary>
+      {entries.length === 0 ? (
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '6px 0 0' }}>
+          The scanner returned something this screen cannot lay out as fields. The raw data is below.
+        </div>
+      ) : (
+        <div style={{ margin: '6px 0 0', maxHeight: '170px', overflowY: 'auto' }}>
+          {entries.map(([k, v], i) => {
+            const { text, nested } = ocrFieldValue(v);
+            return (
+              <div key={k} style={{
+                display: 'flex', gap: '10px', alignItems: 'baseline', padding: '4px 0',
+                borderTop: i > 0 ? '1px solid var(--border-hair)' : 'none', fontSize: '12px',
+              }}>
+                <span style={{ color: 'var(--text-muted)', flex: '0 0 42%', minWidth: 0 }}>{ocrFieldLabel(k)}</span>
+                <span style={{
+                  flex: 1, minWidth: 0, wordBreak: 'break-word',
+                  color: nested ? 'var(--text-muted)' : 'var(--text-primary)',
+                  fontStyle: nested ? 'italic' : 'normal',
+                }}>{text}</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <details style={{ marginTop: '8px' }}>
+        <summary style={{ fontSize: '11px', color: 'var(--text-muted)', cursor: 'pointer' }}>Show raw data</summary>
+        <pre style={{ fontSize: '11px', margin: '6px 0 0', overflowX: 'auto', maxHeight: '160px', color: 'var(--text-secondary)' }}>
+          {JSON.stringify(result, null, 2)}
+        </pre>
+      </details>
+    </details>
+  );
+};
+
 export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => void; onChanged?: () => void }> = ({
   projectBranchId, onBack, onChanged,
 }) => {
@@ -344,14 +428,7 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
                   <strong>Correction requested</strong> — no note was recorded. Ask the reviewer what needs changing.
                 </div>
               ) : null}
-              {validationCase.ocrResult && (
-                <details style={{ marginBottom: '8px' }}>
-                  <summary style={{ ...label, cursor: 'pointer' }}>OCR extraction</summary>
-                  <pre style={{ fontSize: '11px', margin: '6px 0 0', overflowX: 'auto', maxHeight: '90px', color: 'var(--text-secondary)' }}>
-                    {JSON.stringify(validationCase.ocrResult, null, 2)}
-                  </pre>
-                </details>
-              )}
+              {validationCase.ocrResult && <OcrExtraction result={validationCase.ocrResult} />}
               {canReview && status !== 'SUBMITTED' && (
                 <>
                   <textarea

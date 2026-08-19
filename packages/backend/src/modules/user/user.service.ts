@@ -14,6 +14,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In } from 'typeorm';
 import * as bcrypt from 'bcrypt';
+import { randomInt } from 'crypto';
 import { UserEntity } from './user.entity';
 import { RoleEntity } from './role.entity';
 import { PermissionEntity } from './permission.entity';
@@ -24,7 +25,12 @@ import { EventCategory, UserStatus, SystemRole, Region, isRegion } from '@fapoms
 export interface CreateUserDto {
   username: string;
   email: string;
-  password: string;
+  /**
+   * Optional. When omitted the server mints the initial credential and returns it once —
+   * see `createUser`. Kept optional rather than removed so any existing caller that already
+   * supplies a chosen password (imports, fixtures, tests) keeps working unchanged.
+   */
+  password?: string;
   firstName: string;
   lastName: string;
   phone?: string;
@@ -59,10 +65,20 @@ export class UserService {
     private readonly eventPublisher: DomainEventPublisher,
   ) {}
 
+  /**
+   * Creates a user and, when no password was supplied, issues the initial one.
+   *
+   * Generation belongs here rather than in the browser: the admin's tab is not a trustworthy
+   * place to mint a credential (extensions and devtools see it, and nothing stops a stale or
+   * tampered page from sending a weak one), and only the server can guarantee the password
+   * that is hashed is the password that was generated. The generated value is returned to the
+   * caller exactly once, in the creation response, and is never persisted in readable form,
+   * never logged, and never recoverable afterwards — a lost one is replaced by a reset.
+   */
   async createUser(
     dto: CreateUserDto,
     createdById: string,
-  ): Promise<UserEntity> {
+  ): Promise<{ user: UserEntity; generatedPassword?: string }> {
     // Check for duplicates
     const existing = await this.userRepository.findOne({
       where: [{ username: dto.username }, { email: dto.email }],
@@ -71,8 +87,10 @@ export class UserService {
       throw new ConflictException('Username or email already exists');
     }
 
-    // Hash password
-    const passwordHash = await bcrypt.hash(dto.password, 12);
+    // An explicitly supplied password wins; otherwise the server issues one.
+    const suppliedPassword = dto.password?.trim();
+    const generatedPassword = suppliedPassword ? undefined : this.generateInitialPassword();
+    const passwordHash = await bcrypt.hash(suppliedPassword ?? generatedPassword!, 12);
 
     // Load roles if specified
     let roles: RoleEntity[] = [];
@@ -92,6 +110,14 @@ export class UserService {
       phone: dto.phone ?? null,
       departmentId: dto.departmentId ?? null,
       status: UserStatus.ACTIVE,
+      /**
+       * Whoever set this password, the account holder did not choose it — an admin typed it or
+       * the server generated it, and either way it has travelled through a chat message or a
+       * piece of paper by the time it is first used. The web app already implements the forced
+       * change (App.tsx routes anyone with this flag to ForcePasswordChange before any screen,
+       * and /users/me/change-password clears it), so setting it here locks nobody out.
+       */
+      mustChangePassword: true,
       createdBy: createdById,
       updatedBy: createdById,
       roles,
@@ -123,7 +149,23 @@ export class UserService {
       console.error('Failed to publish user:created event:', err);
     }
 
-    return savedUser;
+    return { user: savedUser, generatedPassword };
+  }
+
+  /**
+   * The initial password for a web account: 16 characters from an alphabet with no l/I/1/O/0,
+   * because this gets read off a screen or dictated over a phone and a misread character costs
+   * a support call. `randomInt` is Node's CSPRNG and is rejection-sampled internally, so unlike
+   * a `% alphabet.length` fold over raw bytes it draws each character uniformly.
+   *
+   * Note this is deliberately not the assayer module's short sayable form: web users type on
+   * keyboards and only ever need this password once, so strength costs them nothing.
+   */
+  private generateInitialPassword(): string {
+    const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789@#%+=?';
+    let out = '';
+    for (let i = 0; i < 16; i++) out += alphabet[randomInt(alphabet.length)];
+    return out;
   }
 
   async findById(id: string): Promise<UserEntity> {

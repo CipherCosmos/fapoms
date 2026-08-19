@@ -79,7 +79,7 @@ export const ExecutiveMap: React.FC = () => {
   const [selectedBranchId, setSelectedBranchId] = useUrlSelection('branchId');
   const [lens, setLens] = useState<'ALL' | 'GAPS' | 'UNASSIGNED'>('ALL');
 
-  const { download: downloadExcel } = useExcelExport();
+  const { download: downloadExcel, busy: exporting } = useExcelExport();
   const handleExport = () => {
     void downloadExcel('/reports/command-center', { ...scopeParams, clientId: clientId || undefined });
   };
@@ -154,8 +154,10 @@ export const ExecutiveMap: React.FC = () => {
           <button onClick={load} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
             <RefreshCw size={14} className={loading ? 'spin' : ''} /> Refresh
           </button>
-          <button onClick={handleExport} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--success)' }}>
-            <FileSpreadsheet size={14} /> Export
+          {/* The command-centre sheet covers every branch in scope — slow enough that the
+              button looked dead and got clicked twice. */}
+          <button onClick={handleExport} disabled={exporting} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12, color: 'var(--success)' }}>
+            <FileSpreadsheet size={14} /> {exporting ? 'Preparing…' : 'Export'}
           </button>
         </div>
       </div>

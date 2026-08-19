@@ -22,6 +22,8 @@ import { useScope, withScope } from '../context/ScopeContext';
 import { userMessage } from '../services/errors';
 import { connectSocket } from '../services/socket';
 import { StatusBadge, Modal, SearchInput, FilterSelect, AlertBanner, PrimaryButton, UploadExcelControls, Select, useConfirm } from '../components/ui';
+import { ChipMultiSelect } from '../components/ui/ChipMultiSelect';
+import { useWorkforceVocabulary, asOptions } from '../hooks/useWorkforceVocabulary';
 import { localDateKey } from '../utils/statusLabels';
 import { useCurrentRoles, canManageProjects, canDeleteProjects } from '../hooks/useCurrentRoles';
 
@@ -292,22 +294,15 @@ export const Projects: React.FC = () => {
    * `null` means "still loading"; an empty array means the HR-scoped endpoint is not readable by
    * this role, in which case the fields fall back to the free-text boxes rather than vanishing
    * and leaving no way to record a requirement at all.
+   *
+   * The fetch, de-dupe and sort that used to sit here are `useWorkforceVocabulary` — the same
+   * three lines existed on this page, on Branches, on Rules, on the client configuration panel
+   * and on Zones, and each copy had drifted. Both meanings of `null` and `[]` above are the
+   * hook's contract, so the two fallbacks below are unchanged.
    */
-  const [skillOptions, setSkillOptions] = useState<string[] | null>(null);
-  const [certOptions, setCertOptions] = useState<string[] | null>(null);
+  const { skills: skillOptions, certifications: certOptions } = useWorkforceVocabulary();
   /** Matching requirements are an expert override; most projects use the client's defaults. */
   const [showAdvancedMatching, setShowAdvancedMatching] = useState(false);
-
-  useEffect(() => {
-    api.request<{ SKILL?: { name: string }[]; CERTIFICATION?: { name: string }[] }>('/assayers/workforce-attribute/vocabulary')
-      .then((v) => {
-        const names = (list?: { name: string }[]) =>
-          Array.from(new Set((list ?? []).map((x) => x.name).filter(Boolean))).sort((a, b) => a.localeCompare(b));
-        setSkillOptions(names(v?.SKILL));
-        setCertOptions(names(v?.CERTIFICATION));
-      })
-      .catch(() => { setSkillOptions([]); setCertOptions([]); });   // not permitted / unavailable → free text fallback
-  }, []);
 
   /**
    * The form stores these as the comma-separated string the create/update handlers already
@@ -317,13 +312,9 @@ export const Projects: React.FC = () => {
    */
   const csvValues = (raw: string) => raw.split(',').map((x) => x.trim()).filter(Boolean);
 
-  const toggleCsvValue = (key: 'requiredSkills' | 'requiredCertifications', name: string) => {
-    setForm((f) => {
-      const current = csvValues(f[key]);
-      const next = current.includes(name) ? current.filter((c) => c !== name) : [...current, name];
-      return { ...f, [key]: next.join(', ') };
-    });
-  };
+  /** The picker hands back a list; the form keeps the comma-joined string it always kept. */
+  const setCsvValue = (key: 'requiredSkills' | 'requiredCertifications', next: string[]) =>
+    setForm((f) => ({ ...f, [key]: next.join(', ') }));
 
   const { scopeParams, scopeKey } = useScope();
   const scopeQuery = withScope(scopeParams);
@@ -838,21 +829,15 @@ export const Projects: React.FC = () => {
                         /* Picked, never typed — a misspelling here matches nobody and there is
                            nothing on screen afterwards to say why the shortlist came back empty.
                            Values already stored on the project are shown alongside the roster's
-                           own list so an older free-text entry stays visible and removable. */
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                          {Array.from(new Set([...options, ...selected])).map((name) => {
-                            const on = selected.includes(name);
-                            return (
-                              <button key={name} type="button" onClick={() => toggleCsvValue(key, name)} aria-pressed={on}
-                                style={{ padding: '4px 10px', fontSize: '11.5px', borderRadius: '999px', cursor: 'pointer',
-                                  border: `1px solid ${on ? 'var(--accent-primary)' : 'var(--border-color)'}`,
-                                  background: on ? 'rgba(216,174,71,0.12)' : 'var(--bg-primary)',
-                                  color: on ? 'var(--accent-primary)' : 'var(--text-secondary)' }}>
-                                {name}
-                              </button>
-                            );
-                          })}
-                        </div>
+                           own list so an older free-text entry stays visible and removable; the
+                           shared picker does that itself (marked "(as recorded)"). */
+                        <ChipMultiSelect
+                          options={asOptions(options)}
+                          value={selected}
+                          onChange={(next) => setCsvValue(key, next)}
+                          searchPlaceholder={`Search ${title.toLowerCase()}…`}
+                          aria-label={title}
+                        />
                       ) : (
                         /* The roster vocabulary is not readable by this role — free text rather
                            than no field, so the requirement can still be recorded. */
@@ -1275,7 +1260,9 @@ export const Projects: React.FC = () => {
                             title={branchesLocked ? lockReason : undefined}
                             style={{ display: 'flex', gap: '8px', opacity: branchesLocked ? 0.45 : 1, pointerEvents: branchesLocked ? 'none' : 'auto' }}
                           >
-                            <UploadExcelControls onUpload={handleUploadBranches} onDownloadTemplate={handleDownloadTemplate} accept=".xlsx,.xls" />
+                            {/* `isSaving` is already set for the whole length of the branch-sheet import; it just
+                                had nowhere to go until the control took a `busy` prop. */}
+                            <UploadExcelControls onUpload={handleUploadBranches} onDownloadTemplate={handleDownloadTemplate} accept=".xlsx,.xls" busy={isSaving} busyLabel="Importing branches…" />
                           </div>
                         </div>
                       </div>

@@ -154,12 +154,52 @@ export const Zones: React.FC = () => {
   };
 
   const handleDelete = async (z: Zone) => {
-    // Deleting a zone orphans every branch grouped under it, and the zone list is a long
-    // table of similar names — so this asks for the zone's own name to be typed. That is
-    // both un-reflexive and a check that the right row is being deleted.
+    /**
+     * Deleting a zone orphans every branch grouped under it, and the zone list is a long table
+     * of similar names — so this asks for the zone's own name to be typed. That is both
+     * un-reflexive and a check that the right row is being deleted.
+     *
+     * The warning used to say only "branches will be left without a zone", which is the fact
+     * without the number: nothing on this page could say whether that meant none, four, or
+     * every branch in the state, so the person deciding had to guess at the consequence. The
+     * branch list already answers it — `GET /branches?zoneId=` is a supported filter — so the
+     * count and the first few names are fetched and shown before the question is asked.
+     *
+     * The lookup deliberately does NOT gate the dialog: if the
+     * branch list is unreadable, the delete still has to be possible, so the confirmation falls
+     * back to the honest version — we could not check, and there may be branches attached.
+     * Silence about branches would be worse than either.
+     */
+    let affected: { total: number; names: string[] } | null = null;
+    try {
+      const res = await api.request<{ id: string; name?: string; branchCode?: string }[]>(
+        `/branches?zoneId=${encodeURIComponent(z.id)}&limit=10`,
+        { withMeta: true },
+      );
+      const rows = Array.isArray(res) ? res : ((res as any)?.data ?? []);
+      const total = (res as any)?.meta?.pagination?.total ?? rows.length;
+      affected = { total, names: rows.map((b: any) => b.name || b.branchCode).filter(Boolean) };
+    } catch {
+      affected = null;   // unreadable — fall through to the "could not check" wording below
+    }
+
     const ok = await confirm({
       title: `Delete the "${z.name}" zone?`,
-      message: 'Branches grouped under it will be left without a zone.',
+      message: affected === null ? (
+        <>The branches grouped under this zone could not be checked just now. Any that are in it
+          will be left without a zone, and the coverage planner will stop keeping their audits
+          inside this area.</>
+      ) : affected.total === 0 ? (
+        <>No branches are grouped under this zone, so nothing else changes.</>
+      ) : (
+        <>
+          {affected.total.toLocaleString('en-IN')} branch{affected.total === 1 ? '' : 'es'} will be
+          left without a zone{affected.names.length > 0 ? <> — {affected.names.join(', ')}
+            {affected.total > affected.names.length ? ` and ${(affected.total - affected.names.length).toLocaleString('en-IN')} more` : ''}</> : null}.
+          The coverage planner will stop keeping their audits inside this area until each one is
+          put in another zone, which is done from the branch's own record.
+        </>
+      ),
       confirmLabel: 'Delete zone',
       reversible: false,
       tone: 'danger',

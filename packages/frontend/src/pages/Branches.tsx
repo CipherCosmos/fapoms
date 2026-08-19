@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useUrlSelection } from '../hooks/useUrlSelection';
 import { Upload, Building2, Globe, ShieldAlert, Activity, Plus, Edit2, Trash2, Phone, FileText, User, Filter, ChevronDown, Map, X } from 'lucide-react';
 import { SearchInput, FilterSelect, StatusBadge, AlertBanner, Modal, Select, useToast } from '../components/ui';
+import { ChipMultiSelect } from '../components/ui/ChipMultiSelect';
+import { useWorkforceVocabulary, asOptions } from '../hooks/useWorkforceVocabulary';
 import { Autocomplete } from '../components/ui/Autocomplete';
 import type { IndiaPlaceResult } from '../components/ui/Autocomplete';
 import { api } from '../services/api';
@@ -730,31 +732,28 @@ const BranchFormModal: React.FC<{
    * actually hold. This was comma-separated free text, where "KYC Audits" silently became a
    * fifth competency nobody has and the branch became unplannable against it.
    *
-   * The endpoint is HR-scoped; when the current user cannot read it the field falls back to the
-   * old free-text box rather than losing the ability to record a competency at all.
+   * The fetch, the de-dupe and the sort are now `useWorkforceVocabulary` — this page had its
+   * own copy of all three, as did Projects, Rules, the configuration panel and Zones. A branch
+   * requires "a competency", which is either kind, so the two lists are merged here; `null`
+   * from the hook still means "loading", and an empty array still means the HR-scoped endpoint
+   * is not readable by this user, in which case the field falls back to the old free-text box
+   * rather than losing the ability to record a competency at all.
    */
-  const [competencyOptions, setCompetencyOptions] = useState<string[] | null>(null);
+  const { skills, certifications } = useWorkforceVocabulary();
+  const competencyOptions = React.useMemo(() => {
+    if (skills === null || certifications === null) return null;
+    return Array.from(new Set([...skills, ...certifications])).sort((a, b) => a.localeCompare(b));
+  }, [skills, certifications]);
 
-  useEffect(() => {
-    api.request<{ SKILL?: { name: string }[]; CERTIFICATION?: { name: string }[] }>('/assayers/workforce-attribute/vocabulary')
-      .then((v) => {
-        const names = [...(v?.SKILL ?? []), ...(v?.CERTIFICATION ?? [])].map((x) => x.name).filter(Boolean);
-        setCompetencyOptions(Array.from(new Set(names)).sort((a, b) => a.localeCompare(b)));
-      })
-      .catch(() => setCompetencyOptions([]));   // not permitted / unavailable → free text fallback
-  }, []);
-
+  /**
+   * The stored value is unchanged: a comma-joined string, which the submit path and the
+   * edit-prefill already split on. The chips only edit that string, so nothing about what
+   * reaches the server — or what an older free-text branch round-trips as — has moved.
+   */
   const selectedCompetencies = React.useMemo(
     () => form.requiredCompetencies.split(',').map((c) => c.trim()).filter(Boolean),
     [form.requiredCompetencies],
   );
-
-  const toggleCompetency = (name: string) => {
-    const next = selectedCompetencies.includes(name)
-      ? selectedCompetencies.filter((c) => c !== name)
-      : [...selectedCompetencies, name];
-    setForm((f) => ({ ...f, requiredCompetencies: next.join(', ') }));
-  };
 
   const set = (key: keyof BranchFormData) => (v: string) => setForm(f => ({ ...f, [key]: v }));
 
@@ -932,21 +931,16 @@ const BranchFormModal: React.FC<{
               <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Loading competencies…</span>
             ) : competencyOptions.length > 0 ? (
               /* Picked, never typed: a typo here used to invent a competency no assayer holds,
-                 which silently made the branch unmatchable during planning. */
-              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                {Array.from(new Set([...competencyOptions, ...selectedCompetencies])).map((name) => {
-                  const on = selectedCompetencies.includes(name);
-                  return (
-                    <button key={name} type="button" onClick={() => toggleCompetency(name)} aria-pressed={on}
-                      style={{ padding: '4px 10px', fontSize: '11.5px', borderRadius: '999px', cursor: 'pointer',
-                        border: `1px solid ${on ? 'var(--accent-primary)' : 'var(--border-color)'}`,
-                        background: on ? 'rgba(216,174,71,0.12)' : 'var(--bg-primary)',
-                        color: on ? 'var(--accent-primary)' : 'var(--text-secondary)' }}>
-                      {name}
-                    </button>
-                  );
-                })}
-              </div>
+                 which silently made the branch unmatchable during planning. The shared picker
+                 also keeps a competency the roster no longer offers visible and removable,
+                 which this page's own copy did too — see ChipMultiSelect's file comment. */
+              <ChipMultiSelect
+                options={asOptions(competencyOptions)}
+                value={selectedCompetencies}
+                onChange={(next) => setForm((f) => ({ ...f, requiredCompetencies: next.join(', ') }))}
+                searchPlaceholder="Search competencies…"
+                aria-label="Required competencies"
+              />
             ) : (
               /* The vocabulary is unavailable to this user — free text rather than no field. */
               field('', 'requiredCompetencies', { full: true, placeholder: 'Comma-separated, e.g. Gold Valuation, KYC Audit' })

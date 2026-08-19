@@ -10,7 +10,7 @@ import { AlertBanner, Select, useConfirm } from '../components/ui';
 import { connectSocket, getSocket } from '../services/socket';
 import { fetchWithTimeout } from '../services/http';
 import { api } from '../services/api';
-import { userMessage } from '../services/errors';
+import { userMessage, AppError } from '../services/errors';
 
 /**
  * The presigned PUT's own budget, longer than the API default because the file, not the network,
@@ -50,10 +50,17 @@ async function openDocumentDownload(documentId: string): Promise<void> {
  * /documents/upload/presign → client PUT straight to object storage → POST
  * /documents/upload/finalize) so the file bytes never buffer through the API process.
  *
- * Falls back to the original multipart `/documents/upload` on ANY failure of the presigned path
- * — the local-disk storage driver (no presign), a storage endpoint the browser cannot reach, or
- * a bucket without CORS. The fallback guarantees this can never upload *less* reliably than
- * before; it only upgrades the transport when direct-to-storage is actually available.
+ * Falls back to the original multipart `/documents/upload` when the presigned path fails for a
+ * *transport* reason — the local-disk storage driver (no presign), a storage endpoint the browser
+ * cannot reach, or a bucket without CORS. The fallback guarantees this can never upload less
+ * reliably than before; it only upgrades the transport when direct-to-storage is available.
+ *
+ * It deliberately does NOT retry when the server *rejected the file itself* (400: disallowed type,
+ * over the size cap). Retrying a refusal through a second door was the whole problem: the multipart
+ * route used to skip those checks, so a file the API had just refused was accepted on the next
+ * request. Both routes validate now, so a blind retry would only turn one clear error into two
+ * confusing ones — but keeping the distinction here means the client is not the thing standing
+ * between a rejected file and storage.
  */
 async function uploadDocumentSmart(assessmentId: string, type: string, file: File): Promise<any> {
   const contentType = file.type || 'application/octet-stream';
@@ -88,7 +95,11 @@ async function uploadDocumentSmart(assessmentId: string, type: string, file: Fil
         contentType,
       }),
     });
-  } catch {
+  } catch (err) {
+    // 4xx from our own API = the file or the request was refused on its merits. Surface it; a
+    // second attempt down the multipart route would be refused identically.
+    if (err instanceof AppError && err.status && err.status >= 400 && err.status < 500) throw err;
+
     const formData = new FormData();
     formData.append('file', file);
     return api.request(

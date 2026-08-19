@@ -100,14 +100,37 @@ export const CustomerMasterVersions: React.FC = () => {
   }, [projectId, loadVersions]);
 
   const approve = async (v: CustomerMasterVersion) => {
-    // Approval displaces whichever version is live right now — the risk is approving the
-    // wrong row, not the approval itself, so the dialog names the version being approved.
+    /**
+     * Approval displaces whichever version is live right now — the risk is approving the wrong
+     * row, not the approval itself, so the dialog names both versions by number.
+     *
+     * It used to say "replacing the version approved now", which names nothing: on a project
+     * with nine versions the reader could not tell what they were about to switch away from,
+     * and the page shows no comparison between the two. Naming the outgoing version is the
+     * cheapest honest substitute for a diff, and the duplicate-account count is repeated here
+     * because approving is the moment it stops being a statistic about a file and starts being
+     * the data the audit runs on.
+     */
+    const current = versions.find((x) => x.status === 'APPROVED' && x.id !== v.id);
     const ok = await confirm({
       title: `Approve version ${v.versionNumber}?`,
-      message:
-        'This becomes the active customer data for the project, replacing the version approved now, and its PDFs can then be generated.',
+      message: (
+        <>
+          Version {v.versionNumber} ({v.totalRows.toLocaleString('en-IN')} rows,{' '}
+          {v.uniqueAccounts.toLocaleString('en-IN')} accounts) becomes the customer data this
+          project runs on, and its branch PDFs can then be generated.
+          {current
+            ? <> Version {current.versionNumber}, approved{current.approvedAt ? ` on ${new Date(current.approvedAt).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}` : ''}, stops being used from that moment.</>
+            : <> No version is approved for this project yet, so nothing is being replaced.</>}
+          {v.duplicateAccounts > 0 && (
+            <> This version has {v.duplicateAccounts.toLocaleString('en-IN')} account
+              {v.duplicateAccounts === 1 ? '' : 's'} that appear more than once in the file. Use
+              Records to check them first if that is not expected.</>
+          )}
+        </>
+      ),
       confirmLabel: `Approve version ${v.versionNumber}`,
-      reversibleNote: 'To go back, another version has to be approved instead.',
+      reversibleNote: 'This cannot be undone from this screen. The only way back is to approve another version, which replaces this one in turn.',
     });
     if (!ok) return;
     setBusyId(v.id);
@@ -147,10 +170,15 @@ export const CustomerMasterVersions: React.FC = () => {
       header: 'Accounts',
       align: 'right',
       render: (v) => (
-        <span title="Unique / duplicate accounts">
+        // "12 dup" said nothing about what to do with it. The count now reads as a sentence and
+        // points at Records, the one place on this page where those accounts can actually be
+        // looked at — the drill-down already existed; nothing linked the warning to it.
+        <span title={v.duplicateAccounts > 0
+          ? `${v.uniqueAccounts.toLocaleString('en-IN')} different accounts. ${v.duplicateAccounts.toLocaleString('en-IN')} of them appear more than once in the file — open Records to see them.`
+          : `${v.uniqueAccounts.toLocaleString('en-IN')} different accounts, none repeated.`}>
           {v.uniqueAccounts.toLocaleString('en-IN')}
           {v.duplicateAccounts > 0 && (
-            <span style={{ color: 'var(--warning, #d97706)', fontSize: 11 }}> · {v.duplicateAccounts} dup</span>
+            <span style={{ color: 'var(--warning, #d97706)', fontSize: 11 }}> · {v.duplicateAccounts.toLocaleString('en-IN')} repeated</span>
           )}
         </span>
       ),

@@ -90,8 +90,18 @@ export const DirectoryPanel: React.FC = () => {
    */
   const [usernameEdited, setUsernameEdited] = useState(false);
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [passwordCopied, setPasswordCopied] = useState(false);
+  /**
+   * The credential the server issued for a just-created account, held only in this component's
+   * state for as long as the confirmation is on screen.
+   *
+   * The password used to be minted in the browser with `crypto.getRandomValues` and typed into
+   * the form. That was a stopgap: the tab is not a trustworthy place to mint a credential, and
+   * the server could not tell a generated password from a weak one a tampered page had sent.
+   * The server now generates it and returns it once in the creation response, so there is
+   * nothing to generate, re-roll or submit here — only something to show and copy.
+   */
+  const [issuedCredential, setIssuedCredential] = useState<{ displayName: string; username: string; password: string } | null>(null);
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
@@ -123,27 +133,9 @@ export const DirectoryPanel: React.FC = () => {
     return local.toLowerCase().replace(/[^a-z0-9._-]+/g, '.').replace(/^\.+|\.+$/g, '').slice(0, 100);
   };
 
-  /**
-   * A password nobody chose, so nobody is tempted to choose "Welcome@123" for the fifth account
-   * this month. `crypto.getRandomValues` is the platform CSPRNG — `Math.random` is not one and
-   * must never back a credential.
-   *
-   * This is generated in the browser, which is a real limitation worth naming: the ideal is for
-   * the server to mint it and return it once, and that needs a change in the users module. What
-   * it does fix is the part that was under this screen's control — the admin no longer invents
-   * the password, and it is strong, unique and shown exactly once, at creation.
-   */
-  const generatePassword = (): string => {
-    // No l/I/1/O/0: this password gets read aloud or copied off a screen.
-    const alphabet = 'ABCDEFGHJKMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789@#%+=?';
-    const bytes = new Uint32Array(16);
-    crypto.getRandomValues(bytes);
-    return Array.from(bytes, (b) => alphabet[b % alphabet.length]).join('');
-  };
-
   const openCreateModal = () => {
     setUsername(''); setUsernameEdited(false); setEmail('');
-    setPassword(generatePassword()); setPasswordCopied(false);
+    setPasswordCopied(false);
     setFirstName(''); setLastName(''); setSelectedRoleIds([]);
     setShowCreateModal(true);
   };
@@ -183,13 +175,22 @@ export const DirectoryPanel: React.FC = () => {
     setError(null);
     setSubmitting(true);
     try {
-      await api.request('/users', {
+      // No `password` in the body: omitting it is what asks the server to issue one, which it
+      // returns as `initialPassword` on this response and nowhere else, ever.
+      const created = await api.request<{ initialPassword?: string }>('/users', {
         method: 'POST',
-        body: JSON.stringify({ username, email, password, firstName, lastName, roleIds: selectedRoleIds }),
+        body: JSON.stringify({ username, email, firstName, lastName, roleIds: selectedRoleIds }),
       });
       setShowCreateModal(false);
-      setNotice(`${firstName} ${lastName} can now sign in as "${username}". Pass on the initial password shown on the form — it is not stored anywhere you can read it back.`);
-      setUsername(''); setUsernameEdited(false); setEmail(''); setPassword(''); setPasswordCopied(false);
+      if (created?.initialPassword) {
+        setPasswordCopied(false);
+        setIssuedCredential({ displayName: `${firstName} ${lastName}`, username, password: created.initialPassword });
+      } else {
+        // Should not happen while this form omits the password, but a silent success that
+        // leaves the admin with no credential to hand over would be worse than saying so.
+        setNotice(`${firstName} ${lastName} can now sign in as "${username}", but the server returned no initial password. Use "Reset password" on their account to issue one.`);
+      }
+      setUsername(''); setUsernameEdited(false); setEmail('');
       setFirstName(''); setLastName(''); setSelectedRoleIds([]);
       loadUsers();
     } catch (err: any) {
@@ -669,26 +670,10 @@ export const DirectoryPanel: React.FC = () => {
                 {usernameEdited ? 'You are setting this yourself.' : 'Taken from the email address — change it only if you need something different.'}
               </div>
             </div>
-            <div>
-              <label className="form-label" htmlFor="new-user-password">Initial Password</label>
-              <div style={{ display: 'flex', gap: '8px' }}>
-                {/* Deliberately readable, not masked: it is generated here and shown exactly once,
-                    so the admin has to be able to see it in order to pass it on. */}
-                <input id="new-user-password" type="text" className="form-input" value={password} readOnly
-                  style={{ flex: 1, fontFamily: 'var(--font-mono, monospace)' }} />
-                <button type="button" className="btn btn-secondary" style={{ padding: '8px 12px', fontSize: '12px', whiteSpace: 'nowrap' }}
-                  onClick={() => { navigator.clipboard?.writeText(password).then(() => setPasswordCopied(true)).catch(() => setPasswordCopied(false)); }}>
-                  {passwordCopied ? 'Copied' : 'Copy'}
-                </button>
-                <button type="button" className="btn btn-secondary" style={{ padding: '8px 12px', fontSize: '12px', whiteSpace: 'nowrap' }}
-                  onClick={() => { setPassword(generatePassword()); setPasswordCopied(false); }}>
-                  New
-                </button>
-              </div>
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
-                Generated for you — copy it now and pass it on. It is not shown again, and there is no
-                email flow; you can set a new one later from the account's own panel.
-              </div>
+            <div style={{ fontSize: '11px', color: 'var(--text-muted)', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '10px' }}>
+              The initial password is generated by the server when the account is created, and shown
+              to you once on the next screen. Nobody has to invent one, and it is never stored
+              anywhere it can be read back.
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: '12px' }}>
               <div><label className="form-label">First Name</label><input type="text" className="form-input" value={firstName} onChange={(e) => setFirstName(e.target.value)} required /></div>
@@ -707,6 +692,42 @@ export const DirectoryPanel: React.FC = () => {
                   );
                 })}
               </div>
+            </div>
+          </div>
+        </Modal>
+      )}
+
+      {/* The one and only time this password is visible. Dismissing this modal discards it. */}
+      {issuedCredential && (
+        <Modal open onClose={() => setIssuedCredential(null)} title="Account created — copy the password now" width="460px"
+          footer={
+            <button type="button" onClick={() => setIssuedCredential(null)}
+              style={{ width: '100%', marginTop: '12px', background: 'var(--gradient-neon)', color: 'var(--on-gradient)', border: 'none', padding: '10px', borderRadius: 'var(--radius-md)', fontWeight: 600, cursor: 'pointer' }}>
+              I have copied it — close
+            </button>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+            <div style={{ fontSize: '13px' }}>
+              {issuedCredential.displayName} can now sign in as <strong>{issuedCredential.username}</strong>.
+            </div>
+            <div>
+              <label className="form-label" htmlFor="issued-password">Initial password</label>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                {/* Readable, not masked: the whole purpose of this field is to be passed on. */}
+                <input id="issued-password" type="text" className="form-input" value={issuedCredential.password} readOnly
+                  onFocus={(e) => e.currentTarget.select()}
+                  style={{ flex: 1, fontFamily: 'var(--font-mono, monospace)' }} />
+                <button type="button" className="btn btn-secondary" style={{ padding: '8px 12px', fontSize: '12px', whiteSpace: 'nowrap' }}
+                  onClick={() => { navigator.clipboard?.writeText(issuedCredential.password).then(() => setPasswordCopied(true)).catch(() => setPasswordCopied(false)); }}>
+                  {passwordCopied ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+            </div>
+            <AlertBanner type="error" message="Copy this now — it will not be shown again. The server does not keep a readable copy, so if it is lost the only way forward is a password reset from the account's own panel." />
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+              They will be asked to choose their own password the first time they sign in, and cannot
+              reach the rest of the application until they do.
             </div>
           </div>
         </Modal>
