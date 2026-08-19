@@ -197,7 +197,10 @@ export const ThreadPanel: React.FC<Props> = ({
             display: 'inline-flex', alignItems: 'center', gap: '4px',
           }}>
             {resolved ? <CheckCircle2 size={12} /> : <span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--warning)' }} />}
-            {resolved ? 'RESOLVED' : 'ACTIVE CLARIFICATION'}
+            {/* Shouted labels, and "ACTIVE CLARIFICATION" names the record type rather than saying
+                what is true of it. The chip's job is to tell the clerk whether this question is
+                still live or finished with. */}
+            {resolved ? 'Closed' : 'Still open'}
           </span>
         </div>
 
@@ -244,7 +247,7 @@ export const ThreadPanel: React.FC<Props> = ({
             color: 'var(--text-muted)', fontSize: '12.5px',
           }}>
             <MessageSquare size={24} style={{ opacity: 0.3, marginBottom: '8px' }} />
-            <div>No messages yet in this clarification thread.</div>
+            <div>Nothing has been said on this question yet.</div>
             <div style={{ fontSize: '11.5px', marginTop: '4px' }}>
               Mark an area on the PDF or type below to send your query to the field assayer.
             </div>

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { Clock, AlertTriangle, User, ArrowRight } from 'lucide-react';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
+import { counted } from '../../utils/plural';
 
 /**
  * The clarification worklist.
@@ -39,11 +40,13 @@ const fmtWhen = (iso: string | null) =>
 
 const slaLabel = (row: ClarificationRow): { text: string; tone: string } => {
   if (row.status === 'RESOLVED') return { text: 'resolved', tone: 'var(--text-muted)' };
-  if (!row.slaDueDate) return { text: 'no SLA', tone: 'var(--text-muted)' };
+  // "no SLA" is the acronym for the reply deadline the office agreed with the field. Nothing
+  // outside the code calls it that.
+  if (!row.slaDueDate) return { text: 'no reply deadline', tone: 'var(--text-muted)' };
   const ms = new Date(row.slaDueDate).getTime() - Date.now();
   const hrs = Math.round(ms / 3_600_000);
-  if (ms < 0) return { text: `${Math.abs(hrs)}h overdue`, tone: 'var(--danger)' };
-  return { text: `${hrs}h left`, tone: hrs <= 2 ? 'var(--warning)' : 'var(--text-muted)' };
+  if (ms < 0) return { text: `${counted(Math.abs(hrs), 'hour')} overdue`, tone: 'var(--danger)' };
+  return { text: `${counted(hrs, 'hour')} left to reply`, tone: hrs <= 2 ? 'var(--warning)' : 'var(--text-muted)' };
 };
 
 /** The whole worklist's shape, computed in SQL. The tabs read these, never the loaded rows. */
@@ -128,7 +131,7 @@ export const ClarificationsPage: React.FC = () => {
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           {truncated && (
             <div style={{ fontSize: 11.5, color: 'var(--warning)', lineHeight: 1.45 }}>
-              Showing the {shown.length} most urgent of {counts[filter]}. Clear these and the rest move up —
+              Showing the {shown.length} most urgent of {counted(counts[filter], 'question')}. Clear these and the rest move up —
               they are ordered by reply deadline, soonest first.
             </div>
           )}
@@ -140,14 +143,14 @@ export const ClarificationsPage: React.FC = () => {
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 4 }}>
                     <strong style={{ fontSize: 13, color: 'var(--text-primary)' }}>{r.branchName ?? 'Unknown branch'}</strong>
-                    {r.targetField && <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 999, background: 'var(--bg-surface-2)', color: 'var(--text-muted)' }}>Field: {r.targetField}</span>}
+                    {r.targetField && <span style={{ fontSize: 11, padding: '1px 7px', borderRadius: 999, background: 'var(--bg-surface-2)', color: 'var(--text-muted)' }}>About: {r.targetField}</span>}
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, color: 'var(--text-muted)' }}>
                       <User size={11} /> {r.assayerName ?? '—'}{r.assayerCode ? ` · ${r.assayerCode}` : ''}
                     </span>
                   </div>
                   <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.queryText}</div>
                   <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
-                    raised {fmtWhen(r.createdAt)}{r.lastMessageAt ? ` · last message ${fmtWhen(r.lastMessageAt)}` : ''}
+                    Asked {fmtWhen(r.createdAt)}{r.lastMessageAt ? ` · last message ${fmtWhen(r.lastMessageAt)}` : ''}
                   </div>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>

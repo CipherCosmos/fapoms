@@ -26,6 +26,82 @@ const SESSION_KEYS = [
 ];
 
 /**
+ * Where an unauthenticated visitor was trying to go, held until they have signed in.
+ *
+ * The literal is owned by `App.tsx`, which writes it whenever the router bounces someone to
+ * /login, and `PostLoginRedirect` consumes it. It is repeated here — rather than imported from
+ * `App.tsx` — because a service importing the root component would close an import cycle through
+ * every route in the app. The two must stay in step; that is why the name is a constant on both
+ * sides and not an inline string.
+ *
+ * It matters here because the 401 handler in `api.ts` does NOT go through the router: it calls
+ * `location.replace('/login')` directly, so `RememberAndRedirectToLogin` never mounts and never
+ * records the path. An expiry mid-navigation therefore lost the destination, and the only reason
+ * it ever appeared to work is that a value left over from an *earlier* bounce was still sitting in
+ * sessionStorage. The handler now writes the key itself.
+ */
+export const RETURN_TO_KEY = 'fapoms_return_to';
+
+/**
+ * Why the person is looking at the login screen, when they did not ask to be.
+ *
+ * Being dropped on a sign-in form with no explanation reads as "the app broke" — which is the
+ * worst possible reading, because it is the one that makes people stop trusting the numbers they
+ * were just looking at. This carries a reason from the moment of the forced sign-out to the login
+ * screen that renders a moment later, across the full page reload that `location.replace` causes
+ * (which is why it is storage and not React state).
+ *
+ * sessionStorage, like the return path: this belongs to this tab and this attempt.
+ */
+export const SIGNED_OUT_REASON_KEY = 'fapoms_signed_out_reason';
+
+/**
+ * The reasons, kept as a closed set so the login screen can phrase each one properly instead of
+ * printing whatever string it happens to find.
+ *
+ *  - `expired`      — the session timed out while reading or navigating. Nothing was lost.
+ *  - `expired_save` — it timed out while a change was being *sent*. The change did not save, and
+ *                     the page it was typed on is gone. Saying so is the whole point: silent data
+ *                     loss that the user discovers hours later is far more damaging than being
+ *                     told plainly to enter it again.
+ */
+export type SignedOutReason = 'expired' | 'expired_save';
+
+/**
+ * Record why this sign-out is happening, and where to come back to.
+ *
+ * Best-effort throughout: private-mode browsers and full storage throw on write, and failing to
+ * explain a sign-out must never *prevent* the sign-out.
+ */
+export function rememberForcedSignOut(reason: SignedOutReason, returnTo: string): void {
+  try {
+    sessionStorage.setItem(SIGNED_OUT_REASON_KEY, reason);
+    // Never remember /login itself, or signing in would redirect to the screen just left.
+    if (returnTo && !returnTo.startsWith('/login')) {
+      sessionStorage.setItem(RETURN_TO_KEY, returnTo);
+    }
+  } catch {
+    // Worst case: the person lands on their role's home page with no explanation — exactly the
+    // behaviour that existed before, so this can only ever be an improvement or a no-op.
+  }
+}
+
+/**
+ * Read the reason once and forget it, so it explains the sign-out that caused it and nothing
+ * afterwards. Without the clear, someone who signed out, signed in, then visited /login again by
+ * hand would be told their session had expired, which is simply untrue.
+ */
+export function consumeSignedOutReason(): SignedOutReason | null {
+  try {
+    const raw = sessionStorage.getItem(SIGNED_OUT_REASON_KEY);
+    sessionStorage.removeItem(SIGNED_OUT_REASON_KEY);
+    return raw === 'expired' || raw === 'expired_save' ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Clear every trace of the current session.
  *
  * Clears the React Query cache as well as storage. That matters more than it looks: logout

@@ -36,6 +36,7 @@ import {
   PaymentMethod,
   DocumentType,
   ValidationStatus,
+  ValidationQueryStatus,
   Priority,
   UserStatus,
 } from './enums';
@@ -232,6 +233,59 @@ const PRIORITY_LABELS: Record<Priority, string> = {
 export function priorityLabel(priority?: string | null): string {
   if (!priority) return '—';
   return PRIORITY_LABELS[priority as Priority] ?? humanize(priority);
+}
+
+/**
+ * How exposed a branch is, and how much work it is — the two words the Branches list puts in
+ * front of the office.
+ *
+ * Both were rendered raw. "MEDIUM" in the Risk column and "VERY_COMPLEX" in the detail panel are
+ * database spellings; a clerk reading them cannot tell whether the capitals mean "urgent" or are
+ * simply how the machine writes things, and an underscore is not a word in any language.
+ *
+ * Risk deliberately borrows the priority wording rather than inventing a second set: the four
+ * bands are the same four words, and having "High" on one screen and "HIGH" on another is exactly
+ * the drift this file exists to prevent. `humanize` still catches any band the backend adds
+ * before the UI does.
+ */
+export function riskCategoryLabel(risk?: string | null): string {
+  if (!risk) return '—';
+  return PRIORITY_LABELS[risk as Priority] ?? humanize(risk);
+}
+
+const BRANCH_COMPLEXITY_LABELS: Record<string, string> = {
+  SIMPLE: 'Simple',
+  STANDARD: 'Standard',
+  COMPLEX: 'Complex',
+  VERY_COMPLEX: 'Very complex',
+};
+
+export function branchComplexityLabel(complexity?: string | null): string {
+  if (!complexity) return '—';
+  return BRANCH_COMPLEXITY_LABELS[complexity] ?? humanize(complexity);
+}
+
+/**
+ * Branch type as clients actually send it. The values in the live data are MAIN, METRO, SUB and
+ * URBAN — a mix of "what kind of office" and "what kind of place" — so this map covers both
+ * families rather than the tidier list the form used to offer.
+ */
+const BRANCH_TYPE_LABELS: Record<string, string> = {
+  MAIN: 'Main branch',
+  BRANCH: 'Branch',
+  SUB: 'Sub-branch',
+  SUB_BRANCH: 'Sub-branch',
+  EXTENSION: 'Extension counter',
+  MICRO: 'Micro branch',
+  METRO: 'Metro',
+  URBAN: 'Urban',
+  SEMI_URBAN: 'Semi-urban',
+  RURAL: 'Rural',
+};
+
+export function branchTypeLabel(type?: string | null): string {
+  if (!type) return '—';
+  return BRANCH_TYPE_LABELS[type] ?? humanize(type);
 }
 
 /**
@@ -814,6 +868,26 @@ export const VALIDATION_STATUS_LABELS: Record<ValidationStatus, string> = {
 export function validationStatusLabel(status?: string | null): string {
   if (!status) return '—';
   return VALIDATION_STATUS_LABELS[status as ValidationStatus] ?? humanize(status);
+}
+
+/**
+ * Where a clarification thread with the assayer stands.
+ *
+ * The case workspace printed the raw enum on every thread chip — a clerk saw the word
+ * "RESPONDED" and had no way to know whether that meant the assayer had replied (so the desk
+ * must act) or that we had replied (so the assayer must). The three values are really three
+ * answers to "whose move is it", and the cross-case Clarifications worklist already words it
+ * that way in its tabs, so the chip on a thread and the tab that lists it now agree.
+ */
+export const VALIDATION_QUERY_STATUS_LABELS: Record<ValidationQueryStatus, string> = {
+  [ValidationQueryStatus.OPEN]: 'Waiting on the assayer',
+  [ValidationQueryStatus.RESPONDED]: 'Assayer replied — your turn',
+  [ValidationQueryStatus.RESOLVED]: 'Closed',
+};
+
+export function validationQueryStatusLabel(status?: string | null): string {
+  if (!status) return '—';
+  return VALIDATION_QUERY_STATUS_LABELS[status as ValidationQueryStatus] ?? humanize(status);
 }
 
 /**

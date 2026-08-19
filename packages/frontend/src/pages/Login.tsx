@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { BrandLogo } from '../components/BrandLogo';
 import { fetchWithTimeout } from '../services/http';
+import { consumeSignedOutReason } from '../services/session';
 
 interface LoginProps {
   onLoginSuccess: (accessToken: string, refreshToken: string) => void;
@@ -12,6 +13,21 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+
+  /**
+   * Why this person is here, when they did not click Sign Out.
+   *
+   * A session that runs out mid-click dropped people on this screen with nothing but an empty
+   * username box. To a clerk that reads as "the system crashed and lost my work" — and when a
+   * save was in flight it half did, which is exactly why the two cases get different wording.
+   *
+   * Read once in a `useState` initialiser rather than in an effect or inline: `consumeSignedOutReason`
+   * clears the flag as it reads it, and React StrictMode double-invokes render in development, so
+   * an inline read would return the reason on the first pass and `null` on the second — and it is
+   * the second result that reaches the screen. This is the same pattern App.tsx uses for the
+   * return path, for the same reason.
+   */
+  const [signedOutReason] = useState(() => consumeSignedOutReason());
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -99,6 +115,45 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
           {/* Form */}
           <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
             
+            {/*
+              Amber, not red, and worded as a fact rather than a failure: nothing went wrong, a
+              session simply ran out. It sits above the sign-in error because it explains the state
+              the person arrived in, while the error below explains what just happened when they
+              pressed the button.
+            */}
+            {signedOutReason && !error && (
+              <div style={{
+                background: 'rgba(216, 174, 71, 0.12)',
+                border: '1px solid rgba(216, 174, 71, 0.35)',
+                color: 'var(--text-primary)',
+                padding: '12px 16px',
+                borderRadius: 'var(--radius-md)',
+                fontSize: '13px',
+                lineHeight: 1.5,
+                display: 'flex',
+                alignItems: 'flex-start',
+                gap: '8px'
+              }}>
+                <span aria-hidden="true">🔒</span>
+                <span>
+                  {signedOutReason === 'expired_save' ? (
+                    <>
+                      <strong>You were signed out before your last change could be saved.</strong>
+                      {' '}Your sign-in timed out, so that change was not saved and you will need to
+                      enter it again. Please sign in below — we will take you straight back to the
+                      page you were on.
+                    </>
+                  ) : (
+                    <>
+                      <strong>You were signed out because you had been away for a while.</strong>
+                      {' '}Nothing has been lost. Please sign in below — we will take you straight
+                      back to the page you were on.
+                    </>
+                  )}
+                </span>
+              </div>
+            )}
+
             {error && (
               <div style={{
                 background: 'rgba(239, 68, 68, 0.12)',

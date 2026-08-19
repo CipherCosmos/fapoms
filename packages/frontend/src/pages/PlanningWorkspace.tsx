@@ -11,9 +11,9 @@ import { useScope, withScope, scopeConflict } from '../context/ScopeContext';
 import { useUrlSelection } from '../hooks/useUrlSelection';
 import { InteractivePlanningMap } from '../components/InteractivePlanningMap';
 import { BranchHistoryDrawer } from './planning/BranchHistoryDrawer';
-import { useToast, Modal, Select } from '../components/ui';
+import { useToast, Modal, Select, useConfirm } from '../components/ui';
 import { ScoreBreakdown } from './planning/ScoreBreakdown';
-import { AssayerRemarks, fmtSignedMean, type RemarkSummary } from '../components/AssayerRemarks';
+import { AssayerRemarks, type RemarkSummary } from '../components/AssayerRemarks';
 import { ExcludedCandidatesPanel } from './planning/ExcludedCandidatesPanel';
 import { CoveragePlanModal } from './planning/CoveragePlanModal';
 import { BranchListPanel, RecommendationPanel, ProjectBranch } from './planning';
@@ -31,6 +31,7 @@ import { WORK_TAB_STRIP_HEIGHT } from './work/workTabs';
 
 import { money } from '../utils/money';
 import { visibleSelection, hiddenSelectionNote } from '../utils/selection';
+import { counted } from '../utils/plural';
 /** Mirrors FeeBreakdown from packages/backend/src/modules/pricing/fee-policy.service.ts. */
 interface FeeQuote {
   baseFee: number;
@@ -356,6 +357,35 @@ const NO_CONTACT: Record<string, { outcome: string; timestamp: string; negotiate
 
 
 
+/**
+ * What staff have said about an assayer, said in words a clerk already understands.
+ *
+ * The chip used to read "1 remark · avg +2.0". That +2.0 is the raw internal remark scale
+ * (−2…+2, see modules/assayer-remarks and migration AssayerRemarkRatings1791430000000): a
+ * signed number, out of nothing stated, on a scale that appears nowhere in front of a user.
+ * A clerk cannot tell whether +2.0 is excellent or barely adequate, and a *negative* average
+ * — the one that actually matters before dispatching someone — is even easier to misread.
+ *
+ * The backend already owns the conversion the rest of the product shows: `recomputeAverageRating`
+ * in assayer.service.ts stores `3 + mean`, clamped to 1–5, which is the figure the assayer
+ * profile and the mobile "out of 5" tile display. Applying the same arithmetic here means the
+ * planning desk quotes ONE scale with everything else, and the word in front of it means the
+ * number never has to be interpreted at all.
+ *
+ * The figure itself is unchanged — this is presentation only. Note the engine's mean is
+ * recency-weighted while the profile's lifetime average is not, so the wording says
+ * "recently" rather than implying the two are the same number.
+ */
+const remarkVerdict = (mean: number): { word: string; outOfFive: string } => ({
+  word:
+    mean >= 1.5 ? 'very good' :
+    mean >= 0.5 ? 'good' :
+    mean > -0.5 ? 'mixed' :
+    mean > -1.5 ? 'poor' : 'very poor',
+  // Same mapping the backend uses for every other "out of 5" surface in the product.
+  outOfFive: Math.max(1, Math.min(5, 3 + mean)).toFixed(1),
+});
+
 export const PlanningWorkspace: React.FC = () => {
   // The header's global scope narrows the coverage queue. This page keeps its own project
   // selector — planning is inherently one project at a time — so only the geographic
@@ -454,6 +484,9 @@ export const PlanningWorkspace: React.FC = () => {
    * Sticky per operator: whoever works the phones differently should not have to re-tick it on
    * every call.
    */
+  // Anything that dispatches work to a real person on one click gets the shared confirm
+  // dialog — never window.confirm, which cannot say what is about to happen.
+  const { confirm, confirmDialog } = useConfirm();
   const [assignDirectly, setAssignDirectly] = useState<boolean>(
     () => localStorage.getItem('planning_assignDirectly') !== 'false',
   );
@@ -1820,9 +1853,17 @@ export const PlanningWorkspace: React.FC = () => {
               onClick={() => setMaxRadiusEnabled(true)}
               className="btn btn-secondary"
               style={{ padding: '2px 8px', fontSize: '10px' }}
-              title={`Hide candidates further than the ${maxRadius} km service radius`}
+              /*
+                This button and the sentence beside it were quoting two different numbers.
+                The banner counts everyone past `searchRadiusKm` (the map's radius, 300 km by
+                default); the button switches on the max-radius filter, which cuts at `maxRadius`
+                (200 km by default) — so "1 is beyond 300 km · Hide distant" could remove four
+                people, three of whom were inside the 300 the sentence had just named. The
+                filter is unchanged; the button now states the cut it actually makes.
+              */
+              title={`Removes every candidate further than ${maxRadius} km from this branch. This is the service-radius filter in Advanced — a different, tighter number than the ${searchRadiusKm} km the map draws.`}
             >
-              Hide distant
+              Hide over {maxRadius} km
             </button>
           </div>
         )}
@@ -1909,7 +1950,16 @@ export const PlanningWorkspace: React.FC = () => {
                           never promoted to a road figure. */}
                       {formatRouteDistance(c.distanceKm, c.distanceSource ?? null)}
                       {c.durationMinutes != null && c.distanceKm !== null && (
-                        <> · {formatTravelTime(c.durationMinutes, c.distanceSource ?? null)}</>
+                        /*
+                          The provenance suffix belongs to the PAIR, not to each half. Both shared
+                          formatters append it independently, so the two of them side by side read
+                          "327 km by road · 4 h 25 min by road" — the same qualification twice in
+                          one twelve-word line, which reads like a rendering fault rather than a
+                          fact. The distance carries the label (it is the figure people quote);
+                          the time, which shares its provenance by construction, drops the repeat.
+                          The formatters are untouched — every other surface still gets both.
+                        */
+                        <> · {formatTravelTime(c.durationMinutes, c.distanceSource ?? null).replace(' by road', '')}</>
                       )}
                     </span>
                     {/*
@@ -1939,7 +1989,16 @@ export const PlanningWorkspace: React.FC = () => {
                     )}
                   </div>
                 </div>
-                <span title="Based on 15 checks including distance rules, past acceptance, workload and cost." style={{ cursor: 'help', padding: '3px 8px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: conf != null && conf >= 90 ? 'var(--status-active-bg)' : 'var(--status-pending-bg)', color: conf != null && conf >= 90 ? 'var(--status-active)' : 'var(--warning)', flexShrink: 0 }}>
+                {/*
+                  The percentage is the FIRST thing on the card a clerk reads and the last thing
+                  the card explained: "66% Match" states a number without saying 66 % of what, or
+                  whether 66 is a pass. "Why this match?" underneath opens the dimensions — but
+                  only once you already believe the number means something. The tooltip now says
+                  what is being scored and what the shading means, in the same breath, so the
+                  figure is legible before anyone expands anything. 90 is the threshold the
+                  colouring below already uses; it is now stated rather than merely coloured.
+                */}
+                <span title={`How well this assayer fits this branch, out of 100 — weighing distance, past acceptance, current workload, skills and cost. 90 and above is shown green as a strong fit; below that, read "Why this match?" underneath before offering. It is a ranking aid, not a rule — nothing here blocks an assignment.`} style={{ cursor: 'help', padding: '3px 8px', borderRadius: '8px', fontSize: '11px', fontWeight: 700, background: conf != null && conf >= 90 ? 'var(--status-active-bg)' : 'var(--status-pending-bg)', color: conf != null && conf >= 90 ? 'var(--status-active)' : 'var(--warning)', flexShrink: 0 }}>
                   {conf != null ? `${conf}% Match` : 'Match n/a'}
                 </span>
               </div>
@@ -1971,9 +2030,13 @@ export const PlanningWorkspace: React.FC = () => {
                        manager was attributed to "operations manager" while the user directory
                        and every other surface name the same person's role from the shared
                        ROLE_LABELS map — and HR_MANAGER de-cased to "hr manager". */
-                    title={latest ? `Latest (${latest.category.toLowerCase()}, ${latest.authorRole ? roleLabel(latest.authorRole) : 'staff'}): "${latest.text.length > 140 ? `${latest.text.slice(0, 137)}…` : latest.text}" — click for all remarks` : 'Click for remarks'}
+                    title={[
+                      `What staff have written about this assayer, scored ${remarkVerdict(m).outOfFive} out of 5 — recent remarks count for more than old ones.`,
+                      latest ? `Latest (${latest.category.toLowerCase()}, ${latest.authorRole ? roleLabel(latest.authorRole) : 'staff'}): "${latest.text.length > 140 ? `${latest.text.slice(0, 137)}…` : latest.text}"` : null,
+                      'Click to read them all, or add one.',
+                    ].filter(Boolean).join('\n')}
                     style={{ alignSelf: 'flex-start', display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '10.5px', fontWeight: 600, padding: '3px 8px', borderRadius: 'var(--radius-sm)', background: tone.bg, color: tone.fg, border: 'none', cursor: 'pointer' }}>
-                    <MessageCircle size={10} /> {c.remarkSummary.count} remark{c.remarkSummary.count === 1 ? '' : 's'} · avg {fmtSignedMean(m)}
+                    <MessageCircle size={10} /> {counted(c.remarkSummary.count, 'remark')} · {remarkVerdict(m).word} ({remarkVerdict(m).outOfFive} out of 5)
                   </button>
                 );
               })()}
@@ -2078,7 +2141,7 @@ export const PlanningWorkspace: React.FC = () => {
                     { value: 'DECLINED', label: CALL_OUTCOME_LABELS.DECLINED },
                     { value: 'WRONG_NUMBER', label: CALL_OUTCOME_LABELS.WRONG_NUMBER },
                   ]}
-                  placeholder="Log call outcome…"
+                  placeholder="Called but no assignment? Record what happened…"
                   aria-label="Record a call that did not result in an assignment"
                   compact
                   style={{ gridColumn: '1 / -1', color: 'var(--text-secondary)' }}
@@ -2087,6 +2150,24 @@ export const PlanningWorkspace: React.FC = () => {
                 <button onClick={async () => {
                   const selectedPb = branches.find(b => b.id === selectedBranchId);
                   if (!selectedPb) return;
+                  /*
+                    This button created a live assignment on a single click, with no fee and no
+                    confirmation — the most consequential control on the card and the only one
+                    that asked nothing. Its old name, "Direct App Invite", also described the
+                    mechanism rather than the outcome: it is not an invitation to look, it books
+                    the person. The shared confirm dialog now names the assayer, the branch and
+                    the fee consequence before anything is sent (never window.confirm — that
+                    cannot show any of it).
+                  */
+                  const ok = await confirm({
+                    title: 'Send this job to the assayer\u2019s phone?',
+                    message: `${c.displayName} will be assigned to ${selectedPb.branch?.name ?? 'this branch'} straight away and will see it in their app. No fee is agreed or recorded \u2014 use \u201cCall & Assign\u201d instead if a fee needs to be quoted.`,
+                    confirmLabel: 'Send now',
+                    // Truthful rather than reassuring: the assignment can be cancelled
+                    // afterwards, but the notification on the assayer's phone cannot be recalled.
+                    reversibleNote: 'The assignment can be cancelled afterwards, but the assayer will already have been notified.',
+                  });
+                  if (!ok) return;
                   try {
                     await api.request('/assignments', {
                       method: 'POST',
@@ -2103,9 +2184,9 @@ export const PlanningWorkspace: React.FC = () => {
                   }
                 }}
                   className="btn btn-secondary"
-                  title="Dispatches immediately with no fee captured — use Call & Assign for a priced offer"
+                  title="Assigns this assayer immediately and shows the job in their app. No fee is agreed or recorded — use “Call & Assign” when a fee has to be quoted."
                   style={{ padding: '7px 10px', fontSize: '11px', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
-                  <Smartphone size={12} /> Direct App Invite
+                  <Smartphone size={12} /> Send to app (no fee)
                 </button>
               </div>
 
@@ -3625,6 +3706,8 @@ export const PlanningWorkspace: React.FC = () => {
           </div>
         </div>
       )}
+      {/* Shared confirm dialog host — rendered once for the whole workspace. */}
+      {confirmDialog}
     </div>
   );
 };

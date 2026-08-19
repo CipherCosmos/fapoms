@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useUrlSelection } from '../hooks/useUrlSelection';
 import { Upload, Building2, Globe, ShieldAlert, Activity, Plus, Edit2, Trash2, Phone, FileText, User, Filter, ChevronDown, Map, X } from 'lucide-react';
-import { SearchInput, FilterSelect, StatusBadge, AlertBanner, Modal, Select, useToast } from '../components/ui';
+import { SearchInput, FilterSelect, StatusBadge, AlertBanner, Modal, Select, useToast, useConfirm } from '../components/ui';
 import { ChipMultiSelect } from '../components/ui/ChipMultiSelect';
 import { useWorkforceVocabulary, asOptions } from '../hooks/useWorkforceVocabulary';
 import { Autocomplete } from '../components/ui/Autocomplete';
@@ -9,12 +9,13 @@ import type { IndiaPlaceResult } from '../components/ui/Autocomplete';
 import { api } from '../services/api';
 import { GeoPrecisionBadge, geoNeedsFixing } from '../components/GeoPrecisionBadge';
 import { PinCoordinateControl } from '../components/PinCoordinateControl';
-import { INDIAN_STATES, REGION_ORDER, REGION_LABELS, regionLabel, canonicalStateName, resolveRegion } from '@fapoms/shared';
+import { INDIAN_STATES, REGION_ORDER, REGION_LABELS, regionLabel, canonicalStateName, resolveRegion, riskCategoryLabel, branchComplexityLabel, branchTypeLabel, auditDocumentTypeLabel } from '@fapoms/shared';
 import { useScope, withScope } from '../context/ScopeContext';
 import { connectSocket } from '../services/socket';
 import { useCurrentRoles, canManageBranches, canDeleteBranches } from '../hooks/useCurrentRoles';
 import { userMessage } from '../services/errors';
 import { getZones } from '../services/planning';
+import { counted } from '../utils/plural';
 
 interface ClientOption {
   id: string;
@@ -129,8 +130,35 @@ const normalisePhone = (raw: string): string => {
 };
 
 const RISK_CATEGORIES = ['LOW', 'MEDIUM', 'HIGH', 'CRITICAL'];
-const COMPLEXITIES = ['STANDARD', 'COMPLEX', 'VERY_COMPLEX'];
-const BRANCH_TYPES = ['MAIN', 'BRANCH', 'SUB_BRANCH', 'EXTENSION', 'MICRO'];
+/**
+ * SIMPLE was missing from this list, and it is the second most common value in the data — 50 of
+ * the 166 branches on file carry it. The Complexity dropdown matches its options by exact string,
+ * so every one of those branches opened the edit form showing "Select…", and saving after any
+ * unrelated change re-banded the branch (and, through DEFAULT_HOURS_BY_COMPLEXITY, the day's work
+ * planning assumes for it) to whatever the user picked to fill the empty box.
+ */
+const COMPLEXITIES = ['SIMPLE', 'STANDARD', 'COMPLEX', 'VERY_COMPLEX'];
+/**
+ * The same trap, worse: this list offered BRANCH / SUB_BRANCH / EXTENSION / MICRO, none of which
+ * appear in the data at all. What clients actually send is MAIN, METRO, SUB and URBAN — 161 of
+ * 166 branches held a type the dropdown could not show. The recorded value is also kept as an
+ * option of its own below (`keepRecorded`), the way State already does it, so a type from a
+ * future import is never silently rewritten either.
+ */
+const BRANCH_TYPES = ['MAIN', 'SUB', 'METRO', 'URBAN', 'SEMI_URBAN', 'RURAL', 'BRANCH', 'SUB_BRANCH', 'EXTENSION', 'MICRO'];
+
+/**
+ * Keeps whatever is already stored selectable, even when it is not one of the offered values.
+ * A <select> that cannot represent the current value reads as "unset" and quietly rewrites the
+ * record on the next save — the exact failure the State field was fixed for.
+ */
+const keepRecorded = (
+  current: string,
+  options: { value: string; label: string }[],
+): { value: string; label: string }[] =>
+  !current || options.some((o) => o.value === current)
+    ? options
+    : [...options, { value: current, label: `${current} (as recorded)` }];
 
 /**
  * Risk score and risk category are one idea, not two.
@@ -170,6 +198,7 @@ const categoryForScore = (score: string): string => {
  * complexity, so leaving the field alone now produces the right answer instead of a typed guess.
  */
 const DEFAULT_HOURS_BY_COMPLEXITY: Record<string, string> = {
+  SIMPLE: '4',
   STANDARD: '8',
   COMPLEX: '12',
   VERY_COMPLEX: '16',
@@ -208,6 +237,12 @@ const applyPlaceToBranch = (fieldKey: 'city' | 'district' | 'pincode', place: In
 
 export const Branches: React.FC = () => {
   const { toast } = useToast();
+  // Deleting a branch takes its contacts, documents and audit history with it and cannot be
+  // undone. `window.confirm` asked "Delete this branch?" in the browser's own grey box — the same
+  // box office staff are trained to dismiss, with an OK button that says nothing about what it
+  // does and answers to a stray Enter key. The shared dialog names the branch and makes the user
+  // type its code, which is impossible to do by reflex and proves they are on the row they think.
+  const { confirm, confirmDialog } = useConfirm();
   // The header's global scope. `scopeKey` changes whenever any dimension does, and is what the
   // reload effect below watches.
   const { scopeParams, scopeKey } = useScope();
@@ -222,6 +257,9 @@ export const Branches: React.FC = () => {
   // choice follows the operator across every page, and so the server can apply them to the
   // whole result set rather than to the one page this component happens to have loaded.
   const [riskFilter, setRiskFilter] = useState('ALL');
+  // Off by default because the column repeats the branch code for almost every row; on demand for
+  // the reconciliation job where the client's SOL register is the document being checked against.
+  const [showSolIdColumn, setShowSolIdColumn] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -319,8 +357,23 @@ export const Branches: React.FC = () => {
     } catch (err) { console.error('Failed to load branch details'); }
   };
 
-  const handleDelete = async (id: string) => {
-    if (!confirm('Delete this branch?')) return;
+  const handleDelete = async (branch: Branch) => {
+    const id = branch.id;
+    const ok = await confirm({
+      title: 'Delete this branch?',
+      message: (
+        <>
+          <b>{branch.name}</b> ({branch.branchCode}) in {branch.city}, {branch.state} will be removed,
+          along with its contacts and saved documents. Any audit already planned against it will no
+          longer have a branch to visit.
+        </>
+      ),
+      confirmLabel: 'Delete branch',
+      tone: 'danger',
+      reversible: false,
+      confirmPhrase: branch.branchCode,
+    });
+    if (!ok) return;
     try {
       await api.request(`/branches/${id}`, { method: 'DELETE' });
       setMessage({ type: 'success', text: 'Branch deleted.' });
@@ -341,14 +394,14 @@ export const Branches: React.FC = () => {
         body: formData
       });
       const { importedCount, errors } = data;
-      let msg = `Successfully imported ${importedCount} branches.`;
+      let msg = `Successfully imported ${counted(importedCount, 'branch', 'branches')}.`;
       if (errors && errors.length > 0) {
         // Show what actually failed, not just a count — the backend returns per-row reasons.
         const detail = errors
           .slice(0, 5)
           .map((er: any) => (typeof er === 'string' ? er : er?.reason || er?.message || JSON.stringify(er)))
           .join('; ');
-        msg += ` Excluded ${errors.length} row(s): ${detail}${errors.length > 5 ? '…' : ''}`;
+        msg += ` Excluded ${counted(errors.length, 'row')}: ${detail}${errors.length > 5 ? '…' : ''}`;
       }
       setMessage({ type: errors && errors.length > 0 ? 'error' : 'success', text: msg });
       loadBranches(selectedClientId);
@@ -370,16 +423,28 @@ export const Branches: React.FC = () => {
   const regionCount = new Set(branches.map(b => b.region).filter(Boolean)).size;
   const highRiskCount = branches.filter(b => b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL').length;
   const standardCount = branches.filter(b => b.complexity === 'STANDARD').length;
+  // Every branch on file carries a SOL ID, and for all but a handful it is a copy of the branch
+  // code (156 of 166 in the live data). Two columns of the same string told the clerk nothing and
+  // pushed the branch name off the side of the table, so the SOL ID is shown beneath the code
+  // only where it actually says something different. Nothing is lost: the search box still
+  // matches on it, the detail panel still lists it, and the toggle below brings the full column
+  // back for anyone reconciling against a client's own SOL register.
+  const solIdDiffers = (b: Branch) => !!b.solId && b.solId !== b.branchCode;
+  const solIdIsInformative = branches.some(solIdDiffers);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
       {/* KPI Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
         {[
-          { label: 'Total Branches', value: totalCount, icon: Building2, color: 'var(--accent-primary)' },
-          { label: 'Regions Covered', value: regionCount, icon: Globe, color: 'var(--status-active)' },
-          { label: 'High / Critical Risk', value: highRiskCount, icon: ShieldAlert, color: 'var(--danger)' },
-          { label: 'Standard Complexity', value: standardCount, icon: Activity, color: 'var(--accent-secondary)' },
+          // Each tile now says what its number is and what it is for. "Standard Complexity 71"
+          // was a puzzle: nothing on the page defined complexity, so a clerk could not tell
+          // whether 71 was good, bad, or something they were supposed to act on. The numbers
+          // themselves are unchanged.
+          { label: 'Total Branches', value: totalCount, icon: Building2, color: 'var(--accent-primary)', note: 'On this client\u2019s list, within your current scope' },
+          { label: 'Regions Covered', value: regionCount, icon: Globe, color: 'var(--status-active)', note: 'Distinct planning regions these branches fall in' },
+          { label: 'High / Critical Risk', value: highRiskCount, icon: ShieldAlert, color: 'var(--danger)', note: 'Need an experienced assayer \u2014 plan these first' },
+          { label: 'Standard Complexity', value: standardCount, icon: Activity, color: 'var(--accent-secondary)', note: 'A normal one-day visit (about 8 hours each)' },
         ].map(card => {
           const Icon = card.icon;
           return (
@@ -390,6 +455,7 @@ export const Branches: React.FC = () => {
               <div>
                 <span style={{ fontSize: '12px', color: 'var(--text-secondary)', fontWeight: 500 }}>{card.label}</span>
                 <h4 style={{ fontSize: '24px', fontWeight: 800, margin: '2px 0', color: 'var(--text-primary)' }}>{card.value}</h4>
+                <span style={{ fontSize: '10.5px', color: 'var(--text-muted)', display: 'block', lineHeight: 1.3 }}>{card.note}</span>
               </div>
             </div>
           );
@@ -437,7 +503,7 @@ export const Branches: React.FC = () => {
           {/* Advanced Filters */}
           {showFilters && (
             <div className="glass-card" style={{ padding: '12px 16px', display: 'flex', gap: '16px', flexWrap: 'wrap', alignItems: 'center' }}>
-              <FilterSelect label={<span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 500 }}>Risk:</span>} value={riskFilter} onChange={setRiskFilter} options={[{ value: 'ALL', label: 'All' }, ...RISK_CATEGORIES.map(r => ({ value: r, label: r }))]} compact />
+              <FilterSelect label={<span style={{ fontSize: '12px', color: 'var(--text-muted)', fontWeight: 500 }}>Risk:</span>} value={riskFilter} onChange={setRiskFilter} options={[{ value: 'ALL', label: 'All risk levels' }, ...RISK_CATEGORIES.map(r => ({ value: r, label: riskCategoryLabel(r) }))]} compact />
               <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
                 Region, zone and state are set in the header's scope filter.
               </span>
@@ -463,30 +529,45 @@ export const Branches: React.FC = () => {
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>Code</th><th>SOL ID</th><th>Branch Name</th><th>City / State</th><th>Region</th><th>Risk</th><th>Type</th><th>Actions</th>
+                    <th>
+                      Code
+                      {solIdIsInformative && (
+                        <button type="button" onClick={() => setShowSolIdColumn(v => !v)}
+                          style={{ marginLeft: 6, background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent-primary)', fontSize: '10px', fontWeight: 600 }}>
+                          {showSolIdColumn ? 'hide SOL ID' : 'show SOL ID'}
+                        </button>
+                      )}
+                    </th>
+                    {showSolIdColumn && <th>SOL ID</th>}
+                    <th>Branch Name</th><th>City / State</th><th>Region</th><th>Risk</th><th>Type</th><th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {filteredBranches.length === 0 ? (
-                    <tr><td colSpan={8} style={{ textAlign: 'center', padding: '24px', color: 'var(--text-secondary)' }}>No branches to show. Branches come from a client’s branch list — clear your search and filters if you expected to see some.</td></tr>
+                    <tr><td colSpan={showSolIdColumn ? 9 : 8} style={{ textAlign: 'center', padding: '24px', color: 'var(--text-secondary)' }}>No branches to show. Branches come from a client’s branch list — clear your search and filters if you expected to see some.</td></tr>
                   ) : filteredBranches.map((b) => (
                     <tr key={b.id || b.branchCode}
                       onClick={() => { loadBranchDetail(b); selectBranch(b.id); }}
                       style={{ cursor: 'pointer', background: selectedBranch?.id === b.id ? 'rgba(216,174,71,0.08)' : undefined }}>
-                      <td style={{ fontSize: '12px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>{b.branchCode}</td>
-                      <td style={{ fontSize: '12px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>{b.solId || '-'}</td>
+                      <td style={{ fontSize: '12px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
+                        {b.branchCode}
+                        {!showSolIdColumn && solIdDiffers(b) && (
+                          <span style={{ display: 'block', fontSize: '10.5px', color: 'var(--text-muted)' }}>SOL {b.solId}</span>
+                        )}
+                      </td>
+                      {showSolIdColumn && <td style={{ fontSize: '12px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>{b.solId || '-'}</td>}
                       <td style={{ fontWeight: 600, fontSize: '14px' }}>{b.name}</td>
                       <td style={{ fontSize: '13px' }}>{b.city}, {b.state}</td>
                       <td style={{ fontSize: '13px' }}>{regionLabel(b.region)}</td>
                       <td>
-                        <StatusBadge label={b.riskCategory || '-'} bg={b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL' ? 'var(--status-cancelled-bg)' : b.riskCategory === 'MEDIUM' ? 'var(--status-pending-bg)' : 'var(--status-active-bg)'} color={b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL' ? 'var(--danger)' : b.riskCategory === 'MEDIUM' ? 'var(--warning)' : 'var(--status-active)'} />
+                        <StatusBadge label={riskCategoryLabel(b.riskCategory)} bg={b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL' ? 'var(--status-cancelled-bg)' : b.riskCategory === 'MEDIUM' ? 'var(--status-pending-bg)' : 'var(--status-active-bg)'} color={b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL' ? 'var(--danger)' : b.riskCategory === 'MEDIUM' ? 'var(--warning)' : 'var(--status-active)'} />
                       </td>
-                      <td style={{ fontSize: '12px' }}>{b.branchType || '-'}</td>
+                      <td style={{ fontSize: '12px' }}>{branchTypeLabel(b.branchType)}</td>
                       <td onClick={(e) => e.stopPropagation()}>
                         <div style={{ display: 'flex', gap: '4px' }}>
                           {canManage && <>
                             <button aria-label="Edit branch" onClick={() => { setEditingBranch(b); setShowEditModal(true); }} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '11px' }}><Edit2 size={11} /></button>
-                            {canDelete && <button aria-label="Delete branch" onClick={() => handleDelete(b.id)} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '11px', color: 'var(--danger)' }}><Trash2 size={11} /></button>}
+                            {canDelete && <button aria-label="Delete branch" onClick={() => handleDelete(b)} className="btn btn-secondary" style={{ padding: '4px 8px', fontSize: '11px', color: 'var(--danger)' }}><Trash2 size={11} /></button>}
                           </>}
                         </div>
                       </td>
@@ -520,13 +601,13 @@ export const Branches: React.FC = () => {
               {/* Info Grid */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', fontSize: '12px', padding: '12px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)' }}>
                 <InfoRow label="SOL ID" value={branchDetail.solId || '-'} />
-                <InfoRow label="Branch Type" value={branchDetail.branchType || '-'} />
+                <InfoRow label="Branch Type" value={branchTypeLabel(branchDetail.branchType)} />
                 <InfoRow label="Region" value={regionLabel(branchDetail.region)} />
                 <InfoRow label="Territory" value={branchDetail.territory || '-'} />
                 <InfoRow label="Manager" value={branchDetail.managerName || '-'} />
-                <InfoRow label="Risk Category" value={branchDetail.riskCategory || '-'} />
+                <InfoRow label="Risk Category" value={riskCategoryLabel(branchDetail.riskCategory)} />
                 <InfoRow label="Risk Score" value={branchDetail.riskScore != null ? String(Number(branchDetail.riskScore).toFixed(2)) : '-'} />
-                <InfoRow label="Complexity" value={branchDetail.complexity} />
+                <InfoRow label="Complexity" value={branchComplexityLabel(branchDetail.complexity)} />
                 <InfoRow label="Est. Duration" value={branchDetail.estimatedDurationHours != null ? `${branchDetail.estimatedDurationHours}h` : '-'} />
                 <InfoRow label="Phone" value={branchDetail.phone || '-'} />
                 {branchDetail.email && <InfoRow label="Email" value={branchDetail.email} full />}
@@ -580,7 +661,7 @@ export const Branches: React.FC = () => {
                 ) : branchDetail.contacts.map(c => (
                   <div key={c.id} style={{ padding: '10px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', fontSize: '12px', marginBottom: '8px' }}>
                     <div style={{ fontWeight: 600, display: 'flex', justifyContent: 'space-between' }}>
-                      <span>{c.name} {c.isPrimary && <span style={{ fontSize: '10px', color: 'var(--accent-secondary)' }}>(PRIMARY)</span>}</span>
+                      <span>{c.name} {c.isPrimary && <span style={{ fontSize: '10px', color: 'var(--accent-secondary)' }}>(Primary contact)</span>}</span>
                     </div>
                     <div style={{ color: 'var(--text-muted)' }}>{c.designation}{c.department && ` • ${c.department}`}</div>
                     <div style={{ color: 'var(--text-secondary)', display: 'flex', gap: '10px', fontSize: '11px', marginTop: '2px' }}><span>{c.email}</span><span>{c.phone}</span></div>
@@ -598,7 +679,9 @@ export const Branches: React.FC = () => {
                 ) : branchDetail.documents.map(d => (
                   <div key={d.id} style={{ padding: '10px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', fontSize: '12px', marginBottom: '8px' }}>
                     <div style={{ fontWeight: 600 }}>{d.fileName}</div>
-                    <div style={{ color: 'var(--text-muted)', fontSize: '11px' }}>{d.category} • {(d.fileSize / 1024).toFixed(1)} KB{d.remarks && ` • ${d.remarks}`}</div>
+                    {/* The category is stored as an enum (BRANCH_LIST); rendering it raw put a SCREAMING_SNAKE
+                          word under a filename the clerk had just uploaded themselves. */}
+                    <div style={{ color: 'var(--text-muted)', fontSize: '11px' }}>{auditDocumentTypeLabel(d.category)} • {(d.fileSize / 1024).toFixed(1)} KB{d.remarks && ` • ${d.remarks}`}</div>
                   </div>
                 ))}
               </div>
@@ -665,6 +748,8 @@ export const Branches: React.FC = () => {
           }}
         />
       )}
+
+      {confirmDialog}
 
       {showContactModal && selectedBranch && (
         <AddBranchContactModal branchId={selectedBranch.id} onClose={() => setShowContactModal(false)} onAdded={() => { setShowContactModal(false); loadBranchDetail(selectedBranch); }} />
@@ -880,7 +965,7 @@ const BranchFormModal: React.FC<{
         {/* One input for one idea. The score is derived from the band and shown read-only here;
             it stays directly editable under Advanced for a branch with a real scored assessment. */}
         {field('Risk Category', 'riskCategory', {
-          options: RISK_BANDS.map(b => ({ value: b.category, label: `${b.category} — ${b.hint}` })),
+          options: RISK_BANDS.map(b => ({ value: b.category, label: `${riskCategoryLabel(b.category)} — ${b.hint}` })),
           onChange: setRiskCategory,
           hint: form.riskScore ? `Risk score ${Number(form.riskScore).toFixed(2)} — set from this band` : 'Sets the risk score for you',
         })}
@@ -897,7 +982,7 @@ const BranchFormModal: React.FC<{
         {showAdvanced && <>
           <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>IDENTIFICATION</span>
           {field('SOL ID', 'solId', { placeholder: 'e.g. 12345' })}
-          {field('Branch Type', 'branchType', { options: BRANCH_TYPES.map(t => ({ value: t, label: t })) })}
+          {field('Branch Type', 'branchType', { options: keepRecorded(form.branchType, BRANCH_TYPES.map(t => ({ value: t, label: branchTypeLabel(t) }))) })}
           {field('Manager Name', 'managerName', { placeholder: 'Branch manager name', full: true })}
           {field('Email', 'email', { type: 'email', full: true })}
 
@@ -915,10 +1000,10 @@ const BranchFormModal: React.FC<{
           {field('Zone', 'zoneId', { options: zoneOptions, full: true })}
 
           <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>AUDIT & RISK</span>
-          {field('Complexity', 'complexity', { options: COMPLEXITIES.map(c => ({ value: c, label: c })), onChange: setComplexity })}
+          {field('Complexity', 'complexity', { options: keepRecorded(form.complexity, COMPLEXITIES.map(c => ({ value: c, label: branchComplexityLabel(c) }))), onChange: setComplexity })}
           {field('Est. Duration (hours)', 'estimatedDurationHours', {
             type: 'number',
-            hint: `Defaults to ${DEFAULT_HOURS_BY_COMPLEXITY[form.complexity] ?? '8'}h for ${form.complexity || 'STANDARD'}`,
+            hint: `Defaults to ${DEFAULT_HOURS_BY_COMPLEXITY[form.complexity] ?? '8'}h for ${branchComplexityLabel(form.complexity || 'STANDARD')}`,
           })}
           {field('Risk Score', 'riskScore', {
             type: 'number', onChange: setRiskScore, placeholder: '0.00 - 100.00', full: true,

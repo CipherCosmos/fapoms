@@ -8,6 +8,8 @@ import { userMessage } from '../../services/errors';
 import { deskRole, deskCard, deskLabel, CaseListRow, TeamMember } from './deskRoles';
 import { Select, useConfirm } from '../../components/ui';
 import { validationStatusLabel } from '@fapoms/shared';
+import { counted } from '../../utils/plural';
+import { visibleSelection, hiddenSelectionNote } from '../../utils/selection';
 
 /**
  * The review queue: validation cases as a server-paginated table.
@@ -115,18 +117,20 @@ export const ReviewsQueue: React.FC = () => {
    * so the number being signed off has to be read before it happens.
    */
   const bulkDecide = async (target: 'APPROVED' | 'CORRECTION_REQUIRED') => {
-    if (sel.size === 0) return;
+    const ids = selectedIds;
+    if (ids.length === 0) return;
     if (target === 'APPROVED') {
-      const n = sel.size;
+      const n = ids.length;
       const ok = await confirm({
-        title: `Approve ${n} report${n === 1 ? '' : 's'}?`,
+        title: `Approve ${counted(n, 'report')}?`,
         message: (
           <>
-            This signs off <strong>{n} audit report{n === 1 ? '' : 's'}</strong> as checked and correct.
+            This signs off <strong>{counted(n, 'audit report')}</strong> as checked and correct.
             Approved reports are the ones a manager can send to the client.
+            {hiddenNote && <><br />{hiddenNote}</>}
           </>
         ),
-        confirmLabel: `Approve ${n} report${n === 1 ? '' : 's'}`,
+        confirmLabel: `Approve ${counted(n, 'report')}`,
         reversible: false,
         reversibleNote: 'Approving cannot be undone from this screen. Each report would have to be reopened one by one.',
         tone: 'danger',
@@ -138,13 +142,13 @@ export const ReviewsQueue: React.FC = () => {
     try {
       const res = await api.request<{ succeeded: { id: string }[]; failed: { id: string; reason: string }[] }>('/validation/bulk/transition', {
         method: 'POST',
-        body: JSON.stringify({ ids: Array.from(sel), targetStatus: target, remarks: note.trim() || undefined }),
+        body: JSON.stringify({ ids, targetStatus: target, remarks: note.trim() || undefined }),
       });
       const s = res.succeeded?.length ?? 0;
       const f = res.failed ?? [];
       setMsg(f.length
-        ? { type: 'error', text: `${s} updated · ${f.length} failed: ${f.map((x) => x.reason).join('; ')}` }
-        : { type: 'success', text: `${s} ${target === 'APPROVED' ? 'approved' : 'sent back for rework'}` });
+        ? { type: 'error', text: `${counted(s, 'report')} updated · ${counted(f.length, 'report')} could not be: ${f.map((x) => x.reason).join('; ')}` }
+        : { type: 'success', text: `${counted(s, 'report')} ${target === 'APPROVED' ? 'approved' : 'sent back for correction'}` });
       setSel(new Set());
       setNote('');
       load();
@@ -161,6 +165,20 @@ export const ReviewsQueue: React.FC = () => {
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / PAGE_SIZE)), [total]);
   const showBulk = isHead && status === 'HUMAN_REVIEW';
 
+  /**
+   * Which ticked reports a bulk decision actually signs off.
+   *
+   * The ticked ids lived in a `Set` that outlived the list they were ticked from. This queue
+   * re-fetches on a status tab change, a search, and a page turn, and none of those cleared the
+   * set — so a head could tick five reports, type a search, and press "Approve selected" with the
+   * button reading 5 while the rows on screen were a different five. Approving is irreversible
+   * from this screen, which makes "approved something I could not see" the worst possible outcome
+   * of a stale selection. Narrowed at the moment of the action, and the note says plainly when the
+   * current view is hiding ticked rows rather than silently including or dropping them.
+   */
+  const { ids: selectedIds, hiddenCount } = visibleSelection(sel, rows, (r) => r.id);
+  const hiddenNote = hiddenSelectionNote(hiddenCount, 'report');
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
       {confirmDialog}
@@ -174,7 +192,8 @@ export const ReviewsQueue: React.FC = () => {
         ))}
         {isHead && status === 'HUMAN_REVIEW' && (
           <label style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '12px', color: unroutedOnly ? 'var(--danger)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}>
-            <input type="checkbox" checked={unroutedOnly} onChange={toggleUnrouted} /> Not routed only
+            {/* "Routed" was the pipeline's word for the reviewer having been chosen. */}
+            <input type="checkbox" checked={unroutedOnly} onChange={toggleUnrouted} /> Only ones nobody is checking yet
           </label>
         )}
         <span style={{ display: 'flex', alignItems: 'center', gap: '6px', marginLeft: 'auto', background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '6px 10px' }}>
@@ -192,7 +211,8 @@ export const ReviewsQueue: React.FC = () => {
 
       {showBulk && (
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', fontSize: '12px' }}>
-          <span style={{ color: 'var(--text-muted)' }}>{sel.size} selected</span>
+          <span style={{ color: 'var(--text-muted)' }}>{counted(selectedIds.length, 'report')} ticked</span>
+          {hiddenNote && <span style={{ color: 'var(--warning)' }}>{hiddenNote}</span>}
           {/*
             The note is optional to approve and required to reject. Sending work back without
             saying what is wrong leaves the data-entry operator looking at a case marked
@@ -202,11 +222,11 @@ export const ReviewsQueue: React.FC = () => {
           */}
           <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note for the decision (required to send back)"
             style={{ flex: '1 1 220px', padding: '6px 10px', fontSize: '12px', borderRadius: '7px', background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)', outline: 'none' }} />
-          <button onClick={() => bulkDecide('APPROVED')} disabled={sel.size === 0 || busy === '__bulk__'} className="btn btn-primary"
+          <button onClick={() => bulkDecide('APPROVED')} disabled={selectedIds.length === 0 || busy === '__bulk__'} className="btn btn-primary"
             style={{ fontSize: '11.5px', padding: '6px 12px', width: 'auto' }}>
             {busy === '__bulk__' ? 'Saving…' : 'Approve selected'}
           </button>
-          <button onClick={() => bulkDecide('CORRECTION_REQUIRED')} disabled={sel.size === 0 || busy === '__bulk__' || !note.trim()} className="btn btn-secondary"
+          <button onClick={() => bulkDecide('CORRECTION_REQUIRED')} disabled={selectedIds.length === 0 || busy === '__bulk__' || !note.trim()} className="btn btn-secondary"
             title={!note.trim() ? 'Add a note saying what needs correcting' : undefined}
             style={{ fontSize: '11.5px', padding: '6px 12px', width: 'auto', color: 'var(--danger)' }}>
             Send back for rework
@@ -270,7 +290,7 @@ export const ReviewsQueue: React.FC = () => {
                         value={c.reviewerId ?? ''}
                         disabled={busy === c.id}
                         onChange={(v) => route(c.id, v)}
-                        placeholder={c.reviewerId ? 'Re-route…' : 'Route to…'}
+                        placeholder={c.reviewerId ? 'Change who checks…' : 'Choose who checks…'}
                         options={reviewers.map((v) => ({ value: v.id, label: v.name }))}
                         style={c.reviewerId ? undefined : { border: '1px solid var(--warning)' }}
                       />

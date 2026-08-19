@@ -10,6 +10,8 @@ import { api } from '../services/api';
 import { userMessage } from '../services/errors';
 import { useToast } from '../components/ui';
 import { clientLifecycleLabel, clientTypeLabel } from '../utils/statusLabels';
+import { priorityLabel } from '@fapoms/shared';
+import { counted } from '../utils/plural';
 import { CreateClientModal } from './clients/CreateClientModal';
 import { EditClientModal } from './clients/EditClientModal';
 import { LifecycleModal } from './clients/LifecycleModal';
@@ -143,6 +145,12 @@ const Clients: React.FC = () => {
 
   const selectedClient = data?.items.find((c) => c.id === selectedId) ?? null;
 
+  // There is something to page through only when the server says the result set is bigger than
+  // one page. `page > 1` keeps the controls on screen if a shrinking result set (a filter typed,
+  // a client deleted) leaves the user stranded on a page that no longer exists.
+  const totalClients = data?.meta.total ?? 0;
+  const showPager = (data?.meta.totalPages ?? 1) > 1 || totalClients > limit || page > 1;
+
   // The clients this page will actually change — ticked AND on the page in front of the user.
   // The list is server-paged and server-filtered, so a tick made on page 1 or under a different
   // lifecycle filter is not something the user can see or check any more. `hidden` is surfaced in
@@ -191,7 +199,7 @@ const Clients: React.FC = () => {
       // partial failure the user had to hunt down and re-tick each failure by hand.
       setSelectedIds(new Set(failed.map((f) => f.id)));
       setBulkTarget(failed.length > 0 ? target : '');
-      toast('success', `${succeeded.length} client(s) moved to ${clientLifecycleLabel(target)}.`);
+      toast('success', `${counted(succeeded.length, 'client')} moved to ${clientLifecycleLabel(target)}.`);
     } catch (err: any) {
       // The whole call failed, so nothing changed — keep the selection exactly as it was so the
       // user can simply press Apply again.
@@ -251,7 +259,9 @@ const Clients: React.FC = () => {
     },
     {
       key: 'lifecycleStatus',
-      header: 'Lifecycle',
+      // "Lifecycle" is the name of the model, not of the thing on screen. A clerk asked where a
+      // client stands says "status"; the word "lifecycle" appears on no form they handle.
+      header: 'Status',
       sortValue: (r) => r.lifecycleStatus,
       render: (r) => {
         const c = LIFECYCLE_COLORS[r.lifecycleStatus] ?? { color: 'var(--text-muted)', bg: 'var(--bg-surface-2)' };
@@ -264,7 +274,10 @@ const Clients: React.FC = () => {
       sortValue: (r) => r.priority,
       render: (r) => {
         const c = PRIORITY_COLORS[r.priority] ?? { color: 'var(--text-muted)', bg: 'var(--bg-surface-2)' };
-        return <StatusBadge label={r.priority} color={c.color} bg={c.bg} variant="tag" />;
+        // `HIGH` is how the database spells it, not how anyone says it. The chip used to render
+        // the raw enum, so the Priority column was the only shouting column on the page and gave a
+        // clerk no clue whether the capitals themselves meant something.
+        return <StatusBadge label={priorityLabel(r.priority)} color={c.color} bg={c.bg} variant="tag" />;
       },
     },
     {
@@ -304,9 +317,9 @@ const Clients: React.FC = () => {
           the Clear button, which also wiped the search box. Every other filtered page in the app
           already passes an "All …" option; this one was the exception.
         */}
-        <FilterSelect value={status} onChange={(v) => setStatus(v)} options={[{ value: '', label: 'All lifecycles' }, ...LIFECYCLE_FILTERS.map((s) => ({ value: s, label: clientLifecycleLabel(s) }))]} label="Lifecycle" />
+        <FilterSelect value={status} onChange={(v) => setStatus(v)} options={[{ value: '', label: 'All statuses' }, ...LIFECYCLE_FILTERS.map((s) => ({ value: s, label: clientLifecycleLabel(s) }))]} label="Status" />
         <FilterSelect value={clientType} onChange={(v) => setClientType(v)} options={[{ value: '', label: 'All types' }, ...CLIENT_TYPE_FILTERS.map((t) => ({ value: t, label: clientTypeLabel(t) }))]} label="Type" />
-        <FilterSelect value={priority} onChange={(v) => setPriority(v)} options={[{ value: '', label: 'All priorities' }, ...PRIORITY_FILTERS.map((p) => ({ value: p, label: p }))]} label="Priority" />
+        <FilterSelect value={priority} onChange={(v) => setPriority(v)} options={[{ value: '', label: 'All priorities' }, ...PRIORITY_FILTERS.map((p) => ({ value: p, label: priorityLabel(p) }))]} label="Priority" />
         {(status || clientType || priority || debouncedSearch) && (
           <button onClick={() => { setStatus(''); setClientType(''); setPriority(''); setSearch(''); setDebouncedSearch(''); setPage(1); }} className="btn btn-secondary" style={{ fontSize: 12 }}>Clear</button>
         )}
@@ -435,15 +448,22 @@ const Clients: React.FC = () => {
       />
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{data?.meta.total ?? 0} clients</div>
-        <Pagination
+        <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>{counted(data?.meta.total ?? 0, 'client')}</div>
+        {/*
+          The pager only appears when there is somewhere to page to. With two clients on the
+          books the footer still read "Page 1 of 1", "1-2 of 2" and "10 / page" — three dead
+          controls that invite a clerk to hunt for the rest of the list, and one of them (the page
+          size) can only ever change a number that is already showing everything. The count on the
+          left is the part that stays useful at every size, so it is always rendered.
+        */}
+        {showPager && <Pagination
           page={page}
           pageSize={limit}
           total={data?.meta.total ?? 0}
           totalPages={data?.meta.totalPages ?? 1}
           onPageChange={setPage}
           onPageSizeChange={(s) => { setLimit(s); setPage(1); }}
-        />
+        />}
       </div>
 
       <DetailDrawer
@@ -456,7 +476,7 @@ const Clients: React.FC = () => {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
               <div style={{ display: 'flex', gap: 6 }}>
                 <StatusBadge label={clientLifecycleLabel(selectedClient.lifecycleStatus)} color={LIFECYCLE_COLORS[selectedClient.lifecycleStatus]?.color ?? 'var(--text-muted)'} bg={LIFECYCLE_COLORS[selectedClient.lifecycleStatus]?.bg ?? 'var(--bg-surface-2)'} />
-                <StatusBadge label={selectedClient.priority} color={PRIORITY_COLORS[selectedClient.priority]?.color ?? 'var(--text-muted)'} bg={PRIORITY_COLORS[selectedClient.priority]?.bg ?? 'var(--bg-surface-2)'} variant="tag" />
+                <StatusBadge label={priorityLabel(selectedClient.priority)} color={PRIORITY_COLORS[selectedClient.priority]?.color ?? 'var(--text-muted)'} bg={PRIORITY_COLORS[selectedClient.priority]?.bg ?? 'var(--bg-surface-2)'} variant="tag" />
               </div>
               <div style={{ display: 'flex', gap: 6 }}>
                 <button onClick={() => setShowEdit(true)} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>

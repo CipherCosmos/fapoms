@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 
 import { roleLabel, activityEventLabel } from '@fapoms/shared';
+import { counted, plural } from '../../utils/plural';
 import { api } from '../../services/api';
 import { useCurrentRoles } from '../../hooks/useCurrentRoles';
 import { deskRole, deskCard, deskLabel, QueueCounts, PagedQueue } from './deskRoles';
@@ -70,18 +71,39 @@ const ATTENTION_BUCKETS: Array<{ key: keyof Omit<DeskAttention, 'slaHours'>; lab
  * shared layer is the fallback — an unlisted event used to be de-cased inline here.
  */
 const ACTIVITY_LABEL: Record<string, string> = {
-  DOCUMENT_DELEGATED_TO_DATA_ENTRY: 'assigned a packet',
-  DOCUMENT_DATA_ENTRY_COMPLETED: 'handed back',
-  DOCUMENT_RECEIVED: 'packet received',
-  DOCUMENT_UPLOADED: 'packet uploaded',
-  DOCUMENT_DISPATCHED: 'packet dispatched',
-  VALIDATION_STARTED: 'case opened',
-  VALIDATION_HUMAN_REVIEW: 'sent for review',
-  VALIDATION_REVIEWER_ASSIGNED: 'routed the review',
+  DOCUMENT_DELEGATED_TO_DATA_ENTRY: 'gave the packet for',
+  DOCUMENT_DATA_ENTRY_COMPLETED: 'finished typing up',
+  DOCUMENT_RECEIVED: 'received the packet for',
+  DOCUMENT_UPLOADED: 'uploaded the packet for',
+  DOCUMENT_DISPATCHED: 'sent out the packet for',
+  // Was 'case opened' — a noun phrase describing a row appearing in `validation_cases`. With the
+  // actor printed in front it rendered as "System case opened", which is not a sentence, and a
+  // clerk had no way to know a "case" is the checking of one branch's report.
+  VALIDATION_STARTED: 'started the checking of',
+  VALIDATION_HUMAN_REVIEW: 'sent for checking',
+  // "Routed" is the pipeline's word for picking who reviews; say the choosing, not the plumbing.
+  VALIDATION_REVIEWER_ASSIGNED: 'chose who checks',
   VALIDATION_APPROVED: 'approved',
-  VALIDATION_CORRECTION_REQUIRED: 'sent back for rework',
-  VALIDATION_SUBMITTED: 'submitted to client',
+  VALIDATION_CORRECTION_REQUIRED: 'sent back for correction on',
+  VALIDATION_SUBMITTED: 'sent to the client',
 };
+
+/**
+ * Remarks the backend writes for its own record, which are not sentences for a person.
+ *
+ * `validation.service.ts` stamps "Validation pipeline initialized for project branch." on every
+ * case it opens. It appeared verbatim under the feed line, so the most common entry on the whole
+ * Overview was a sentence about a pipeline — a word that exists nowhere in this office's
+ * vocabulary — attached to an event the line above had already described. The stored remark is
+ * untouched (it is audit evidence); it is simply not read out here, because the line it decorates
+ * already says who started checking which branch.
+ *
+ * Matching is on the exact stored string: a remark a person typed must always survive, so this
+ * cannot be a loose "looks technical" heuristic.
+ */
+const SYSTEM_REMARKS = new Set<string>([
+  'Validation pipeline initialized for project branch.',
+]);
 
 export const DataEntryOverview: React.FC = () => {
   const roles = useCurrentRoles();
@@ -125,6 +147,25 @@ export const DataEntryOverview: React.FC = () => {
     : [];
   const breachedTotal = breachedBuckets.reduce((n, b) => n + (attention![b.key]?.total ?? 0), 0);
 
+  /**
+   * Has the desk actually got nothing on it, as opposed to not having loaded yet?
+   *
+   * The Overview's first screenful is seven tiles, and on a quiet desk every one of them reads 0.
+   * Seven zeroes is indistinguishable from seven failed requests, and staff were reading a working
+   * empty desk as a broken screen — this system's data is sparse, so that is the common case, not
+   * the exception. The tiles all stay (they are the links into the queues, and a head still uses
+   * them to reach an empty queue); one plain sentence above them says which of the two it is.
+   *
+   * Deliberately requires the numbers to have *arrived*: `counts`/`totals` are null while loading
+   * and every tile renders "…", so claiming "nothing to do" then would be a guess.
+   */
+  const headFigures = [counts?.unassigned, counts?.working, counts?.rework,
+    totals?.inReview, totals?.unroutedReviews, totals?.approved, totals?.openClarifications];
+  const memberFigures = [counts?.working, counts?.rework, counts?.done, openClarifications];
+  const figures = isHead ? headFigures : memberFigures;
+  const allLoaded = figures.every((n) => typeof n === 'number');
+  const deskIsClear = allLoaded && figures.every((n) => n === 0) && breachedBuckets.length === 0;
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
       {/* Management by exception: what has broken its SLA, loudest first. Absent when
@@ -132,7 +173,7 @@ export const DataEntryOverview: React.FC = () => {
       {isHead && breachedBuckets.length > 0 && (
         <section style={{ ...deskCard, border: '1px solid var(--danger)' }}>
           <div style={{ ...deskLabel, color: 'var(--danger)', marginBottom: '8px' }}>
-            ⚠ Needs attention — {breachedTotal} item{breachedTotal === 1 ? '' : 's'} past their due date
+            ⚠ Needs attention — {counted(breachedTotal, 'item')} past the time they were due
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             {breachedBuckets.map((b) => {
@@ -166,6 +207,17 @@ export const DataEntryOverview: React.FC = () => {
         </section>
       )}
 
+      {deskIsClear && (
+        <section style={{ ...deskCard, borderColor: 'var(--success)' }}>
+          <div style={{ fontSize: '13.5px', fontWeight: 700, color: 'var(--success)' }}>Nothing needs doing right now.</div>
+          <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px', lineHeight: 1.5 }}>
+            {isHead
+              ? 'No packet is waiting to be given out, nothing is being typed up, and no report is waiting to be checked or sent. The counts below are all zero because the desk is clear — work appears here as assayers send their audits back.'
+              : 'You are holding no packets and nothing has been sent back to you. New work appears here once your head gives you a packet.'}
+          </div>
+        </section>
+      )}
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))', gap: '10px' }}>
         {isHead ? (
           <>
@@ -177,7 +229,14 @@ export const DataEntryOverview: React.FC = () => {
               tone={counts?.rework ? 'var(--danger)' : undefined} onClick={() => navigate('/data-entry/packets?lane=rework')} />
             <NumberCard icon={<FileText size={15} />} value={totals?.inReview} caption="In review"
               tone={totals?.inReview ? 'var(--warning)' : undefined} onClick={() => navigate('/data-entry/reviews?status=HUMAN_REVIEW')} />
-            <NumberCard icon={<AlertTriangle size={15} />} value={totals?.unroutedReviews} caption="Reviews not routed"
+            {/*
+              This tile used to read "Reviews not routed". "Routing" is the pipeline's own word for
+              the reviewer assignment step, and "not routed" describes the absence of a database
+              column (`reviewer_id IS NULL`) rather than anything a person does. The count is
+              exactly: reports sitting in review that nobody has been given to check yet — so a head
+              reading it knows the action is "pick someone", which is what the linked queue asks for.
+            */}
+            <NumberCard icon={<AlertTriangle size={15} />} value={totals?.unroutedReviews} caption="Nobody checking yet"
               tone={totals?.unroutedReviews ? 'var(--danger)' : undefined} onClick={() => navigate('/data-entry/reviews?status=HUMAN_REVIEW&routed=no')} />
             <NumberCard icon={<CheckCircle2 size={15} />} value={totals?.approved} caption="Approved — to submit"
               tone={totals?.approved ? 'var(--success)' : undefined} onClick={() => navigate('/data-entry/reviews?status=APPROVED')} />
@@ -204,7 +263,7 @@ export const DataEntryOverview: React.FC = () => {
             <TeamIcon size={14} />
             <span style={{ ...deskLabel, color: 'var(--text-primary)' }}>Team workload</span>
             <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginLeft: 'auto' }}>
-              packets · rework · reviews held · cleared (7d)
+              What each person is holding right now
             </span>
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(240px, 1fr))', gap: '8px' }}>
@@ -220,21 +279,45 @@ export const DataEntryOverview: React.FC = () => {
                     <span style={{ fontSize: '12.5px', fontWeight: 700 }}>{m.name}</span>
                     <span style={{ ...deskLabel, fontSize: '9px' }}>{roleLabel(m.role)}</span>
                   </div>
-                  <div style={{ display: 'flex', gap: '9px', marginTop: '5px', fontSize: '12px', fontVariantNumeric: 'tabular-nums', flexWrap: 'wrap' }}>
-                    <span title="Open packets">{m.openPackets} 📄</span>
-                    <span title="Rework" style={{ color: m.reworkPackets ? 'var(--danger)' : 'var(--text-muted)' }}>{m.reworkPackets} ↩</span>
-                    <span title="Reviews held" style={{ color: m.casesInReview ? 'var(--warning)' : 'var(--text-muted)' }}>{m.casesInReview} 🔍</span>
-                    <span title="Packets handed back in the last 7 days" style={{ color: m.handedBackWeek ? 'var(--success)' : 'var(--text-muted)' }}>{m.handedBackWeek} ⇧</span>
-                    <span title="Reviews cleared this week" style={{ color: m.clearedThisWeek ? 'var(--success)' : 'var(--text-muted)' }}>{m.clearedThisWeek} ✓</span>
-                    {idle && <span style={{ marginLeft: 'auto', fontSize: '10px', color: 'var(--success)', fontWeight: 700 }}>FREE</span>}
-                    {stale && <span style={{ marginLeft: 'auto', fontSize: '10px', color: 'var(--danger)', fontWeight: 700 }}>{m.oldestOpenDays}d OLD</span>}
+                  {/*
+                    Every number on this card used to be an icon and a digit — `0 📄 0 ↩ 0 👁 0 ✓` —
+                    with the key printed once at the top of the panel and once at the bottom. A head
+                    had to hold five icon meanings in their head and read across, and the two legends
+                    did not even agree with each other (🔍 vs 👁). Each figure now carries its own
+                    word, so a card can be read on its own with nothing memorised. `MetricWord`
+                    keeps them on one line and greys the zeroes, which is what made the icon row
+                    compact in the first place.
+                  */}
+                  <div style={{ display: 'flex', gap: '10px', marginTop: '6px', flexWrap: 'wrap', alignItems: 'baseline' }}>
+                    <MetricWord n={m.openPackets} one="packet" tone="var(--text-primary)" />
+                    <MetricWord n={m.reworkPackets} one="to redo" many="to redo" tone="var(--danger)" />
+                    <MetricWord n={m.casesInReview} one="report to check" many="reports to check" tone="var(--warning)" />
+                  </div>
+                  <div style={{ display: 'flex', gap: '10px', marginTop: '3px', flexWrap: 'wrap', alignItems: 'baseline' }}>
+                    {/* "cleared (7d)" meant nothing without the legend; say the window in words. */}
+                    <MetricWord n={m.handedBackWeek} one="handed back" many="handed back" tone="var(--success)" suffix="in the last 7 days" />
+                    <MetricWord n={m.clearedThisWeek} one="check finished" many="checks finished" tone="var(--success)" suffix="in the last 7 days" />
+                  </div>
+                  <div style={{ marginTop: '5px' }}>
+                    {/*
+                      "FREE" is computed from packets + rework + reports-to-check all being zero —
+                      i.e. this person is holding nothing, so they can take the next packet. As one
+                      shouted word it read like a status the system had put them in. "N d OLD" is
+                      likewise the age of their oldest untouched packet, not a label on the person.
+                    */}
+                    {idle && <span style={{ fontSize: '11px', color: 'var(--success)', fontWeight: 700 }}>Free — can take more work</span>}
+                    {stale && (
+                      <span style={{ fontSize: '11px', color: 'var(--danger)', fontWeight: 700 }}>
+                        Oldest packet has been with them {counted(m.oldestOpenDays ?? 0, 'day')}
+                      </span>
+                    )}
                   </div>
                 </button>
               );
             })}
           </div>
-          <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '8px' }}>
-            📄 open packets · ↩ rework · 🔍 reviews held · ⇧ handed back (7d) · ✓ reviews cleared (7d) — click a member to see their packets
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '8px' }}>
+            Click a person to see exactly which packets they are holding.
           </div>
         </section>
       )}
@@ -244,13 +327,19 @@ export const DataEntryOverview: React.FC = () => {
         <section style={deskCard}>
           <div style={{ ...deskLabel, color: 'var(--text-primary)', marginBottom: '8px' }}>Recent activity</div>
           {activity === null && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Loading…</div>}
-          {activity?.length === 0 && <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Nothing recorded yet.</div>}
+          {activity?.length === 0 && (
+            <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+              Nothing has happened on the desk yet. Every packet handed out, typed up, checked or sent
+              to a client will be listed here, newest first.
+            </div>
+          )}
           {activity?.map((a, i) => (
             <div key={i} style={{ display: 'flex', gap: '9px', padding: '7px 0', borderTop: i > 0 ? '1px solid var(--border-hair)' : 'none', fontSize: '12.5px', alignItems: 'baseline', flexWrap: 'wrap' }}>
               <span style={{ color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap', fontSize: '11.5px' }}>
                 {new Date(a.at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
               </span>
-              <span style={{ fontWeight: 700 }}>{a.actor ?? 'System'}</span>
+              {/* An unattributed event is the app itself acting; "System" alone reads like a person's name. */}
+              <span style={{ fontWeight: 700 }}>{a.actor ?? 'The app'}</span>
               <span style={{ color: 'var(--text-secondary)' }}>{ACTIVITY_LABEL[a.eventType] ?? activityEventLabel(a.eventType)}</span>
               {a.branchName && (
                 a.projectBranchId ? (
@@ -260,7 +349,9 @@ export const DataEntryOverview: React.FC = () => {
                   </button>
                 ) : <span style={{ color: 'var(--accent)' }}>{a.branchName}</span>
               )}
-              {a.remarks && <span style={{ color: 'var(--text-muted)', fontSize: '11.5px', flexBasis: '100%' }}>{a.remarks}</span>}
+              {a.remarks && !SYSTEM_REMARKS.has(a.remarks.trim()) && (
+                <span style={{ color: 'var(--text-muted)', fontSize: '11.5px', flexBasis: '100%' }}>{a.remarks}</span>
+              )}
             </div>
           ))}
         </section>
@@ -268,6 +359,21 @@ export const DataEntryOverview: React.FC = () => {
     </div>
   );
 };
+
+/**
+ * One workload figure with the word that says what it counts.
+ *
+ * Zero is deliberately still shown rather than hidden: a head scanning the strip is looking for
+ * who is holding nothing, and a card that simply omits the line reads as missing data.
+ */
+const MetricWord: React.FC<{
+  n: number; one: string; many?: string; tone: string; suffix?: string;
+}> = ({ n, one, many, tone, suffix }) => (
+  <span style={{ fontSize: '11.5px', color: n ? tone : 'var(--text-muted)', fontVariantNumeric: 'tabular-nums' }}>
+    <strong style={{ fontSize: '13px', fontWeight: 700 }}>{n}</strong>{' '}
+    {plural(n, one, many)}{suffix ? ` ${suffix}` : ''}
+  </span>
+);
 
 const NumberCard: React.FC<{
   icon: React.ReactNode; value: number | undefined | null; caption: string; tone?: string; onClick: () => void;

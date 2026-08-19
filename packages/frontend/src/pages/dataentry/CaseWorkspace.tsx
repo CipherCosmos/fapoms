@@ -6,7 +6,8 @@ import {
 
 import { api } from '../../services/api';
 import { useCurrentRoles } from '../../hooks/useCurrentRoles';
-import { SystemRole, validationStatusLabel, activityEventLabel } from '@fapoms/shared';
+import { SystemRole, validationStatusLabel, activityEventLabel, validationQueryStatusLabel } from '@fapoms/shared';
+import { counted } from '../../utils/plural';
 import { PdfRegionViewer } from './PdfRegionViewer';
 import type { RegionCapture, Region } from './PdfRegionViewer';
 import { ThreadPanel } from './ThreadPanel';
@@ -87,7 +88,7 @@ function ocrFieldValue(value: unknown): { text: string; nested: boolean } {
     if (value.every((v) => v === null || ['string', 'number', 'boolean'].includes(typeof v))) {
       return { text: value.map((v) => String(v)).join(', ') || '—', nested: false };
     }
-    return { text: `${value.length} item${value.length === 1 ? '' : 's'} — see the raw data below`, nested: true };
+    return { text: `${counted(value.length, 'item')} — see the raw data below`, nested: true };
   }
   return { text: 'See the raw data below', nested: true };
 }
@@ -325,6 +326,25 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
     setBusy(false);
   };
 
+  /**
+   * The field names the scanner actually read off this packet, offered as suggestions when the
+   * clerk anchors a question to a field.
+   *
+   * "Field (optional)" was a bare text box. Anchoring the question is what lets the assayer jump
+   * straight to the disputed value, but a clerk had to remember and re-type a field name with no
+   * idea what spelling the system expects — so it was usually left blank, or typed differently
+   * every time ("Gross wt", "gross weight", "GrossWeight"), which makes the same field unmatchable
+   * across threads. The names are already on screen in "What the scanner read" a few lines above,
+   * so the box now suggests exactly those, humanised the same way that list humanises them. A
+   * datalist rather than a dropdown, because a clerk must still be able to ask about something the
+   * scanner failed to read at all — which is a large share of what gets asked.
+   */
+  const fieldSuggestions = useMemo(() => {
+    const r = validationCase?.ocrResult;
+    if (!r || typeof r !== 'object' || Array.isArray(r)) return [] as string[];
+    return Object.keys(r as Record<string, unknown>).map(ocrFieldLabel);
+  }, [validationCase]);
+
   const openCount = (queries ?? []).filter((q) => q.status !== 'RESOLVED').length;
   const status = validationCase?.status;
   const tone = status ? STATUS_TONE[status] ?? 'var(--text-muted)' : 'var(--text-muted)';
@@ -507,12 +527,12 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 0 }}>
               <MessageSquare size={15} style={{ color: 'var(--accent)' }} />
               <span style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                Assayer Chat & Clarifications {openCount > 0 && <span style={{ color: 'var(--warning)', marginLeft: '4px' }}>({openCount} open)</span>}
+                Assayer Chat & Clarifications {openCount > 0 && <span style={{ color: 'var(--warning)', marginLeft: '4px' }}>({counted(openCount, 'still open', 'still open')})</span>}
               </span>
             </div>
             <button onClick={() => setShowNewQuery((v) => !v)} className="btn btn-primary"
               style={{ fontSize: '11px', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}>
-              <MessageSquarePlus size={13} /> {showNewQuery ? 'Cancel' : 'New Question'}
+              <MessageSquarePlus size={13} /> {showNewQuery ? 'Cancel' : 'Ask the assayer'}
             </button>
           </div>
 
@@ -529,14 +549,23 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
                 <input
                   value={newQueryField}
                   onChange={(e) => setNewQueryField(e.target.value)}
-                  placeholder="Field (optional) — e.g. Gross weight"
+                  list={fieldSuggestions.length ? 'ocr-field-suggestions' : undefined}
+                  placeholder={fieldSuggestions.length
+                    ? 'Which field? (optional) — pick one or type your own'
+                    : 'Which field? (optional) — e.g. Gross weight'}
                   style={{ flex: '1 1 180px', padding: '7px 10px', fontSize: '12px', borderRadius: '8px', background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)', outline: 'none' }}
                 />
+                {fieldSuggestions.length > 0 && (
+                  <datalist id="ocr-field-suggestions">
+                    {fieldSuggestions.map((f) => <option key={f} value={f} />)}
+                  </datalist>
+                )}
                 <label style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '12px', color: 'var(--text-secondary)', cursor: 'pointer' }}>
-                  <input type="checkbox" checked={newQueryUrgent} onChange={(e) => setNewQueryUrgent(e.target.checked)} /> Urgent (2h)
+                  {/* "(2h)" was the SLA in shorthand; say what the deadline actually is. */}
+                  <input type="checkbox" checked={newQueryUrgent} onChange={(e) => setNewQueryUrgent(e.target.checked)} /> Urgent — answer needed within 2 hours
                 </label>
                 <button onClick={raiseQuery} disabled={busy || !newQueryText.trim()} className="btn btn-primary" style={{ fontSize: '12px', padding: '8px 14px', fontWeight: 600, marginLeft: 'auto' }}>
-                  {busy ? <Loader2 size={13} className="spin" /> : 'Start Thread'}
+                  {busy ? <Loader2 size={13} className="spin" /> : 'Send the question'}
                 </button>
               </div>
             </div>
@@ -559,7 +588,10 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
                 }}>
                   <MessageSquare size={24} style={{ opacity: 0.3, marginBottom: '8px' }} />
                   <div>No clarification threads for this branch.</div>
-                  <div style={{ fontSize: '11.5px', marginTop: '4px' }}>Click "New Question" above to message the field assayer.</div>
+                  <div style={{ fontSize: '11.5px', marginTop: '4px', lineHeight: 1.5 }}>
+                    When something on this packet is unclear, use "Ask the assayer" above. Your question
+                    and their reply are kept here against this branch.
+                  </div>
                 </div>
               )}
               {queries?.map((q) => {
@@ -585,9 +617,15 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
                         fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '10px',
                         background: isResolved ? 'rgba(34,197,94,0.15)' : 'rgba(234,179,8,0.15)',
                         color: isResolved ? 'var(--success)' : 'var(--warning)',
-                        textTransform: 'uppercase', flexShrink: 0,
+                        flexShrink: 0, whiteSpace: 'nowrap',
                       }}>
-                        {q.status}
+                        {/*
+                          Printed the raw enum: a thread chip read OPEN, RESPONDED or RESOLVED. A
+                          clerk cannot tell from "RESPONDED" whether the assayer answered (their job
+                          now) or we did (wait for the assayer) — which is the only thing the chip is
+                          there to tell them. The shared label says whose move it is.
+                        */}
+                        {validationQueryStatusLabel(q.status)}
                       </span>
                     </div>
                     {q.targetField && (
@@ -604,7 +642,7 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
               <div style={{ padding: '8px 14px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-surface-2)' }}>
                 <button onClick={() => setSelectedQuery(null)} className="btn btn-secondary"
                   style={{ fontSize: '11.5px', padding: '4px 10px', display: 'inline-flex', alignItems: 'center', gap: '5px', fontWeight: 600 }}>
-                  <ArrowLeft size={12} /> All Clarification Threads
+                  <ArrowLeft size={12} /> Back to all questions
                 </button>
               </div>
               <ThreadPanel

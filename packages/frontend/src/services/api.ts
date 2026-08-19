@@ -1,6 +1,6 @@
 import { NotificationCategory } from '@fapoms/shared';
 import { AppError, fromNetwork, fromResponse } from './errors';
-import { clearSession } from './session';
+import { clearSession, rememberForcedSignOut } from './session';
 // Budgets and the direct-fetch helper live in a leaf module so `session.ts` can share them
 // without closing an import cycle back through this file. See services/http.ts.
 import { DEFAULT_TIMEOUT_MS, LONG_TIMEOUT_MS } from './http';
@@ -163,6 +163,29 @@ class ApiClient {
       }
 
       if (response.status === 401) {
+        /**
+         * The refresh was tried and did not save us, so the session really is over.
+         *
+         * Two things are recorded before the teardown, and both have to happen *before*
+         * `clearSession()` and the navigation, because `location.replace` reloads the page and
+         * nothing in memory survives it:
+         *
+         *  1. Where the person was. This handler bypasses the router entirely, so App.tsx's
+         *     `RememberAndRedirectToLogin` — the only other writer of the return path — never
+         *     runs. Without this write the destination was lost, and appeared to work only when
+         *     a stale value from an earlier bounce happened to still be there.
+         *  2. Whether a *save* was in flight. A GET that 401s loses nothing; a POST/PUT/PATCH/
+         *     DELETE that 401s means the person's typed work did not reach the server and the
+         *     form it was typed into is about to be destroyed by the reload. This app has no
+         *     mechanism to hold that draft across a reload, so the honest and achievable fix is
+         *     to say so plainly on the login screen rather than let them find out later.
+         */
+        const method = (options?.method ?? 'GET').toUpperCase();
+        const wasSaving = method !== 'GET' && method !== 'HEAD';
+        rememberForcedSignOut(
+          wasSaving ? 'expired_save' : 'expired',
+          `${window.location.pathname}${window.location.search}`,
+        );
         // Same teardown as an explicit logout, so the two paths cannot drift apart again.
         clearSession();
         if (window.location.pathname !== '/login') {
