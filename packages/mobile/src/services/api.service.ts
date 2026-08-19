@@ -272,10 +272,26 @@ export class MobileApiService {
         }
         return true;
       }
-      // The refresh token itself was rejected (expired, already rotated away by
-      // a concurrent call that lost this race anyway, or revoked) — the session
-      // is genuinely over, so stop holding tokens that will only keep failing.
-      this.clearSession();
+      /**
+       * Only a *rejected credential* ends the session.
+       *
+       * This used to clear the session on every non-2xx, which put a momentarily overloaded
+       * server in the same bucket as a revoked token: a 502 from a restarting API, or a 503
+       * while it was under load, signed the assayer out mid-job and sent them back to the login
+       * screen — on a handset that may be in a vault with no signal to sign back in with. The
+       * token was still perfectly valid; only the server was briefly unwell.
+       *
+       * 401/403 is the server saying "this refresh token is no good" — expired, revoked, or
+       * already rotated away by a concurrent call that lost the race. That is genuinely over,
+       * and holding the tokens would only keep failing.
+       *
+       * Anything else (5xx, 429, a proxy's HTML error page) is treated exactly like the network
+       * failure in the `catch` below: return false, keep the tokens, let the next attempt try
+       * again. Worst case the user sees one failed request instead of losing their session.
+       */
+      if (response.status === 401 || response.status === 403) {
+        this.clearSession();
+      }
       return false;
     } catch {
       return false;

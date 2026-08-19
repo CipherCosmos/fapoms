@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Modal, View, TextInput, TextStyle, KeyboardAvoidingView, Platform } from 'react-native';
-import { travelModeLabel } from '@fapoms/shared';
+import { travelModeLabel, parseRupeeInput, formatRupees } from '@fapoms/shared';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Card } from './ui/primitives';
 
@@ -63,8 +63,17 @@ export const NegotiateModal: React.FC<NegotiateModalProps> = ({
 
   const handleSubmit = async () => {
     setErrorMsg(null);
-    const parsedFee = parseFloat(feeText);
-    if (isNaN(parsedFee) || parsedFee <= 0) {
+    /**
+     * `parseRupeeInput`, not `parseFloat`.
+     *
+     * `parseFloat('1,000')` is 1 — it reads up to the comma and stops. So an assayer countering
+     * at one thousand rupees submitted a counter-offer of ₹1, silently and with no error, and the
+     * number went straight into the fee that billing later pays against. The expense form had the
+     * same flaw with a different ending (it filed ₹0 and reported success); both now share one
+     * reading of an amount field.
+     */
+    const parsedFee = parseRupeeInput(feeText);
+    if (parsedFee === null) {
       setErrorMsg('Please enter a valid counter-offer fee amount.');
       return;
     }
@@ -103,11 +112,11 @@ export const NegotiateModal: React.FC<NegotiateModalProps> = ({
         <Card level={2} style={{ gap: t.space.lg, padding: t.space.xl }}>
           <AppText variant="h2">Negotiate Audit Fee</AppText>
           <AppText variant="caption" tone="muted">
-            Current Offered Fee: ₹{(currentFee || 0).toLocaleString('en-IN')}
+            Current Offered Fee: {formatRupees(currentFee || 0)}
           </AppText>
           {quotedTravelFee != null && quotedTravelFee > 0 && (
             <AppText variant="caption" tone="muted">
-              Includes ₹{Number(quotedTravelFee).toLocaleString('en-IN')} for travel
+              Includes {formatRupees(quotedTravelFee)} for travel
               {quotedTransportMode ? ` by ${travelModeLabel(quotedTransportMode).toLowerCase()}` : ''}
               {quotedDistanceKm ? ` (~${Math.round(Number(quotedDistanceKm))} km each way)` : ''}
             </AppText>

@@ -1000,7 +1000,7 @@ function AppMain() {
             if (res.success) {
               feedback.success(
                 'Counter-Offer Submitted',
-                `Your proposed fee of ₹${counterFee.toLocaleString('en-IN')} has been sent to Operations.`
+                `Your proposed fee of ${formatRupees(counterFee)} has been sent to Operations.`
               );
               overlay.close();
             } else {
