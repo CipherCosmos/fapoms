@@ -4,8 +4,9 @@ import { useSearchParams } from 'react-router-dom';
 import { assayerLifecycleLabel } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
-import { card, label, Empty, ExpiryChip } from './hr-ui';
+import { card, label, Empty, ExpiryChip, fmtDate } from './hr-ui';
 import { ChipMultiSelect } from '../../components/ui/ChipMultiSelect';
+import { useToast } from '../../components/ui';
 import { useConfirm } from '../../components/ui/ConfirmDialog';
 import { useHr } from './HrLayout';
 
@@ -66,8 +67,8 @@ type Vocabulary = Record<string, Array<{ name: string; assayerCount: number }>>;
 const TYPE_META: Record<AttrType, { label: string; icon: typeof Award; hasExpiry: boolean }> = {
   SKILL: { label: 'Skills', icon: Wrench, hasExpiry: false },
   LANGUAGE: { label: 'Languages', icon: LangIcon, hasExpiry: false },
-  CERTIFICATION: { label: 'Certifications', icon: Award, hasExpiry: true },
-  SPECIALIZATION: { label: 'Specializations', icon: Award, hasExpiry: false },
+  CERTIFICATION: { label: 'Certificates', icon: Award, hasExpiry: true },
+  SPECIALIZATION: { label: 'Specialisations', icon: Award, hasExpiry: false },
 };
 
 /**
@@ -77,7 +78,7 @@ const TYPE_META: Record<AttrType, { label: string; icon: typeof Award; hasExpiry
 export const ATTRIBUTE_TYPE_LABEL: Record<string, string> = {
   SKILL: 'Skill',
   LANGUAGE: 'Language',
-  CERTIFICATION: 'Certification',
+  CERTIFICATION: 'Certificate',
   SPECIALIZATION: 'Specialisation',
 };
 
@@ -120,6 +121,7 @@ export const HrCapabilityPage: React.FC = () => {
 
   const { canManage } = useHr();
   const narrow = useNarrow();
+  const { toast } = useToast();
   const { confirm, confirmDialog } = useConfirm();
   const [searchParams] = useSearchParams();
   const [roster, setRoster] = useState<AssayerLite[]>([]);
@@ -214,7 +216,17 @@ export const HrCapabilityPage: React.FC = () => {
       return;
     }
     await loadAttrs(selectedId);
-    // A newly-typed name becomes part of the shared vocabulary immediately.
+    /*
+     * Say so. A save that only *stops showing an error* asks the clerk to work out for themselves
+     * whether the row in the list below is the one they just added or one that was already there —
+     * so the safe habit was to add it a second time "to be sure".
+     */
+    toast({
+      type: 'success',
+      title: `${attributeTypeLabel(type)} added`,
+      message: `“${name.trim()}” is now on ${roster.find((a) => a.id === selectedId)?.displayName ?? 'this assayer'}’s record.`,
+    });
+    // A newly-typed name becomes part of the shared list of names immediately.
     setVocab((v) => {
       const list = v[type] ?? [];
       if (list.some((x) => x.name.toLowerCase() === name.trim().toLowerCase())) return v;
@@ -250,6 +262,11 @@ export const HrCapabilityPage: React.FC = () => {
       return;
     }
     await loadAttrs(selectedId);
+    toast({
+      type: 'success',
+      title: `${attributeTypeLabel(row.type)} removed`,
+      message: `“${row.name}” is no longer on ${who}’s record.`,
+    });
   };
 
   const updateExpiry = async (id: string, expiryDate: string) => {
@@ -264,9 +281,21 @@ export const HrCapabilityPage: React.FC = () => {
       return;
     }
     if (selectedId) await loadAttrs(selectedId);
+    /*
+     * The renewal is the single most consequential edit on this page — it is what puts a lapsed
+     * assayer back into the assignable pool — and it was made by typing into a small date box that
+     * gave no sign of having saved. Confirming it by name and date is how the clerk knows the
+     * renewal is recorded and not still sitting unsaved in the box.
+     */
+    const row = attrs.find((a) => a.id === id);
+    toast({
+      type: 'success',
+      title: 'Renewal recorded',
+      message: `${row ? `“${row.name}” now expires` : 'New expiry date:'} ${fmtDate(expiryDate)}.`,
+    });
   };
 
-  if (loading) return <div style={{ padding: '20px 4px', color: 'var(--text-muted)' }}>Loading capability register…</div>;
+  if (loading) return <div style={{ padding: '20px 4px', color: 'var(--text-muted)' }}>Loading skills and certificates…</div>;
   if (error) return <div style={{ padding: '20px 4px', color: 'var(--danger)' }}>{error}</div>;
 
   return (
@@ -302,15 +331,15 @@ export const HrCapabilityPage: React.FC = () => {
                     <AlertTriangle
                       size={12}
                       style={{ flexShrink: 0, color: alert === 'expired' ? 'var(--danger)' : 'var(--warning)' }}
-                      aria-label={alert === 'expired' ? 'Certification expired' : 'Certification expiring soon'}
+                      aria-label={alert === 'expired' ? 'Certificate has run out' : 'Certificate runs out soon'}
                     />
                   )}
                 </div>
                 <div style={{ fontSize: '11px', color: alert === 'expired' ? 'var(--danger)' : 'var(--text-muted)' }}>
                   {alert === 'expired'
-                    ? 'Certification expired — cannot be assigned'
+                    ? 'Certificate has run out — cannot be given work'
                     : alert === 'expiring'
-                      ? 'Certification expires within 30 days'
+                      ? 'Certificate runs out within 30 days'
                       : `${a.assayerCode}${a.district ? ` · ${a.district}` : ''}`}
                 </div>
               </button>
@@ -320,7 +349,7 @@ export const HrCapabilityPage: React.FC = () => {
         </div>
       </div>
 
-      {/* Capability editor */}
+      {/* What this person can do, and what their certificates say */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
         {actionError && (
           <div style={{ ...card, borderLeft: '3px solid var(--danger)', color: 'var(--danger)', fontSize: '12.5px', display: 'flex', gap: '8px', alignItems: 'center' }}>
@@ -334,6 +363,16 @@ export const HrCapabilityPage: React.FC = () => {
                 workforce surface prints, so the two can never read differently. */}
             <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
               {selected.assayerCode} · {assayerLifecycleLabel(selected.lifecycleStatus)}
+            </div>
+            {/*
+              Said in one sentence, because nothing on the old screen explained why any of it
+              mattered. A clerk reading four lists of words had no way to know that these entries
+              are what the planner matches on, or that a certificate past its date takes the person
+              out of the running entirely — so entries were left half-recorded as decoration.
+            */}
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '8px', lineHeight: 1.5 }}>
+              What is recorded here decides the work {selected.displayName.split(' ')[0]} can be matched to.
+              A certificate whose date has passed takes them out of the running until the new date is entered below.
             </div>
           </div>
         )}
@@ -412,8 +451,26 @@ const AttributeSection: React.FC<{
         <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>({rows.length})</span>
       </div>
 
+      {/*
+        The renewal instruction, said where the renewal is made. This page is the only place in the
+        system a new expiry date can be entered, and the way to enter one was an unlabelled little
+        date box at the end of a row — so the common outcome was a clerk holding a renewed
+        certificate, seeing "expired" on screen, and going to look for an "upload" or "renew"
+        button that does not exist anywhere.
+      */}
+      {meta.hasExpiry && canManage && rows.length > 0 && (
+        <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)', marginBottom: '10px', lineHeight: 1.5 }}>
+          Renewed a certificate? Change the date at the end of its row to the new expiry date —
+          it saves as soon as you click away, and no other screen records renewals.
+        </div>
+      )}
+
       {rows.length === 0 ? (
-        <Empty>{`No ${meta.label.toLowerCase()} recorded yet. They appear here once HR adds them to an assayer’s record.`}</Empty>
+        <Empty>
+          {meta.hasExpiry
+            ? 'No certificates recorded for this person yet. Add one below with the date it runs out — until it is here, no branch that asks for a certificate will match them.'
+            : `No ${meta.label.toLowerCase()} recorded for this person yet. Add one below so they can be matched to work that asks for it.`}
+        </Empty>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
           {rows.map((r) => {
@@ -442,7 +499,8 @@ const AttributeSection: React.FC<{
                           onUpdateExpiry(r.id, next);
                         }}
                         min="2000-01-01"
-                        title="Renewal / expiry date"
+                        title="Date this certificate runs out. Change it to record a renewal — it saves when you click away."
+                        aria-label={`Expiry date for ${r.name} — change it to record a renewal`}
                         style={{ fontSize: '11px', padding: '3px 6px', background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-secondary)' }}
                       />
                     )}
@@ -465,7 +523,7 @@ const AttributeSection: React.FC<{
 
       {meta.hasExpiry && rows.some((r) => { const d = daysUntil(r.expiryDate); return d !== null && d < 0; }) && (
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '10px', fontSize: '11.5px', color: 'var(--danger)' }}>
-          <AlertTriangle size={12} /> A lapsed certification removes this assayer from the assignable pool until it is renewed.
+          <AlertTriangle size={12} /> This person cannot be given work that needs this certificate until a new expiry date is entered above.
         </div>
       )}
 
@@ -473,7 +531,7 @@ const AttributeSection: React.FC<{
         <>
         <div style={{ marginTop: '12px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
           {/*
-            The register first. `single` because one row is added at a time and the expiry date
+            Names already in use first. `single` because one row is added at a time and the expiry date
             below belongs to that one row — a multi-select would need one date per chip, which is
             the form this page deliberately does not have.
           */}
@@ -481,20 +539,20 @@ const AttributeSection: React.FC<{
             <ChipMultiSelect
               single
               /*
-                The count is the TOTAL number of assayers the register recognises under that
+                The count is the TOTAL number of assayers recorded under that exact
                 name — `COUNT(DISTINCT assayer_id)` over the whole roster, not "others besides
                 this one". Shown because it is the useful signal when choosing between two
                 near-identical names: the one nobody else holds is usually the typo.
               */
               options={suggestions.map((s) => ({
                 value: s.name,
-                label: `${s.name} · ${s.assayerCount} assayer${s.assayerCount === 1 ? '' : 's'}`,
+                label: `${s.name} · held by ${s.assayerCount} ${s.assayerCount === 1 ? 'person' : 'people'}`,
               }))}
               value={name ? [name] : []}
               onChange={(next) => setName(next[0] ?? '')}
               searchPlaceholder={`Search ${meta.label.toLowerCase()}…`}
-              emptyText={`Nothing left to add from the register — use “new ${meta.label.toLowerCase().replace(/s$/, '')}” below.`}
-              aria-label={`Add a ${meta.label.toLowerCase().replace(/s$/, '')} from the register`}
+              emptyText={`This person already has every ${meta.label.toLowerCase().replace(/s$/, '')} used elsewhere in the system. To record one under a new name, use the link below.`}
+              aria-label={`Add a ${meta.label.toLowerCase().replace(/s$/, '')} already used elsewhere`}
             />
           )}
           {newName && (
@@ -513,19 +571,27 @@ const AttributeSection: React.FC<{
             style={{ alignSelf: 'flex-start', background: 'none', border: 'none', padding: 0, fontSize: '11.5px', fontWeight: 600, color: 'var(--accent)', cursor: 'pointer' }}
           >
             {newName
-              ? '← Pick from the register instead'
-              : `Not listed? Record a new ${meta.label.toLowerCase().replace(/s$/, '')} name`}
+              ? '← Choose from the existing names instead'
+              : `Not in the list? Record a new ${meta.label.toLowerCase().replace(/s$/, '')} name`}
           </button>
         </div>
-        <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: '8px', marginTop: '10px', flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          {/*
+            The date box was bare: a clerk adding a certificate saw two controls and no clue that
+            the second one was the date the certificate runs out, or that leaving it blank means
+            the system will never warn anyone when it lapses. Saying both, out loud, next to it.
+          */}
           {meta.hasExpiry && (
-            <input
-              type="date"
-              value={expiry}
-              onChange={(e) => setExpiry(e.target.value)}
-              title="Expiry date (optional)"
-              style={{ padding: '7px 8px', fontSize: '12px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: '8px', color: 'var(--text-secondary)' }}
-            />
+            <label style={{ display: 'flex', flexDirection: 'column', gap: '3px', fontSize: '10.5px', color: 'var(--text-muted)', fontWeight: 600 }}>
+              Date it runs out (leave blank if it never does)
+              <input
+                type="date"
+                value={expiry}
+                onChange={(e) => setExpiry(e.target.value)}
+                title="The date this certificate stops being valid. Without it, nobody is warned when it lapses."
+                style={{ padding: '7px 8px', fontSize: '12px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: '8px', color: 'var(--text-secondary)' }}
+              />
+            </label>
           )}
           <button
             onClick={submit}

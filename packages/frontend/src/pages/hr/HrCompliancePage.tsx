@@ -97,7 +97,7 @@ const ComplianceTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate: 
       </section>
 
       <section style={card}>
-        <div style={{ ...label, marginBottom: '10px' }}>Capability inventory</div>
+        <div style={{ ...label, marginBottom: '10px' }}>Skills, languages and certificates on file</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '16px' }}>
           {([['Skills', d.capability.skills], ['Languages', d.capability.languages], ['Certifications', d.capability.certifications]] as const).map(
             ([title, items]) => (
@@ -115,7 +115,7 @@ const ComplianceTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate: 
         </div>
         {d.capability.unprofiled > 0 && (
           <div style={{ fontSize: '12px', color: 'var(--warning)', marginTop: '12px' }}>
-            {d.capability.unprofiled} assayer(s) have no recorded skill — they cannot be matched on competency during planning.
+            {d.capability.unprofiled} {d.capability.unprofiled === 1 ? 'person has' : 'people have'} no skill recorded — nobody can pick them by skill when work is being planned.
           </div>
         )}
       </section>

@@ -65,14 +65,20 @@ const UtilisationTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate:
         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '12px' }}>
           <Stat value={d.utilisation.utilizationCounts.overUtilized} caption="Over capacity" tone={d.utilisation.utilizationCounts.overUtilized ? 'var(--danger)' : undefined} />
           <Stat value={d.utilisation.utilizationCounts.balanced} caption="Balanced" tone='var(--success)' />
-          <Stat value={d.utilisation.utilizationCounts.underUtilized} caption="Under-utilised" tone={d.utilisation.utilizationCounts.underUtilized ? 'var(--warning)' : undefined} />
-          <Stat value={d.utilisation.utilizationCounts.idle} caption="Idle (no work)" tone={d.utilisation.utilizationCounts.idle ? 'var(--warning)' : undefined} />
+          {/* The tile said "Under-utilised" while the Status column beneath it, for exactly the same
+            people, said "Room for more". Two words for one set on one screen. The tile now uses the
+            column's words. */}
+          <Stat value={d.utilisation.utilizationCounts.underUtilized} caption="Room for more work" tone={d.utilisation.utilizationCounts.underUtilized ? 'var(--warning)' : undefined} />
+          <Stat value={d.utilisation.utilizationCounts.idle} caption="No work at all" tone={d.utilisation.utilizationCounts.idle ? 'var(--warning)' : undefined} />
         </div>
         {d.utilisation.utilization.length === 0 ? (
           <Empty>Nobody is on the active roster yet, so there is no workload to measure. Add people in Roster first.</Empty>
         ) : (
           <Table
-            head={['Assayer', 'Location', 'Loaded', 'Capacity', 'Util %', 'Status', '']}
+            // "Loaded" and "Util %" are the model's words, not a clerk's: "Loaded 3 / 6" reads as a
+            // fraction of nothing in particular, and "Util %" is an abbreviation of a word this
+            // audience does not use. The headers now say what the cell beneath them contains.
+            head={['Assayer', 'Location', 'Jobs now / can take', 'Spare capacity', 'Share of capacity used', 'Status', '']}
             rows={d.utilisation.utilization.map((r) => {
               const tone = noWorkYet ? 'var(--text-muted)' :
                 r.posture === 'OVER_UTILIZED' ? 'var(--danger)' :
@@ -113,13 +119,14 @@ const UtilisationTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate:
       </section>
 
       <section style={card}>
-        <div style={{ ...label, marginBottom: '10px' }}>Attrition</div>
+        <div style={{ ...label, marginBottom: '10px' }}>People who have left</div>
         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '12px' }}>
           <Stat value={d.attrition.exits90d} caption="Exits (90 days)" />
           <Stat value={d.attrition.exits12m} caption="Exits (12 months)" />
           <Stat value={d.attrition.terminations} caption="Terminations" />
           <Stat value={d.attrition.joins90d} caption="Joins (90 days)" />
-          <Stat value={`${d.attrition.attritionRate12m}%`} caption="Attrition rate" />
+          <Stat value={`${d.attrition.attritionRate12m}%`} caption="Share of the roster, past year"
+            hint="Exits in the last 12 months as a percentage of the people on the books" />
         </div>
         {d.attrition.recent.length === 0 ? (
           <Empty>

@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, CheckCircle2 } from 'lucide-react';
-import { card, label, Stat, Bar, SEVERITY } from './hr-ui';
+import { card, label, Stat, Bar, SEVERITY, actionAreaLabel } from './hr-ui';
 import type { HrAction, HrWorkforceOverview } from '../../hooks/useHrWorkforce';
 import { useHr, resolveHrDestination } from './HrLayout';
 
@@ -48,7 +48,7 @@ const OverviewTabBody = ({ d, onJump }: { d: HrWorkforceOverview; onJump: (to: s
                 <div style={{ minWidth: 0 }}>
                   <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '3px' }}>
                     <span style={{ fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: s.bg, color: s.fg }}>{s.label}</span>
-                    <span style={{ ...label, fontSize: '10px' }}>{a.area}</span>
+                    <span style={{ ...label, fontSize: '10px' }}>{actionAreaLabel(a.area)}</span>
                   </div>
                   <div style={{ fontSize: '13px', fontWeight: 600 }}>{a.title}</div>
                   <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>{a.detail}</div>
@@ -80,18 +80,27 @@ const OverviewTabBody = ({ d, onJump }: { d: HrWorkforceOverview; onJump: (to: s
         tone={neverWorked ? undefined : d.utilisation.idleCount ? 'var(--warning)' : undefined}
         hint={neverWorked ? 'No work has been assigned to anyone yet — assign branches in Planning' : undefined}
       />
-      <Stat value={`${d.attrition.attritionRate12m}%`} caption="Attrition (12m)" />
+      {/* "Attrition (12m)" is a percentage with no stated denominator and no stated period in
+          words. A clerk could not tell whether 12% meant twelve people or twelve per cent of what,
+          over which twelve months. Same number, said out loud, with the headcount behind it on
+          hover — and the raw count of leavers alongside, which is the figure anyone actually
+          repeats in a meeting. */}
+      <Stat
+        value={`${d.attrition.attritionRate12m}%`}
+        caption="Left in the past year"
+        hint={`${d.attrition.exits12m} ${d.attrition.exits12m === 1 ? 'person has' : 'people have'} left in the last 12 months, out of ${d.headcount.total} on the roster`}
+      />
     </section>
 
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '14px' }}>
       <section style={card}>
-        <div style={{ ...label, marginBottom: '12px' }}>Onboarding funnel</div>
+        <div style={{ ...label, marginBottom: '12px' }}>Joining, stage by stage</div>
         {d.pipeline.stages.map((s) => (
           <div key={s.key} style={{ marginBottom: '10px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}>
               <span>{s.label}</span>
               <span style={{ color: 'var(--text-muted)' }}>
-                {s.count}{s.stalled > 0 && <span style={{ color: 'var(--warning)' }}> · {s.stalled} stalled</span>}
+                {s.count}{s.stalled > 0 && <span style={{ color: 'var(--warning)' }}> · {s.stalled} waiting too long</span>}
               </span>
             </div>
             <Bar pct={d.headcount.total ? (s.count / d.headcount.total) * 100 : 0} tone={s.stalled ? 'var(--warning)' : 'var(--accent)'} />

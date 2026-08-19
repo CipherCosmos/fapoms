@@ -74,9 +74,18 @@ export function useHr(): HrContext {
  * badges are neutral at any value, 'alert' badges go red only when there is something to do.
  */
 const PAGES = [
-  { to: '/hr', end: true, label: 'Overview', icon: ClipboardList, badge: () => null, tone: 'count' },
-  { to: '/hr/roster', label: 'Roster', icon: Users, badge: (d: HrWorkforceOverview) => d.headcount.total, tone: 'count' },
-  { to: '/hr/onboarding', label: 'Onboarding', icon: UserPlus, badge: (d: HrWorkforceOverview) => d.pipeline.stalled.length, tone: 'alert' },
+  { to: '/hr', end: true, label: 'Overview', icon: ClipboardList, badge: () => null, tone: 'count', hint: () => 'Everything that needs attention today, in one list' },
+  {
+    to: '/hr/roster', label: 'Roster', icon: Users, tone: 'count',
+    badge: (d: HrWorkforceOverview) => d.headcount.total,
+    hint: (d: HrWorkforceOverview) => `${d.headcount.total} people on the books — this is a total, not a task`,
+  },
+  {
+    to: '/hr/onboarding', label: 'Onboarding', icon: UserPlus, tone: 'alert',
+    badge: (d: HrWorkforceOverview) => d.pipeline.stalled.length,
+    hint: (d: HrWorkforceOverview) =>
+      `${d.pipeline.stalled.length} joining ${d.pipeline.stalled.length === 1 ? 'has' : 'have'} not moved on in over ${d.pipeline.stalledAfterDays} days`,
+  },
   {
     to: '/hr/paperwork',
     label: 'Paperwork',
@@ -84,10 +93,16 @@ const PAGES = [
     tone: 'alert',
     badge: (d: HrWorkforceOverview) =>
       d.compliance.incompleteCount + Math.max(d.compliance.roster - d.compliance.governmentDocuments.withGovDoc, 0),
+    hint: (d: HrWorkforceOverview) =>
+      `${d.compliance.incompleteCount} with missing bank or personal details, plus ${Math.max(d.compliance.roster - d.compliance.governmentDocuments.withGovDoc, 0)} with no ID document on file`,
   },
-  { to: '/hr/skills', label: 'Skills & Certificates', icon: Award, badge: (d: HrWorkforceOverview) => d.expiries.certifications.expired, tone: 'alert' },
-  { to: '/hr/pay', label: 'Pay & Terms', icon: Wallet, badge: () => null, tone: 'count' },
-  { to: '/hr/where', label: 'Where people are', icon: MapPin, badge: () => null, tone: 'count' },
+  {
+    to: '/hr/skills', label: 'Skills & Certificates', icon: Award, tone: 'alert',
+    badge: (d: HrWorkforceOverview) => d.expiries.certifications.expired,
+    hint: (d: HrWorkforceOverview) => `${d.expiries.certifications.expired} certificate(s) have already run out and need renewing`,
+  },
+  { to: '/hr/pay', label: 'Pay & Terms', icon: Wallet, badge: () => null, tone: 'count', hint: () => 'What each person is paid, and on what terms' },
+  { to: '/hr/where', label: 'Where people are', icon: MapPin, badge: () => null, tone: 'count', hint: () => 'Who is busy, which states are covered, and what changed recently' },
 ] as const;
 
 /**
@@ -148,13 +163,31 @@ export const HrLayout: React.FC = () => {
   const legacy = params.get('tab');
   if (legacy && LEGACY_TABS[legacy]) return <Navigate to={LEGACY_TABS[legacy]} replace />;
 
-  if (isLoading) return <div style={{ padding: '24px' }}>Loading workforce position…</div>;
+  /*
+   * "Loading workforce position…" is the system describing its own data model. It also arrived
+   * bare on a white page with no heading, so for the second or two it is on screen there was
+   * nothing to say which part of the app you had landed in. Say what is coming, in the words of
+   * the tab that asked for it, under the section's own title.
+   */
+  if (isLoading) {
+    return (
+      <div style={{ padding: '20px 24px', maxWidth: '1500px' }}>
+        <h1 style={{ fontSize: '22px', fontWeight: 700, margin: 0 }}>Workforce</h1>
+        <p style={{ color: 'var(--text-muted)', fontSize: '13px', marginTop: '10px' }}>
+          Getting the latest figures for everyone on the roster…
+        </p>
+      </div>
+    );
+  }
 
   if (error || !data) {
     return (
       <div style={{ padding: '24px', color: 'var(--danger)' }}>
-        <div style={{ fontWeight: 600 }}>Could not load the workforce overview.</div>
+        <div style={{ fontWeight: 600 }}>The workforce figures could not be loaded just now.</div>
         <div style={{ fontSize: 12, marginTop: 4 }}>{userMessage(error)}</div>
+        <div style={{ fontSize: 12, marginTop: 6, color: 'var(--text-muted)' }}>
+          Nothing has been lost — try again, and tell IT if it keeps happening.
+        </div>
         <button onClick={() => refetch()} className="btn btn-primary" style={{ marginTop: 14, padding: '8px 16px', fontSize: 12 }}>
           Retry
         </button>
@@ -172,6 +205,12 @@ export const HrLayout: React.FC = () => {
         {PAGES.map((p) => {
           const Icon = p.icon;
           const badge = p.badge(d);
+          /*
+           * A bare red number beside a tab name is a puzzle: "Paperwork 34" says a quantity but
+           * not of what, and not whether 34 is a workload or a warning. The hint spells the
+           * number out in a sentence on hover, in the same words the destination screen uses.
+           */
+          const hint = p.hint(d);
           // Red means "there is something here for you to do", never "this number is large" —
           // see the badge rule above.
           const alarming = p.tone === 'alert' && badge !== null && badge > 0;
@@ -179,6 +218,7 @@ export const HrLayout: React.FC = () => {
             <NavLink
               key={p.to}
               to={p.to}
+              title={hint}
               end={'end' in p ? p.end : false}
               style={({ isActive }) => ({
                 display: 'flex', alignItems: 'center', gap: '6px',

@@ -20,8 +20,11 @@ const DeploymentTabBody = ({ d }: { d: HrWorkforceOverview }) => (
     </div>
 
     <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-      <Stat value={d.deployment.hiringNeeded.length} caption="Territories needing hires" tone={d.deployment.hiringNeeded.length ? 'var(--danger)' : 'var(--success)'} />
-      <Stat value={d.deployment.territories.length} caption="Territories in play" />
+      <Stat value={d.deployment.hiringNeeded.length} caption="States that need more people" tone={d.deployment.hiringNeeded.length ? 'var(--danger)' : 'var(--success)'} />
+      {/* "Territories in play" is a sales phrase for a plain fact: every state that has either a
+          branch to visit or somebody living there. */}
+      <Stat value={d.deployment.territories.length} caption="States with work or people"
+        hint="Counted once for each state that has at least one branch or one assayer" />
       {/* This counts states whose posture is NO_WORK — assayers living where we have no branches at
           all. It used to be captioned "no local work", which reads as "they are idle" and collides
           with the Workload chip's idle figure; the two count different things. */}
@@ -37,7 +40,9 @@ const DeploymentTabBody = ({ d }: { d: HrWorkforceOverview }) => (
         </Empty>
       ) : (
       <Table
-        head={['State', 'Branches', 'Assayers', 'Active', 'Branches / assayer', 'Posture']}
+        // "Posture" is the backend's word for this column and means nothing to a clerk; the values
+        // under it ("No coverage", "Stretched") already say it plainly.
+        head={['State', 'Branches', 'Assayers', 'Active', 'Branches per assayer', 'Position']}
         rows={d.deployment.territories.map((t) => {
           const p = POSTURE[t.posture] ?? POSTURE.BALANCED;
           return [

@@ -18,6 +18,27 @@ export const SEVERITY: Record<string, { bg: string; fg: string; label: string }>
   low: { bg: 'var(--bg-surface-2)', fg: 'var(--text-muted)', label: 'Low' },
 };
 
+/**
+ * The `area` word the backend stamps on each worklist card.
+ *
+ * hr-workforce.service.ts labels its actions 'Record', 'Compliance', 'Staffing' and
+ * 'Utilisation' — internal groupings, printed raw on the Overview cards. A clerk reading
+ * "UTILISATION · 8 active assayer(s) have never been assigned" had to work out that the word
+ * meant workload, and none of the four matched the tab the card actually sends you to. These
+ * say the destination in the words the tabs and chips use, so the card and the screen it opens
+ * agree. Unknown areas fall through unchanged — the backend can add one without this hiding it.
+ */
+export const ACTION_AREA_LABELS: Record<string, string> = {
+  Record: 'Personal details',
+  Onboarding: 'Onboarding',
+  Compliance: 'Certificates & IDs',
+  Staffing: 'Coverage',
+  Utilisation: 'Workload',
+};
+
+export const actionAreaLabel = (area?: string | null): string =>
+  (area && ACTION_AREA_LABELS[area]) || area || '';
+
 export const POSTURE: Record<string, { fg: string; label: string; hint: string }> = {
   NO_COVERAGE: { fg: 'var(--danger)', label: 'No coverage', hint: 'Branches here cannot be staffed at all' },
   STRETCHED: { fg: 'var(--warning)', label: 'Stretched', hint: 'Too much work per assayer' },

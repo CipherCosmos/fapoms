@@ -4,10 +4,10 @@ import {
   X, Edit2, ArrowRightLeft, AlertTriangle, CheckCircle2,
   User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, MapPin, KeyRound,
 } from 'lucide-react';
-import { nextAssayerLifecycleStates, AssayerLifecycleStatus, assayerLifecycleLabel, activityEventLabel } from '@fapoms/shared';
+import { nextAssayerLifecycleStates, AssayerLifecycleStatus, assayerLifecycleLabel, activityEventLabel, employmentTypeLabel } from '@fapoms/shared';
 
 import { api } from '../../services/api';
-import { Select } from '../../components/ui';
+import { Select, useConfirm } from '../../components/ui';
 import type { Assayer } from './assayer-shared';
 import {
   STATUS_COLORS, money, missingCriticalFields,
@@ -59,6 +59,38 @@ const LIFECYCLE_MOVES_NEEDING_A_REASON: string[] = [
   AssayerLifecycleStatus.TERMINATED,
 ];
 
+/**
+ * What each stage actually does to the person, in the words an office user needs.
+ *
+ * The dropdown offered "Suspended", "Archived", "Inactive" and so on and stopped there. Those are
+ * HR's words for a filing state; what a clerk needs to know before pressing Move is whether the
+ * person can still be given work tomorrow, and whether they can be put back. Nothing on this
+ * screen said so — someone picking "Inactive" to park a person for a fortnight had no way to learn
+ * they had just taken them out of every planning list, and the difference between "Resigned" and
+ * "Terminated" on a permanent employment record was left to be guessed from the word alone.
+ */
+export const STAGE_CONSEQUENCE: Record<string, string> = {
+  [AssayerLifecycleStatus.INVITED]: 'They are back at the start of joining and cannot be given work.',
+  [AssayerLifecycleStatus.DOCUMENT_VERIFICATION]: 'They wait for their documents to be checked and cannot be given work yet.',
+  [AssayerLifecycleStatus.BACKGROUND_VERIFICATION]: 'They wait for their background check and cannot be given work yet.',
+  [AssayerLifecycleStatus.TRAINING]: 'They are in training and cannot be given work yet.',
+  [AssayerLifecycleStatus.ACTIVE]: 'They can be planned, offered work and paid from now on.',
+  [AssayerLifecycleStatus.ON_LEAVE]: 'They stay on the roster but are not offered work until they are made Active again.',
+  [AssayerLifecycleStatus.SUSPENDED]: 'They are blocked from all work immediately. This goes on their employment record.',
+  [AssayerLifecycleStatus.INACTIVE]: 'They stop appearing for planning and receive no new work.',
+  [AssayerLifecycleStatus.RESIGNED]: 'They are recorded as having left of their own accord, and are removed from all planning.',
+  [AssayerLifecycleStatus.TERMINATED]: 'They are recorded as dismissed by the company, and are removed from all planning.',
+  [AssayerLifecycleStatus.ARCHIVED]: 'Their record is closed and filed away. They will no longer appear on the working roster.',
+};
+
+/** Moves that go on a permanent employment record or end the working relationship. */
+export const HARD_TO_REVERSE_STAGES: string[] = [
+  AssayerLifecycleStatus.SUSPENDED,
+  AssayerLifecycleStatus.RESIGNED,
+  AssayerLifecycleStatus.TERMINATED,
+  AssayerLifecycleStatus.ARCHIVED,
+];
+
 export const AssayerDetailDrawer: React.FC<{
   assayerId: string;
   canManage: boolean;
@@ -74,6 +106,7 @@ export const AssayerDetailDrawer: React.FC<{
   const [reason, setReason] = useState('');
   const [err, setErr] = useState<string | null>(null);
   const [payModal, setPayModal] = useState<{ open: boolean; profile: CommercialProfile | null }>({ open: false, profile: null });
+  const { confirm, confirmDialog } = useConfirm();
 
   useEffect(() => {
     api.request<Assayer>(`/assayers/${assayerId}`)
@@ -159,8 +192,36 @@ export const AssayerDetailDrawer: React.FC<{
    */
   const reasonRequired = LIFECYCLE_MOVES_NEEDING_A_REASON.includes(target);
 
+  /**
+   * Moving someone's stage, with the consequence stated before it happens.
+   *
+   * This used to fire on one click of a button labelled "Move". Suspending, dismissing or
+   * archiving a person are all one dropdown pick away from each other, they all take effect on the
+   * live roster the moment the button is pressed, and none of them can be taken back by picking
+   * the previous stage again — the state machine does not run backwards. So the moves that end
+   * someone's work now ask first, in a dialog that names the person and says what happens to them.
+   * Routine moves (Active, On Leave, the joining steps) are still one click, because making a
+   * clerk confirm every ordinary step is how people learn to click through dialogs unread.
+   */
   const move = async () => {
     if (!target) return;
+    if (a && HARD_TO_REVERSE_STAGES.includes(target)) {
+      const ok = await confirm({
+        title: `Move ${a.displayName} to ${assayerLifecycleLabel(target)}?`,
+        message: (
+          <>
+            {STAGE_CONSEQUENCE[target] ?? ''}{' '}
+            {a.displayName} ({a.assayerCode}) is currently {assayerLifecycleLabel(a.lifecycleStatus)}.
+            Any work already assigned to them is not cancelled by this — check their assignments separately.
+          </>
+        ),
+        confirmLabel: `Move to ${assayerLifecycleLabel(target)}`,
+        reversible: false,
+        reversibleNote: 'The stages only run forwards, so this cannot be put back by choosing the old stage again.',
+        tone: 'danger',
+      });
+      if (!ok) return;
+    }
     setBusy(true); setErr(null);
     try {
       await api.request(`/assayers/${assayerId}/lifecycle`, {
@@ -186,6 +247,16 @@ export const AssayerDetailDrawer: React.FC<{
    */
   const resetPassword = async () => {
     if (resetting) return;
+    // The old password stops working the instant this runs, and the replacement is shown once and
+    // never again. A clerk exploring the drawer could lock a field worker out of the app mid-shift
+    // by pressing a button whose label ("Reset password") did not say that anything was destroyed.
+    const ok = await confirm({
+      title: `Give ${a?.displayName ?? 'this assayer'} a new password?`,
+      message: 'Their current password stops working straight away. A one-time password appears here for you to read out to them over the phone — it is shown once and cannot be looked up afterwards, and they must be able to sign in with it to choose a new one.',
+      confirmLabel: 'Create one-time password',
+      reversible: false,
+    });
+    if (!ok) return;
     setResetting(true); setErr(null); setTempPassword(null);
     try {
       // The endpoint returns a pre-enveloped body ({ success, temporaryPassword, message }) with no
@@ -205,6 +276,7 @@ export const AssayerDetailDrawer: React.FC<{
 
   return (
     <>
+      {confirmDialog}
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 60 }} />
       <aside
         role="dialog"
@@ -318,9 +390,16 @@ export const AssayerDetailDrawer: React.FC<{
                           placeholder={reasonRequired ? 'Why? — goes on their record' : 'Reason (optional)'}
                           style={{ flex: 1, minWidth: '160px', padding: '7px 10px', fontSize: '12px', borderRadius: '6px', background: 'var(--bg-page)', color: 'inherit', border: `1px solid ${reasonRequired && !reason.trim() ? 'var(--warning)' : 'var(--border-color)'}` }} />
                         <button onClick={move} disabled={!target || busy || (reasonRequired && !reason.trim())} className="btn btn-primary" style={{ fontSize: '12px', padding: '7px 13px' }}>
-                          {busy ? 'Moving…' : 'Move'}
+                          {busy ? 'Moving…' : target ? `Move to ${assayerLifecycleLabel(target)}` : 'Move'}
                         </button>
                       </div>
+                      {/* The picked stage explained before the button is pressed, not after. */}
+                      {target && STAGE_CONSEQUENCE[target] && (
+                        <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)', marginTop: '7px', lineHeight: 1.5 }}>
+                          {STAGE_CONSEQUENCE[target]}
+                          {reasonRequired && ' A reason is required and is kept on their employment record.'}
+                        </div>
+                      )}
                     </section>
                   )}
 
@@ -347,14 +426,33 @@ export const AssayerDetailDrawer: React.FC<{
                     </section>
                   )}
 
-                  <Facts rows={[
-                    ['Phone', a.phone], ['Alternate', a.alternatePhone], ['Email', a.email],
-                    ['Address', a.address], ['District', a.district], ['Pincode', a.pincode],
-                    ['Employment', a.employmentType], ['Employee ID', a.employeeId],
-                    ['Department', a.department], ['Region', a.region],
-                    ['Joined', fmtDate(a.joiningDate)], ['Experience', `${a.experienceYears ?? 0} years`],
-                    ['Max daily load', a.maxDailyWorkload], ['Max weekly load', a.maxWeeklyWorkload],
+                  {/*
+                    Sixteen facts in one undifferentiated grid, in the order the database happens
+                    to store them: a phone number, then a pincode, then an employment type, then a
+                    workload cap. Someone looking up how to reach this person had to read past
+                    "Max weekly load" to be sure they had not missed a second number, because
+                    nothing told them where contact details ended. Same sixteen facts, in the four
+                    groups a clerk actually asks for — nothing hidden, nothing added.
+
+                    "Employment" also printed the stored value: every person on the live roster
+                    reads "INTERNAL", a word that appears nowhere in the edit form's own list of
+                    employment types, so there was no way to find out what it meant.
+                  */}
+                  <FactGroup title="How to reach them" rows={[
+                    ['Phone', a.phone], ['Alternate phone', a.alternatePhone], ['Email', a.email],
                     ['Emergency contact', a.emergencyContactName], ['Emergency phone', a.emergencyContactPhone],
+                  ]} />
+                  <FactGroup title="Where they are" rows={[
+                    ['Address', a.address], ['District', a.district], ['Pincode', a.pincode],
+                    ['Region', a.region],
+                  ]} />
+                  <FactGroup title="Their job" rows={[
+                    ['Employment', employmentTypeLabel(a.employmentType)], ['Employee ID', a.employeeId],
+                    ['Department', a.department],
+                    ['Joined', fmtDate(a.joiningDate)], ['Experience', `${a.experienceYears ?? 0} years`],
+                  ]} />
+                  <FactGroup title="How much work they can take" rows={[
+                    ['Most jobs in a day', a.maxDailyWorkload], ['Most jobs in a week', a.maxWeeklyWorkload],
                   ]} />
                 </div>
               )}
@@ -533,6 +631,14 @@ export const AssayerDetailDrawer: React.FC<{
     </>
   );
 };
+
+/** One titled block of facts, so the summary reads as answers to questions rather than a dump. */
+const FactGroup: React.FC<{ title: string; rows: [string, any][] }> = ({ title, rows }) => (
+  <section>
+    <div style={{ ...label, marginBottom: '8px' }}>{title}</div>
+    <Facts rows={rows} />
+  </section>
+);
 
 const Facts: React.FC<{ rows: [string, any][] }> = ({ rows }) => (
   <dl style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '11px', margin: 0 }}>

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { User, MapPin, Briefcase, Award, CreditCard, Clock, Phone, X, CheckCircle, Edit2, AlertTriangle } from 'lucide-react';
-import { INDIAN_STATES, todayDateKey } from '@fapoms/shared';
+import { INDIAN_STATES, todayDateKey, REGION_ORDER, REGION_LABELS } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { Modal, Select, useToast } from '../../components/ui';
 import { Autocomplete } from '../../components/ui/Autocomplete';
@@ -58,6 +58,23 @@ const PERFORMANCE_RATINGS: { value: string; label: string }[] = [
   { value: '3', label: '3 - Average' }, { value: '4', label: '4 - Good' },
   { value: '5', label: '5 - Excellent' },
 ];
+
+/**
+ * The six operational regions, offered as a list instead of a text box.
+ *
+ * `region` looked like free text on this form, and it is not: the server runs every value
+ * through `resolveRegion()` (packages/shared/src/regions.ts) and stores one of six enum values,
+ * and that stored value is what region-scoped desks are filtered by
+ * (`AssayerService.findAll`: `where.region = In(scope.regions)`). So a clerk who typed
+ * "Delhi NCR", "Western India" or their zone name was not recording a region — the server could
+ * not resolve it, fell back to deriving one from the state, and the typing was discarded with no
+ * message. Worse, someone who typed a region that *did* resolve but was not the one their state
+ * belongs to could file the person out of their own desk's view.
+ *
+ * Six named choices, and a hint saying that leaving it blank is the normal, correct answer.
+ */
+const REGION_OPTIONS: { value: string; label: string }[] =
+  REGION_ORDER.map((r) => ({ value: r, label: REGION_LABELS[r] }));
 
 interface FieldDef {
   key: string;
@@ -119,11 +136,17 @@ const useManagerOptions = (enabled: boolean, excludeId?: string) => {
  * three clicks away, in a mode they may not be in. The section named in the URL is matched to a
  * tab by title, case-insensitively, so the link reads in plain words and survives re-ordering
  * of the tabs. An unknown or absent section leaves the form exactly as it was.
+ *
+ * A tab may also claim old names through `aliases`. "Financial" and "Pay" are now one tab called
+ * "Money", and both old names still land on it — a link that another screen, a bookmark or a
+ * pasted URL already carries must not start silently opening the form on Personal.
  */
 const sectionTabIndex = (section: string | null, groups: FieldGroup[]): number | null => {
   const want = (section || '').trim().toLowerCase();
   if (!want) return null;
-  const i = groups.findIndex((g) => g.title.toLowerCase() === want);
+  const i = groups.findIndex((g) => (
+    g.title.toLowerCase() === want || (g.aliases || []).some((a) => a.toLowerCase() === want)
+  ));
   return i >= 0 ? i : null;
 };
 
@@ -165,6 +188,31 @@ const formatHint = (key: string, value: string): string | null => {
 };
 
 /**
+ * The three identifier fields, defined once so the create and edit forms cannot drift apart.
+ *
+ * There genuinely are three columns, and they are not duplicates of each other — but only one of
+ * them is used for anything, and the form gave all three the same weight and no explanation. On
+ * the live roster `employee_id` and `employee_code` are populated on 0 of 8 rows, nothing in the
+ * backend reads either one, and `employee_id` carries a UNIQUE constraint while `employee_code`
+ * does not. So a clerk faced with "Assayer Code / Employee ID / Employee Code" had no way to know
+ * which one the login uses, which one payroll means, or which one would refuse a second person
+ * with the same value. They are kept — every one still saves exactly as before — and each now
+ * says who assigns it and what happens if it is wrong.
+ */
+const EMPLOYEE_ID_FIELD: FieldDef = {
+  key: 'employeeId', label: 'Employee ID (payroll)',
+  hint: 'Optional. The number your HR or payroll system knows this person by. No two people may share one.',
+};
+const EMPLOYEE_CODE_FIELD: FieldDef = {
+  key: 'employeeCode', label: 'Employee Code (your own reference)',
+  hint: 'Optional and free-form. Kept on the record for you to look at; nothing in the system uses it.',
+};
+const REGION_FIELD: FieldDef = {
+  key: 'region', label: 'Region', options: REGION_OPTIONS,
+  hint: 'Best left blank — it is worked out from the state. Set it only to override that.',
+};
+
+/**
  * Admission asks for who this is and where they work, and nothing else.
  *
  * This form used to make eight fields mandatory — phone, address, district and city among them —
@@ -176,7 +224,14 @@ const formatHint = (key: string, value: string): string | null => {
  */
 const CREATE_FIELDS: FieldDef[] = [
   // Not required: blank means "allocate the next free one", which is the normal case.
-  { key: 'assayerCode', label: 'Assayer Code', placeholder: 'Left blank, one is assigned for you' },
+  {
+    key: 'assayerCode', label: 'Assayer Code', placeholder: 'Left blank, one is assigned for you',
+    // Said out loud because this is the one identifier that *does* something: AuthService looks
+    // an assayer up by it at sign-in (`{ assayerCode: ILike(cleanKey) }`) and uses it as their
+    // username. A clerk who overwrote the assigned code to match a payroll number was changing
+    // somebody's login without being told so.
+    hint: 'Assigned by the system, and it is also their login username. Leave blank unless you have been given a specific code.',
+  },
   { key: 'firstName', label: 'First Name', required: true },
   { key: 'lastName', label: 'Last Name', required: true },
   { key: 'email', label: 'Email', type: 'email' },
@@ -187,9 +242,9 @@ const CREATE_FIELDS: FieldDef[] = [
   { key: 'district', label: 'District' },
   { key: 'city', label: 'City' },
   { key: 'pincode', label: 'Pincode' },
-  { key: 'region', label: 'Region' },
-  { key: 'employeeId', label: 'Employee ID' },
-  { key: 'employeeCode', label: 'Employee Code' },
+  REGION_FIELD,
+  EMPLOYEE_ID_FIELD,
+  EMPLOYEE_CODE_FIELD,
   { key: 'employmentType', label: 'Employment Type', options: EMPLOYMENT_TYPES },
   { key: 'department', label: 'Department', options: DEPARTMENTS },
   { key: 'joiningDate', label: 'Joining Date', type: 'date' },
@@ -213,8 +268,22 @@ const CREATE_FIELD_GROUPS: FieldGroup[] = [
   { title: 'Personal', icon: <User size={13} />, fields: ['assayerCode', 'firstName', 'lastName', 'email', 'phone', 'alternatePhone'] },
   { title: 'Address', icon: <MapPin size={13} />, fields: ['address', 'city', 'district', 'state', 'pincode', 'region'] },
   { title: 'Employment', icon: <Briefcase size={13} />, fields: ['employeeId', 'employeeCode', 'employmentType', 'department', 'joiningDate'] },
-  { title: 'Financial', icon: <CreditCard size={13} />, fields: ['panNumber', 'bankAccountNumber', 'ifscCode'] },
-  { title: 'Pay', icon: <CreditCard size={13} />, fields: ['baseFee', 'hourlyRate', 'dailyRate'] },
+  /**
+   * "Financial" and "Pay" were two tabs, side by side, both with a card icon — one holding the
+   * bank account and PAN, the other the rates. Nothing on either title said which was which, so
+   * a clerk holding a new joiner's paperwork had to open both to find out where the account
+   * number goes, and anyone who found the rates first assumed they had done the money tab and
+   * left the bank details empty. One tab now, in the order the paperwork is read: where the
+   * money goes, then how much it is. Both old `?section=` names still open it.
+   */
+  {
+    title: 'Money', icon: <CreditCard size={13} />, aliases: ['financial', 'pay', 'bank'],
+    fields: ['panNumber', 'bankAccountNumber', 'ifscCode', 'baseFee', 'hourlyRate', 'dailyRate'],
+    blocks: [
+      { title: 'How we pay them', note: 'Bank and tax details. Needed before this person can be paid.', fields: ['panNumber', 'bankAccountNumber', 'ifscCode'] },
+      { title: "What they're paid", note: 'Leave at zero if the rates are not agreed yet — they can be set later.', fields: ['baseFee', 'hourlyRate', 'dailyRate'] },
+    ],
+  },
   { title: 'Skills', icon: <Award size={13} />, fields: ['experienceYears', 'skills', 'languages', 'certifications'] },
   { title: 'Other', icon: <Clock size={13} />, fields: ['notes'] },
 ];
@@ -232,14 +301,31 @@ const EDIT_FIELDS: FieldDef[] = [
   { key: 'district', label: 'District' },
   { key: 'city', label: 'City' },
   { key: 'pincode', label: 'Pincode' },
-  { key: 'region', label: 'Region' },
-  { key: 'employeeId', label: 'Employee ID' },
-  { key: 'employeeCode', label: 'Employee Code' },
+  REGION_FIELD,
+  EMPLOYEE_ID_FIELD,
+  EMPLOYEE_CODE_FIELD,
   { key: 'employmentType', label: 'Employment Type', options: EMPLOYMENT_TYPES },
   { key: 'department', label: 'Department', options: DEPARTMENTS },
   { key: 'joiningDate', label: 'Joining Date', type: 'date' },
-  { key: 'exitDate', label: 'Exit Date', type: 'date' },
-  { key: 'terminationDate', label: 'Termination Date', type: 'date' },
+  /**
+   * Two leaving dates, and they are not a duplicate pair — but nothing on screen said so.
+   *
+   * `AssayerStateMachine` stamps `exitDate` when somebody is moved to RESIGNED and
+   * `terminationDate` when they are moved to TERMINATED, and the roster reads
+   * `COALESCE(exit_date, termination_date)` as "the day they left". A clerk who saw two date
+   * boxes and filled in whichever they reached first was recording *how* the person left, not
+   * just when — and filling in both says the person both resigned and was dismissed. The labels
+   * now carry the reason, and both say that the usual way to set them is to change the person's
+   * status, which stamps the right one automatically.
+   */
+  {
+    key: 'exitDate', label: 'Last day — resigned', type: 'date',
+    hint: 'Filled in automatically when the status is set to Resigned. Only change it if that date is wrong.',
+  },
+  {
+    key: 'terminationDate', label: 'Last day — terminated', type: 'date',
+    hint: 'Filled in automatically when the status is set to Terminated. Use this one only for a dismissal, not a resignation.',
+  },
   // Was a box asking for a raw UUID, which nobody in the office has ever been able to type,
   // so the reporting line simply went unrecorded. It is a pick from the roster now: the name
   // is shown, the id is what gets stored. Still optional — the server treats it as optional,
@@ -252,9 +338,34 @@ const EDIT_FIELDS: FieldDef[] = [
   { key: 'skills', label: 'Skills', vocab: 'skills', full: true },
   { key: 'languages', label: 'Languages', vocab: 'languages', full: true },
   { key: 'certifications', label: 'Certifications', vocab: 'certifications', full: true },
-  { key: 'performanceRating', label: 'Performance Rating', type: 'number', options: PERFORMANCE_RATINGS },
-  { key: 'maxDailyWorkload', label: 'Max Daily Workload', type: 'number' },
-  { key: 'maxWeeklyWorkload', label: 'Max Weekly Workload', type: 'number' },
+  /**
+   * A hand-set rating that the planning engine really does read — and a second, computed rating
+   * that this field is not.
+   *
+   * `assayers.performance_rating` is set by HR only (the mobile app lists it in
+   * HR_MAINTAINED_FIELDS and renders it read-only) and is scored by the recommendation engine
+   * when it ranks candidates for a job, so it is not a decorative note. The separate
+   * `average_rating` column is computed from remarks by `recomputeAverageRating()` and is never
+   * touched from here. Nobody reading "Performance Rating" could tell which of the two they were
+   * about to overwrite, or that typing a number here changes who gets offered work.
+   *
+   * The list also only ever offered whole numbers while the column stores two decimals: a person
+   * on 4.80 opened this form showing an empty dropdown — reading as "not rated" — and any pick
+   * silently rounded them down. `renderFormField` now offers the recorded value back as its own
+   * choice, so opening the form cannot round anybody.
+   */
+  {
+    key: 'performanceRating', label: 'HR performance rating', type: 'number', options: PERFORMANCE_RATINGS,
+    hint: 'Set by HR. Used when the system suggests who to send to a job. Separate from the rating worked out from remarks.',
+  },
+  {
+    key: 'maxDailyWorkload', label: 'Most jobs per day', type: 'number',
+    hint: 'How many jobs this person may be given in one day.',
+  },
+  {
+    key: 'maxWeeklyWorkload', label: 'Most jobs per week', type: 'number',
+    hint: 'How many jobs this person may be given in one week.',
+  },
   { key: 'emergencyContactName', label: 'Emergency Contact Name' },
   { key: 'emergencyContactPhone', label: 'Emergency Contact Phone' },
   { key: 'emergencyContactRelation', label: 'Emergency Contact Relation', options: EMERGENCY_CONTACT_RELATIONS },
@@ -371,13 +482,31 @@ const renderFormField = (
           );
         })()
       ) : field.options ? (
-        <Select
-          value={val}
-          onChange={(v) => setForm({ ...form, [field.key]: v })}
-          options={field.options.map(o => ({ value: o.value, label: o.label }))}
-          placeholder={`-- Select ${field.label.replace(' *', '')} --`}
-          style={{ width: '100%' }}
-        />
+        /**
+         * A value already on the record that is not one of the offered choices is shown as its
+         * own choice, marked "as recorded", instead of leaving the box looking unanswered.
+         *
+         * The rating is the case that bit: it is stored to two decimals, the list offers whole
+         * numbers, and a person on 4.80 therefore opened with an empty dropdown that read as
+         * "never rated" — so the obvious repair was to pick 5, or 4, quietly changing a figure
+         * the assignment recommendations are scored on. The same protects a department or
+         * employment type that was recorded before this list was last edited.
+         */
+        (() => {
+          const known = field.options.some((o) => o.value === val);
+          const opts = val && !known
+            ? [...field.options, { value: val, label: `${val} — as recorded` }]
+            : field.options;
+          return (
+            <Select
+              value={val}
+              onChange={(v) => setForm({ ...form, [field.key]: v })}
+              options={opts.map(o => ({ value: o.value, label: o.label }))}
+              placeholder={`-- Select ${field.label.replace(' *', '')} --`}
+              style={{ width: '100%' }}
+            />
+          );
+        })()
       ) : GEO_AUTO_FIELDS.has(field.key) ? (
         <Autocomplete
           value={val}
@@ -430,6 +559,46 @@ const renderFormField = (
   );
 };
 
+/**
+ * The body of one tab: either a plain grid of fields, or sub-headed blocks when the group
+ * defines them.
+ *
+ * Anything in `group.fields` that no block claims is still rendered, after the blocks. That is
+ * deliberate belt-and-braces: a field added to a group but forgotten in its blocks would
+ * otherwise disappear from the form while still being saved from `form` state, which is the
+ * quietest possible way to lose a value.
+ */
+const renderGroupBody = (
+  group: FieldGroup,
+  fieldsMap: Map<string, FieldDef>,
+  renderOne: (field: FieldDef) => React.ReactNode,
+): React.ReactNode => {
+  const gridStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px' } as const;
+  if (!group.blocks || group.blocks.length === 0) {
+    return <div style={gridStyle}>{group.fields.map((key) => { const f = fieldsMap.get(key); return f ? renderOne(f) : null; })}</div>;
+  }
+  const claimed = new Set(group.blocks.flatMap((b) => b.fields));
+  const leftover = group.fields.filter((k) => !claimed.has(k));
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      {group.blocks.map((block) => (
+        <div key={block.title}>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '2px' }}>{block.title}</div>
+          {block.note && <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginBottom: '8px' }}>{block.note}</div>}
+          <div style={gridStyle}>
+            {block.fields.map((key) => { const f = fieldsMap.get(key); return f ? renderOne(f) : null; })}
+          </div>
+        </div>
+      ))}
+      {leftover.length > 0 && (
+        <div style={gridStyle}>
+          {leftover.map((key) => { const f = fieldsMap.get(key); return f ? renderOne(f) : null; })}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const CreateAssayerModal: React.FC<{
   onClose: () => void;
   onCreated: () => void;
@@ -470,8 +639,11 @@ export const CreateAssayerModal: React.FC<{
    * instead — otherwise the deep link works in Advanced and silently does nothing in the mode
    * most people are actually in, which is the failure it was added to prevent.
    */
+  // Every name the Money tab answers to, not just "financial" — the tab merge would otherwise
+  // have left `?section=money` and `?section=pay` opening Express mode with the bank block still
+  // collapsed, which is precisely the failure the collapsed-block deep link was added to prevent.
   const [showBank, setShowBank] = useState(
-    (initialSection ?? urlParams.get('section') ?? '').trim().toLowerCase() === 'financial',
+    ['financial', 'money', 'pay', 'bank'].includes((initialSection ?? urlParams.get('section') ?? '').trim().toLowerCase()),
   );
 
   /**
@@ -956,14 +1128,10 @@ export const CreateAssayerModal: React.FC<{
           </div>
           <div key={activeTab} className="tab-pane" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
             <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>{currentGroup.title}</div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px' }}>
-              {currentGroup.fields.map(key => {
-                const field = fieldsMap.get(key);
-                return field
-                  ? renderFormField(field, form, setForm, vocabulary, (k) => { if (k === 'pincode') void applyPincodeLookup(form.pincode || ''); })
-                  : null;
-              })}
-            </div>
+            {renderGroupBody(currentGroup, fieldsMap, (field) => renderFormField(
+              field, form, setForm, vocabulary,
+              (k) => { if (k === 'pincode') void applyPincodeLookup(form.pincode || ''); },
+            ))}
           </div>
         </>
       )}
@@ -975,13 +1143,33 @@ interface FieldGroup {
   title: string;
   icon: React.ReactNode;
   fields: string[];
+  /**
+   * Other names a `?section=` link may use for this tab. Renaming a tab must never break a link
+   * that another screen already sends people through — see `sectionTabIndex`.
+   */
+  aliases?: string[];
+  /**
+   * Optional sub-headings inside one tab. Used by "Money", which holds two things a clerk thinks
+   * of separately — where the money goes, and how much it is — and which were two tabs before.
+   * The keys listed here must all appear in `fields`; anything in `fields` that no block claims
+   * is rendered after the blocks, so a field can never be lost by forgetting to list it.
+   */
+  blocks?: { title: string; note?: string; fields: string[] }[];
 }
 
 const EDIT_FIELD_GROUPS: FieldGroup[] = [
   { title: 'Personal', icon: <User size={13} />, fields: ['firstName', 'lastName', 'email', 'phone', 'alternatePhone'] },
   { title: 'Address', icon: <MapPin size={13} />, fields: ['address', 'city', 'district', 'state', 'pincode', 'region'] },
   { title: 'Employment', icon: <Briefcase size={13} />, fields: ['employeeId', 'employeeCode', 'employmentType', 'department', 'joiningDate', 'exitDate', 'terminationDate', 'managerId'] },
-  { title: 'Financial', icon: <CreditCard size={13} />, fields: ['panNumber', 'bankAccountNumber', 'ifscCode'] },
+  // Named "Money" to match the create form, so the same thing is not called two different things
+  // in the two places a clerk meets it. The old `?section=financial` links still land here.
+  {
+    title: 'Money', icon: <CreditCard size={13} />, aliases: ['financial', 'pay', 'bank'],
+    fields: ['panNumber', 'bankAccountNumber', 'ifscCode'],
+    blocks: [
+      { title: 'How we pay them', note: 'Bank and tax details. Needed before this person can be paid. Rates are set on the Pay screen.', fields: ['panNumber', 'bankAccountNumber', 'ifscCode'] },
+    ],
+  },
   { title: 'Skills', icon: <Award size={13} />, fields: ['experienceYears', 'skills', 'languages', 'certifications', 'performanceRating', 'maxDailyWorkload', 'maxWeeklyWorkload'] },
   { title: 'Emergency', icon: <Phone size={13} />, fields: ['emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation'] },
   { title: 'Other', icon: <Clock size={13} />, fields: ['workingHoursStart', 'workingHoursEnd', 'notes'] },
@@ -1133,14 +1321,10 @@ export const EditAssayerModal: React.FC<{
       {/* Tab content */}
       <div key={activeEditTab} className="tab-pane" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
         <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>{currentGroup.title}</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px' }}>
-          {currentGroup.fields.map(key => {
-            const field = fieldsMap.get(key);
-            return field
-              ? renderFormField(field, form, setForm, vocabulary, undefined, { options: managers.people, failed: managers.failed })
-              : null;
-          })}
-        </div>
+        {renderGroupBody(currentGroup, fieldsMap, (field) => renderFormField(
+          field, form, setForm, vocabulary, undefined,
+          { options: managers.people, failed: managers.failed },
+        ))}
       </div>
     </Modal>
   );

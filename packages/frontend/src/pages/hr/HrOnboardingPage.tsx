@@ -38,7 +38,9 @@ const OnboardingTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate: 
 
     <section style={card}>
       <div style={{ ...label, marginBottom: '10px' }}>
-        Stalled over {d.pipeline.stalledAfterDays} days ({d.pipeline.stalled.length})
+        {/* "Stalled" is the backend's word for the same rule this sentence states: nothing has
+            moved for N days. Said plainly, it also matches the tab badge's hover text. */}
+        Waiting more than {d.pipeline.stalledAfterDays} days without moving on ({d.pipeline.stalled.length})
       </div>
       {d.pipeline.stalled.length === 0 ? (
         <Empty>No candidate has been sitting in a stage longer than {d.pipeline.stalledAfterDays} days.</Empty>

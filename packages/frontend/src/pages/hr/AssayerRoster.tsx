@@ -18,7 +18,7 @@ import { useExcelExport } from '../../hooks/useExcelExport';
 import { CreateAssayerModal, EditAssayerModal } from './AssayerForms';
 import type { Assayer } from './assayer-shared';
 import { STATUS_COLORS, missingCriticalFields } from './assayer-shared';
-import { AssayerDetailDrawer } from './AssayerDetailDrawer';
+import { AssayerDetailDrawer, STAGE_CONSEQUENCE, HARD_TO_REVERSE_STAGES } from './AssayerDetailDrawer';
 import { fmtDate } from '../../utils/dates';
 import { queryKeys } from '../../hooks/queryKeys';
 
@@ -322,8 +322,40 @@ export const AssayerRoster: React.FC = () => {
   const sortBy = (key: SortKey) =>
     setSort((s) => ({ key, dir: s.key === key && s.dir === 'asc' ? 'desc' : 'asc' }));
 
+  /**
+   * Moving a whole batch of people to another stage, asked about first.
+   *
+   * The bar said "12 selected" and offered an Apply button, and pressing it changed twelve
+   * employment records with no further question — including moves like Terminated and Archived,
+   * which the state machine will not run backwards. There is also nothing in the bar that names
+   * *who* is in the batch, so a mis-click on the header tick box (which selects every row in the
+   * current view, potentially hundreds) was indistinguishable from a deliberate selection of
+   * twelve. The dialog now states the count, the destination, what it does to those people, and
+   * lists the first few names so the batch can be recognised before it is committed.
+   */
   const runBulkTransition = async () => {
     if (!bulkTarget || selected.length === 0) return;
+    const names = selected.slice(0, 5).map((a) => `${a.displayName} (${a.assayerCode})`);
+    const ok = await confirm({
+      title: `Move ${selected.length} ${selected.length === 1 ? 'person' : 'people'} to ${assayerLifecycleLabel(bulkTarget)}?`,
+      message: (
+        <>
+          {STAGE_CONSEQUENCE[bulkTarget] ?? `Everyone selected is moved to ${assayerLifecycleLabel(bulkTarget)}.`}
+          {' '}Anyone who cannot legally reach that stage from where they are now is left alone, and
+          you will get a list of who moved and who did not.
+          <div style={{ marginTop: '8px', fontSize: '12px' }}>
+            {names.join(', ')}
+            {selected.length > names.length && ` and ${selected.length - names.length} more`}
+          </div>
+          {hiddenNote && <div style={{ marginTop: '6px', fontSize: '12px' }}>{hiddenNote}</div>}
+        </>
+      ),
+      confirmLabel: `Move ${selected.length} to ${assayerLifecycleLabel(bulkTarget)}`,
+      reversible: false,
+      reversibleNote: 'The stages only run forwards, so this cannot be put back by choosing the old stage again.',
+      tone: HARD_TO_REVERSE_STAGES.includes(bulkTarget) ? 'danger' : 'normal',
+    });
+    if (!ok) return;
     setBusy(true);
     setBulkReport(null);
     const ids = selectedVisibleIds;
@@ -650,8 +682,15 @@ export const AssayerRoster: React.FC = () => {
 
       {showFilters && (
         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', padding: '10px 12px', borderRadius: '8px', background: 'var(--bg-surface-2)' }}>
-          <RosterFilterSelect label="State" value={stateFilter} onChange={setStateFilter} options={states} />
-          <RosterFilterSelect label="Status" value={statusFilter} onChange={setStatusFilter} options={statuses} formatOption={assayerLifecycleLabel} />
+          {/*
+            "State" and "Status" sat side by side as two five-letter words, one meaning the part of
+            India someone lives in and the other meaning where they have got to with HR — and the
+            column they each narrow is headed "Location" and "Stage". Someone hunting for everyone
+            in Kerala read "Status" first as often as not. Both now say which question they answer,
+            and the "All" option names what it is all of.
+          */}
+          <RosterFilterSelect label="State they live in" value={stateFilter} onChange={setStateFilter} options={states} allLabel="All states" />
+          <RosterFilterSelect label="Stage with HR" value={statusFilter} onChange={setStatusFilter} options={statuses} formatOption={assayerLifecycleLabel} allLabel="All stages" />
           {(stateFilter !== 'ALL' || statusFilter !== 'ALL' || search) && (
             <button
               onClick={() => { setStateFilter('ALL'); setStatusFilter('ALL'); setSearch(''); }}
@@ -694,6 +733,15 @@ export const AssayerRoster: React.FC = () => {
           <button onClick={() => setSelectedIds(new Set())} className="btn btn-secondary" style={{ fontSize: '12px', padding: '6px 12px', marginLeft: 'auto' }}>
             Clear selection
           </button>
+          {/* What the chosen stage does to these people, before Apply is pressed. The dropdown
+              named a stage and the button said "Apply"; between the two, nothing said that
+              "Archived" takes everyone selected off the working roster. */}
+          {bulkTarget && STAGE_CONSEQUENCE[bulkTarget] && (
+            <div style={{ flexBasis: '100%', fontSize: '11.5px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+              {STAGE_CONSEQUENCE[bulkTarget]} Anyone who cannot reach that stage from where they are
+              now is left alone, and you get a list of who moved and who did not.
+            </div>
+          )}
         </div>
       )}
 
@@ -757,7 +805,8 @@ export const AssayerRoster: React.FC = () => {
                 <Th label="Location" k="state" sort={sort} onSort={sortBy} />
                 <Th label="Record" k="completeness" sort={sort} onSort={sortBy} />
                 <Th label="Joined" k="joiningDate" sort={sort} onSort={sortBy} />
-                <Th label="Exp" k="experienceYears" sort={sort} onSort={sortBy} />
+                {/* "Exp" could as easily have been an expiry date. It is years of experience. */}
+                <Th label="Experience" k="experienceYears" sort={sort} onSort={sortBy} />
                 <th style={{ ...head, textAlign: 'right' }}>Actions</th>
               </tr>
             </thead>
@@ -941,15 +990,17 @@ const RosterFilterSelect: React.FC<{
   options: string[];
   /** Turns a stored option value into the words shown. Defaults to the value itself. */
   formatOption?: (value: string) => string;
+  /** Wording for "no filter" — say what it is all of, not just "All". */
+  allLabel?: string;
 }> = ({
-  label, value, onChange, options, formatOption = (v) => v,
+  label, value, onChange, options, formatOption = (v) => v, allLabel = 'All',
 }) => (
   <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
     <span style={{ fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)' }}>{label}</span>
     <Select
       value={value}
       onChange={onChange}
-      options={[{ value: 'ALL', label: 'All' }, ...options.map((o) => ({ value: o, label: formatOption(o) }))]}
+      options={[{ value: 'ALL', label: allLabel }, ...options.map((o) => ({ value: o, label: formatOption(o) }))]}
       compact
       style={{ minWidth: '150px' }}
     />

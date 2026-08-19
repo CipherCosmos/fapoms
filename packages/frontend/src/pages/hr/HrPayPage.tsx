@@ -1,12 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Wallet, Search, Pencil, Plus, AlertTriangle, Clock } from 'lucide-react';
-import { formatRupees as money } from '@fapoms/shared';
 import { Link } from 'react-router-dom';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { card, label, Empty, fmtDate } from './hr-ui';
 import { useHr } from './HrLayout';
-import { CommercialProfileModal, type CommercialProfile } from './CommercialProfileModal';
+import { CommercialProfileModal, formatMoney, type CommercialProfile } from './CommercialProfileModal';
 
 /**
  * Pay & terms.
@@ -47,6 +46,28 @@ interface RosterPayRow {
 
 type Filter = 'all' | 'priced' | 'unpriced';
 
+/**
+ * Does this person get paid their OWN agreed fee, or the client's default?
+ *
+ * The screen used to answer "do they have a profile row?", which is not the same question.
+ * `FeePolicyService.resolveBaseFee` only uses a profile's base fee when it is **greater than
+ * zero** — a profile saved with the base fee left blank falls back to the client's contracted
+ * default exactly as if no profile existed at all. Six of the eight live profiles carry a zero in
+ * at least one rate box, so this is not a theoretical case: those people were counted under "Have
+ * a rate card", and the clerk had no way to see that the system was quietly paying them the
+ * default anyway. Same rule, same source, one answer.
+ */
+const paidOwnFee = (row?: RosterPayRow): boolean => Number(row?.profile?.baseFee ?? 0) > 0;
+
+/**
+ * A rate box left at zero is not "₹0 per hour agreed" — it is a box nobody filled in. Printing
+ * "₹0" made an unfilled box look like a deliberate term of employment.
+ */
+const rate = (value: number | string | null | undefined, currency?: string | null): React.ReactNode =>
+  Number(value ?? 0) > 0
+    ? formatMoney(value, currency)
+    : <span title="Nothing agreed for this — it was left blank" style={{ color: 'var(--text-muted)' }}>Not set</span>;
+
 export const HrPayPage: React.FC = () => {
 
   const { canManage } = useHr();
@@ -81,15 +102,15 @@ export const HrPayPage: React.FC = () => {
     return roster
       .filter((a) => !q || a.displayName.toLowerCase().includes(q) || a.assayerCode.toLowerCase().includes(q))
       .filter((a) => {
-        const has = !!pay[a.id]?.profile;
+        const has = paidOwnFee(pay[a.id]);
         return filter === 'all' || (filter === 'priced' ? has : !has);
       });
   }, [roster, pay, search, filter]);
 
-  const unpricedCount = roster.filter((a) => !pay[a.id]?.profile).length;
+  const unpricedCount = roster.filter((a) => !paidOwnFee(pay[a.id])).length;
   const unbankedCount = roster.filter(bankMissing).length;
 
-  if (loading) return <div style={{ padding: '20px 4px', color: 'var(--text-muted)' }}>Loading rate cards…</div>;
+  if (loading) return <div style={{ padding: '20px 4px', color: 'var(--text-muted)' }}>Loading what everyone is paid…</div>;
   if (error) return <div style={{ padding: '20px 4px', color: 'var(--danger)' }}>{error}</div>;
 
   return (
@@ -101,11 +122,11 @@ export const HrPayPage: React.FC = () => {
         </button>
         <button onClick={() => setFilter('priced')} style={tile(filter === 'priced')}>
           <div style={statValue}>{roster.length - unpricedCount}</div>
-          <div style={label}>Have a rate card</div>
+          <div style={label}>Paid their own agreed fee</div>
         </button>
         <button onClick={() => setFilter('unpriced')} style={tile(filter === 'unpriced', unpricedCount > 0)}>
           <div style={{ ...statValue, color: unpricedCount > 0 ? 'var(--warning)' : undefined }}>{unpricedCount}</div>
-          <div style={label}>On the default fee</div>
+          <div style={label}>Paid the client's default fee</div>
         </button>
         {/*
           Not a filter — a count with nothing behind it on this page, because bank details are not
@@ -133,8 +154,9 @@ export const HrPayPage: React.FC = () => {
         <div style={{ ...card, borderLeft: '3px solid var(--warning)', display: 'flex', gap: '9px', alignItems: 'flex-start', fontSize: '12.5px' }}>
           <AlertTriangle size={15} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: '1px' }} />
           <span style={{ color: 'var(--text-secondary)' }}>
-            These assayers have no commercial profile in force, so every assignment prices them at the
-            client's contracted default base fee. Set a rate card to pay them their own agreed terms.
+            These people have no base fee of their own in force today — either no pay terms at all, or
+            pay terms saved with the base fee left at zero. Either way every audit they do is paid at
+            the client's contracted default fee. Use “Set pay terms” on a row to agree their own.
           </span>
         </div>
       )}
@@ -142,7 +164,7 @@ export const HrPayPage: React.FC = () => {
       <div style={card}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px', flexWrap: 'wrap' }}>
           <Wallet size={15} style={{ color: 'var(--accent)' }} />
-          <span style={{ ...label, fontSize: '12px' }}>Rate cards in force today</span>
+          <span style={{ ...label, fontSize: '12px' }}>What each person is paid today</span>
           <div style={{ position: 'relative', marginLeft: 'auto' }}>
             <Search size={13} style={{ position: 'absolute', left: '9px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
             <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Find an assayer…"
@@ -151,14 +173,28 @@ export const HrPayPage: React.FC = () => {
         </div>
 
         {rows.length === 0 ? (
-          <Empty>No assayer matches the current filter.</Empty>
+          <Empty>
+            {search.trim()
+              ? `Nobody on the roster is called “${search.trim()}”. Check the spelling, or clear the search box to see everyone.`
+              : filter === 'unpriced'
+                ? 'Everyone on the roster has their own agreed base fee — nobody is falling back to the client default fee.'
+                : filter === 'priced'
+                  ? 'Nobody has their own agreed base fee yet. Use “Set pay terms” on a row after switching to “On the roster”, and every audit that person does will be paid at their agreed rate instead of the client default.'
+                  : 'Nobody is on the roster yet. People appear here as soon as they are added under Workforce, and their pay terms are set from this screen.'}
+          </Empty>
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px' }}>
               <thead>
                 <tr>
-                  {['Assayer', 'Base fee', 'Daily', 'Hourly', 'Travel', 'Effective', ''].map((h) => (
-                    <th key={h} style={{ ...label, textAlign: h === 'Assayer' || h === '' ? 'left' : 'right', padding: '8px 10px', borderBottom: '1px solid var(--border-color)', whiteSpace: 'nowrap' }}>{h}</th>
+                  {/*
+                    Every column says per what. "Daily / Hourly / Travel" over four rupee figures
+                    left a clerk to guess whether ₹3,600 was a day, a visit or a month — and the
+                    only column that decides what is actually paid was indistinguishable from the
+                    three that do not.
+                  */}
+                  {['Person', 'Base fee (per audit) — what is paid', 'Daily rate', 'Hourly rate', 'Travel (per trip)', 'These terms apply from', ''].map((h) => (
+                    <th key={h} style={{ ...label, textAlign: h === 'Person' || h === '' ? 'left' : 'right', padding: '8px 10px', borderBottom: '1px solid var(--border-color)', whiteSpace: 'nowrap' }}>{h}</th>
                   ))}
                 </tr>
               </thead>
@@ -189,27 +225,46 @@ export const HrPayPage: React.FC = () => {
                       </td>
                       {p ? (
                         <>
-                          <td style={num}>{money(p.baseFee)}</td>
-                          <td style={num}>{money(p.dailyRate)}</td>
-                          <td style={num}>{money(p.hourlyRate)}</td>
-                          <td style={num}>{money(p.travelReimbursement)}</td>
+                          <td style={{ ...num, color: 'var(--text-primary)', fontWeight: 600 }}>
+                            {rate(p.baseFee, p.currency)}
+                            {/*
+                              Pay terms exist, but with no base fee in them — so the system pays the
+                              client default and the row otherwise looks fully priced. This is the
+                              exact row a clerk would have sworn was on an agreed rate.
+                            */}
+                            {!paidOwnFee(row) && (
+                              <div style={{ fontSize: '10.5px', fontWeight: 500, color: 'var(--warning)', marginTop: '2px' }}>
+                                paid the client default
+                              </div>
+                            )}
+                          </td>
+                          <td style={num}>{rate(p.dailyRate, p.currency)}</td>
+                          <td style={num}>{rate(p.hourlyRate, p.currency)}</td>
+                          <td style={num}>{rate(p.travelReimbursement, p.currency)}</td>
                           <td style={{ ...num, color: 'var(--text-muted)', fontSize: '11.5px' }}>
                             {fmtDate(p.effectiveStartDate)}
+                            {/*
+                              The clock icon on its own said nothing: hovering for a tooltip is not
+                              how anyone reads a table, so "these are not the rates from next month"
+                              was information only a mouse could find.
+                            */}
                             {row?.hasFutureProfile && (
-                              <span title="A later profile is scheduled" style={{ marginLeft: '5px', color: 'var(--accent)' }}><Clock size={11} /></span>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'flex-end', color: 'var(--accent)', marginTop: '2px' }}>
+                                <Clock size={11} /> <span>Different terms start later</span>
+                              </div>
                             )}
                           </td>
                         </>
                       ) : (
                         <td colSpan={5} style={{ padding: '9px 10px', color: 'var(--warning)', fontSize: '12px' }}>
-                          No rate card — priced at the client default
+                          No pay terms agreed — paid the client's default fee for every audit
                         </td>
                       )}
                       <td style={{ padding: '9px 10px', textAlign: 'right' }}>
                         {canManage && (
                           <button onClick={() => setEditing({ assayerId: a.id, profile: p ?? null })}
                             style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', fontWeight: 600, padding: '5px 10px', borderRadius: '7px', border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--accent)', cursor: 'pointer' }}>
-                            {p ? <><Pencil size={12} /> Edit</> : <><Plus size={12} /> Set terms</>}
+                            {p ? <><Pencil size={12} /> Change pay</> : <><Plus size={12} /> Set pay terms</>}
                           </button>
                         )}
                       </td>

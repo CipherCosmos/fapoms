@@ -85,10 +85,22 @@ const RecordsTabBody = ({ d, navigate, search, setSearch, canManage }: { d: HrWo
         </div>
 
         {rows.length === 0 ? (
+          /*
+           * Two filters can hide the list — the field tile above and the search box — and the old
+           * wording, "No record matches this filter", named neither. A clerk who had typed a name
+           * ten minutes earlier and then clicked a field tile could not tell which of the two to
+           * undo, and when nothing was filtered at all it still blamed a filter that was not set.
+           * Each case now says which control is hiding the rows, or that there is genuinely
+           * nothing left to chase.
+           */
           <Empty>
             {d.compliance.incompleteCount === 0
-              ? 'Every active record has its payroll and duty-of-care fields filled in.'
-              : 'No record matches this filter.'}
+              ? 'Every active record has its payroll and duty-of-care fields filled in — nothing to chase here.'
+              : onlyField && search.trim()
+                ? `Nobody missing ${FIELD_LABELS[onlyField] ?? onlyField} matches “${search.trim()}”. Clear the search box or the field above to widen it.`
+                : onlyField
+                  ? `Nobody is missing ${FIELD_LABELS[onlyField] ?? onlyField}. Click that field above again to see everyone with something missing.`
+                  : `No incomplete record matches “${search.trim()}”. Clear the search box to see all ${d.compliance.incompleteCount}.`}
           </Empty>
         ) : (
           <Table

@@ -597,6 +597,31 @@ export function assayerLifecycleLabel(status?: string | null): string {
 }
 
 /**
+ * How someone is engaged — on the payroll, on a contract, or through an agency.
+ *
+ * There was no shared wording for this at all, so the assayer record rendered the stored value
+ * straight onto the screen: every person on the live roster reads "INTERNAL" under Employment.
+ * The create/edit form offers a list that does not even contain that value, so an office user had
+ * no way to find out what it means. Free text is allowed here (imports carry whatever the client's
+ * sheet said), which is why unknown values fall through to sentence case rather than "—".
+ */
+export const EMPLOYMENT_TYPE_LABELS: Record<string, string> = {
+  INTERNAL: 'On our payroll',
+  FULL_TIME: 'Full time',
+  PART_TIME: 'Part time',
+  CONTRACT: 'On contract',
+  INTERN: 'Intern',
+  CONSULTANT: 'Consultant',
+  FREELANCE: 'Freelance',
+  EXTERNAL: 'Outside agency',
+};
+
+export function employmentTypeLabel(type?: string | null): string {
+  if (!type) return '—';
+  return EMPLOYMENT_TYPE_LABELS[type.toUpperCase()] ?? humanize(type);
+}
+
+/**
  * The client-side ledger line for one assignment. Same values as `billingStateLabel` — named
  * for the record the finance desk is actually looking at ("this billing entry"), because
  * "state" is the schema's word and "status" is the one on the screen.
