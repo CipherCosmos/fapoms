@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
   CalendarDays, RefreshCw, Calendar, CheckCircle2,
@@ -819,8 +819,33 @@ export const Scheduling: React.FC = () => {
                   Loading schedules…
                 </div>
               ) : timelineSchedules.length === 0 ? (
-                <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)', fontSize: '13px' }}>
-                  {timelineSearch ? 'No schedules match your search.' : 'No schedules match the status filter.'}
+                <div style={{ textAlign: 'center', padding: '40px 24px', color: 'var(--text-muted)', fontSize: '13px' }}>
+                  {/*
+                    "No schedules match the status filter" was shown even when there were no
+                    visits at all and no filter applied, which reads as "your visits are being
+                    hidden from you". Two further things this screen never said out loud and was
+                    reported confusing for: it lists booked VISITS, not branches — a branch with
+                    no assayer yet cannot appear — and it only ever shows the month on screen, so
+                    a visit completed last month is a month back, not missing.
+                  */}
+                  {rawSchedules.length === 0 && !timelineSearch ? (
+                    <>
+                      <p style={{ margin: '0 0 6px', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                        No visits are booked for this month.
+                      </p>
+                      <p style={{ margin: '0 auto', maxWidth: 430, lineHeight: 1.5 }}>
+                        A branch appears here once an assayer has accepted it and a date is set.
+                        Visits from other months are behind the arrows above. To get work booked,
+                        choose an assayer in{' '}
+                        <Link to="/planning" style={{ color: 'var(--accent)' }}>Planning</Link>.
+                      </p>
+                    </>
+                  ) : (
+                    <p style={{ margin: 0 }}>
+                      Nothing matches what you have selected. Clear the search or filter to see the
+                      whole month.
+                    </p>
+                  )}
                 </div>
               ) : (
                 timelineSchedules.map(sch => {

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { useUrlSelection } from '../hooks/useUrlSelection';
 import { useQuery } from '@tanstack/react-query';
 import { ClipboardList, RefreshCw, Calendar, MessageSquare, Clock, Send, CheckCircle, XCircle, ExternalLink, GitCommit, Circle, MapPin, FileText, Lock, ChevronLeft, ChevronRight, AlertTriangle, Hourglass, Flame, FileSpreadsheet } from 'lucide-react';
@@ -836,9 +836,30 @@ export const Assignments: React.FC = () => {
           {isLoading ? (
             <div style={{ textAlign: 'center', padding: '40px 0', color: 'var(--text-muted)' }}>Loading assignments queue...</div>
           ) : filteredAssignments.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '60px 0', color: 'var(--text-muted)' }}>
+            <div style={{ textAlign: 'center', padding: '60px 24px', color: 'var(--text-muted)' }}>
               <ClipboardList size={48} style={{ margin: '0 auto 16px auto', opacity: 0.5 }} />
-              <p>No assignments found matching your criteria.</p>
+              {/*
+                Blaming the filter when nothing exists yet is what made this screen read as
+                broken. A coordinator with 165 imported branches and nobody assigned to any of
+                them saw "No assignments found matching your criteria" and reasonably concluded
+                the app was hiding their branches. This page lists assignments, and an assignment
+                only exists once somebody has been given the job — so when the list is empty and
+                no filter is on, say that, and say where the work actually is.
+              */}
+              {assignments.length === 0 && statusFilter === 'ALL' && !searchTerm ? (
+                <>
+                  <p style={{ margin: '0 0 6px', fontWeight: 600, color: 'var(--text-secondary)' }}>
+                    Nobody has been given a branch to audit yet.
+                  </p>
+                  <p style={{ margin: '0 auto', maxWidth: 420, fontSize: '13px', lineHeight: 1.5 }}>
+                    A branch appears here once an assayer has been chosen for it. Choose one in{' '}
+                    <Link to="/planning" style={{ color: 'var(--accent)' }}>Planning</Link> and it
+                    will show up on this tab.
+                  </p>
+                </>
+              ) : (
+                <p>Nothing matches what you have selected. Clear the filter or search to see everything.</p>
+              )}
             </div>
           ) : (
             <table className="table" style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
