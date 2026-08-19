@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Animated, BackHandler, Dimensions, Modal, PanResponder, ScrollView, StyleProp, View, ViewStyle } from 'react-native';
 import { useTheme } from '../../theme/ThemeProvider';
 import { AppText, Icon, Tappable } from './primitives';
+import { TOP_INSET } from './AppShell';
 
 /**
  * A minimal push/pop stack, built from `Animated`/`PanResponder`/`View` — all pure JS, already
@@ -127,9 +128,19 @@ export const SubScreen: React.FC<SubScreenProps> = ({ active, title, onBack, tra
           style,
         ]}
       >
+        {/*
+         * `paddingTop: TOP_INSET`, the same constant AppShell's own TopBar uses — without it
+         * the header sat right at y=0 of the Modal's window. `statusBarTranslucent` (below) lets
+         * this Modal draw behind the status bar rather than have Android push its whole window
+         * down and re-flow everything on open/close, but that means THIS view is now the one
+         * responsible for clearing the status bar/notch itself. Without this padding the back
+         * arrow and title rendered underneath the status bar — invisible, not merely misplaced —
+         * which is indistinguishable from "the header disappeared" to whoever's holding the
+         * phone, exactly the report this fixes.
+         */}
         <View style={{
           flexDirection: 'row', alignItems: 'center', gap: t.space.sm,
-          paddingHorizontal: t.space.sm, paddingVertical: t.space.md,
+          paddingTop: TOP_INSET, paddingHorizontal: t.space.sm, paddingBottom: t.space.md,
           borderBottomWidth: 1, borderBottomColor: t.colors.border,
         }}>
           <Tappable onPress={onBack} accessibilityRole="button" accessibilityLabel="Back" hitSlop={8}>

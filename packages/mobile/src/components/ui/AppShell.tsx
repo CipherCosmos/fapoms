@@ -20,7 +20,7 @@ type IconName = string;
 export type TabType = 'HOME' | 'SCHEDULE' | 'QUERIES' | 'EARNINGS' | 'MY_PROFILE';
 
 /** Safe top padding without pulling in react-native-safe-area-context. */
-const TOP_INSET = Platform.select({ ios: 54, android: (StatusBar.currentHeight ?? 24) + 10, default: 16 });
+export const TOP_INSET = Platform.select({ ios: 54, android: (StatusBar.currentHeight ?? 24) + 10, default: 16 });
 /** Home-indicator clearance on iOS; Android nav bars are handled by the OS. */
 export const BOTTOM_INSET = Platform.select({ ios: 26, android: 24, default: 12 });
 
