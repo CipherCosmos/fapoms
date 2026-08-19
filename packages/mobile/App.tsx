@@ -160,6 +160,7 @@ function AppMain() {
   const {
     profile,
     saving: savingProfile,
+    dirty: profileDirty,
     leaves: availabilityLeaves,
     setLeaves: setAvailabilityLeaves,
     load: loadAssayerProfile,
@@ -767,6 +768,7 @@ function AppMain() {
             assayerCode={user?.assayerCode || profile.assayerCode}
             profile={profile}
             savingProfile={savingProfile}
+            profileDirty={profileDirty}
             openQueries={assignments.reduce((n, a) => n + (a.queries || []).filter((q: any) => q.status !== 'RESOLVED' && q.status !== 'CLOSED').length, 0)}
             resolvedQueries={assignments.reduce((n, a) => n + (a.queries || []).filter((q: any) => q.status === 'RESOLVED' || q.status === 'CLOSED').length, 0)}
             onUpdateProfileField={handleUpdateProfileField}

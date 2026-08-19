@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useMemo, useState } from 'react';
 import { MobileApiService } from '../services/api.service';
 import { useFeedback } from '../components/ui/Feedback';
 import type { ProfileDataState } from '../screens/ProfileScreen';
@@ -54,6 +54,13 @@ function emptyProfile(seed: { assayerCode?: string; latitude?: number; longitude
 export interface AssayerProfile {
   profile: ProfileDataState;
   saving: boolean;
+  /**
+   * Whether `profile` differs from what the server last confirmed (either from `load()` or the
+   * last successful `save()`). Drives whether the Save button appears at all — see ProfileScreen,
+   * where showing it unconditionally meant it sat on screen with nothing to do on every visit,
+   * and a tap on it re-sent whatever was already saved for no reason.
+   */
+  dirty: boolean;
   /** Days the assayer has marked unavailable, as plain YYYY-MM-DD ranges. */
   leaves: LeavePeriod[];
   setLeaves: (leaves: LeavePeriod[]) => void;
@@ -77,15 +84,27 @@ export function useAssayerProfile(user: {
 } | null | undefined, location?: { latitude?: number; longitude?: number } | null): AssayerProfile {
   const feedback = useFeedback();
 
-  const [profile, setProfile] = useState<ProfileDataState>(() =>
+  const initialProfile = useMemo(() =>
     emptyProfile({
       assayerCode: user?.assayerCode,
       latitude: location?.latitude,
       longitude: location?.longitude,
     }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
   );
+  const [profile, setProfile] = useState<ProfileDataState>(initialProfile);
+  /**
+   * The last state the server actually confirmed — everything currently on screen is compared
+   * against this to decide `dirty`. Deliberately its own state rather than derived from `profile`
+   * some other way: it must NOT move every time `profile` does (that's the whole point), only on
+   * a successful `load()` or `save()`.
+   */
+  const [baseline, setBaseline] = useState<ProfileDataState>(initialProfile);
   const [saving, setSaving] = useState(false);
   const [leaves, setLeaves] = useState<LeavePeriod[]>([]);
+
+  const dirty = useMemo(() => JSON.stringify(profile) !== JSON.stringify(baseline), [profile, baseline]);
 
   const load = useCallback(async () => {
     if (!user?.id) return;
@@ -99,10 +118,16 @@ export function useAssayerProfile(user: {
       // other way).
       const joinArr = (v: any, fallback: string) => (Array.isArray(v) ? v.join(', ') : v || fallback);
 
+      // Captured from inside the functional update below so `baseline` can be set to the exact
+      // same merged object — `dirty` must read false immediately after a load, not just after
+      // the next edit recomputes it.
+      let merged: ProfileDataState | null = null;
+
       // Personal fields fall back to what is already on screen so a partial server record does
       // not wipe something the assayer has typed but not yet saved. Totals do not: they are the
       // server's to state, and keeping a stale number would misreport what they are owed.
-      setProfile((prev) => ({
+      setProfile((prev) => {
+        merged = {
         ...prev,
         phone: p.phone || prev.phone,
         alternatePhone: p.alternatePhone || prev.alternatePhone,
@@ -148,7 +173,10 @@ export function useAssayerProfile(user: {
         latitude: p.latitude ?? prev.latitude,
         longitude: p.longitude ?? prev.longitude,
         preferredRegions: joinArr(p.preferredRegions, prev.preferredRegions),
-      }));
+        };
+        return merged;
+      });
+      if (merged) setBaseline(merged);
 
       // Normalise the leave calendar to plain YYYY-MM-DD ranges for the availability picker.
       setLeaves(
@@ -185,6 +213,9 @@ export function useAssayerProfile(user: {
         feedback.error('Not saved', result.error || 'Your profile could not be saved. Please try again.');
         return false;
       }
+      // What was just sent is now what the server has, so it's the new baseline — the Save
+      // button (gated on `dirty`) should disappear again until the next actual edit.
+      setBaseline(profile);
       feedback.success('Profile saved');
       return true;
     } catch (e: any) {
@@ -195,5 +226,5 @@ export function useAssayerProfile(user: {
     }
   }, [user?.id, profile, feedback]);
 
-  return { profile, saving, leaves, setLeaves, load, updateField, save };
+  return { profile, saving, dirty, leaves, setLeaves, load, updateField, save };
 }

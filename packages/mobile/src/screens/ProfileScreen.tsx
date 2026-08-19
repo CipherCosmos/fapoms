@@ -71,6 +71,8 @@ interface ProfileScreenProps {
   assayerCode?: string;
   profile: ProfileDataState;
   savingProfile: boolean;
+  /** Whether `profile` actually differs from the server's last confirmed copy. */
+  profileDirty: boolean;
   onUpdateProfileField: (field: keyof ProfileDataState, value: any) => void;
   onSaveProfile: () => void;
   onLogout?: () => void;
@@ -154,6 +156,29 @@ const SubToggle: React.FC<{ label: string; hint?: string; value: boolean; onChan
   );
 };
 
+/**
+ * The "Edit"/"Done" text control for an editable sub-screen's header — the standard iOS
+ * Settings/Contacts placement (top-right of the nav bar) for exactly this job: fields start
+ * read-only, this is the one deliberate tap that unlocks them.
+ */
+const EditToggle: React.FC<{ editing: boolean; onToggle: () => void }> = ({ editing, onToggle }) => {
+  const t = useTheme();
+  return (
+    <Tappable
+      onPress={onToggle}
+      accessibilityRole="button"
+      accessibilityLabel={editing ? 'Done editing' : 'Edit'}
+      hitSlop={8}
+    >
+      <View style={{ paddingHorizontal: t.space.sm, paddingVertical: t.space.xs }}>
+        <AppText variant="bodyStrong" style={{ color: t.colors.primary }}>
+          {editing ? 'Done' : 'Edit'}
+        </AppText>
+      </View>
+    </Tappable>
+  );
+};
+
 const FieldInput: React.FC<{
   label: string;
   value: string;
@@ -167,16 +192,26 @@ const FieldInput: React.FC<{
    * because the worker types, saves, and only then learns it was never theirs to change.
    */
   lockedReason?: string;
-}> = ({ label, value, onChange, placeholder, keyboardType = 'default', autoCapitalize = 'none', lockedReason }) => {
+  /**
+   * Not permanently locked — just not currently in this section's edit mode (see each editable
+   * SubScreen's "Edit" toggle below). Same flat display treatment as `lockedReason`, minus the
+   * lock icon and reason line, since it's reachable by the assayer themselves, just not by
+   * accident. Without this, every field on the screen was a live TextInput at all times: a stray
+   * character brushed in while scrolling, or a field wiped by a mis-aimed tap, sat there
+   * indistinguishable from a deliberate edit until the (previously always-visible) Save button
+   * sent it to the server.
+   */
+  readOnly?: boolean;
+}> = ({ label, value, onChange, placeholder, keyboardType = 'default', autoCapitalize = 'none', lockedReason, readOnly }) => {
   const t = useTheme();
   const [focus, setFocus] = useState(false);
 
-  if (lockedReason) {
+  if (lockedReason || readOnly) {
     return (
       <View style={{ gap: t.space.sm }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
           <AppText variant="overline" tone="faint">{label.toUpperCase()}</AppText>
-          <Icon name="lock-closed" size={11} color={t.colors.textFaint} />
+          {lockedReason && <Icon name="lock-closed" size={11} color={t.colors.textFaint} />}
         </View>
         <View style={{
           backgroundColor: t.colors.surface,
@@ -190,7 +225,7 @@ const FieldInput: React.FC<{
             {value ? String(value) : 'Not on file'}
           </AppText>
         </View>
-        <AppText variant="caption" tone="faint">{lockedReason}</AppText>
+        {lockedReason && <AppText variant="caption" tone="faint">{lockedReason}</AppText>}
       </View>
     );
   }
@@ -243,6 +278,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   assayerCode = '',
   profile,
   savingProfile,
+  profileDirty,
   onUpdateProfileField,
   onSaveProfile,
   onLogout,
@@ -258,6 +294,20 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   // this isn't react-navigation): `push('contact')` opens the Contact sub-screen, `pop()` (or the
   // sub-screen's own back chevron / hardware back / edge swipe) returns to the row list.
   const stackNav = useStackNav();
+
+  /**
+   * Whether the currently-open editable sub-screen (Contact/Address/Emergency
+   * contact/Capability/Capacity) accepts input right now. Every field on those screens defaults
+   * to a flat, read-only display (`FieldInput`'s `readOnly` prop) until this is toggled on via
+   * the "Edit" control in that sub-screen's header — see the request this answers: an
+   * always-editable field next to an always-visible Save button meant a stray character brushed
+   * in while scrolling had a live path to overwriting the server record. One shared flag (not
+   * one per section) is enough because the stack is one level deep and only one section is ever
+   * open at a time; it resets to false on every navigation so leaving a section never leaves the
+   * next one silently unlocked.
+   */
+  const [editing, setEditing] = useState(false);
+  useEffect(() => { setEditing(false); }, [stackNav.current]);
 
   /**
    * Device settings, seeded from the persisted store rather than from the profile object.
@@ -493,17 +543,29 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
         />
       </GroupedSection>
 
-      {/* Saves whatever was touched in the two sections above. Kept unconditional (rather than
-          gated to a tab) now that there's no tab to gate it to — it's cheap to show and an
-          assayer who has nothing pending simply never needs to tap it. */}
-      <Button
-        label={savingProfile ? 'Saving…' : 'Save changes'}
-        icon="save-outline"
-        onPress={onSaveProfile}
-        loading={savingProfile}
-        size="lg"
-        full
-      />
+      {/*
+        Shown only while there's an actual unsaved edit (`profileDirty`, from useAssayerProfile's
+        diff against the server's last confirmed copy). It used to sit here unconditionally on
+        every visit — a button with nothing to do, and a tap on it just re-sent whatever was
+        already saved. Worse, it invited exactly the mistake this whole change set exists to
+        prevent: a permanently-present Save button next to permanently-editable fields means a
+        stray character typed (or a field accidentally cleared) while just scrolling past on a
+        touchscreen has a live, one-tap path to actually overwrite the server record. The fields
+        themselves are now read-only until "Edit" is tapped on their own section (see
+        FieldInput's `readOnly` prop and each SubScreen's trailing edit toggle below) — dirty can
+        now only become true from a deliberate edit, and this button only exists while one is
+        pending.
+      */}
+      {profileDirty && (
+        <Button
+          label={savingProfile ? 'Saving…' : 'Save changes'}
+          icon="save-outline"
+          onPress={onSaveProfile}
+          loading={savingProfile}
+          size="lg"
+          full
+        />
+      )}
 
       {/* Performance used to be an entire alternate screen (StatsScreen) swapped in by the STATS
           tab — the only tab that wasn't a list of rows at all, which is exactly the inconsistency
@@ -626,66 +688,81 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
         Rendered unconditionally so each keeps its `active` prop and the mount/unmount is owned by
         SubScreen's own slide animation rather than by this list.
       */}
-      <SubScreen active={stackNav.current === 'contact'} title="Contact" onBack={stackNav.pop}>
+      <SubScreen
+        active={stackNav.current === 'contact'} title="Contact" onBack={stackNav.pop}
+        trailing={<EditToggle editing={editing} onToggle={() => setEditing((e) => !e)} />}
+      >
         <View style={{ padding: t.space.lg, gap: t.space.lg }}>
           <Card level={1} style={{ gap: t.space.lg }}>
-            <FieldInput label="Phone" value={profile.phone} onChange={(v) => onUpdateProfileField('phone', v)} keyboardType="phone-pad" placeholder="+91…" />
-            <FieldInput label="Alternate phone" value={profile.alternatePhone} onChange={(v) => onUpdateProfileField('alternatePhone', v)} keyboardType="phone-pad" />
+            <FieldInput label="Phone" value={profile.phone} onChange={(v) => onUpdateProfileField('phone', v)} keyboardType="phone-pad" placeholder="+91…" readOnly={!editing} />
+            <FieldInput label="Alternate phone" value={profile.alternatePhone} onChange={(v) => onUpdateProfileField('alternatePhone', v)} keyboardType="phone-pad" readOnly={!editing} />
           </Card>
         </View>
       </SubScreen>
 
-      <SubScreen active={stackNav.current === 'address'} title="Address" onBack={stackNav.pop}>
+      <SubScreen
+        active={stackNav.current === 'address'} title="Address" onBack={stackNav.pop}
+        trailing={<EditToggle editing={editing} onToggle={() => setEditing((e) => !e)} />}
+      >
         <View style={{ padding: t.space.lg, gap: t.space.lg }}>
           <Card level={1} style={{ gap: t.space.lg }}>
-            <FieldInput label="Address" value={profile.address} onChange={(v) => onUpdateProfileField('address', v)} autoCapitalize="words" />
+            <FieldInput label="Address" value={profile.address} onChange={(v) => onUpdateProfileField('address', v)} autoCapitalize="words" readOnly={!editing} />
             <View style={{ flexDirection: 'row', gap: t.space.md }}>
               <View style={{ flex: 1 }}>
-                <FieldInput label="City" value={profile.city} onChange={(v) => onUpdateProfileField('city', v)} autoCapitalize="words" />
+                <FieldInput label="City" value={profile.city} onChange={(v) => onUpdateProfileField('city', v)} autoCapitalize="words" readOnly={!editing} />
               </View>
               <View style={{ flex: 1 }}>
-                <FieldInput label="Pincode" value={profile.pincode} onChange={(v) => onUpdateProfileField('pincode', v)} keyboardType="numeric" />
+                <FieldInput label="Pincode" value={profile.pincode} onChange={(v) => onUpdateProfileField('pincode', v)} keyboardType="numeric" readOnly={!editing} />
               </View>
             </View>
             <View style={{ flexDirection: 'row', gap: t.space.md }}>
               <View style={{ flex: 1 }}>
-                <FieldInput label="District" value={profile.district} onChange={(v) => onUpdateProfileField('district', v)} autoCapitalize="words" />
+                <FieldInput label="District" value={profile.district} onChange={(v) => onUpdateProfileField('district', v)} autoCapitalize="words" readOnly={!editing} />
               </View>
               <View style={{ flex: 1 }}>
-                <FieldInput label="State" value={profile.state} onChange={(v) => onUpdateProfileField('state', v)} autoCapitalize="words" />
-              </View>
-            </View>
-          </Card>
-        </View>
-      </SubScreen>
-
-      <SubScreen active={stackNav.current === 'emergency'} title="Emergency contact" onBack={stackNav.pop}>
-        <View style={{ padding: t.space.lg, gap: t.space.lg }}>
-          <Card level={1} style={{ gap: t.space.lg }}>
-            <FieldInput label="Name" value={profile.emergencyName} onChange={(v) => onUpdateProfileField('emergencyName', v)} autoCapitalize="words" />
-            <View style={{ flexDirection: 'row', gap: t.space.md }}>
-              <View style={{ flex: 1 }}>
-                <FieldInput label="Phone" value={profile.emergencyPhone} onChange={(v) => onUpdateProfileField('emergencyPhone', v)} keyboardType="phone-pad" />
-              </View>
-              <View style={{ flex: 1 }}>
-                <FieldInput label="Relation" value={profile.emergencyRelation} onChange={(v) => onUpdateProfileField('emergencyRelation', v)} autoCapitalize="words" />
+                <FieldInput label="State" value={profile.state} onChange={(v) => onUpdateProfileField('state', v)} autoCapitalize="words" readOnly={!editing} />
               </View>
             </View>
           </Card>
         </View>
       </SubScreen>
 
-      <SubScreen active={stackNav.current === 'capability'} title="Capability" onBack={stackNav.pop}>
+      <SubScreen
+        active={stackNav.current === 'emergency'} title="Emergency contact" onBack={stackNav.pop}
+        trailing={<EditToggle editing={editing} onToggle={() => setEditing((e) => !e)} />}
+      >
         <View style={{ padding: t.space.lg, gap: t.space.lg }}>
           <Card level={1} style={{ gap: t.space.lg }}>
-            <FieldInput label="Skills" value={profile.skills} onChange={(v) => onUpdateProfileField('skills', v)} placeholder="Gold assaying, purity testing" />
-            <FieldInput label="Languages" value={profile.languages} onChange={(v) => onUpdateProfileField('languages', v)} placeholder="English, Hindi" />
-            <FieldInput label="Experience (years)" value={String(profile.experienceYears ?? '')} onChange={(v) => onUpdateProfileField('experienceYears', Number(v) || 0)} keyboardType="numeric" />
+            <FieldInput label="Name" value={profile.emergencyName} onChange={(v) => onUpdateProfileField('emergencyName', v)} autoCapitalize="words" readOnly={!editing} />
+            <View style={{ flexDirection: 'row', gap: t.space.md }}>
+              <View style={{ flex: 1 }}>
+                <FieldInput label="Phone" value={profile.emergencyPhone} onChange={(v) => onUpdateProfileField('emergencyPhone', v)} keyboardType="phone-pad" readOnly={!editing} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <FieldInput label="Relation" value={profile.emergencyRelation} onChange={(v) => onUpdateProfileField('emergencyRelation', v)} autoCapitalize="words" readOnly={!editing} />
+              </View>
+            </View>
           </Card>
         </View>
       </SubScreen>
 
-      <SubScreen active={stackNav.current === 'capacity'} title="Capacity" onBack={stackNav.pop}>
+      <SubScreen
+        active={stackNav.current === 'capability'} title="Capability" onBack={stackNav.pop}
+        trailing={<EditToggle editing={editing} onToggle={() => setEditing((e) => !e)} />}
+      >
+        <View style={{ padding: t.space.lg, gap: t.space.lg }}>
+          <Card level={1} style={{ gap: t.space.lg }}>
+            <FieldInput label="Skills" value={profile.skills} onChange={(v) => onUpdateProfileField('skills', v)} placeholder="Gold assaying, purity testing" readOnly={!editing} />
+            <FieldInput label="Languages" value={profile.languages} onChange={(v) => onUpdateProfileField('languages', v)} placeholder="English, Hindi" readOnly={!editing} />
+            <FieldInput label="Experience (years)" value={String(profile.experienceYears ?? '')} onChange={(v) => onUpdateProfileField('experienceYears', Number(v) || 0)} keyboardType="numeric" readOnly={!editing} />
+          </Card>
+        </View>
+      </SubScreen>
+
+      <SubScreen
+        active={stackNav.current === 'capacity'} title="Capacity" onBack={stackNav.pop}
+        trailing={<EditToggle editing={editing} onToggle={() => setEditing((e) => !e)} />}
+      >
         <View style={{ padding: t.space.lg, gap: t.space.lg }}>
           <Card level={1} style={{ gap: t.space.lg }}>
             <View style={{ flexDirection: 'row', gap: t.space.md }}>
@@ -696,8 +773,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                 <FieldInput label="Max per week" value={String(profile.maxWeeklyWorkload ?? '')} onChange={() => {}} lockedReason="Set by operations, alongside your daily limit." />
               </View>
             </View>
-            <FieldInput label="Preferred travel radius (km)" value={String(profile.preferredRadius ?? '')} onChange={(v) => onUpdateProfileField('preferredRadius', Number(v) || 0)} keyboardType="numeric" />
-            <FieldInput label="Preferred regions" value={profile.preferredRegions} onChange={(v) => onUpdateProfileField('preferredRegions', v)} autoCapitalize="words" />
+            <FieldInput label="Preferred travel radius (km)" value={String(profile.preferredRadius ?? '')} onChange={(v) => onUpdateProfileField('preferredRadius', Number(v) || 0)} keyboardType="numeric" readOnly={!editing} />
+            <FieldInput label="Preferred regions" value={profile.preferredRegions} onChange={(v) => onUpdateProfileField('preferredRegions', v)} autoCapitalize="words" readOnly={!editing} />
           </Card>
         </View>
       </SubScreen>
