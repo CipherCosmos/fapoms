@@ -1449,17 +1449,41 @@ export const PlanningWorkspace: React.FC = () => {
    * and opens it, then scrolls its best match into view so the next click is the assign button.
    */
   const PRIORITY_ORDER: Record<string, number> = { CRITICAL: 0, HIGH: 1, MEDIUM: 2, LOW: 3 };
-  const nextUnassignedBranch = useMemo(() => {
+
+  /**
+   * Every branch still needing somebody, most urgent first — INCLUDING whichever is open.
+   *
+   * Keeping the open one in the list is the whole point. The first version excluded it and then
+   * took the top of what remained, which walks the queue only while priorities differ: with two
+   * equally urgent branches A and B, opening A makes B the top of the rest, and opening B makes
+   * A the top again, so the button flipped between those two forever and never reached the third.
+   * Reported exactly that way — "next branch to staff just moves within 2 branches only".
+   *
+   * `sort` is stable, so equal priorities keep the queue's own order and the walk is repeatable.
+   */
+  const pendingBranchesInOrder = useMemo(() => {
     const pending = filteredBranches.filter(b =>
       !b.assignment &&
-      !['AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED', 'UNABLE_TO_COVER', 'CANCELLED'].includes(b.status) &&
-      b.id !== selectedBranchId);
-    if (pending.length === 0) return null;
-    // Stable ordering: priority first, then the queue's own order, so pressing the button
-    // repeatedly walks down the list instead of bouncing between two equally urgent branches.
+      !['AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED', 'UNABLE_TO_COVER', 'CANCELLED'].includes(b.status));
     return [...pending].sort((a, b) =>
-      (PRIORITY_ORDER[a.priority ?? ''] ?? 9) - (PRIORITY_ORDER[b.priority ?? ''] ?? 9))[0] ?? null;
-  }, [filteredBranches, selectedBranchId]);
+      (PRIORITY_ORDER[a.priority ?? ''] ?? 9) - (PRIORITY_ORDER[b.priority ?? ''] ?? 9));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filteredBranches]);
+
+  /**
+   * A cursor over that list rather than "the best one that isn't this one": step to whatever
+   * follows the open branch and wrap at the end, so repeated presses visit every branch in turn
+   * and come back round instead of oscillating between the top two.
+   */
+  const nextUnassignedBranch = useMemo(() => {
+    if (pendingBranchesInOrder.length === 0) return null;
+    const current = pendingBranchesInOrder.findIndex(b => b.id === selectedBranchId);
+    // Nothing relevant open yet — start at the most urgent.
+    if (current === -1) return pendingBranchesInOrder[0];
+    // The open branch is the only one left to staff; there is nowhere to move on to.
+    if (pendingBranchesInOrder.length === 1) return null;
+    return pendingBranchesInOrder[(current + 1) % pendingBranchesInOrder.length] ?? null;
+  }, [pendingBranchesInOrder, selectedBranchId]);
 
   /**
    * Set when the coordinator pressed "Next branch to staff", so the effect below knows to scroll
