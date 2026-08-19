@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Animated, BackHandler, Dimensions, PanResponder, ScrollView, StyleProp, View, ViewStyle } from 'react-native';
+import { Animated, BackHandler, Dimensions, Modal, PanResponder, ScrollView, StyleProp, View, ViewStyle } from 'react-native';
 import { useTheme } from '../../theme/ThemeProvider';
 import { AppText, Icon, Tappable } from './primitives';
 
@@ -40,16 +40,39 @@ interface SubScreenProps {
 
 /**
  * One pushed screen: slides in from the right when it becomes active, slides back out on pop.
- * Rendered absolutely over the root list so the root never has to unmount while a sub-screen is
- * open — it just sits underneath, exactly like a native stack.
+ *
+ * Rendered through a `Modal`, not as a `position: absolute` overlay inside the scrolling
+ * content it used to sit in. That first version anchored `top: 0` to ProfileScreen's own box,
+ * which is itself a child of App.tsx's single shared vertical ScrollView — so the overlay's
+ * position was relative to wherever Profile happened to be scrolled to, not to the actual
+ * screen. Scroll down at all inside Profile before pushing a row, and the sub-screen's own back
+ * header rendered scrolled away above the visible viewport — indistinguishable from "the page
+ * is stuck under the app's header," which is exactly the bug this was. A `Modal` renders on its
+ * own native layer, entirely outside the ScrollView's layout and scroll offset, so this problem
+ * cannot recur regardless of where the root list was scrolled to. It also now correctly covers
+ * the app's TopBar/tab dock while open, the way a real sub-screen should — the previous overlay
+ * sat underneath both of those, a second header-like bar always visible above it.
+ *
+ * Kept mounted slightly past `active` going false (`mounted` state) purely so the exit slide has
+ * something to animate — `Modal`'s `visible` prop has no transition of its own here
+ * (`animationType="none"`; the slide is done by hand on `translateX` to match the edge-swipe).
  */
 export const SubScreen: React.FC<SubScreenProps> = ({ active, title, onBack, trailing, style, children }) => {
   const t = useTheme();
-  const translateX = useRef(new Animated.Value(active ? 0 : SCREEN_W)).current;
+  const translateX = useRef(new Animated.Value(SCREEN_W)).current;
+  const [mounted, setMounted] = useState(active);
 
   useEffect(() => {
-    Animated.timing(translateX, { toValue: active ? 0 : SCREEN_W, duration: t.motion.base, useNativeDriver: true }).start();
-  }, [active, translateX, t.motion.base]);
+    if (active) {
+      setMounted(true);
+      translateX.setValue(SCREEN_W);
+      Animated.timing(translateX, { toValue: 0, duration: t.motion.base, useNativeDriver: true }).start();
+    } else if (mounted) {
+      Animated.timing(translateX, { toValue: SCREEN_W, duration: t.motion.base, useNativeDriver: true })
+        .start(() => setMounted(false));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [active]);
 
   // Android hardware back (and the Android gesture-nav back swipe, which also fires
   // hardwareBackPress) pops this sub-screen instead of falling through to App.tsx's own
@@ -93,47 +116,40 @@ export const SubScreen: React.FC<SubScreenProps> = ({ active, title, onBack, tra
     })
   ).current;
 
+  if (!mounted) return null;
+
   return (
-    <Animated.View
-      {...panResponder.panHandlers}
-      pointerEvents={active ? 'auto' : 'none'}
-      style={[
-        {
-          position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-          backgroundColor: t.colors.bg,
-          transform: [{ translateX }],
-        },
-        t.elevation(active ? 3 : 0) as object,
-        style,
-      ]}
-    >
-      <View style={{
-        flexDirection: 'row', alignItems: 'center', gap: t.space.sm,
-        paddingHorizontal: t.space.sm, paddingVertical: t.space.md,
-        borderBottomWidth: 1, borderBottomColor: t.colors.border,
-      }}>
-        <Tappable onPress={onBack} accessibilityRole="button" accessibilityLabel="Back" hitSlop={8}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', padding: t.space.sm }}>
-            <Icon name="chevron-back" size={22} color={t.colors.primary} />
-          </View>
-        </Tappable>
-        <AppText variant="h3" numberOfLines={1} style={{ flex: 1 }}>{title}</AppText>
-        {trailing}
-      </View>
-      {/*
-       * A ScrollView of its own, not a plain View. This sub-screen is absolutely positioned
-       * over ProfileScreen's root list, which itself sits inside App.tsx's single shared
-       * vertical ScrollView — so the outer scroll moves this whole overlay as a block, but
-       * nothing was letting content TALLER than one viewport (Notifications' category
-       * toggles, Security & Biometrics, Accreditation) be reached past whatever fit in the
-       * visible frame. `flex: 1` on a bare View just clips there; a ScrollView gives every
-       * sub-screen its own scroll regardless of how the outer container is sized. No padding
-       * here — every call site already wraps its own children in a padded/gapped View (see
-       * ProfileScreen.tsx's `<SubScreen>` usages), so adding it here too would double it.
-       */}
-      <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
-        {children}
-      </ScrollView>
-    </Animated.View>
+    <Modal visible={mounted} transparent={false} animationType="none" onRequestClose={onBack} statusBarTranslucent>
+      <Animated.View
+        {...panResponder.panHandlers}
+        style={[
+          { flex: 1, backgroundColor: t.colors.bg, transform: [{ translateX }] },
+          style,
+        ]}
+      >
+        <View style={{
+          flexDirection: 'row', alignItems: 'center', gap: t.space.sm,
+          paddingHorizontal: t.space.sm, paddingVertical: t.space.md,
+          borderBottomWidth: 1, borderBottomColor: t.colors.border,
+        }}>
+          <Tappable onPress={onBack} accessibilityRole="button" accessibilityLabel="Back" hitSlop={8}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', padding: t.space.sm }}>
+              <Icon name="chevron-back" size={22} color={t.colors.primary} />
+            </View>
+          </Tappable>
+          <AppText variant="h3" numberOfLines={1} style={{ flex: 1 }}>{title}</AppText>
+          {trailing}
+        </View>
+        {/*
+         * A ScrollView of its own: content taller than one viewport (Notifications' category
+         * toggles, Security & Biometrics, Accreditation) needs somewhere to scroll to. No
+         * padding here — every call site already wraps its own children in a padded/gapped View
+         * (see ProfileScreen.tsx's `<SubScreen>` usages), so adding it here too would double it.
+         */}
+        <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
+          {children}
+        </ScrollView>
+      </Animated.View>
+    </Modal>
   );
 };
