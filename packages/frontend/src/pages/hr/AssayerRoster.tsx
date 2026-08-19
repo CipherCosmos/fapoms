@@ -21,6 +21,7 @@ import { STATUS_COLORS, missingCriticalFields } from './assayer-shared';
 import { AssayerDetailDrawer, STAGE_CONSEQUENCE, HARD_TO_REVERSE_STAGES } from './AssayerDetailDrawer';
 import { fmtDate } from '../../utils/dates';
 import { queryKeys } from '../../hooks/queryKeys';
+import { counted } from '../../utils/plural';
 
 /**
  * The workforce roster.
@@ -382,7 +383,7 @@ export const AssayerRoster: React.FC = () => {
               tone: 'err',
               text: `${moved} moved to ${assayerLifecycleLabel(bulkTarget)}, ${skipped.length} skipped, ${failed.length} failed.`,
             }
-          : { tone: 'ok', text: `${moved} assayer(s) moved to ${assayerLifecycleLabel(bulkTarget)}.` },
+          : { tone: 'ok', text: `${counted(moved, 'person', 'people')} moved to ${assayerLifecycleLabel(bulkTarget)}.` },
       );
     } catch (e) {
       // Raw server text ("API Endpoint /assayers/bulk/lifecycle returned status 500") tells an
@@ -500,8 +501,8 @@ export const AssayerRoster: React.FC = () => {
             // `breakdown` is phrased to follow "Roster imported — …", so dropping it straight
             // into "Imported … of 6" produced "Imported 4 updated of 6". Keep the count and the
             // make-up of it apart.
-            ? `Imported ${imported} of ${imported + errors.length} rows${sheetNote} (${breakdown}). ${errors.length} row(s) could not be imported.${phoneNote}`
-            : `Imported ${imported} of ${imported + errors.length}. ${errors.length} row(s) could not be imported.`,
+            ? `Imported ${imported} of ${imported + errors.length} rows${sheetNote} (${breakdown}). ${counted(errors.length, 'row')} could not be imported.${phoneNote}`
+            : `Imported ${imported} of ${imported + errors.length}. ${counted(errors.length, 'row')} could not be imported.`,
           details: errors,
         });
       }

@@ -21,6 +21,7 @@ import { AssayerRemarks } from '../../components/AssayerRemarks';
 // there rather than keeping a second map that would drift. Both modules are lazy-loaded under /hr.
 import { attributeTypeLabel } from './HrCapabilityPage';
 import { todayDateKey, localDateKey } from '../../utils/statusLabels';
+import { counted } from '../../utils/plural';
 
 /** Whole days until a recorded expiry; null when nothing is recorded. */
 const expiryDays = (iso?: string | null): number | null =>
@@ -277,12 +278,22 @@ export const AssayerDetailDrawer: React.FC<{
   return (
     <>
       {confirmDialog}
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 60 }} />
+      {/*
+        * Z-INDEX HAS TO CLEAR THE MOBILE BOTTOM NAV, WHICH IS 990.
+        *
+        * This drawer was written at 60/61, so on any screen narrow enough for the bottom tab bar
+        * to appear (<=1024px) the bar was painted OVER it: the drawer still ran the full height,
+        * but its last 60px — and whatever action happened to sit there — were covered by a nav
+        * the drawer had no way to dismiss. It read as the panel spilling off the bottom of the
+        * screen. `src/components/ui/DetailDrawer.tsx` already established 1090/1091 for exactly
+        * this reason; those are the numbers used here so there is one convention, not two.
+        */}
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1090 }} />
       <aside
         role="dialog"
         aria-label="Assayer detail"
         style={{
-          position: 'fixed', top: 0, right: 0, bottom: 0, width: 'min(560px, 100vw)', zIndex: 61,
+          position: 'fixed', top: 0, right: 0, bottom: 0, width: 'min(560px, 100vw)', zIndex: 1091,
           background: 'var(--bg-card)', borderLeft: '1px solid var(--border-color)',
           display: 'flex', flexDirection: 'column', boxShadow: '-16px 0 40px rgba(0,0,0,0.4)',
         }}
@@ -356,7 +367,7 @@ export const AssayerDetailDrawer: React.FC<{
                   {missing.length > 0 && (
                     <div style={{ padding: '11px 13px', borderRadius: '8px', background: 'var(--status-pending-bg)', border: '1px solid rgba(216,174,71,0.25)' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '7px', color: 'var(--warning)', fontWeight: 700, fontSize: '12.5px' }}>
-                        <AlertTriangle size={14} /> {missing.length} required field(s) missing
+                        <AlertTriangle size={14} /> {counted(missing.length, 'required field')} missing
                       </div>
                       <ul style={{ margin: '7px 0 0', paddingLeft: '20px', fontSize: '12px', color: 'var(--text-secondary)' }}>
                         {missing.map((f) => <li key={String(f.key)}>{f.label} — blocks {f.why.toLowerCase()}</li>)}
@@ -543,7 +554,7 @@ export const AssayerDetailDrawer: React.FC<{
                   {lapsedCertifications.length > 0 && (
                     <div style={{ padding: '11px 13px', borderRadius: '8px', marginBottom: '12px', background: 'var(--status-cancelled-bg)', border: '1px solid rgba(220,80,80,0.3)' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '7px', color: 'var(--danger)', fontWeight: 700, fontSize: '12.5px' }}>
-                        <AlertTriangle size={14} /> {lapsedCertifications.length} certification(s) expired
+                        <AlertTriangle size={14} /> {counted(lapsedCertifications.length, 'certificate')} expired
                       </div>
                       <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '5px' }}>
                         {lapsedCertifications.map((c: any) => c.name).join(', ')} — any branch that requires these will

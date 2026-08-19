@@ -1755,3 +1755,7 @@ html, body {
   from { opacity: 0; transform: translateY(-4px) scale(0.98); }
   to   { opacity: 1; transform: none; }
 }
+
+/* The Workforce tab strip scrolls sideways rather than wrapping into a full-screen stack (see
+   HrLayout.tsx). Firefox uses scrollbar-width in the inline style; this is the WebKit half. */
+.hr-tab-strip::-webkit-scrollbar { display: none; }

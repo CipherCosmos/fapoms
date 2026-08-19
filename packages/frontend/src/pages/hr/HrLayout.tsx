@@ -9,6 +9,7 @@ import type { HrWorkforceOverview } from '../../hooks/useHrWorkforce';
 import { useCurrentRoles, canManageAssayers } from '../../hooks/useCurrentRoles';
 import { HrHeader } from './hr-ui';
 import { userMessage } from '../../services/errors';
+import { counted } from '../../utils/plural';
 
 /**
  * The shell every HR page sits in.
@@ -99,7 +100,7 @@ const PAGES = [
   {
     to: '/hr/skills', label: 'Skills & Certificates', icon: Award, tone: 'alert',
     badge: (d: HrWorkforceOverview) => d.expiries.certifications.expired,
-    hint: (d: HrWorkforceOverview) => `${d.expiries.certifications.expired} certificate(s) have already run out and need renewing`,
+    hint: (d: HrWorkforceOverview) => `${counted(d.expiries.certifications.expired, 'certificate')} ${d.expiries.certifications.expired === 1 ? 'has' : 'have'} already run out and need renewing`,
   },
   { to: '/hr/pay', label: 'Pay & Terms', icon: Wallet, badge: () => null, tone: 'count', hint: () => 'What each person is paid, and on what terms' },
   { to: '/hr/where', label: 'Where people are', icon: MapPin, badge: () => null, tone: 'count', hint: () => 'Who is busy, which states are covered, and what changed recently' },
@@ -201,7 +202,28 @@ export const HrLayout: React.FC = () => {
     <div style={{ padding: '20px 24px', maxWidth: '1500px' }}>
       <HrHeader data={d} canManage={canManage} />
 
-      <nav style={{ display: 'flex', gap: '4px', margin: '18px 0', flexWrap: 'wrap', borderBottom: '1px solid var(--border-color)' }}>
+      {/*
+        * ONE SCROLLING STRIP, NEVER A WRAPPED STACK.
+        *
+        * `flexWrap: 'wrap'` was fine at desk width and wrong everywhere else: on a phone the seven
+        * tabs wrapped to one per line, so arriving at Workforce filled the entire first screen
+        * with a vertical list of tab names. It read as a navigation drawer that had opened by
+        * itself, and the page's actual content — the list of what needs attention — started below
+        * the fold, where nobody scrolled to find it.
+        *
+        * Nowrap plus horizontal scroll keeps the strip one row tall at every width. The tabs that
+        * do not fit are reached by swiping the strip sideways, which is the same gesture the
+        * detail drawer's own tab row already uses.
+        */}
+      <nav
+        className="hr-tab-strip"
+        style={{
+          display: 'flex', gap: '4px', margin: '18px 0',
+          flexWrap: 'nowrap', overflowX: 'auto', overflowY: 'hidden',
+          borderBottom: '1px solid var(--border-color)',
+          scrollbarWidth: 'none',
+        }}
+      >
         {PAGES.map((p) => {
           const Icon = p.icon;
           const badge = p.badge(d);
@@ -224,6 +246,10 @@ export const HrLayout: React.FC = () => {
                 display: 'flex', alignItems: 'center', gap: '6px',
                 padding: '9px 14px', fontSize: '13px', fontWeight: 600, cursor: 'pointer',
                 textDecoration: 'none',
+                // Without these the strip stops being a strip: flex items shrink by default, so
+                // narrow widths squeezed the tabs into each other and wrapped their labels onto
+                // two lines instead of letting the row scroll.
+                flexShrink: 0, whiteSpace: 'nowrap',
                 borderBottom: `2px solid ${isActive ? 'var(--accent)' : 'transparent'}`,
                 color: isActive ? 'var(--accent)' : 'var(--text-muted)',
               })}
