@@ -17,9 +17,6 @@ import { ScenarioPlanningService } from './scenario-planning.service';
 import { ClusterManager } from './cluster.manager';
 import { CoveragePlanningEngine } from './coverage-planning.engine';
 import { OperationsPlanningService } from './operations-planning.service';
-import { OperationsControlCenterService } from './operations-control-center.service';
-import { OperationsExecutionService } from './operations-execution.service';
-import { FieldOperationsService } from './field-operations.service';
 import { DayPlannerService } from './day-planner.service';
 import { PlanningJobsService } from './planning-jobs.service';
 import { PlanningJobsWorker } from './planning-jobs.worker';
@@ -29,12 +26,6 @@ import { OperationsAntiCorruptionLayer } from './operations-acl.adapter';
 import { OperationsProjectMetricsAdapter } from './operations-project-metrics.adapter';
 import { CoveragePlanEntity } from './coverage-plan.entity';
 import { CoveragePlanVersionEntity } from './coverage-plan-version.entity';
-import { OperationsTaskEntity } from './operations-task.entity';
-import { OperationsExceptionEntity } from './operations-exception.entity';
-import { OperationsExecutionGroupEntity } from './operations-execution-group.entity';
-import { OperationsExecutionConversationEntity } from './operations-execution-conversation.entity';
-import { FieldVisitEntity } from './field-visit.entity';
-import { FieldIncidentEntity } from './field-incident.entity';
 import { BranchEntity } from '../branch/branch.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
@@ -116,19 +107,12 @@ import { AssayerRemarksModule } from '../assayer-remarks/assayer-remarks.module'
       ClientEntity,
       CoveragePlanEntity,
       CoveragePlanVersionEntity,
-      OperationsTaskEntity,
-      OperationsExceptionEntity,
-      OperationsExecutionGroupEntity,
-      OperationsExecutionConversationEntity,
-      FieldVisitEntity,
-      FieldIncidentEntity,
     ]),
     GeoModule,
     BranchModule,
     AssayerModule,
     HolidayModule,
     ProjectModule,
-    // Field incidents have to reach the operations desk — see FieldOperationsService.
     NotificationsModule,
     forwardRef(() => AssignmentModule),
     AssayerRemarksModule,
@@ -144,9 +128,6 @@ import { AssayerRemarksModule } from '../assayer-remarks/assayer-remarks.module'
     ClusterManager,
     CoveragePlanningEngine,
     OperationsPlanningService,
-    OperationsControlCenterService,
-    OperationsExecutionService,
-    FieldOperationsService,
     DayPlannerService,
     PlanningJobsService,
     PlanningJobsWorker,
@@ -186,7 +167,7 @@ import { AssayerRemarksModule } from '../assayer-remarks/assayer-remarks.module'
     FairnessScoreCalculator,
     RecommendationEngine,
   ],
-  exports: [PlanningService, PlanningOrchestratorService, ProjectPlanningService, OptimizationEngine, ScenarioPlanningService, ClusterManager, CoveragePlanningEngine, OperationsPlanningService, 'OperationsControlServiceInterface', OperationsControlCenterService, OperationsExecutionService, FieldOperationsService, RecommendationEngine, ConstraintEvaluator, DayPlannerService, CommandCenterService],
+  exports: [PlanningService, PlanningOrchestratorService, ProjectPlanningService, OptimizationEngine, ScenarioPlanningService, ClusterManager, CoveragePlanningEngine, OperationsPlanningService, 'OperationsControlServiceInterface', RecommendationEngine, ConstraintEvaluator, DayPlannerService, CommandCenterService],
 })
 export class PlanningModule {}
 

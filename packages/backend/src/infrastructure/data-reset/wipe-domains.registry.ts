@@ -88,8 +88,7 @@ export const WIPE_DOMAINS: WipeDomain[] = [
     label: 'Assignments & fieldwork',
     description: 'Assignments, schedules, call logs, expenses and field execution records.',
     tables: [
-      'operations_execution_conversations', 'operations_execution_groups', 'operations_field_incidents',
-      'operations_field_visits', 'operations_exceptions', 'operations_tasks', 'assignment_comments',
+      'assignment_comments',
       'assignment_expenses', 'schedules', 'call_logs', 'assignments',
     ],
   },

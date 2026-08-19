@@ -4,7 +4,6 @@ import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { AssessmentEntity } from '../project/assessment.entity';
 import { ProjectEntity } from '../project/project.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
-import { OperationsExecutionGroupEntity } from '../planning/operations-execution-group.entity';
 import { AssignmentStatus, Priority } from '@fapoms/shared';
 
 @Entity('assignments')
@@ -174,12 +173,6 @@ export class AssignmentEntity extends BaseEntity {
   @JoinColumn({ name: 'assayer_id' })
   assayer: AssayerEntity;
 
-  @Column({ name: 'execution_group_id', type: 'uuid', nullable: true })
-  executionGroupId: string | null;
-
-  @ManyToOne(() => OperationsExecutionGroupEntity, (eg) => eg.assignments, { onDelete: 'SET NULL', nullable: true })
-  @JoinColumn({ name: 'execution_group_id' })
-  executionGroup: OperationsExecutionGroupEntity | null;
 
   /**
    * Reimbursement claims raised against this visit.
