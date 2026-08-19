@@ -6,7 +6,7 @@ import type { FeedbackCategory, FeedbackSeverity, FeedbackStatus } from '@fapoms
  *
  * Reporter functions (`createFeedback`, `getMyFeedback`) work for any signed-in
  * user; team functions (`getQueue`, `getStats`, `getDigest`, `triage`, …) require a
- * PRODUCT_SUPPORT / admin token and 403 otherwise. Mirrors `services/planning.ts`:
+ * super-administrator token (FEEDBACK_TEAM_ROLES) and 403 otherwise. Mirrors `services/planning.ts`:
  * plain functions over `api.request`, response shapes owned here.
  */
 

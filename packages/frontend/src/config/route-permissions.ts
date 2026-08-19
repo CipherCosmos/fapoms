@@ -11,11 +11,16 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     allowedRoles: Object.values(SystemRole),
   },
   {
-    // The feedback & collaboration channel. Everyone who signs in can raise and follow
-    // their own items; the PRODUCT_SUPPORT team and admins get the triage desk. The page
-    // itself renders the right view per role.
+    /**
+     * The feedback & collaboration channel — super administrators only, by decision
+     * (2026-08-17): the platform owner asked for feedback, notification rules and platform
+     * settings to be visible to the super administrator and nobody else. This used to be open
+     * to every role (reporters saw their own items, the PRODUCT_SUPPORT team and admins the
+     * triage desk); the header launcher is gated on this same entry (Header.tsx), so no other
+     * web user sees a feedback surface at all. Mirrors FEEDBACK_TEAM_ROLES on the backend.
+     */
     path: '/feedback',
-    allowedRoles: Object.values(SystemRole),
+    allowedRoles: [SystemRole.SUPER_ADMINISTRATOR],
   },
   {
     path: '/executive-map',
@@ -176,28 +181,17 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     ],
   },
   {
-    // Platform configuration. Staff may see how the platform is configured — a support
-    // conversation goes faster when both sides can — but editing is gated by
-    // canAdministerPlatformSettings(), mirroring the backend's SETTINGS_ADMIN_ROLES.
+    // Platform configuration — super administrators only, by decision (2026-08-17; see
+    // /feedback above). Wider staff used to be able to read it; the backend
+    // PlatformSettingsController now admits the same single role, so the page and the API agree.
     path: '/admin/settings',
-    allowedRoles: [
-      SystemRole.SUPER_ADMINISTRATOR,
-      SystemRole.ADMINISTRATOR,
-      SystemRole.OPERATIONS_MANAGER,
-      SystemRole.FINANCE_MANAGER,
-      SystemRole.READ_ONLY_AUDITOR,
-    ],
+    allowedRoles: [SystemRole.SUPER_ADMINISTRATOR],
   },
   {
-    // Which events the platform raises, to whom, on what channels. Read for staff who need to
-    // see what each event says; editing is gated by canAdministerNotifications() — admins only.
+    // Which events the platform raises, to whom, on what channels — super administrators only,
+    // by the same decision. Mirrors NOTIFICATION_ADMIN_ROLES on the backend controller.
     path: '/admin/notifications',
-    allowedRoles: [
-      SystemRole.SUPER_ADMINISTRATOR,
-      SystemRole.ADMINISTRATOR,
-      SystemRole.OPERATIONS_MANAGER,
-      SystemRole.READ_ONLY_AUDITOR,
-    ],
+    allowedRoles: [SystemRole.SUPER_ADMINISTRATOR],
   },
   {
     // Read for most; create/edit/delete is gated by canManageHolidays().

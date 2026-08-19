@@ -1,4 +1,5 @@
 import { NotificationCategory, NotificationChannel, NotificationPriority } from '@fapoms/shared';
+import { FEEDBACK_TEAM_ROLE_NAMES } from '../feedback/feedback-roles';
 
 /**
  * The single registry of what this system can notify anyone about.
@@ -660,15 +661,15 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   },
 
   // ── Feedback & collaboration channel ────────────────────────────────────────
-  // The two-way channel between every user and the product/support team. The team
-  // (PRODUCT_SUPPORT + admins) hears about new items and reporter replies; the
-  // reporter hears about team replies and status changes. RECORD_OWNER carries a
+  // The two-way channel between every user and the team that owns feedback. The team
+  // (FEEDBACK_TEAM_ROLES — super administrators only, see feedback-roles.ts) hears about
+  // new items and reporter replies; the reporter hears about team replies and status changes. RECORD_OWNER carries a
   // user reporter/assignee, ASSIGNED_ASSAYER carries a field-assayer reporter —
   // only the id that was set on the emit resolves.
   FEEDBACK_SUBMITTED: {
     category: NotificationCategory.FEEDBACK,
     priority: NotificationPriority.NORMAL,
-    roles: ['PRODUCT_SUPPORT', ...ADMINS],
+    roles: [...FEEDBACK_TEAM_ROLE_NAMES],
     channels: IN_APP,
     title: 'New feedback',
     body: '${reporterName} reported a ${category}: "${title}".',
@@ -689,7 +690,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   FEEDBACK_REPORTER_REPLY: {
     category: NotificationCategory.FEEDBACK,
     priority: NotificationPriority.NORMAL,
-    roles: ['PRODUCT_SUPPORT', ...ADMINS],
+    roles: [...FEEDBACK_TEAM_ROLE_NAMES],
     special: ['RECORD_OWNER'],
     channels: IN_APP,
     title: 'New reply on feedback',
@@ -724,7 +725,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   FEEDBACK_SLA_FIRST_RESPONSE_BREACH: {
     category: NotificationCategory.FEEDBACK,
     priority: NotificationPriority.HIGH,
-    roles: ['PRODUCT_SUPPORT', ...ADMINS],
+    roles: [...FEEDBACK_TEAM_ROLE_NAMES],
     channels: IN_APP_AND_EMAIL,
     title: 'Feedback awaiting first response',
     body: '"${title}" has waited ${hours}h with no reply from the team.',
@@ -733,7 +734,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   FEEDBACK_SLA_RESOLUTION_BREACH: {
     category: NotificationCategory.FEEDBACK,
     priority: NotificationPriority.HIGH,
-    roles: ['PRODUCT_SUPPORT', ...ADMINS],
+    roles: [...FEEDBACK_TEAM_ROLE_NAMES],
     special: ['RECORD_OWNER'],
     channels: IN_APP_AND_EMAIL,
     title: 'Feedback past its resolution SLA',

@@ -19,7 +19,10 @@ import { Select } from '../../components/ui';
 
 import { FEEDBACK_STATUS_LABELS } from '@fapoms/shared';
 const PAGE_SIZE = 25;
-const TEAM_ROLES = [SystemRole.PRODUCT_SUPPORT, SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR];
+// Mirrors FEEDBACK_TEAM_ROLES on the backend: super administrators only, by decision (2026-08-17).
+// The route itself admits only this role now (route-permissions.ts), so in practice every visitor
+// is team; the reporter view is kept for the day the desk is widened again.
+const TEAM_ROLES = [SystemRole.SUPER_ADMINISTRATOR];
 
 const STATUS_TABS: { key: FeedbackStatus | 'ALL'; label: string }[] = [
   { key: 'ALL', label: 'All' },

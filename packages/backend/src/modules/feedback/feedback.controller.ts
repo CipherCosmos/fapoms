@@ -49,7 +49,7 @@ class ResolveFeedbackRequestDto {
  * service enforces that a non-team caller only ever touches their own threads.
  *
  * Team routes (the queue, stats, digest, triage, resolve) are gated to
- * {@link FEEDBACK_TEAM_ROLES} — the product/support team plus admins.
+ * {@link FEEDBACK_TEAM_ROLES} — super administrators only (see feedback-roles.ts).
  */
 @ApiTags('Feedback')
 @ApiBearerAuth()

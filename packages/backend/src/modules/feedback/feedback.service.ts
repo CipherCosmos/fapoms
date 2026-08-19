@@ -11,7 +11,6 @@ import {
   FeedbackStatus,
   FeedbackAuthorType,
   EventCategory,
-  SystemRole,
 } from '@fapoms/shared';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
@@ -21,16 +20,12 @@ import { FEEDBACK_INTELLIGENCE, FeedbackIntelligence } from './feedback-intellig
 import { UserEntity } from '../user/user.entity';
 
 /**
- * The roles that receive and triage feedback: the dedicated product/support team,
- * plus admins — who hold the queue too so nothing is ever blocked waiting for the
- * PRODUCT_SUPPORT seat to be staffed. Used both to gate the team endpoints and to
- * populate the "assign to" list.
+ * The roles that receive and triage feedback. Defined once in `feedback-roles.ts` (super
+ * administrators only, by decision) and re-exported here for the callers that already import
+ * it from the service. Gates the team endpoints and populates the "assign to" list.
  */
-export const FEEDBACK_TEAM_ROLES = [
-  SystemRole.PRODUCT_SUPPORT,
-  SystemRole.SUPER_ADMINISTRATOR,
-  SystemRole.ADMINISTRATOR,
-] as const;
+import { FEEDBACK_TEAM_ROLES } from './feedback-roles';
+export { FEEDBACK_TEAM_ROLES };
 
 export interface CreateFeedbackDto {
   title?: string;
@@ -104,7 +99,10 @@ export class FeedbackService {
       reporterUserId: reporter.userId,
       reporterAssayerId: reporter.assayerId,
       reporterName: reporter.name || 'A user',
-      reporterRole: reporter.assayerId ? 'ASSAYER' : reporter.isTeam ? 'PRODUCT_SUPPORT' : null,
+      // A display snapshot ("Nilesh · SUPER_ADMINISTRATOR"), not an authorisation. A team
+      // reporter is stamped with the first team role rather than a hardcoded PRODUCT_SUPPORT,
+      // which stopped being on the team when the desk narrowed to super administrators.
+      reporterRole: reporter.assayerId ? 'ASSAYER' : reporter.isTeam ? FEEDBACK_TEAM_ROLES[0] : null,
       title,
       // The reporter's own category wins when they set one; otherwise trust the classifier.
       category: dto.category ?? inferred.category,
@@ -255,7 +253,7 @@ export class FeedbackService {
     return { items, total, page, limit };
   }
 
-  /** People a thread can be assigned to: the product/support team and admins. */
+  /** People a thread can be assigned to: whoever holds a FEEDBACK_TEAM_ROLES role (super administrators). */
   async teamMembers(): Promise<{ id: string; name: string }[]> {
     const rows = await this.userRepository
       .createQueryBuilder('u')

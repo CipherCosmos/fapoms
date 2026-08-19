@@ -11,6 +11,7 @@ import { JwtService } from '@nestjs/jwt';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { RegionGuardService, RoomVerdict } from '../../infrastructure/scope/region-guard.service';
 import { REGION_ORDER } from '@fapoms/shared';
+import { FEEDBACK_TEAM_ROLE_NAMES } from '../feedback/feedback-roles';
 
 /** Every region room a national (unassigned) staff socket joins. */
 const ALL_REGIONS: string[] = REGION_ORDER;
@@ -471,8 +472,8 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
        * Feedback & collaboration channel. The open thread's room gets every event;
        * the reporter's own room mirrors it so their "my feedback" list stays live —
        * except internal team notes, which the reporter must never receive. The
-       * product/support team (PRODUCT_SUPPORT + admins) hear it in their role rooms
-       * so their queue and dashboard refresh without a manual reload.
+       * feedback team (FEEDBACK_TEAM_ROLES — super administrators only) hear it in their
+       * role rooms so their queue and dashboard refresh without a manual reload.
        */
       case 'feedback:new':
       case 'feedback:updated':
@@ -484,7 +485,7 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         if (reporterRoom && !payload.isInternal) {
           this.server.to(`user:${reporterRoom}`).emit(eventType, payload);
         }
-        for (const role of ['PRODUCT_SUPPORT', 'ADMINISTRATOR', 'SUPER_ADMINISTRATOR']) {
+        for (const role of FEEDBACK_TEAM_ROLE_NAMES) {
           this.server.to(`role:${role}`).emit(eventType, payload);
         }
         break;
