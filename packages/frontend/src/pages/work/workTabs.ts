@@ -54,12 +54,12 @@ export const WORK_TABS: readonly WorkTab[] = [
   },
   {
     path: '/planning',
-    label: 'Choose an assayer',
-    hint: 'Match a branch with the right person and agree the fee.',
+    label: 'Planning',
+    hint: 'Choose an assayer for a branch and agree the fee.',
   },
   {
     path: '/scheduling',
-    label: 'Set the visit date',
+    label: 'Scheduling',
     hint: 'Put an agreed visit on the calendar, or move one that has to change.',
   },
   {

@@ -46,7 +46,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
    */
   const auditWorkTabs = WORK_TABS.filter((tab) => canAccessRoute(userRoles, tab.path));
 
-  const allMenuGroups: { category: string; items: { name: string; path: string; icon: React.ComponentType<any>; activePaths?: readonly string[] }[] }[] = [
+  const allMenuGroups: { category: string; items: { name: string; path: string; icon: React.ComponentType<any>; activePaths?: readonly string[]; children?: { name: string; path: string }[] }[] }[] = [
     {
       category: 'Overview',
       items: [
@@ -64,6 +64,18 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
               path: auditWorkTabs[0].path as string,
               icon: ClipboardList,
               activePaths: WORK_TABS.map((tab) => tab.path),
+              /**
+               * The stages stay listed under the parent row, indented.
+               *
+               * Merging them into one destination was right — one job should not be four menu
+               * entries — but the first cut removed their names from the sidebar entirely, and
+               * the immediate real-world reaction was "where is planning and scheduling, I'm not
+               * seeing them". Someone who already knows they want the visit calendar should be
+               * able to see it and click it, not have to learn that it now lives behind a tab.
+               * So: one destination, still one highlighted section, but every stage visible and
+               * directly reachable. Filtered by role exactly as the parent row is.
+               */
+              children: auditWorkTabs.map((tab) => ({ name: tab.label, path: tab.path as string })),
             }]
           : []),
         { name: 'Projects', path: '/projects', icon: FolderKanban },
@@ -118,7 +130,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
     }))
     .filter((group) => group.items.length > 0);
 
-  const renderNavLink = (item: { name: string; path: string; icon: React.ComponentType<any>; activePaths?: readonly string[] }) => {
+  const renderNavLink = (item: { name: string; path: string; icon: React.ComponentType<any>; activePaths?: readonly string[]; children?: { name: string; path: string }[] }) => {
     const Icon = item.icon;
     // `activePaths` exists for merged destinations (Audit Work), whose tabs are each their own
     // URL: without it, switching to a tab other than the one this row links to would un-highlight
@@ -127,7 +139,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
     const isActive = matchAgainst.some(
       (path) => location.pathname === path || location.pathname.startsWith(path + '/'),
     );
-    return (
+    const link = (
       <NavLink
         key={item.name}
         to={item.path}
@@ -156,6 +168,44 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
           <div style={{ position: 'absolute', left: 0, top: '6px', bottom: '6px', width: '3px', background: 'var(--accent-primary)', borderRadius: '2px' }} />
         )}
       </NavLink>
+    );
+
+    // Collapsed rail has no room for names, so the parent row (with its tooltip) stands alone.
+    if (collapsed || !item.children?.length) return link;
+
+    return (
+      <div key={item.name}>
+        {link}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', marginTop: '2px' }}>
+          {item.children.map((child) => {
+            const childActive = location.pathname === child.path;
+            return (
+              <NavLink
+                key={child.path}
+                to={child.path}
+                className={`sidebar-link ${childActive ? 'active' : ''}`}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  padding: '6px 16px 6px 47px',
+                  borderRadius: 'var(--radius-md)',
+                  color: childActive ? 'var(--accent)' : 'var(--text-tertiary, var(--text-secondary))',
+                  background: childActive ? 'var(--status-pending-bg)' : 'transparent',
+                  textDecoration: 'none',
+                  fontSize: '12px',
+                  fontWeight: childActive ? 600 : 400,
+                  whiteSpace: 'nowrap',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  transition: 'all var(--transition-fast)',
+                }}
+              >
+                {child.name}
+              </NavLink>
+            );
+          })}
+        </div>
+      </div>
     );
   };
 
