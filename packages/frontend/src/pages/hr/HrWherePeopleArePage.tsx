@@ -25,10 +25,22 @@ import { HrActivityPage } from './HrActivityPage';
  * every query and callback inside them is the one that was already reviewed. Old
  * `/hr/utilisation`, `/hr/deployment` and `/hr/activity` URLs redirect here with the matching
  * `?view=` selected — see LEGACY_PATHS in HrLayout.
+ *
+ * IS THE MERGE REAL, or three screens behind one URL? Real where it counts, and deliberately
+ * not more than that. All three bodies read the *same* already-fetched overview through
+ * `useHr()` — none of them issues a request of its own — so switching chips cannot make a
+ * number change under you, which was the failure mode when they were three tabs a page-load
+ * apart. What the chips do not do is filter one table three ways, because the three are not
+ * three filters of one list: workload is per person, coverage is per state, and changes is a
+ * time-ordered log. Forcing them into one grid would mean inventing rows that do not exist.
+ * The obligation the merge does carry is one vocabulary across all three, and that is now
+ * enforced by hand: "no work" means the same thing on every chip, the Overview tile that sends
+ * you here uses the same words as the chip it lands on, and Coverage no longer says "no local
+ * work" for a state-level fact that Workload uses for a person-level one.
  */
 
 const VIEWS = [
-  { key: 'workload', label: 'Workload', hint: 'Who is over capacity, who is idle, and who has left' },
+  { key: 'workload', label: 'Workload', hint: 'How much work each person is carrying, who has none, and who has left' },
   { key: 'coverage', label: 'Coverage by area', hint: 'Assayers against branches, state by state' },
   { key: 'changes', label: 'Recent changes', hint: 'Every change to a person’s record, and who made it' },
 ] as const;

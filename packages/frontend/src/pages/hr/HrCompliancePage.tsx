@@ -1,7 +1,8 @@
 import React from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { AlertTriangle } from 'lucide-react';
-import { card, label, Stat, Empty, Table, OpenLink, ExpiryChip, fmtDate } from './hr-ui';
+import { card, label, Stat, Empty, Table, OpenLink, ExpiryChip, fmtDate, govDocStatusLabel } from './hr-ui';
+import { hrDocumentTypeLabel } from '@fapoms/shared';
 import type { HrWorkforceOverview } from '../../hooks/useHrWorkforce';
 import { useHr } from './HrLayout';
 
@@ -13,6 +14,12 @@ import { useHr } from './HrLayout';
  * that job needs without competing for room with seven other concerns.
  */
 
+/*
+ * Both "Open" links below used to point at `/assayers/<id>`, which is not a route — `/assayers`
+ * is a bare redirect that matches that exact path only, so the id form fell through to the
+ * catch-all and landed the user on the dashboard. They now open the roster drawer on that one
+ * person via `?assayer=<id>`, the same link Onboarding and global search use.
+ */
 const ComplianceTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate: (path: string) => void }) => {
   const { certifications, documents } = d.expiries;
   const gd = d.compliance.governmentDocuments;
@@ -53,7 +60,7 @@ const ComplianceTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate: 
               r.level ?? '—',
               fmtDate(r.expiryDate),
               <ExpiryChip days={r.daysToExpiry} />,
-              <OpenLink onClick={() => navigate(`/assayers/${r.assayerId}`)} />,
+              <OpenLink onClick={() => navigate(`/hr/roster?assayer=${r.assayerId}`)} />,
             ])}
           />
         )}
@@ -66,11 +73,11 @@ const ComplianceTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate: 
             head={['Assayer', 'Document', 'Status', 'Expires', 'In', '']}
             rows={documents.rows.map((r: any) => [
               <strong>{r.displayName}</strong>,
-              r.documentType,
-              r.verificationStatus ?? 'PENDING',
+              hrDocumentTypeLabel(r.documentType),
+              govDocStatusLabel(r.verificationStatus),
               fmtDate(r.expiryDate),
               <ExpiryChip days={r.daysToExpiry} />,
-              <OpenLink onClick={() => navigate(`/assayers/${r.assayerId}`)} />,
+              <OpenLink onClick={() => navigate(`/hr/roster?assayer=${r.assayerId}`)} />,
             ])}
           />
         </section>

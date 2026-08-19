@@ -66,21 +66,28 @@ export function useHr(): HrContext {
  * that can resolve it. Paperwork counts incomplete personnel fields plus people with no identity
  * document. Expired certifications stay on Skills & Certificates because that is the only screen
  * that can record a renewal, even though Paperwork also *shows* the expiry list.
+ *
+ * A badge also has to say whether it is a PROBLEM or just a SIZE. Every badge here used to be
+ * painted red as soon as it was above zero, so Roster's headcount — a perfectly healthy "8 people
+ * on the books" — was drawn in the same alarm colour as "8 people with no bank account", and a
+ * fully-staffed team looked like an outstanding task. `tone` now marks which is which: 'count'
+ * badges are neutral at any value, 'alert' badges go red only when there is something to do.
  */
 const PAGES = [
-  { to: '/hr', end: true, label: 'Overview', icon: ClipboardList, badge: () => null },
-  { to: '/hr/roster', label: 'Roster', icon: Users, badge: (d: HrWorkforceOverview) => d.headcount.total },
-  { to: '/hr/onboarding', label: 'Onboarding', icon: UserPlus, badge: (d: HrWorkforceOverview) => d.pipeline.stalled.length },
+  { to: '/hr', end: true, label: 'Overview', icon: ClipboardList, badge: () => null, tone: 'count' },
+  { to: '/hr/roster', label: 'Roster', icon: Users, badge: (d: HrWorkforceOverview) => d.headcount.total, tone: 'count' },
+  { to: '/hr/onboarding', label: 'Onboarding', icon: UserPlus, badge: (d: HrWorkforceOverview) => d.pipeline.stalled.length, tone: 'alert' },
   {
     to: '/hr/paperwork',
     label: 'Paperwork',
     icon: FileCheck,
+    tone: 'alert',
     badge: (d: HrWorkforceOverview) =>
       d.compliance.incompleteCount + Math.max(d.compliance.roster - d.compliance.governmentDocuments.withGovDoc, 0),
   },
-  { to: '/hr/skills', label: 'Skills & Certificates', icon: Award, badge: (d: HrWorkforceOverview) => d.expiries.certifications.expired },
-  { to: '/hr/pay', label: 'Pay & Terms', icon: Wallet, badge: () => null },
-  { to: '/hr/where', label: 'Where people are', icon: MapPin, badge: () => null },
+  { to: '/hr/skills', label: 'Skills & Certificates', icon: Award, badge: (d: HrWorkforceOverview) => d.expiries.certifications.expired, tone: 'alert' },
+  { to: '/hr/pay', label: 'Pay & Terms', icon: Wallet, badge: () => null, tone: 'count' },
+  { to: '/hr/where', label: 'Where people are', icon: MapPin, badge: () => null, tone: 'count' },
 ] as const;
 
 /**
@@ -165,6 +172,9 @@ export const HrLayout: React.FC = () => {
         {PAGES.map((p) => {
           const Icon = p.icon;
           const badge = p.badge(d);
+          // Red means "there is something here for you to do", never "this number is large" —
+          // see the badge rule above.
+          const alarming = p.tone === 'alert' && badge !== null && badge > 0;
           return (
             <NavLink
               key={p.to}
@@ -182,8 +192,8 @@ export const HrLayout: React.FC = () => {
               {badge !== null && (
                 <span style={{
                   fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '9px',
-                  background: badge > 0 ? 'var(--status-cancelled-bg)' : 'var(--bg-surface-2)',
-                  color: badge > 0 ? 'var(--danger)' : 'var(--text-muted)',
+                  background: alarming ? 'var(--status-cancelled-bg)' : 'var(--bg-surface-2)',
+                  color: alarming ? 'var(--danger)' : 'var(--text-muted)',
                 }}>{badge}</span>
               )}
             </NavLink>

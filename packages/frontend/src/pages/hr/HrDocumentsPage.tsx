@@ -2,10 +2,12 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { ShieldCheck, ShieldAlert, ShieldQuestion, Plus, Search, Check, X, Trash2 } from 'lucide-react';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
+import { Link } from 'react-router-dom';
 import { Select } from '../../components/ui';
-import { card, label, Empty, ExpiryChip, fmtDate } from './hr-ui';
+import { card, label, Empty, ExpiryChip, fmtDate, govDocStatusLabel } from './hr-ui';
 import { useCurrentRoles, canManageAssayers } from '../../hooks/useCurrentRoles';
-import { SystemRole, HR_DOCUMENT_TYPES, hrDocumentTypeLabel } from '@fapoms/shared';
+import { useConfirm } from '../../components/ui/ConfirmDialog';
+import { SystemRole, HR_DOCUMENT_TYPES, hrDocumentTypeLabel, assayerLifecycleLabel } from '@fapoms/shared';
 
 /**
  * Identity document register.
@@ -50,11 +52,37 @@ interface AssayerLite {
   lifecycleStatus: string;
 }
 
+// Wording comes from the shared map in hr-ui so this register and the expiry list on the
+// sibling chip cannot describe the same document with two different words.
 const STATUS_META = {
-  VERIFIED: { icon: ShieldCheck, fg: 'var(--success)', bg: 'var(--status-active-bg)', label: 'Verified' },
-  PENDING: { icon: ShieldQuestion, fg: 'var(--warning)', bg: 'var(--status-pending-bg)', label: 'Pending' },
-  REJECTED: { icon: ShieldAlert, fg: 'var(--danger)', bg: 'var(--status-cancelled-bg)', label: 'Rejected' },
+  VERIFIED: { icon: ShieldCheck, fg: 'var(--success)', bg: 'var(--status-active-bg)', label: govDocStatusLabel('VERIFIED') },
+  PENDING: { icon: ShieldQuestion, fg: 'var(--warning)', bg: 'var(--status-pending-bg)', label: govDocStatusLabel('PENDING') },
+  REJECTED: { icon: ShieldAlert, fg: 'var(--danger)', bg: 'var(--status-cancelled-bg)', label: govDocStatusLabel('REJECTED') },
 } as const;
+
+/**
+ * How many people this screen will pre-scan for "has any identity document".
+ *
+ * There is no bulk endpoint — documents are only readable one assayer at a time — so knowing who
+ * is missing one means asking once per person. With the real roster (8 people, and zero documents
+ * recorded between them) that is trivial and it is the whole job: the register was a per-person
+ * search box, so the only way to learn that nobody had an ID on file was to click all of them and
+ * remember. Above this size the scan stops being free, so it is skipped and the list simply
+ * behaves as it did before rather than firing hundreds of requests on mount.
+ */
+const SCAN_LIMIT = 120;
+
+/** Small fixed-concurrency map, so the scan does not open one socket per person at once. */
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length);
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, async () => {
+      for (let i = next++; i < items.length; i = next++) out[i] = await fn(items[i]);
+    }),
+  );
+  return out;
+}
 
 const daysUntil = (iso: string | null): number | null =>
   iso ? Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000) : null;
@@ -84,7 +112,18 @@ export const HrDocumentsPage: React.FC = () => {
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [docsLoading, setDocsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Two error slots on purpose. `fatalError` means the roster itself never arrived, so there is
+  // nothing to show; `docError` is one person's documents failing to load or a verify/remove
+  // being rejected. The two shared one slot, and a single failed action replaced the entire
+  // register with a red sentence — losing the roster, the selection and any half-typed entry.
+  const [fatalError, setFatalError] = useState<string | null>(null);
+  const [docError, setDocError] = useState<string | null>(null);
+  // assayerId -> how many identity documents they have. Populated by the pre-scan below and kept
+  // in step by every add/remove, so "who has nothing on file" is a list rather than a hunt.
+  const [docCounts, setDocCounts] = useState<Record<string, number>>({});
+  const [scanned, setScanned] = useState(false);
+  const [onlyMissing, setOnlyMissing] = useState(false);
+  const { confirm, confirmDialog } = useConfirm();
 
   useEffect(() => {
     let cancelled = false;
@@ -94,10 +133,28 @@ export const HrDocumentsPage: React.FC = () => {
         if (cancelled) return;
         setRoster(people);
         setSelectedId((prev) => prev ?? people[0]?.id ?? null);
+        setLoading(false);
+
+        // Pre-scan for who has nothing on file. Without it the only signal that a person's
+        // identity papers are missing is selecting them and reading an empty panel, which for a
+        // roster where *nobody* has a document means eight clicks to learn one fact.
+        if (people.length <= SCAN_LIMIT) {
+          const counts = await mapLimit(people, 6, async (a) => {
+            try {
+              const list = await api.request<GovDocument[]>(`/assayers/${a.id}/government-document`);
+              return [a.id, list.length] as const;
+            } catch {
+              // A person whose documents cannot be read is not evidence that they have none, so
+              // they are left out of the map and shown as unknown rather than falsely flagged.
+              return null;
+            }
+          });
+          if (cancelled) return;
+          setDocCounts(Object.fromEntries(counts.filter(Boolean) as ReadonlyArray<readonly [string, number]>));
+          setScanned(true);
+        }
       } catch (e) {
-        if (!cancelled) setError(userMessage(e));
-      } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled) { setFatalError(userMessage(e)); setLoading(false); }
       }
     })();
     return () => { cancelled = true; };
@@ -105,10 +162,14 @@ export const HrDocumentsPage: React.FC = () => {
 
   const loadDocs = async (assayerId: string) => {
     setDocsLoading(true);
+    setDocError(null);
     try {
-      setDocs(await api.request<GovDocument[]>(`/assayers/${assayerId}/government-document`));
+      const list = await api.request<GovDocument[]>(`/assayers/${assayerId}/government-document`);
+      setDocs(list);
+      setDocCounts((prev) => ({ ...prev, [assayerId]: list.length }));
     } catch (e) {
-      setError(userMessage(e));
+      setDocs([]);
+      setDocError(userMessage(e));
     } finally {
       setDocsLoading(false);
     }
@@ -116,10 +177,19 @@ export const HrDocumentsPage: React.FC = () => {
 
   useEffect(() => { if (selectedId) loadDocs(selectedId); }, [selectedId]);
 
+  const missingCount = useMemo(
+    () => roster.filter((a) => docCounts[a.id] === 0).length,
+    [roster, docCounts],
+  );
+
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return q ? roster.filter((a) => a.displayName.toLowerCase().includes(q) || a.assayerCode.toLowerCase().includes(q)) : roster;
-  }, [roster, search]);
+    return roster.filter((a) => {
+      if (onlyMissing && docCounts[a.id] !== 0) return false;
+      if (!q) return true;
+      return a.displayName.toLowerCase().includes(q) || a.assayerCode.toLowerCase().includes(q);
+    });
+  }, [roster, search, onlyMissing, docCounts]);
 
   const selected = roster.find((a) => a.id === selectedId) ?? null;
 
@@ -133,29 +203,83 @@ export const HrDocumentsPage: React.FC = () => {
   };
 
   const setStatus = async (id: string, verificationStatus: GovDocument['verificationStatus']) => {
-    await api.request(`/assayers/government-document/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify({ verificationStatus }),
-    });
+    try {
+      await api.request(`/assayers/government-document/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ verificationStatus }),
+      });
+    } catch (e) {
+      // Verify/reject is HR-gated on the backend. Rejection used to throw into an unhandled
+      // promise: the button did nothing and the screen said nothing, so it read as a dead
+      // control rather than as "you are not allowed to do this".
+      setDocError(userMessage(e));
+    }
     if (selectedId) await loadDocs(selectedId);
   };
 
-  const removeDoc = async (id: string) => {
-    await api.request(`/assayers/government-document/${id}`, { method: 'DELETE' });
+  /**
+   * Removing a document deletes the identity record and its verification trail outright — there
+   * is no undo and no archive on this route. It was a bare trash icon wired straight to DELETE:
+   * one mis-click on a crowded row destroyed an audited Verified→who→when trail that only the
+   * person's original paperwork can rebuild. Now it names the document and demands the number be
+   * typed, which also guarantees the row being deleted is the row that was meant.
+   */
+  const removeDoc = async (doc: GovDocument) => {
+    const ok = await confirm({
+      title: `Remove this ${hrDocumentTypeLabel(doc.documentType)} record?`,
+      message: `The ${hrDocumentTypeLabel(doc.documentType)} numbered ${doc.documentNumber}${selected ? ` for ${selected.displayName}` : ''} is deleted, along with the record of who verified it and when. It would have to be entered and verified again from the original paperwork.`,
+      confirmLabel: 'Remove document',
+      reversible: false,
+      tone: 'danger',
+      confirmPhrase: doc.documentNumber,
+    });
+    if (!ok) return;
+    try {
+      await api.request(`/assayers/government-document/${doc.id}`, { method: 'DELETE' });
+    } catch (e) {
+      setDocError(userMessage(e));
+    }
     if (selectedId) await loadDocs(selectedId);
   };
 
   if (loading) return <div style={{ padding: '20px 4px', color: 'var(--text-muted)' }}>Loading document register…</div>;
-  if (error) return <div style={{ padding: '20px 4px', color: 'var(--danger)' }}>{error}</div>;
+  if (fatalError) return <div style={{ padding: '20px 4px', color: 'var(--danger)' }}>{fatalError}</div>;
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: narrow ? '1fr' : 'minmax(240px, 300px) 1fr', gap: '18px', alignItems: 'start' }}>
+      {confirmDialog}
       <div style={{ ...card, padding: '12px', position: narrow ? 'static' : 'sticky', top: '12px' }}>
         <div style={{ position: 'relative', marginBottom: '10px' }}>
           <Search size={13} style={{ position: 'absolute', left: '9px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Find an assayer…"
             style={{ width: '100%', padding: '7px 10px 7px 28px', fontSize: '12.5px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: '8px', color: 'var(--text-primary)' }} />
         </div>
+
+        {/*
+          * The worklist, in one line. Eight people with no identity paper on file is a list to
+          * work through, not something to discover one selection at a time — this says how many
+          * there are and narrows the picker to exactly them.
+          */}
+        {scanned && (
+          <button
+            onClick={() => setOnlyMissing((v) => !v)}
+            disabled={missingCount === 0 && !onlyMissing}
+            style={{
+              width: '100%', marginBottom: '10px', padding: '7px 10px', fontSize: '11.5px', fontWeight: 700,
+              textAlign: 'left', borderRadius: '8px', cursor: missingCount === 0 && !onlyMissing ? 'default' : 'pointer',
+              border: `1px solid ${onlyMissing ? 'var(--accent)' : 'var(--border-color)'}`,
+              background: onlyMissing ? 'rgba(216,174,71,0.12)' : 'var(--bg-surface-2)',
+              color: missingCount > 0 ? 'var(--danger)' : 'var(--text-muted)',
+            }}
+          >
+            {missingCount === 0
+              ? 'Everyone has an ID document on file'
+              : onlyMissing
+                ? `Showing the ${missingCount} with no ID — show everyone`
+                : `${missingCount} have no ID document on file — show only them`}
+          </button>
+        )}
+
         <div style={{ maxHeight: '68vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2px' }}>
           {filtered.map((a) => {
             const active = a.id === selectedId;
@@ -165,25 +289,69 @@ export const HrDocumentsPage: React.FC = () => {
                   background: active ? 'var(--status-pending-bg)' : 'transparent', color: active ? 'var(--accent)' : 'var(--text-secondary)' }}>
                 <div style={{ fontSize: '13px', fontWeight: 600 }}>{a.displayName}</div>
                 <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{a.assayerCode}{a.district ? ` · ${a.district}` : ''}</div>
+                {docCounts[a.id] === 0 && (
+                  <div style={{ fontSize: '10.5px', fontWeight: 700, color: 'var(--danger)', marginTop: '2px' }}>No ID on file</div>
+                )}
               </button>
             );
           })}
-          {filtered.length === 0 && <Empty>No assayer matches “{search}”.</Empty>}
+          {filtered.length === 0 && (
+            <Empty>
+              {onlyMissing && !search.trim()
+                ? 'Everyone has at least one identity document recorded.'
+                : `No assayer matches “${search}”.`}
+            </Empty>
+          )}
         </div>
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
         {selected && (
-          <div style={card}>
-            <div style={{ fontSize: '16px', fontWeight: 700 }}>{selected.displayName}</div>
-            <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>{selected.assayerCode} · {selected.lifecycleStatus}</div>
+          <div style={{ ...card, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
+            <div>
+              <div style={{ fontSize: '16px', fontWeight: 700 }}>{selected.displayName}</div>
+              {/* `lifecycleStatus` is a database enum; printed raw it read `DOCUMENT_VERIFICATION`
+                  here while the roster called the same state "Document Verification". */}
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>
+                {selected.assayerCode} · {assayerLifecycleLabel(selected.lifecycleStatus)}
+              </div>
+            </div>
+            {/* Identity papers and bank details are chased in the same sitting; this is the
+                one-click hop to the rest of this person's file rather than a re-search. */}
+            <Link to={`/hr/roster?assayer=${selected.id}`} className="btn btn-secondary"
+              style={{ fontSize: '12px', padding: '7px 12px', textDecoration: 'none' }}>
+              Open full record
+            </Link>
           </div>
+        )}
+
+        {docError && (
+          <div style={{ ...card, borderLeft: '3px solid var(--danger)', fontSize: '12.5px', color: 'var(--danger)' }}>{docError}</div>
         )}
 
         <div style={card}>
           <div style={{ ...label, marginBottom: '12px' }}>Identity documents ({docs.length})</div>
-          {docs.length === 0 ? (
-            <Empty>No identity document recorded for this assayer.</Empty>
+          {docsLoading && docs.length === 0 ? (
+            <Empty>Loading this person’s documents…</Empty>
+          ) : docs.length === 0 ? (
+            /*
+             * "No records found" is a dead end: it names the absence but not the remedy, and with
+             * an empty register that is every single person. This says what belongs here and, for
+             * whoever can act, points at the form immediately below it.
+             */
+            <Empty>
+              <div style={{ fontWeight: 600, color: 'var(--text-secondary)' }}>
+                Nothing on file for {selected?.displayName ?? 'this assayer'} yet.
+              </div>
+              <div style={{ marginTop: '6px', maxWidth: '460px', marginInline: 'auto', lineHeight: 1.5 }}>
+                An assayer’s file should hold at least one government identity document — Aadhaar, PAN,
+                driving licence, voter ID or passport. Field staff are admitted to client bank vaults on
+                the strength of it, so it is normally recorded before their first visit.
+                {canManage
+                  ? ' Enter the type and number below, then mark it Verified once you have seen the original.'
+                  : ' HR records and verifies these; ask them to add it.'}
+              </div>
+            </Empty>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               {docs.map((doc) => {
@@ -223,7 +391,7 @@ export const HrDocumentsPage: React.FC = () => {
                       </button>
                     )}
                     {canDelete && (
-                      <button onClick={() => removeDoc(doc.id)} title="Remove record"
+                      <button onClick={() => removeDoc(doc)} title="Remove record"
                         style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: '4px', display: 'flex' }}>
                         <Trash2 size={13} />
                       </button>

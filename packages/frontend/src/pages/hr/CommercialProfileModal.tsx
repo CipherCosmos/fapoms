@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
+import { formatRupees } from '@fapoms/shared';
 import { Modal, Select, useToast } from '../../components/ui';
+import { useConfirm } from '../../components/ui/ConfirmDialog';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { todayDateKey } from '../../utils/statusLabels';
@@ -71,6 +73,7 @@ export const CommercialProfileModal: React.FC<{
   onSaved: () => void;
 }> = ({ open, onClose, assayerId, profile, onSaved }) => {
   const { toast } = useToast();
+  const { confirm, confirmDialog } = useConfirm();
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<Record<string, string>>(() => buildForm(profile));
 
@@ -104,6 +107,40 @@ export const CommercialProfileModal: React.FC<{
     if (!form.effectiveStartDate) {
       toast({ type: 'error', title: 'Start date required', message: 'Pick the date this pay structure takes effect.' });
       return;
+    }
+    /**
+     * Editing an existing profile rewrites the rate every future assignment is priced and paid
+     * at — there is no separate approval step behind this dialog and no version history in the
+     * UI to read the old numbers back from. Saving a *new* profile is not guarded the same way:
+     * it adds a dated row rather than overwriting one, and the previous rate stays on record.
+     *
+     * The dialog names each figure that moved, old → new, because "are you sure?" on its own
+     * cannot catch the mistake this is here to catch: a digit typed into the wrong box.
+     */
+    if (profile) {
+      const changed = NUMERIC_FIELDS
+        .filter((f) => Number(form[f.key] || 0) !== Number((profile as any)[f.key] ?? 0))
+        .map((f) => `${f.label}: ${formatRupees(Number((profile as any)[f.key] ?? 0))} → ${formatRupees(Number(form[f.key] || 0))}`);
+      if (changed.length > 0) {
+        const ok = await confirm({
+          title: 'Change this pay structure?',
+          message: (
+            <>
+              <div style={{ marginBottom: '8px' }}>
+                Every assignment priced or paid against this profile from now on uses the new figures.
+                Work already invoiced keeps the rate it was billed at.
+              </div>
+              <ul style={{ margin: 0, paddingLeft: '18px' }}>
+                {changed.map((line) => <li key={line}>{line}</li>)}
+              </ul>
+            </>
+          ),
+          confirmLabel: 'Save new rates',
+          reversible: true,
+          tone: 'danger',
+        });
+        if (!ok) return;
+      }
     }
     setBusy(true);
     const payload: any = {
@@ -172,6 +209,7 @@ export const CommercialProfileModal: React.FC<{
           {busy ? 'Saving…' : profile ? 'Save changes' : 'Create pay'}
         </button>
       </div>
+      {confirmDialog}
     </Modal>
   );
 };

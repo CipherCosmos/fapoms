@@ -1,7 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Wallet, Search, Pencil, Plus, AlertTriangle, Clock } from 'lucide-react';
 import { formatRupees as money } from '@fapoms/shared';
+import { Link } from 'react-router-dom';
 import { api } from '../../services/api';
+import { userMessage } from '../../services/errors';
 import { card, label, Empty, fmtDate } from './hr-ui';
 import { useHr } from './HrLayout';
 import { CommercialProfileModal, type CommercialProfile } from './CommercialProfileModal';
@@ -26,7 +28,16 @@ interface AssayerLite {
   displayName: string;
   district: string | null;
   lifecycleStatus: string;
+  /**
+   * Banking is not part of the commercial profile — it lives on the assayer record, behind the
+   * roster's Edit form. This page priced everybody and never mentioned it, which is how all
+   * eight people ended up with rates and no account to pay them into.
+   */
+  bankAccountNumber: string | null;
+  ifscCode: string | null;
 }
+
+const bankMissing = (a: AssayerLite) => !a.bankAccountNumber?.trim() || !a.ifscCode?.trim();
 
 interface RosterPayRow {
   assayerId: string;
@@ -56,7 +67,8 @@ export const HrPayPage: React.FC = () => {
       setRoster(people);
       setPay(Object.fromEntries(rows.map((r) => [r.assayerId, r])));
     } catch (e) {
-      setError((e as Error).message);
+      // userMessage, not `.message` — the raw one can be "Request failed with status code 403".
+      setError(userMessage(e));
     } finally {
       setLoading(false);
     }
@@ -75,6 +87,7 @@ export const HrPayPage: React.FC = () => {
   }, [roster, pay, search, filter]);
 
   const unpricedCount = roster.filter((a) => !pay[a.id]?.profile).length;
+  const unbankedCount = roster.filter(bankMissing).length;
 
   if (loading) return <div style={{ padding: '20px 4px', color: 'var(--text-muted)' }}>Loading rate cards…</div>;
   if (error) return <div style={{ padding: '20px 4px', color: 'var(--danger)' }}>{error}</div>;
@@ -94,7 +107,27 @@ export const HrPayPage: React.FC = () => {
           <div style={{ ...statValue, color: unpricedCount > 0 ? 'var(--warning)' : undefined }}>{unpricedCount}</div>
           <div style={label}>On the default fee</div>
         </button>
+        {/*
+          Not a filter — a count with nothing behind it on this page, because bank details are not
+          edited here. Shown anyway: a rate card with no account behind it produces a payout that
+          cannot be sent, and this is the screen where someone is thinking about being paid.
+        */}
+        <div style={{ ...tile(false, unbankedCount > 0), cursor: 'default' }}>
+          <div style={{ ...statValue, color: unbankedCount > 0 ? 'var(--danger)' : undefined }}>{unbankedCount}</div>
+          <div style={label}>Cannot be paid — no bank details</div>
+        </div>
       </div>
+
+      {unbankedCount > 0 && (
+        <div style={{ ...card, borderLeft: '3px solid var(--danger)', display: 'flex', gap: '9px', alignItems: 'flex-start', fontSize: '12.5px' }}>
+          <AlertTriangle size={15} style={{ color: 'var(--danger)', flexShrink: 0, marginTop: '1px' }} />
+          <span style={{ color: 'var(--text-secondary)' }}>
+            Account number and IFSC are part of the assayer's own record, not their rate card. Use
+            the “Add bank details” link on any row below — it opens that person's record with the
+            Financial section ready to fill in.
+          </span>
+        </div>
+      )}
 
       {filter === 'unpriced' && unpricedCount > 0 && (
         <div style={{ ...card, borderLeft: '3px solid var(--warning)', display: 'flex', gap: '9px', alignItems: 'flex-start', fontSize: '12.5px' }}>
@@ -138,6 +171,14 @@ export const HrPayPage: React.FC = () => {
                       <td style={{ padding: '9px 10px' }}>
                         <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{a.displayName}</div>
                         <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{a.assayerCode}{a.district ? ` · ${a.district}` : ''}</div>
+                        {bankMissing(a) && (
+                          <Link
+                            to={`/hr/roster?assayer=${a.id}`}
+                            style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 600, color: 'var(--danger)', marginTop: '3px' }}
+                          >
+                            <AlertTriangle size={11} /> No bank details — add them
+                          </Link>
+                        )}
                       </td>
                       {p ? (
                         <>

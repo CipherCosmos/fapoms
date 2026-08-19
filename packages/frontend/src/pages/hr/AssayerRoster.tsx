@@ -11,12 +11,13 @@ import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { connectSocket } from '../../services/socket';
 import { Select, UploadExcelControls, useConfirm } from '../../components/ui';
+import { visibleSelection, hiddenSelectionNote } from '../../utils/selection';
 import { useSearchParams } from 'react-router-dom';
 import { useCurrentRoles, canManageAssayers } from '../../hooks/useCurrentRoles';
 import { useExcelExport } from '../../hooks/useExcelExport';
 import { CreateAssayerModal, EditAssayerModal } from './AssayerForms';
 import type { Assayer } from './assayer-shared';
-import { STATUS_COLORS } from './assayer-shared';
+import { STATUS_COLORS, missingCriticalFields } from './assayer-shared';
 import { AssayerDetailDrawer } from './AssayerDetailDrawer';
 import { fmtDate } from '../../utils/dates';
 import { queryKeys } from '../../hooks/queryKeys';
@@ -34,14 +35,23 @@ import { queryKeys } from '../../hooks/queryKeys';
  * thing you can see and fix here.
  */
 
-/** Fields that block payroll, statutory filing or duty-of-care if empty. */
-const CRITICAL_FIELDS: { key: keyof Assayer; label: string }[] = [
-  { key: 'panNumber', label: 'PAN' },
-  { key: 'bankAccountNumber', label: 'Bank a/c' },
-  { key: 'ifscCode', label: 'IFSC' },
-  { key: 'joiningDate', label: 'Joining date' },
-  { key: 'emergencyContactPhone', label: 'Emergency contact' },
-];
+/**
+ * Which gaps stop a payout, as opposed to merely leaving the record untidy.
+ *
+ * The roster's "Record" column used to say only "3 missing", which reads as paperwork. It is
+ * not: with no bank account, IFSC or PAN, that person cannot be paid at all, and today every
+ * single assayer on the books is in exactly that state while showing a green ACTIVE stage. HR
+ * had no way to see from this screen that a fully "Active" roster is a roster nobody can pay,
+ * so the column now names the consequence and a segment collects the people it applies to.
+ */
+const PAYOUT_BLOCKING_KEYS: (keyof Assayer)[] = ['bankAccountNumber', 'ifscCode', 'panNumber'];
+
+/** The payout-blocking gaps on one record, by their shared human labels. */
+function payoutBlockers(a: Assayer): string[] {
+  return missingCriticalFields(a)
+    .filter((f) => PAYOUT_BLOCKING_KEYS.includes(f.key))
+    .map((f) => f.label);
+}
 
 /** Stages that mean the person has left, whatever the date fields say. */
 const EXITED_STAGES: string[] = [
@@ -69,6 +79,7 @@ const SEGMENTS: { key: string; label: string; match: (a: Assayer) => boolean }[]
   { key: 'active', label: 'Active', match: (a) => a.lifecycleStatus === AssayerLifecycleStatus.ACTIVE },
   { key: 'onboarding', label: 'Onboarding', match: (a) => ONBOARDING_STAGES.includes(a.lifecycleStatus) },
   { key: 'incomplete', label: 'Incomplete record', match: (a) => missingFields(a).length > 0 },
+  { key: 'unpayable', label: 'Cannot be paid', match: (a) => payoutBlockers(a).length > 0 },
   { key: 'unprofiled', label: 'No skills', match: (a) => !a.skills || a.skills.length === 0 },
   // Lifecycle status first, dates second — matching the server's headcount. Someone shown as
   // RESIGNED on the row itself has to appear under "Exited", whether or not a date was captured.
@@ -81,11 +92,17 @@ const SEGMENTS: { key: string; label: string; match: (a: Assayer) => boolean }[]
 
 type SortKey = 'displayName' | 'assayerCode' | 'lifecycleStatus' | 'state' | 'experienceYears' | 'completeness' | 'joiningDate';
 
+/**
+ * The gaps in one record, by label.
+ *
+ * This file used to carry its own second copy of the critical-field list, and the two had
+ * already drifted: the shared one counts a missing phone number and calls the field "Bank
+ * account", this one ignored phone entirely and called it "Bank a/c". So the drawer and the
+ * roster row disagreed about whether the same person's record was complete, and the "Incomplete
+ * record" segment under-counted. One list, in `assayer-shared`, used by both.
+ */
 function missingFields(a: Assayer): string[] {
-  return CRITICAL_FIELDS.filter((f) => {
-    const v = a[f.key];
-    return v === null || v === undefined || String(v).trim() === '';
-  }).map((f) => f.label);
+  return missingCriticalFields(a).map((f) => f.label);
 }
 
 /** Tenure in whole months, or null when the joining date was never captured. */
@@ -153,7 +170,19 @@ export const AssayerRoster: React.FC = () => {
    * overlapping imports re-run every row against a roster the first is still writing.
    */
   const [uploading, setUploading] = useState(false);
-  const [bulkReport, setBulkReport] = useState<{ target: string; succeeded: string[]; skipped: { id: string; current: string; reason: string }[]; failed: { id: string; reason: string }[] } | null>(null);
+  /**
+   * The per-row outcome of the last bulk move. Names are captured *at send time*: the report is
+   * read after `refresh()` has replaced the roster, and a row that was archived out of the
+   * current view then had no name left to look up — the skipped list rendered as a bare stage
+   * with no indication of who it was about, and failures as eight characters of a UUID.
+   */
+  const [bulkReport, setBulkReport] = useState<{
+    target: string;
+    succeeded: string[];
+    skipped: { id: string; current: string; reason: string }[];
+    failed: { id: string; reason: string }[];
+    names: Record<string, string>;
+  } | null>(null);
   const RENDER_CHUNK = 200;
   const [visibleCount, setVisibleCount] = useState(RENDER_CHUNK);
   const queryClient = useQueryClient();
@@ -164,7 +193,7 @@ export const AssayerRoster: React.FC = () => {
       const res = await api.request<Assayer[]>('/assayers?limit=1000');
       setAssayers(Array.isArray(res) ? res : []);
     } catch (e) {
-      setNotice({ tone: 'err', text: `Could not load the roster: ${(e as Error).message}` });
+      setNotice({ tone: 'err', text: `Could not load the roster. ${userMessage(e)}` });
     } finally {
       setLoading(false);
     }
@@ -205,8 +234,12 @@ export const AssayerRoster: React.FC = () => {
     () => [...new Set(assayers.map((a) => a.state).filter(Boolean))].sort(),
     [assayers],
   );
+  // Sorted by the label the reader sees. Sorting by the stored value put "BACKGROUND_VERIFICATION"
+  // before "DOCUMENT_VERIFICATION" before "INVITED" — an order with no meaning on a screen that
+  // never shows those words.
   const statuses = useMemo(
-    () => [...new Set(assayers.map((a) => a.lifecycleStatus).filter(Boolean))].sort(),
+    () => [...new Set(assayers.map((a) => a.lifecycleStatus).filter(Boolean))]
+      .sort((a, b) => assayerLifecycleLabel(a).localeCompare(assayerLifecycleLabel(b))),
     [assayers],
   );
 
@@ -236,7 +269,33 @@ export const AssayerRoster: React.FC = () => {
   useEffect(() => { setVisibleCount(RENDER_CHUNK); }, [assayers, search, segment, stateFilter, statusFilter, sort]);
 
   const allShownSelected = rows.length > 0 && rows.every((r) => selectedIds.has(r.id));
-  const selected = useMemo(() => assayers.filter((a) => selectedIds.has(a.id)), [assayers, selectedIds]);
+  /**
+   * The bulk bar acts on the ticked rows that are *on screen*, never on ticks the current
+   * segment, filter or "show more" cut-off is hiding.
+   *
+   * This used to intersect the ticked ids against the whole roster instead of against `rows`.
+   * Tick ten people under "Onboarding", switch to "Active", press Apply, and all ten were sent
+   * — the bar said ten, the screen showed different people, and the lifecycle change landed on
+   * rows nobody had looked at. `visibleSelection` is the one rule for this across the app: the
+   * count shown equals the count changed, and anything hidden is named rather than silently
+   * included or silently dropped.
+   */
+  const { rows: selected, ids: selectedVisibleIds, hiddenCount } = useMemo(
+    () => visibleSelection(selectedIds, rows, (r) => r.id),
+    [selectedIds, rows],
+  );
+  const hiddenNote = hiddenSelectionNote(hiddenCount, 'assayer');
+
+  /** Every criterion currently narrowing the list, in the words shown on the controls. */
+  const activeCriteria = useMemo(() => {
+    const out: string[] = [];
+    const seg = SEGMENTS.find((s) => s.key === segment);
+    if (seg && seg.key !== 'all') out.push(`"${seg.label}"`);
+    if (statusFilter !== 'ALL') out.push(`stage "${assayerLifecycleLabel(statusFilter)}"`);
+    if (stateFilter !== 'ALL') out.push(`state "${stateFilter}"`);
+    if (search.trim()) out.push(`search "${search.trim()}"`);
+    return out.length ? out : ['the current view'];
+  }, [segment, statusFilter, stateFilter, search]);
 
   /** Every target stage reachable from *any* selected row (walking forward through
    *  the state machine). Unlike a strict intersection this works for mixed-stage
@@ -267,17 +326,23 @@ export const AssayerRoster: React.FC = () => {
     if (!bulkTarget || selected.length === 0) return;
     setBusy(true);
     setBulkReport(null);
-    const ids = selected.map((a) => a.id);
+    const ids = selectedVisibleIds;
     try {
       const res = await api.request<{ succeeded: { id: string; from: string; to: string }[]; skipped: { id: string; current: string; reason: string }[]; failed: { id: string; reason: string }[] }>(
         '/assayers/bulk/lifecycle',
         {
           method: 'POST',
-          body: JSON.stringify({ ids, targetStatus: bulkTarget, reason: `Bulk transition to ${bulkTarget}` }),
+          body: JSON.stringify({ ids, targetStatus: bulkTarget, reason: `Bulk transition to ${assayerLifecycleLabel(bulkTarget)}` }),
         },
       );
       const { succeeded, skipped, failed } = res ?? { succeeded: [], skipped: [], failed: [] };
-      setBulkReport({ target: bulkTarget, succeeded: succeeded.map((s) => s.id), skipped, failed });
+      setBulkReport({
+        target: bulkTarget,
+        succeeded: succeeded.map((s) => s.id),
+        skipped,
+        failed,
+        names: Object.fromEntries(selected.map((a) => [a.id, `${a.displayName} (${a.assayerCode})`])),
+      });
       const moved = succeeded.length;
       setNotice(
         failed.length || skipped.length
@@ -288,7 +353,9 @@ export const AssayerRoster: React.FC = () => {
           : { tone: 'ok', text: `${moved} assayer(s) moved to ${assayerLifecycleLabel(bulkTarget)}.` },
       );
     } catch (e) {
-      setNotice({ tone: 'err', text: `Bulk move failed: ${(e as Error).message}` });
+      // Raw server text ("API Endpoint /assayers/bulk/lifecycle returned status 500") tells an
+      // HR officer nothing they can act on; `userMessage` is the one place that translation lives.
+      setNotice({ tone: 'err', text: `Nobody was moved. ${userMessage(e)}` });
     } finally {
       setBusy(false);
       setBulkTarget('');
@@ -316,7 +383,7 @@ export const AssayerRoster: React.FC = () => {
       setOpenId(null);
       refresh();
     } catch (e) {
-      setNotice({ tone: 'err', text: (e as Error).message });
+      setNotice({ tone: 'err', text: userMessage(e) });
     }
   };
 
@@ -415,14 +482,25 @@ export const AssayerRoster: React.FC = () => {
     }
   };
 
+  /**
+   * The blank sheet with the column headings the importer expects.
+   *
+   * This was unguarded: if the request failed the promise rejected into nowhere, so the click
+   * produced no file and no message, and the next move was to upload a hand-made sheet that the
+   * importer then rejected row by row. A failed template download has to say so.
+   */
   const downloadTemplate = async () => {
-    const blob = await api.request<Blob>('/assayers/template/download', { raw: true } as any);
-    const url = URL.createObjectURL(blob as any);
-    const el = document.createElement('a');
-    el.href = url;
-    el.download = 'assayer-template.xlsx';
-    el.click();
-    URL.revokeObjectURL(url);
+    try {
+      const blob = await api.request<Blob>('/assayers/template/download', { raw: true } as any);
+      const url = URL.createObjectURL(blob as any);
+      const el = document.createElement('a');
+      el.href = url;
+      el.download = 'assayer-template.xlsx';
+      el.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setNotice({ tone: 'err', text: `Could not download the template. ${userMessage(e)}` });
+    }
   };
 
   return (
@@ -552,6 +630,9 @@ export const AssayerRoster: React.FC = () => {
           background: 'var(--status-pending-bg)', border: '1px solid rgba(216,174,71,0.3)',
         }}>
           <strong style={{ fontSize: '13px' }}>{selected.length} selected</strong>
+          {hiddenNote && (
+            <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>{hiddenNote}</span>
+          )}
           <ArrowRightLeft size={13} style={{ color: 'var(--text-muted)' }} />
           {bulkOptions.length > 0 ? (
             <Select
@@ -593,7 +674,7 @@ export const AssayerRoster: React.FC = () => {
               <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Could not reach {assayerLifecycleLabel(bulkReport.target)}:</div>
               {bulkReport.skipped.map((s) => (
                 <div key={s.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
-                  <span style={{ color: 'inherit' }}>{assayerLifecycleLabel(s.current)}</span>
+                  <span style={{ color: 'inherit' }}>{bulkReport.names[s.id] ?? 'This assayer'} — {assayerLifecycleLabel(s.current)}</span>
                   <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>— {s.reason}</span>
                 </div>
               ))}
@@ -604,7 +685,7 @@ export const AssayerRoster: React.FC = () => {
               <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Failed:</div>
               {bulkReport.failed.map((f) => (
                 <div key={f.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
-                  <span style={{ color: 'inherit' }}>{f.id.slice(0, 8)}</span>
+                  <span style={{ color: 'inherit' }}>{bulkReport.names[f.id] ?? 'This assayer'}</span>
                   <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>— {f.reason}</span>
                 </div>
               ))}
@@ -648,12 +729,29 @@ export const AssayerRoster: React.FC = () => {
                     <Users size={26} style={{ opacity: 0.35 }} />
                     <div style={{ fontSize: '14px', fontWeight: 600, marginTop: '10px' }}>Nobody matches this view</div>
                     <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px' }}>
-                      {assayers.length === 0 ? 'The roster is empty — import a workforce file or add someone.' : 'Try a different segment or clear the filters.'}
+                      {/* "Try a different segment or clear the filters" makes the reader hunt for
+                          which of four controls is responsible — and the segment pill and the
+                          Status dropdown can contradict each other outright (Active + Resigned
+                          can never match anybody) while the Filters panel is collapsed and shows
+                          nothing. Name the criteria actually in force. */}
+                      {assayers.length === 0
+                        ? 'The roster is empty — import a workforce file or add someone.'
+                        : `No one matches ${activeCriteria.join(' + ')}.`}
                     </div>
+                    {assayers.length > 0 && (
+                      <button
+                        onClick={() => { setSegment('all'); setStateFilter('ALL'); setStatusFilter('ALL'); setSearch(''); }}
+                        className="btn btn-secondary"
+                        style={{ marginTop: '10px', fontSize: '11.5px', padding: '5px 12px' }}
+                      >
+                        Show everyone
+                      </button>
+                    )}
                   </td>
                 </tr>
               ) : rows.slice(0, visibleCount).map((a) => {
                 const missing = missingFields(a);
+                const blockers = payoutBlockers(a);
                 const tone = STATUS_COLORS[a.lifecycleStatus] ?? 'var(--text-muted)';
                 const months = tenureMonths(a);
                 return (
@@ -695,9 +793,18 @@ export const AssayerRoster: React.FC = () => {
                       ) : (
                         <span
                           title={`Missing: ${missing.join(', ')}`}
-                          style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--warning)', fontSize: '11.5px', fontWeight: 600 }}
+                          style={{
+                            display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11.5px', fontWeight: 600,
+                            color: blockers.length ? 'var(--danger)' : 'var(--warning)',
+                          }}
                         >
-                          <AlertTriangle size={12} /> {missing.length} missing
+                          <AlertTriangle size={12} />
+                          {/* "3 missing" reads as tidying-up. "Cannot be paid" is what it actually
+                              means, and it is the difference between a gap someone gets to next
+                              month and one that stops a payout run. */}
+                          {blockers.length
+                            ? `Cannot be paid · ${missing.length} missing`
+                            : `${missing.length} missing`}
                         </span>
                       )}
                     </td>
@@ -723,6 +830,10 @@ export const AssayerRoster: React.FC = () => {
               Showing {Math.min(visibleCount, rows.length)} of {rows.length}
               {rows.filter((r) => missingFields(r).length > 0).length > 0 &&
                 ` · ${rows.filter((r) => missingFields(r).length > 0).length} with an incomplete record`}
+              {/* Stated separately from "incomplete", because a roster where everyone is Active
+                  and nobody has bank details looks entirely healthy until this sentence. */}
+              {rows.filter((r) => payoutBlockers(r).length > 0).length > 0 &&
+                ` · ${rows.filter((r) => payoutBlockers(r).length > 0).length} cannot be paid yet`}
             </span>
             {rows.length > visibleCount && (
               <button onClick={() => setVisibleCount((c) => c + RENDER_CHUNK)} className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: '11.5px' }}>

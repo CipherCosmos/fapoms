@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   X, Edit2, ArrowRightLeft, AlertTriangle, CheckCircle2,
   User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, MapPin, KeyRound,
@@ -16,6 +17,14 @@ import { fmtDate, fmtWhen } from '../../utils/dates';
 import { userMessage } from '../../services/errors';
 import { CommercialProfileModal, type CommercialProfile } from './CommercialProfileModal';
 import { AssayerRemarks } from '../../components/AssayerRemarks';
+// The capability page owns the wording for a workforce attribute's type; this tab reads it from
+// there rather than keeping a second map that would drift. Both modules are lazy-loaded under /hr.
+import { attributeTypeLabel } from './HrCapabilityPage';
+import { todayDateKey, localDateKey } from '../../utils/statusLabels';
+
+/** Whole days until a recorded expiry; null when nothing is recorded. */
+const expiryDays = (iso?: string | null): number | null =>
+  iso ? Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000) : null;
 
 /**
  * Everything about one person, in a slide-over.
@@ -96,6 +105,50 @@ export const AssayerDetailDrawer: React.FC<{
   }, [tab, assayerId, loaded]);
 
   const missing = useMemo(() => missingCriticalFields(a), [a]);
+
+  /**
+   * Skills, languages and certifications with the ones that stop working soonest at the top, and
+   * the expired ones called out separately above the list. Server order was insertion order.
+   */
+  const sortedAttributes = useMemo(() => {
+    const rows: any[] | undefined = loaded.skills;
+    if (!rows) return rows;
+    return [...rows].sort((x, y) => {
+      const ex = x.expiryDate ? new Date(x.expiryDate).getTime() : Number.POSITIVE_INFINITY;
+      const ey = y.expiryDate ? new Date(y.expiryDate).getTime() : Number.POSITIVE_INFINITY;
+      if (ex !== ey) return ex - ey;
+      return String(x.name).localeCompare(String(y.name));
+    });
+  }, [loaded.skills]);
+
+  const lapsedCertifications = useMemo(
+    () => (loaded.skills ?? []).filter((w: any) => {
+      const d = expiryDays(w.expiryDate);
+      return d !== null && d < 0;
+    }),
+    [loaded.skills],
+  );
+
+  /**
+   * The pay structure that is actually being quoted today, and whether a later one is queued.
+   * The list showed every profile with equal weight, so a superseded rate and the live one
+   * looked the same — and the future-dated one at the top read as the current price.
+   */
+  const commercialRows = useMemo(() => {
+    const rows: any[] | undefined = loaded.commercial;
+    if (!rows) return rows;
+    const today = todayDateKey();
+    const withState = rows.map((c) => {
+      const start = localDateKey(c.effectiveStartDate || c.startDate);
+      const end = c.effectiveEndDate ? localDateKey(c.effectiveEndDate) : null;
+      const state = start > today ? 'future' : end && end < today ? 'past' : 'current';
+      return { ...c, __start: start, __state: state };
+    });
+    // Newest start first, matching the fee calculator's "latest profile effective on the date wins".
+    return withState.sort((x, y) => (x.__start < y.__start ? 1 : x.__start > y.__start ? -1 : 0));
+  }, [loaded.commercial]);
+
+  const bankMissing = !!a && (!a.bankAccountNumber?.trim() || !a.ifscCode?.trim());
 
   const transitions = a ? nextAssayerLifecycleStates(a.lifecycleStatus) : [];
 
@@ -308,6 +361,34 @@ export const AssayerDetailDrawer: React.FC<{
 
               {tab === 'commercial' && (
                 <div>
+                  {/*
+                    Rates and banking are two different records — the rates live on the commercial
+                    profile below, the account number and IFSC live on the assayer record itself,
+                    behind Edit → Financial. Every one of the eight people on the roster has rates
+                    but no bank details, which is what happens when a tab called "Pay" says nothing
+                    at all about where the money is actually sent. It says so now, and the button
+                    opens the same form on the same person.
+                  */}
+                  <div style={{
+                    padding: '11px 13px', borderRadius: '8px', marginBottom: '12px',
+                    background: bankMissing ? 'var(--status-pending-bg)' : 'var(--bg-surface-2)',
+                    border: `1px solid ${bankMissing ? 'rgba(216,174,71,0.25)' : 'var(--border-color)'}`,
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '7px', fontWeight: 700, fontSize: '12.5px', color: bankMissing ? 'var(--warning)' : 'var(--success)' }}>
+                      {bankMissing ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />}
+                      {bankMissing ? 'No bank details — cannot be paid' : 'Bank details on file'}
+                    </div>
+                    <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                      {bankMissing
+                        ? 'The rates below decide what this assayer earns; the account they are paid into is on their record, under Financial.'
+                        : `Account ending ${String(a.bankAccountNumber).slice(-4)} · IFSC ${a.ifscCode}`}
+                    </div>
+                    {canManage && bankMissing && (
+                      <button onClick={() => onEdit(a)} className="btn btn-secondary" style={{ fontSize: '11.5px', padding: '5px 10px', marginTop: '9px' }}>
+                        Add bank details
+                      </button>
+                    )}
+                  </div>
                   {canManage && (
                     <button onClick={() => setPayModal({ open: true, profile: null })}
                       className="btn btn-primary" style={{ fontSize: '12px', padding: '7px 12px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -315,7 +396,7 @@ export const AssayerDetailDrawer: React.FC<{
                     </button>
                   )}
                   <List
-                    rows={loaded.commercial}
+                    rows={commercialRows}
                     empty="No pay structure recorded — this assayer cannot be billed or paid until one exists."
                     render={(c: any) => (
                       <div key={c.id} style={{ padding: '11px 0', borderBottom: '1px solid var(--border-hair)' }}>
@@ -323,6 +404,13 @@ export const AssayerDetailDrawer: React.FC<{
                           <div>
                             <strong>{money(c.baseFee)} base</strong>
                             {c.currency && <span style={{ color: 'var(--text-muted)', marginLeft: '5px' }}>{c.currency}</span>}
+                            <span style={{
+                              marginLeft: '7px', fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '999px',
+                              background: c.__state === 'current' ? 'var(--status-active-bg)' : 'var(--bg-surface-2)',
+                              color: c.__state === 'current' ? 'var(--success)' : c.__state === 'future' ? 'var(--accent)' : 'var(--text-muted)',
+                            }}>
+                              {c.__state === 'current' ? 'In force' : c.__state === 'future' ? 'Starts later' : 'Ended'}
+                            </span>
                           </div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                             <span style={{ color: 'var(--text-muted)', fontSize: '11.5px' }}>
@@ -348,18 +436,51 @@ export const AssayerDetailDrawer: React.FC<{
               )}
 
               {tab === 'skills' && (
-                <List
-                  rows={loaded.skills}
-                  empty="No skills, languages or certifications recorded — planning cannot match this person on competency."
-                  render={(w: any) => (
-                    <div key={w.id} style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid var(--border-hair)', fontSize: '12.5px' }}>
-                      <span><strong>{w.name}</strong> <span style={{ ...label, marginLeft: '6px' }}>{w.type}</span></span>
-                      <span style={{ color: 'var(--text-muted)', fontSize: '11.5px' }}>
-                        {w.level ?? ''}{w.expiryDate ? ` · expires ${fmtDate(w.expiryDate)}` : ''}
-                      </span>
+                <>
+                  {/*
+                    An expired certification is refused by the eligibility gate, so the person is
+                    quietly unassignable. Said here, at the top, rather than left to be worked out
+                    from a date halfway down a list — with the way to fix it one click away.
+                  */}
+                  {lapsedCertifications.length > 0 && (
+                    <div style={{ padding: '11px 13px', borderRadius: '8px', marginBottom: '12px', background: 'var(--status-cancelled-bg)', border: '1px solid rgba(220,80,80,0.3)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '7px', color: 'var(--danger)', fontWeight: 700, fontSize: '12.5px' }}>
+                        <AlertTriangle size={14} /> {lapsedCertifications.length} certification(s) expired
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '5px' }}>
+                        {lapsedCertifications.map((c: any) => c.name).join(', ')} — any branch that requires these will
+                        refuse this assayer until the renewal date is recorded.
+                      </div>
+                      {canManage && (
+                        <Link to={`/hr/skills?assayer=${assayerId}`} className="btn btn-secondary"
+                          style={{ fontSize: '11.5px', padding: '5px 10px', marginTop: '9px', display: 'inline-block', textDecoration: 'none' }}>
+                          Record the renewal
+                        </Link>
+                      )}
                     </div>
                   )}
-                />
+                  <List
+                    rows={sortedAttributes}
+                    empty="No skills, languages or certifications recorded — planning cannot match this person on competency."
+                    render={(w: any) => {
+                      const days = expiryDays(w.expiryDate);
+                      return (
+                        <div key={w.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', padding: '8px 0', borderBottom: '1px solid var(--border-hair)', fontSize: '12.5px' }}>
+                          {/* Was the raw column value — "CERTIFICATION" next to the name. */}
+                          <span><strong>{w.name}</strong> <span style={{ ...label, marginLeft: '6px' }}>{attributeTypeLabel(w.type)}</span></span>
+                          <span style={{ color: days !== null && days < 0 ? 'var(--danger)' : days !== null && days <= 30 ? 'var(--warning)' : 'var(--text-muted)', fontSize: '11.5px', whiteSpace: 'nowrap' }}>
+                            {w.level ?? ''}
+                            {w.expiryDate && (
+                              days !== null && days < 0
+                                ? ` · expired ${fmtDate(w.expiryDate)}`
+                                : ` · expires ${fmtDate(w.expiryDate)}`
+                            )}
+                          </span>
+                        </div>
+                      );
+                    }}
+                  />
+                </>
               )}
 
               {/*

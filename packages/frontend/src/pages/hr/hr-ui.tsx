@@ -38,6 +38,25 @@ export const label: React.CSSProperties = {
   color: 'var(--text-muted)', fontWeight: 700,
 };
 
+/**
+ * How an identity document's verification state is said out loud.
+ *
+ * The document register spelled these three states as "Verified / Pending / Rejected" while the
+ * expiry list on the sibling chip printed the raw column straight from the API — the same
+ * document read "Verified" on one chip and `PENDING` on another, and HR had no way to know those
+ * were the same vocabulary. One map, imported by both, so they cannot drift again. It lives here
+ * rather than in @fapoms/shared because that package labels *audit* document types
+ * (hrDocumentTypeLabel) but carries no map for this column.
+ */
+export const GOV_DOC_STATUS_LABELS: Record<string, string> = {
+  VERIFIED: 'Verified',
+  PENDING: 'Pending',
+  REJECTED: 'Rejected',
+};
+
+export const govDocStatusLabel = (status?: string | null): string =>
+  GOV_DOC_STATUS_LABELS[status ?? 'PENDING'] ?? 'Pending';
+
 export const FIELD_LABELS: Record<string, string> = {
   pan_number: 'PAN', bank_account_number: 'Bank a/c', ifsc_code: 'IFSC',
   joining_date: 'Joining date', emergency_contact_phone: 'Emergency contact',

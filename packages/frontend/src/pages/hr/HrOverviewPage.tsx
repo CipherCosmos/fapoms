@@ -13,7 +13,13 @@ import { useHr, resolveHrDestination } from './HrLayout';
  * that job needs without competing for room with seven other concerns.
  */
 
-const OverviewTabBody = ({ d, onJump }: { d: HrWorkforceOverview; onJump: (to: string) => void }) => (
+const OverviewTabBody = ({ d, onJump }: { d: HrWorkforceOverview; onJump: (to: string) => void }) => {
+  // Nobody has ever been assigned work, so idleness is the absence of assignments rather than a
+  // performance signal. Kept in step with the same test on the Workload screen.
+  const neverWorked =
+    d.utilisation.performance.totalAssignments === 0 &&
+    d.utilisation.idleCount === d.utilisation.neverAssigned;
+  return (
   <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
     <section>
       <div style={{ ...label, marginBottom: '8px' }}>Needs attention</div>
@@ -64,10 +70,15 @@ const OverviewTabBody = ({ d, onJump }: { d: HrWorkforceOverview; onJump: (to: s
         tone={d.compliance.incompleteCount ? 'var(--warning)' : 'var(--success)'}
         hint="Assayers with every payroll- and duty-of-care-critical field filled in"
       />
+      {/* "Idle > 30d" said the team had stopped working. With no assignments in the system at all,
+          every one of those people is simply waiting for a first job, and the amber accused them of
+          something the data cannot show. Same figure, honest caption — and it now uses the same words
+          as the Workload chip it sends you to, rather than a shorthand only this tile used. */}
       <Stat
         value={d.utilisation.idleCount}
-        caption={`Idle > ${d.utilisation.idleAfterDays}d`}
-        tone={d.utilisation.idleCount ? 'var(--warning)' : undefined}
+        caption={neverWorked ? 'Waiting for their first job' : `No work in ${d.utilisation.idleAfterDays} days`}
+        tone={neverWorked ? undefined : d.utilisation.idleCount ? 'var(--warning)' : undefined}
+        hint={neverWorked ? 'No work has been assigned to anyone yet — assign branches in Planning' : undefined}
       />
       <Stat value={`${d.attrition.attritionRate12m}%`} caption="Attrition (12m)" />
     </section>
@@ -105,7 +116,8 @@ const OverviewTabBody = ({ d, onJump }: { d: HrWorkforceOverview; onJump: (to: s
       </section>
     </div>
   </div>
-);
+  );
+};
 
 // ── Onboarding ─────────────────────────────────────────────────────────────
 

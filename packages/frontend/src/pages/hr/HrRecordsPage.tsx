@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search } from 'lucide-react';
 import { card, label, Bar, Empty, Table, OpenLink, FIELD_LABELS } from './hr-ui';
+import { assayerLifecycleLabel } from '@fapoms/shared';
 import type { HrWorkforceOverview } from '../../hooks/useHrWorkforce';
 import { useHr } from './HrLayout';
 
@@ -96,7 +97,10 @@ const RecordsTabBody = ({ d, navigate, search, setSearch, canManage }: { d: HrWo
               <strong>{r.displayName}</strong>,
               <span style={{ fontFamily: 'monospace', fontSize: '11px' }}>{r.assayerCode}</span>,
               [r.district, r.state].filter(Boolean).join(', ') || '—',
-              r.lifecycleStatus,
+              // `lifecycleStatus` is a database enum (`DOCUMENT_VERIFICATION`, `PRE_ONBOARDING`).
+              // Printed raw it shouted underscored capitals at HR staff and, worse, disagreed
+              // with the wording the roster and onboarding screens use for the very same person.
+              assayerLifecycleLabel(r.lifecycleStatus),
               <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
                 {r.missing.map((m) => (
                   <span key={m} style={{ fontSize: '10px', padding: '1px 6px', borderRadius: '4px', background: 'var(--status-cancelled-bg)', color: 'var(--danger)' }}>
@@ -104,7 +108,13 @@ const RecordsTabBody = ({ d, navigate, search, setSearch, canManage }: { d: HrWo
                   </span>
                 ))}
               </div>,
-              <OpenLink label={canManage ? 'Fix' : 'View'} onClick={() => navigate(`/assayers/${r.id}`)} />,
+              // `/assayers/:id` IS NOT A ROUTE. `/assayers` is a bare redirect to /hr/roster and
+              // matches that path only, so `/assayers/<uuid>` fell through to the catch-all and
+              // dumped the user on the dashboard. Every "Fix" on this page — the one action the
+              // whole screen exists for — silently threw the person away from the record they
+              // clicked. The roster drawer reads `?assayer=<id>` and opens straight onto that one
+              // person's editable details; Onboarding already links this way.
+              <OpenLink label={canManage ? 'Fix' : 'View'} onClick={() => navigate(`/hr/roster?assayer=${r.id}`)} />,
             ])}
           />
         )}

@@ -21,7 +21,11 @@ const ActivityTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate: (p
       Every change to a person's record, in order, with who made it.
     </p>
     {d.activity.length === 0 ? (
-      <Empty>No workforce activity recorded yet.</Empty>
+      <Empty>
+        Nothing has changed on anyone's record yet. Entries appear here automatically whenever someone is
+        added to the roster, moves through onboarding, or has their status changed — there is nothing to
+        fill in on this screen.
+      </Empty>
     ) : (
       <Table
         head={['When', 'Assayer', 'Event', 'Change', 'By', '']}

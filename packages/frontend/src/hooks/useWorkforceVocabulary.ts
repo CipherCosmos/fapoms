@@ -20,6 +20,13 @@ import { api } from '../services/api';
 export interface WorkforceVocabulary {
   skills: string[] | null;
   certifications: string[] | null;
+  /**
+   * Languages are the third kind the endpoint returns and were simply never surfaced here.
+   * The workforce form needs them for the same reason as skills: an assayer's languages are
+   * matched against a branch's requirement by exact string, so a hand-typed "Kanada" matches
+   * nobody and looks like a staffing shortage rather than a spelling mistake.
+   */
+  languages: string[] | null;
 }
 
 const clean = (list?: { name: string }[]) =>
@@ -28,25 +35,28 @@ const clean = (list?: { name: string }[]) =>
 export function useWorkforceVocabulary(): WorkforceVocabulary {
   const [skills, setSkills] = useState<string[] | null>(null);
   const [certifications, setCertifications] = useState<string[] | null>(null);
+  const [languages, setLanguages] = useState<string[] | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     api
-      .request<{ SKILL?: { name: string }[]; CERTIFICATION?: { name: string }[] }>('/assayers/workforce-attribute/vocabulary')
+      .request<{ SKILL?: { name: string }[]; CERTIFICATION?: { name: string }[]; LANGUAGE?: { name: string }[] }>('/assayers/workforce-attribute/vocabulary')
       .then((v) => {
         if (cancelled) return;
         setSkills(clean(v?.SKILL));
         setCertifications(clean(v?.CERTIFICATION));
+        setLanguages(clean(v?.LANGUAGE));
       })
       .catch(() => {
         if (cancelled) return;
         setSkills([]);   // not permitted / unavailable → callers fall back to free text
         setCertifications([]);
+        setLanguages([]);
       });
     return () => { cancelled = true; };
   }, []);
 
-  return { skills, certifications };
+  return { skills, certifications, languages };
 }
 
 /** Convenience for a field that accepts either kind of competency. */

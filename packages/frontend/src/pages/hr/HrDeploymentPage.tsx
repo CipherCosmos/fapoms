@@ -1,5 +1,5 @@
 import React from 'react';
-import { card, label, Stat, Table, POSTURE } from './hr-ui';
+import { card, label, Stat, Empty, Table, POSTURE } from './hr-ui';
 import type { HrWorkforceOverview } from '../../hooks/useHrWorkforce';
 import { useHr } from './HrLayout';
 
@@ -22,11 +22,20 @@ const DeploymentTabBody = ({ d }: { d: HrWorkforceOverview }) => (
     <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
       <Stat value={d.deployment.hiringNeeded.length} caption="Territories needing hires" tone={d.deployment.hiringNeeded.length ? 'var(--danger)' : 'var(--success)'} />
       <Stat value={d.deployment.territories.length} caption="Territories in play" />
-      <Stat value={d.deployment.idleTerritories.length} caption="Assayers with no local work" tone={d.deployment.idleTerritories.length ? 'var(--warning)' : undefined} />
+      {/* This counts states whose posture is NO_WORK — assayers living where we have no branches at
+          all. It used to be captioned "no local work", which reads as "they are idle" and collides
+          with the Workload chip's idle figure; the two count different things. */}
+      <Stat value={d.deployment.idleTerritories.length} caption="States with people but no branches" tone={d.deployment.idleTerritories.length ? 'var(--warning)' : undefined} />
     </div>
 
     <section style={card}>
       <div style={{ ...label, marginBottom: '10px' }}>Supply vs demand by state</div>
+      {d.deployment.territories.length === 0 ? (
+        <Empty>
+          No states to compare yet. A state appears here as soon as it has either a project branch or an
+          assayer on the roster; branches arrive with a project import, people arrive from Roster.
+        </Empty>
+      ) : (
       <Table
         head={['State', 'Branches', 'Assayers', 'Active', 'Branches / assayer', 'Posture']}
         rows={d.deployment.territories.map((t) => {
@@ -41,6 +50,7 @@ const DeploymentTabBody = ({ d }: { d: HrWorkforceOverview }) => (
           ];
         })}
       />
+      )}
     </section>
   </div>
 );
