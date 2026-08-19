@@ -5,6 +5,7 @@ import { CacheService } from '../../infrastructure/cache/cache.service';
 
 import { canonicalState } from '../planning/command-center.service';
 import { IN_FLIGHT_ASSIGNMENT_STATUSES, sqlStatusList } from '../assignment/assignment-workload';
+import { BUSINESS_TODAY_SQL } from '@fapoms/shared';
 
 /**
  * FAPOMS — HR workforce analytics.
@@ -399,7 +400,7 @@ export class HrWorkforceService {
         JOIN assayers a ON a.id = g.assayer_id
         WHERE g.is_active = true AND g.expiry_date IS NOT NULL
           AND ${ON_ROSTER_A}
-          AND g.expiry_date::date <= CURRENT_DATE + ($1 || ' days')::interval
+          AND g.expiry_date::date <= ${BUSINESS_TODAY_SQL} + ($1 || ' days')::interval
 
         UNION ALL
 
@@ -414,7 +415,7 @@ export class HrWorkforceService {
         JOIN assayers a ON a.id = w.assayer_id
         WHERE w.is_active = true AND w.type = 'CERTIFICATION' AND w.expiry_date IS NOT NULL
           AND ${ON_ROSTER_A}
-          AND w.expiry_date::date <= CURRENT_DATE + ($1 || ' days')::interval
+          AND w.expiry_date::date <= ${BUSINESS_TODAY_SQL} + ($1 || ' days')::interval
       ) credentials
       ORDER BY "expiryDate" ASC
       LIMIT 200
@@ -429,12 +430,12 @@ export class HrWorkforceService {
       SELECT w.id, w.name, w.type, w.level, w.expiry_date AS "expiryDate",
              a.id AS "assayerId", a.assayer_code AS "assayerCode", a.display_name AS "displayName",
              a.state,
-             (w.expiry_date::date - CURRENT_DATE)::int AS "daysToExpiry"
+             (w.expiry_date::date - ${BUSINESS_TODAY_SQL})::int AS "daysToExpiry"
       FROM workforce_attributes w
       JOIN assayers a ON a.id = w.assayer_id
       WHERE w.is_active = true AND w.expiry_date IS NOT NULL
         AND ${ON_ROSTER_A}
-        AND w.expiry_date::date <= CURRENT_DATE + INTERVAL '180 days'
+        AND w.expiry_date::date <= ${BUSINESS_TODAY_SQL} + INTERVAL '180 days'
       ORDER BY w.expiry_date ASC
       LIMIT 100
     `);
@@ -443,12 +444,12 @@ export class HrWorkforceService {
       SELECT g.id, g.document_type AS "documentType", g.expiry_date AS "expiryDate",
              g.verification_status AS "verificationStatus",
              a.id AS "assayerId", a.assayer_code AS "assayerCode", a.display_name AS "displayName",
-             (g.expiry_date::date - CURRENT_DATE)::int AS "daysToExpiry"
+             (g.expiry_date::date - ${BUSINESS_TODAY_SQL})::int AS "daysToExpiry"
       FROM assayer_government_documents g
       JOIN assayers a ON a.id = g.assayer_id
       WHERE g.is_active = true AND g.expiry_date IS NOT NULL
         AND ${ON_ROSTER_A}
-        AND g.expiry_date::date <= CURRENT_DATE + INTERVAL '180 days'
+        AND g.expiry_date::date <= ${BUSINESS_TODAY_SQL} + INTERVAL '180 days'
       ORDER BY g.expiry_date ASC
       LIMIT 100
     `);
@@ -713,10 +714,10 @@ export class HrWorkforceService {
     const [totals] = await this.dataSource.query(`
       SELECT
         COUNT(*) FILTER (WHERE exit_date IS NOT NULL OR termination_date IS NOT NULL)::int AS "totalExits",
-        COUNT(*) FILTER (WHERE COALESCE(exit_date, termination_date) > CURRENT_DATE - INTERVAL '90 days')::int  AS "exits90d",
-        COUNT(*) FILTER (WHERE COALESCE(exit_date, termination_date) > CURRENT_DATE - INTERVAL '365 days')::int AS "exits12m",
+        COUNT(*) FILTER (WHERE COALESCE(exit_date, termination_date) > ${BUSINESS_TODAY_SQL} - INTERVAL '90 days')::int  AS "exits90d",
+        COUNT(*) FILTER (WHERE COALESCE(exit_date, termination_date) > ${BUSINESS_TODAY_SQL} - INTERVAL '365 days')::int AS "exits12m",
         COUNT(*) FILTER (WHERE termination_date IS NOT NULL)::int AS terminations,
-        COUNT(*) FILTER (WHERE joining_date > CURRENT_DATE - INTERVAL '90 days')::int AS "joins90d"
+        COUNT(*) FILTER (WHERE joining_date > ${BUSINESS_TODAY_SQL} - INTERVAL '90 days')::int AS "joins90d"
       FROM assayers
       -- Attrition counts people who LEFT, which is a different thing from a record that was
       -- deleted. Resigning or being terminated leaves the row live and dated; deletion clears

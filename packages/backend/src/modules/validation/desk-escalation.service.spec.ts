@@ -114,5 +114,36 @@ describe('DeskEscalationService', () => {
       const key = emitSafe.mock.calls[0][0].dedupeKey as string;
       expect(key).toMatch(/^DESK_PACKET_UNASSIGNED_SLA:u1:\d{4}-\d{2}-\d{2}$/);
     });
+
+    /**
+     * The day that key names is the Indian working day, not the server's.
+     *
+     * The scan runs every fifteen minutes and the server runs UTC, so with a UTC date the
+     * "one reminder per day" bucket rolled over at 05:30 in the morning. A breach reminder
+     * sent at 11pm therefore silenced the whole of the next morning — the hours the desk is
+     * most able to act on it.
+     */
+    it('rolls the day over at Indian midnight, not five and a half hours into the morning', async () => {
+      rowsFor = (q) => (q.includes('d.assigned_to_user_id IS NULL') ? [row('u1', 1)] : []);
+      jest.useFakeTimers();
+      try {
+        // 22:00 UTC on the 19th is 03:30 IST on the 20th: a new working day is under way.
+        jest.setSystemTime(new Date('2026-08-19T22:00:00Z'));
+        await service.scan();
+        expect(emitSafe.mock.calls.at(-1)![0].dedupeKey).toBe('DESK_PACKET_UNASSIGNED_SLA:u1:2026-08-20');
+
+        // Two hours earlier is 01:30 IST — still the 20th, so still the same reminder.
+        jest.setSystemTime(new Date('2026-08-19T20:00:00Z'));
+        await service.scan();
+        expect(emitSafe.mock.calls.at(-1)![0].dedupeKey).toBe('DESK_PACKET_UNASSIGNED_SLA:u1:2026-08-20');
+
+        // 17:00 UTC is 22:30 IST on the 19th — the previous working day, a separate reminder.
+        jest.setSystemTime(new Date('2026-08-19T17:00:00Z'));
+        await service.scan();
+        expect(emitSafe.mock.calls.at(-1)![0].dedupeKey).toBe('DESK_PACKET_UNASSIGNED_SLA:u1:2026-08-19');
+      } finally {
+        jest.useRealTimers();
+      }
+    });
   });
 });

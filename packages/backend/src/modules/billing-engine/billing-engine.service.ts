@@ -34,6 +34,8 @@ import {
   BillingAttentionItem,
   BillingOverview,
   AssignmentMoneyLine,
+  businessTodayDateKey,
+  BUSINESS_TODAY_SQL,
 } from '@fapoms/shared';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import {
@@ -851,7 +853,7 @@ export class BillingEngineService implements OnModuleInit {
         method: dto.method,
         amount,
         currency: payable.currency,
-        receivedDate: dto.paidDate ?? new Date().toISOString().slice(0, 10),
+        receivedDate: dto.paidDate ?? businessTodayDateKey(),
         payableId: payable.id,
         assayerId: payable.assayerId,
         runningBalance: balance,
@@ -937,7 +939,7 @@ export class BillingEngineService implements OnModuleInit {
       const projectIds = new Set(entries.map((e) => e.projectId).filter(Boolean));
 
       const terms = await this.clientPaymentTerms(dto.clientId, m);
-      const issueDate = dto.issueDate ?? new Date().toISOString().slice(0, 10);
+      const issueDate = dto.issueDate ?? businessTodayDateKey();
 
       const invoice = this.invoiceRepository.create({
         invoiceNumber: `INV-${Date.now().toString(36).toUpperCase()}-${this.seq()}`,
@@ -991,7 +993,7 @@ export class BillingEngineService implements OnModuleInit {
         throw new ConflictException(`${invoice.invoiceNumber} is ${invoice.status.toLowerCase()} and cannot be sent.`);
       }
       invoice.status = InvoiceStatus.ISSUED;
-      if (!invoice.issueDate) invoice.issueDate = new Date().toISOString().slice(0, 10);
+      if (!invoice.issueDate) invoice.issueDate = businessTodayDateKey();
       if (!invoice.dueDate) {
         invoice.dueDate = this.dueDateFromTerms(invoice.issueDate, await this.clientPaymentTerms(invoice.clientId, m));
       }
@@ -1095,7 +1097,7 @@ export class BillingEngineService implements OnModuleInit {
         method: dto.method,
         amount,
         currency: invoice.currency,
-        receivedDate: dto.receivedDate ?? new Date().toISOString().slice(0, 10),
+        receivedDate: dto.receivedDate ?? businessTodayDateKey(),
         notes: dto.notes ?? null,
         createdBy: userId,
         updatedBy: userId,
@@ -1640,10 +1642,10 @@ export class BillingEngineService implements OnModuleInit {
          ORDER BY e.updated_at DESC LIMIT ${ATTENTION_LIMIT}`).catch(() => []),
       mgr.query(`
         SELECT i.id, i.invoice_number, c.name AS client_name, i.outstanding_amount, i.due_date,
-               (CURRENT_DATE - i.due_date) AS days_overdue
+               (${BUSINESS_TODAY_SQL} - i.due_date) AS days_overdue
           FROM billing_invoices i
           LEFT JOIN clients c ON c.id = i.client_id
-         WHERE i.is_active = true AND i.status = 'ISSUED' AND i.due_date < CURRENT_DATE AND i.outstanding_amount > 0
+         WHERE i.is_active = true AND i.status = 'ISSUED' AND i.due_date < ${BUSINESS_TODAY_SQL} AND i.outstanding_amount > 0
          ORDER BY i.due_date ASC LIMIT ${ATTENTION_LIMIT}`).catch(() => []),
     ]);
     const items: BillingAttentionItem[] = [];

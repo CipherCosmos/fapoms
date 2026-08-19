@@ -37,7 +37,7 @@ import { RoutingService, RouteResult } from '../geo/routing.provider';
 import { ValidationService } from '../validation/validation.service';
 import { DocumentService } from '../document/document.service';
 import { FeePolicyService } from '../pricing/fee-policy.service';
-import { EventCategory, ScheduleStatus, AssignmentStatus, AssessmentStatus, ProjectBranchStatus, CustomerMasterStatus, Priority, SystemRole, calculateHaversineDistance, assignmentIssueCategoryLabel, isAssignmentTerminal, BypassableRule } from '@fapoms/shared';
+import { EventCategory, ScheduleStatus, AssignmentStatus, AssessmentStatus, ProjectBranchStatus, CustomerMasterStatus, Priority, SystemRole, calculateHaversineDistance, assignmentIssueCategoryLabel, isAssignmentTerminal, BypassableRule, businessDateKey, businessTodayDateKey } from '@fapoms/shared';
 import { applyBranchScope, branchScopeWhere, needsBranchJoin } from '../../infrastructure/scope/apply-scope';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { CacheService } from '../../infrastructure/cache/cache.service';
@@ -347,8 +347,20 @@ export class AssignmentService {
       );
     }
 
-    // Dynamic Scheduled Date Resolution: Use provided date, project branch scheduled date, or fallback to current date (today)
-    const targetDateStr = dto.scheduledDate || (projectBranch.scheduledDate ? (typeof projectBranch.scheduledDate === 'string' ? (projectBranch.scheduledDate as string).slice(0, 10) : (projectBranch.scheduledDate as Date).toISOString().slice(0, 10)) : new Date().toISOString().slice(0, 10));
+    /**
+     * What day this assignment is for: what the caller asked for, else the branch's own audit
+     * date, else today.
+     *
+     * "Today" is the Indian working day, not the server's. The server runs UTC, so between
+     * midnight and 05:30 IST its date is still yesterday — an assignment created first thing in
+     * the morning was scheduled for the day before, which is a date already past.
+     */
+    const branchDate = projectBranch.scheduledDate
+      ? (typeof projectBranch.scheduledDate === 'string'
+          ? (projectBranch.scheduledDate as string).slice(0, 10)
+          : businessDateKey(projectBranch.scheduledDate as Date))
+      : null;
+    const targetDateStr = dto.scheduledDate || branchDate || businessTodayDateKey();
     const scheduledDateObj = new Date(targetDateStr);
 
     // Dynamic Proposed Fee Calculation based on Assayer Base Fee + Calculated Travel Distance Allowance

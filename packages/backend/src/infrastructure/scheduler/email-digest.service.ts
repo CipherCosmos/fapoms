@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { formatRupees } from '@fapoms/shared';
+import { formatRupees, BUSINESS_TODAY_SQL } from '@fapoms/shared';
 
 import { DeskEscalationService } from '../../modules/validation/desk-escalation.service';
 import { FeedbackEscalationService } from '../../modules/feedback/feedback-escalation.service';
@@ -184,7 +184,7 @@ export class EmailDigestService {
            FROM assignment_expenses WHERE status = 'PENDING' AND is_active = true`, 'pending expense claims'),
       q(`SELECT COUNT(*)::int AS n, COALESCE(SUM(outstanding_amount),0)::numeric AS total
            FROM billing_invoices
-          WHERE due_date < CURRENT_DATE AND COALESCE(outstanding_amount, 0) > 0 AND is_active = true`, 'overdue invoices'),
+          WHERE due_date < ${BUSINESS_TODAY_SQL} AND COALESCE(outstanding_amount, 0) > 0 AND is_active = true`, 'overdue invoices'),
     ]);
 
     const p = payables?.[0] ?? {};

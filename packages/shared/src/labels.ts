@@ -421,6 +421,17 @@ export function businessTodayDateKey(timeZone: string = BUSINESS_TIME_ZONE): str
 }
 
 /**
+ * The same "today", for SQL.
+ *
+ * `CURRENT_DATE` is the *database session's* date, and the database runs UTC — so between
+ * midnight and 05:30 in India it is still yesterday. Every query that buckets by day, counts
+ * "days away" or decides what is overdue was reading that clock, which put the boundary of the
+ * working day at half past five in the morning. Interpolate this instead; it needs no
+ * parameter and is safe to inline.
+ */
+export const BUSINESS_TODAY_SQL = `((NOW() AT TIME ZONE '${BUSINESS_TIME_ZONE}')::date)`;
+
+/**
  * Reasons an assayer can flag an assignment to the operations desk from the field app.
  *
  * The field app cannot cancel or reassign work — those stay with the desk. This is the

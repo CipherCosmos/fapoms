@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { ValidationCaseEntity } from './validation-case.entity';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { businessTodayDateKey } from '@fapoms/shared';
 
 /**
  * The desk's SLA policy and escalation engine — the data-entry mirror of the
@@ -249,7 +250,9 @@ export class DeskEscalationService {
      * below, not by truncating the work.
      */
     const a = await this.attention(null);
-    const day = new Date().toISOString().slice(0, 10);
+    // See the feedback scanner: the day this bucket names is the Indian working day, so a
+    // breach reminder sent late at night does not silence the whole of the next morning.
+    const day = businessTodayDateKey();
     let emitted = 0;
 
     const emit = (

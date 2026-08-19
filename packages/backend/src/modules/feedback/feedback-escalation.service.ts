@@ -5,6 +5,7 @@ import { PlatformSettingsService } from '../../infrastructure/settings/platform-
 
 import { FeedbackThreadEntity } from './feedback-thread.entity';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { businessTodayDateKey } from '@fapoms/shared';
 
 /**
  * Response-time SLAs for the feedback desk, and the escalation that enforces them.
@@ -129,7 +130,9 @@ export class FeedbackEscalationService {
   /** Called from the 15-minute SLA scanner. One reminder per breached item per day. */
   async scan(): Promise<void> {
     const { firstResponseOverdue, resolutionOverdue } = await this.attention();
-    const day = new Date().toISOString().slice(0, 10);
+    // The working day this reminder belongs to, in India — not the server's UTC date, which
+    // would put the boundary of "one reminder per day" at half past five in the morning.
+    const day = businessTodayDateKey();
 
     for (const item of firstResponseOverdue) {
       this.notificationDispatch.emitSafe({

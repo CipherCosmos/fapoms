@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
-import { branchStatusLabel, ProjectBranchStatus } from '@fapoms/shared';
+import { branchStatusLabel, ProjectBranchStatus, BUSINESS_TODAY_SQL } from '@fapoms/shared';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 
@@ -201,7 +201,7 @@ export class OperationsSnapshotService {
       this.dataSource.query(`
         SELECT pb.id, pb.scheduled_date, pb.status,
                b.name AS branch_name, b.district, b.state,
-               (pb.scheduled_date - CURRENT_DATE)::int AS days_away,
+               (pb.scheduled_date - ${BUSINESS_TODAY_SQL})::int AS days_away,
                EXISTS (SELECT 1 FROM assignments a
                         WHERE a.project_branch_id = pb.id AND a.is_active = true
                           AND a.status IN ('ACCEPTED','CHECKED_IN','IN_PROGRESS','COMPLETED')) AS has_assayer,
@@ -215,7 +215,7 @@ export class OperationsSnapshotService {
           JOIN projects p ON p.id = pb.project_id
          WHERE pb.is_active = true
            AND pb.scheduled_date IS NOT NULL
-           AND pb.scheduled_date BETWEEN CURRENT_DATE - 3 AND CURRENT_DATE + 7${branchFrag}${frag.client}${frag.project}
+           AND pb.scheduled_date BETWEEN ${BUSINESS_TODAY_SQL} - 3 AND ${BUSINESS_TODAY_SQL} + 7${branchFrag}${frag.client}${frag.project}
          ORDER BY pb.scheduled_date`, sp),
 
       // Idle vs loaded people, against the work waiting to be placed. Scoped by the assayer's
