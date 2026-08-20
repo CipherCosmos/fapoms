@@ -35,6 +35,14 @@ import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { businessTodayDateKey } from '@fapoms/shared';
 
+/**
+ * A real cost-12 bcrypt hash of a throwaway string, compared against on the account-not-found
+ * path so that path costs the same as a genuine password check. It must match the cost factor
+ * used for real passwords (12) or the timing it is meant to equalise would differ. It is never a
+ * valid credential — nobody knows the plaintext and nothing checks it for correctness.
+ */
+const DUMMY_BCRYPT_HASH = '$2b$12$StcDs0lSbteaKXRTjYJSf.NLoQkM942PTrxyk4KjSBOQzhkTVzLvS';
+
 export interface JwtPayload {
   sub: string;           // User ID
   username: string;
@@ -144,6 +152,12 @@ export class AuthService implements OnModuleInit {
       });
 
       if (!assayer) {
+        // Spend the same work a real password check would, so "no such account" and "wrong
+        // password" take about the same time. Without this, an unknown identifier returned
+        // immediately while a known one paid a full bcrypt compare (~250ms) — a timing oracle
+        // that lets an attacker enumerate which usernames/assayer codes exist before guessing
+        // passwords. The hash is a fixed dummy; the result is discarded.
+        await bcrypt.compare(password, DUMMY_BCRYPT_HASH).catch(() => undefined);
         throw new UnauthorizedException('Invalid credentials');
       }
 

@@ -775,6 +775,11 @@ export class AssayerController {
   @Get(':assayerId/profile')
   @ApiOperation({ summary: 'Get detailed profile with stats for an assayer (by UUID or assayer code)' })
   async getProfile(@Param('assayerId') assayerId: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    // `isSelf` below only controlled REDACTION, never access — so an assayer could pull any
+    // colleague's profile by id (name, code, phone, email, address, employment status) and get a
+    // redacted-but-real record back. This refuses that outright: an assayer may read only their
+    // own profile; staff are unaffected, and the mobile app only ever fetches its own id.
+    assertSelfOrPrivileged(req.user, assayerId, 'view this profile');
     await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const assayer = await this.assayerService.getProfile(assayerId);
     return {

@@ -5,6 +5,7 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
+import { assertUploadAllowed } from '../document/upload-validation';
 import { memoryStorage } from 'multer';
 import { IsOptional, IsString, IsArray, IsNumber, IsObject, IsIn, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -117,6 +118,10 @@ export class ValidationQueryController {
 
     const results = await Promise.all(
       (files || []).map(async (file) => {
+        // Type + size allowlist, the same gate the document upload paths use. These routes
+        // scan for malware but accepted ANY declared type; a clarification thread is not a
+        // place to smuggle an arbitrary file type into storage.
+        assertUploadAllowed({ contentType: file.mimetype, size: file.size, hint: 'Attach a PDF, image, or spreadsheet.' });
         const key = await this.storage.saveFile(
           `chat/${file.originalname}`,
           file.buffer,
@@ -151,6 +156,8 @@ export class ValidationQueryController {
     if (!file?.buffer?.length) {
       throw new BadRequestException('No file was uploaded.');
     }
+    // Same allowlist as the multi-file route above.
+    assertUploadAllowed({ contentType: file.mimetype, size: file.size, hint: 'Attach a PDF, image, or spreadsheet.' });
 
     const key = await this.storage.saveFile(
       `chat/${file.originalname}`,

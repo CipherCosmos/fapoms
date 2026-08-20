@@ -32,7 +32,7 @@ import { Transform } from 'class-transformer';
  */
 const TrimmedString = () => Transform(({ value }) => (typeof value === 'string' ? value.trim() : value));
 import { UserService, CreateUserDto, UpdateUserDto } from './user.service';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AnyAuthenticated } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AnyAuthenticated, PasswordChangeExempt } from '../auth/guards';
 import { SystemRole, UserStatus } from '@fapoms/shared';
 
 /**
@@ -184,6 +184,9 @@ export class UserController {
 
   @Get('me')
   @AnyAuthenticated()
+  // Reachable while a forced password change is pending: the client reads this to discover it
+  // must show the change screen. Blocking it would trap the user before they could comply.
+  @PasswordChangeExempt()
   @ApiOperation({ summary: 'Get current user profile' })
   async getMe(@Req() req: any) {
     return {
@@ -205,6 +208,8 @@ export class UserController {
 
   @Post('me/change-password')
   @AnyAuthenticated()
+  // The one action a user with a pending forced change MUST be able to take.
+  @PasswordChangeExempt()
   @ApiOperation({ summary: 'Change current user password' })
   async changePassword(@Body() dto: SelfChangePasswordDto, @Req() req: any) {
     // The change revokes every existing session and returns a fresh pair for THIS device, so

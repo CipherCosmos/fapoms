@@ -24,13 +24,25 @@ import { AuthGuard } from '@nestjs/passport';
 export const IS_PUBLIC_KEY = 'isPublic';
 export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);
 
+/**
+ * Marks the few routes a user with an unchanged issued password may still reach.
+ *
+ * A user still on a password someone else set (a seeded credential, an admin reset) is forced to
+ * change it before doing anything else — see the enforcement in `JwtAuthGuard`. That forcing is
+ * only real if the change itself, reading their own profile to know they must change it, and
+ * signing out remain reachable; every other route is refused. This decorator names those
+ * exceptions.
+ */
+export const PASSWORD_CHANGE_EXEMPT_KEY = 'passwordChangeExempt';
+export const PasswordChangeExempt = () => SetMetadata(PASSWORD_CHANGE_EXEMPT_KEY, true);
+
 @Injectable()
 export class JwtAuthGuard extends AuthGuard('jwt') {
   constructor(private reflector?: Reflector) {
     super();
   }
 
-  canActivate(context: ExecutionContext) {
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     if (this.reflector) {
       const isPublic = this.reflector.getAllAndOverride<boolean>(IS_PUBLIC_KEY, [
         context.getHandler(),
@@ -40,7 +52,41 @@ export class JwtAuthGuard extends AuthGuard('jwt') {
         return true;
       }
     }
-    return super.canActivate(context);
+
+    const ok = (await super.canActivate(context)) as boolean;
+    if (!ok) return false;
+
+    /**
+     * Forced password change, enforced HERE rather than trusted to the browser.
+     *
+     * `mustChangePassword` was returned to the client and acted on only by the web app, which
+     * routes such a user to the change-password screen. But the access token they hold carries
+     * full permissions, so anyone who ignored the UI — a curl script, the mobile client, a stale
+     * tab — used the API normally with a password an admin set or the system seeded. For an
+     * account still on `admin123` that is a straight path to whatever the account can do. The
+     * check now lives in the guard every authenticated route passes through, so the UI can no
+     * longer be the only thing standing between a shared default and the API.
+     *
+     * Scoped to principals that actually carry the flag — the staff `UserEntity` does; the
+     * assayer mobile principal does not, so the field app's own forced-change flow is unchanged
+     * and nobody in the field is locked out by this. The exempt routes (change the password,
+     * read your own profile, log out) stay open so the forcing cannot trap the user.
+     */
+    if (this.reflector) {
+      const exempt = this.reflector.getAllAndOverride<boolean>(PASSWORD_CHANGE_EXEMPT_KEY, [
+        context.getHandler(),
+        context.getClass(),
+      ]);
+      if (!exempt) {
+        const user = context.switchToHttp().getRequest()?.user;
+        if (user?.mustChangePassword === true) {
+          throw new ForbiddenException(
+            'You must change your password before you can continue. Please set a new password.',
+          );
+        }
+      }
+    }
+    return true;
   }
 }
 
