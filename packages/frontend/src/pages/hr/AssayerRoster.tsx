@@ -187,14 +187,35 @@ export const AssayerRoster: React.FC = () => {
     names: Record<string, string>;
   } | null>(null);
   const RENDER_CHUNK = 200;
+  /** How many rows the roster asks for at once. The chips count what arrives. */
+  const ROSTER_LIMIT = 1000;
   const [visibleCount, setVisibleCount] = useState(RENDER_CHUNK);
+  /** How many the server holds, which is not always how many arrived. */
+  const [rosterTotal, setRosterTotal] = useState(0);
   const queryClient = useQueryClient();
 
+  /**
+   * The roster, and how big the set it came from actually is.
+   *
+   * This asked for a thousand rows and then counted them for every filter chip, while the tab
+   * badge above reads the server's own total. Past a thousand people the two silently describe
+   * different things — "Everyone 1,000" under a badge saying 1,400 — and every other chip
+   * counts an arbitrary window of the roster ordered by creation date. The account's region
+   * scope narrows this list too, and does not narrow the badge.
+   *
+   * `meta.pagination.total` is the size of the set the server cut this page from, so the screen
+   * can say plainly when it is showing part of the roster rather than implying it is all of it.
+   */
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.request<Assayer[]>('/assayers?limit=1000');
-      setAssayers(Array.isArray(res) ? res : []);
+      const res = await api.request<{ data: Assayer[]; meta?: { pagination?: { total?: number } } }>(
+        `/assayers?limit=${ROSTER_LIMIT}`,
+        { withMeta: true },
+      );
+      const rows = Array.isArray(res?.data) ? res.data : [];
+      setAssayers(rows);
+      setRosterTotal(res?.meta?.pagination?.total ?? rows.length);
     } catch (e) {
       setNotice({ tone: 'err', text: `Could not load the roster. ${userMessage(e)}` });
     } finally {
@@ -274,6 +295,8 @@ export const AssayerRoster: React.FC = () => {
 
   useEffect(() => { setVisibleCount(RENDER_CHUNK); }, [assayers, search, segment, stateFilter, statusFilter, sort]);
 
+  /** True when the server holds more people than this page asked for. */
+  const truncated = rosterTotal > assayers.length;
   const allShownSelected = rows.length > 0 && rows.every((r) => selectedIds.has(r.id));
   /**
    * The bulk bar acts on the ticked rows that are *on screen*, never on ticks the current
@@ -583,7 +606,19 @@ export const AssayerRoster: React.FC = () => {
         );
       })()}
 
-      {/* Segments: the questions HR ask, as one click each. */}
+      {/*
+        * Segments: the questions HR ask, as one click each.
+        *
+        * These count the rows that arrived, which is the whole roster until it passes
+        * ROSTER_LIMIT. Past that the page says so rather than letting "Everyone 1,000" sit
+        * under a tab badge reading 1,400 with nothing to explain the gap.
+        */}
+      {truncated && (
+        <div style={{ fontSize: '11.5px', color: 'var(--warning)', lineHeight: 1.5 }}>
+          Showing the {assayers.length} most recently added of {rosterTotal} people. The counts on
+          these filters describe those {assayers.length}; search to find anyone not listed.
+        </div>
+      )}
       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
         {SEGMENTS.map((s) => {
           const n = assayers.filter(s.match).length;
