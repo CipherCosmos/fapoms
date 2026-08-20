@@ -242,13 +242,12 @@ export class AssignmentController {
   // GET /assignments/assayer/:id.
   @Roles(...STAFF_ROLES)
   @Get()
-  @ApiOperation({ summary: 'List all assignments, optionally filtered by status, projectBranchStatus, assessmentStatus, or priority' })
+  @ApiOperation({ summary: 'List all assignments, optionally filtered by status, projectBranchStatus, or priority' })
   async findAll(
     @Query('page') page?: number,
     @Query('limit') limit?: number,
     @Query('status') status?: string,
     @Query('projectBranchStatus') projectBranchStatus?: string,
-    @Query('assessmentStatus') assessmentStatus?: string,
     @Query('unscheduledOnly') unscheduledOnly?: string,
     @Query('priority') priority?: string,
     @GlobalScopeFilter() scope?: GlobalScope,
@@ -258,7 +257,6 @@ export class AssignmentController {
       limit ? Number(limit) : 50,
       status,
       projectBranchStatus,
-      assessmentStatus,
       unscheduledOnly === 'true' || unscheduledOnly === '1',
       priority,
       scope,

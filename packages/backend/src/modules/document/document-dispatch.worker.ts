@@ -43,13 +43,13 @@ export class DocumentDispatchWorker {
     // date, not the UTC calendar day (which flips 5.5h early).
     const tomorrowStr = businessDateKey(tomorrow);
 
-    // The audit date is owned by project_branches.scheduled_date — that is what
-    // scheduling writes and what a reschedule updates. `assessments.audit_date` is
-    // a copy made by syncAssessmentStatus, and only when the status *changes*, so
-    // it is absent for branches whose assignment has not transitioned yet and goes
-    // stale whenever a branch is rescheduled without a status change. Keying
-    // auto-dispatch off that copy meant packets for those branches were never sent
-    // at all, or sent against an out-of-date date.
+    // The audit date is owned by project_branches.scheduled_date — that is what scheduling
+    // writes and what a reschedule updates. This worker used to key off `assessments.audit_date`,
+    // a copy written only when the assessment's status *changed*: absent for branches whose
+    // assignment had not transitioned yet, and stale whenever a branch was rescheduled without
+    // one. Packets for those branches were never sent, or sent against an out-of-date date.
+    // That column is gone now, along with the rest of the assessment's write-only copy of the
+    // pipeline; this is the one place the date lives.
     const scheduledRows: Array<{ project_id: string; branch_id: string; scheduled_date: string | null }> =
       await this.documentRepository.manager.query(
         `SELECT project_id, branch_id, scheduled_date

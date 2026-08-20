@@ -813,7 +813,7 @@ const mockNotificationService = {
     it('holds when the filters join through projectBranch — the shape that actually broke', async () => {
       // unscheduledOnly + projectBranchStatus is the combination the planning screen sends, and
       // the one that 500'd: both reach through the relation, so both produce the join.
-      await service.findAll(1, 100, undefined, 'ASSIGNMENT_CONFIRMED', undefined, true);
+      await service.findAll(1, 100, undefined, 'ASSIGNMENT_CONFIRMED', true);
       const { select, order } = pageOptions();
 
       for (const column of Object.keys(order)) {

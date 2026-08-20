@@ -136,7 +136,6 @@ export class ReportsService {
       q.status,
       q.projectBranchStatus,
       undefined,
-      undefined,
       q.priority,
       q.scope,
     );

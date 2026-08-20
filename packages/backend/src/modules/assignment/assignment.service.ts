@@ -1599,7 +1599,6 @@ export class AssignmentService {
     page = 1, limit = 50,
     status?: string,
     projectBranchStatus?: string,
-    assessmentStatus?: string,
     unscheduledOnly?: boolean,
     priority?: string,
     scope?: Partial<GlobalScope>,
@@ -1620,9 +1619,6 @@ export class AssignmentService {
       } else if (pbStatuses.length > 1) {
         where.projectBranch = { status: In(pbStatuses) };
       }
-    }
-    if (assessmentStatus) {
-      where.assessment = { status: assessmentStatus };
     }
     if (priority) {
       const priorities = priority.split(',').map((s) => s.trim()).filter(Boolean);
