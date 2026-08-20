@@ -630,11 +630,22 @@ export class BranchService {
     userId: string,
   ): Promise<{ importedCount: number; errors: string[] }> {
     const client = await this.clientService.findOne(clientId);
-    const mapping = client.configuration?.importMapping;
 
-    if (!mapping || Object.keys(mapping).length === 0) {
-      throw new BadRequestException('Client import mappings are not configured.');
-    }
+    /**
+     * The column mapping is an override, not a prerequisite.
+     *
+     * Every lookup below already falls back to a standard heading — `Branch Code`, `SOL ID`,
+     * `Branch Name` and so on — and those defaults are the same words the client's
+     * configuration screen offers as labels. So a file with the standard headings needed no
+     * mapping at all; the operator was made to type the defaults back in before the import
+     * would run, and a newly created client starts with an empty mapping, which meant every
+     * new client was blocked on this ceremony.
+     *
+     * It stays configurable because clients really do differ — one bank's file says
+     * `Branch Code` and another's says `BrCode` — but only the clients that differ have to say
+     * so. A mapping entry that is absent means "this file uses the standard heading".
+     */
+    const mapping: Record<string, string> = client.configuration?.importMapping ?? {};
 
     const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];

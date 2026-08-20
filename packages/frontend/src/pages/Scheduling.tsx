@@ -7,7 +7,7 @@ import {
   X, Sun, Landmark, Umbrella, Filter, List, Grid,
   MapPin, User, Check
 } from 'lucide-react';
-import { ScheduleStatus, SystemRole, formatRupees } from '@fapoms/shared';
+import { ScheduleStatus, SystemRole, formatRupees, businessTodayDateKey } from '@fapoms/shared';
 import { useCurrentRoles, hasAnyRole } from '../hooks/useCurrentRoles';
 import { scheduleStatusLabel, localDateKey, todayDateKey, formatDateOnly } from '../utils/statusLabels';
 import { api } from '../services/api';
@@ -62,6 +62,11 @@ interface AssignmentOption {
   /** `branch.id` is the underlying branch record — what the date suggester keys off, and NOT
    *  the project-branch id. Optional because a malformed row must not break the dropdown. */
   projectBranch: { branch: { id?: string; name: string; city: string; state: string; }; };
+  /**
+   * The audit date this assignment was created against, copied from the branch's own schedule.
+   * Optional because an assignment created without one carries null.
+   */
+  scheduledDate?: string | null;
   project: { name: string; };
   proposedFee: number;
   status: string;
@@ -303,6 +308,26 @@ export const Scheduling: React.FC = () => {
    */
   const applySuggestedDate = async (assignmentId: string) => {
     const sel = scopedAssignments.find(a => a.id === assignmentId);
+
+    /**
+     * If this audit already has a date, that is the answer — don't go looking for another one.
+     *
+     * The branch carries its audit date and the assignment was created against it, so the
+     * payload this dropdown is already holding knows when the work is due. Seeding from the
+     * generic calendar walk instead opened the picker on an unrelated day and quietly invited
+     * the operator to move a scheduled audit. A date already in the past is not offered — it
+     * cannot be scheduled — and the suggestion is used for those.
+     */
+    const planned = sel?.scheduledDate ? String(sel.scheduledDate).slice(0, 10) : null;
+    if (planned && planned >= businessTodayDateKey()) {
+      if (!dateChosenByUser) {
+        setScheduleDate(planned);
+        if (sel?.assayerId) loadAssayerWorkload(sel.assayerId, planned);
+      }
+      setSuggestedDateNote("This branch's audit is already planned for this date.");
+      return;
+    }
+
     const branchId = sel?.projectBranch?.branch?.id;
     if (!branchId) { setSuggestedDateNote(null); return; }
     try {

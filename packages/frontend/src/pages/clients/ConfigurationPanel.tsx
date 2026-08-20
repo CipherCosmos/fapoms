@@ -401,14 +401,27 @@ export const ConfigurationPanel: React.FC<{ clientId: string }> = ({ clientId })
 
       <section style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
         <h4 style={sectionTitle}><Upload size={14} /> Branch Import Mapping</h4>
-        <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)' }}>
-          For each field below, enter the exact column heading used in the client's branch Excel/CSV file. This maps imported columns to the system fields.
+        {/*
+          * Only fill in a row where this client's file differs. Every field already falls back
+          * to the heading shown below it, so a file using the standard headings imports without
+          * anything typed here — which the importer used to refuse until all ten were filled.
+          */}
+        <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)', lineHeight: 1.5 }}>
+          Leave these blank unless this client's branch file uses different column headings.
+          Each field already reads the heading shown in its box; fill one in only to override it.
         </p>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
           {IMPORT_FIELDS.map((f) => (
             <label key={f.key} style={labelStyle}>
               {f.label} column
-              <input style={inputStyle} value={importMapping[f.key] ?? ''} onChange={(e) => setImportMapping((m) => ({ ...m, [f.key]: e.target.value }))} placeholder={`e.g. ${f.label.replace(/\s+/g, '')}`} />
+              <input
+                style={inputStyle}
+                value={importMapping[f.key] ?? ''}
+                onChange={(e) => setImportMapping((m) => ({ ...m, [f.key]: e.target.value }))}
+                // The placeholder is the heading the importer actually falls back to, so an
+                // empty box shows what will be read rather than an invented example.
+                placeholder={f.label}
+              />
             </label>
           ))}
         </div>

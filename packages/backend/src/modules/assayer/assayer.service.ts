@@ -1730,9 +1730,11 @@ export class AssayerService implements OnModuleInit {
    */
   async generateTemplate(): Promise<Buffer> {
     const headers = [
-      // Required — the record cannot function without these
+      // Identity. A row needs a code and a name; the rest of this group is what makes the
+      // assayer reachable and costable, and is reported as incomplete rather than refused.
       'Assayer code', 'Assayer Name', 'Phone', 'Residence Address', 'Initial Password',
-      // Location / coverage
+      // Location / coverage. `State` is required — it decides the region, the zone and the
+      // holiday calendar the assayer is planned against, and a row without it is rejected.
       'Location', 'District', 'State', 'Zone', 'Pincode', 'Preferred Regions',
       // Contact
       'Email', 'Alternate Phone',
@@ -1761,12 +1763,12 @@ export class AssayerService implements OnModuleInit {
     const instructions = [
       { Field: 'Assayer code', Required: 'Yes', Description: 'Unique code, e.g. AS0643. Re-importing the same code updates that assayer instead of creating a duplicate.' },
       { Field: 'Assayer Name', Required: 'Yes', Description: 'Full name in one cell, e.g. "Shinil T". Split automatically — the last word is taken as the surname.' },
-      { Field: 'Phone', Required: 'Yes', Description: "The assayer's login identifier AND how dispatch notifications reach them. A record without it cannot be used." },
-      { Field: 'Residence Address', Required: 'Yes', Description: 'Full address. Used to compute travel distance to branches; a 6-digit pincode inside this text is picked up automatically.' },
+      { Field: 'Phone', Required: 'No', Description: "The assayer's login identifier AND how dispatch notifications reach them. The row is accepted without one and flagged incomplete — the assayer cannot be called or dispatched to until it is filled in." },
+      { Field: 'Residence Address', Required: 'No', Description: 'Full address. Used to compute travel distance to branches; a 6-digit pincode inside this text is picked up automatically. Without it the assayer has no start point, so travel cannot be costed.' },
       { Field: 'Initial Password', Required: 'No', Description: "Password the assayer signs in with. Defaults to 'assayer123' when blank. Only applied when the assayer is first created — re-importing a roster never resets an existing password." },
       { Field: 'Location', Required: 'No', Description: 'Town or locality, e.g. Kunnamangalam. Stored as the city.' },
       { Field: 'District', Required: 'No', Description: 'Used for travel distance and coverage planning.' },
-      { Field: 'State', Required: 'No', Description: 'Used to apply state-specific public holidays to this assayer.' },
+      { Field: 'State', Required: 'Yes', Description: 'Sets the region, the zone and the public-holiday calendar this assayer is planned against. A row without it is rejected.' },
       { Field: 'Zone', Required: 'No', Description: 'Operating zone, e.g. South. Casing is normalised, so "north" and "North" are one zone.' },
       { Field: 'Pincode', Required: 'No', Description: 'Leave blank if already present in the address.' },
       { Field: 'Preferred Regions', Required: 'No', Description: 'Comma-separated. Regions this assayer prefers; improves their match score for branches there.' },
