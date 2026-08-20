@@ -1,7 +1,6 @@
-import { Controller, Get, Post, Param, Query, UseGuards, ParseUUIDPipe, Req, UseInterceptors, UploadedFile, DefaultValuePipe, ParseIntPipe, Inject, BadRequestException } from '@nestjs/common';
+import { Controller, Get, Post, Param, Query, UseGuards, ParseUUIDPipe, Req, UseInterceptors, UploadedFile, DefaultValuePipe, ParseIntPipe, Inject } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { assertUploadAllowed, UPLOAD_INTERCEPTOR_OPTIONS } from '../document/upload-validation';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
 import { CustomerMasterService } from './customer-master.service';
 import { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
@@ -20,7 +19,7 @@ export class CustomerMasterController {
 
   @Post('upload')
   @Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.OPERATIONS)
-    @UseInterceptors(FileInterceptor('file', UPLOAD_INTERCEPTOR_OPTIONS), FileScanInterceptor)
+    @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload customer master Excel file, run database branch reconciliation, and register new version' })
   async upload(
@@ -31,12 +30,6 @@ export class CustomerMasterController {
     // for all branches scheduled that day, so the date is what identifies the run.
     @Query('auditDate') auditDate?: string,
   ) {
-    if (!file?.buffer?.length) {
-      throw new BadRequestException('No file was uploaded. Choose a file and try again.');
-    }
-    // Same gap as the branch import: no size cap and no type check before the Excel parser. The
-    // interceptor now bounds the buffer; this rejects a wrong type before reconciliation runs.
-    assertUploadAllowed({ contentType: file.mimetype, size: file.size, hint: 'Upload the customer-master Excel file.' });
     const savedPath = await this.storage.saveFile(
       file.originalname,
       file.buffer,

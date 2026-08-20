@@ -309,9 +309,6 @@ export class GeoPrecisionService {
 
   /** Rows still too coarse to plan against — the worklist for manual pinning. */
   async imprecise(target: GeoTarget, limit = 100): Promise<any[]> {
-    // `take: limit * 4` below over-fetches to survive the post-filter; an unbounded client limit
-    // would turn that into take: 400_000_000. Clamp first.
-    limit = Math.min(Math.max(Number(limit) || 100, 1), 500);
     const repo: Repository<any> = target === 'branch' ? this.branchRepository : this.assayerRepository;
     const rows = await repo.find({
       where: [

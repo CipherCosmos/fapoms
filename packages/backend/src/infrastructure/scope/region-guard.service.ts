@@ -30,8 +30,6 @@ import { Region } from '@fapoms/shared';
 import { AssignmentEntity } from '../../modules/assignment/assignment.entity';
 import { ValidationQueryEntity } from '../../modules/validation-query/validation-query.entity';
 import { UserEntity } from '../../modules/user/user.entity';
-import { FeedbackThreadEntity } from '../../modules/feedback/feedback-thread.entity';
-import { FEEDBACK_TEAM_ROLES } from '../../modules/feedback/feedback-roles';
 
 /** Distinguishes a UUID path param from a human-facing code on routes that accept both. */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -321,31 +319,6 @@ export class RegionGuardService {
       (row.raisedByUserId && row.raisedByUserId === principal.id);
     if (isOwner) return { found: true, allowed: true };
     return this.staffVerdict(principal, row.region);
-  }
-
-  /**
-   * Can this socket join a feedback thread's room? Mirrors the HTTP rule in FeedbackService.findOne:
-   * the reporter (by user id or assayer id) may, and anyone holding a feedback-team role may; nobody
-   * else. Without this the room accepted ANY authenticated socket — an assayer who guessed a thread
-   * UUID received every message on it, internal team notes included.
-   */
-  async feedbackVerdict(principal: SocketPrincipal, threadId: string): Promise<RoomVerdict> {
-    const row = await this.dataSource
-      .getRepository(FeedbackThreadEntity)
-      .createQueryBuilder('t')
-      .select('t.id', 'id')
-      .addSelect('t.reporterUserId', 'reporterUserId')
-      .addSelect('t.reporterAssayerId', 'reporterAssayerId')
-      .where('t.id = :id', { id: threadId })
-      .getRawOne<{ id: string; reporterUserId: string | null; reporterAssayerId: string | null }>();
-    if (!row) return REFUSED_UNKNOWN;
-    const isReporter =
-      (!!row.reporterUserId && row.reporterUserId === principal.id) ||
-      (!!row.reporterAssayerId && row.reporterAssayerId === principal.id);
-    if (isReporter) return { found: true, allowed: true };
-    const names = (principal.roles ?? []).map((r) => (typeof r === 'string' ? r : r?.name)).filter(Boolean) as string[];
-    const isTeam = names.some((r) => (FEEDBACK_TEAM_ROLES as unknown as string[]).includes(r));
-    return { found: true, allowed: isTeam };
   }
 
   private async staffVerdict(

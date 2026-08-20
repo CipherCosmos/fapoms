@@ -472,9 +472,6 @@ export class AssayerService implements OnModuleInit {
     // Only region applies. An assayer has a home region but no client, zone or state of their
     // own in the sense the scope means, and inferring one from their assignment history would
     // hide anyone who has not yet worked for the client the operator happens to be scoped to.
-    // Clamp the page size: an unbounded client `limit` turns one request into a full-table
-    // scan. 200 is the same class of ceiling the assignment list already uses.
-    limit = Math.min(Math.max(Number(limit) || 50, 1), 200);
     const where: Record<string, unknown> = { isActive: true };
     if (scope?.regions?.length) where.region = In(scope.regions);
 

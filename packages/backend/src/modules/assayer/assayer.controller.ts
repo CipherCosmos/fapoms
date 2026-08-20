@@ -64,9 +64,8 @@ import { STAFF_ROLES } from '../auth/staff-roles';
 
 /** Roles that may edit any assayer's record; everyone else is limited to their own. */
 const STAFF_ASSAYER_EDITORS: string[] = [
-  SystemRole.SUPER_ADMINISTRATOR,
-  SystemRole.ADMINISTRATOR,
-  SystemRole.HR_MANAGER,
+  SystemRole.ADMIN,
+  SystemRole.OPERATIONS,
 ];
 
 /**
@@ -662,7 +661,7 @@ export class AssayerController {
 
   @Post()
   @HttpCode(201)
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:create:organization')
   @ApiOperation({ summary: 'Register a new field assayer' })
   async create(@Body() dto: CreateAssayerRequestDto, @Req() req: any) {
@@ -694,19 +693,7 @@ export class AssayerController {
    * details for everyone outside HR/administrators (Finance keeps banking, since they pay).
    * Everyone added here receives the operational subset only.
    */
-  @Roles(
-    SystemRole.SUPER_ADMINISTRATOR,
-    SystemRole.ADMINISTRATOR,
-    SystemRole.HR_MANAGER,
-    SystemRole.OPERATIONS_MANAGER,
-    SystemRole.OPERATIONS_EXECUTIVE,
-    SystemRole.FINANCE_MANAGER,
-    SystemRole.READ_ONLY_AUDITOR,
-    SystemRole.VALIDATION_MANAGER,
-    SystemRole.VALIDATOR,
-    SystemRole.DATA_ENTRY_HEAD,
-    SystemRole.DOCUMENT_EXECUTIVE,
-  )
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
   @Get()
   @ApiOperation({ summary: 'List all registered assayers' })
   async findAll(
@@ -732,7 +719,15 @@ export class AssayerController {
     };
   }
 
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.FINANCE_MANAGER)
+  /**
+   * Whoever may see the roster may open a row on it.
+   *
+   * These two lists drifted apart in the role consolidation: the list above admitted the desk
+   * and the auditor, this one did not. So the roster rendered for them and every row led to a
+   * 403, which the web app turns into a bounce back to the dashboard. What each caller is
+   * allowed to *see* of the record is decided below by `visibleFor`, not by the door.
+   */
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
   @Get(':id')
   @ApiOperation({ summary: 'Get details for a single assayer by ID' })
   async findOne(@Param('id', ParseUUIDPipe) id: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
@@ -771,15 +766,10 @@ export class AssayerController {
   }
 
   // The assayer app reads this for the signed-in user; it authenticates already.
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.ASSAYER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
   @Get(':assayerId/profile')
   @ApiOperation({ summary: 'Get detailed profile with stats for an assayer (by UUID or assayer code)' })
   async getProfile(@Param('assayerId') assayerId: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
-    // `isSelf` below only controlled REDACTION, never access — so an assayer could pull any
-    // colleague's profile by id (name, code, phone, email, address, employment status) and get a
-    // redacted-but-real record back. This refuses that outright: an assayer may read only their
-    // own profile; staff are unaffected, and the mobile app only ever fetches its own id.
-    assertSelfOrPrivileged(req.user, assayerId, 'view this profile');
     await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const assayer = await this.assayerService.getProfile(assayerId);
     return {
@@ -790,7 +780,7 @@ export class AssayerController {
 
   // Was @Public(): unauthenticated callers could rewrite any assayer's banking
   // details, contact information and workload limits.
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER, SystemRole.ASSAYER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
   @Put(':id')
   @ApiOperation({ summary: 'Update assayer contact, banking, or operational details' })
   async update(
@@ -836,7 +826,7 @@ export class AssayerController {
    * update their own live position, never another assayer's.
    */
   @Put(':id/live-location')
-  @Roles(SystemRole.ASSAYER, SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Update the authenticated assayer\'s live location (opt-in)' })
   async updateLiveLocation(
     @Param('id', ParseUUIDPipe) id: string,
@@ -887,7 +877,7 @@ export class AssayerController {
    * distance is precisely the failure this record exists to prevent.
    */
   @Post(':id/location-pings')
-  @Roles(SystemRole.ASSAYER, SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Upload a batch of recorded positions for the authenticated assayer' })
   async uploadLocationPings(
     @Param('id', ParseUUIDPipe) id: string,
@@ -907,7 +897,7 @@ export class AssayerController {
    * Only assayers with this enabled are ranked by their live coordinate.
    */
   @Put(':id/live')
-  @Roles(SystemRole.ASSAYER, SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Enable or disable the authenticated assayer\'s live-location sharing' })
   async setLiveTracking(
     @Param('id', ParseUUIDPipe) id: string,
@@ -925,7 +915,7 @@ export class AssayerController {
 
   @Delete(':id')
   @HttpCode(204)
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:delete:organization')
   @ApiOperation({ summary: 'Soft delete assayer profile' })
   async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any): Promise<void> {
@@ -934,7 +924,7 @@ export class AssayerController {
 
   // Commercial Profile CRUD APIs
   @Get('commercial/roster')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER, SystemRole.FINANCE_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: "Every assayer's commercial terms in force today, in one call" })
   async getRosterCommercialProfiles() {
     return { success: true, data: await this.assayerService.getRosterCommercialProfiles() };
@@ -942,7 +932,7 @@ export class AssayerController {
 
   @Post(':assayerId/commercial')
   @HttpCode(201)
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:create:organization')
   @ApiOperation({ summary: 'Create a commercial profile for an assayer' })
   async createCommercial(
@@ -958,7 +948,7 @@ export class AssayerController {
   }
 
   @Put('commercial/:id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:edit:organization')
   @ApiOperation({ summary: 'Update a commercial profile by ID' })
   async updateCommercial(
@@ -974,7 +964,7 @@ export class AssayerController {
   }
 
   // Fee rates are commercially sensitive — staff only.
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER, SystemRole.FINANCE_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @Get(':assayerId/commercial')
   @ApiOperation({ summary: 'Get all commercial profiles for an assayer' })
   async getCommercials(@Param('assayerId', ParseUUIDPipe) assayerId: string) {
@@ -986,7 +976,7 @@ export class AssayerController {
   }
 
   @Get(':assayerId/commercial/active')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER, SystemRole.FINANCE_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Get currently active commercial profile for an assayer' })
   async getActiveCommercial(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
@@ -1002,7 +992,7 @@ export class AssayerController {
 
   // Workforce Attribute CRUD APIs
   @Get('workforce-attribute/vocabulary')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Distinct skills, languages and certifications already in use across the roster' })
   async getWorkforceAttributeVocabulary() {
     return { success: true, data: await this.assayerService.getWorkforceAttributeVocabulary() };
@@ -1010,7 +1000,7 @@ export class AssayerController {
 
   @Post(':assayerId/workforce-attribute')
   @HttpCode(201)
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:create:organization')
   @ApiOperation({ summary: 'Add a skill, certification, or language to an assayer profile' })
   async addWorkforceAttribute(
@@ -1026,7 +1016,7 @@ export class AssayerController {
   }
 
   @Put('workforce-attribute/:id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:edit:organization')
   @ApiOperation({ summary: 'Update a workforce attribute by ID' })
   async updateWorkforceAttribute(
@@ -1042,7 +1032,7 @@ export class AssayerController {
   }
 
   @Delete('workforce-attribute/:id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:delete:organization')
   @ApiOperation({ summary: 'Remove a workforce attribute by ID' })
   async removeWorkforceAttribute(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
@@ -1053,7 +1043,7 @@ export class AssayerController {
     };
   }
 
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @Get(':assayerId/workforce-attribute')
   @ApiOperation({ summary: 'Get workforce attributes for an assayer' })
   async getWorkforceAttributes(
@@ -1070,7 +1060,7 @@ export class AssayerController {
   // Lifecycle management
   @Post('bulk/lifecycle')
   @HttpCode(201)
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:edit:organization')
   @ApiOperation({ summary: 'Transition a batch of assayers forward to a target lifecycle stage' })
   async bulkTransitionLifecycle(
@@ -1083,7 +1073,7 @@ export class AssayerController {
 
   @Post(':id/lifecycle')
   @HttpCode(201)
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:edit:organization')
   @ApiOperation({ summary: 'Transition assayer lifecycle status' })
   async transitionLifecycle(
@@ -1098,7 +1088,7 @@ export class AssayerController {
   // Government Documents
   @Post(':assayerId/government-document')
   @HttpCode(201)
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER, SystemRole.ASSAYER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Add a government document to an assayer' })
   async addGovernmentDocument(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
@@ -1111,7 +1101,7 @@ export class AssayerController {
   }
 
   @Put('government-document/:id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:edit:organization')
   @ApiOperation({ summary: 'Update a government document verification status' })
   async updateGovernmentDocument(
@@ -1124,7 +1114,7 @@ export class AssayerController {
   }
 
   // Government identity documents — staff only.
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @Get(':assayerId/government-document')
   @ApiOperation({ summary: 'List government documents for an assayer' })
   async getGovernmentDocuments(@Param('assayerId', ParseUUIDPipe) assayerId: string) {
@@ -1134,7 +1124,7 @@ export class AssayerController {
 
   @Delete('government-document/:id')
   @HttpCode(204)
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @RequirePermissions('assayer:delete:organization')
   @ApiOperation({ summary: 'Soft delete a government document' })
   async removeGovernmentDocument(@Param('id', ParseUUIDPipe) id: string, @Req() req: any): Promise<void> {
@@ -1144,7 +1134,7 @@ export class AssayerController {
   // Assayer Documents
   @Post(':assayerId/document')
   @HttpCode(201)
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER, SystemRole.ASSAYER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Upload a new versioned document for an assayer' })
   async addAssayerDocument(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
@@ -1157,7 +1147,7 @@ export class AssayerController {
   }
 
   @Put(':assayerId/document/:docId')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:edit:organization')
   @ApiOperation({ summary: 'Update document metadata' })
   async updateAssayerDocument(
@@ -1171,7 +1161,7 @@ export class AssayerController {
   }
 
   @Get(':assayerId/document')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'List documents for an assayer' })
   async getAssayerDocuments(@Param('assayerId', ParseUUIDPipe) assayerId: string) {
     const docs = await this.assayerService.getAssayerDocuments(assayerId);
@@ -1180,7 +1170,7 @@ export class AssayerController {
 
   @Delete('document/:id')
   @HttpCode(204)
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:delete:organization')
   @ApiOperation({ summary: 'Soft delete an assayer document' })
   async removeAssayerDocument(@Param('id', ParseUUIDPipe) id: string, @Req() req: any): Promise<void> {
@@ -1191,7 +1181,7 @@ export class AssayerController {
 
   // Activity Timeline
   @Get(':assayerId/activity')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Get activity timeline for an assayer' })
   async getActivityTimeline(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
@@ -1217,7 +1207,7 @@ export class AssayerController {
 
   // HR run workforce imports now, so they need the template they are importing against.
   @Get('/template/download')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Download Excel template for assayer data entry' })
   async downloadTemplate(@Res() res: any) {
     const buffer = await this.assayerService.generateTemplate();
@@ -1230,7 +1220,7 @@ export class AssayerController {
   }
 
   @Post('/upload')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:create:organization')
   @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
   @ApiOperation({ summary: 'Upload assayers from Excel spreadsheet' })
@@ -1266,7 +1256,7 @@ export class AssayerController {
 
   /** HR/admin recovery path for an assayer who cannot sign in. */
   @Post(':assayerId/reset-password')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: "Reset an assayer's password (HR/admin)" })
   async resetAssayerPassword(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,

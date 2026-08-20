@@ -186,17 +186,12 @@ export class SchedulingService {
     if (branchWhere) where.assignment = { projectBranch: { branch: branchWhere } };
     if (scope?.projectId) where.projectId = scope.projectId;
 
-    // Clamp the page size: this query eagerly joins five relations four levels deep, so an
-    // uncapped `?limit=100000000` was one cheap request that forced a full scan + huge join into
-    // memory. Real calendars page well under 100.
-    const take = Math.min(Math.max(Number(limit) || 50, 1), 100);
-    const currentPage = Math.max(Number(page) || 1, 1);
     const [schedules, total] = await this.scheduleRepository.findAndCount({
       where,
       relations: ['assignment', 'assignment.projectBranch', 'assignment.projectBranch.branch', 'assayer', 'project'],
       order: { scheduledDate: 'ASC' },
-      take,
-      skip: (currentPage - 1) * take,
+      take: limit,
+      skip: (page - 1) * limit,
     });
 
     // Schedules are returned exactly as stored.

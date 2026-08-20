@@ -198,15 +198,6 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {
     if (!client.user?.id) return;
 
-    // Cap how fast one socket may attempt subscriptions. Each attempt can run a DB verdict, and a
-    // not-found verdict is deliberately not cached, so a client spraying random UUIDs would issue an
-    // unbounded stream of queries. This bounds it per socket without affecting any real client, which
-    // subscribes a handful of times per screen.
-    if (!this.allowSubscribeAttempt(client)) {
-      client.emit('error', { message: 'Too many subscription attempts; please slow down.' });
-      return;
-    }
-
     // Refuse malformed ids before they reach a query: a non-UUID would make Postgres throw,
     // and arbitrary strings must never become room names.
     if (typeof entityId !== 'string' || !EventsGateway.UUID_RE.test(entityId)) {
@@ -239,23 +230,6 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   private static readonly UUID_RE =
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-  // Per-socket subscribe budget. Keyed by the socket object so it is discarded with the connection;
-  // no per-connection field or cleanup needed.
-  private static readonly SUBSCRIBE_MAX = 60;
-  private static readonly SUBSCRIBE_WINDOW_MS = 10_000;
-  private readonly subscribeBuckets = new WeakMap<object, { count: number; resetAt: number }>();
-
-  private allowSubscribeAttempt(client: AuthenticatedSocket): boolean {
-    const now = Date.now();
-    let b = this.subscribeBuckets.get(client);
-    if (!b || now > b.resetAt) {
-      b = { count: 0, resetAt: now + EventsGateway.SUBSCRIBE_WINDOW_MS };
-      this.subscribeBuckets.set(client, b);
-    }
-    b.count += 1;
-    return b.count <= EventsGateway.SUBSCRIBE_MAX;
-  }
 
   /**
    * Joining an entity room is an entitlement decision, not just an authentication one.
@@ -295,11 +269,9 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   @SubscribeMessage('subscribe:feedback')
   async handleSubscribeFeedback(client: AuthenticatedSocket, threadId: string) {
-    // Was an unconditional join — any authenticated socket (an assayer included) could subscribe to
-    // any thread id and receive its messages. Gated now like the assignment/query rooms.
-    await this.joinIfEntitled(client, `feedback:${threadId}`, threadId, () =>
-      this.regionGuard.feedbackVerdict(client.user!, threadId),
-    );
+    if (client.user?.id) {
+      await client.join(`feedback:${threadId}`);
+    }
   }
 
   @SubscribeMessage('unsubscribe:feedback')

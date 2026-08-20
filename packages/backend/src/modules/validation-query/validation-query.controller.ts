@@ -5,7 +5,6 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
-import { assertUploadAllowed } from '../document/upload-validation';
 import { memoryStorage } from 'multer';
 import { IsOptional, IsString, IsArray, IsNumber, IsObject, IsIn, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -104,7 +103,7 @@ export class ValidationQueryController {
   // ───────────────────────────────────────────────────────────────────────────
 
   @Post('upload-attachment')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.ASSAYER, SystemRole.VALIDATOR, SystemRole.VALIDATION_MANAGER, SystemRole.DATA_ENTRY_HEAD, SystemRole.DOCUMENT_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.ASSAYER, SystemRole.DESK_OPERATOR, SystemRole.DESK)
   @ApiOperation({ summary: 'Upload chat attachment via multipart form-data' })
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FilesInterceptor('files', 10, chatMulterOptions), FileScanInterceptor)
@@ -118,10 +117,6 @@ export class ValidationQueryController {
 
     const results = await Promise.all(
       (files || []).map(async (file) => {
-        // Type + size allowlist, the same gate the document upload paths use. These routes
-        // scan for malware but accepted ANY declared type; a clarification thread is not a
-        // place to smuggle an arbitrary file type into storage.
-        assertUploadAllowed({ contentType: file.mimetype, size: file.size, hint: 'Attach a PDF, image, or spreadsheet.' });
         const key = await this.storage.saveFile(
           `chat/${file.originalname}`,
           file.buffer,
@@ -134,7 +129,7 @@ export class ValidationQueryController {
           fileName: file.originalname,
           fileType: file.mimetype,
           size: file.size,
-          uploadedBy: req.user?.role === 'ASSAYER' ? 'ASSAYER' : 'VALIDATOR',
+          uploadedBy: req.user?.role === 'ASSAYER' ? 'ASSAYER' : 'DESK_OPERATOR',
           timestamp: new Date().toISOString(),
         };
       }),
@@ -145,7 +140,7 @@ export class ValidationQueryController {
 
   // Single file upload fallback (for simpler clients)
   @Post('upload-single')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.ASSAYER, SystemRole.VALIDATOR, SystemRole.VALIDATION_MANAGER, SystemRole.DATA_ENTRY_HEAD, SystemRole.DOCUMENT_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.ASSAYER, SystemRole.DESK_OPERATOR, SystemRole.DESK)
   @ApiOperation({ summary: 'Upload single chat attachment via multipart form-data' })
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(FileInterceptor('file', chatMulterOptions), FileScanInterceptor)
@@ -156,8 +151,6 @@ export class ValidationQueryController {
     if (!file?.buffer?.length) {
       throw new BadRequestException('No file was uploaded.');
     }
-    // Same allowlist as the multi-file route above.
-    assertUploadAllowed({ contentType: file.mimetype, size: file.size, hint: 'Attach a PDF, image, or spreadsheet.' });
 
     const key = await this.storage.saveFile(
       `chat/${file.originalname}`,
@@ -173,18 +166,14 @@ export class ValidationQueryController {
         fileName: file.originalname,
         fileType: file.mimetype,
         size: file.size,
-        uploadedBy: req.user?.role === 'ASSAYER' ? 'ASSAYER' : 'VALIDATOR',
+        uploadedBy: req.user?.role === 'ASSAYER' ? 'ASSAYER' : 'DESK_OPERATOR',
         timestamp: new Date().toISOString(),
       },
     };
   }
 
   @Get('attachment-token')
-  @Roles(
-    SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR,
-    SystemRole.ASSAYER, SystemRole.VALIDATOR, SystemRole.VALIDATION_MANAGER,
-    SystemRole.DATA_ENTRY_HEAD, SystemRole.DOCUMENT_EXECUTIVE,
-  )
+  @Roles(SystemRole.ADMIN, SystemRole.ASSAYER, SystemRole.DESK_OPERATOR, SystemRole.DESK)
   @ApiOperation({ summary: 'Issue a short-lived HMAC signed token for downloading an attachment' })
   async issueAttachmentToken(@Query('key') key: string) {
     if (!key) throw new BadRequestException('key query parameter is required.');
@@ -325,7 +314,7 @@ export class ValidationQueryController {
   }
 
   @Post()
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR, SystemRole.DATA_ENTRY_HEAD, SystemRole.DOCUMENT_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.DESK_OPERATOR)
   @ApiOperation({ summary: 'Raise a new validation query to an assayer (Data Entry / Admin)' })
   async createQuery(@Body() dto: CreateValidationQueryDto, @Req() req: any) {
     const query = await this.validationQueryService.createQuery(dto, req.user.id);
@@ -333,7 +322,7 @@ export class ValidationQueryController {
   }
 
   @Post(':id/respond')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.ASSAYER, SystemRole.VALIDATOR, SystemRole.VALIDATION_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.ASSAYER, SystemRole.DESK_OPERATOR, SystemRole.DESK)
   @ApiOperation({ summary: 'Respond/reply to an active validation query thread' })
   async respondToQuery(
     @Param('id', ParseUUIDPipe) id: string,
@@ -345,7 +334,7 @@ export class ValidationQueryController {
   }
 
   @Post(':id/resolve')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR, SystemRole.DATA_ENTRY_HEAD, SystemRole.DOCUMENT_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.DESK_OPERATOR)
   @ApiOperation({ summary: 'Validator / Data Entry Head marks a responded query as RESOLVED' })
   async resolveQuery(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     const query = await this.validationQueryService.resolveQuery(id, req.user.id);
@@ -353,7 +342,7 @@ export class ValidationQueryController {
   }
 
   @Post(':id/reopen')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR, SystemRole.DATA_ENTRY_HEAD)
+  @Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.DESK_OPERATOR)
   @ApiOperation({ summary: 'Reopen a resolved clarification, returning it to the assayer' })
   async reopenQuery(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     const query = await this.validationQueryService.reopenQuery(id, req.user.id);
@@ -382,12 +371,7 @@ export class ValidationQueryController {
   // region of a specific page of the returned PDF.
 
   @Get(':id/messages')
-  @Roles(
-    SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR,
-    SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR,
-    SystemRole.DATA_ENTRY_HEAD, SystemRole.DOCUMENT_EXECUTIVE,
-    SystemRole.OPERATIONS_MANAGER, SystemRole.ASSAYER,
-  )
+  @Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.OPERATIONS, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Full clarification thread' })
   async listMessages(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     const messages = await this.threadService.listMessages(id);
@@ -395,12 +379,7 @@ export class ValidationQueryController {
   }
 
   @Post(':id/messages')
-  @Roles(
-    SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR,
-    SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR,
-    SystemRole.DATA_ENTRY_HEAD, SystemRole.DOCUMENT_EXECUTIVE,
-    SystemRole.ASSAYER,
-  )
+  @Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Add a message to a clarification, optionally anchored to a PDF region' })
   async postMessage(
     @Param('id', ParseUUIDPipe) id: string,

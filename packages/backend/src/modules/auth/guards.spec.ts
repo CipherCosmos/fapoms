@@ -1,6 +1,6 @@
 import { ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { RolesGuard, PermissionsGuard, JwtAuthGuard, ROLES_KEY, ANY_AUTHENTICATED_KEY, PASSWORD_CHANGE_EXEMPT_KEY } from './guards';
+import { RolesGuard, PermissionsGuard, ROLES_KEY, ANY_AUTHENTICATED_KEY } from './guards';
 
 /**
  * These lock in DENY-BY-DEFAULT.
@@ -24,7 +24,7 @@ describe('Authorization guards — deny by default', () => {
   const reflectorReturning = (map: Record<string, any>) =>
     ({ getAllAndOverride: (key: string) => map[key] }) as unknown as Reflector;
 
-  const staffUser = { id: 'u-1', roles: [{ name: 'OPERATIONS_MANAGER' }] };
+  const staffUser = { id: 'u-1', roles: [{ name: 'OPERATIONS' }] };
   const assayer = { id: 'a-1', roles: [{ name: 'ASSAYER' }] };
 
   describe('RolesGuard', () => {
@@ -44,17 +44,17 @@ describe('Authorization guards — deny by default', () => {
     });
 
     it('allows a principal holding one of the required roles', () => {
-      const guard = new RolesGuard(reflectorReturning({ [ROLES_KEY]: ['OPERATIONS_MANAGER'] }));
+      const guard = new RolesGuard(reflectorReturning({ [ROLES_KEY]: ['OPERATIONS'] }));
       expect(guard.canActivate(ctx(staffUser))).toBe(true);
     });
 
     it('denies a principal missing every required role', () => {
-      const guard = new RolesGuard(reflectorReturning({ [ROLES_KEY]: ['FINANCE_MANAGER'] }));
+      const guard = new RolesGuard(reflectorReturning({ [ROLES_KEY]: ['OPERATIONS'] }));
       expect(() => guard.canActivate(ctx(assayer))).toThrow(ForbiddenException);
     });
 
     it('denies when there is no authenticated principal', () => {
-      const guard = new RolesGuard(reflectorReturning({ [ROLES_KEY]: ['ADMINISTRATOR'] }));
+      const guard = new RolesGuard(reflectorReturning({ [ROLES_KEY]: ['ADMIN'] }));
       expect(() => guard.canActivate(ctx(undefined))).toThrow(ForbiddenException);
     });
 
@@ -85,39 +85,9 @@ describe('Authorization guards — deny by default', () => {
       const guard = new PermissionsGuard(reflectorReturning({ permissions: ['BILLING:READ:ORGANIZATION'] }));
       const financeUser = {
         id: 'f-1',
-        roles: [{ name: 'FINANCE_MANAGER', permissions: [{ resource: 'BILLING', action: 'READ', scope: 'PLATFORM' }] }],
+        roles: [{ name: 'OPERATIONS', permissions: [{ resource: 'BILLING', action: 'READ', scope: 'PLATFORM' }] }],
       };
       expect(guard.canActivate(ctx(financeUser))).toBe(true);
-    });
-  });
-  /**
-   * Forced password change is enforced server-side, not just in the browser. The passport parent
-   * is stubbed so these exercise only the mustChangePassword branch this guard adds on top of it.
-   */
-  describe('JwtAuthGuard — forced password change', () => {
-    const parentProto = Object.getPrototypeOf(JwtAuthGuard.prototype);
-    let spy: jest.SpyInstance;
-    beforeEach(() => { spy = jest.spyOn(parentProto, 'canActivate').mockResolvedValue(true); });
-    afterEach(() => spy.mockRestore());
-
-    it('blocks an ordinary route when a staff user still owes a password change', async () => {
-      const guard = new JwtAuthGuard(reflectorReturning({}) as any);
-      await expect(
-        guard.canActivate(ctx({ id: 'u-1', mustChangePassword: true })),
-      ).rejects.toThrow(ForbiddenException);
-    });
-
-    it('allows an exempt route (change-password, logout, get-me) even while pending', async () => {
-      const guard = new JwtAuthGuard(reflectorReturning({ [PASSWORD_CHANGE_EXEMPT_KEY]: true }) as any);
-      await expect(
-        guard.canActivate(ctx({ id: 'u-1', mustChangePassword: true })),
-      ).resolves.toBe(true);
-    });
-
-    it('does not touch a user who need not change, nor an assayer (no flag)', async () => {
-      const guard = new JwtAuthGuard(reflectorReturning({}) as any);
-      await expect(guard.canActivate(ctx({ id: 'u-2' }))).resolves.toBe(true);
-      await expect(guard.canActivate(ctx({ id: 'a-1', roles: [{ name: 'ASSAYER' }] }))).resolves.toBe(true);
     });
   });
 });

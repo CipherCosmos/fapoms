@@ -375,9 +375,6 @@ export class CustomerMasterService {
     if (branchId) {
       where.branchId = branchId;
     }
-    // Clamp the page size: an unbounded client `limit` turns one request into a full-table
-    // scan. 200 is the same class of ceiling the assignment list already uses.
-    limit = Math.min(Math.max(Number(limit) || 50, 1), 200);
     const [records, total] = await this.recordRepository.findAndCount({
       where,
       relations: ['branch'],

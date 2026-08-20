@@ -41,15 +41,10 @@ export class ReportsController {
   @ApiOperation({ summary: 'Export project coverage report (branch-level) to Excel' })
   async coverage(
     @Param('projectId', ParseUUIDPipe) projectId: string,
-    // This report was the ONLY one here that took no scope, so a region-confined user could
-    // export the full branch-level coverage of a NATIONAL project — every region's branches and
-    // their ids — by hitting it with a project id. Every sibling report already threads the
-    // scope; this one now does too, so a regional desk sees only its own region's rows.
-    @GlobalScopeFilter() scope?: GlobalScope,
-    @Res() res?: Response,
+    @Res() res: Response,
   ): Promise<void> {
-    const buffer = await this.reportsService.coverage(projectId, scope);
-    this.send(res!, buffer, `coverage_${projectId}.xlsx`);
+    const buffer = await this.reportsService.coverage(projectId);
+    this.send(res, buffer, `coverage_${projectId}.xlsx`);
   }
 
   @Get('assignments')

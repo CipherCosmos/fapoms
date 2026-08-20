@@ -57,15 +57,6 @@ export const ALLOWED_UPLOAD_TYPES = new Set([
 export const MAX_UPLOAD_BYTES = (Number(process.env.DOCUMENT_MAX_UPLOAD_MB) || MAX_UPLOAD_MB) * 1024 * 1024;
 
 /**
- * Multer options for FileInterceptor. `NestJS`'s FileInterceptor defaults to memoryStorage with NO
- * size limit, so without this multer buffers the ENTIRE request body into memory before any handler
- * (or `assertUploadAllowed`) can look at it — a request with a multi-gigabyte body exhausts the
- * process before a single line of our code runs. This caps the buffer at the same ceiling the
- * storage check enforces, so the two agree and the memory can never exceed the disk limit.
- */
-export const UPLOAD_INTERCEPTOR_OPTIONS = { limits: { fileSize: MAX_UPLOAD_BYTES } };
-
-/**
  * Hard ceiling on a *resumable* (chunked) upload — deliberately higher than the single-request one.
  *
  * These two numbers disagreeing is not drift, it is the point. A one-shot upload has to survive as

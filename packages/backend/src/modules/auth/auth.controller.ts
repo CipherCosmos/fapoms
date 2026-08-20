@@ -17,7 +17,7 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsNotEmpty } from 'class-validator';
 import { AuthService } from './auth.service';
-import { JwtAuthGuard, PasswordChangeExempt } from './guards';
+import { JwtAuthGuard } from './guards';
 import { Throttle } from '@nestjs/throttler';
 
 class LoginDto {
@@ -190,8 +190,6 @@ export class AuthController {
   }
 
   @Post('logout')
-  // Signing out must stay available even with a forced password change pending.
-  @PasswordChangeExempt()
   @HttpCode(HttpStatus.OK)
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()

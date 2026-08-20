@@ -335,19 +335,10 @@ export class AssignmentController {
   @Get(':id')
   @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Get details for a single assignment by ID' })
-  async findOne(@Param('id', ParseUUIDPipe) id: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+  async findOne(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
     // No-op for the mobile app: an ASSAYER principal carries no region assignment.
     await this.regionGuard.assertAssignmentInScope(id, scope);
     const assignment = await this.assignmentService.findOne(id);
-    // The region scope above is a no-op for assayers, so on its own this route let ANY assayer read
-    // ANY assignment by id — branch and borrower detail, and another assayer's negotiated fee. The
-    // sibling comment route already pins assayers to their own; this does the same for the read.
-    const roles: string[] = (req.user?.roles ?? [])
-      .map((r: any) => (typeof r === 'string' ? r : r?.name))
-      .filter(Boolean);
-    if (roles.includes(SystemRole.ASSAYER) && assignment?.assayerId !== req.user?.id) {
-      throw new ForbiddenException('You can only view an assignment of your own.');
-    }
     return {
       success: true,
       data: assignment,

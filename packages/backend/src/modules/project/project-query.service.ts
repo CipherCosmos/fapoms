@@ -67,9 +67,6 @@ export class ProjectQueryService {
       }
     }
 
-    // Clamp the page size: an unbounded client `limit` turns one request into a full-table
-    // scan. 200 is the same class of ceiling the assignment list already uses.
-    limit = Math.min(Math.max(Number(limit) || 20, 1), 200);
     const [projects, total] = await this.projectRepository.findAndCount({
       where,
       relations: ['client'],
