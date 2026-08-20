@@ -6,7 +6,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
 import {
   IsString, IsNotEmpty, IsOptional, IsNumber, IsEnum, IsArray, IsUUID, IsBoolean, IsBooleanString,
-  ArrayNotEmpty, Min,
+  ArrayNotEmpty, ArrayMaxSize, Min,
 } from 'class-validator';
 import { BillingEngineService } from './billing-engine.service';
 import { BillingJobsService } from './billing-jobs.service';
@@ -17,7 +17,10 @@ import { SystemRole, BillingState, InvoiceStatus, PaymentMethod, AssayerPayableS
 // ---- DTOs ---------------------------------------------------------------
 
 class PayoutIdsDto {
-  @IsArray() @ArrayNotEmpty() @IsUUID('4', { each: true })
+  // Cap the batch. Shape was validated but size was not, so one request could carry tens of
+  // thousands of ids into a single giant IN clause plus per-id payout writes. 500 is far above
+  // any batch a human approves in one action.
+  @IsArray() @ArrayNotEmpty() @ArrayMaxSize(500) @IsUUID('4', { each: true })
   payableIds: string[];
 }
 
@@ -42,7 +45,7 @@ class ClientLineDto {
 
 class CreateInvoiceDto {
   @IsUUID() clientId: string;
-  @IsArray() @ArrayNotEmpty() @IsUUID('4', { each: true }) assignmentIds: string[];
+  @IsArray() @ArrayNotEmpty() @ArrayMaxSize(500) @IsUUID('4', { each: true }) assignmentIds: string[];
   @IsOptional() @IsString() issueDate?: string;
   @IsOptional() @IsString() dueDate?: string;
   @IsOptional() @IsString() notes?: string;

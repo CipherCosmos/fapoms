@@ -59,8 +59,16 @@ export class ReportsService {
    * (scheduled / confirmed / remaining) but row-per-branch so it can be filtered and totalled
    * in Excel.
    */
-  async coverage(projectId: string): Promise<Buffer> {
-    const branches = await this.projectQueryService.findProjectBranches(projectId);
+  async coverage(projectId: string, scope?: GlobalScope): Promise<Buffer> {
+    const allBranches = await this.projectQueryService.findProjectBranches(projectId);
+
+    // Confine to the caller's regions when they have any. A national desk (no regions) sees the
+    // whole project unchanged; a regional desk only ever sees branches in its own region, so the
+    // export cannot become a back door to out-of-region branch ids.
+    const scopeRegions = scope?.regions && scope.regions.length > 0 ? new Set(scope.regions) : null;
+    const branches = scopeRegions
+      ? allBranches.filter((pb) => pb.branch?.region && scopeRegions.has(pb.branch.region as any))
+      : allBranches;
 
     /**
      * Coverage as the client reads it, from the shared status sets rather than a hand-written

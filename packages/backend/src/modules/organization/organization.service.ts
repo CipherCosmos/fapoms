@@ -75,10 +75,13 @@ export class OrganizationService {
   }
 
   async findAll(page = 1, limit = 50): Promise<{ organizations: OrganizationEntity[]; total: number }> {
+    // Clamp so an uncapped `?limit=` cannot force a full-table read; 100 is above any real page.
+    const take = Math.min(Math.max(Number(limit) || 50, 1), 100);
+    const currentPage = Math.max(Number(page) || 1, 1);
     const [organizations, total] = await this.organizationRepository.findAndCount({
       where: { isActive: true },
-      skip: (page - 1) * limit,
-      take: limit,
+      skip: (currentPage - 1) * take,
+      take,
       order: { createdAt: 'DESC' },
     });
     return { organizations, total };

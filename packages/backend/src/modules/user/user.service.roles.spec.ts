@@ -8,6 +8,7 @@ import { RoleEntity } from './role.entity';
 import { PermissionEntity } from './permission.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { AuthService } from '../auth/auth.service';
 
 /**
  * Guard rails on the role editor.
@@ -54,6 +55,9 @@ describe('UserService — roles & permissions', () => {
         { provide: getRepositoryToken(PermissionEntity), useValue: mockPermissionRepo },
         { provide: AuditService, useValue: mockAudit },
         { provide: DomainEventPublisher, useValue: mockEvents },
+        // UserService now revokes sessions on password change/reset via AuthService; these role
+        // tests never touch that path, so a bare mock satisfies the injector.
+        { provide: AuthService, useValue: { revokeAllSessions: jest.fn(), issueFreshSessionForUser: jest.fn() } },
       ],
     }).compile();
 

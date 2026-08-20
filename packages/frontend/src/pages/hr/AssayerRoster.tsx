@@ -22,6 +22,7 @@ import { AssayerDetailDrawer, STAGE_CONSEQUENCE, HARD_TO_REVERSE_STAGES } from '
 import { fmtDate } from '../../utils/dates';
 import { queryKeys } from '../../hooks/queryKeys';
 import { counted } from '../../utils/plural';
+import { toCsv } from '../../utils/csv';
 
 /**
  * The workforce roster.
@@ -423,11 +424,12 @@ export const AssayerRoster: React.FC = () => {
   /** Exports exactly what is on screen — same filter, same sort, same order. */
   const exportCsv = () => {
     const cols = ['assayerCode', 'displayName', 'phone', 'email', 'city', 'district', 'state', 'lifecycleStatus', 'employmentType', 'joiningDate', 'experienceYears'];
-    const esc = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const csv = [
-      [...cols, 'missingFields'].join(','),
-      ...rows.map((r) => [...cols.map((c) => esc((r as any)[c])), esc(missingFields(r).join('; '))].join(',')),
-    ].join('\n');
+    // csvCell both quotes and neutralises formula injection — a value like `=…` in a name field
+    // would otherwise run as a formula when the export is opened in Excel. See utils/csv.
+    const csv = toCsv(
+      [...cols, 'missingFields'],
+      rows.map((r) => [...cols.map((c) => (r as any)[c]), missingFields(r).join('; ')]),
+    );
     const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
     const el = document.createElement('a');
     el.href = url;

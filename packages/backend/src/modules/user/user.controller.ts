@@ -207,10 +207,18 @@ export class UserController {
   @AnyAuthenticated()
   @ApiOperation({ summary: 'Change current user password' })
   async changePassword(@Body() dto: SelfChangePasswordDto, @Req() req: any) {
-    await this.userService.changePassword(req.user.id, dto.currentPassword, dto.newPassword);
+    // The change revokes every existing session and returns a fresh pair for THIS device, so
+    // the client must replace its stored tokens with these — otherwise its now-revoked refresh
+    // token fails at the next rotation and the user is bounced to login minutes later.
+    const tokens = await this.userService.changePassword(
+      req.user.id,
+      dto.currentPassword,
+      dto.newPassword,
+      { ipAddress: req.ip, userAgent: req.headers?.['user-agent'] },
+    );
     return {
       success: true,
-      data: { message: 'Password changed successfully.' },
+      data: { message: 'Password changed successfully.', tokens },
     };
   }
 

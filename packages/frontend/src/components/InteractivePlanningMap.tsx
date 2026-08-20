@@ -10,6 +10,26 @@ import { branchStatusColor, BRANCH_STATUS_LEGEND } from '../utils/statusLabels';
 /** Stable empty roster, so "not loaded yet" is not a new array on every render. */
 const NO_ASSAYERS: any[] = [];
 
+/**
+ * Escape a value before it goes into one of the HTML strings this map hands to Leaflet.
+ *
+ * Every popup and tooltip here is built by string-concatenation and rendered by Leaflet as
+ * innerHTML. That is fine for the fixed markup, but the assayer's name, code, skills and status,
+ * and the branch name and city, are stored fields a user can set — through the assayer/branch
+ * forms or the Excel import. A last name of `<img src=x onerror=...>` therefore ran as script in
+ * the browser of every planner who opened the pin: stored XSS with a session-token blast radius.
+ * Numbers (distances, radii, ranks) don't need this; free-text does, so every interpolated
+ * string field is wrapped in `esc()`.
+ */
+function esc(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 interface MapBranch {
   id: string;
   name: string;
@@ -595,8 +615,8 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
           if (effectiveSlaEnabled && (isSelectedForSla || (isHighRiskSla && !selectedBranchId))) {
             const slaColor = slaEnabledProp ? '#f97316' : '#ef4444';
             const slaLabel = slaEnabledProp
-              ? `🛡️ Minimum distance met: more than ${effectiveSlaRadius} km away\nCurrent branch: ${b.name}`
-              : `⚠️ Too close to branch — inside the ${effectiveSlaRadius} km minimum distance: ${b.name}`;
+              ? `🛡️ Minimum distance met: more than ${effectiveSlaRadius} km away\nCurrent branch: ${esc(b.name)}`
+              : `⚠️ Too close to branch — inside the ${effectiveSlaRadius} km minimum distance: ${esc(b.name)}`;
             const riskCircle = L.circle([lat, lng], {
               radius: effectiveSlaRadius * 1000,
               color: slaColor,
@@ -750,8 +770,8 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             // assayer can be in `rankedCandidates` (unfiltered by radius, e.g. when only the
             // map's own SLA-risk layer is on) while still standing inside the restricted zone.
             const verdict = blocked
-              ? `<div style="margin-top:3px;color:#b45309;font-weight:600;">🚫 Not assignable — ${blocked.reason}</div>` +
-                (blocked.detail ? `<div style="font-size:10px;color:#92400e;">└─ ${blocked.detail}</div>` : '')
+              ? `<div style="margin-top:3px;color:#b45309;font-weight:600;">🚫 Not assignable — ${esc(blocked.reason)}</div>` +
+                (blocked.detail ? `<div style="font-size:10px;color:#92400e;">└─ ${esc(blocked.detail)}</div>` : '')
               : inBreach
               ? `<div style="margin-top:3px;color:#b45309;font-weight:600;">🚫 Not assignable — within the ${effectiveSlaRadius}km restricted zone</div>`
               : ranking
@@ -759,8 +779,8 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
               : '';
             assayerPopupHtml = `
               <div style="color:#000;font-family:sans-serif;font-size:12px;min-width:170px;">
-                <b style="color:${markerColor};display:block;margin-bottom:2px;">${assayer.firstName} ${assayer.lastName}</b>
-                <div>Code: <b>${assayer.assayerCode}</b></div>
+                <b style="color:${markerColor};display:block;margin-bottom:2px;">${esc(assayer.firstName)} ${esc(assayer.lastName)}</b>
+                <div>Code: <b>${esc(assayer.assayerCode)}</b></div>
                 <div>Distance: <b>~${straightDist.toFixed(1)} km</b> <span style="color:#666;">straight line</span></div>
                 ${verdict}
                 ${slaStatus}
@@ -781,10 +801,10 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
           } else {
             assayerPopupHtml = `
               <div style="color:#000; font-family:sans-serif; font-size:12px; min-width: 140px;">
-                <b style="color:#a855f7; display:block; margin-bottom: 4px;">${assayer.firstName} ${assayer.lastName}</b>
-                <div>Code: <b>${assayer.assayerCode}</b></div>
-                <div>Status: <span style="color:var(--status-active)">${assayer.status}</span></div>
-                <div>Skills: <i>${assayer.skills?.length ? assayer.skills.join(', ') : 'None recorded'}</i></div>
+                <b style="color:#a855f7; display:block; margin-bottom: 4px;">${esc(assayer.firstName)} ${esc(assayer.lastName)}</b>
+                <div>Code: <b>${esc(assayer.assayerCode)}</b></div>
+                <div>Status: <span style="color:var(--status-active)">${esc(assayer.status)}</span></div>
+                <div>Skills: <i>${assayer.skills?.length ? esc(assayer.skills.join(', ')) : 'None recorded'}</i></div>
               </div>
             `;
           }
@@ -841,7 +861,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
 
         densityCircle.bindPopup(`
           <div style="color:#000; font-size:11px; font-family:sans-serif; min-width: 120px;">
-            <b style="display:block; margin-bottom: 4px;">${city} Audit Density</b>
+            <b style="display:block; margin-bottom: 4px;">${esc(city)} Audit Density</b>
             <div>Audit sites: <b>${data.count}</b></div>
             <div style="margin-top: 4px; font-weight:600; color:${color}">${isHigh ? '🔥 High Volume' : 'Standard Volume'}</div>
           </div>

@@ -52,10 +52,17 @@ export const ForcePasswordChange: React.FC<Props> = ({ onChanged, onLogout }) =>
 
     setBusy(true);
     try {
-      await api.request('/users/me/change-password', {
-        method: 'POST',
-        body: JSON.stringify({ currentPassword, newPassword }),
-      });
+      // Changing the password revokes every existing session and returns a fresh pair for THIS
+      // device. Store them before continuing, or the next request rides the now-revoked token
+      // and bounces to login — see the server's change-password handler.
+      const res = await api.request<{ tokens?: { accessToken: string; refreshToken: string } }>(
+        '/users/me/change-password',
+        { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) },
+      );
+      if (res?.tokens?.accessToken) {
+        localStorage.setItem('fapoms_token', res.tokens.accessToken);
+        localStorage.setItem('fapoms_refresh_token', res.tokens.refreshToken);
+      }
       onChanged();
     } catch (err: any) {
       const msg = err?.message;

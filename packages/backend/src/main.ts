@@ -79,6 +79,22 @@ export function assertProductionSafeConfig(): void {
     fatal.push('CORS_ORIGINS is unset, so the API would fall back to localhost development origins and reject the real frontend.');
   }
 
+  /**
+   * PII at rest must actually be encrypted.
+   *
+   * The field-encryption layer degrades to plaintext passthrough (with only a log warning) when
+   * `PII_ENCRYPTION_KEY` is unset — so a production deploy that forgets it writes PAN, bank
+   * account numbers and government-ID numbers as cleartext into Postgres, and every subsequent
+   * write silently "migrates" more of them to plaintext, with no failure signal. That is a
+   * data-protection breach that is invisible until someone reads the table. Fail fast instead,
+   * the same as the secrets above: a missing or too-short key is a one-line fix at deploy time.
+   */
+  const piiKey = process.env.PII_ENCRYPTION_KEY;
+  const piiKeyOk = piiKey && (/^[0-9a-fA-F]{64}$/.test(piiKey) || Buffer.from(piiKey, 'base64').length >= 32);
+  if (!piiKeyOk) {
+    fatal.push('PII_ENCRYPTION_KEY is unset or too weak. Without a 32-byte key (64 hex chars, or a 32-byte base64 value) sensitive fields (PAN, bank account, government IDs) are stored UNENCRYPTED.');
+  }
+
   // A production database reachable with the development password is not a production database.
   // 'fapoms_dev' is included because it was committed to git history in .env.docker.
   const dbPassword = process.env.DB_PASSWORD;

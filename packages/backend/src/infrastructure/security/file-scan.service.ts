@@ -25,8 +25,34 @@ export class FileScanService {
   private readonly logger = new Logger(FileScanService.name);
   private readonly host = process.env.CLAMAV_HOST;
   private readonly port = Number(process.env.CLAMAV_PORT) || 3310;
-  private readonly required = process.env.FILE_SCAN_REQUIRED === 'true';
+  /**
+   * Whether a scan that cannot confirm a file is clean should REFUSE the file (fail closed)
+   * rather than let it through (fail open).
+   *
+   * `FILE_SCAN_REQUIRED` wins if set either way. When it is unset, the default is "required iff
+   * a scanner is configured": if you took the trouble to point `CLAMAV_HOST` at clamd, a
+   * transient scan error should fail closed — you clearly intend files to be scanned, and
+   * silently admitting an unscanned file defeats the point. If no scanner is configured at all,
+   * this stays false so uploads keep working (a deployment without clamd is not forced to reject
+   * every file); the loud startup warning below is what surfaces that gap instead.
+   */
+  private readonly required = process.env.FILE_SCAN_REQUIRED
+    ? process.env.FILE_SCAN_REQUIRED === 'true'
+    : !!process.env.CLAMAV_HOST;
   private readonly timeoutMs = Number(process.env.CLAMAV_TIMEOUT_MS) || 15000;
+
+  constructor() {
+    // In production, a system serving bank audit documents with NO malware scanner is a
+    // standing risk that must not be silent. Warn once at boot — not fatal, because forcing
+    // every upload to fail when clamd is merely not deployed yet would be its own outage, and
+    // that is a deployment decision, not something this process should make by refusing to start.
+    if (process.env.NODE_ENV === 'production' && !this.host) {
+      this.logger.warn(
+        'No CLAMAV_HOST configured — uploaded documents are NOT being malware-scanned. ' +
+          'Configure clamd and set CLAMAV_HOST, or set FILE_SCAN_REQUIRED=true to reject uploads until it is.',
+      );
+    }
+  }
 
   // The EICAR anti-malware test string (not real malware) — its presence proves the pipe works.
   private static readonly EICAR =

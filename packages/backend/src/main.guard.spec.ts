@@ -15,6 +15,7 @@ describe('assertProductionSafeConfig', () => {
     CORS_ORIGINS: 'https://fapoms.example.com',
     DB_PASSWORD: 'a-genuinely-random-production-password',
     STORAGE_DRIVER: 's3',
+    PII_ENCRYPTION_KEY: 'b'.repeat(64),
   };
 
   beforeEach(() => {
@@ -67,6 +68,18 @@ describe('assertProductionSafeConfig', () => {
     delete env.STORAGE_DRIVER;
     process.env = env;
     expect(() => assertProductionSafeConfig()).toThrow(/STORAGE_DRIVER/);
+  });
+
+  it('refuses to start without a PII encryption key — PAN and bank numbers would be plaintext', () => {
+    const env: any = { ...process.env, ...safeProduction };
+    delete env.PII_ENCRYPTION_KEY;
+    process.env = env;
+    expect(() => assertProductionSafeConfig()).toThrow(/PII_ENCRYPTION_KEY/);
+  });
+
+  it('accepts a 32-byte base64 PII key as well as 64 hex chars', () => {
+    process.env = { ...process.env, ...safeProduction, PII_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64') };
+    expect(() => assertProductionSafeConfig()).not.toThrow();
   });
 
   it('refuses a JWT secret that was committed to git history', () => {

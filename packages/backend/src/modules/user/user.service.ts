@@ -20,6 +20,7 @@ import { RoleEntity } from './role.entity';
 import { PermissionEntity } from './permission.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { AuthService } from '../auth/auth.service';
 import { EventCategory, UserStatus, SystemRole, Region, isRegion } from '@fapoms/shared';
 
 export interface CreateUserDto {
@@ -63,6 +64,7 @@ export class UserService {
     private readonly permissionRepository: Repository<PermissionEntity>,
     private readonly auditService: AuditService,
     private readonly eventPublisher: DomainEventPublisher,
+    private readonly authService: AuthService,
   ) {}
 
   /**
@@ -183,11 +185,17 @@ export class UserService {
     page = 1,
     limit = 20,
   ): Promise<{ users: UserEntity[]; total: number }> {
+    // Clamp the page size. `take: limit` straight from the query string let one authenticated
+    // caller send `?limit=100000000` and force a full-table read with `roles` eagerly joined,
+    // materialised into memory and JSON — a cheap request that exhausts DB and heap, and well
+    // within the general rate budget. Legitimate grids page at 20–50, so 100 is generous.
+    const take = Math.min(Math.max(Number(limit) || 20, 1), 100);
+    const currentPage = Math.max(Number(page) || 1, 1);
     const [users, total] = await this.userRepository.findAndCount({
       relations: ['roles'],
       order: { createdAt: 'DESC' },
-      take: limit,
-      skip: (page - 1) * limit,
+      take,
+      skip: (currentPage - 1) * take,
     });
     return { users, total };
   }
@@ -403,6 +411,12 @@ export class UserService {
     user.updatedBy = actorId;
     await this.userRepository.save(user);
 
+    // An admin reset is almost always a response to "this account is compromised" or "this person
+    // has left". Ending every existing session is the point of it: a stolen access/refresh token
+    // must stop working, not keep rotating for the refresh lifetime. Without this the reset only
+    // changed the password the attacker was no longer using.
+    await this.authService.revokeAllSessions(id);
+
     await this.auditService.recordEvent({
       category: EventCategory.USER,
       eventType: 'USER_PASSWORD_RESET',
@@ -413,7 +427,12 @@ export class UserService {
     });
   }
 
-  async changePassword(id: string, currentPassword: string, newPassword: string): Promise<void> {
+  async changePassword(
+    id: string,
+    currentPassword: string,
+    newPassword: string,
+    context?: { ipAddress?: string; userAgent?: string },
+  ): Promise<{ accessToken: string; refreshToken: string; expiresIn: number }> {
     const user = await this.userRepository.createQueryBuilder('u')
       .addSelect('u.passwordHash')
       .where('u.id = :id', { id })
@@ -443,6 +462,11 @@ export class UserService {
     user.updatedBy = id;
     await this.userRepository.save(user);
 
+    // Changing your password is the standard response to "you may be compromised", so it must
+    // end every OTHER session — otherwise a stolen session keeps rotating its refresh token for
+    // days after the victim did the one thing they were told would stop it.
+    await this.authService.revokeAllSessions(id);
+
     await this.auditService.recordEvent({
       category: EventCategory.USER,
       eventType: 'USER_PASSWORD_CHANGED',
@@ -451,6 +475,12 @@ export class UserService {
       userId: id,
       remarks: `Self-service password update for ${user.username}`,
     });
+
+    // Hand this device a fresh session so the person who just changed their password stays
+    // signed in here while every other session is dead. Without this they would keep the old
+    // access token for a few minutes and then be silently bounced to login when its refresh
+    // failed — a confusing punishment for doing the secure thing.
+    return this.authService.issueFreshSessionForUser(id, context?.ipAddress, context?.userAgent);
   }
 
   async assignRoles(

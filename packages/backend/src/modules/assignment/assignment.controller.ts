@@ -335,10 +335,29 @@ export class AssignmentController {
   @Get(':id')
   @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Get details for a single assignment by ID' })
-  async findOne(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
-    // No-op for the mobile app: an ASSAYER principal carries no region assignment.
+  async findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    // Two independent gates, because the ASSAYER role passes both role and region checks yet
+    // must still be confined to its OWN assignments.
+    //
+    // Region scoping (`assertAssignmentInScope`) is a deliberate no-op for an assayer — the
+    // mobile principal carries no region — so on its own it authorises an assayer to fetch ANY
+    // assignment by id: another assayer's branch, customer/borrower detail, agreed fee and
+    // negotiation state, with ids leaking through search results and realtime events. The sibling
+    // routes here (reportIssue, check-in) all already add the ownership check below; this read
+    // was the one that forgot it, which is a textbook IDOR. Staff keep full visibility.
     await this.regionGuard.assertAssignmentInScope(id, scope);
     const assignment = await this.assignmentService.findOne(id);
+
+    const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean);
+    const isStaff = roles.some((r) => (STAFF_ROLES as string[]).includes(r));
+    if (!isStaff && (!assignment || assignment.assayerId !== req.user.id)) {
+      throw new ForbiddenException('You can only view an assignment that is assigned to you.');
+    }
+
     return {
       success: true,
       data: assignment,

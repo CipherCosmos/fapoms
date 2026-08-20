@@ -106,11 +106,17 @@ export const Settings: React.FC = () => {
 
     setChangingPassword(true);
     try {
-      await api.request('/users/me/change-password', {
-        method: 'POST',
-        body: JSON.stringify({ currentPassword, newPassword }),
-      });
-      setPasswordMessage({ type: 'success', text: 'Password updated successfully.' });
+      // The change revokes all other sessions and returns a fresh pair for this device; store it
+      // so this tab keeps working instead of being logged out at the next token refresh.
+      const res = await api.request<{ tokens?: { accessToken: string; refreshToken: string } }>(
+        '/users/me/change-password',
+        { method: 'POST', body: JSON.stringify({ currentPassword, newPassword }) },
+      );
+      if (res?.tokens?.accessToken) {
+        localStorage.setItem('fapoms_token', res.tokens.accessToken);
+        localStorage.setItem('fapoms_refresh_token', res.tokens.refreshToken);
+      }
+      setPasswordMessage({ type: 'success', text: 'Password updated. Other devices have been signed out.' });
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');

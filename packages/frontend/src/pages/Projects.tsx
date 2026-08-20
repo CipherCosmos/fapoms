@@ -26,6 +26,7 @@ import { ChipMultiSelect } from '../components/ui/ChipMultiSelect';
 import { useWorkforceVocabulary, asOptions } from '../hooks/useWorkforceVocabulary';
 import { localDateKey } from '../utils/statusLabels';
 import { useCurrentRoles, canManageProjects, canDeleteProjects } from '../hooks/useCurrentRoles';
+import { toCsv } from '../utils/csv';
 
 interface ClientOption {
   id: string;
@@ -874,7 +875,9 @@ export const Projects: React.FC = () => {
                 p.budget || '', p.startDate ? new Date(p.startDate).toLocaleDateString() : '',
                 p.endDate ? new Date(p.endDate).toLocaleDateString() : ''
               ]);
-              const csv = [header.join(','), ...rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','))].join('\n');
+              // toCsv quotes AND neutralises formula injection (a project named `=…` would run in
+              // Excel otherwise). See utils/csv.
+              const csv = toCsv(header, rows);
               const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
               const url = URL.createObjectURL(blob);
               const a = document.createElement('a'); a.href = url; a.download = `projects_export_${new Date().toISOString().split('T')[0]}.csv`; a.click();

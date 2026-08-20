@@ -342,15 +342,44 @@ export class AuthService implements OnModuleInit {
   ): Promise<{ tokens: TokenPair; user: any }> {
     const tokenHash = this.hashToken(refreshToken);
 
+    // Look the token up by hash ALONE — not `isRevoked: false` — so a token that has already
+    // been rotated is *found* rather than silently missed. A presented-but-revoked token is the
+    // signature of theft: the legitimate holder rotated it, and now someone is replaying the old
+    // one. Telling those two cases apart is the whole point of detecting reuse (below), and the
+    // old WHERE made them indistinguishable from a random bad token.
     const storedToken = await this.refreshTokenRepository.findOne({
-      where: {
-        tokenHash,
-        isRevoked: false,
-        expiresAt: MoreThan(new Date()),
-      },
+      where: { tokenHash },
     });
 
     if (!storedToken) {
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+
+    if (storedToken.expiresAt <= new Date()) {
+      throw new UnauthorizedException('Invalid or expired refresh token');
+    }
+
+    if (storedToken.isRevoked) {
+      /**
+       * A revoked token was presented. Two innocent-vs-hostile cases, told apart by time.
+       *
+       * INNOCENT (a race): two tabs or a retry redeem the same token within moments of each
+       * other. The first rotates it; the second arrives just after and finds it revoked. This is
+       * ordinary and must not punish anyone, so within a short grace window we simply refuse this
+       * one request and leave every other session alone.
+       *
+       * HOSTILE (replay): a token revoked a while ago is being redeemed again — the classic
+       * stolen-refresh-token replay, where the thief and the victim now both hold a chain
+       * descending from the same token. We cannot tell which of them is which, so the only safe
+       * move is to revoke the ENTIRE family for that user: both the thief's chain and the
+       * victim's die, the victim simply logs in again, and the thief's persistent access is cut.
+       * An audit event is raised so a human can see it happened.
+       */
+      const revokedMsAgo = Date.now() - (storedToken.revokedAt?.getTime() ?? 0);
+      const graceMs = Number(process.env.REFRESH_REUSE_GRACE_MS) || 30_000;
+      if (revokedMsAgo > graceMs) {
+        await this.handleRefreshTokenReuse(storedToken, ipAddress, userAgent);
+      }
       throw new UnauthorizedException('Invalid or expired refresh token');
     }
 
@@ -369,9 +398,10 @@ export class AuthService implements OnModuleInit {
       storedToken.revokedAt = new Date();
       await this.refreshTokenRepository.save(storedToken);
 
-      const tokens = await this.generateTokenPair(user, ipAddress, userAgent);
+      const { tokens, refreshRowId } = await this.generateTokenPairWithRow(user, ipAddress, userAgent);
 
-      storedToken.replacedBy = tokens.refreshToken;
+      // Point at the successor ROW, never store its secret. See generateTokenPairWithRow.
+      storedToken.replacedBy = refreshRowId;
       await this.refreshTokenRepository.save(storedToken);
 
       return {
@@ -409,9 +439,10 @@ export class AuthService implements OnModuleInit {
     storedToken.revokedAt = new Date();
     await this.refreshTokenRepository.save(storedToken);
 
-    const tokens = await this.generateTokenPair(assayerPayload);
+    const { tokens, refreshRowId } = await this.generateTokenPairWithRow(assayerPayload);
 
-    storedToken.replacedBy = tokens.refreshToken;
+    // Point at the successor ROW, never store its secret. See generateTokenPairWithRow.
+    storedToken.replacedBy = refreshRowId;
     await this.refreshTokenRepository.save(storedToken);
 
     return {
@@ -484,6 +515,77 @@ export class AuthService implements OnModuleInit {
     // node-postgres reports the row count on the command result; TypeORM surfaces it as the
     // second element of the tuple for a raw DELETE.
     return Array.isArray(result) && typeof result[1] === 'number' ? result[1] : 0;
+  }
+
+  /**
+   * Mint a brand-new session for a user who has just proven themselves another way.
+   *
+   * Used right after a self-service password change: every existing session is revoked (a
+   * password change must invalidate a possibly-stolen one), but the person who just changed it,
+   * on the device they changed it on, should not be bounced to the login screen for their
+   * trouble. So the caller revokes everything and then issues one fresh pair for the current
+   * device — the old sessions die, this one lives, and it is a genuinely new token, not a
+   * survivor of the revocation.
+   */
+  async issueFreshSessionForUser(
+    userId: string,
+    ipAddress?: string,
+    userAgent?: string,
+  ): Promise<TokenPair> {
+    const user = await this.userRepository.findOne({
+      where: { id: userId },
+      relations: ['roles', 'roles.permissions', 'roles.responsibilities', 'roles.responsibilities.capabilities', 'roles.responsibilities.capabilities.permissions'],
+    });
+    if (!user) {
+      throw new UnauthorizedException('User account not found');
+    }
+    return this.generateTokenPair(user, ipAddress, userAgent);
+  }
+
+  /**
+   * Revoke every live refresh token for a user and drop their cached principal.
+   *
+   * The single place that ends all of a user's sessions at once. Logout uses it for the
+   * ordinary case; reuse-detection, password change, admin reset and de-activation use it for
+   * the security case, where the point is precisely that a session the user no longer controls
+   * must stop working. Dropping the principal cache matters just as much as revoking the tokens:
+   * a stale cached principal would let the old access token keep resolving its permissions until
+   * the cache expired.
+   */
+  async revokeAllSessions(userId: string): Promise<void> {
+    await this.refreshTokenRepository.update(
+      { userId, isRevoked: false },
+      { isRevoked: true, revokedAt: new Date() },
+    );
+    await this.cache.del(this.principalKey(userId));
+  }
+
+  /**
+   * A refresh token that was already rotated has been presented again outside the race window.
+   *
+   * Treated as theft: kill the whole family so neither the legitimate holder's chain nor the
+   * attacker's survives, and record it so a human can see a session was compromised. The victim
+   * is signed out of everything and logs in again — a small, one-time cost that is the correct
+   * response to "someone else is holding your token".
+   */
+  private async handleRefreshTokenReuse(
+    storedToken: RefreshTokenEntity,
+    ipAddress?: string,
+    userAgent?: string,
+  ): Promise<void> {
+    await this.revokeAllSessions(storedToken.userId);
+    await this.auditService.recordEvent({
+      // USER rather than a new SECURITY category: the audit_events.category column documents
+      // exactly four values and downstream readers switch on them, so this rides the existing
+      // set. The eventType is what makes it findable as a security event.
+      category: EventCategory.USER,
+      eventType: 'REFRESH_TOKEN_REUSE_DETECTED',
+      entityType: 'USER',
+      entityId: storedToken.userId,
+      userId: storedToken.userId,
+      ipAddress: ipAddress ?? undefined,
+      metadata: { userAgent: userAgent ?? undefined, revokedTokenId: storedToken.id },
+    });
   }
 
   /**
@@ -589,6 +691,27 @@ export class AuthService implements OnModuleInit {
     ipAddress?: string,
     userAgent?: string,
   ): Promise<TokenPair> {
+    const { tokens } = await this.generateTokenPairWithRow(userOrPayload, ipAddress, userAgent);
+    return tokens;
+  }
+
+  /**
+   * As `generateTokenPair`, but also returns the id of the `refresh_tokens` row it just wrote.
+   *
+   * The rotation path needs that id so it can record the SUCCESSOR of the token it is retiring
+   * in `replaced_by` — a pointer to a row, which is what that column has always been typed as
+   * (`uuid`). It must not put the successor's raw secret there: the raw refresh token is a
+   * bearer credential, and writing the *current, still-valid* one in cleartext into the
+   * predecessor row defeated the hashing on every other write — anyone who could read the table
+   * (a DB backup, a read replica, a support export) could lift the newest `replaced_by` per user
+   * and redeem it with no password. The secret now exists only as its sha256 hash in
+   * `token_hash`, exactly like every other row.
+   */
+  private async generateTokenPairWithRow(
+    userOrPayload: UserEntity | JwtPayload,
+    ipAddress?: string,
+    userAgent?: string,
+  ): Promise<{ tokens: TokenPair; refreshRowId: string }> {
     let payload: JwtPayload;
     let userId: string;
 
@@ -639,9 +762,12 @@ export class AuthService implements OnModuleInit {
     await this.refreshTokenRepository.save(refreshTokenEntity);
 
     return {
-      accessToken,
-      refreshToken,
-      expiresIn: this.accessExpiration,
+      tokens: {
+        accessToken,
+        refreshToken,
+        expiresIn: this.accessExpiration,
+      },
+      refreshRowId: refreshTokenEntity.id,
     };
   }
 

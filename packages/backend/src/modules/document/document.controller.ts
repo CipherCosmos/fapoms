@@ -339,6 +339,12 @@ export class DocumentController {
       size: buffer.length,
       hint: 'Scan at a lower quality, or split it.',
     });
+    // Malware scan, exactly like the multipart, presign-finalize and chunked-complete paths.
+    // This base64-JSON route was the ONE upload entry that skipped it — so a field token could
+    // post an infected file straight into storage, to be downloaded later by ops staff as a
+    // trusted "audited return PDF". scanOrThrow rejects on a hit (and, in production, on a
+    // scanner that is required but unreachable); a clean file is untouched.
+    await this.fileScanner.scanOrThrow(buffer, fileName);
 
     const savedFilePath = await this.storage.saveFile(fileName, buffer, 'application/pdf');
 
