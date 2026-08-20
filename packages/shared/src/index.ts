@@ -26,6 +26,7 @@ export * from './labels';
 // Shared utilities
 export * from './utils';
 export * from './assayer-lifecycle';
+export * from './assayer-record';
 export * from './rule-bypass';
 
 // Upload size limits shared by the API and every client that offers a file picker

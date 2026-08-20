@@ -5,7 +5,7 @@ import { CacheService } from '../../infrastructure/cache/cache.service';
 
 import { canonicalState } from '../planning/command-center.service';
 import { IN_FLIGHT_ASSIGNMENT_STATUSES, sqlStatusList } from '../assignment/assignment-workload';
-import { BUSINESS_TODAY_SQL } from '@fapoms/shared';
+import { BUSINESS_TODAY_SQL, ASSAYER_RECORD_FIELDS } from '@fapoms/shared';
 
 /**
  * FAPOMS — HR workforce analytics.
@@ -64,23 +64,14 @@ const IDLE_AFTER_DAYS = 30;
  * `critical` fields block something concrete — payroll, statutory filing, or
  * emergency response — so they are reported separately from merely-thin data.
  */
-const RECORD_FIELDS: {
-  column: string;
-  label: string;
-  critical: boolean;
-  blocks: string;
-}[] = [
-  { column: 'pan_number', label: 'PAN', critical: true, blocks: 'TDS deduction and statutory filing' },
-  { column: 'bank_account_number', label: 'Bank account', critical: true, blocks: 'Payouts' },
-  { column: 'ifsc_code', label: 'IFSC', critical: true, blocks: 'Payouts' },
-  { column: 'joining_date', label: 'Joining date', critical: true, blocks: 'Tenure, leave accrual and exit settlement' },
-  { column: 'emergency_contact_phone', label: 'Emergency contact', critical: true, blocks: 'Duty-of-care for field staff' },
-  { column: 'email', label: 'Email', critical: false, blocks: 'System notifications' },
-  { column: 'employment_type', label: 'Employment type', critical: false, blocks: 'Contract terms' },
-  { column: 'manager_id', label: 'Reporting manager', critical: false, blocks: 'Escalation path' },
-  { column: 'photograph', label: 'Photograph', critical: false, blocks: 'Field ID verification' },
-  { column: 'address', label: 'Address', critical: false, blocks: 'Travel planning' },
-];
+/**
+ * The record's fields, and what a blank one blocks.
+ *
+ * This list used to live here and again in the web app, and the two disagreed: the roster
+ * counted a missing phone as an incomplete record and this side did not, so the two screens
+ * reported different people. It is one list now, in `@fapoms/shared`, read from both.
+ */
+const RECORD_FIELDS = ASSAYER_RECORD_FIELDS;
 
 @Injectable()
 export class HrWorkforceService {

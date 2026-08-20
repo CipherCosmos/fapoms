@@ -78,10 +78,9 @@ export const GOV_DOC_STATUS_LABELS: Record<string, string> = {
 export const govDocStatusLabel = (status?: string | null): string =>
   GOV_DOC_STATUS_LABELS[status ?? 'PENDING'] ?? 'Pending';
 
-export const FIELD_LABELS: Record<string, string> = {
-  pan_number: 'PAN', bank_account_number: 'Bank a/c', ifsc_code: 'IFSC',
-  joining_date: 'Joining date', emergency_contact_phone: 'Emergency contact',
-};
+// Lives in assayer-shared.ts, which is plain data rather than presentation; re-exported here so
+// the pages already importing it from this module do not need touching.
+export { FIELD_LABELS } from './assayer-shared';
 
 // Imported (rather than a pure re-export) because this file also uses fmtWhen itself below;
 // re-exported so the 5 pages already importing these from here don't need touching — the one

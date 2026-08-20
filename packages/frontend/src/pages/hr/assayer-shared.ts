@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react';
-import { AssayerLifecycleStatus } from '@fapoms/shared';
+import { AssayerLifecycleStatus, ASSAYER_RECORD_FIELDS, CRITICAL_ASSAYER_RECORD_FIELDS, missingAssayerRecordFields } from '@fapoms/shared';
 
 /** Shared shape and colours for the workforce record, used by the roster and its forms. */
 
@@ -72,25 +72,41 @@ export const STATUS_COLORS: Record<string, string> = {
  * so the two surfaces can never disagree about who is missing what — the earlier
  * copy-paste had already begun to drift ("payouts" vs "Payouts").
  */
-export const CRITICAL_FIELDS: { key: keyof Assayer; label: string; why: string }[] = [
-  // Phone stopped being a barrier to *admission* — client rosters arrive without a phone column,
-  // and requiring one meant importing nobody. It is a gap in the record instead, listed here so
-  // it is worked rather than discovered on the day someone tries to ring this person.
-  { key: 'phone', label: 'Phone', why: 'calling and phone-channel dispatch' },
-  { key: 'panNumber', label: 'PAN', why: 'TDS and statutory filing' },
-  { key: 'bankAccountNumber', label: 'Bank account', why: 'payouts' },
-  { key: 'ifscCode', label: 'IFSC', why: 'payouts' },
-  { key: 'joiningDate', label: 'Joining date', why: 'tenure and settlement' },
-  { key: 'emergencyContactPhone', label: 'Emergency contact', why: 'duty of care' },
-];
+/**
+ * The record's critical fields, and what each blank one blocks.
+ *
+ * These lived here and again in the HR service's SQL, and the two disagreed — this side counted
+ * a missing phone as an incomplete record and that side did not, so the roster's "Incomplete
+ * record" filter and the paperwork page's incomplete list named different people. The imported
+ * client rosters have no phone column at all, so the disagreement fired on the common case
+ * rather than an edge one. One list now, in `@fapoms/shared`, read from both.
+ */
+export const CRITICAL_FIELDS = CRITICAL_ASSAYER_RECORD_FIELDS.map((f) => ({
+  key: f.key as keyof Assayer,
+  label: f.label,
+  // The screens phrase this as "blocks X"; the shared list carries it sentence-cased.
+  why: f.blocks.charAt(0).toLowerCase() + f.blocks.slice(1),
+}));
+
+/**
+ * Column name to the words a person reads, derived from the one list of record fields.
+ *
+ * This was a third hand-written copy of that list, and it covered five of the eleven columns —
+ * so anything outside those five printed its raw database name on screen: a page telling an HR
+ * clerk that someone is missing their `emergency_contact_phone`. Deriving it means a field
+ * added to the record cannot arrive unlabelled.
+ */
+export const FIELD_LABELS: Record<string, string> = Object.fromEntries(
+  ASSAYER_RECORD_FIELDS.map((f) => [f.column, f.label]),
+);
 
 /** The critical fields this record is still missing (blank or whitespace-only). */
-export function missingCriticalFields(a: Pick<Assayer, (typeof CRITICAL_FIELDS)[number]['key']> | null | undefined) {
-  if (!a) return [];
-  return CRITICAL_FIELDS.filter((f) => {
-    const v = (a as any)[f.key];
-    return v == null || String(v).trim() === '';
-  });
+export function missingCriticalFields(a: Partial<Assayer> | null | undefined) {
+  return missingAssayerRecordFields(a as Record<string, unknown> | null | undefined).map((f) => ({
+    key: f.key as keyof Assayer,
+    label: f.label,
+    why: f.blocks.charAt(0).toLowerCase() + f.blocks.slice(1),
+  }));
 }
 
 /** Rupees with an em-dash for empty, matching the workforce screens. */
