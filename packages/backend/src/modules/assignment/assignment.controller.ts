@@ -332,6 +332,20 @@ export class AssignmentController {
     };
   }
 
+  /**
+   * The "Falling behind" board — assignments past a deadline or their audit date, ranked
+   * most-overdue-first. Reads the SLA machinery (slaStatus / slaDueDate) plus overdue audit
+   * dates and surfaces them as one chase list. Declared before `:id` so "falling-behind" is
+   * never parsed as an assignment id.
+   */
+  @Get('falling-behind')
+  @Roles(...STAFF_ROLES)
+  @ApiOperation({ summary: 'Assignments past a deadline or audit date, ranked most-overdue first' })
+  async fallingBehind(@GlobalScopeFilter() scope?: GlobalScope) {
+    const items = await this.assignmentService.getFallingBehind(scope);
+    return { success: true, data: items };
+  }
+
   @Get(':id')
   @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Get details for a single assignment by ID' })

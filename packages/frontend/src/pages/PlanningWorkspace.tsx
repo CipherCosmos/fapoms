@@ -1886,14 +1886,16 @@ export const PlanningWorkspace: React.FC = () => {
           // The real weighted score, or nothing. This used to invent 98/88/74 from distance when the
           // server returned no score, showing ops a confident match % the engine never produced.
           const conf = c.score != null ? Math.round(c.score) : null;
-          // "Independent"/"too close", not "SLA compliant"/"SLA breach" — being near the branch
-          // is good for service level and bad only for independence. Calling proximity an SLA
-          // breach told planners the opposite of what the recommendation engine scores.
-          const slaStatus = slaEnabled && c.distanceKm !== null
-            ? (c.distanceKm >= slaRadius ? 'compliant' : 'breach')
+          // This colours the card by the DISTANCE independence floor, not by any deadline. It
+          // was named `slaStatus`, which is exactly the mislabel the chip text below already
+          // fixed: being near the branch is good for service level and bad only for independence,
+          // so "compliant"/"breach" here is about whether the assayer is far enough away to audit
+          // this branch — nothing to do with the SLA clock. Renamed so the variable says so too.
+          const independenceStatus = slaEnabled && c.distanceKm !== null
+            ? (c.distanceKm >= slaRadius ? 'independent' : 'too-close')
             : null;
-          const cardBorderColor = slaStatus === 'compliant' ? 'var(--status-active-bg)' : slaStatus === 'breach' ? 'var(--status-cancelled-bg)' : 'var(--border-color)';
-          const cardBg = slaStatus === 'compliant' ? 'var(--status-active-bg)' : slaStatus === 'breach' ? 'var(--status-cancelled-bg)' : 'var(--bg-surface-2)';
+          const cardBorderColor = independenceStatus === 'independent' ? 'var(--status-active-bg)' : independenceStatus === 'too-close' ? 'var(--status-cancelled-bg)' : 'var(--border-color)';
+          const cardBg = independenceStatus === 'independent' ? 'var(--status-active-bg)' : independenceStatus === 'too-close' ? 'var(--status-cancelled-bg)' : 'var(--bg-surface-2)';
           // The top match carries a ref so "Next branch to staff" can scroll straight to the
           // person it is recommending, rather than leaving the coordinator to hunt for them.
           return (

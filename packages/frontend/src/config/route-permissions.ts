@@ -49,6 +49,12 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS],
   },
   {
+    // The "Falling behind" board: overdue/breached assignments ranked most-overdue-first. Same
+    // coordinator roles that work the inbox, since chasing is the same operations job.
+    path: '/falling-behind',
+    allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS],
+  },
+  {
     // Operations executives work this queue daily; finance needs it to see what was billable.
     path: '/assignments',
     allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR],

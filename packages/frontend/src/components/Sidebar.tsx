@@ -15,7 +15,7 @@ import {
   Sliders,
   Building2,
   Receipt,
-  UserCog, Inbox, MessageSquare, Bus, BellRing, SlidersHorizontal } from 'lucide-react';
+  UserCog, Inbox, MessageSquare, Bus, BellRing, SlidersHorizontal, AlertTriangle } from 'lucide-react';
 import { GlobalSearch } from './GlobalSearch';
 import { canAccessRoute } from '../config/route-permissions';
 import { WORK_TABS } from '../pages/work/workTabs';
@@ -66,6 +66,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
               activePaths: WORK_TABS.map((tab) => tab.path),
             }]
           : []),
+        { name: 'Falling Behind', path: '/falling-behind', icon: AlertTriangle },
         { name: 'Projects', path: '/projects', icon: FolderKanban },
       ],
     },

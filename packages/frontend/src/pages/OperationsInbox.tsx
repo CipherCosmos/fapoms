@@ -14,7 +14,7 @@ import { getRecommendations, suggestAuditDate, describeSuggestedDate } from '../
 import { userMessage } from '../services/errors';
 import { todayDateKey, formatDateOnly } from '../utils/statusLabels';
 import { formatRouteDistance, type RouteSource, callOutcomeLabel } from '@fapoms/shared';
-import { AlertBanner } from '../components/ui';
+import { AlertBanner, useConfirm } from '../components/ui';
 
 import { usePlatformLimits } from '../hooks/usePlatformLimits';
 /**
@@ -83,6 +83,7 @@ const age = (h: number) => (h < 1 ? 'just now' : h < 24 ? `${h}h ago` : `${Math.
 export const OperationsInbox: React.FC = () => {
   const { maxNegotiationRounds } = usePlatformLimits();
   const navigate = useNavigate();
+  const { confirm, confirmDialog } = useConfirm();
 
   /**
    * Open the planning workspace *on the branch this card is about*.
@@ -130,7 +131,7 @@ export const OperationsInbox: React.FC = () => {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   // Per-card expanded input: which card has which mini-form open ('agree' | 'counter' | 'decline').
-  const [openForm, setOpenForm] = useState<{ id: string; kind: 'agree' | 'counter' | 'decline' } | null>(null);
+  const [openForm, setOpenForm] = useState<{ id: string; kind: 'agree' | 'counter' | 'decline' | 'noshow' } | null>(null);
   const [feeInput, setFeeInput] = useState('');
   const [reasonInput, setReasonInput] = useState('');
   // Reassign drawer target.
@@ -230,6 +231,31 @@ export const OperationsInbox: React.FC = () => {
   };
 
   /**
+   * The audit date came and went with no check-in. Recording it as a no-show cancels the
+   * assignment and frees the branch to be planned again — irreversible, so it goes through the
+   * shared confirm, and the reason the operator types is preserved on the cancellation so
+   * replanning knows why the person did not attend.
+   */
+  const markNoShow = async (item: InboxItem) => {
+    const reason = reasonInput.trim();
+    if (!reason) { setMessage({ type: 'error', text: 'Add a short reason for the no-show.' }); return; }
+    const ok = await confirm({
+      title: 'Mark as no-show?',
+      message: `${item.assayerName || 'The assayer'} did not check in at ${item.branchName || 'this branch'}. This cancels the assignment and frees the branch to be planned again.`,
+      confirmLabel: 'Mark no-show',
+      tone: 'danger',
+      reversible: false,
+    });
+    if (!ok) return;
+    void act(item, async () => {
+      await api.request(`/assignments/${item.id}/transition`, {
+        method: 'POST',
+        body: JSON.stringify({ targetStatus: 'CANCELLED', reason: `No-show — ${reason}` }),
+      });
+    }, `${item.branchName || item.assignmentNumber} marked as a no-show and cancelled.`);
+  };
+
+  /**
    * Open the inline booking confirmation for one accepted offer.
    *
    * The suggested date is fetched, not assumed: the server already skips Sundays, that state's
@@ -277,6 +303,41 @@ export const OperationsInbox: React.FC = () => {
       openBookingIdRef.current = null;
     }, `${item.branchName || item.assignmentNumber} booked for ${formatDateOnly(bookDate)} with ${item.assayerName || 'the assayer'}.`);
   };
+
+  /**
+   * The inline date-picker used by both "Accepted, not scheduled" (first booking) and "Audit
+   * overdue" (reschedule). Same POST /schedules either way: the scheduling service updates the
+   * existing schedule row when there is one and creates it when there is not, so this books a new
+   * audit and moves an overdue one with the same call. Extracted so the two lanes cannot drift.
+   */
+  const bookingPanel = (item: InboxItem) => (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+      <div style={{ fontSize: '12px', color: 'var(--text-primary)' }}>
+        {bookLoadingDate
+          ? 'Finding the earliest date that works…'
+          : <>Book <b>{item.assayerName || 'the assayer'}</b> for <b>{formatDateOnly(bookDate)}</b>?</>}
+      </div>
+      {bookNote && !bookLoadingDate && (
+        <div style={{ fontSize: '10.5px', color: 'var(--text-secondary)' }}>{bookNote}</div>
+      )}
+      <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+        <button onClick={() => confirmBooking(item)} disabled={busyId === item.id || bookLoadingDate}
+          className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
+          {busyId === item.id ? 'Booking…' : 'Confirm'}
+        </button>
+        {/* Changing anything hands the operator the full scheduling page, with this
+            assignment already chosen — the old behaviour, kept as the escape hatch
+            rather than the default. */}
+        <button onClick={() => navigate(`/scheduling?assignmentId=${item.id}`)}
+          className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
+          Change date
+        </button>
+        <button onClick={() => { setBookFor(null); openBookingIdRef.current = null; }} className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
 
   const lane = (title: string, icon: React.ReactNode, count: number, tone: string, children: React.ReactNode) =>
     count === 0 ? null : (
@@ -546,50 +607,59 @@ export const OperationsInbox: React.FC = () => {
                     Put on calendar
                   </button>
                 ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                    <div style={{ fontSize: '12px', color: 'var(--text-primary)' }}>
-                      {bookLoadingDate
-                        ? 'Finding the earliest date that works…'
-                        : <>Book <b>{item.assayerName || 'the assayer'}</b> for <b>{formatDateOnly(bookDate)}</b>?</>}
-                    </div>
-                    {bookNote && !bookLoadingDate && (
-                      <div style={{ fontSize: '10.5px', color: 'var(--text-secondary)' }}>{bookNote}</div>
-                    )}
-                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
-                      <button onClick={() => confirmBooking(item)} disabled={busyId === item.id || bookLoadingDate}
-                        className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
-                        {busyId === item.id ? 'Booking…' : 'Confirm'}
-                      </button>
-                      {/* Changing anything hands the operator the full scheduling page, with this
-                          assignment already chosen — the old behaviour, kept as the escape hatch
-                          rather than the default. */}
-                      <button onClick={() => navigate(`/scheduling?assignmentId=${item.id}`)}
-                        className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
-                        Change date
-                      </button>
-                      <button onClick={() => { setBookFor(null); openBookingIdRef.current = null; }} className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
-                        Cancel
-                      </button>
-                    </div>
-                  </div>
+                  bookingPanel(item)
                 )}
               </CardShell>
             ))
           ))}
 
-          {lane('Overdue — no check-in', <AlertTriangle size={14} />, data0.overdue.length, 'var(--danger)', (
-            data0.overdue.map((item) => (
-              <CardShell key={item.id} item={item}
-                chip={<span style={{ marginLeft: 8, fontSize: '10px', fontWeight: 800, padding: '1px 8px', borderRadius: '8px', background: 'var(--status-cancelled-bg)', color: 'var(--danger)' }}>
-                  DUE {item.scheduledDate}
-                </span>}>
-                <div style={{ display: 'flex', gap: '6px' }}>
-                  <button onClick={() => navigate(`/assignments?id=${item.id}`)} className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
-                    Open in Stage 3
-                  </button>
-                </div>
-              </CardShell>
-            ))
+          {lane('Audit overdue — no check-in', <AlertTriangle size={14} />, data0.overdue.length, 'var(--danger)', (
+            data0.overdue.map((item) => {
+              const busy = busyId === item.id;
+              const form = openForm?.id === item.id ? openForm.kind : null;
+              return (
+                <CardShell key={item.id} item={item}
+                  chip={<span style={{ marginLeft: 8, fontSize: '10px', fontWeight: 800, padding: '1px 8px', borderRadius: '8px', background: 'var(--status-cancelled-bg)', color: 'var(--danger)' }}>
+                    WAS DUE {item.scheduledDate}
+                  </span>}>
+                  {bookFor?.id === item.id ? bookingPanel(item) : (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', alignItems: 'flex-end' }}>
+                      {/* Everything happens here — no bounce to another screen. Reassign opens the
+                          same ranked-candidates drawer as Replacements; Reschedule opens the inline
+                          date-picker; No-show cancels with a captured reason. */}
+                      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                        <button onClick={() => setReassignFor(item)} disabled={busy}
+                          className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <UserX size={12} /> Reassign
+                        </button>
+                        <button onClick={() => startBooking(item)} disabled={busy}
+                          className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px', color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <CalendarClock size={12} /> Reschedule
+                        </button>
+                        <button onClick={() => { setReasonInput(''); setOpenForm({ id: item.id, kind: 'noshow' }); }} disabled={busy}
+                          className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px', color: 'var(--danger)', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                          <UserX size={12} /> Mark no-show
+                        </button>
+                        <button onClick={() => navigate(`/assignments?id=${item.id}`)} disabled={busy}
+                          className="btn btn-secondary" style={{ padding: '5px 12px', fontSize: '11.5px' }}>
+                          Open
+                        </button>
+                      </div>
+                      {form === 'noshow' && (
+                        <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                          {miniInput("Why? e.g. assayer didn't attend", reasonInput, setReasonInput, 'text')}
+                          <button onClick={() => markNoShow(item)} disabled={busy} className="btn btn-primary"
+                            style={{ padding: '5px 12px', fontSize: '11.5px', background: 'var(--danger)', borderColor: 'var(--danger)' }}>
+                            {busy ? 'Saving…' : 'Confirm no-show'}
+                          </button>
+                          <button onClick={() => setOpenForm(null)} className="btn btn-secondary" style={{ padding: '5px 10px', fontSize: '11.5px' }}><X size={12} /></button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </CardShell>
+              );
+            })
           ))}
 
           {lane('Field issues', <MapPin size={14} />, data0.fieldIssues.length, 'var(--warning)', (
@@ -623,6 +693,7 @@ export const OperationsInbox: React.FC = () => {
           }}
         />
       )}
+      {confirmDialog}
     </div>
   );
 };
@@ -669,7 +740,11 @@ const ReassignDrawer: React.FC<{
         body: JSON.stringify({
           projectBranchId: item.projectBranchId,
           assayerId: c.id,
-          proposedFee: c.baseFee ?? undefined,
+          // Deliberately NO proposedFee. The candidate row only knows the assayer's BASE fee;
+          // sending that alone under-quoted every replacement, because a replacement is usually
+          // further from the branch than the person who declined and so owes more travel. With
+          // the fee omitted, POST /assignments prices the full quote itself — base + routed
+          // travel by the client's rate card — exactly the way the primary offer path does.
           remarks: `Reassigned from the Operations Inbox (previous: ${item.assayerName ?? 'n/a'})`,
         }),
       });
@@ -689,7 +764,8 @@ const ReassignDrawer: React.FC<{
           <div>
             <div id="reassign-drawer-title" style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)' }}>Find a replacement</div>
             <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>
-              {item.branchName}{item.branchCity ? ` · ${item.branchCity}` : ''} — the engine's ranked candidates. One click sends the offer.
+              {item.branchName}{item.branchCity ? ` · ${item.branchCity}` : ''} — the engine's ranked candidates. One click sends the offer;
+              the fee is the full quote (base + travel to this branch), priced when it is sent.
             </div>
           </div>
           <button onClick={onClose} className="btn btn-secondary" style={{ padding: '6px', lineHeight: 0 }} aria-label="Close"><X size={15} /></button>
@@ -715,7 +791,7 @@ const ReassignDrawer: React.FC<{
                   {c.score != null && <span style={{ marginLeft: 6, fontSize: '10.5px', fontWeight: 800, color: 'var(--success)' }}>{Math.round(c.score)}%</span>}
                 </div>
                 <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                  {formatRouteDistance(c.distanceKm, c.distanceSource ?? null, { emptyAs: 'distance n/a' })} · base {inr(c.baseFee)}
+                  {formatRouteDistance(c.distanceKm, c.distanceSource ?? null, { emptyAs: 'distance n/a' })} · base {inr(c.baseFee)} + travel
                 </div>
               </div>
               <button onClick={() => offer(c)} disabled={busyId != null}

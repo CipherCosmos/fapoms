@@ -21,6 +21,7 @@ import { CallProvider } from './components/calls/CallProvider';
  */
 const Dashboard = React.lazy(() => import('./pages/Dashboard').then((m) => ({ default: m.Dashboard })));
 const ExecutiveMap = React.lazy(() => import('./pages/ExecutiveMap').then((m) => ({ default: m.ExecutiveMap })));
+const FallingBehind = React.lazy(() => import('./pages/FallingBehind').then((m) => ({ default: m.FallingBehind })));
 const Projects = React.lazy(() => import('./pages/Projects').then((m) => ({ default: m.Projects })));
 const Branches = React.lazy(() => import('./pages/Branches').then((m) => ({ default: m.Branches })));
 /**
@@ -327,6 +328,7 @@ export const App: React.FC = () => {
         <Route element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Outlet /></ProtectedRoute>}>
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/executive-map" element={<ExecutiveMap />} />
+          <Route path="/falling-behind" element={<FallingBehind />} />
           <Route path="/projects" element={<Projects />} />
           <Route path="/branches" element={<Branches />} />
           {/* The four Audit Work tabs. Same container, different tab in front — see AuditWork. */}

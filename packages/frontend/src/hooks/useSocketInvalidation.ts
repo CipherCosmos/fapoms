@@ -14,6 +14,7 @@ import { queryKeys } from './queryKeys';
  */
 const DESK_QUEUES = [
   queryKeys.desk.inbox,
+  queryKeys.desk.fallingBehind,
   queryKeys.desk.inboxRecommendations,
   queryKeys.desk.assignmentDetail,
   queryKeys.desk.assignmentFieldIssues,

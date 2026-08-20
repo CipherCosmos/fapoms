@@ -8,6 +8,14 @@ import { CustomerMasterStatus, EventCategory } from '@fapoms/shared';
 import { AuditService } from '../../core/audit/audit.service';
 import * as xlsx from 'xlsx';
 
+/** One account row from the upload that could not be tied to a branch. */
+export interface UnmatchedAccountDto {
+  accountNumber: string;
+  branchCode: string | null;
+  /** Plain-language why-it-didn't-match, ready to show a non-technical operator. */
+  reason: string;
+}
+
 export interface CustomerMasterReconciliationReportDto {
   versionId: string;
   projectId: string;
@@ -17,11 +25,25 @@ export interface CustomerMasterReconciliationReportDto {
   duplicateAccountsCount: number;
   unmappedBranchCodesCount: number;
   status: CustomerMasterStatus;
+  /** True when the version was created and its records saved; false when the thresholds rejected it. */
+  accepted: boolean;
+  /** Why the batch was rejected, in plain language — null when it was accepted. */
+  blockReason: string | null;
+  /** How many account rows matched no branch at all (blank code or unknown code). */
+  unmatchedCount: number;
+  /** The unmatched rows themselves, capped so a huge bad file cannot bloat the response. */
+  unmatchedAccounts: UnmatchedAccountDto[];
   /** Distinct branches present in the file — the branches to be audited that day. */
   coveredBranchCount: number;
   auditDate: string | null;
   recommendation: string;
 }
+
+/** Reject the batch above these — the same numbers as before, named so the reason can quote them. */
+const DUPLICATE_ACCOUNT_LIMIT = 50;
+const UNMAPPED_BRANCH_CODE_LIMIT = 10;
+/** Never return more than this many unmatched sample rows; the true total rides on `unmatchedCount`. */
+const UNMATCHED_SAMPLE_LIMIT = 100;
 
 @Injectable()
 export class CustomerMasterService {
@@ -59,6 +81,11 @@ export class CustomerMasterService {
     const totalRows = rows.length;
     let duplicateAccounts = 0;
     let unmappedBranchCodes = 0;
+    // Every row that could not be tied to a branch — not just the unknown-code case counted above,
+    // but blank-code rows too, since both mean "this account has no branch". The desk needs the
+    // rows themselves, not only a number, to fix or knowingly ignore them.
+    let unmatchedCount = 0;
+    const unmatchedAccounts: UnmatchedAccountDto[] = [];
     const accountSet = new Set<string>();
 
     const recordEntities: Partial<CustomerRecordEntity>[] = [];
@@ -105,6 +132,18 @@ export class CustomerMasterService {
       if (!branchId && branchCode) {
         unmappedBranchCodes++;
       }
+      if (!branchId) {
+        unmatchedCount++;
+        if (unmatchedAccounts.length < UNMATCHED_SAMPLE_LIMIT) {
+          unmatchedAccounts.push({
+            accountNumber: acc,
+            branchCode: branchCode || null,
+            reason: branchCode
+              ? `Branch code "${branchCode}" is not in the system`
+              : 'No branch code in the row',
+          });
+        }
+      }
 
       const previousRecordId = prevRecordMap.get(acc) || null;
 
@@ -123,7 +162,17 @@ export class CustomerMasterService {
     // schedule before anything is generated from it.
     const coveredBranchIds = new Set(recordEntities.map((r) => r.branchId).filter(Boolean) as string[]);
 
-    const isBlocked = duplicateAccounts > 50 || unmappedBranchCodes > 10;
+    // Why it was rejected, in the operator's words and quoting the numbers — a flat "rejected"
+    // toast left the desk with no idea which threshold tripped or by how much.
+    const blockReasons: string[] = [];
+    if (duplicateAccounts > DUPLICATE_ACCOUNT_LIMIT) {
+      blockReasons.push(`${duplicateAccounts} duplicate account rows (limit ${DUPLICATE_ACCOUNT_LIMIT})`);
+    }
+    if (unmappedBranchCodes > UNMAPPED_BRANCH_CODE_LIMIT) {
+      blockReasons.push(`${unmappedBranchCodes} unknown branch codes (limit ${UNMAPPED_BRANCH_CODE_LIMIT})`);
+    }
+    const isBlocked = blockReasons.length > 0;
+    const blockReason = isBlocked ? `Too many exceptions to accept automatically: ${blockReasons.join('; ')}.` : null;
     const status = isBlocked ? CustomerMasterStatus.REJECTED : CustomerMasterStatus.RECONCILED;
 
     return this.dataSource.transaction(async (manager) => {
@@ -187,11 +236,17 @@ export class CustomerMasterService {
         duplicateAccountsCount: duplicateAccounts,
         unmappedBranchCodesCount: unmappedBranchCodes,
         status,
+        accepted: !isBlocked,
+        blockReason,
+        unmatchedCount,
+        unmatchedAccounts,
         coveredBranchCount: coveredBranchIds.size,
         auditDate: auditDate ?? null,
         recommendation: isBlocked
-          ? 'Reconciliation Rejected: Exceeds duplicate account or unmapped branch threshold.'
-          : 'Reconciliation Passed: Version created and records mapped cleanly.',
+          ? `Reconciliation rejected. ${blockReason}`
+          : unmatchedCount > 0
+            ? `Reconciliation passed with ${unmatchedCount} account row(s) that matched no branch — review before generating.`
+            : 'Reconciliation passed: version created and records mapped cleanly.',
       };
     });
   }

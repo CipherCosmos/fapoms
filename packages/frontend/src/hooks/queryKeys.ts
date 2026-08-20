@@ -37,6 +37,8 @@ export const queryKeys = {
   desk: {
     /** The Operations Inbox queue (scoped per region/zone selection). */
     inbox: ['operations-inbox'] as const,
+    /** The "Falling behind" board — overdue/breached assignments, ranked. Scoped per selection. */
+    fallingBehind: ['falling-behind'] as const,
     /** Candidate suggestions rendered inside an inbox card. */
     inboxRecommendations: ['inbox-recommendations'] as const,
     /** Detail panel for an assignment not present in the loaded list page. */

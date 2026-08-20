@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { UploadCloud, AlertTriangle, CheckCircle2, Clock, Send, ArrowRightCircle } from 'lucide-react';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
+import { counted } from '../../utils/plural';
 import { UPLOAD_LIMIT_HINT } from '@fapoms/shared';
 
 /**
@@ -31,6 +32,23 @@ export interface DailyRunBranch {
     sentToExternalOcrAt: string | null; fromThisBatch: boolean;
   } | null;
   nextAction: keyof typeof ACTION_META;
+}
+
+/**
+ * What the reconciliation actually did with the client's file — the true outcome, not a flat
+ * "uploaded and reconciled" toast. `accepted` is false when the thresholds rejected the batch;
+ * `unmatchedAccounts` are the rows that tied to no branch, which the desk must fix or knowingly
+ * ignore before anything is generated.
+ */
+interface ReconOutcome {
+  versionNumber: number;
+  uniqueAccountsCount: number;
+  duplicateAccountsCount: number;
+  status: string;
+  accepted: boolean;
+  blockReason: string | null;
+  unmatchedCount: number;
+  unmatchedAccounts: Array<{ accountNumber: string; branchCode: string | null; reason: string }>;
 }
 
 export interface DailyRun {
@@ -82,6 +100,7 @@ export const DailyRunPanel: React.FC<{
   const [loading, setLoading] = useState(false);
   const [acting, setActing] = useState<Set<string>>(new Set());
   const [unmatched, setUnmatched] = useState<Array<{ fileName: string; reason: string }>>([]);
+  const [recon, setRecon] = useState<ReconOutcome | null>(null);
 
   const load = useCallback(async () => {
     if (!projectId || !auditDate) return;
@@ -107,11 +126,24 @@ export const DailyRunPanel: React.FC<{
   const uploadBatch = async (file: File) => {
     await withActing('batch', async () => {
       try {
-        await api.request(`/customer-master/upload?projectId=${projectId}&auditDate=${auditDate}`, {
-          method: 'POST',
-          body: (() => { const fd = new FormData(); fd.append('file', file); return fd; })(),
-        });
-        onSuccess(`Client batch "${file.name}" uploaded and reconciled.`);
+        // The reconciliation report, not a fire-and-forget POST. It carries the true outcome
+        // (accepted vs rejected + why) and the account rows that matched no branch, so the toast
+        // can tell the truth and the exceptions can be shown instead of hidden behind a flat
+        // "uploaded and reconciled" that lied on a rejection.
+        const report = await api.request<ReconOutcome>(
+          `/customer-master/upload?projectId=${projectId}&auditDate=${auditDate}`,
+          { method: 'POST', body: (() => { const fd = new FormData(); fd.append('file', file); return fd; })() },
+        );
+        setRecon(report);
+        if (report.accepted) {
+          onSuccess(
+            `Client batch "${file.name}" accepted — v${report.versionNumber}, ${counted(report.uniqueAccountsCount, 'account')}` +
+            (report.unmatchedCount > 0 ? `, ${counted(report.unmatchedCount, 'row')} matched no branch (see below)` : '') + '.',
+          );
+        } else {
+          // A rejection is a failure, and must read as one — not a success toast.
+          onError(`Client batch "${file.name}" was rejected. ${report.blockReason ?? ''}`.trim());
+        }
       } catch (e) { onError(userMessage(e)); }
     });
   };
@@ -211,10 +243,54 @@ export const DailyRunPanel: React.FC<{
         )}
         {s && s.unexpectedBranchesInBatch > 0 && (
           <div style={{ marginTop: 9, fontSize: 11.5, color: 'var(--warning)' }}>
-            {s.unexpectedBranchesInBatch} branch(es) in the client file are not scheduled for this date.
+            {counted(s.unexpectedBranchesInBatch, 'branch', 'branches')} in the client file are not scheduled for this date.
           </div>
         )}
       </div>
+
+      {/* The reconciliation exceptions from the most recent upload: the true outcome, and the
+          account rows that tied to no branch. Shown until dismissed so a rejection or a pile of
+          unmatched rows cannot be missed the way the old flat toast let them be. */}
+      {recon && (!recon.accepted || recon.unmatchedCount > 0) && (
+        <div style={{
+          background: recon.accepted ? 'var(--status-pending-bg)' : 'var(--status-cancelled-bg)',
+          border: `1px solid ${recon.accepted ? 'var(--status-pending-bg)' : 'var(--status-cancelled-bg)'}`,
+          borderRadius: 'var(--radius-md)', padding: 13,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: recon.accepted ? 'var(--warning)' : 'var(--danger)', fontWeight: 700, fontSize: 13, marginBottom: 6 }}>
+            <AlertTriangle size={15} />
+            {recon.accepted
+              ? `Accepted with exceptions — ${counted(recon.unmatchedCount, 'account row')} matched no branch`
+              : 'Batch rejected — nothing was generated'}
+          </div>
+          {!recon.accepted && recon.blockReason && (
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 8 }}>{recon.blockReason}</div>
+          )}
+          {recon.unmatchedCount > 0 && (
+            <>
+              <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', marginBottom: 6 }}>
+                These {counted(recon.unmatchedCount, 'account row')} matched no branch — fix the branch code in the file, or ignore them and generate the rest.
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+                {recon.unmatchedAccounts.map((u, i) => (
+                  <div key={`${u.accountNumber}-${i}`} style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>
+                    <strong>{u.accountNumber}</strong>
+                    {u.branchCode ? ` · ${u.branchCode}` : ''} — {u.reason}
+                  </div>
+                ))}
+              </div>
+              {recon.unmatchedCount > recon.unmatchedAccounts.length && (
+                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                  …and {counted(recon.unmatchedCount - recon.unmatchedAccounts.length, 'more row')} not listed.
+                </div>
+              )}
+            </>
+          )}
+          <button onClick={() => setRecon(null)} style={{ marginTop: 8, background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: 11, cursor: 'pointer', padding: 0 }}>
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Step 2 — the branches, each with its one next action. */}
       {run && run.branches.length === 0 && (

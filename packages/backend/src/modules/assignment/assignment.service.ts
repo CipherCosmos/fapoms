@@ -45,6 +45,35 @@ import { CacheService } from '../../infrastructure/cache/cache.service';
 // Fee rates are no longer declared here. They resolve per client contract through
 // FeePolicyService — see packages/backend/src/modules/pricing/fee-policy.service.ts.
 
+/**
+ * One row of the "Falling behind" board — an assignment that has slipped past a deadline or its
+ * audit date and needs chasing. Ranked most-overdue-first by the service, never dropping off
+ * until it is resolved. All wording is plain: `slaState` and `nextAction` are already what a
+ * non-technical coordinator reads, so no surface has to translate a raw enum.
+ */
+export interface FallingBehindItem {
+  id: string;
+  assignmentNumber: string;
+  status: string;
+  projectId: string | null;
+  projectBranchId: string | null;
+  branchId: string | null;
+  branchName: string | null;
+  branchCity: string | null;
+  projectName: string | null;
+  clientName: string | null;
+  assayerId: string | null;
+  assayerName: string | null;
+  scheduledDate: string | null;
+  slaDueDate: string | null;
+  /** Whole days past the earliest missed deadline. 0 means it slipped today. */
+  daysOverdue: number;
+  /** Plain-language description of which deadline was missed. */
+  slaState: string;
+  /** The one obvious next step. */
+  nextAction: 'OPEN' | 'REASSIGN' | 'RESCHEDULE';
+}
+
 
 export interface CreateAssignmentDto {
   projectBranchId: string;
@@ -2413,6 +2442,115 @@ export class AssignmentService {
       priorityCounts: prioritySummary,
       branchStatusCounts: branchStatusSummary,
     };
+  }
+
+  /**
+   * The "Falling behind" board: every assignment that has slipped past a deadline or its audit
+   * date, ranked most-overdue-first. The SLA machinery already flags these (`slaStatus`,
+   * `slaDueDate`, the 15-minute scanner) — but nothing rendered them, so a breach only ever
+   * became visible if someone happened to open the right assignment. This is the screen.
+   *
+   * "Behind" is three things at once, which is why the ranking is done in memory rather than by a
+   * single ORDER BY:
+   *   1. `slaStatus = BREACHED`      — the scanner has already flagged it.
+   *   2. `slaDueDate < now`          — the response/completion clock has run out but the scanner
+   *                                    (which runs every 15 min) has not flipped it yet.
+   *   3. an ACCEPTED audit whose `scheduledDate` has passed with no check-in — the visit date came
+   *      and went and nobody attended.
+   *
+   * The set is only the breached/overdue tail of the book, not the whole thing, so this stays
+   * cheap even on a large book; it is capped and ranked defensively all the same.
+   */
+  async getFallingBehind(scope?: Partial<GlobalScope>): Promise<FallingBehindItem[]> {
+    const now = new Date();
+    const todayKey = businessTodayDateKey();
+
+    const qb = this.assignmentRepository
+      .createQueryBuilder('a')
+      .leftJoinAndSelect('a.assayer', 'assayer')
+      .leftJoinAndSelect('a.projectBranch', 'pb')
+      .leftJoinAndSelect('pb.branch', 'branch')
+      .leftJoinAndSelect('a.project', 'project')
+      .leftJoinAndSelect('project.client', 'client')
+      .where('a.isActive = true')
+      .andWhere('a.status IN (:...statuses)', {
+        statuses: [
+          AssignmentStatus.PENDING,
+          AssignmentStatus.ACCEPTED,
+          AssignmentStatus.CHECKED_IN,
+          AssignmentStatus.IN_PROGRESS,
+        ],
+      })
+      .andWhere(
+        `(
+           a.sla_status = 'BREACHED'
+           OR (a.sla_due_date IS NOT NULL AND a.sla_due_date < :now)
+           OR (a.status = :accepted AND a.checked_in_at IS NULL AND a.scheduled_date IS NOT NULL AND a.scheduled_date < :today)
+         )`,
+        { now, today: todayKey, accepted: AssignmentStatus.ACCEPTED },
+      );
+
+    // Same region/zone/state scoping every assignment read follows: a West coordinator must not
+    // be handed the South's overdue work. The branch relation is already joined as `branch`, so
+    // this adds predicates, not joins — mirrors the operations-inbox replacement lane.
+    applyBranchScope(qb, scope, { branch: 'branch', project: 'pb' });
+    if (scope?.projectId) {
+      qb.andWhere('a.project_id = :scopeProjectId', { scopeProjectId: scope.projectId });
+    }
+
+    const rows = await qb.orderBy('a.sla_due_date', 'ASC').take(500).getMany();
+    const todayMs = new Date(`${todayKey}T00:00:00`).getTime();
+
+    const items: FallingBehindItem[] = rows.map((a) => {
+      const dateKey = a.scheduledDate ? String(a.scheduledDate).slice(0, 10) : null;
+      const dueMs = a.slaDueDate ? now.getTime() - new Date(a.slaDueDate).getTime() : 0;
+      const dueDays = dueMs > 0 ? Math.floor(dueMs / 86_400_000) : 0;
+      const schedOverdue =
+        a.status === AssignmentStatus.ACCEPTED && !a.checkedInAt && dateKey != null && dateKey < todayKey;
+      const schedDays = schedOverdue
+        ? Math.max(0, Math.floor((todayMs - new Date(`${dateKey}T00:00:00`).getTime()) / 86_400_000))
+        : 0;
+      const daysOverdue = Math.max(dueDays, schedDays);
+
+      let slaState: string;
+      let nextAction: FallingBehindItem['nextAction'];
+      if (a.status === AssignmentStatus.PENDING) {
+        slaState = 'Offer still unanswered past its deadline';
+        nextAction = 'REASSIGN';
+      } else if (schedOverdue) {
+        slaState = 'Audit date has passed with no check-in';
+        nextAction = 'RESCHEDULE';
+      } else {
+        slaState = 'Past its completion deadline';
+        nextAction = 'OPEN';
+      }
+
+      const client = (a as any).project?.client;
+      return {
+        id: a.id,
+        assignmentNumber: a.assignmentNumber,
+        status: a.status,
+        projectId: a.projectId ?? null,
+        projectBranchId: a.projectBranchId ?? null,
+        branchId: a.projectBranch?.branch?.id ?? null,
+        branchName: a.projectBranch?.branch?.name ?? null,
+        branchCity: a.projectBranch?.branch?.city ?? null,
+        projectName: (a as any).project?.name ?? null,
+        clientName: client?.displayName ?? client?.name ?? null,
+        assayerId: a.assayerId ?? null,
+        assayerName: a.assayer?.displayName ?? null,
+        scheduledDate: dateKey,
+        slaDueDate: a.slaDueDate ? new Date(a.slaDueDate).toISOString() : null,
+        daysOverdue,
+        slaState,
+        nextAction,
+      };
+    });
+
+    // Most overdue first; the board never re-sorts, so what a coordinator sees at the top is the
+    // thing that has been waiting longest.
+    items.sort((x, y) => y.daysOverdue - x.daysOverdue);
+    return items;
   }
 
   async recordCheckIn(
