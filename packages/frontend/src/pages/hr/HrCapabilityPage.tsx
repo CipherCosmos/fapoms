@@ -4,6 +4,8 @@ import { useSearchParams } from 'react-router-dom';
 import { assayerLifecycleLabel, daysUntilExpiry } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
+import { SkeletonList } from '../../components/ui';
+import { listPhase } from '../../components/ui/list-phase';
 import { card, label, Empty, ExpiryChip, fmtDate } from './hr-ui';
 import { ChipMultiSelect } from '../../components/ui/ChipMultiSelect';
 import { useToast } from '../../components/ui';
@@ -301,7 +303,8 @@ export const HrCapabilityPage: React.FC = () => {
     });
   };
 
-  if (loading) return <div style={{ padding: '20px 4px', color: 'var(--text-muted)' }}>Loading skills and certificates…</div>;
+  // Loading no longer replaces the page — it keeps its shape and the list fills into it.
+  const phase = listPhase({ loading, rowCount: filtered.length });
   if (error) return <div style={{ padding: '20px 4px', color: 'var(--danger)' }}>{error}</div>;
 
   return (
@@ -318,6 +321,7 @@ export const HrCapabilityPage: React.FC = () => {
           />
         </div>
         <div style={{ maxHeight: '68vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          {phase === 'skeleton' && <SkeletonList rows={7} height={44} />}
           {filtered.map((a) => {
             const active = a.id === selectedId;
             const alert = certificationAlert(a);
@@ -351,7 +355,7 @@ export const HrCapabilityPage: React.FC = () => {
               </button>
             );
           })}
-          {filtered.length === 0 && <Empty>No assayer matches “{search}”.</Empty>}
+          {phase === 'empty' && <Empty>No assayer matches “{search}”.</Empty>}
         </div>
       </div>
 

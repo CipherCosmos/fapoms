@@ -44,6 +44,23 @@ export const SkeletonRows: React.FC<{ rows?: number; columns: number }> = ({ row
 );
 
 /**
+ * Placeholder blocks for a list that is not a table — cards, stacked rows, a register.
+ *
+ * Same rule as `SkeletonRows`: hold the page's shape so nothing jumps when the content lands.
+ */
+export const SkeletonList: React.FC<{ rows?: number; height?: number }> = ({ rows = 5, height = 56 }) => (
+  <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }} aria-hidden="true">
+    {Array.from({ length: rows }, (_, i) => (
+      <span
+        key={i}
+        className="skeleton-bar"
+        style={{ display: 'block', height, borderRadius: 'var(--radius-md, 10px)' }}
+      />
+    ))}
+  </div>
+);
+
+/**
  * Wraps content that is being refreshed in place.
  *
  * `busy` dims and blocks pointer events so a row cannot be clicked as it is replaced by a

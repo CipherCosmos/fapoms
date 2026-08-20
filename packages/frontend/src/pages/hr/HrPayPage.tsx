@@ -3,6 +3,8 @@ import { Wallet, Search, Pencil, Plus, AlertTriangle, Clock } from 'lucide-react
 import { Link } from 'react-router-dom';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
+import { SkeletonRows } from '../../components/ui';
+import { listPhase } from '../../components/ui/list-phase';
 import { card, label, Empty, fmtDate } from './hr-ui';
 import { useHr } from './HrLayout';
 import { CommercialProfileModal, formatMoney, type CommercialProfile } from './CommercialProfileModal';
@@ -110,8 +112,18 @@ export const HrPayPage: React.FC = () => {
   const unpricedCount = roster.filter((a) => !paidOwnFee(pay[a.id])).length;
   const unbankedCount = roster.filter(bankMissing).length;
 
-  if (loading) return <div style={{ padding: '20px 4px', color: 'var(--text-muted)' }}>Loading what everyone is paid…</div>;
+  // The error still takes over the screen — there is nothing to show and something to fix.
+  // Loading does not: see below, where the page keeps its shape and the rows fill in.
   if (error) return <div style={{ padding: '20px 4px', color: 'var(--danger)' }}>{error}</div>;
+
+  /**
+   * The page keeps its own shape while it loads.
+   *
+   * It used to return a line of text instead of itself, so opening it showed an empty panel
+   * where the tiles and the table belong and then everything appeared at once. The tiles read
+   * zero until the answer lands rather than claiming a total nobody counted.
+   */
+  const phase = listPhase({ loading, rowCount: rows.length });
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
@@ -199,6 +211,7 @@ export const HrPayPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
+                {phase === 'skeleton' && <SkeletonRows rows={6} columns={7} />}
                 {rows.map((a) => {
                   const row = pay[a.id];
                   const p = row?.profile;

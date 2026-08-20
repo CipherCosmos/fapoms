@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { ShieldCheck, ShieldAlert, ShieldQuestion, Plus, Search, Check, X, Trash2 } from 'lucide-react';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
+import { SkeletonList } from '../../components/ui';
+import { listPhase } from '../../components/ui/list-phase';
 import { Link } from 'react-router-dom';
 import { Select } from '../../components/ui';
 import { card, label, Empty, ExpiryChip, fmtDate, govDocStatusLabel } from './hr-ui';
@@ -244,8 +246,11 @@ export const HrDocumentsPage: React.FC = () => {
     if (selectedId) await loadDocs(selectedId);
   };
 
-  if (loading) return <div style={{ padding: '20px 4px', color: 'var(--text-muted)' }}>Loading document register…</div>;
+  // A fatal error takes over — there is nothing to show and something to fix. Loading does not:
+  // the page keeps its own shape below and the list fills into it.
   if (fatalError) return <div style={{ padding: '20px 4px', color: 'var(--danger)' }}>{fatalError}</div>;
+
+  const phase = listPhase({ loading, rowCount: filtered.length });
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: narrow ? '1fr' : 'minmax(240px, 300px) 1fr', gap: '18px', alignItems: 'start' }}>
@@ -283,6 +288,7 @@ export const HrDocumentsPage: React.FC = () => {
         )}
 
         <div style={{ maxHeight: '68vh', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+          {phase === 'skeleton' && <SkeletonList rows={7} height={44} />}
           {filtered.map((a) => {
             const active = a.id === selectedId;
             return (
@@ -297,7 +303,7 @@ export const HrDocumentsPage: React.FC = () => {
               </button>
             );
           })}
-          {filtered.length === 0 && (
+          {phase === 'empty' && (
             <Empty>
               {onlyMissing && !search.trim()
                 ? 'Everyone has at least one identity document recorded.'
