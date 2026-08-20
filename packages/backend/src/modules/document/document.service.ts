@@ -140,7 +140,7 @@ export class DocumentService {
 
     const total = await listQb.clone().getCount();
     const items = await listQb
-      .orderBy('d.received_at', 'ASC', 'NULLS LAST')
+      .orderBy('d.receivedAt', 'ASC', 'NULLS LAST')
       .offset((page - 1) * limit)
       .limit(limit)
       .getRawMany();

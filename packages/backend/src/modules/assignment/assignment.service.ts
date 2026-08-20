@@ -2498,7 +2498,28 @@ export class AssignmentService {
       qb.andWhere('a.project_id = :scopeProjectId', { scopeProjectId: scope.projectId });
     }
 
-    const rows = await qb.orderBy('a.sla_due_date', 'ASC').take(500).getMany();
+    /**
+     * Soonest deadline first, and by entity property — not by column name.
+     *
+     * `take()` on a query with joined relations makes TypeORM fetch distinct ids in a subquery
+     * and re-apply the ordering to it, which means every ORDER BY term is looked up in the
+     * entity metadata. `a.sla_due_date` is the database column, not a property path, so the
+     * lookup returned nothing and the whole endpoint threw
+     * `Cannot read properties of undefined (reading 'databaseName')` — a 500 on every request
+     * to the Falling Behind board. The WHERE clauses above can keep using column names because
+     * those are passed through to SQL untouched; ordering cannot.
+     *
+     * NULLS LAST is Postgres's default for ASC and is stated rather than assumed, because it
+     * decides which rows survive the cap: an assignment that is overdue only by its audit date
+     * carries no SLA deadline, so it sorts last and is the first to be cut. `id` breaks ties so
+     * the 500 are a stable set rather than reshuffling between requests.
+     */
+    const rows = await qb
+      .orderBy('a.slaDueDate', 'ASC', 'NULLS LAST')
+      .addOrderBy('a.scheduledDate', 'ASC', 'NULLS LAST')
+      .addOrderBy('a.id', 'ASC')
+      .take(500)
+      .getMany();
     const todayMs = new Date(`${todayKey}T00:00:00`).getTime();
 
     const items: FallingBehindItem[] = rows.map((a) => {

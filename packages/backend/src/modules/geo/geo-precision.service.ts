@@ -153,8 +153,8 @@ export class GeoPrecisionService {
       })
       // Worst first — a state centroid is a bigger lie than a district one — then oldest first,
       // so a row that failed last night is not starved by rows that arrived today.
-      .orderBy('r.geo_accuracy_meters', 'DESC', 'NULLS FIRST')
-      .addOrderBy('r.geo_resolved_at', 'ASC', 'NULLS FIRST')
+      .orderBy('r.geoAccuracyMeters', 'DESC', 'NULLS FIRST')
+      .addOrderBy('r.geoResolvedAt', 'ASC', 'NULLS FIRST')
       .take(limit);
     if (ids && ids.length > 0) qb.andWhere('r.id IN (:...ids)', { ids });
 

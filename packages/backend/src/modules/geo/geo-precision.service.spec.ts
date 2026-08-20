@@ -62,9 +62,17 @@ describe('GeoPrecisionService', () => {
         '(r.geo_source IS NULL OR r.geo_accuracy_meters IS NULL OR r.geo_accuracy_meters > :pin)',
         { pin: 3000 },
       );
-      // Worst placed first (a state centroid before a district one), then longest waiting.
-      expect(qb.orderBy).toHaveBeenCalledWith('r.geo_accuracy_meters', 'DESC', 'NULLS FIRST');
-      expect(qb.addOrderBy).toHaveBeenCalledWith('r.geo_resolved_at', 'ASC', 'NULLS FIRST');
+      /**
+       * Worst placed first (a state centroid before a district one), then longest waiting.
+       *
+       * By property path, not column name: the predicates above are passed through to SQL
+       * untouched, but an ordering term is looked up in the entity metadata the moment a query
+       * joins a relation and takes a limit. This one has no joins so either spelling runs — the
+       * neighbouring Falling Behind query did have joins, and its column-named ordering was a
+       * 500 on every request. One spelling everywhere is what keeps that from being luck.
+       */
+      expect(qb.orderBy).toHaveBeenCalledWith('r.geoAccuracyMeters', 'DESC', 'NULLS FIRST');
+      expect(qb.addOrderBy).toHaveBeenCalledWith('r.geoResolvedAt', 'ASC', 'NULLS FIRST');
       // The bound applies to rows actually worked — not limit*4 with in-memory skipping.
       expect(qb.take).toHaveBeenCalledWith(25);
     });
