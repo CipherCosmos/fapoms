@@ -476,6 +476,18 @@ export class ValidationQueryService {
     });
   }
 
+  /**
+   * The assayer a clarification belongs to — for the controller's ownership check on the read
+   * routes. Returns `undefined` when the query does not exist (distinct from a null owner).
+   */
+  async ownerAssayerId(queryId: string): Promise<string | null | undefined> {
+    const q = await this.queryRepository.findOne({
+      where: { id: queryId, isActive: true },
+      select: { id: true, assayerId: true },
+    });
+    return q ? q.assayerId : undefined;
+  }
+
   async findByValidationCase(validationCaseId: string): Promise<ValidationQueryEntity[]> {
     return this.queryRepository.find({
       where: { validationCaseId, isActive: true },
