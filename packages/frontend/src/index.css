@@ -1759,3 +1759,31 @@ html, body {
 /* The Workforce tab strip scrolls sideways rather than wrapping into a full-screen stack (see
    HrLayout.tsx). Firefox uses scrollbar-width in the inline style; this is the WebKit half. */
 .hr-tab-strip::-webkit-scrollbar { display: none; }
+
+/*
+ * Skeleton placeholder.
+ *
+ * A list that is loading shows the shape of its rows rather than a line of text where the table
+ * used to be — see components/ui/Loading.tsx. The sweep is slow and low-contrast on purpose: it
+ * should read as "this is arriving", not compete with the content that lands on top of it.
+ */
+.skeleton-bar {
+  background: linear-gradient(
+    90deg,
+    var(--bg-surface-2) 0%,
+    var(--border-color) 50%,
+    var(--bg-surface-2) 100%
+  );
+  background-size: 200% 100%;
+  animation: skeleton-sweep 1.4s ease-in-out infinite;
+}
+
+@keyframes skeleton-sweep {
+  0%   { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* Someone who asked for less motion gets a flat placeholder, not a moving one. */
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-bar { animation: none; }
+}

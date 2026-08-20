@@ -9,6 +9,7 @@ export { PrimaryButton, UploadExcelControls } from './buttons';
 export { DataTable } from './DataTable';
 export type { Column } from './DataTable';
 export { Pagination } from './Pagination';
+export { SkeletonRows, Refreshing } from './Loading';
 export { DetailDrawer } from './DetailDrawer';
 export { ToastProvider, useToast } from './Toast';
 export type { ToastType, ToastOptions } from './Toast';

@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useUrlSelection } from '../hooks/useUrlSelection';
 import { Upload, Building2, Globe, ShieldAlert, Activity, Plus, Edit2, Trash2, Phone, FileText, User, Filter, ChevronDown, Map, X } from 'lucide-react';
-import { SearchInput, FilterSelect, StatusBadge, AlertBanner, Modal, Select, useToast, useConfirm, Pagination } from '../components/ui';
+import { SearchInput, FilterSelect, StatusBadge, AlertBanner, Modal, Select, useToast, useConfirm, Pagination, SkeletonRows, Refreshing } from '../components/ui';
+import { listPhase } from '../components/ui/list-phase';
 import { ChipMultiSelect } from '../components/ui/ChipMultiSelect';
 import { useWorkforceVocabulary, asOptions } from '../hooks/useWorkforceVocabulary';
 import { Autocomplete } from '../components/ui/Autocomplete';
@@ -279,7 +280,16 @@ export const Branches: React.FC = () => {
   // the reconciliation job where the client's SOL register is the document being checked against.
   const [showSolIdColumn, setShowSolIdColumn] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
+  /**
+   * True from the first paint, not from when the request starts.
+   *
+   * This began as `false`, and the load is debounced, so for the first quarter-second the table
+   * rendered its empty state — "No branches to show … clear your search and filters if you
+   * expected to see some" — to someone who had just opened the page and typed nothing. An
+   * empty result and a result that has not arrived are different things and must not look the
+   * same.
+   */
+  const [isLoading, setIsLoading] = useState(true);
   const [isUploading, setIsUploading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   // Audit and finance can open this page but hold no branch write permission —
@@ -332,7 +342,8 @@ export const Branches: React.FC = () => {
    */
   useEffect(() => {
     selectedClientIdRef.current = selectedClientId;
-    if (!selectedClientId && !scopeParams.clientId) return;
+    // No client to list yet — stop waiting, or the skeleton runs forever on an empty account.
+    if (!selectedClientId && !scopeParams.clientId) { setIsLoading(false); return; }
     const t = setTimeout(() => { loadBranches(selectedClientId); }, 250);
     return () => clearTimeout(t);
   }, [selectedClientId, scopeKey, page, searchTerm, riskFilter]);
@@ -467,6 +478,8 @@ export const Branches: React.FC = () => {
   const highRiskCount = summary?.highRisk ?? 0;
   const standardCount = summary?.standard ?? 0;
   const totalPages = Math.max(1, Math.ceil((branchesTotal || 0) / BRANCH_PAGE_LIMIT));
+  // One rule for what a loading list shows — see components/ui/list-phase.
+  const phase = listPhase({ loading: isLoading, rowCount: filteredBranches.length });
   // Every branch on file carries a SOL ID, and for all but a handful it is a copy of the branch
   // code (156 of 166 in the live data). Two columns of the same string told the clerk nothing and
   // pushed the branch name off the side of the table, so the SOL ID is shown beneath the code
@@ -559,11 +572,17 @@ export const Branches: React.FC = () => {
             </div>
           )}
 
-          {/* Table */}
+          {/*
+            * The table stays on screen while it refetches.
+            *
+            * It used to be replaced by a line of text on every search, filter and page change,
+            * so the answer you were reading vanished the moment you narrowed it. Now: on the
+            * first load the table's own shape is drawn and the rows fill into it, and on every
+            * load after that the rows you have stay put, dimmed, until the new ones replace
+            * them. The header, the toolbar and the counts never go away.
+            */}
           <div className="table-container">
-            {isLoading ? (
-              <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-secondary)' }}>Loading branch master repository...</div>
-            ) : (
+            <Refreshing busy={phase === 'refreshing'}>
               <table className="data-table">
                 <thead>
                   <tr>
@@ -581,7 +600,9 @@ export const Branches: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredBranches.length === 0 ? (
+                  {phase === 'skeleton' ? (
+                    <SkeletonRows rows={8} columns={showSolIdColumn ? 9 : 8} />
+                  ) : phase === 'empty' ? (
                     <tr><td colSpan={showSolIdColumn ? 9 : 8} style={{ textAlign: 'center', padding: '24px', color: 'var(--text-secondary)' }}>No branches to show. Branches come from a client’s branch list — clear your search and filters if you expected to see some.</td></tr>
                   ) : filteredBranches.map((b) => (
                     <tr key={b.id || b.branchCode}
@@ -613,7 +634,7 @@ export const Branches: React.FC = () => {
                   ))}
                 </tbody>
               </table>
-            )}
+            </Refreshing>
           </div>
 
           <Pagination
