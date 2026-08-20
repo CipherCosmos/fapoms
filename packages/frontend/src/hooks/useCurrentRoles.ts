@@ -103,6 +103,19 @@ export function canAdministerDataReset(roles: SystemRole[]): boolean {
 }
 
 /**
+ * Eligibility rules — the section folded into Platform Settings from the old `/rules` page.
+ *
+ * Operations own planning inputs and hold the write permission on `/planning/rules`, so they
+ * had that page and must keep the section. Everything *else* on Platform Settings stays
+ * administrator-only, which is why this is its own check rather than widening
+ * `canAdministerPlatformSettings`: folding a page into another screen must not hand out that
+ * screen's mailbox passwords and tax details along with it.
+ */
+export function canManagePlanningRules(roles: SystemRole[]): boolean {
+  return roles.includes(SystemRole.ADMIN) || roles.includes(SystemRole.OPERATIONS);
+}
+
+/**
  * Transport rates price the travel in every offer. Operations own planning inputs; finance
  * owns what things cost — both manage. Mirrors RATE_MANAGER_ROLES on the backend controller.
  */

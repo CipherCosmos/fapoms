@@ -54,8 +54,8 @@ export const SETTINGS_GROUPS = [
   { key: 'billing', label: 'Billing & claims', description: 'Tax withholding and the ceiling on a single expense claim.' },
   { key: 'retention', label: 'Data retention', description: 'How long movement and operational records are kept.' },
   { key: 'feedback', label: 'Feedback SLA', description: 'How long the product team has to answer, and to resolve, before it escalates.' },
-  { key: 'field', label: 'Field rules', description: 'What the app enforces on an assayer in the field, and how far a negotiation may run.' },
-  { key: 'planning', label: 'Planning', description: 'How the recommendation engine spreads work across the workforce.' },
+  { key: 'field', label: 'In the field', description: 'What the app enforces on an assayer while they are out on a job, and how far a negotiation may run.' },
+  { key: 'planning', label: 'Planning', description: 'How the recommendation engine spreads work across the people who are eligible for it.' },
 ] as const;
 
 export const SETTINGS_REGISTRY: SettingDef[] = [

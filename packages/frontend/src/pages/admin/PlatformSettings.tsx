@@ -1,18 +1,19 @@
 import React, { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
-  SlidersHorizontal, Mail, Clock, Wallet, Receipt, Database, Send,
+  SlidersHorizontal, Mail, Clock, Wallet, Receipt, Database, Send, Sliders,
   RotateCcw, Info, CheckCircle2, XCircle, Eye, EyeOff, AlertTriangle,
 } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { useToast, Select, useConfirm } from '../../components/ui';
 import {
   SectionCard, SettingRow, Toggle, Pill, controlStyle,
 } from '../../components/ui/settings';
-import { useCurrentRoles, canAdministerPlatformSettings, canAdministerDataReset } from '../../hooks/useCurrentRoles';
+import { useCurrentRoles, canAdministerPlatformSettings, canAdministerDataReset, canManagePlanningRules } from '../../hooks/useCurrentRoles';
 import { DangerZoneSection } from './DangerZone/DangerZoneSection';
+import { RulesSection } from '../Rules';
 
 /**
  * Client-side-only nav entry — the data-reset domains have no corresponding "setting group" on
@@ -20,6 +21,20 @@ import { DangerZoneSection } from './DangerZone/DangerZoneSection';
  * other row in `groups` this one is never fetched, just appended.
  */
 const DANGER_ZONE_GROUP = { key: 'dangerZone', label: 'Danger zone', description: 'Clear accumulated test data — everything here is destructive.' };
+
+/**
+ * Eligibility rules, folded in from the page that used to live at `/rules`.
+ *
+ * Like the danger zone this is not a saved-value/environment/default setting, so it is appended
+ * client-side rather than fetched. It sits directly under Planning because the two answer one
+ * question between them — who may be sent to a job, and how the engine spreads work across the
+ * people who may.
+ */
+const RULES_GROUP = {
+  key: 'rules',
+  label: 'Who can be assigned',
+  description: 'Skills, certificates, territories and assignment limits that decide which assayers a job may be offered to.',
+};
 
 /**
  * Platform Settings.
@@ -62,6 +77,8 @@ const GROUP_ICON: Record<string, React.ElementType> = {
   billing: Receipt,
   retention: Database,
   dangerZone: AlertTriangle,
+  rules: Sliders,
+  planning: Sliders,
 };
 
 
@@ -75,11 +92,38 @@ export const PlatformSettings: React.FC = () => {
   const roles = useCurrentRoles();
   const canEdit = canAdministerPlatformSettings(roles);
   const canWipeData = canAdministerDataReset(roles);
+  /**
+   * Operations reach this screen for one section only.
+   *
+   * They owned `/rules` and hold the write permission on it, so folding that page in here must
+   * not cost them the feature — nor hand them the mailbox password, the company's tax details
+   * and the data-reset tool on the way. Everything but the rules section stays
+   * administrator-only.
+   */
+  const canManageRules = canManagePlanningRules(roles);
+  const settingsAdmin = canAdministerPlatformSettings(roles);
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { confirm, confirmDialog } = useConfirm();
 
-  const [activeGroup, setActiveGroup] = useState<string>('email');
+  /**
+   * Which section is open, kept in the URL.
+   *
+   * So a link can point at one — `/rules` now redirects to `?group=rules`, and anything else
+   * that used to send people to a settings page can name the section instead of dropping them
+   * on email delivery and letting them hunt.
+   */
+  const [searchParams, setSearchParams] = useSearchParams();
+  // Operations only ever see the rules section, so that is where they land rather than on a
+  // group they cannot open.
+  const activeGroup = searchParams.get('group') || (settingsAdmin ? 'email' : 'rules');
+  const setActiveGroup = (key: string) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev);
+      next.set('group', key);
+      return next;
+    }, { replace: true });
+  };
   /** Local edits, keyed by setting. Absent = showing the server's value. */
   const [drafts, setDrafts] = useState<Record<string, any>>({});
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
@@ -93,10 +137,27 @@ export const PlatformSettings: React.FC = () => {
     queryFn: () => api.request<any>('/platform-settings'),
   });
   const payload = res ? (res as { groups: Group[]; settings: Setting[] }) : null;
-  const groups = useMemo(
-    () => [...(payload?.groups ?? []), ...(canWipeData ? [DANGER_ZONE_GROUP] : [])],
-    [payload, canWipeData],
-  );
+  /**
+   * The server's groups, with the two client-side sections placed where they belong.
+   *
+   * Rules go directly after Planning rather than on the end: between them they answer one
+   * question — who may be sent to a job, and how the engine spreads work across the people who
+   * may — and they were previously on two different screens under two different nav headings.
+   */
+  const groups = useMemo(() => {
+    if (!settingsAdmin) return canManageRules ? [RULES_GROUP] : [];
+    const fromServer = payload?.groups ?? [];
+    /**
+     * Planning has no nav entry of its own: its one setting — how many offers before someone
+     * counts as well used — is a scoring rule, and it sat on a separate heading from the rules
+     * deciding who is eligible to be scored at all. It renders inside that section instead.
+     */
+    const planningAt = fromServer.findIndex((g) => g.key === 'planning');
+    const withoutPlanning = fromServer.filter((g) => g.key !== 'planning');
+    const at = planningAt === -1 ? withoutPlanning.length : planningAt;
+    const withRules = [...withoutPlanning.slice(0, at), RULES_GROUP, ...withoutPlanning.slice(at)];
+    return [...withRules, ...(canWipeData ? [DANGER_ZONE_GROUP] : [])];
+  }, [payload, canWipeData, settingsAdmin, canManageRules]);
   const settings = useMemo(() => payload?.settings ?? [], [payload]);
 
   const { data: emailStatusRes } = useQuery({
@@ -259,6 +320,60 @@ export const PlatformSettings: React.FC = () => {
     return <Pill tone="muted">Default</Pill>;
   };
 
+  /**
+   * One group's settings as rows.
+   *
+   * Extracted so the eligibility-rules section can show the rotation setting above its rule
+   * list: "how many offers before someone counts as well used" is a scoring rule, and it sat on
+   * a separate nav entry from the rules that decide who is eligible in the first place.
+   */
+  const settingRows = (list: Setting[]) => list.map((s, i) => (
+                <SettingRow
+                  key={s.key}
+                  last={i === list.length - 1}
+                  label={
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap' }}>
+                      {s.label}
+                      {s.unit && <span style={{ fontSize: '10.5px', color: 'var(--text-muted)', fontWeight: 500 }}>({s.unit})</span>}
+                      {sourceNote(s)}
+                    </span>
+                  }
+                  description={s.description}
+                  control={renderControl(s)}
+                  footnote={
+                    <span style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+                      <span>{APPLIES_LABEL[s.applies] ?? s.applies}</span>
+                      {s.type !== 'boolean' && s.type !== 'select' && s.default != null && (
+                        <span>· default {String(s.default)}</span>
+                      )}
+                    </span>
+                  }
+                  aside={
+                    <div style={{ display: 'flex', gap: '5px' }}>
+                      {canEdit && (isDirty(s) || (s.type === 'password' && drafts[s.key])) && (
+                        <button
+                          className="btn btn-primary"
+                          disabled={saving === s.key}
+                          onClick={() => save(s, drafts[s.key])}
+                          style={{ padding: '6px 12px', fontSize: '11.5px', whiteSpace: 'nowrap' }}
+                        >
+                          {saving === s.key ? 'Saving…' : 'Save'}
+                        </button>
+                      )}
+                      {canEdit && s.source === 'saved' && !isDirty(s) && (
+                        <button
+                          className="btn btn-secondary" title="Clear the saved value"
+                          disabled={saving === s.key} onClick={() => reset(s)}
+                          style={{ padding: '6px 9px' }}
+                        >
+                          <RotateCcw size={12} />
+                        </button>
+                      )}
+                    </div>
+                  }
+                />
+  ));
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
       {confirmDialog}
@@ -360,7 +475,25 @@ export const PlatformSettings: React.FC = () => {
             </SectionCard>
           )}
 
-          {activeGroup === 'dangerZone' ? (
+          {activeGroup === 'rules' ? (
+            <>
+              {/* The scoring dial first — it applies to everyone — then the rules that carve
+                  out who is eligible in the first place. */}
+              {settings.some((s) => s.group === 'planning') && (
+                <SectionCard
+                  title="Spreading work around"
+                  description="How the recommendation engine shares jobs across the people who are eligible for them."
+                >
+                  {settingRows(settings.filter((s) => s.group === 'planning'))}
+                </SectionCard>
+              )}
+              <SectionCard title={RULES_GROUP.label} description={RULES_GROUP.description}>
+                <div style={{ padding: '16px' }}>
+                  <RulesSection />
+                </div>
+              </SectionCard>
+            </>
+          ) : activeGroup === 'dangerZone' ? (
             <DangerZoneSection />
           ) : (
           <SectionCard
@@ -370,52 +503,7 @@ export const PlatformSettings: React.FC = () => {
             {isLoading ? (
               <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>Loading…</div>
             ) : (
-              inGroup.map((s, i) => (
-                <SettingRow
-                  key={s.key}
-                  last={i === inGroup.length - 1}
-                  label={
-                    <span style={{ display: 'flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap' }}>
-                      {s.label}
-                      {s.unit && <span style={{ fontSize: '10.5px', color: 'var(--text-muted)', fontWeight: 500 }}>({s.unit})</span>}
-                      {sourceNote(s)}
-                    </span>
-                  }
-                  description={s.description}
-                  control={renderControl(s)}
-                  footnote={
-                    <span style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
-                      <span>{APPLIES_LABEL[s.applies] ?? s.applies}</span>
-                      {s.type !== 'boolean' && s.type !== 'select' && s.default != null && (
-                        <span>· default {String(s.default)}</span>
-                      )}
-                    </span>
-                  }
-                  aside={
-                    <div style={{ display: 'flex', gap: '5px' }}>
-                      {canEdit && (isDirty(s) || (s.type === 'password' && drafts[s.key])) && (
-                        <button
-                          className="btn btn-primary"
-                          disabled={saving === s.key}
-                          onClick={() => save(s, drafts[s.key])}
-                          style={{ padding: '6px 12px', fontSize: '11.5px', whiteSpace: 'nowrap' }}
-                        >
-                          {saving === s.key ? 'Saving…' : 'Save'}
-                        </button>
-                      )}
-                      {canEdit && s.source === 'saved' && !isDirty(s) && (
-                        <button
-                          className="btn btn-secondary" title="Clear the saved value"
-                          disabled={saving === s.key} onClick={() => reset(s)}
-                          style={{ padding: '6px 9px' }}
-                        >
-                          <RotateCcw size={12} />
-                        </button>
-                      )}
-                    </div>
-                  }
-                />
-              ))
+              settingRows(inGroup)
             )}
           </SectionCard>
           )}

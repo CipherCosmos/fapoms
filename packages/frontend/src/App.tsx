@@ -39,7 +39,6 @@ const Users = React.lazy(() => import('./pages/Users'));
 const Clients = React.lazy(() => import('./pages/Clients').then((m) => ({ default: m.Clients })));
 const Billing = React.lazy(() => import('./pages/Billing').then((m) => ({ default: m.Billing })));
 const AssayerStatementPage = React.lazy(() => import('./pages/billing/AssayerStatementPage').then((m) => ({ default: m.AssayerStatementPage })));
-const Rules = React.lazy(() => import('./pages/Rules'));
 const Notifications = React.lazy(() => import('./pages/Notifications'));
 const FeedbackPage = React.lazy(() => import('./pages/feedback/FeedbackPage').then((m) => ({ default: m.FeedbackPage })));
 const Holidays = React.lazy(() => import('./pages/Holidays'));
@@ -377,7 +376,8 @@ export const App: React.FC = () => {
           <Route path="/billing" element={<Billing />} />
           <Route path="/billing/statement" element={<AssayerStatementPage />} />
           <Route path="/admin/rule-bypass" element={<RuleBypassPanel />} />
-          <Route path="/rules" element={<Rules />} />
+          {/* Eligibility rules are a section of Platform Settings now; keep the old path working. */}
+          <Route path="/rules" element={<Navigate to="/admin/settings?group=rules" replace />} />
           <Route path="/holidays" element={<Holidays />} />
           <Route path="/transport-costs" element={<TransportCosts />} />
           <Route path="/admin/notifications" element={<NotificationAdmin />} />

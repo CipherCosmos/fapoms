@@ -123,8 +123,11 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     // Platform configuration — super administrators only, by decision (2026-08-17; see
     // /feedback above). Wider staff used to be able to read it; the backend
     // PlatformSettingsController now admits the same single role, so the page and the API agree.
+    // OPERATIONS reach exactly one section of it — the eligibility rules folded in from the old
+    // `/rules` page, which they own and hold the write permission for. The page itself shows
+    // them nothing else; see canManagePlanningRules.
     path: '/admin/settings',
-    allowedRoles: [SystemRole.ADMIN],
+    allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS],
   },
   {
     // Which events the platform raises, to whom, on what channels — super administrators only,
@@ -147,7 +150,8 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     allowedRoles: [SystemRole.ADMIN],
   },
   {
-    // Operations own planning rules — they hold the write permission, so they need the page.
+    // Now a redirect into Platform Settings' rules section. The path stays permitted so old
+    // links and bookmarks land where the feature moved rather than on the login screen.
     path: '/rules',
     allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS],
   },

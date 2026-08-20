@@ -12,7 +12,6 @@ import {
   
   ClipboardList,
   Users,
-  Sliders,
   Building2,
   Receipt,
   UserCog, Inbox, MessageSquare, Bus, BellRing, SlidersHorizontal, AlertTriangle } from 'lucide-react';
@@ -85,10 +84,15 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
      * Two groups, not one list in the order things were built.
      *
      * "Operational setup" is reference data operations maintain to do the work — dates that
-     * cannot be worked, territories, what travel costs, the scoring rules. "Administration" is
-     * the platform itself: how it behaves, who may use it, and the deliberate suspension of its
-     * controls. They were one accreted list, which is why "where do I change X" had no
-     * answerable shape.
+     * cannot be worked, territories, what travel costs, and everything the platform assumes
+     * when no contract says otherwise. "Administration" is who may use the system and the
+     * deliberate suspension of its controls. They were one accreted list, which is why "where
+     * do I change X" had no answerable shape.
+     *
+     * Platform Settings moved here from Administration for that reason: almost everything in
+     * it is a fact about the business — the company's own GST details, what an unpriced audit
+     * is worth, how long the product team has to answer feedback — rather than a fact about
+     * the software.
      */
     {
       category: 'Operational Setup',
@@ -96,13 +100,16 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
         { name: 'Holiday Calendar', path: '/holidays', icon: CalendarDays },
         { name: 'Service Areas', path: '/zones', icon: Map },
         { name: 'Transport Costs', path: '/transport-costs', icon: Bus },
-        { name: 'Business Rules', path: '/rules', icon: Sliders },
+        // "Business Rules" pointed at /rules, a second screen for changing how the system
+        // behaves sitting under a different nav heading from Platform Settings — so the
+        // question "where do I change X" had two answers and nothing to choose between them.
+        // It is a section of Platform Settings now.
+        { name: 'Platform Settings', path: '/admin/settings', icon: SlidersHorizontal },
       ],
     },
     {
       category: 'Administration',
       items: [
-        { name: 'Platform Settings', path: '/admin/settings', icon: SlidersHorizontal },
         { name: 'Notification Rules', path: '/admin/notifications', icon: BellRing },
         { name: 'User Management', path: '/users', icon: Users },
         // Administrators only — filtered by canAccessRoute against route-permissions, same as

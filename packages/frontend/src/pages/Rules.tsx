@@ -86,7 +86,15 @@ const emptyForm = {
   actionType: 'BLOCK', actionValue: '',
 };
 
-export const Rules: React.FC = () => {
+/**
+ * Who may be sent to a job, and how their ranking is nudged.
+ *
+ * This was a page of its own at `/rules`, titled "Business Rule Engine", next to a separate
+ * "Platform Settings" screen — so "where do I change how the system behaves" had two answers
+ * and no signpost between them. It is a section of that screen now; the engine, the per-client
+ * and per-branch scoping, and every stored rule are unchanged.
+ */
+export const RulesSection: React.FC = () => {
   const roles = useCurrentRoles();
   const canManage = canManageRules(roles);
   // Deletion is admin-only on the backend; showing it more widely only produced a 403 on click.
@@ -224,14 +232,13 @@ export const Rules: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-        <div style={{ minWidth: 0 }}>
-          <h2 style={{ fontSize: '24px', fontWeight: 700, fontFamily: 'var(--font-display)' }}>Business Rule Engine</h2>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginTop: '4px' }}>
-            These rules decide who is eligible and how they rank during candidate recommendation.
-          </p>
-        </div>
-        {canManage && <PrimaryButton onClick={openCreate}>Create Rule</PrimaryButton>}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
+        <p style={{ color: 'var(--text-secondary)', fontSize: '13px', margin: 0, maxWidth: '62ch', lineHeight: 1.55 }}>
+          A rule can require a skill or a certificate, keep work out of a state, or cap how many
+          open assignments someone may hold. Rules apply to everyone unless you point one at a
+          single client or branch.
+        </p>
+        {canManage && <PrimaryButton onClick={openCreate}>Add a rule</PrimaryButton>}
       </div>
 
       {err && (
@@ -244,13 +251,11 @@ export const Rules: React.FC = () => {
         </div>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '14px' }}>
-        <Kpi icon={<Sliders size={20} />} tone="var(--accent-primary)" value={rules.length} label="Total Rules" />
-        <Kpi icon={<Shield size={20} />} tone="var(--accent-primary)" value={rules.filter((r) => r.scope === 'GLOBAL').length} label="Global" />
-        <Kpi icon={<Shield size={20} />} tone="var(--status-active)" value={rules.filter((r) => r.ruleType === 'SKILL' || r.ruleType === 'CERTIFICATION').length} label="Skill / Cert Rules" />
-        <Kpi icon={<Shield size={20} />} tone="var(--accent)" value={rules.filter((r) => r.ruleType === 'TERRITORY' || r.ruleType === 'CAPACITY').length} label="Territory / Capacity Rules" />
-      </div>
-
+      {/*
+        * Four tiles counting rules by category used to sit here. With no rules configured they
+        * were four zeroes above an empty list, and with a handful they restated what the list
+        * already shows. The count that matters is beside the filter.
+        */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
         <SearchInput value={searchTerm} onChange={setSearchTerm} placeholder="Search rules..." style={{ maxWidth: '320px' }} />
         <FilterSelect value={typeFilter} onChange={setTypeFilter} options={[{ value: 'ALL', label: 'All types' }, ...RULE_TYPES.map((t) => ({ value: t.value, label: t.label }))]} />
@@ -263,7 +268,11 @@ export const Rules: React.FC = () => {
         ) : filtered.length === 0 ? (
           <div style={{ gridColumn: '1 / -1', padding: '60px 20px', textAlign: 'center', border: '1px dashed var(--border-color)', borderRadius: 'var(--radius-lg)', color: 'var(--text-muted)' }}>
             <Sliders size={40} style={{ margin: '0 auto 12px', opacity: 0.4 }} />
-            <p>{searchTerm ? 'No rules match your search.' : 'No rules configured. Create one to define eligibility filters.'}</p>
+            <p style={{ maxWidth: '46ch', margin: '0 auto', lineHeight: 1.6 }}>
+              {searchTerm
+                ? 'No rules match your search.'
+                : 'No rules yet. Without any, every assayer is eligible for every job and ranking is decided by the recommendation score alone — which is a perfectly normal way to run. Add one when a client or a branch needs something specific.'}
+            </p>
           </div>
         ) : (
           filtered.map((rule) => {
@@ -444,11 +453,4 @@ const Field: React.FC<{ label: string; children: React.ReactNode }> = ({ label, 
   </div>
 );
 
-const Kpi: React.FC<{ icon: React.ReactNode; tone: string; value: React.ReactNode; label: string }> = ({ icon, tone, value, label }) => (
-  <div className="glass-card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
-    <div style={{ width: '40px', height: '40px', borderRadius: 'var(--radius-md)', background: 'rgba(216,174,71,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: tone }}>{icon}</div>
-    <div><div style={{ fontSize: '22px', fontWeight: 800, fontFamily: 'var(--font-display)' }}>{value}</div><div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{label}</div></div>
-  </div>
-);
-
-export default Rules;
+export default RulesSection;
