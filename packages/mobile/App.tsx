@@ -9,6 +9,7 @@ import { loadPreferences } from './src/services/preferences';
 import { useAssayerNotifications, type NotificationTapData } from './src/hooks/useAssayerNotifications';
 import { useAssayerProfile } from './src/hooks/useAssayerProfile';
 import { useReturnPaperwork } from './src/hooks/useReturnPaperwork';
+import { useUploadOutbox } from './src/hooks/useUploadOutbox';
 import { connectMobileSocket } from './src/services/socket';
 import { handleIncomingCall, handleCallAnswered, handleCallEnded } from './src/services/calls';
 import { countOpenQueries, countResolvedQueries } from './src/utils/queries';
@@ -42,6 +43,7 @@ import { ProfileScreen } from './src/screens/ProfileScreen';
 import { NotificationsModal } from './src/components/NotificationsModal';
 import { DocumentScanner } from './src/components/DocumentScanner';
 import { AssayerQueryChatModal } from './src/components/AssayerQueryChatModal';
+import { UploadsModal } from './src/components/UploadsModal';
 import { InAppNavigationModal } from './src/components/InAppNavigationModal';
 import { CallModal } from './src/components/CallModal';
 import { RejectionModal } from './src/components/RejectionModal';
@@ -86,10 +88,20 @@ function AppMain() {
   const overlay = useOverlay();
 
   /**
-   * The audited return. Not an overlay: it replaces the tab body, and the overlays above can
-   * open on top of it.
+   * The durable upload outbox. Packets are handed to it and sent in the background — the transfer
+   * survives leaving the paperwork screen, backgrounding the app, or a dropped signal, and a
+   * failed one stays visible to retry. `onUploaded` refreshes once a packet is durably accepted,
+   * because filing the return moves the assignment on server-side. Read through a ref so it can
+   * call `refreshAfterServerChange`, which is defined below, without a load-order hazard.
    */
-  const paperwork = useReturnPaperwork({ onSubmitted: () => refreshAfterServerChange() });
+  const onUploadedRef = useRef<() => void>(() => {});
+  const outbox = useUploadOutbox({ onUploaded: useCallback(() => onUploadedRef.current(), []) });
+
+  /**
+   * The audited return. Not an overlay: it replaces the tab body, and the overlays above can
+   * open on top of it. Filing hands the packet to the outbox rather than uploading inline.
+   */
+  const paperwork = useReturnPaperwork({ onEnqueue: outbox.enqueue });
 
   // A tapped notification's target, held until `assignments` has actually loaded — a cold
   // start races the deep link against the assignment list fetch, so the target is queued
@@ -203,6 +215,11 @@ function AppMain() {
   const refreshAfterServerChange = useCallback(async () => {
     await Promise.all([loadAssignments(), loadAssayerProfile(), loadExpenseSummary()]);
   }, [loadAssignments, loadAssayerProfile, loadExpenseSummary]);
+
+  // Keep the outbox's "a packet arrived" callback pointed at the current refresh. Assigned in
+  // render (like selectedTabRef below) so the stable callback handed to the hook always calls the
+  // latest closure.
+  onUploadedRef.current = refreshAfterServerChange;
 
 
   useEffect(() => {
@@ -696,6 +713,9 @@ function AppMain() {
               overlay.open({ name: 'expense', assignment: openPaperwork })
             }
             onReportIssue={() => overlay.open({ name: 'issue', assignment: openPaperwork })}
+            onOpenUploads={() => overlay.open({ name: 'uploads' })}
+            activeUploads={outbox.counts.active}
+            failedUploads={outbox.counts.failed}
           />
           </>
         ) : (
@@ -824,6 +844,24 @@ function AppMain() {
             const assignment = scanner.assignment;
             overlay.close();
 
+            // The normal path: ML Kit assembled the pages into a single PDF. Hand it to the durable
+            // outbox and let it carry the packet to the desk in the background — the assayer is free
+            // to move on, and a weak-signal transfer survives them doing so. Only the image-page
+            // fallback (no PDF could be built — iOS/web) still uploads inline below.
+            if (doc.pdfUri) {
+              await outbox.enqueue({
+                assignmentId: assignment.id,
+                branchName: assignment.branchName,
+                fileName: doc.fileName,
+                fileUri: doc.pdfUri,
+              });
+              feedback.success(
+                'Added to uploads',
+                `${doc.pageCount} page${doc.pageCount === 1 ? '' : 's'} sending in the background. Check Uploads for progress.`,
+              );
+              return;
+            }
+
             feedback.info('Uploading', `Sending ${doc.fileName}…`);
             const outcome = await uploadScannedAuditPacket(assignment.id, doc);
 
@@ -865,6 +903,14 @@ function AppMain() {
       {queryChat && (
         <AssayerQueryChatModal visible assignment={queryChat.assignment} onClose={overlay.close} />
       )}
+
+      <UploadsModal
+        visible={Boolean(overlay.current('uploads'))}
+        uploads={outbox.uploads}
+        onClose={overlay.close}
+        onRetry={outbox.retry}
+        onDismiss={outbox.dismiss}
+      />
 
       {/* Voice-call UI, mounted once at root like the navigation modal. Renders nothing
           while no call exists; the calls service's store drives it entirely. */}

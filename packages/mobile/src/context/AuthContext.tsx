@@ -5,6 +5,7 @@ import { MobileApiService } from '../services/api.service';
 import { disconnectMobileSocket } from '../services/socket';
 import { clearCache } from '../services/token-store';
 import { clearQueue } from '../services/location-queue';
+import { clearOutbox } from '../services/upload-outbox';
 import { getPreference } from '../services/preferences';
 
 /**
@@ -341,6 +342,9 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // Explicit as well as implicit: clearCache() drops the whole cache file on native, but its
     // web branch returns early, and one assayer's movements must never upload under another's login.
     void clearQueue();
+    // Same rule for pending audit packets: one assayer's un-sent branch packet must never be
+    // uploaded under the next person's session on a shared handset.
+    void clearOutbox();
     setIsAuthenticated(false);
     setUser(null);
     // Or the next sign-in lands straight on the lock screen.

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, ScrollView, TextInput, Image, Linking, Platform, ActivityIndicator } from 'react-native';
+import { View, ScrollView, TextInput, Image, Linking, Platform, ActivityIndicator, Modal } from 'react-native';
 import { MobileApiService } from '../services/api.service';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Badge, Button, Card, Icon, IconButton, Tappable } from './ui/primitives';
@@ -12,6 +12,12 @@ interface QueryThreadProps {
   refreshKey?: number;
   onAttach: () => Promise<{ url: string; fileName: string; fileType: string }[]>;
   onScan: () => void;
+  /**
+   * Open the referenced page of the assayer's own packet, if the parent can. Optional and
+   * best-effort: when it is not provided (or the packet is not downloadable), the marked-up crop
+   * shown in the bubble is the guaranteed way to see the cell being questioned.
+   */
+  onOpenPacketPage?: (page: number) => void;
 }
 
 const isImage = (fileType?: string, fileName?: string) =>
@@ -45,10 +51,13 @@ const dayOf = (iso: string) => {
  * and write the same thread, which is also what lets the server move the query's status
  * correctly as each side speaks.
  */
-export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onAttach, onScan }) => {
+export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onAttach, onScan, onOpenPacketPage }) => {
   const t = useTheme();
   const feedback = useFeedback();
   const scrollRef = useRef<ScrollView>(null);
+
+  /** The crop currently opened full-screen, or null. Lets the assayer enlarge the marked cell. */
+  const [zoomedCrop, setZoomedCrop] = useState<string | null>(null);
 
   const [messages, setMessages] = useState<QueryMessage[]>([]);
   const [loading, setLoading] = useState(true);
@@ -97,7 +106,16 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
     setMessages(list);
     setLoading(false);
 
-    const keys = [...new Set(list.flatMap((m) => m.attachments.map((a) => a.s3Key).filter(Boolean)))] as string[];
+    // Both the message attachments and the desk's region-snapshot crop are stored behind a
+    // signed-token route — resolve every key in one batch so nothing on the render path fetches.
+    const keys = [
+      ...new Set(
+        [
+          ...list.flatMap((m) => m.attachments.map((a) => a.s3Key)),
+          ...list.map((m) => m.regionImageS3Key),
+        ].filter(Boolean),
+      ),
+    ] as string[];
     if (keys.length === 0) return;
     const pairs = await Promise.all(
       keys.map(async (k) => [k, await MobileApiService.getAttachmentUrl(k)] as const),
@@ -239,7 +257,14 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
                 </AppText>
               </View>
               {g.items.map((m) => (
-                <Bubble key={m.id} message={m} signed={signed} onOpenAttachment={open} />
+                <Bubble
+                  key={m.id}
+                  message={m}
+                  signed={signed}
+                  onOpenAttachment={open}
+                  onZoomCrop={setZoomedCrop}
+                  onOpenPacketPage={onOpenPacketPage}
+                />
               ))}
             </View>
           ))}
@@ -341,7 +366,36 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
           </View>
         </View>
       )}
+
+      {/* Full-screen view of the marked cell, so the assayer can read the exact figures the desk
+          is asking about. Tap anywhere to close. */}
+      <CropLightbox uri={zoomedCrop} onClose={() => setZoomedCrop(null)} />
     </View>
+  );
+};
+
+/** A tap-to-close full-screen view of one crop. In-app, so a weak connection is not re-hit. */
+const CropLightbox: React.FC<{ uri: string | null; onClose: () => void }> = ({ uri, onClose }) => {
+  const t = useTheme();
+  return (
+    <Modal visible={!!uri} transparent animationType="fade" onRequestClose={onClose}>
+      <Tappable
+        onPress={onClose}
+        accessibilityRole="button"
+        accessibilityLabel="Close the enlarged image"
+        style={{ flex: 1 }}
+      >
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.92)', alignItems: 'center', justifyContent: 'center', padding: t.space.lg }}>
+          {uri ? (
+            <Image source={{ uri }} style={{ width: '100%', height: '80%' }} resizeMode="contain" />
+          ) : null}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm, marginTop: t.space.lg }}>
+            <Icon name="close-circle" size={18} color="#fff" />
+            <AppText variant="small" style={{ color: '#fff' }}>Tap anywhere to close</AppText>
+          </View>
+        </View>
+      </Tappable>
+    </Modal>
   );
 };
 
@@ -349,9 +403,15 @@ const Bubble: React.FC<{
   message: QueryMessage;
   signed: Record<string, string>;
   onOpenAttachment: (url: string) => void;
-}> = ({ message, signed, onOpenAttachment }) => {
+  /** Open a crop full-screen. */
+  onZoomCrop: (uri: string) => void;
+  onOpenPacketPage?: (page: number) => void;
+}> = ({ message, signed, onOpenAttachment, onZoomCrop, onOpenPacketPage }) => {
   const t = useTheme();
   const mine = message.authorType === 'ASSAYER';
+
+  // The desk's marked-cell crop: a ready signed URL, or an object key resolved into `signed`.
+  const cropUri = message.regionImageUrl || (message.regionImageS3Key ? signed[message.regionImageS3Key] : '') || '';
 
   return (
     <View style={{ alignItems: mine ? 'flex-end' : 'flex-start' }}>
@@ -408,11 +468,68 @@ const Bubble: React.FC<{
           );
         })}
 
-        {/* The desk can anchor a question to a page of the audit PDF; say so. */}
+        {/* The desk can anchor a question to a marked rectangle on a page of the audit PDF. When
+            a cropped snapshot of that spot is available, show it inline — tap to enlarge — so the
+            assayer sees the exact cell being questioned, not just a page number. Falls back to the
+            plain "page N" line whenever the crop image is missing or still resolving. */}
         {message.pageNumber != null ? (
-          <AppText variant="caption" tone="faint">
-            Refers to page {message.pageNumber}
-          </AppText>
+          <View style={{ gap: 6, marginTop: 2 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+              <Icon name="crop-outline" size={13} color={t.colors.textFaint} />
+              <AppText variant="caption" tone="faint">
+                The desk marked this on page {message.pageNumber}
+              </AppText>
+            </View>
+            {cropUri ? (
+              <Tappable
+                onPress={() => onZoomCrop(cropUri)}
+                accessibilityRole="button"
+                accessibilityLabel={`Enlarge the marked cell on page ${message.pageNumber}`}
+              >
+                <View
+                  style={{
+                    borderRadius: t.radius.md,
+                    borderWidth: 1,
+                    borderColor: t.colors.warning,
+                    overflow: 'hidden',
+                    backgroundColor: t.colors.bg,
+                  }}
+                >
+                  <Image
+                    source={{ uri: cropUri }}
+                    style={{ width: 220, height: 150 }}
+                    resizeMode="contain"
+                  />
+                  <View
+                    style={{
+                      flexDirection: 'row',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      gap: 5,
+                      paddingVertical: 5,
+                      backgroundColor: t.colors.warningSoft,
+                    }}
+                  >
+                    <Icon name="expand-outline" size={12} color={t.colors.warning} />
+                    <AppText variant="caption" tone="warning">Tap to enlarge</AppText>
+                  </View>
+                </View>
+              </Tappable>
+            ) : null}
+            {onOpenPacketPage ? (
+              <Tappable
+                onPress={() => onOpenPacketPage(message.pageNumber as number)}
+                accessibilityRole="button"
+                accessibilityLabel={`Open page ${message.pageNumber} of your packet`}
+                hitSlop={6}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 2 }}>
+                  <Icon name="document-text-outline" size={13} color={t.colors.primary} />
+                  <AppText variant="caption" tone="primary">Open page {message.pageNumber} of your packet</AppText>
+                </View>
+              </Tappable>
+            ) : null}
+          </View>
         ) : null}
 
         <AppText variant="caption" tone="faint" style={{ alignSelf: 'flex-end' }}>

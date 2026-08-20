@@ -13,6 +13,11 @@ interface PdfDocsScreenProps {
   onSubmitCompletedPdf: () => void;
   onOpenExpenseModal: () => void;
   onReportIssue: () => void;
+  /** Open the durable uploads list. */
+  onOpenUploads: () => void;
+  /** How many packets are still sending, and how many have failed — for the status line here. */
+  activeUploads?: number;
+  failedUploads?: number;
 }
 
 /**
@@ -58,6 +63,9 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
   onSubmitCompletedPdf,
   onOpenExpenseModal,
   onReportIssue,
+  onOpenUploads,
+  activeUploads = 0,
+  failedUploads = 0,
 }) => {
   const t = useTheme();
 
@@ -166,16 +174,49 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
             Capture the sheets before submitting.
           </AppText>
         )}
-        {uploadingPdf && (
-          // A branch audit packet can run tens of megabytes over a weak signal, and a bare
-          // spinner gives no sense of whether it is still moving or has stalled. This can't show
-          // real progress without a percentage from the upload itself, so it sets the expectation
-          // that matters most in the field: don't back out, it will keep going.
-          <AppText variant="caption" tone="muted" style={{ textAlign: 'center' }}>
-            Sending over your current connection — this can take a while on weak signal. Stay on this screen.
-          </AppText>
-        )}
+        {/* The packet is handed to the durable outbox and sent in the background, so — unlike
+            before — the assayer is explicitly freed to leave. A weak-signal transfer keeps going
+            and its progress is watchable in Uploads. */}
+        <AppText variant="caption" tone="faint" style={{ textAlign: 'center' }}>
+          Once submitted, the packet sends in the background. You can leave this screen — it keeps going, even on weak signal.
+        </AppText>
       </View>
+
+      {/* The uploads outbox: what is still on its way to the desk, and anything that failed and
+          needs a retry. Shown here (where packets are filed) so a failed one is impossible to
+          miss, and always openable so the assayer can check a packet actually arrived. */}
+      {(activeUploads > 0 || failedUploads > 0) ? (
+        <Card
+          level={1}
+          onPress={onOpenUploads}
+          style={{
+            gap: t.space.xs,
+            borderLeftWidth: 3,
+            borderLeftColor: failedUploads > 0 ? t.colors.danger : t.colors.primary,
+          }}
+        >
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
+            <Icon
+              name={failedUploads > 0 ? 'alert-circle' : 'cloud-upload-outline'}
+              size={20}
+              color={failedUploads > 0 ? t.colors.danger : t.colors.primary}
+            />
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <AppText variant="bodyStrong">
+                {failedUploads > 0
+                  ? `${failedUploads} packet${failedUploads === 1 ? '' : 's'} not sent`
+                  : `${activeUploads} packet${activeUploads === 1 ? '' : 's'} sending`}
+              </AppText>
+              <AppText variant="caption" tone="muted">
+                {failedUploads > 0 ? 'Tap to retry the ones that failed.' : 'Tap to see progress.'}
+              </AppText>
+            </View>
+            {failedUploads > 0 ? <Badge label="Action needed" tone="danger" dot /> : <Badge label="Sending" tone="info" dot />}
+          </View>
+        </Card>
+      ) : (
+        <Button label="View my uploads" icon="cloud-upload-outline" variant="ghost" onPress={onOpenUploads} />
+      )}
 
       <View style={{ flexDirection: 'row', gap: t.space.sm }}>
         <Button label="Log an expense" icon="receipt-outline" variant="ghost" onPress={onOpenExpenseModal} style={{ flex: 1 }} />

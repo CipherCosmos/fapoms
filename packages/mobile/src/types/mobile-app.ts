@@ -213,5 +213,15 @@ export interface QueryMessage {
   /** Set when the desk anchored the question to a region of the audit PDF. */
   pageNumber: number | null;
   region: { x: number; y: number; w: number; h: number } | null;
+  /**
+   * A cropped snapshot of the exact cell the desk marked, so the assayer SEES the spot in
+   * question rather than a bare "Refers to page N". Two shapes, whichever the server sends:
+   * `regionImageUrl` is a ready-to-load signed URL, and `regionImageS3Key` is an object key
+   * resolved to a signed URL the same way chat attachments are (React Native's <Image> cannot
+   * send an auth header, so a tokened URL is required either way). Absent on messages the desk
+   * did not pin to a region, and on older backends — the thread degrades to the page-number line.
+   */
+  regionImageUrl: string | null;
+  regionImageS3Key: string | null;
   createdAt: string;
 }

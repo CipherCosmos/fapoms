@@ -1028,6 +1028,14 @@ export class MobileApiService {
           })),
         pageNumber: m.pageNumber ?? null,
         region: m.region ?? null,
+        // The cropped snapshot of the marked cell. Read from a few candidate shapes so whichever
+        // the backend lands on works: a ready signed URL, or an object key resolved to one the
+        // same way attachments are. `region` may also carry the crop nested alongside its rect.
+        // Backend (validation-query messages endpoint) returns a signed `snapshotUrl` and the raw
+        // `snapshotPath` key; accept those alongside the other shapes so the marked-cell crop
+        // actually renders rather than falling back to the page-number line.
+        regionImageUrl: m.regionImageUrl ?? m.regionSnapshotUrl ?? m.snapshotUrl ?? m.region?.imageUrl ?? null,
+        regionImageS3Key: m.regionImageS3Key ?? m.regionSnapshotS3Key ?? m.snapshotPath ?? m.region?.s3Key ?? null,
         createdAt: m.createdAt,
       }));
     } catch {

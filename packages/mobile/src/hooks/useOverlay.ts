@@ -40,7 +40,9 @@ export type Overlay =
   | { name: 'expense'; assignment: AssayerAssignment | null }
   | { name: 'availability' }
   | { name: 'feedback' }
-  | { name: 'notifications' };
+  | { name: 'notifications' }
+  /** The durable upload outbox — carries no subject; it lists every packet, across branches. */
+  | { name: 'uploads' };
 
 export type OverlayName = Overlay['name'];
 

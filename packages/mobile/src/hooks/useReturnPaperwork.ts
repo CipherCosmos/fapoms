@@ -1,9 +1,9 @@
 import { useCallback, useState } from 'react';
 import { Platform } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
-import { MobileApiService } from '../services/api.service';
 import { useFeedback } from '../components/ui/Feedback';
 import { assetToBase64 } from '../utils/pickDocument';
+import type { OutboxInput } from '../services/upload-outbox';
 import type { AssayerAssignment } from '../types/mobile-app';
 
 /**
@@ -33,9 +33,14 @@ export interface ReturnPaperwork {
  * This is the app's one job of record — the evidence a bank collateral audit actually produces —
  * and it was spread across App.tsx as three pieces of state and five handlers interleaved with
  * navigation, notifications and profile code.
+ *
+ * Filing no longer *does* the upload here. It hands the packet to the durable outbox, which
+ * carries it to the desk in the background and survives the assayer leaving this screen — the
+ * transfer used to live in this hook's state and was lost the moment they navigated away. The
+ * screen is free to close as soon as the packet is safely written down.
  */
-export function useReturnPaperwork(options: { onSubmitted: () => void | Promise<void> }): ReturnPaperwork {
-  const { onSubmitted } = options;
+export function useReturnPaperwork(options: { onEnqueue: (input: OutboxInput) => void | Promise<void> }): ReturnPaperwork {
+  const { onEnqueue } = options;
   const feedback = useFeedback();
 
   const [assignment, setAssignment] = useState<AssayerAssignment | null>(null);
@@ -95,40 +100,26 @@ export function useReturnPaperwork(options: { onSubmitted: () => void | Promise<
 
     setUploading(true);
     try {
-      // A picked file gets the same resumable transfer the scanner does. It is the same operation
-      // over the same field connections, and there was no reason for one of them to have to start
-      // over from zero when the signal dropped. Resumable needs a real file path, so web keeps
-      // the single-shot path (which retries on its own).
-      const res =
-        staged.uri && Platform.OS !== 'web'
-          ? await MobileApiService.uploadAuditPdfResumable(
-              assignment.id,
-              staged.name,
-              staged.uri,
-              assignment.id,
-            )
-          : await MobileApiService.uploadCompletedAuditPdf(
-              assignment.id,
-              staged.name,
-              { uri: staged.uri, base64: staged.base64 },
-              assignment.id,
-            );
-
-      if (!res?.success) {
-        feedback.error('Upload Failed', res?.error || 'The document could not be uploaded.');
-        return false;
-      }
-
-      feedback.success('Upload Complete', `${staged.name} was uploaded successfully.`);
-      await onSubmitted();
+      // Hand the packet to the outbox rather than uploading it here. Native passes the file path
+      // so the bytes stream off disk and the transfer is resumable; web has no path, so it passes
+      // the decoded content. Either way it is written down durably and sent in the background —
+      // the assayer can leave this screen and watch it in Uploads.
+      await onEnqueue({
+        assignmentId: assignment.id,
+        branchName: assignment.branchName,
+        fileName: staged.name,
+        fileUri: Platform.OS !== 'web' ? staged.uri : undefined,
+        base64: Platform.OS === 'web' ? staged.base64 : undefined,
+      });
+      feedback.success('Added to uploads', `${staged.name} is sending in the background. You can leave this screen.`);
       return true;
     } catch {
-      feedback.error('Upload Failed', 'The document could not be uploaded. Please try again.');
+      feedback.error('Could not queue upload', 'The packet could not be saved for sending. Please try again.');
       return false;
     } finally {
       setUploading(false);
     }
-  }, [assignment, staged, feedback, onSubmitted]);
+  }, [assignment, staged, feedback, onEnqueue]);
 
   return { assignment, staged, uploading, open, close, selectFile, submit };
 }

@@ -10,6 +10,7 @@ import {
   Image,
   KeyboardAvoidingView,
   Platform,
+  Linking,
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
@@ -186,6 +187,47 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
   }, [feedback]);
 
 
+  /**
+   * Open the assayer's own packet at the page the desk marked.
+   *
+   * Best-effort, and layered on top of the crop the bubble already shows: the crop is the
+   * guaranteed way to see the cell, this is the convenience of opening the whole page. It reuses
+   * the same dispatch-gated packet download the schedule screen uses, and appends `#page=N` —
+   * which the device's PDF viewer may honour or may ignore, so it lands on the right document
+   * regardless and on the right page where the viewer supports it. Says so plainly when the
+   * packet is not available to open rather than failing silently.
+   */
+  const handleOpenPacketPage = useCallback(
+    async (page: number) => {
+      if (!assignment?.projectBranchId) {
+        feedback.info('Packet not open here', 'The marked cell is shown in the message above.');
+        return;
+      }
+      try {
+        const { success, data } = await MobileApiService.getBranchDocuments(assignment.projectBranchId);
+        const docs = success && Array.isArray(data) ? data : [];
+        // Prefer the assayer's own returned packet; fall back to the packet the desk audited.
+        const doc =
+          docs.find((d: any) => d.type === 'AUDITED_RETURN_PDF') ||
+          docs.find((d: any) => d.type === 'PRE_FIELD_AUDIT_PDF') ||
+          docs[0];
+        if (!doc?.id) {
+          feedback.info('Packet not available yet', 'The marked cell is shown in the message above.');
+          return;
+        }
+        const res = await MobileApiService.getDocumentDownloadUrl(doc.id);
+        if (!res.ok) {
+          feedback.info('Cannot open the packet', res.message || 'The marked cell is shown in the message above.');
+          return;
+        }
+        await Linking.openURL(`${res.url}#page=${page}`);
+      } catch (err: any) {
+        feedback.info('Cannot open the packet', 'The marked cell is shown in the message above.');
+      }
+    },
+    [assignment, feedback],
+  );
+
   const activeQuery = queries.find((q: any) => q.id === activeQueryId) ?? null;
 
   if (!visible || !assignment) return null;
@@ -296,6 +338,7 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
             refreshKey={threadVersion}
             onAttach={handlePickAttachment}
             onScan={() => setIsCameraActive(true)}
+            onOpenPacketPage={handleOpenPacketPage}
           />
         ) : (
           <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: t.space.xl }}>
