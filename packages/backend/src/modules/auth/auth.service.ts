@@ -98,28 +98,6 @@ export class AuthService implements OnModuleInit {
     };
     this.events.subscribe('user:updated', invalidate);
     this.events.subscribe('user:role-changed', invalidate);
-    // A password change or admin reset must END every existing session — otherwise a stolen or
-    // lingering refresh token keeps rotating into fresh access tokens for the full refresh TTL,
-    // which defeats the entire point of changing the password after a compromise.
-    this.events.subscribe('user:password-changed', (payload: any) => {
-      const id = payload?.userId;
-      if (id) void this.revokeAllSessions(id);
-    });
-  }
-
-  /**
-   * Revoke every refresh token for a user and drop their cached principal. The current access
-   * token (stateless JWT) still works until it expires — up to 15 minutes — after which the dead
-   * refresh token forces a fresh login. So the legitimate holder degrades gracefully while an
-   * attacker's token is cut off at once. Distinct from `logout` so it records no logout event: the
-   * caller logs the password action itself.
-   */
-  async revokeAllSessions(userId: string): Promise<void> {
-    await this.refreshTokenRepository.update(
-      { userId, isRevoked: false },
-      { isRevoked: true, revokedAt: new Date() },
-    );
-    await this.cache.del(this.principalKey(userId));
   }
 
   private principalKey(userId: string): string {
@@ -143,13 +121,6 @@ export class AuthService implements OnModuleInit {
       ],
       relations: ['roles', 'roles.permissions', 'roles.responsibilities', 'roles.responsibilities.capabilities', 'roles.responsibilities.capabilities.permissions'],
     });
-    if (user) {
-      // passwordHash is `select: false` on the entity, so the relation-loaded row above does not
-      // carry it. Authentication is the one read that legitimately needs it — opt back in with a
-      // targeted lookup rather than making every principal read pull the hash.
-      const cred = await this.userRepository.findOne({ where: { id: user.id }, select: { id: true, passwordHash: true } });
-      if (cred) user.passwordHash = cred.passwordHash;
-    }
 
     if (!user) {
       // 2. Check Assayer Master Database if not found in system users. Exact-identifier

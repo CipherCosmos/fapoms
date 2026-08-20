@@ -1,5 +1,5 @@
 import React, { useState, useEffect, Suspense } from 'react';
-import { Routes, Route, Navigate, Outlet, useNavigate, useLocation } from 'react-router-dom';
+import { Routes, Route, Navigate, Outlet, useNavigate, useLocation, useParams } from 'react-router-dom';
 import { defaultRouteForRoles } from './config/route-permissions';
 import { SystemRole } from '@fapoms/shared';
 import { Login } from './pages/Login';
@@ -107,6 +107,12 @@ const PostLoginRedirect: React.FC<{ fallback: string }> = ({ fallback }) => {
   // ProtectedRoute still guards the destination, so a deep link into a section this role may not
   // open is refused exactly as it would be if they had clicked through to it.
   return <Navigate to={returnTo ?? fallback} replace />;
+};
+
+/** Turns `/assayers/:id` into the roster's own deep link, so the record opens where it lives. */
+const AssayerDeepLink: React.FC = () => {
+  const { id } = useParams<{ id: string }>();
+  return <Navigate to={id ? `/hr/roster?assayer=${encodeURIComponent(id)}` : '/hr/roster'} replace />;
 };
 
 const RememberAndRedirectToLogin: React.FC = () => {
@@ -383,6 +389,16 @@ export const App: React.FC = () => {
         <Route path="/validation" element={<Navigate to="/data-entry" replace />} />
         {/* The roster now lives inside the workforce console; keep the old path working. */}
         <Route path="/assayers" element={<Navigate to="/hr/roster" replace />} />
+        {/*
+          * One assayer, by link.
+          *
+          * Every roster row has an "Open full profile" button that navigates here, and nothing
+          * was listening: the path fell through to the catch-all below, which sends everything
+          * it does not recognise to the dashboard. So the button on every row silently threw
+          * the operator out of Workforce — as did any bookmarked or shared link to a person.
+          * The roster already opens a record from `?assayer=<id>`, so this hands it over.
+          */}
+        <Route path="/assayers/:id" element={<AssayerDeepLink />} />
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

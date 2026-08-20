@@ -20,6 +20,14 @@ import { EventCategory, AssayerLifecycleStatus } from '@fapoms/shared';
 describe('AssayerService', () => {
   let service: AssayerService;
 
+  /**
+   * The columns `update()` consults to decide what an emptied field means.
+   *
+   * It reads nullability off the entity metadata rather than carrying its own list, so the mock
+   * has to carry the handful of columns these tests touch. `address` and `city` are the NOT NULL
+   * ones — an empty string is right for them and null is refused; the rest take null.
+   */
+  const NOT_NULL_COLUMNS = new Set(['address', 'city', 'district', 'state', 'employmentType']);
   const mockAssayerRepo = {
     create: jest.fn(),
     save: jest.fn(),
@@ -27,6 +35,12 @@ describe('AssayerService', () => {
     findAndCount: jest.fn(),
     find: jest.fn(),
     update: jest.fn().mockResolvedValue({ affected: 1 }),
+    metadata: {
+      findColumnWithPropertyName: (name: string) => ({
+        propertyName: name,
+        isNullable: !NOT_NULL_COLUMNS.has(name),
+      }),
+    },
   };
 
   const mockCommercialRepo = {
@@ -297,6 +311,55 @@ describe('AssayerService', () => {
       expect(mockAuditService.recordEventSafe).toHaveBeenCalledWith(
         expect.objectContaining({ eventType: 'ASSAYER_PASSWORD_RESET', entityId: 'asr-1', userId: 'hr-1' }),
       );
+    });
+  });
+
+  /**
+   * What an emptied box means, decided against the schema.
+   *
+   * Forms send `''` for a field the operator cleared, and whether that is storable depends
+   * entirely on the column. `manager_id` is a uuid and `''` is not one; `employee_id` is unique,
+   * so two records cleared to `''` collide on the second; `address` and `city` are NOT NULL and
+   * `''` is exactly right for them. All three used to surface as a bare 500 with a Postgres
+   * message in it, which is what "the save failed and I don't know why" was.
+   */
+  describe('clearing a field', () => {
+    const existing = () => ({
+      id: 'as-1', firstName: 'Rajesh', lastName: 'Gupta', displayName: 'Rajesh Gupta',
+      address: 'Nashik Road', city: 'Nashik', district: 'Nashik', state: 'Maharashtra',
+      pincode: '422101', managerId: 'mgr-1', employeeId: 'EMP-9', panNumber: 'PQRST2345M',
+      isActive: true,
+    });
+
+    beforeEach(() => {
+      mockAssayerRepo.findOne.mockResolvedValue(existing());
+      mockAssayerRepo.save.mockImplementation(async (a: any) => a);
+    });
+
+    it('stores null for a nullable column, so a uuid never receives an empty string', async () => {
+      const saved = await service.update('as-1', { managerId: '' } as any, 'u-1');
+      expect(saved.managerId).toBeNull();
+    });
+
+    it('stores null for a unique column, so two cleared records cannot collide', async () => {
+      const saved = await service.update('as-1', { employeeId: '' } as any, 'u-1');
+      expect(saved.employeeId).toBeNull();
+    });
+
+    it('keeps an empty string where the column refuses null', async () => {
+      const saved = await service.update('as-1', { address: '' } as any, 'u-1');
+      expect(saved.address).toBe('');
+    });
+
+    it('refuses an explicit null on a NOT NULL column, and says which field', async () => {
+      await expect(service.update('as-1', { city: null } as any, 'u-1'))
+        .rejects.toThrow(/city cannot be emptied/);
+    });
+
+    it('leaves a field the caller did not mention alone', async () => {
+      const saved = await service.update('as-1', { panNumber: '' } as any, 'u-1');
+      expect(saved.address).toBe('Nashik Road');
+      expect(saved.panNumber).toBeNull();
     });
   });
 

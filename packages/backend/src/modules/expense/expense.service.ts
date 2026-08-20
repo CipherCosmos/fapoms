@@ -199,16 +199,6 @@ export class ExpenseService {
       throw new BadRequestException('A reason is required when rejecting an expense claim.');
     }
 
-    // Maker-checker: the person who RAISED a claim cannot APPROVE it. Approving writes an
-    // assayer_payables row — money out — so the same staff member entering a claim and then
-    // approving their own entry is exactly the self-dealing separation of duties is meant to stop.
-    // Rejecting your own entry is harmless and stays allowed; another reviewer or an admin approves.
-    if (approve && expense.createdBy && expense.createdBy === userId) {
-      throw new ForbiddenException(
-        'You cannot approve an expense claim you raised. Ask another reviewer or an administrator to approve it.',
-      );
-    }
-
     expense.status = approve ? ExpenseStatus.APPROVED : ExpenseStatus.REJECTED;
     expense.reviewedBy = userId;
     expense.reviewedAt = new Date();

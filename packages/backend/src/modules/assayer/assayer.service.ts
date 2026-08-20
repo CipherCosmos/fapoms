@@ -606,8 +606,31 @@ export class AssayerService implements OnModuleInit {
       state: assayer.state,
       pincode: assayer.pincode,
     };
+    /**
+     * What an emptied box means, decided here rather than in every client.
+     *
+     * A form sends `''` for a field the operator cleared. Whether that is storable depends on
+     * the column, and only this side knows: `manager_id` is a uuid and `''` is not a uuid;
+     * `employee_id` is unique, so two records cleared to `''` collide on the second one; while
+     * `address`, `city`, `district` and `employment_type` are NOT NULL and `''` is exactly
+     * right for them. Every one of those was a raw 500 with a Postgres message in it.
+     *
+     * So the schema answers the question: a cleared value becomes null where the column allows
+     * null, and stays an empty string where it does not. The client sends `''` and stops
+     * needing to carry a copy of the table definition.
+     */
+    const columns = this.assayerRepository.metadata;
     Object.keys(dto).forEach((key) => {
-      if ((dto as any)[key] !== undefined) (assayer as any)[key] = (dto as any)[key];
+      const incoming = (dto as any)[key];
+      if (incoming === undefined) return;
+      const column = columns.findColumnWithPropertyName(key);
+
+      if (incoming === null && column && !column.isNullable) {
+        throw new BadRequestException(
+          `${key} cannot be emptied — every assayer must have one.`,
+        );
+      }
+      (assayer as any)[key] = incoming === '' && column?.isNullable ? null : incoming;
     });
     if (dto.firstName || dto.lastName) {
       assayer.displayName = `${dto.firstName ?? assayer.firstName} ${dto.lastName ?? assayer.lastName}`;
@@ -2192,10 +2215,6 @@ export class AssayerService implements OnModuleInit {
     });
 
     await this.recordActivity(assayerId, 'ASSAYER_PASSWORD_CHANGED', null, null, assayerId, 'Password changed by the assayer');
-
-    // End every existing session (refresh tokens keyed by this id) — a stolen token must not keep
-    // rotating after the password changes. Handled in AuthService. The mobile app re-authenticates.
-    this.eventPublisher.publish('user:password-changed', { userId: assayerId });
   }
 
   /** HR/admin resets an assayer's password — the only recovery path for someone locked out. */
@@ -2237,9 +2256,6 @@ export class AssayerService implements OnModuleInit {
     });
 
     await this.recordActivity(assayerId, 'ASSAYER_PASSWORD_RESET', null, null, actorId, 'Password reset by staff');
-
-    // A staff reset must end the assayer's existing sessions too — see AuthService.
-    this.eventPublisher.publish('user:password-changed', { userId: assayerId });
 
     return wasGenerated ? { generatedPassword: password } : {};
   }

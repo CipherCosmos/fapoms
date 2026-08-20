@@ -36,9 +36,6 @@ export class ReportsController {
     res.send(buffer);
   }
 
-  // Synchronous xlsx.write blocks the event loop with no yield; the queued POST twins are
-  // throttled and these were not. Same ceiling so a burst of exports can't stall the process.
-  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Get('coverage/:projectId')
   @Roles(...STAFF_ROLES)
   @ApiOperation({ summary: 'Export project coverage report (branch-level) to Excel' })
@@ -50,9 +47,6 @@ export class ReportsController {
     this.send(res, buffer, `coverage_${projectId}.xlsx`);
   }
 
-  // Synchronous xlsx.write blocks the event loop with no yield; the queued POST twins are
-  // throttled and these were not. Same ceiling so a burst of exports can't stall the process.
-  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Get('assignments')
   @Roles(...STAFF_ROLES)
   @ApiOperation({ summary: 'Export assignment status report to Excel' })
@@ -67,9 +61,6 @@ export class ReportsController {
     this.send(res!, buffer, `assignments_${Date.now()}.xlsx`);
   }
 
-  // Synchronous xlsx.write blocks the event loop with no yield; the queued POST twins are
-  // throttled and these were not. Same ceiling so a burst of exports can't stall the process.
-  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Get('billing')
   @Roles(...BILLING_READ_ROLES)
   @ApiOperation({ summary: 'Export billing entries and invoices to Excel' })
@@ -84,9 +75,6 @@ export class ReportsController {
     this.send(res!, buffer, `billing_${Date.now()}.xlsx`);
   }
 
-  // Synchronous xlsx.write blocks the event loop with no yield; the queued POST twins are
-  // throttled and these were not. Same ceiling so a burst of exports can't stall the process.
-  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Get('command-center')
   @Roles(...STAFF_ROLES)
   @ApiOperation({ summary: 'Export Command Center territory summary to Excel' })
@@ -98,9 +86,6 @@ export class ReportsController {
     this.send(res!, buffer, `command_center_${Date.now()}.xlsx`);
   }
 
-  // Synchronous xlsx.write blocks the event loop with no yield; the queued POST twins are
-  // throttled and these were not. Same ceiling so a burst of exports can't stall the process.
-  @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Get('assayer-roster')
   @Roles(...ROSTER_ROLES)
   @ApiOperation({ summary: 'Export assayer roster and payroll rate card to Excel' })

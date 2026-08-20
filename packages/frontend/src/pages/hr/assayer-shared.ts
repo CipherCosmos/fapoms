@@ -101,3 +101,101 @@ export const fieldLabelStyle: CSSProperties = {
   fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase',
   letterSpacing: '0.05em', color: 'var(--text-muted)',
 };
+
+/** The subset of a form field's definition that decides how its value is sent. */
+export interface EditableFieldShape {
+  key: string;
+  type?: string;
+  vocab?: 'skills' | 'languages' | 'certifications';
+}
+
+/** Phone fields, which carry a country code everywhere else in the system. */
+const TEL_FIELDS = new Set(['phone', 'alternatePhone', 'emergencyContactPhone']);
+
+/**
+ * The four columns that are NOT NULL with a database default.
+ *
+ * Experience, the HR rating and the two workload caps have no "empty": sending null for any of
+ * them is a constraint violation, which surfaces as a bare 500. A blank box means "leave it
+ * alone", which is the only honest reading available.
+ */
+const NO_EMPTY_VALUE = new Set(['experienceYears', 'performanceRating', 'maxDailyWorkload', 'maxWeeklyWorkload']);
+
+const parseListValue = (raw?: string): string[] => {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) return parsed.map(String).filter(Boolean);
+  } catch { /* legacy comma text — fall through */ }
+  return raw.split(',').map((x) => x.trim()).filter(Boolean);
+};
+
+/**
+ * Turn the edit form's string state into the body of a PUT.
+ *
+ * Extracted from the submit handler so the one rule that matters here can be tested: a box the
+ * operator emptied must reach the server as an empty value, not vanish from the request. It
+ * used to vanish — every field whose value was `''` was skipped — so clearing a phone number,
+ * an address, a note or the last skill in a list saved nothing while reporting success.
+ * Deleting a value was the single edit this form could not perform.
+ *
+ * "Empty" is per type, because the columns differ: a date takes null, a list takes `[]`, text
+ * takes `''`, and the four NOT NULL numerics have no empty at all.
+ */
+export function buildAssayerEditBody(
+  fields: EditableFieldShape[],
+  form: Record<string, string | undefined>,
+  current: Pick<Assayer, 'workingHours' | 'certifications'>,
+): { body: Record<string, unknown>; problems: string[] } {
+  const body: Record<string, any> = {};
+  const problems: string[] = [];
+
+  /**
+   * The working day is a pair, and the server will only store a complete one.
+   *
+   * Both boxes empty means "no hours recorded", which the column holds as null. Both filled is
+   * a range. One filled is neither, and the two obvious ways to handle it are both wrong:
+   * dropping it silently is the bug this function exists to fix, and storing null throws away
+   * the time the operator just typed. So it is reported, and the form says which box is missing
+   * instead of letting the server answer with "2 fields need attention".
+   */
+  const editsHours = form.workingHoursStart !== undefined || form.workingHoursEnd !== undefined;
+  if (editsHours) {
+    const start = form.workingHoursStart ?? current.workingHours?.start ?? '';
+    const end = form.workingHoursEnd ?? current.workingHours?.end ?? '';
+    if (start && end) body.workingHours = { start, end };
+    else if (!start && !end) body.workingHours = null;
+    else problems.push(start ? 'Working hours need an end time as well as a start.'
+                             : 'Working hours need a start time as well as an end.');
+  }
+
+  for (const field of fields) {
+    const val = form[field.key];
+    if (val === undefined) continue;
+    const cleared = val === '';
+
+    if (field.key === 'workingHoursStart' || field.key === 'workingHoursEnd') {
+      continue; // handled as a pair above
+    } else if (field.key === 'certifications') {
+      const expiryByName = new Map((current.certifications || []).map((c) => [c.name, c.expiryDate]));
+      body.certifications = parseListValue(val).map((name) => ({ name, expiryDate: expiryByName.get(name) || '' }));
+    } else if (field.vocab) {
+      body[field.key] = parseListValue(val);
+    } else if (field.type === 'number') {
+      if (!cleared) body[field.key] = Number(val);
+      else if (!NO_EMPTY_VALUE.has(field.key)) body[field.key] = null;
+    } else if (field.type === 'date') {
+      body[field.key] = cleared ? null : new Date(val).toISOString();
+    } else if (TEL_FIELDS.has(field.key)) {
+      // The same +91 normalisation the create form applies. Without it a number edited here is
+      // stored bare while every number created there carries a country code, and the two forms
+      // of the same phone compare as different everywhere downstream.
+      const digits = val.replace(/\D/g, '');
+      body[field.key] = digits ? (digits.startsWith('91') ? `+${digits}` : `+91${digits}`) : val;
+    } else {
+      body[field.key] = val;
+    }
+  }
+
+  return { body, problems };
+}

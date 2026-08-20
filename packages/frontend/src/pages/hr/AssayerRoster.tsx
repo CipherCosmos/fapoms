@@ -159,6 +159,8 @@ export const AssayerRoster: React.FC = () => {
    */
   const [searchParams] = useSearchParams();
   const [openId, setOpenId] = useState<string | null>(searchParams.get('assayer'));
+  /** Incremented by `refresh()`; the detail drawer re-reads the record when it changes. */
+  const [detailVersion, setDetailVersion] = useState(0);
   const [editing, setEditing] = useState<Assayer | null>(null);
   const [creating, setCreating] = useState(false);
   const [bulkTarget, setBulkTarget] = useState('');
@@ -214,6 +216,9 @@ export const AssayerRoster: React.FC = () => {
   const refresh = useCallback(() => {
     load();
     queryClient.invalidateQueries({ queryKey: queryKeys.hr.workforce });
+    // And the open record itself. The list reloading is not enough: the detail drawer holds its
+    // own copy, fetched when it opened, and showed stale values behind every save until reload.
+    setDetailVersion((v) => v + 1);
   }, [load, queryClient]);
 
   // Lifecycle changes can come from anywhere — a bulk action here, an admin
@@ -941,7 +946,8 @@ export const AssayerRoster: React.FC = () => {
           canManage={canManage}
           onClose={() => setOpenId(null)}
           onEdit={(a) => setEditing(a)}
-          onChanged={load}
+          onChanged={refresh}
+          reloadKey={detailVersion}
         />
       )}
       {creating && (

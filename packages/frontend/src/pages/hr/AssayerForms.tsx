@@ -8,7 +8,7 @@ import { Autocomplete } from '../../components/ui/Autocomplete';
 import { ChipMultiSelect } from '../../components/ui/ChipMultiSelect';
 import { useWorkforceVocabulary, asOptions } from '../../hooks/useWorkforceVocabulary';
 import type { Assayer } from './assayer-shared';
-import { STATUS_COLORS } from './assayer-shared';
+import { STATUS_COLORS, buildAssayerEditBody } from './assayer-shared';
 import { userMessage } from '../../services/errors';
 import { fetchWithTimeout } from '../../services/http';
 
@@ -1213,28 +1213,11 @@ export const EditAssayerModal: React.FC<{
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault(); setSubmitting(true);
     try {
-      const body: any = {};
-      EDIT_FIELDS.forEach(field => {
-        const val = form[field.key];
-        if (val !== undefined && val !== '') {
-          if (field.key === 'workingHoursStart' || field.key === 'workingHoursEnd') {
-            body.workingHours = { ...(assayer.workingHours || {}), [field.key === 'workingHoursStart' ? 'start' : 'end']: val };
-          } else if (field.key === 'certifications') {
-            const existing = new Map((assayer.certifications || []).map((c) => [c.name, c.expiryDate]));
-            body.certifications = parseList(val).map((name) => ({ name, expiryDate: existing.get(name) || '' }));
-          } else if (field.vocab) {
-            body[field.key] = parseList(val);
-          } else if (FIELD_TEL.has(field.key)) {
-            // Same +91 normalisation the create form applies. Without it a number edited here
-            // was stored bare while every number created there carried a country code, and the
-            // two forms of the same phone compare as different everywhere downstream.
-            const digits = val.replace(/\D/g, '');
-            body[field.key] = digits ? (digits.startsWith('91') ? `+${digits}` : `+91${digits}`) : val;
-          } else if (field.type === 'number') body[field.key] = Number(val);
-          else if (field.type === 'date') body[field.key] = new Date(val).toISOString();
-          else body[field.key] = val;
-        }
-      });
+      const { body, problems } = buildAssayerEditBody(EDIT_FIELDS, form, assayer);
+      if (problems.length) {
+        toast({ type: 'error', title: 'Could not save changes', message: problems.join(' ') });
+        return;
+      }
       await api.request(`/assayers/${assayer.id}`, { method: 'PUT', body: JSON.stringify(body) });
       onUpdated();
     } catch (err) { toast({ type: 'error', title: 'Could not save changes', message: userMessage(err) }); }

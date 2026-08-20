@@ -98,7 +98,17 @@ export const AssayerDetailDrawer: React.FC<{
   onClose: () => void;
   onEdit: (a: Assayer) => void;
   onChanged: () => void;
-}> = ({ assayerId, canManage, onClose, onEdit, onChanged }) => {
+  /**
+   * Bumped by the roster whenever this record has been changed anywhere — an edit saved, a
+   * lifecycle move, a bulk action.
+   *
+   * Without it this panel read the record once, when it opened, and never again. So an edit
+   * saved correctly and the drawer behind it went on showing the old values until the page was
+   * reloaded: the change was in the database and not on the screen, which is indistinguishable
+   * from a save that silently did nothing.
+   */
+  reloadKey?: number;
+}> = ({ assayerId, canManage, onClose, onEdit, onChanged, reloadKey = 0 }) => {
   const [a, setA] = useState<Assayer | null>(null);
   const [tab, setTab] = useState<TabKey>('summary');
   const [loaded, setLoaded] = useState<Record<string, any>>({});
@@ -110,10 +120,16 @@ export const AssayerDetailDrawer: React.FC<{
   const { confirm, confirmDialog } = useConfirm();
 
   useEffect(() => {
+    let cancelled = false;
     api.request<Assayer>(`/assayers/${assayerId}`)
-      .then(setA)
-      .catch((e) => setErr(userMessage(e)));
-  }, [assayerId]);
+      .then((fresh) => { if (!cancelled) setA(fresh); })
+      .catch((e) => { if (!cancelled) setErr(userMessage(e)); });
+    return () => { cancelled = true; };
+  }, [assayerId, reloadKey]);
+
+  // The per-tab panels are cached in `loaded`; a change to the record invalidates that cache
+  // too, or the Pay and Skills tabs keep serving what they fetched before the edit.
+  useEffect(() => { setLoaded({}); }, [assayerId, reloadKey]);
 
   // Escape closes, matching every other overlay in the app.
   useEffect(() => {
