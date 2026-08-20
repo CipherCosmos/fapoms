@@ -105,6 +105,47 @@ const SYSTEM_REMARKS = new Set<string>([
   'Validation pipeline initialized for project branch.',
 ]);
 
+/**
+ * The same problem, but for machine remarks that embed a filename and so are never the same
+ * string twice.
+ *
+ * An exact-match set caught the one fixed remark and let these through, so the feed still read
+ * "Transitioned document Scan_2026-08-17_00-14-53.pdf to RECEIVED." — a sentence containing a
+ * scanner filename, the word "transitioned", and a raw status enum, printed underneath a line
+ * that had already said "The app received the packet". Three ways of being unreadable in one
+ * row.
+ *
+ * These are anchored, whole-string patterns quoting the exact phrasing the backend writes, not a
+ * "looks technical" heuristic: a remark a person typed must always survive, and a person may
+ * legitimately mention a filename.
+ */
+const SYSTEM_REMARK_PATTERNS: RegExp[] = [
+  /^Transitioned document .+ to [A-Z_]+\.$/,
+  /^Uploaded document .+ for assessment\.$/,
+];
+
+function isSystemRemark(remark: string): boolean {
+  const text = remark.trim();
+  return SYSTEM_REMARKS.has(text) || SYSTEM_REMARK_PATTERNS.some((re) => re.test(text));
+}
+
+/**
+ * What to say when the event has no branch attached.
+ *
+ * Every phrase in ACTIVITY_LABEL is written to be followed by the branch name ("uploaded the
+ * packet for" + "EDAYAR PALAYAM"). The name is only rendered when `branchName` is set, so an
+ * event without one printed the preposition and stopped: "The app uploaded the packet for",
+ * dangling. These are the same events said without an object.
+ */
+const ACTIVITY_LABEL_NO_BRANCH: Record<string, string> = {
+  DOCUMENT_DELEGATED_TO_DATA_ENTRY: 'gave out a packet',
+  DOCUMENT_RECEIVED: 'received a packet',
+  DOCUMENT_UPLOADED: 'uploaded a packet',
+  DOCUMENT_DISPATCHED: 'sent out a packet',
+  VALIDATION_STARTED: 'started checking a report',
+  VALIDATION_CORRECTION_REQUIRED: 'sent a report back for correction',
+};
+
 export const DataEntryOverview: React.FC = () => {
   const roles = useCurrentRoles();
   const { isHead } = deskRole(roles);
@@ -340,7 +381,10 @@ export const DataEntryOverview: React.FC = () => {
               </span>
               {/* An unattributed event is the app itself acting; "System" alone reads like a person's name. */}
               <span style={{ fontWeight: 700 }}>{a.actor ?? 'The app'}</span>
-              <span style={{ color: 'var(--text-secondary)' }}>{ACTIVITY_LABEL[a.eventType] ?? activityEventLabel(a.eventType)}</span>
+              <span style={{ color: 'var(--text-secondary)' }}>
+                {(a.branchName ? ACTIVITY_LABEL[a.eventType] : ACTIVITY_LABEL_NO_BRANCH[a.eventType] ?? ACTIVITY_LABEL[a.eventType])
+                  ?? activityEventLabel(a.eventType)}
+              </span>
               {a.branchName && (
                 a.projectBranchId ? (
                   <button onClick={() => navigate(`/data-entry/case/${a.projectBranchId}`)}
@@ -349,7 +393,7 @@ export const DataEntryOverview: React.FC = () => {
                   </button>
                 ) : <span style={{ color: 'var(--accent)' }}>{a.branchName}</span>
               )}
-              {a.remarks && !SYSTEM_REMARKS.has(a.remarks.trim()) && (
+              {a.remarks && !isSystemRemark(a.remarks) && (
                 <span style={{ color: 'var(--text-muted)', fontSize: '11.5px', flexBasis: '100%' }}>{a.remarks}</span>
               )}
             </div>
