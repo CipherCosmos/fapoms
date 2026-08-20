@@ -167,24 +167,50 @@ export class BranchController {
   @ApiQuery({ name: 'region', required: false, enum: Region })
   @ApiQuery({ name: 'zoneId', required: false })
   @ApiQuery({ name: 'state', required: false })
+  @ApiQuery({ name: 'search', required: false, description: 'Matches branch name, code, SOL ID or city.' })
+  @ApiQuery({ name: 'risk', required: false })
+  @ApiQuery({ name: 'type', required: false })
   async findAll(
     @Query('page') page = 1,
     @Query('limit') limit = 20,
     @GlobalScopeFilter() scope?: GlobalScope,
+    @Query('search') search?: string,
+    @Query('risk') risk?: string,
+    @Query('type') type?: string,
   ) {
-    const { branches, total } = await this.branchService.findAll(page, limit, scope);
+    // Bounded here rather than trusted from the caller: this list feeds a table, and the page
+    // that reads it used to ask for a thousand rows at a time and filter them in the browser.
+    const safeLimit = Math.min(200, Math.max(1, Number(limit) || 20));
+    const safePage = Math.max(1, Number(page) || 1);
+    const { branches, total } = await this.branchService.findAll(
+      safePage, safeLimit, scope, { search, risk, type },
+    );
     return {
       success: true,
       data: branches,
       meta: {
         pagination: {
-          page, limit, total,
-          totalPages: Math.ceil(total / limit),
-          hasNext: page * limit < total,
-          hasPrevious: page > 1,
+          page: safePage, limit: safeLimit, total,
+          totalPages: Math.ceil(total / safeLimit),
+          hasNext: safePage * safeLimit < total,
+          hasPrevious: safePage > 1,
         },
       },
     };
+  }
+
+  @Get('summary')
+  @ApiOperation({ summary: 'Counts for the branch list header, over the same filters as the list' })
+  @ApiQuery({ name: 'search', required: false })
+  @ApiQuery({ name: 'risk', required: false })
+  @ApiQuery({ name: 'type', required: false })
+  async summary(
+    @GlobalScopeFilter() scope?: GlobalScope,
+    @Query('search') search?: string,
+    @Query('risk') risk?: string,
+    @Query('type') type?: string,
+  ) {
+    return { success: true, data: await this.branchService.summary(scope, { search, risk, type }) };
   }
 
   @Get(':id')

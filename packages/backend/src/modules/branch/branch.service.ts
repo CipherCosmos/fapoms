@@ -310,12 +310,20 @@ export class BranchService {
     page = 1,
     limit = 20,
     scope: Partial<GlobalScope> = {},
+    filters: { search?: string; risk?: string; type?: string } = {},
   ): Promise<{ branches: BranchEntity[]; total: number }> {
-    return this.branchQueryService.findAll(page, limit, scope);
+    return this.branchQueryService.findAll(page, limit, scope, filters);
   }
 
   async scopeFacets(scope: Partial<GlobalScope> = {}) {
     return this.branchQueryService.scopeFacets(scope);
+  }
+
+  async summary(
+    scope: Partial<GlobalScope> = {},
+    filters: { search?: string; risk?: string; type?: string } = {},
+  ) {
+    return this.branchQueryService.summary(scope, filters);
   }
 
   async update(id: string, dto: UpdateBranchDto, userId: string): Promise<BranchEntity> {

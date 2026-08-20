@@ -27,6 +27,12 @@ services:
   minio:
     ports: !reset []
 
+  # Redis joined the list when another project on this machine took :6379. Nothing outside
+  # Docker talks to FAPOMS' redis either — the backend reaches it as `redis:6379` on the
+  # Docker network — so it needs no host binding at all.
+  redis:
+    ports: !reset []
+
   # Published on 3001 so the other project's :3000 keeps working.
   # API:      http://localhost:3001/api/v1
   # Swagger:  http://localhost:3001/api/docs

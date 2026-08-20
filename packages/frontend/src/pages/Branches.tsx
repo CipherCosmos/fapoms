@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useUrlSelection } from '../hooks/useUrlSelection';
 import { Upload, Building2, Globe, ShieldAlert, Activity, Plus, Edit2, Trash2, Phone, FileText, User, Filter, ChevronDown, Map, X } from 'lucide-react';
-import { SearchInput, FilterSelect, StatusBadge, AlertBanner, Modal, Select, useToast, useConfirm } from '../components/ui';
+import { SearchInput, FilterSelect, StatusBadge, AlertBanner, Modal, Select, useToast, useConfirm, Pagination } from '../components/ui';
 import { ChipMultiSelect } from '../components/ui/ChipMultiSelect';
 import { useWorkforceVocabulary, asOptions } from '../hooks/useWorkforceVocabulary';
 import { Autocomplete } from '../components/ui/Autocomplete';
@@ -235,6 +235,9 @@ const applyPlaceToBranch = (fieldKey: 'city' | 'district' | 'pincode', place: In
 
 
 
+/** The four figures above the table, counted by the server over the same filter as the rows. */
+interface BranchSummary { total: number; regions: number; highRisk: number; standard: number }
+
 export const Branches: React.FC = () => {
   const { toast } = useToast();
   // Deleting a branch takes its contacts, documents and audit history with it and cannot be
@@ -246,7 +249,22 @@ export const Branches: React.FC = () => {
   // The header's global scope. `scopeKey` changes whenever any dimension does, and is what the
   // reload effect below watches.
   const { scopeParams, scopeKey } = useScope();
+  /**
+   * One page of branches, from the server.
+   *
+   * This screen used to ask for a thousand rows and then search, filter and count them in the
+   * browser. Two things were wrong with that. A client with more branches than the cap had the
+   * remainder silently missing from its own search — the page knew it was truncated and said so,
+   * but the search box still only looked at what had arrived. And every visit paid to fetch and
+   * render up to a thousand table rows, with nothing cached, so returning to the screen was a
+   * full reload every time.
+   *
+   * Search, the risk filter and the four figures above the table all run in SQL now, and the
+   * page holds fifty rows.
+   */
+  const [page, setPage] = useState(1);
   const [branches, setBranches] = useState<Branch[]>([]);
+  const [summary, setSummary] = useState<BranchSummary | null>(null);
   // The true server-side total, so the UI can tell the operator when the loaded list is truncated
   // rather than silently showing a partial list as if it were everything.
   const [branchesTotal, setBranchesTotal] = useState(0);
@@ -304,10 +322,23 @@ export const Branches: React.FC = () => {
       socket?.off('ProjectBranchAssignmentConfirmed', refresh);
     };
   }, []);
+  /**
+   * Refetch when the window over the list moves.
+   *
+   * Debounced on the same 250 ms as the other server-side search boxes in the app, because
+   * `searchTerm` changes on every keystroke and each one is now a real request. Anything that
+   * narrows the set also resets to page one — staying on page 5 of a filter that now matches
+   * three branches shows an empty table.
+   */
   useEffect(() => {
     selectedClientIdRef.current = selectedClientId;
-    if (selectedClientId || scopeParams.clientId) loadBranches(selectedClientId);
-  }, [selectedClientId, scopeKey]);
+    if (!selectedClientId && !scopeParams.clientId) return;
+    const t = setTimeout(() => { loadBranches(selectedClientId); }, 250);
+    return () => clearTimeout(t);
+  }, [selectedClientId, scopeKey, page, searchTerm, riskFilter]);
+
+  // Any change to what is being looked for invalidates the page number.
+  useEffect(() => { setPage(1); }, [searchTerm, riskFilter, selectedClientId, scopeKey]);
 
   useEffect(() => {
     if (branchIdParam && branches.length > 0) {
@@ -324,27 +355,37 @@ export const Branches: React.FC = () => {
     } catch (err) { console.error('Failed to load clients'); }
   };
 
-  const BRANCH_PAGE_LIMIT = 1000;
+  /** One screenful. The server caps anything larger at 200, so this is the real ceiling too. */
+  const BRANCH_PAGE_LIMIT = 50;
   const loadBranches = async (clientId?: string) => {
     setIsLoading(true);
     try {
       // Region, zone and state come from the header's global scope and are applied by the
-      // server. They cannot be applied here: the list is capped at BRANCH_PAGE_LIMIT rows, so
-      // filtering what already arrived would show "12 of 4000" and quietly hide the remainder.
-      // Read through the ref, never the render closure: this is called from the socket handler
-      // too, which was bound once at mount.
+      // server — as, now, are the search box and the risk filter. Read the scope through the
+      // ref, never the render closure: this is called from the socket handler too, which was
+      // bound once at mount.
       const currentScope = scopeParamsRef.current;
-      const url = `/branches?${withScope(currentScope, {
+      const params = {
         // The global client scope wins when set; otherwise the page's own picker decides.
         clientId: currentScope.clientId ?? clientId,
         limit: BRANCH_PAGE_LIMIT,
-      })}`;
-      // withMeta so we learn the true total and can warn when the list is capped, instead of
-      // silently dropping branches past the limit (a bank client can exceed it).
-      const response = await api.request<{ data: Branch[]; meta?: { pagination?: { total?: number } } }>(url, { withMeta: true });
+        page,
+        ...(searchTerm.trim() ? { search: searchTerm.trim() } : {}),
+        ...(riskFilter !== 'ALL' ? { risk: riskFilter } : {}),
+      };
+      const qs = withScope(currentScope, params);
+      // The rows and the figures above them come from one filter, asked of the server twice, so
+      // the table and its header cannot describe different sets.
+      const [response, summary] = await Promise.all([
+        api.request<{ data: Branch[]; meta?: { pagination?: { total?: number } } }>(
+          `/branches?${qs}`, { withMeta: true },
+        ),
+        api.request<BranchSummary>(`/branches/summary?${qs}`),
+      ]);
       const rows = Array.isArray(response) ? (response as unknown as Branch[]) : (response?.data ?? []);
       setBranches(rows);
       setBranchesTotal(response?.meta?.pagination?.total ?? rows.length);
+      setSummary(summary);
     } catch (err) { console.error('Failed to load branches'); }
     finally { setIsLoading(false); }
   };
@@ -411,18 +452,21 @@ export const Branches: React.FC = () => {
     } finally { setIsUploading(false); e.target.value = ''; }
   };
 
-  const filteredBranches = branches.filter(b => {
-    const matchesSearch = !searchTerm || b.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      b.branchCode.toLowerCase().includes(searchTerm.toLowerCase()) || (b.solId && b.solId.includes(searchTerm));
-    const matchesRisk = riskFilter === 'ALL' || b.riskCategory === riskFilter;
-    return matchesSearch && matchesRisk;
-  });
+  // The server already applied the search and the risk filter, so these rows are the answer.
+  const filteredBranches = branches;
 
-  const totalCount = branchesTotal || branches.length;
-  const isTruncated = branchesTotal > branches.length;
-  const regionCount = new Set(branches.map(b => b.region).filter(Boolean)).size;
-  const highRiskCount = branches.filter(b => b.riskCategory === 'HIGH' || b.riskCategory === 'CRITICAL').length;
-  const standardCount = branches.filter(b => b.complexity === 'STANDARD').length;
+  /**
+   * The figures above the table, from the server's own count of the filtered set.
+   *
+   * They used to be derived from the loaded rows, which was right only while the whole estate
+   * fitted in one request. `branchesTotal` falls back to the page length so the header still
+   * reads sensibly on the first paint, before the summary lands.
+   */
+  const totalCount = summary?.total ?? branchesTotal ?? branches.length;
+  const regionCount = summary?.regions ?? 0;
+  const highRiskCount = summary?.highRisk ?? 0;
+  const standardCount = summary?.standard ?? 0;
+  const totalPages = Math.max(1, Math.ceil((branchesTotal || 0) / BRANCH_PAGE_LIMIT));
   // Every branch on file carries a SOL ID, and for all but a handful it is a copy of the branch
   // code (156 of 166 in the live data). Two columns of the same string told the clerk nothing and
   // pushed the branch name off the side of the table, so the SOL ID is shown beneath the code
@@ -464,12 +508,6 @@ export const Branches: React.FC = () => {
 
       {message && <AlertBanner type={message.type} message={message.text} />}
 
-      {isTruncated && (
-        <AlertBanner type="error">
-          Showing {branches.length.toLocaleString()} of {branchesTotal.toLocaleString()} branches — the list is capped.
-          Use the search and filters to narrow down, or select a specific client, so no branches are hidden.
-        </AlertBanner>
-      )}
 
       <div className="responsive-grid-split" style={{ alignItems: 'start', gridTemplateColumns: 'minmax(0, 1fr) minmax(320px, 400px)' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -577,6 +615,14 @@ export const Branches: React.FC = () => {
               </table>
             )}
           </div>
+
+          <Pagination
+            page={page}
+            totalPages={totalPages}
+            total={branchesTotal}
+            pageSize={BRANCH_PAGE_LIMIT}
+            onPageChange={setPage}
+          />
         </div>
 
         {/* Detail Panel */}

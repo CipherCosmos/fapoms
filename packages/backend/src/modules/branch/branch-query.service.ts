@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Repository, SelectQueryBuilder } from 'typeorm';
 import { BranchEntity } from './branch.entity';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 
@@ -35,17 +35,54 @@ export class BranchQueryService {
    * that a caller which forgets about regions cannot accidentally serve an operator branches
    * outside their assignment.
    */
+  /**
+   * One page of branches, filtered where the rows are.
+   *
+   * `search`, `risk` and `type` are here because the branches screen was doing them in the
+   * browser: it asked for a thousand rows and filtered those, which meant a bank with more
+   * branches than that had the remainder silently missing from its own search, and the page
+   * paid to render up to a thousand table rows on every visit. A filter belongs next to the
+   * data it filters.
+   */
   async findAll(
     page = 1,
     limit = 50,
     scope: Partial<GlobalScope> = {},
+    filters: { search?: string; risk?: string; type?: string } = {},
   ): Promise<{ branches: BranchEntity[]; total: number }> {
     const { clientId, zoneId, state, regions } = scope;
 
     const query = this.branchRepository.createQueryBuilder('branch')
-      .leftJoinAndSelect('branch.contacts', 'contacts', 'contacts.isActive = true')
-      .where('branch.is_active = :isActive', { isActive: true });
+      .leftJoinAndSelect('branch.contacts', 'contacts', 'contacts.isActive = true');
+    BranchQueryService.applyBranchFilters(query, scope, filters);
 
+    const [branches, total] = await query
+      // `name` ties constantly across a bank's branches, and an unbroken tie under LIMIT/OFFSET
+      // lets rows swap between pages; id breaks it.
+      .orderBy('branch.name', 'ASC')
+      .addOrderBy('branch.id', 'ASC')
+      .take(limit)
+      .skip((page - 1) * limit)
+      .getManyAndCount();
+
+    return { branches, total };
+  }
+
+  /**
+   * The one place the branch list's filters are expressed.
+   *
+   * The page query and the summary beneath it have to describe the same set, or the table says
+   * one thing and the four figures above it say another — which is exactly what happened while
+   * the filtering lived in the browser: the counts were computed over whatever thousand rows
+   * had arrived, so they described the page rather than the client's estate.
+   */
+  private static applyBranchFilters(
+    query: SelectQueryBuilder<BranchEntity>,
+    scope: Partial<GlobalScope>,
+    filters: { search?: string; risk?: string; type?: string },
+  ): void {
+    const { clientId, zoneId, state, regions } = scope;
+    query.where('branch.is_active = :isActive', { isActive: true });
     if (clientId) query.andWhere('branch.client_id = :clientId', { clientId });
     if (zoneId) query.andWhere('branch.zone_id = :zoneId', { zoneId });
     if (state) query.andWhere('UPPER(branch.state) = UPPER(:state)', { state });
@@ -53,13 +90,54 @@ export class BranchQueryService {
       query.andWhere('branch.region IN (:...regions)', { regions });
     }
 
-    const [branches, total] = await query
-      .orderBy('branch.name', 'ASC')
-      .take(limit)
-      .skip((page - 1) * limit)
-      .getManyAndCount();
+    const search = (filters.search ?? '').trim();
+    if (search) {
+      // The same four fields the page's own search box matched on, so moving it to the server
+      // changes where it runs, not what it finds.
+      query.andWhere(
+        `(branch.name ILIKE :q OR branch.branch_code ILIKE :q
+          OR branch.sol_id ILIKE :q OR branch.city ILIKE :q)`,
+        { q: `%${search}%` },
+      );
+    }
+    if (filters.risk && filters.risk !== 'ALL') {
+      query.andWhere('branch.risk_category = :risk', { risk: filters.risk });
+    }
+    if (filters.type && filters.type !== 'ALL') {
+      query.andWhere('branch.branch_type = :type', { type: filters.type });
+    }
+  }
 
-    return { branches, total };
+  /**
+   * The figures above the branch table, counted over the whole filtered set.
+   *
+   * They were derived in the browser from the rows that happened to be loaded, so they were
+   * only ever right while the whole estate fitted in one request. Paging the table would have
+   * made them describe fifty rows.
+   */
+  async summary(
+    scope: Partial<GlobalScope> = {},
+    filters: { search?: string; risk?: string; type?: string } = {},
+  ): Promise<{ total: number; regions: number; highRisk: number; standard: number }> {
+    const query = this.branchRepository.createQueryBuilder('branch');
+    BranchQueryService.applyBranchFilters(query, scope, filters);
+
+    const row = await query
+      .select('COUNT(*)::int', 'total')
+      .addSelect('COUNT(DISTINCT branch.region)::int', 'regions')
+      .addSelect(
+        `COUNT(*) FILTER (WHERE branch.risk_category IN ('HIGH','CRITICAL'))::int`,
+        'highRisk',
+      )
+      .addSelect(`COUNT(*) FILTER (WHERE branch.complexity = 'STANDARD')::int`, 'standard')
+      .getRawOne<{ total: string; regions: string; highRisk: string; standard: string }>();
+
+    return {
+      total: Number(row?.total ?? 0),
+      regions: Number(row?.regions ?? 0),
+      highRisk: Number(row?.highRisk ?? 0),
+      standard: Number(row?.standard ?? 0),
+    };
   }
 
   /**
