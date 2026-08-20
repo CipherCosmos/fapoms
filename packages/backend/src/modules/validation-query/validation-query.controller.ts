@@ -290,6 +290,16 @@ export class ValidationQueryController {
     };
   }
 
+  @Roles(...STAFF_ROLES)
+  @Get('worklist/by-assayer')
+  @ApiOperation({ summary: 'Open clarifications grouped by auditor, most pressing auditor first (for a single call)' })
+  async worklistByAssayer(@Query() q: ClarificationWorklistQuery) {
+    return {
+      success: true,
+      data: await this.validationQueryService.getClarificationsByAssayer({ limit: q.limit }),
+    };
+  }
+
   @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @Get()
   @ApiOperation({ summary: 'List validation queries (paginated; page/limit, default limit 50)' })
@@ -375,7 +385,28 @@ export class ValidationQueryController {
   @ApiOperation({ summary: 'Full clarification thread' })
   async listMessages(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     const messages = await this.threadService.listMessages(id);
-    return { success: true, data: messages };
+    /**
+     * Hand the mobile app a picture it can actually load.
+     *
+     * A message can be pinned to a rectangle on the returned PDF — `pageNumber` + `region` say
+     * where, and `snapshotPath` is the desk's cropped image of it. Those two fields already ride
+     * along on the entity, but `snapshotPath` is a storage key no image tag can fetch on its own.
+     * We wrap it in the same short-lived HMAC link `attachment-token` issues for every other chat
+     * attachment, so the phone renders the crop without a session token ever touching the URL.
+     * No new route and no widening of access: the link is signed against this one key and expires.
+     */
+    const data = messages.map((m) => ({
+      ...m,
+      snapshotUrl: m.snapshotPath ? this.signedAttachmentUrl(m.snapshotPath) : null,
+    }));
+    return { success: true, data };
+  }
+
+  /** A five-minute, single-key download link, reusing the attachment-token instrument above. */
+  private signedAttachmentUrl(snapshotPathOrKey: string): string {
+    const key = QueryThreadService.storageKeyFromUrl(snapshotPathOrKey);
+    const { token } = this.documentAccessTokenService.issue(key);
+    return `/api/v1/validation-queries/attachment/${encodeURIComponent(key)}?token=${token}`;
   }
 
   @Post(':id/messages')

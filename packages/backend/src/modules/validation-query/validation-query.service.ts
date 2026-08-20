@@ -580,6 +580,105 @@ export class ValidationQueryService {
   }
 
   /**
+   * The same open clarifications, gathered under the auditor they are with.
+   *
+   * The flat worklist is one long list ordered by deadline, which is the wrong shape for the
+   * one thing the desk does most: pick up the phone and clear everything still open with a
+   * single auditor in one call. This groups the open clarifications by auditor — "Ravi — 4 open
+   * questions" — puts the most pressing auditor first, and the most urgent question first inside
+   * each group. Resolved clarifications are left out on purpose: this is the call list, not the
+   * archive.
+   */
+  async getClarificationsByAssayer(opts: { limit?: number } = {}): Promise<{
+    groups: Array<{
+      assayerId: string | null;
+      assayerName: string | null;
+      assayerCode: string | null;
+      openCount: number;
+      overdueCount: number;
+      oldestCreatedAt: string | null;
+      items: Array<{
+        id: string;
+        validationCaseId: string;
+        projectBranchId: string | null;
+        status: string;
+        queryText: string;
+        targetField: string | null;
+        branchName: string | null;
+        assayerName: string | null;
+        assayerCode: string | null;
+        createdAt: string;
+        lastMessageAt: string | null;
+        slaDueDate: string | null;
+        slaOverdue: boolean;
+        awaiting: 'US' | 'ASSAYER' | 'DONE';
+      }>;
+    }>;
+    total: number;
+    limit: number;
+  }> {
+    const limit = Math.min(CLARIFICATION_PAGE_MAX, Math.max(1, Number(opts.limit) || CLARIFICATION_PAGE_DEFAULT));
+
+    const rows = await this.queryRepository.manager.query(
+      `SELECT q.id, q.validation_case_id AS "validationCaseId", vc.project_branch_id AS "projectBranchId", q.status,
+              q.query_text AS "queryText", q.target_field AS "targetField",
+              q.created_at AS "createdAt", q.last_message_at AS "lastMessageAt",
+              q.sla_due_date AS "slaDueDate", q.assayer_id AS "assayerId",
+              b.name AS "branchName", a.display_name AS "assayerName", a.assayer_code AS "assayerCode"
+         FROM validation_queries q
+         LEFT JOIN validation_cases vc ON vc.id = q.validation_case_id
+         LEFT JOIN project_branches pb ON pb.id = vc.project_branch_id
+         LEFT JOIN branches b ON b.id = pb.branch_id
+         LEFT JOIN assayers a ON a.id = q.assayer_id
+        WHERE q.is_active = true AND q.status <> 'RESOLVED'
+        -- Soonest deadline first, so the auditor a group forms around is the most pressing one,
+        -- and inside a group the most urgent question leads.
+        ORDER BY q.sla_due_date ASC NULLS LAST, q.created_at ASC, q.id ASC
+        LIMIT ${limit}`,
+    );
+
+    const now = Date.now();
+    const order: string[] = [];
+    const byAssayer = new Map<string, {
+      assayerId: string | null; assayerName: string | null; assayerCode: string | null;
+      openCount: number; overdueCount: number; oldestCreatedAt: string | null; items: any[];
+    }>();
+
+    for (const r of rows) {
+      const key = r.assayerId ?? '__unassigned__';
+      const awaiting = r.status === 'OPEN' ? 'ASSAYER' : r.status === 'RESPONDED' ? 'US' : 'DONE';
+      const slaOverdue = !!r.slaDueDate && r.status !== 'RESOLVED' && new Date(r.slaDueDate).getTime() < now;
+      // Drop assayer_id from the row itself — the group already carries the auditor's identity,
+      // and the item then matches the flat worklist row the page already knows how to draw.
+      const { assayerId, ...rest } = r;
+      const item = { ...rest, awaiting, slaOverdue };
+
+      let g = byAssayer.get(key);
+      if (!g) {
+        g = {
+          assayerId: r.assayerId ?? null,
+          assayerName: r.assayerName ?? null,
+          assayerCode: r.assayerCode ?? null,
+          openCount: 0, overdueCount: 0, oldestCreatedAt: null, items: [],
+        };
+        byAssayer.set(key, g);
+        // First appearance fixes the group's place — and because the rows are already sorted by
+        // deadline, the most pressing auditor is seen first.
+        order.push(key);
+      }
+      g.items.push(item);
+      g.openCount += 1;
+      if (slaOverdue) g.overdueCount += 1;
+      if (!g.oldestCreatedAt || (r.createdAt && new Date(r.createdAt).getTime() < new Date(g.oldestCreatedAt).getTime())) {
+        g.oldestCreatedAt = r.createdAt;
+      }
+    }
+
+    const groups = order.map((k) => byAssayer.get(k)!);
+    return { groups, total: rows.length, limit };
+  }
+
+  /**
    * Paginated list of active validation queries, newest first.
    *
    * This table is append-only and never pruned, so an unbounded `find()` grew
