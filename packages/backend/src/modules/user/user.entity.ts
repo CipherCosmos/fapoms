@@ -18,7 +18,11 @@ export class UserEntity extends BaseEntity {
   @Column({ unique: true, length: 255 })
   email: string;
 
-  @Column({ name: 'password_hash', length: 255 })
+  // `select: false`: the hash never loads on an ordinary read, so it cannot ride out in a raw
+  // entity return and — the real exposure — it is no longer pulled into the Redis principal cache
+  // by validateJwtPayload. The two places that legitimately need it (login, change-password) opt
+  // back in explicitly.
+  @Column({ name: 'password_hash', length: 255, select: false })
   passwordHash: string;
 
   @Column({ name: 'first_name', length: 100 })

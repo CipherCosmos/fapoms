@@ -2192,6 +2192,10 @@ export class AssayerService implements OnModuleInit {
     });
 
     await this.recordActivity(assayerId, 'ASSAYER_PASSWORD_CHANGED', null, null, assayerId, 'Password changed by the assayer');
+
+    // End every existing session (refresh tokens keyed by this id) — a stolen token must not keep
+    // rotating after the password changes. Handled in AuthService. The mobile app re-authenticates.
+    this.eventPublisher.publish('user:password-changed', { userId: assayerId });
   }
 
   /** HR/admin resets an assayer's password — the only recovery path for someone locked out. */
@@ -2233,6 +2237,9 @@ export class AssayerService implements OnModuleInit {
     });
 
     await this.recordActivity(assayerId, 'ASSAYER_PASSWORD_RESET', null, null, actorId, 'Password reset by staff');
+
+    // A staff reset must end the assayer's existing sessions too — see AuthService.
+    this.eventPublisher.publish('user:password-changed', { userId: assayerId });
 
     return wasGenerated ? { generatedPassword: password } : {};
   }

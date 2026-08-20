@@ -416,13 +416,21 @@ export class AssignmentController {
       }
       assignment = await this.assignmentService.proposeCounterFee(id, userId, Number(feeVal), body.reason ?? body.remarks);
     } else if (targetStatus === 'ACCEPTED') {
-      // `fee` lets the desk accept on an assayer's behalf at a verbally-agreed number — the
+      // `fee` lets the DESK accept on an assayer's behalf at a verbally-agreed number — the
       // phone-channel flow, where the negotiation happened inside the call, not in the app.
-      const acceptFee = body.fee ?? body.agreedFee;
+      //
+      // An ASSAYER accepting their OWN offer must NOT be able to name the fee. This route takes an
+      // unvalidated body, and the accept path wrote whatever `fee`/`agreedFee` it carried straight
+      // to `agreedFee` — so an assayer could accept their own assignment at any amount, and because
+      // ACCEPTED→ACCEPTED is a valid self-loop, re-accept to bump it upward before completion, then
+      // be paid that figure. When the caller is the assayer we ignore any supplied fee and accept at
+      // the standing proposedFee (which already holds the negotiated number); the desk flow is
+      // unchanged.
+      const deskSuppliedFee = callerIsAssayer ? undefined : (body.fee ?? body.agreedFee);
       assignment = await this.assignmentService.acceptOffer(
         id,
         userId,
-        acceptFee != null && !isNaN(Number(acceptFee)) ? Number(acceptFee) : undefined,
+        deskSuppliedFee != null && !isNaN(Number(deskSuppliedFee)) ? Number(deskSuppliedFee) : undefined,
         body.reason ?? body.remarks,
       );
     } else if (targetStatus === 'REJECTED') {

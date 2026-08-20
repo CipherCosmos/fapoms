@@ -411,6 +411,10 @@ export class UserService {
       userId: actorId,
       remarks: `Password reset for ${user.username} by an administrator`,
     });
+
+    // A reset exists to lock an account down (compromise, or a locked-out user): end every session
+    // the old password could still be driving. See the handler in AuthService.
+    this.eventPublisher.publish('user:password-changed', { userId: id });
   }
 
   async changePassword(id: string, currentPassword: string, newPassword: string): Promise<void> {
@@ -451,6 +455,9 @@ export class UserService {
       userId: id,
       remarks: `Self-service password update for ${user.username}`,
     });
+
+    // End every other session — see the 'user:password-changed' handler in AuthService.
+    this.eventPublisher.publish('user:password-changed', { userId: id });
   }
 
   async assignRoles(
