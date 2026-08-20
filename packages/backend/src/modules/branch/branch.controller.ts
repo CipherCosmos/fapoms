@@ -19,6 +19,7 @@ import { Region } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { assertUploadAllowed, UPLOAD_INTERCEPTOR_OPTIONS } from '../document/upload-validation';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean, Min, IsObject, IsUUID } from 'class-validator';
 import { BranchService, CreateBranchDto, UpdateBranchDto, CreateContactDto, UpdateContactDto, CreateDocumentDto } from './branch.service';
@@ -289,7 +290,7 @@ export class BranchController {
   @Post('import/:clientId')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('branch:create:organization')
-  @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
+  @UseInterceptors(FileInterceptor('file', UPLOAD_INTERCEPTOR_OPTIONS), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Import branches from Excel' })
   @ApiBody({
@@ -307,6 +308,11 @@ export class BranchController {
     if (!file?.buffer?.length) {
       throw new BadRequestException('No file was uploaded. Choose a file and try again.');
     }
+    // Type + size gate before the Excel parser sees it. This route had neither a multer limit nor a
+    // type check, so any file of any size was handed straight to the spreadsheet parser (a parse-
+    // amplification / zip-bomb surface). The interceptor now caps the buffer; this rejects a wrong
+    // type up front.
+    assertUploadAllowed({ contentType: file.mimetype, size: file.size, hint: 'Upload the branches Excel file.' });
     const result = await this.branchService.importExcel(file.buffer, clientId, req.user.id);
     return { success: true, data: result };
   }

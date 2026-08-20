@@ -183,6 +183,9 @@ export class UserService {
     page = 1,
     limit = 20,
   ): Promise<{ users: UserEntity[]; total: number }> {
+    // Clamp the page size: an unbounded client `limit` turns one request into a full-table
+    // scan. 200 is the same class of ceiling the assignment list already uses.
+    limit = Math.min(Math.max(Number(limit) || 20, 1), 200);
     const [users, total] = await this.userRepository.findAndCount({
       relations: ['roles'],
       order: { createdAt: 'DESC' },
