@@ -229,11 +229,24 @@ export enum PermissionResource {
    */
   PLANNING = 'PLANNING',
   DOCUMENT = 'DOCUMENT',
+  /**
+   * The OCR boundary: submitting a packet for recognition, its callback, and retrying a job.
+   *
+   * Same story as PLANNING above, and the holiday calendar before it. Three routes were guarded
+   * by `ocr:create|edit:organization` while OCR was not a member of this enum, so no such
+   * permission row existed and no role could hold one — the routes were refused to every
+   * principal, super administrator included. The parity spec now fails on this shape rather
+   * than waiting for someone to notice a feature has never worked.
+   */
+  OCR = 'OCR',
   VALIDATION = 'VALIDATION',
   ASSAYER = 'ASSAYER',
   CLIENT = 'CLIENT',
   USER = 'USER',
   ROLE = 'ROLE',
+  /** The organisation record itself — creating, editing and removing one. Also absent, also
+   *  guarding three routes that consequently nobody could call. */
+  ORGANIZATION = 'ORGANIZATION',
   CONFIGURATION = 'CONFIGURATION',
   REFERENCE_DATA = 'REFERENCE_DATA',
   AUDIT_LOG = 'AUDIT_LOG',

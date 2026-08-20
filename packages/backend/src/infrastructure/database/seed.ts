@@ -1,3 +1,4 @@
+import { ROLE_PERMISSIONS } from '../../modules/auth/role-permissions';
 import { AppDataSource } from './data-source';
 import { UserEntity } from '../../modules/user/user.entity';
 import { RoleEntity } from '../../modules/user/role.entity';
@@ -283,72 +284,48 @@ async function seed() {
     const roleRepository = AppDataSource.getRepository(RoleEntity);
     const existingRoles = await roleRepository.find();
     
+    /**
+     * Roles are built from the one grant table, not from a copy kept here.
+     *
+     * These lists used to be written out inline, while the roles that arrived later were granted
+     * by migrations — so what a role actually held could not be read anywhere. See
+     * `modules/auth/role-permissions.ts`, and the parity spec that holds it to what the routes
+     * declare.
+     */
     const roleDefinitions = [
       {
         name: SystemRole.SUPER_ADMINISTRATOR,
         displayName: 'Super Administrator',
         description: 'Unlimited access to all platform features and configuration.',
-        permissionKeys: Array.from(permissionMap.keys()), // All permissions
+        permissionKeys: ROLE_PERMISSIONS[SystemRole.SUPER_ADMINISTRATOR],
         responsibilityNames: Array.from(responsibilityMap.keys()), // All responsibilities
       },
       {
         name: SystemRole.ADMINISTRATOR,
         displayName: 'Administrator',
         description: 'Full platform access excluding system configuration.',
-        permissionKeys: [
-          'PROJECT:VIEW:PLATFORM', 'PROJECT:CREATE:ORGANIZATION', 'PROJECT:EDIT:ORGANIZATION', 'PROJECT:ARCHIVE:ORGANIZATION', 'PROJECT:CLOSE:ORGANIZATION', 'PROJECT:DELETE:ORGANIZATION',
-          'BRANCH:VIEW:PLATFORM', 'BRANCH:IMPORT:ORGANIZATION', 'BRANCH:EDIT:ORGANIZATION', 'BRANCH:CREATE:ORGANIZATION', 'BRANCH:DELETE:ORGANIZATION',
-          'CLIENT:VIEW:PLATFORM', 'CLIENT:CREATE:ORGANIZATION', 'CLIENT:EDIT:ORGANIZATION', 'CLIENT:DELETE:ORGANIZATION',
-          'ASSIGNMENT:VIEW:PLATFORM', 'ASSIGNMENT:CREATE:ORGANIZATION', 'ASSIGNMENT:NEGOTIATE:ORGANIZATION', 'ASSIGNMENT:CANCEL:ORGANIZATION',
-          'SCHEDULING:VIEW:PLATFORM', 'SCHEDULING:CREATE:ORGANIZATION', 'SCHEDULING:MODIFY:ORGANIZATION',
-          'DOCUMENT:UPLOAD:ORGANIZATION', 'DOCUMENT:GENERATE:ORGANIZATION', 'DOCUMENT:DOWNLOAD:PLATFORM', 'DOCUMENT:VIEW:PLATFORM', 'DOCUMENT:EDIT:ORGANIZATION', 'DOCUMENT:CREATE:ORGANIZATION',
-          'VALIDATION:VIEW:PLATFORM', 'VALIDATION:CREATE:ORGANIZATION', 'VALIDATION:EDIT:ORGANIZATION', 'VALIDATION:ASSIGN:ORGANIZATION', 'VALIDATION:APPROVE:ORGANIZATION',
-          'PLANNING:VIEW:PLATFORM', 'PLANNING:CREATE:ORGANIZATION', 'PLANNING:EDIT:ORGANIZATION', 'PLANNING:DELETE:ORGANIZATION',
-          'BILLING:VIEW:PLATFORM', 'BILLING:CREATE:ORGANIZATION', 'BILLING:EDIT:ORGANIZATION', 'BILLING:APPROVE:ORGANIZATION',
-          'USER:VIEW:PLATFORM', 'USER:CREATE:PLATFORM', 'USER:EDIT:PLATFORM',
-          'CONFIGURATION:VIEW:PLATFORM',
-          'AUDIT_LOG:VIEW:PLATFORM',
-          'ASSAYER:VIEW:PLATFORM', 'ASSAYER:CREATE:ORGANIZATION', 'ASSAYER:EDIT:ORGANIZATION', 'ASSAYER:DELETE:ORGANIZATION',
-          'REFERENCE_DATA:VIEW:PLATFORM', 'REFERENCE_DATA:CREATE:ORGANIZATION', 'REFERENCE_DATA:EDIT:ORGANIZATION', 'REFERENCE_DATA:DELETE:ORGANIZATION',
-        ],
+        permissionKeys: ROLE_PERMISSIONS[SystemRole.ADMINISTRATOR],
         responsibilityNames: ['PROJECT_MANAGEMENT', 'BRANCH_MANAGEMENT', 'ASSIGNMENT_MANAGEMENT', 'SCHEDULE_MANAGEMENT', 'DOCUMENT_MANAGEMENT', 'USER_ADMINISTRATION', 'AUDIT_ACCESS'],
       },
       {
         name: SystemRole.OPERATIONS_MANAGER,
         displayName: 'Operations Manager',
         description: 'Manages projects, assignment planning, schedules, and assayers.',
-        permissionKeys: [
-          'PROJECT:VIEW:PLATFORM', 'PROJECT:CREATE:ORGANIZATION', 'PROJECT:EDIT:ORGANIZATION', 'PROJECT:ARCHIVE:ORGANIZATION', 'PROJECT:CLOSE:ORGANIZATION',
-          'BRANCH:VIEW:PLATFORM', 'BRANCH:IMPORT:ORGANIZATION', 'BRANCH:EDIT:ORGANIZATION',
-          'CLIENT:VIEW:PLATFORM', 'CLIENT:CREATE:ORGANIZATION', 'CLIENT:EDIT:ORGANIZATION',
-          'ASSIGNMENT:VIEW:PLATFORM', 'ASSIGNMENT:CREATE:ORGANIZATION', 'ASSIGNMENT:NEGOTIATE:ORGANIZATION', 'ASSIGNMENT:CANCEL:ORGANIZATION',
-          'SCHEDULING:VIEW:PLATFORM', 'SCHEDULING:CREATE:ORGANIZATION', 'SCHEDULING:MODIFY:ORGANIZATION',
-          'DOCUMENT:UPLOAD:ORGANIZATION', 'DOCUMENT:GENERATE:ORGANIZATION', 'DOCUMENT:DOWNLOAD:PLATFORM',
-        ],
+        permissionKeys: ROLE_PERMISSIONS[SystemRole.OPERATIONS_MANAGER],
         responsibilityNames: ['PROJECT_MANAGEMENT', 'BRANCH_MANAGEMENT', 'ASSIGNMENT_MANAGEMENT', 'SCHEDULE_MANAGEMENT', 'DOCUMENT_MANAGEMENT'],
       },
       {
         name: SystemRole.OPERATIONS_EXECUTIVE,
         displayName: 'Operations Executive',
         description: 'Day to day assayer communication, negotiation logging, and scheduling.',
-        permissionKeys: [
-          'PROJECT:VIEW:PLATFORM',
-          'BRANCH:VIEW:PLATFORM',
-          'ASSIGNMENT:VIEW:PLATFORM', 'ASSIGNMENT:NEGOTIATE:ORGANIZATION',
-          'SCHEDULING:VIEW:PLATFORM', 'SCHEDULING:CREATE:ORGANIZATION', 'SCHEDULING:MODIFY:ORGANIZATION',
-          'DOCUMENT:DOWNLOAD:PLATFORM',
-        ],
+        permissionKeys: ROLE_PERMISSIONS[SystemRole.OPERATIONS_EXECUTIVE],
         responsibilityNames: ['PROJECT_VIEWING', 'BRANCH_VIEWING', 'ASSIGNMENT_VIEWING', 'ASSIGNMENT_MANAGEMENT', 'SCHEDULE_MANAGEMENT', 'DOCUMENT_ACCESS'],
       },
       {
         name: SystemRole.VALIDATOR,
         displayName: 'Validator',
         description: 'Performs OCR manual review and corrections.',
-        permissionKeys: [
-          'PROJECT:VIEW:PLATFORM',
-          'VALIDATION:REVIEW:ASSIGNED_RECORDS',
-          'DOCUMENT:DOWNLOAD:PLATFORM',
-        ],
+        permissionKeys: ROLE_PERMISSIONS[SystemRole.VALIDATOR],
         responsibilityNames: ['PROJECT_VIEWING', 'VALIDATION_REVIEWING', 'DOCUMENT_ACCESS'],
       },
     ];
