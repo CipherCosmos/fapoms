@@ -45,6 +45,15 @@ const ON_ROSTER = 'is_active = true AND exit_date IS NULL AND termination_date I
 /** The same predicate for a query that aliases the table (`FROM assayers a`). */
 const ON_ROSTER_A = 'a.is_active = true AND a.exit_date IS NULL AND a.termination_date IS NULL';
 
+/**
+ * The stages a candidate passes through, and the one they arrive at.
+ *
+ * ACTIVE is on the end because the funnel chart draws it as the destination — but it is not a
+ * stage anyone is *waiting* in, and treating it as one is what made a healthy roster look
+ * alarming: "stalled" and "average wait" were computed for it too, so eight people who had
+ * been working happily for two months read as eight people stuck. `PRE_ACTIVE_STAGES` is what
+ * those two questions are asked about.
+ */
 const ONBOARDING_STAGES = [
   { key: 'INVITED', label: 'Invited' },
   { key: 'DOCUMENT_VERIFICATION', label: 'Document check' },
@@ -52,6 +61,11 @@ const ONBOARDING_STAGES = [
   { key: 'TRAINING', label: 'Training' },
   { key: 'ACTIVE', label: 'Active' },
 ];
+
+/** Everything before the destination — the stages "stalled" and "in onboarding" mean. */
+const PRE_ACTIVE_STAGES: string[] = ONBOARDING_STAGES
+  .filter((s) => s.key !== 'ACTIVE')
+  .map((s) => s.key);
 
 /** Past this many days in one onboarding stage, a candidate is stalled. */
 const STALLED_AFTER_DAYS = 7;
@@ -212,26 +226,40 @@ export class HrWorkforceService {
 
     const stages = ONBOARDING_STAGES.map((s) => {
       const inStage = rows.filter((r: any) => r.stage === s.key);
+      // Only pre-ACTIVE stages have a meaningful "stalled" or "average wait" — see
+      // PRE_ACTIVE_STAGES. The comment used to say so while the code counted ACTIVE anyway,
+      // which put an amber "waiting too long" beside a roster that was simply working.
+      const isWaiting = PRE_ACTIVE_STAGES.includes(s.key);
       return {
         ...s,
         count: inStage.length,
-        stalled: inStage.filter((r: any) => r.daysInStage >= STALLED_AFTER_DAYS).length,
-        // Only pre-ACTIVE stages have a meaningful "average wait".
-        avgDaysInStage: inStage.length
+        stalled: isWaiting
+          ? inStage.filter((r: any) => r.daysInStage >= STALLED_AFTER_DAYS).length
+          : 0,
+        avgDaysInStage: isWaiting && inStage.length
           ? Math.round(inStage.reduce((t: number, r: any) => t + r.daysInStage, 0) / inStage.length)
           : 0,
       };
     });
 
     const stalled = rows
-      .filter((r: any) => r.stage !== 'ACTIVE' && r.daysInStage >= STALLED_AFTER_DAYS)
+      .filter((r: any) => PRE_ACTIVE_STAGES.includes(r.stage) && r.daysInStage >= STALLED_AFTER_DAYS)
       .slice(0, 25);
 
     return {
       stalledAfterDays: STALLED_AFTER_DAYS,
       stages,
       stalled,
-      inProgress: rows.filter((r: any) => r.stage !== 'ACTIVE').length,
+      /**
+       * People actually part-way through onboarding.
+       *
+       * This counted everything that was not ACTIVE, which sweeps in RESIGNED, TERMINATED and
+       * ARCHIVED records whose exit date was never filled in — and that is the common case, not
+       * a rare one, which is why the headcount above is written to key off the status rather
+       * than the date. The same person then appeared as "1 exited" in the header and "1 in
+       * onboarding" in the tile beside it.
+       */
+      inProgress: rows.filter((r: any) => PRE_ACTIVE_STAGES.includes(r.stage)).length,
     };
   }
 
@@ -287,6 +315,21 @@ export class HrWorkforceService {
       LIMIT 100
     `);
 
+    /**
+     * How many records are incomplete, as opposed to how many fit on the page.
+     *
+     * `incompleteCount` was `incomplete.length`, and that query is capped at a hundred. So the
+     * Overview's "records complete" figure and the Paperwork badge stopped moving past a
+     * hundred while the per-field bars beside them — real aggregates — went on counting
+     * thousands. Two numbers describing the same roster, side by side, on the same screen.
+     */
+    const [incompleteTotals] = await this.dataSource.query(`
+      SELECT COUNT(*)::int AS count
+      FROM assayers
+      WHERE ${ON_ROSTER}
+        AND (${criticalCols.map((c) => `${c} IS NULL OR ${c}::text = ''`).join(' OR ')})
+    `);
+
     const govDocs = await this.dataSource.query(`
       SELECT COALESCE(verification_status, 'PENDING') AS status, COUNT(*)::int AS count
       FROM assayer_government_documents WHERE is_active = true GROUP BY 1
@@ -335,7 +378,7 @@ export class HrWorkforceService {
       roster: total,
       fields,
       incomplete,
-      incompleteCount: incomplete.length,
+      incompleteCount: HrWorkforceService.num(incompleteTotals?.count),
       governmentDocuments: { byStatus: govDocs, ...docCoverage },
     };
   }
@@ -445,16 +488,47 @@ export class HrWorkforceService {
       LIMIT 100
     `);
 
-    const bucket = (rows: any[]) => ({
-      expired: rows.filter((r) => r.daysToExpiry < 0).length,
-      within30: rows.filter((r) => r.daysToExpiry >= 0 && r.daysToExpiry <= 30).length,
-      within90: rows.filter((r) => r.daysToExpiry > 30 && r.daysToExpiry <= 90).length,
-      within180: rows.filter((r) => r.daysToExpiry > 90).length,
-    });
+    /**
+     * The buckets count the whole set; the rows above are the hundred soonest.
+     *
+     * These four figures used to be counted in JS over those hundred rows, so on any roster
+     * with more than a hundred credentials lapsing inside six months they described the page
+     * rather than the workforce. With a backlog of expired ones the hundred soonest are all
+     * expired, which reported "0 expiring within 30 days" and silently dropped the renewal
+     * action derived from it — the counts said the quietest possible thing exactly when there
+     * was most to do.
+     */
+    const bucketsFor = async (table: string, alias: string, dateColumn: string) => {
+      const [counts] = await this.dataSource.query(`
+        SELECT COUNT(*) FILTER (WHERE days < 0)::int                    AS expired,
+               COUNT(*) FILTER (WHERE days BETWEEN 0 AND 30)::int       AS within30,
+               COUNT(*) FILTER (WHERE days > 30 AND days <= 90)::int    AS within90,
+               COUNT(*) FILTER (WHERE days > 90)::int                   AS within180
+          FROM (
+            SELECT (${alias}.${dateColumn}::date - ${BUSINESS_TODAY_SQL})::int AS days
+              FROM ${table} ${alias}
+              JOIN assayers a ON a.id = ${alias}.assayer_id
+             WHERE ${alias}.is_active = true AND ${alias}.${dateColumn} IS NOT NULL
+               AND ${ON_ROSTER_A}
+               AND ${alias}.${dateColumn}::date <= ${BUSINESS_TODAY_SQL} + INTERVAL '180 days'
+          ) lapsing
+      `);
+      return {
+        expired: HrWorkforceService.num(counts?.expired),
+        within30: HrWorkforceService.num(counts?.within30),
+        within90: HrWorkforceService.num(counts?.within90),
+        within180: HrWorkforceService.num(counts?.within180),
+      };
+    };
+
+    const [certificationCounts, documentCounts] = await Promise.all([
+      bucketsFor('workforce_attributes', 'w', 'expiry_date'),
+      bucketsFor('assayer_government_documents', 'g', 'expiry_date'),
+    ]);
 
     return {
-      certifications: { rows: certifications, ...bucket(certifications) },
-      documents: { rows: documents, ...bucket(documents) },
+      certifications: { rows: certifications, ...certificationCounts },
+      documents: { rows: documents, ...documentCounts },
     };
   }
 
