@@ -46,3 +46,38 @@ describe('the workforce record, across screens', () => {
     }
   });
 });
+
+/**
+ * The attrition tile explains itself with the numbers it used.
+ *
+ * The percentage is `exits / (still on the roster + exits)` — you cannot leave a population you
+ * were never in. The hover used to quote `headcount.total` instead, which counts every live
+ * record including people who left before the window, so a tile reading 25% was explained
+ * underneath by two numbers that work out to 20%. The denominator is sent now rather than
+ * guessed at by the screen.
+ */
+describe('the attrition rate', () => {
+  const rate = (exits12m: number, onRoster: number) => ({
+    attritionRate12m: onRoster ? Math.round((exits12m / (onRoster + exits12m)) * 1000) / 10 : 0,
+    averageHeadcount12m: onRoster + exits12m,
+    exits12m,
+  });
+
+  it('divides by the population it names', () => {
+    const a = rate(2, 6);
+    expect(a.averageHeadcount12m).toBe(8);
+    expect(a.attritionRate12m).toBe(25);
+    // The hover's own arithmetic has to land on the tile's number.
+    expect(Math.round((a.exits12m / a.averageHeadcount12m) * 1000) / 10).toBe(a.attritionRate12m);
+  });
+
+  it('holds for a roster with no leavers', () => {
+    const a = rate(0, 8);
+    expect(a.attritionRate12m).toBe(0);
+    expect(a.averageHeadcount12m).toBe(8);
+  });
+
+  it('reports zero rather than dividing by nothing when the roster is empty', () => {
+    expect(rate(0, 0).attritionRate12m).toBe(0);
+  });
+});

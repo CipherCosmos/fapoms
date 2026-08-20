@@ -88,7 +88,10 @@ const OverviewTabBody = ({ d, onJump }: { d: HrWorkforceOverview; onJump: (to: s
       <Stat
         value={`${d.attrition.attritionRate12m}%`}
         caption="Left in the past year"
-        hint={`${d.attrition.exits12m} ${d.attrition.exits12m === 1 ? 'person has' : 'people have'} left in the last 12 months, out of ${d.headcount.total} on the roster`}
+        // The denominator the rate was actually divided by. This used to quote
+        // `headcount.total`, a different population — so a tile reading 25% was explained
+        // underneath by two numbers that work out to 20%.
+        hint={`${d.attrition.exits12m} ${d.attrition.exits12m === 1 ? 'person has' : 'people have'} left in the last 12 months, out of ${d.attrition.averageHeadcount12m} on the roster over that period`}
       />
     </section>
 

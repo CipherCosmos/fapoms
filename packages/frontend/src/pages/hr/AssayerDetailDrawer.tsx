@@ -4,7 +4,7 @@ import {
   X, Edit2, ArrowRightLeft, AlertTriangle, CheckCircle2,
   User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, MapPin, KeyRound,
 } from 'lucide-react';
-import { nextAssayerLifecycleStates, AssayerLifecycleStatus, assayerLifecycleLabel, activityEventLabel, employmentTypeLabel } from '@fapoms/shared';
+import { nextAssayerLifecycleStates, AssayerLifecycleStatus, assayerLifecycleLabel, activityEventLabel, employmentTypeLabel, daysUntilExpiry } from '@fapoms/shared';
 
 import { api } from '../../services/api';
 import { Select, useConfirm } from '../../components/ui';
@@ -23,9 +23,8 @@ import { attributeTypeLabel } from './HrCapabilityPage';
 import { todayDateKey, localDateKey } from '../../utils/statusLabels';
 import { counted } from '../../utils/plural';
 
-/** Whole days until a recorded expiry; null when nothing is recorded. */
-const expiryDays = (iso?: string | null): number | null =>
-  iso ? Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000) : null;
+/** Whole days until a recorded expiry; null when nothing is recorded. See daysUntilExpiry. */
+const expiryDays = (iso?: string | null): number | null => daysUntilExpiry(iso);
 
 /**
  * Everything about one person, in a slide-over.

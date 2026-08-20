@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Award, Languages as LangIcon, Wrench, Plus, Trash2, AlertTriangle, Search } from 'lucide-react';
 import { useSearchParams } from 'react-router-dom';
-import { assayerLifecycleLabel } from '@fapoms/shared';
+import { assayerLifecycleLabel, daysUntilExpiry } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { card, label, Empty, ExpiryChip, fmtDate } from './hr-ui';
@@ -85,10 +85,16 @@ export const ATTRIBUTE_TYPE_LABEL: Record<string, string> = {
 export const attributeTypeLabel = (type?: string | null): string =>
   (type && ATTRIBUTE_TYPE_LABEL[type]) || '—';
 
-const daysUntil = (iso: string | null): number | null => {
-  if (!iso) return null;
-  return Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000);
-};
+/**
+ * Days until a certificate stops working, on the same clock the HR console uses.
+ *
+ * This measured from `Date.now()` on the device, while the compliance panel's figures come from
+ * Postgres counting calendar days against the Indian working day. The two disagreed every
+ * morning between midnight and 05:30 IST: the badge would say a certificate had already run
+ * out while this tab chipped it amber "0d left" and withheld the warning that the person cannot
+ * be given work. One rule now, in `@fapoms/shared`.
+ */
+const daysUntil = (iso: string | null): number | null => daysUntilExpiry(iso);
 
 /**
  * Certifications sort by the date they stop working, soonest first, with the ones that have no

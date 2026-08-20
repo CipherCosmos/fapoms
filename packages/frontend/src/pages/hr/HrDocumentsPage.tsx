@@ -7,7 +7,7 @@ import { Select } from '../../components/ui';
 import { card, label, Empty, ExpiryChip, fmtDate, govDocStatusLabel } from './hr-ui';
 import { useCurrentRoles, canManageAssayers } from '../../hooks/useCurrentRoles';
 import { useConfirm } from '../../components/ui/ConfirmDialog';
-import { SystemRole, HR_DOCUMENT_TYPES, hrDocumentTypeLabel, assayerLifecycleLabel } from '@fapoms/shared';
+import { SystemRole, HR_DOCUMENT_TYPES, hrDocumentTypeLabel, assayerLifecycleLabel, daysUntilExpiry } from '@fapoms/shared';
 
 /**
  * Identity document register.
@@ -84,8 +84,10 @@ async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promis
   return out;
 }
 
-const daysUntil = (iso: string | null): number | null =>
-  iso ? Math.ceil((new Date(iso).getTime() - Date.now()) / 86_400_000) : null;
+// Same clock as the compliance panel and the Skills tab — see daysUntilExpiry. Measuring from
+// the device instead put an ID document a day out from the badge counting it, every morning
+// between midnight and 05:30 IST.
+const daysUntil = (iso: string | null): number | null => daysUntilExpiry(iso);
 
 /** Stacks the two-pane layout below this width so the picker/detail don't overlap on phones. */
 function useNarrow(breakpoint = 760): boolean {

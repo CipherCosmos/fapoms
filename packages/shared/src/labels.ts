@@ -458,6 +458,38 @@ export function businessTodayDateKey(timeZone: string = BUSINESS_TIME_ZONE): str
 export const BUSINESS_TODAY_SQL = `((NOW() AT TIME ZONE '${BUSINESS_TIME_ZONE}')::date)`;
 
 /**
+ * Whole days until a stored expiry date, counted the way the server counts them.
+ *
+ * The HR service asks Postgres for `expiry_date::date - (today in India)`: a difference between
+ * two calendar dates, with no time of day in it. The Skills screen asked the browser for
+ * `Math.ceil((new Date(iso) - Date.now()) / 86400000)` instead — a difference between two
+ * instants, on the device's own clock. The two disagree every day between midnight and 05:30
+ * IST, and whenever a laptop's clock is off.
+ *
+ * What that looked like: a certificate expiring on the 31st, opened at 01:30 IST on the 1st.
+ * The console's badge said "1 certificate has already run out" and chipped it red; the Skills
+ * tab for the same person chipped it amber "0d left" and withheld the warning that says this
+ * assayer cannot be given work. The compliance screen and the person's own record contradicted
+ * each other about whether they were allowed to work.
+ *
+ * Expiry dates are stored as UTC midnight of the intended day, so the day itself is read in
+ * UTC — matching `::date` on the server — and compared against the Indian working day.
+ */
+export function daysUntilExpiry(
+  value?: string | number | Date | null,
+  timeZone: string = BUSINESS_TIME_ZONE,
+): number | null {
+  if (value == null || value === '') return null;
+  const at = new Date(value);
+  if (Number.isNaN(at.getTime())) return null;
+  // The stored calendar day, and today's, both as YYYY-MM-DD; then a plain day difference.
+  const storedDay = at.toISOString().slice(0, 10);
+  const today = businessTodayDateKey(timeZone);
+  const MS_PER_DAY = 86_400_000;
+  return Math.round((Date.parse(`${storedDay}T00:00:00Z`) - Date.parse(`${today}T00:00:00Z`)) / MS_PER_DAY);
+}
+
+/**
  * Reasons an assayer can flag an assignment to the operations desk from the field app.
  *
  * The field app cannot cancel or reassign work — those stay with the desk. This is the

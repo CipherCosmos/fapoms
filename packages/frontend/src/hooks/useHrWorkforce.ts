@@ -57,6 +57,8 @@ export interface HrWorkforceOverview {
   attrition: {
     totalExits: number; exits90d: number; exits12m: number; terminations: number; joins90d: number;
     attritionRate12m: number;
+    /** The population the rate is measured against: still on the roster plus those who left. */
+    averageHeadcount12m: number;
     recent: { id: string; assayerCode: string; displayName: string; state: string; exitDate: string; mode: string; joiningDate: string | null }[];
   };
   activity: { id: string; eventType: string; previousState: string | null; newState: string | null; performedBy: string | null; remarks: string | null; occurredAt: string; assayerId: string; assayerCode: string; displayName: string }[];

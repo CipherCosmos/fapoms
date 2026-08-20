@@ -807,13 +807,25 @@ export class HrWorkforceService {
     `);
 
     const active = HrWorkforceService.num(headcount[0]?.active);
+    const exits12m = HrWorkforceService.num(totals.exits12m);
+    /**
+     * Everyone the rate is measured against: those still on the roster plus those who left
+     * during the window. The standard read — you cannot leave a population you were never in.
+     */
+    const averageHeadcount12m = active + exits12m;
     return {
       ...totals,
       recent,
-      // Annualised attrition against current headcount — the standard read.
-      attritionRate12m: active
-        ? Math.round((HrWorkforceService.num(totals.exits12m) / (active + HrWorkforceService.num(totals.exits12m))) * 1000) / 10
-        : 0,
+      attritionRate12m: active ? Math.round((exits12m / averageHeadcount12m) * 1000) / 10 : 0,
+      /**
+       * The denominator, sent rather than left for the screen to guess.
+       *
+       * The tile's hover used `headcount.total` to explain the percentage, and that is a
+       * different population — it counts every live record including people who left before the
+       * window. So a tile reading 25% was explained underneath by two numbers that work out to
+       * 20%, and the figure anyone would repeat in a meeting was the wrong one.
+       */
+      averageHeadcount12m,
     };
   }
 
