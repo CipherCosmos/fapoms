@@ -17,6 +17,7 @@ import { AssayerPayableEntity } from './payable.entity';
 import { BillingHistoryEntity } from './history.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ProjectEntity } from '../project/project.entity';
+import { AssayerEntity } from '../assayer/assayer.entity';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import {
@@ -36,6 +37,10 @@ import {
   AssignmentMoneyLine,
   businessTodayDateKey,
   BUSINESS_TODAY_SQL,
+  gstinStateCode,
+  gstStateCodeToName,
+  resolveGstStateCode,
+  numberToIndianWords,
 } from '@fapoms/shared';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import {
@@ -159,6 +164,10 @@ export class BillingEngineService implements OnModuleInit {
     private readonly assignmentRepository: Repository<AssignmentEntity>,
     @InjectRepository(ProjectEntity)
     private readonly projectRepository: Repository<ProjectEntity>,
+    // Read-only. Loaded through the repository (not raw SQL) so the encrypted PAN and bank
+    // account number are decrypted by the column transformer for the bank file and TDS report.
+    @InjectRepository(AssayerEntity)
+    private readonly assayerRepository: Repository<AssayerEntity>,
     private readonly eventPublisher: DomainEventPublisher,
     private readonly cache: CacheService,
     private readonly uow: UnitOfWork,
@@ -1243,7 +1252,8 @@ export class BillingEngineService implements OnModuleInit {
 
   /** The one predicate for "what is owed to this assayer", used by every screen that says so. */
   async assayerTotals(assayerId: string, manager?: EntityManager): Promise<{
-    earned: number; paid: number; outstanding: number; awaitingApproval: number; onHoldOrDisputed: number; payableCount: number;
+    earned: number; paid: number; outstanding: number; awaitingApproval: number; onHoldOrDisputed: number;
+    tdsWithheld: number; payableCount: number;
   }> {
     const rows = await (manager ?? this.payableRepository.manager).query(
       `SELECT COALESCE(SUM(total_amount), 0)                                                         AS earned,
@@ -1251,6 +1261,7 @@ export class BillingEngineService implements OnModuleInit {
               COALESCE(SUM(total_amount - paid_amount) FILTER (WHERE on_hold = false), 0)            AS outstanding,
               COALESCE(SUM(total_amount) FILTER (WHERE status = 'PENDING' AND on_hold = false), 0)   AS awaiting_approval,
               COALESCE(SUM(total_amount - paid_amount) FILTER (WHERE on_hold = true), 0)             AS on_hold,
+              COALESCE(SUM(tds_amount), 0)                                                           AS tds_withheld,
               COUNT(*)::int                                                                          AS payable_count
          FROM assayer_payables
         WHERE assayer_id = $1 AND is_active = true`,
@@ -1263,6 +1274,7 @@ export class BillingEngineService implements OnModuleInit {
       outstanding: round2(Number(r.outstanding ?? 0)),
       awaitingApproval: round2(Number(r.awaiting_approval ?? 0)),
       onHoldOrDisputed: round2(Number(r.on_hold ?? 0)),
+      tdsWithheld: round2(Number(r.tds_withheld ?? 0)),
       payableCount: Number(r.payable_count ?? 0),
     };
   }
@@ -1273,16 +1285,21 @@ export class BillingEngineService implements OnModuleInit {
    * computes money of its own.
    */
   async assayerStatement(assayerId: string): Promise<any> {
-    const [totals, payables, payments, assayer] = await Promise.all([
+    // Loaded through the repository, not raw SQL, so the encrypted PAN is decrypted for the
+    // statement's TDS block. tds.section is a label only — it never changes an amount.
+    const [totals, payables, payments, assayer, tdsSection] = await Promise.all([
       this.assayerTotals(assayerId),
       this.payableRepository.find({ where: { assayerId, isActive: true }, order: { createdAt: 'DESC' } }),
       this.paymentRepository.find({ where: { assayerId, direction: PaymentDirection.OUTBOUND, isActive: true }, order: { createdAt: 'DESC' } }),
-      this.payableRepository.manager.query(`SELECT display_name, assayer_code FROM assayers WHERE id = $1 LIMIT 1`, [assayerId]),
+      this.assayerRepository.findOne({ where: { id: assayerId } }).catch(() => null),
+      this.settings.get<string>('billing.tdsSection').catch(() => '194J'),
     ]);
     return {
       assayerId,
-      assayerName: assayer?.[0]?.display_name ?? null,
-      assayerCode: assayer?.[0]?.assayer_code ?? null,
+      assayerName: assayer?.displayName ?? null,
+      assayerCode: assayer?.assayerCode ?? null,
+      pan: assayer?.panNumber ?? null,
+      tdsSection: tdsSection ?? '194J',
       totals,
       payables: payables.map((p) => ({
         id: p.id,
@@ -1453,6 +1470,274 @@ export class BillingEngineService implements OnModuleInit {
       this.invoiceRepository.manager.query(`SELECT name FROM clients WHERE id = $1`, [invoice.clientId]),
     ]);
     return { ...invoice, entries, clientName: clientRows?.[0]?.name ?? null, payments: (invoice.payments ?? []).filter((p) => p.isActive) };
+  }
+
+  /**
+   * Everything a GST-compliant tax invoice document needs, in one payload.
+   *
+   * This does NOT recompute a single figure. The taxable value, tax rate and rupee tax on each
+   * line are exactly what `assignmentMoney` booked and are read back unchanged; all this adds is
+   * the two things a printable invoice needs on top of the stored totals:
+   *
+   *  1. the seller and client tax identity (seller from platform settings, never hardcoded), and
+   *  2. how the already-computed tax is *labelled* — one IGST line when the seller and the place
+   *     of supply are in different states, or a CGST half and an SGST half when they match. The
+   *     halves are split so cgst + sgst equals the stored tax to the paisa (sgst takes the
+   *     remainder), so the split can never disagree with the invoice total.
+   *
+   * Where the seller identity is not set, the field comes back null — the print view renders a
+   * marked placeholder rather than a plausible-looking fake, so a half-configured system produces
+   * an obviously-incomplete invoice instead of a wrong one.
+   */
+  async getInvoiceDocument(invoiceId: string): Promise<any> {
+    const invoice = await this.invoiceRepository.findOne({ where: { id: invoiceId }, relations: ['entries'] });
+    if (!invoice) throw new NotFoundException(`Invoice ${invoiceId} not found.`);
+
+    const [lines, clientRows, seller] = await Promise.all([
+      this.attachEntryNames(invoice.entries ?? []),
+      this.invoiceRepository.manager.query(
+        `SELECT c.name, c.address, c.tax_id,
+                cb.tax_identifier AS billing_gstin, cb.billing_address, cb.payment_terms
+           FROM clients c
+           LEFT JOIN client_billing cb ON cb.client_id = c.id AND cb.is_active = true
+          WHERE c.id = $1 LIMIT 1`,
+        [invoice.clientId],
+      ),
+      this.settings.getMany([
+        'company.legalName', 'company.address', 'company.gstin', 'company.state', 'company.pan',
+        'invoice.defaultSac',
+      ]),
+    ]);
+    const c = clientRows?.[0] ?? {};
+
+    // Seller state: the GSTIN prefix is authoritative; the typed state name is the fallback for a
+    // system that has entered its state but not yet its GSTIN.
+    const sellerGstin: string | null = seller['company.gstin'] ?? null;
+    const sellerStateCode = resolveGstStateCode({ gstin: sellerGstin, stateName: seller['company.state'] });
+    const sellerStateName = seller['company.state'] ?? gstStateCodeToName(sellerStateCode);
+
+    // Place of supply for a service is the recipient's location; the client's GSTIN prefix is the
+    // best signal we hold. No client GSTIN → we cannot know, and say so rather than guess.
+    const clientGstin: string | null = c.billing_gstin ?? c.tax_id ?? null;
+    const posCode = gstinStateCode(clientGstin);
+    const posName = gstStateCodeToName(posCode) ?? null;
+
+    const known = !!(sellerStateCode && posCode);
+    const taxMode: 'INTRA' | 'INTER' = known && sellerStateCode !== posCode ? 'INTER' : 'INTRA';
+    const defaultSac: string = seller['invoice.defaultSac'] ?? '998222';
+
+    let cgstTotal = 0, sgstTotal = 0, igstTotal = 0, taxableTotal = 0;
+    const docLines = lines.map((e: any, i: number) => {
+      const taxable = round2(Number(e.taxableAmount));
+      const tax = round2(Number(e.taxAmount));
+      let cgst = 0, sgst = 0, igst = 0;
+      if (taxMode === 'INTER') {
+        igst = tax;
+      } else {
+        cgst = round2(tax / 2);
+        sgst = round2(tax - cgst); // remainder to SGST so cgst + sgst === tax exactly
+      }
+      cgstTotal = round2(cgstTotal + cgst);
+      sgstTotal = round2(sgstTotal + sgst);
+      igstTotal = round2(igstTotal + igst);
+      taxableTotal = round2(taxableTotal + taxable);
+      const branch = e.branchName ?? null;
+      return {
+        srNo: i + 1,
+        assignmentNumber: e.assignmentNumber ?? e.entryNumber,
+        branchName: branch,
+        serviceDate: e.serviceDate ?? null,
+        description: e.description ?? `Audit services${branch ? ` — ${branch}` : ''}`,
+        hsnSac: defaultSac,
+        taxableAmount: taxable,
+        taxRate: Number(e.taxRate),
+        cgst, sgst, igst,
+        total: round2(taxable + tax),
+      };
+    });
+
+    const taxTotal = round2(Number(invoice.taxAmount));
+    const invoiceValue = round2(Number(invoice.subtotal) + taxTotal);
+    const tds = round2(Number(invoice.tdsAmount));
+
+    return {
+      invoice: {
+        number: invoice.invoiceNumber,
+        status: invoice.status,
+        issueDate: invoice.issueDate,
+        dueDate: invoice.dueDate,
+        currency: invoice.currency,
+        notes: invoice.notes,
+        paymentTerms: c.payment_terms ?? null,
+      },
+      seller: {
+        legalName: seller['company.legalName'] ?? null,
+        address: seller['company.address'] ?? null,
+        gstin: sellerGstin,
+        stateName: sellerStateName ?? null,
+        stateCode: sellerStateCode ?? null,
+        pan: seller['company.pan'] ?? null,
+      },
+      client: {
+        name: c.name ?? null,
+        address: c.billing_address ?? c.address ?? null,
+        gstin: clientGstin,
+        stateName: posName,
+        stateCode: posCode,
+      },
+      placeOfSupply: posCode ? { code: posCode, name: posName } : null,
+      taxMode,
+      /** True when seller state or place of supply could not be determined, so the split is a
+       *  fallback (treated as intra-state) rather than a decision — the print view flags it. */
+      taxSplitAssumed: !known,
+      defaultSac,
+      lines: docLines,
+      totals: {
+        taxable: round2(Number(invoice.subtotal)),
+        cgst: cgstTotal,
+        sgst: sgstTotal,
+        igst: igstTotal,
+        tax: taxTotal,
+        invoiceValue,
+        tds,
+        netReceivable: round2(invoiceValue - tds),
+      },
+      amountInWords: numberToIndianWords(invoiceValue),
+    };
+  }
+
+  /**
+   * The bank details behind a set of selected payouts, for the NEFT bank file.
+   *
+   * Returns rows only for payouts that are genuinely payable — APPROVED, not on hold, with money
+   * still outstanding — because a bank file that includes an already-paid or held row is how a
+   * double payment or a mistaken disbursement leaves the building. Anything else in the selection
+   * is returned in `skipped` with the reason, so the caller can tell the operator what was left
+   * out rather than silently dropping it.
+   *
+   * PAN and account number are decrypted here (loaded through the repository); the endpoint that
+   * exposes this is gated to the disbursement roles.
+   */
+  async payoutBankDetails(payableIds: string[]): Promise<{
+    rows: Array<{
+      payableId: string; payableNumber: string; assignmentNumber: string | null;
+      assayerName: string | null; assayerCode: string | null;
+      beneficiaryName: string | null; accountNumber: string | null; ifsc: string | null; pan: string | null;
+      netAmount: number; reference: string; hasBankDetails: boolean;
+    }>;
+    skipped: Array<{ id: string; reason: string }>;
+  }> {
+    const ids = [...new Set(payableIds)].filter(Boolean);
+    if (!ids.length) return { rows: [], skipped: [] };
+
+    const payables = await this.payableRepository.find({ where: { id: In(ids), isActive: true } });
+    const found = new Map(payables.map((p) => [p.id, p]));
+    const skipped: Array<{ id: string; reason: string }> = [];
+
+    const payable = payables.filter((p) => {
+      if (p.status !== AssayerPayableStatus.PAID && p.onHold) { skipped.push({ id: p.id, reason: `${p.payableNumber} is on hold` }); return false; }
+      if (p.status === AssayerPayableStatus.PAID) { skipped.push({ id: p.id, reason: `${p.payableNumber} is already paid` }); return false; }
+      if (p.status !== AssayerPayableStatus.APPROVED) { skipped.push({ id: p.id, reason: `${p.payableNumber} is not approved yet` }); return false; }
+      if (round2(Number(p.totalAmount) - Number(p.paidAmount)) <= 0) { skipped.push({ id: p.id, reason: `${p.payableNumber} has nothing outstanding` }); return false; }
+      return true;
+    });
+    for (const id of ids) if (!found.has(id)) skipped.push({ id, reason: 'Payout not found' });
+
+    const assayerIds = [...new Set(payable.map((p) => p.assayerId))];
+    const assayers = assayerIds.length
+      ? await this.assayerRepository.find({ where: { id: In(assayerIds) } })
+      : [];
+    const byAssayer = new Map(assayers.map((a) => [a.id, a]));
+
+    const rows = payable.map((p) => {
+      const a = byAssayer.get(p.assayerId);
+      const account = a?.bankAccountNumber ?? null;
+      const ifsc = a?.ifscCode ?? null;
+      return {
+        payableId: p.id,
+        payableNumber: p.payableNumber,
+        assignmentNumber: null as string | null, // filled below from a names lookup
+        assayerName: a?.displayName ?? null,
+        assayerCode: a?.assayerCode ?? null,
+        beneficiaryName: a?.displayName ?? null,
+        accountNumber: account,
+        ifsc,
+        pan: a?.panNumber ?? null,
+        netAmount: round2(Number(p.totalAmount) - Number(p.paidAmount)),
+        reference: `${p.payableNumber}${a?.assayerCode ? ` ${a.assayerCode}` : ''}`,
+        hasBankDetails: !!(account && ifsc),
+      };
+    });
+
+    // Assignment numbers, for a human-readable narration, without a join on the sensitive load.
+    const names = await this.resolveNames([], payable);
+    for (let i = 0; i < rows.length; i++) {
+      rows[i].assignmentNumber = names.assignments.get(payable[i].assignmentId) ?? null;
+    }
+    return { rows, skipped };
+  }
+
+  /**
+   * PAN-wise TDS withheld from assayers over a period — the substantiation finance needs to show
+   * what was deducted and against whom. Reads the TDS the system already withheld (never
+   * recomputes it); `gross − tds = net` by construction of the payable.
+   *
+   * `from`/`to` are inclusive calendar dates (YYYY-MM-DD) on the booking date; omit for the whole
+   * book. Only assayers with TDS in the window appear.
+   */
+  async tdsReport(filters: { from?: string | null; to?: string | null } = {}): Promise<{
+    from: string | null; to: string | null; section: string;
+    rows: Array<{ assayerId: string; assayerName: string | null; assayerCode: string | null; pan: string | null; gross: number; tds: number; net: number; count: number }>;
+    totals: { gross: number; tds: number; net: number; count: number };
+  }> {
+    const from = filters.from || null;
+    const to = filters.to || null;
+    const [agg, section] = await Promise.all([
+      this.payableRepository.manager.query(
+        `SELECT assayer_id,
+                COALESCE(SUM(base_amount + travel_amount), 0) AS gross,
+                COALESCE(SUM(tds_amount), 0)                  AS tds,
+                COALESCE(SUM(total_amount), 0)                AS net,
+                COUNT(*)::int                                 AS n
+           FROM assayer_payables
+          WHERE is_active = true
+            -- Fee payables only: TDS is withheld on the professional fee, not on expense
+            -- reimbursements (which carry no TDS and would inflate the gross on a TDS report).
+            AND expense_id IS NULL
+            AND ($1::date IS NULL OR created_at::date >= $1::date)
+            AND ($2::date IS NULL OR created_at::date <= $2::date)
+          GROUP BY assayer_id
+         HAVING SUM(tds_amount) > 0
+          ORDER BY SUM(tds_amount) DESC`,
+        [from, to],
+      ),
+      this.settings.get<string>('billing.tdsSection').catch(() => '194J'),
+    ]);
+
+    const assayerIds = agg.map((r: any) => r.assayer_id);
+    const assayers = assayerIds.length ? await this.assayerRepository.find({ where: { id: In(assayerIds) } }) : [];
+    const byId = new Map(assayers.map((a) => [a.id, a]));
+
+    const rows = agg.map((r: any) => {
+      const a = byId.get(r.assayer_id);
+      return {
+        assayerId: r.assayer_id,
+        assayerName: a?.displayName ?? null,
+        assayerCode: a?.assayerCode ?? null,
+        pan: a?.panNumber ?? null,
+        gross: round2(Number(r.gross)),
+        tds: round2(Number(r.tds)),
+        net: round2(Number(r.net)),
+        count: Number(r.n),
+      };
+    });
+    const totals = rows.reduce(
+      (t: { gross: number; tds: number; net: number; count: number }, r: any) => ({
+        gross: round2(t.gross + r.gross), tds: round2(t.tds + r.tds), net: round2(t.net + r.net), count: t.count + r.count,
+      }),
+      { gross: 0, tds: 0, net: 0, count: 0 },
+    );
+    return { from, to, section: section ?? '194J', rows, totals };
   }
 
   /** Everything money-related about one assignment — the one line the assignment detail shows. */

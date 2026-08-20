@@ -10,6 +10,7 @@ import { AssayerPayableEntity } from './payable.entity';
 import { BillingHistoryEntity } from './history.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ProjectEntity } from '../project/project.entity';
+import { AssayerEntity } from '../assayer/assayer.entity';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { TypeOrmUnitOfWork } from '../../infrastructure/persistence/typeorm-unit-of-work';
@@ -106,6 +107,9 @@ describe('BillingEngineService', () => {
     manager: { query: managerQuery },
   };
   const projectRepo: any = { find: jest.fn(async () => []), findOne: jest.fn(async () => null) };
+  // Read-only in the service (bank file, TDS report, PAN on the statement); the entity load is
+  // what decrypts PAN/account, so tests stub it with plain objects.
+  const assayerRepo: any = { find: jest.fn(async () => []), findOne: jest.fn(async () => null) };
 
   const repoForEntity = (target: any): any => {
     if (target === BillingEntryEntity) return entryRepo;
@@ -115,6 +119,7 @@ describe('BillingEngineService', () => {
     if (target === BillingHistoryEntity) return historyRepo;
     if (target === AssignmentEntity) return assignmentRepo;
     if (target === ProjectEntity) return projectRepo;
+    if (target === AssayerEntity) return assayerRepo;
     throw new Error(`No repository double registered for ${target?.name ?? target}`);
   };
 
@@ -217,7 +222,7 @@ describe('BillingEngineService', () => {
     totalsRow = { earned: 0, paid: 0, outstanding: 0, awaiting_approval: 0, on_hold: 0, payable_count: 0 };
     jest.clearAllMocks();
     managerQuery.mockImplementation(defaultManagerQuery);
-    for (const r of [entryRepo, payableRepo, invoiceRepo, paymentRepo, historyRepo, assignmentRepo, projectRepo]) {
+    for (const r of [entryRepo, payableRepo, invoiceRepo, paymentRepo, historyRepo, assignmentRepo, projectRepo, assayerRepo]) {
       r.findOne.mockImplementation(async () => null);
       r.find.mockImplementation(async () => []);
     }
@@ -244,6 +249,7 @@ describe('BillingEngineService', () => {
         { provide: getRepositoryToken(BillingHistoryEntity), useValue: historyRepo },
         { provide: getRepositoryToken(AssignmentEntity), useValue: assignmentRepo },
         { provide: getRepositoryToken(ProjectEntity), useValue: projectRepo },
+        { provide: getRepositoryToken(AssayerEntity), useValue: assayerRepo },
         { provide: getDataSourceToken(), useValue: dataSource },
         { provide: DataSource, useValue: dataSource },
         { provide: DomainEventPublisher, useValue: { publish, subscribe: jest.fn() } },
@@ -535,9 +541,9 @@ describe('BillingEngineService', () => {
 
   describe('assayerTotals — the one predicate', () => {
     it('maps the SQL to the statement shape and keeps earned = paid + outstanding + held', async () => {
-      totalsRow = { earned: '5000.00', paid: '1800.00', outstanding: '2000.00', awaiting_approval: '2000.00', on_hold: '1200.00', payable_count: 3 };
+      totalsRow = { earned: '5000.00', paid: '1800.00', outstanding: '2000.00', awaiting_approval: '2000.00', on_hold: '1200.00', tds_withheld: '500.00', payable_count: 3 };
       const t = await service.assayerTotals('assayer-1');
-      expect(t).toEqual({ earned: 5000, paid: 1800, outstanding: 2000, awaitingApproval: 2000, onHoldOrDisputed: 1200, payableCount: 3 });
+      expect(t).toEqual({ earned: 5000, paid: 1800, outstanding: 2000, awaitingApproval: 2000, onHoldOrDisputed: 1200, tdsWithheld: 500, payableCount: 3 });
       expect(t.earned).toBe(t.paid + t.outstanding + t.onHoldOrDisputed);
     });
 

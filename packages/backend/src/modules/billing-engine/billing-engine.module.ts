@@ -10,6 +10,7 @@ import { BillingEngineService } from './billing-engine.service';
 import { BillingEngineController } from './billing-engine.controller';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ProjectEntity } from '../project/project.entity';
+import { AssayerEntity } from '../assayer/assayer.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { BILLING_QUEUE } from './billing-jobs.contract';
 import { BillingJobsService } from './billing-jobs.service';
@@ -36,6 +37,9 @@ import { BillingJobsWorker } from './billing-jobs.worker';
       BillingHistoryEntity,
       AssignmentEntity,
       ProjectEntity,
+      // Read-only here, for the payout bank file, the TDS report and the assayer's PAN on the
+      // statement — the three finance outputs that need bank/PAN details the transformer decrypts.
+      AssayerEntity,
     ]),
   ],
   controllers: [BillingEngineController],

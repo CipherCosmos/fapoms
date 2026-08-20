@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
-import { Send, Banknote, Ban, Undo2 } from 'lucide-react';
+import { Send, Banknote, Ban, Undo2, Printer } from 'lucide-react';
 import { DetailDrawer, StyledInput, Select, useConfirm, useToast } from '../../components/ui';
 import { useBillingInvoice, useSendInvoice, useRecordBillingPayment, useCancelInvoice, useReversePayment } from '../../hooks/useBilling';
 import { InvoiceStatus, PaymentMethod, paymentMethodLabel } from '@fapoms/shared';
 import { userMessage } from '../../services/errors';
 import { todayDateKey } from '../../utils/statusLabels';
 import { moneyExact as money } from '../../utils/money';
+import { billingApi } from '../../services/billing';
+import { openInvoicePrintWindow } from './invoicePrint';
 import { InvoiceStatusPill, LineStatePill, fmtDate, inputStyle, th, td, tdNum } from './shared';
 
 // Named by the shared label layer, never by de-casing the enum — see the same note in
@@ -50,6 +52,24 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
   // receipt must never be submitted against another.
   const [reversingId, setReversingId] = useState<string | null>(null);
   const [reverseReason, setReverseReason] = useState('');
+  const [printing, setPrinting] = useState(false);
+
+  /**
+   * Build and open the GST tax invoice as a print-ready A4 page. Everything on it comes from the
+   * server (both GSTINs, the CGST/SGST-or-IGST split, amount in words); the browser's Print →
+   * "Save as PDF" is the PDF step, so no PDF library ships in the app.
+   */
+  const doPrint = async () => {
+    setPrinting(true);
+    try {
+      const doc = await billingApi.getInvoiceDocument(invoiceId);
+      openInvoicePrintWindow(doc);
+    } catch (e) {
+      toast({ type: 'error', title: 'Could not open the invoice', message: userMessage(e) });
+    } finally {
+      setPrinting(false);
+    }
+  };
 
   if (!invoice) return <DetailDrawer open onClose={onClose} title="Loading…" width={640}><div /></DetailDrawer>;
 
@@ -140,6 +160,13 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
         </div>
       ) : undefined}
     >
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <button onClick={doPrint} disabled={printing} className="btn btn-secondary" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}
+          title="Open the GST tax invoice as a print-ready A4 page — use the browser's Print to save it as a PDF for the client">
+          <Printer size={14} /> {printing ? 'Preparing…' : 'Print / PDF invoice'}
+        </button>
+      </div>
+
       {cancelOpen && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--bg-tertiary)', padding: 12, borderRadius: 'var(--radius-sm)' }}>
           <div style={{ fontSize: 12.5 }}>Cancelling returns every line to <strong>Unbilled</strong> so the work can be invoiced again. Say why:</div>

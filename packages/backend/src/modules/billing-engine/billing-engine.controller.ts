@@ -107,6 +107,12 @@ class ReconcilePreviewQuery {
   @IsOptional() @IsString() since?: string;
 }
 
+class TdsReportQuery {
+  /** Inclusive booking-date window (YYYY-MM-DD). Omit both for the whole book. */
+  @IsOptional() @IsString() from?: string;
+  @IsOptional() @IsString() to?: string;
+}
+
 // ---- Controller ---------------------------------------------------------
 
 /**
@@ -175,6 +181,22 @@ export class BillingEngineController {
     return { success: true, data: await this.service.payPayouts(payableIds, payment, this.userId(req)) };
   }
 
+  @Post('payouts/bank-file')
+  @Roles(...DISBURSEMENT_ROLES)
+  @RequirePermissions('billing:approve:organization')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Bank details (beneficiary, account, IFSC, net amount) for the selected approved-unpaid payouts, for the NEFT bank file' })
+  async payoutBankFile(@Body() dto: PayoutIdsDto) {
+    return { success: true, data: await this.service.payoutBankDetails(dto.payableIds) };
+  }
+
+  @Get('tds-report')
+  @Roles(...BILLING_READ_ROLES)
+  @ApiOperation({ summary: 'PAN-wise TDS withheld from assayers over a period, for TDS substantiation' })
+  async tdsReport(@Query() q: TdsReportQuery) {
+    return { success: true, data: await this.service.tdsReport({ from: q.from || null, to: q.to || null }) };
+  }
+
   @Patch('payouts/:id/hold')
   @Roles(...DISBURSEMENT_ROLES)
   @ApiOperation({ summary: 'Put a payout on hold, or release it' })
@@ -223,6 +245,13 @@ export class BillingEngineController {
   @ApiOperation({ summary: 'One invoice with its lines and payments' })
   async invoice(@Param('id', ParseUUIDPipe) id: string) {
     return { success: true, data: await this.service.getInvoice(id) };
+  }
+
+  @Get('invoices/:id/document')
+  @Roles(...BILLING_READ_ROLES)
+  @ApiOperation({ summary: 'The GST tax invoice document: both GSTINs, place of supply, CGST/SGST or IGST split, amount in words' })
+  async invoiceDocument(@Param('id', ParseUUIDPipe) id: string) {
+    return { success: true, data: await this.service.getInvoiceDocument(id) };
   }
 
   @Patch('invoices/:id/send')

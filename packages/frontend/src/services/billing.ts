@@ -85,9 +85,13 @@ export interface AssayerStatement {
   assayerId: string;
   assayerName: string | null;
   assayerCode: string | null;
+  /** Decrypted for finance; null when the assayer has no PAN on file. */
+  pan: string | null;
+  /** The Income-tax section the withholding is quoted under, from settings (e.g. 194J). */
+  tdsSection: string;
   totals: {
     earned: number; paid: number; outstanding: number;
-    awaitingApproval: number; onHoldOrDisputed: number; payableCount: number;
+    awaitingApproval: number; onHoldOrDisputed: number; tdsWithheld: number; payableCount: number;
   };
   payables: Array<{
     id: string; payableNumber: string; status: AssayerPayableStatus; onHold: boolean; holdReason: string | null;
@@ -103,6 +107,79 @@ export interface AssayerStatement {
 export interface PayoutActionResult {
   done: string[];
   refused: Array<{ id: string; reason: string }>;
+}
+
+// ── GST tax invoice document ───────────────────────────────────────────────
+
+export interface InvoiceDocLine {
+  srNo: number;
+  assignmentNumber: string;
+  branchName: string | null;
+  serviceDate: string | null;
+  description: string;
+  hsnSac: string;
+  taxableAmount: number;
+  taxRate: number;
+  cgst: number;
+  sgst: number;
+  igst: number;
+  total: number;
+}
+
+export interface InvoiceDocument {
+  invoice: { number: string; status: InvoiceStatus; issueDate: string | null; dueDate: string | null; currency: string; notes: string | null; paymentTerms: string | null };
+  seller: { legalName: string | null; address: string | null; gstin: string | null; stateName: string | null; stateCode: string | null; pan: string | null };
+  client: { name: string | null; address: string | null; gstin: string | null; stateName: string | null; stateCode: string | null };
+  placeOfSupply: { code: string; name: string | null } | null;
+  taxMode: 'INTRA' | 'INTER';
+  taxSplitAssumed: boolean;
+  defaultSac: string;
+  lines: InvoiceDocLine[];
+  totals: { taxable: number; cgst: number; sgst: number; igst: number; tax: number; invoiceValue: number; tds: number; netReceivable: number };
+  amountInWords: string;
+}
+
+// ── NEFT bank file ─────────────────────────────────────────────────────────
+
+export interface BankFileRow {
+  payableId: string;
+  payableNumber: string;
+  assignmentNumber: string | null;
+  assayerName: string | null;
+  assayerCode: string | null;
+  beneficiaryName: string | null;
+  accountNumber: string | null;
+  ifsc: string | null;
+  pan: string | null;
+  netAmount: number;
+  reference: string;
+  hasBankDetails: boolean;
+}
+
+export interface BankFileResult {
+  rows: BankFileRow[];
+  skipped: Array<{ id: string; reason: string }>;
+}
+
+// ── TDS substantiation ─────────────────────────────────────────────────────
+
+export interface TdsReportRow {
+  assayerId: string;
+  assayerName: string | null;
+  assayerCode: string | null;
+  pan: string | null;
+  gross: number;
+  tds: number;
+  net: number;
+  count: number;
+}
+
+export interface TdsReport {
+  from: string | null;
+  to: string | null;
+  section: string;
+  rows: TdsReportRow[];
+  totals: { gross: number; tds: number; net: number; count: number };
 }
 
 export interface PayPayoutsResult {
@@ -202,6 +279,21 @@ async function getInvoice(id: string): Promise<BillingInvoice & { clientName: st
   return api.request<BillingInvoice & { clientName: string | null }>(`/billing-engine/invoices/${id}`);
 }
 
+/** The GST tax invoice document behind an invoice — everything the printable view needs. */
+async function getInvoiceDocument(id: string): Promise<InvoiceDocument> {
+  return api.request<InvoiceDocument>(`/billing-engine/invoices/${id}/document`);
+}
+
+/** Bank details for the selected approved-unpaid payouts, for building the NEFT bank file. */
+async function getPayoutBankFile(payableIds: string[]): Promise<BankFileResult> {
+  return api.request<BankFileResult>('/billing-engine/payouts/bank-file', { method: 'POST', body: JSON.stringify({ payableIds }) });
+}
+
+/** PAN-wise TDS withheld from assayers over a period, for TDS substantiation. */
+async function getTdsReport(params: { from?: string; to?: string } = {}): Promise<TdsReport> {
+  return api.request<TdsReport>(`/billing-engine/tds-report${qs(params)}`);
+}
+
 async function createInvoice(payload: CreateInvoicePayload): Promise<BillingInvoice> {
   return api.request<BillingInvoice>('/billing-engine/invoices', { method: 'POST', body: JSON.stringify(payload) });
 }
@@ -256,6 +348,9 @@ export const billingApi = {
   listInvoiceable,
   listInvoices,
   getInvoice,
+  getInvoiceDocument,
+  getPayoutBankFile,
+  getTdsReport,
   createInvoice,
   sendInvoice,
   recordInvoicePayment,

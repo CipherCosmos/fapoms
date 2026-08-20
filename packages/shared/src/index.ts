@@ -25,6 +25,9 @@ export * from './labels';
 
 // Shared utilities
 export * from './utils';
+
+// GST state-code resolution, tax-split labelling and amount-in-words for invoices
+export * from './gst';
 export * from './assayer-lifecycle';
 export * from './assayer-record';
 export * from './rule-bypass';

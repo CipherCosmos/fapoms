@@ -1,15 +1,18 @@
 import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { CheckCircle2, Banknote, PauseCircle, PlayCircle, Receipt } from 'lucide-react';
+import { CheckCircle2, Banknote, PauseCircle, PlayCircle, Receipt, FileDown, Percent } from 'lucide-react';
 import { AssayerPayableStatus, PaymentMethod, payableStatusLabel, paymentMethodLabel } from '@fapoms/shared';
 import { Modal, Pagination, Select, StyledInput, useConfirm, useToast } from '../../components/ui';
 import { usePayouts, useApprovePayouts, usePayPayouts, useHoldPayout } from '../../hooks/useBilling';
-import { BILLING_PAGE_SIZE } from '../../services/billing';
+import { BILLING_PAGE_SIZE, billingApi } from '../../services/billing';
 import type { PayoutRow } from '../../services/billing';
 import { userMessage } from '../../services/errors';
 import { moneyTotal as money } from '../../utils/money';
+import { visibleSelection } from '../../utils/selection';
+import { downloadCsv, datedFilename } from '../../utils/csv';
 import { Card, Empty, PayoutStatusPill, fmtDate, th, td, tdNum, inputStyle } from './shared';
 import { ExpenseReview } from '../ExpenseReview';
+import { TdsReportModal } from './TdsReportModal';
 
 /**
  * Payouts — what we owe assayers, and the one gate before paying it.
@@ -28,6 +31,8 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [payOpen, setPayOpen] = useState(false);
   const [holding, setHolding] = useState<PayoutRow | null>(null);
+  const [bankBusy, setBankBusy] = useState(false);
+  const [tdsOpen, setTdsOpen] = useState(false);
 
   const params = {
     status: filter === 'PENDING' || filter === 'APPROVED' || filter === 'PAID' ? (filter as AssayerPayableStatus) : undefined,
@@ -113,6 +118,45 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
     } catch (e) { toast({ type: 'error', title: 'Approval failed', message: userMessage(e) }); }
   };
 
+  /**
+   * Export the selected approved-unpaid payouts as a NEFT bank file the finance team uploads to
+   * the bank portal, instead of hand-keying each beneficiary. The visible-selection rule applies:
+   * only ticked rows on screen right now are included, and any ticked-but-hidden rows are called
+   * out rather than silently added.
+   *
+   * NOTE: the column order below is a common one that most Indian bank bulk-upload (NEFT) portals
+   * accept, but banks differ — if the portal rejects the file, tailor these headers and their
+   * order to the specific bank's template.
+   */
+  const downloadBankFile = async () => {
+    const vis = visibleSelection(selected, rows, (r) => r.id);
+    const eligible = vis.rows.filter(
+      (r) => r.status === AssayerPayableStatus.APPROVED && !r.onHold && (Number(r.totalAmount) - Number(r.paidAmount)) > 0,
+    );
+    if (!eligible.length) { toast('error', 'Tick approved, unpaid payouts to include in a bank file.'); return; }
+    setBankBusy(true);
+    try {
+      const res = await billingApi.getPayoutBankFile(eligible.map((r) => r.id));
+      if (!res.rows.length) { toast('error', 'None of the selected payouts are payable right now.'); return; }
+      const headers = ['Beneficiary Name', 'Account Number', 'IFSC', 'Amount', 'Txn Type', 'Reference / Narration', 'Assayer Code', 'PAN'];
+      const csvRows = res.rows.map((r) => [
+        r.beneficiaryName ?? r.assayerName ?? '', r.accountNumber ?? '', r.ifsc ?? '',
+        r.netAmount.toFixed(2), 'NEFT', r.reference, r.assayerCode ?? '', r.pan ?? '',
+      ]);
+      downloadCsv(datedFilename('assayer_neft_bank_file'), headers, csvRows);
+      const missing = res.rows.filter((r) => !r.hasBankDetails).length;
+      const parts = [`${res.rows.length} payout${res.rows.length === 1 ? '' : 's'} in the file`];
+      if (missing) parts.push(`${missing} missing bank account/IFSC — add them on the assayer record before uploading`);
+      if (res.skipped.length) parts.push(`${res.skipped.length} not eligible were skipped`);
+      if (vis.hiddenCount) parts.push(`${vis.hiddenCount} ticked but off screen, so not included`);
+      toast({ type: missing || res.skipped.length ? 'warning' : 'success', title: 'Bank file downloaded', message: parts.join(' · ') });
+    } catch (e) {
+      toast({ type: 'error', title: 'Could not build the bank file', message: userMessage(e) });
+    } finally {
+      setBankBusy(false);
+    }
+  };
+
   const changeFilter = (f: PayoutFilter) => { onFilter(f); setPage(1); setSelected(new Set()); };
 
   return (
@@ -128,6 +172,10 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
           </button>
         ))}
         <span style={{ marginLeft: 'auto', fontSize: 12, color: 'var(--text-muted)' }}>{total} payout{total === 1 ? '' : 's'}</span>
+        <button onClick={() => setTdsOpen(true)} className="btn btn-secondary" style={{ display: 'inline-flex', gap: 6, alignItems: 'center', fontSize: 12.5 }}
+          title="PAN-wise report of TDS withheld from field workers, downloadable as CSV">
+          <Percent size={13} /> TDS report
+        </button>
         <Link to="/billing/statement" style={{ fontSize: 12.5, color: 'var(--accent)', textDecoration: 'none', fontWeight: 600 }}>Assayer statements →</Link>
       </div>
 
@@ -147,6 +195,13 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
           */}
           <button className="btn btn-primary" disabled={!payable.length || pay.isPending} onClick={() => setPayOpen(true)} style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
             <Banknote size={14} /> Pay {payable.length ? `(${payable.length} · ${money(payable.reduce((s, p) => s + Number(p.totalAmount) - Number(p.paidAmount), 0))})` : ''}
+          </button>
+          {/* Exports the approved-unpaid selection as a NEFT bank file, so beneficiaries are not
+              hand-keyed at the bank portal. It reads bank details but moves no money. */}
+          <button className="btn btn-secondary" disabled={!payable.length || bankBusy} onClick={downloadBankFile}
+            title="Download the selected approved, unpaid payouts as a NEFT bank-upload file (beneficiary, account, IFSC, amount)"
+            style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+            <FileDown size={14} /> {bankBusy ? 'Preparing…' : 'Download bank file'}
           </button>
           <button className="btn btn-secondary" onClick={() => setSelected(new Set())}>Clear</button>
           {selectedRows.length > approvable.length + payable.length && (
@@ -262,6 +317,8 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
           }}
         />
       )}
+
+      {tdsOpen && <TdsReportModal onClose={() => setTdsOpen(false)} />}
 
       {confirmDialog}
     </div>

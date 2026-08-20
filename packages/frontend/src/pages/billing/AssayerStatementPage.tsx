@@ -86,7 +86,12 @@ const StatementBody: React.FC<{ data: AssayerStatement }> = ({ data }) => {
     <>
       <div style={card}>
         <div style={{ fontSize: 16, fontWeight: 700 }}>{data.assayerName ?? data.assayerId}</div>
-        {data.assayerCode && <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2 }}>{data.assayerCode}</div>}
+        <div style={{ fontSize: 12, color: 'var(--text-muted)', marginTop: 2, display: 'flex', gap: 14, flexWrap: 'wrap' }}>
+          {data.assayerCode && <span>{data.assayerCode}</span>}
+          {/* PAN and the TDS section, for the finance manager reconciling withholding against the
+              payouts below. PAN is decrypted server-side; shown here only to billing staff. */}
+          <span>PAN: <strong style={{ color: data.pan ? 'var(--text-secondary)' : 'var(--danger)' }}>{data.pan ?? 'not on file'}</strong></span>
+        </div>
       </div>
 
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
@@ -95,6 +100,7 @@ const StatementBody: React.FC<{ data: AssayerStatement }> = ({ data }) => {
         <Stat label="Outstanding" value={money(t.outstanding)} tone={t.outstanding > 0 ? 'var(--warning)' : 'var(--text-muted)'} />
         <Stat label="Awaiting approval" value={money(t.awaitingApproval)} tone="var(--text-secondary)" />
         <Stat label="On hold" value={money(t.onHoldOrDisputed)} tone={t.onHoldOrDisputed > 0 ? 'var(--danger)' : 'var(--text-muted)'} />
+        <Stat label={`TDS withheld (u/s ${data.tdsSection})`} value={money(t.tdsWithheld)} tone={t.tdsWithheld > 0 ? 'var(--warning)' : 'var(--text-muted)'} />
       </div>
 
       {data.payables.length > 0 && (

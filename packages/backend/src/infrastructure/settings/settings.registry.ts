@@ -46,6 +46,7 @@ export interface SettingDef {
 }
 
 export const SETTINGS_GROUPS = [
+  { key: 'company', label: 'Company & tax identity', description: 'Your firm\'s legal identity as it appears on the GST invoices you send bank clients, and the tax labels on statements. These are printed exactly as entered — set them before sending a real invoice.' },
   { key: 'email', label: 'Email delivery', description: 'The mailbox the platform sends from, and where its links point.' },
   { key: 'schedule', label: 'Schedules', description: 'When recurring work runs — the morning brief and the SLA sweep.' },
   { key: 'fees', label: 'Fees & pricing', description: 'What an audit is worth when no client or assayer contract says otherwise.' },
@@ -58,6 +59,68 @@ export const SETTINGS_GROUPS = [
 ] as const;
 
 export const SETTINGS_REGISTRY: SettingDef[] = [
+  // ── Company & tax identity ────────────────────────────────────────────────
+  //
+  // The seller side of every GST invoice. Nothing here is hardcoded in the invoice document: an
+  // unset value prints as a clearly-marked placeholder ("‹set company GSTIN in Settings›") so a
+  // half-configured system produces an obviously-incomplete invoice rather than a plausible one
+  // with a wrong or blank identity. The GSTIN's first two digits are also what decides CGST+SGST
+  // versus IGST, so a correct GSTIN here is what makes the tax split correct.
+  {
+    key: 'company.legalName',
+    label: 'Company legal name',
+    description: 'The registered name of your firm, printed as the seller on every client invoice. Use the exact legal name on your GST registration.',
+    group: 'company',
+    type: 'string',
+    default: null,
+    applies: 'immediately',
+  },
+  {
+    key: 'company.address',
+    label: 'Company address',
+    description: 'The registered address printed under the seller name. Commas become line breaks on the invoice.',
+    group: 'company',
+    type: 'string',
+    default: null,
+    applies: 'immediately',
+  },
+  {
+    key: 'company.gstin',
+    label: 'Company GSTIN',
+    description: 'Your 15-character GST identification number. It appears on the invoice AND its first two digits set your state, which decides whether a line is taxed CGST+SGST (same state as the client) or IGST (different state). Get this wrong and the tax split is wrong.',
+    group: 'company',
+    type: 'string',
+    default: null,
+    applies: 'immediately',
+  },
+  {
+    key: 'company.state',
+    label: 'Company state',
+    description: 'The state your GST registration is in, e.g. Karnataka. Used to decide CGST+SGST versus IGST only when the GSTIN above has not been entered — set the GSTIN and this is derived from it.',
+    group: 'company',
+    type: 'string',
+    default: null,
+    applies: 'immediately',
+  },
+  {
+    key: 'company.pan',
+    label: 'Company PAN',
+    description: 'Your firm\'s 10-character PAN, printed on the invoice for the client\'s TDS records.',
+    group: 'company',
+    type: 'string',
+    default: null,
+    applies: 'immediately',
+  },
+  {
+    key: 'invoice.defaultSac',
+    label: 'Default HSN/SAC code',
+    description: 'The service accounting code printed against each audit line unless a more specific one is set. Audit services fall under SAC heading 9982; the default 998222 is "financial auditing services". Change it to the SAC your firm actually bills under.',
+    group: 'company',
+    type: 'string',
+    default: '998222',
+    applies: 'immediately',
+  },
+
   // ── Email ───────────────────────────────────────────────────────────────
   {
     key: 'email.transport',
@@ -407,6 +470,20 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     min: 0,
     max: 100,
     unit: '%',
+    applies: 'immediately',
+  },
+  {
+    key: 'billing.tdsSection',
+    label: 'TDS section quoted on statements',
+    description: 'The Income-tax Act section the TDS you withhold from field workers is deducted under, printed on the PAN-wise TDS report. Payments to auditors for professional/technical work are usually 194J (10%); use 194C for payments to contractors. This is a label only — it does not change the amount withheld.',
+    group: 'billing',
+    type: 'select',
+    options: [
+      { value: '194J', label: '194J — professional / technical services' },
+      { value: '194C', label: '194C — payments to contractors' },
+      { value: '194H', label: '194H — commission or brokerage' },
+    ],
+    default: '194J',
     applies: 'immediately',
   },
   {
