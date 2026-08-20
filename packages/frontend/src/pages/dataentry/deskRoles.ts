@@ -6,7 +6,7 @@ import { SystemRole } from '@fapoms/shared';
  */
 export function deskRole(roles: SystemRole[]): { isHead: boolean; isValidator: boolean } {
   const isHead = roles.some((r) =>
-    [SystemRole.DESK, SystemRole.DESK, SystemRole.ADMIN, SystemRole.ADMIN].includes(r));
+    [SystemRole.DESK, SystemRole.ADMIN].includes(r));
   return { isHead, isValidator: !isHead && roles.includes(SystemRole.DESK_OPERATOR) };
 }
 

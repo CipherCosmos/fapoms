@@ -106,7 +106,7 @@ export const HrDocumentsPage: React.FC = () => {
   const canManage = canManageAssayers(roles);
   const narrow = useNarrow();
   // Deletion of an identity document is admin-only on the backend; verify is HR.
-  const canDelete = roles.some((r) => [SystemRole.ADMIN, SystemRole.ADMIN].includes(r));
+  const canDelete = roles.some((r) => [SystemRole.ADMIN].includes(r));
 
   const [roster, setRoster] = useState<AssayerLite[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);

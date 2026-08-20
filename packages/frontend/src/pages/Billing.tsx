@@ -29,10 +29,17 @@ export const Billing: React.FC = () => {
   const roles = useCurrentRoles();
   const { toast } = useToast();
 
-  // Money leaving the business has one gate: finance or an administrator.
-  const canPay = hasAnyRole(roles, [SystemRole.ADMIN, SystemRole.ADMIN, SystemRole.OPERATIONS]);
-  // Invoicing is billing staff; operations raise invoices, they do not release cash.
-  const canInvoice = hasAnyRole(roles, [SystemRole.ADMIN, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.OPERATIONS]);
+  /**
+   * Paying and invoicing are the same gate now, and that is worth saying out loud.
+   *
+   * These were two different lists — releasing cash was finance's, raising an invoice was
+   * billing's — so the person who created the work was not the person who approved payment for
+   * it. FINANCE_MANAGER folded into OPERATIONS in the role consolidation, which collapsed both
+   * lists onto ADMIN + OPERATIONS and took that separation with it. See the note on
+   * SystemRole.OPERATIONS: ADMIN remains on the disbursement path for exactly this reason.
+   */
+  const canPay = hasAnyRole(roles, [SystemRole.ADMIN, SystemRole.OPERATIONS]);
+  const canInvoice = canPay;
   const canReviewClaims = canInvoice;
 
   const tab = (TABS.some((t) => t.key === params.get('tab')) ? params.get('tab') : 'overview') as Tab;

@@ -1493,7 +1493,7 @@ export class ProjectService implements OnModuleInit {
       next,
       userId,
       role,
-      [SystemRole.ADMIN, SystemRole.ADMIN, SystemRole.OPERATIONS],
+      [SystemRole.ADMIN, SystemRole.OPERATIONS],
       async () => {
         const event = ProjectStateMachine.startPlanning(project, userId);
         const saved = await this.projectRepository.save(project);
@@ -1515,7 +1515,7 @@ export class ProjectService implements OnModuleInit {
       next,
       userId,
       role,
-      [SystemRole.ADMIN, SystemRole.ADMIN, SystemRole.OPERATIONS],
+      [SystemRole.ADMIN, SystemRole.OPERATIONS],
       async () => {
         const event = ProjectStateMachine.readyForScheduling(project, userId);
         const saved = await this.projectRepository.save(project);
@@ -1537,7 +1537,7 @@ export class ProjectService implements OnModuleInit {
       next,
       userId,
       role,
-      [SystemRole.ADMIN, SystemRole.ADMIN, SystemRole.OPERATIONS],
+      [SystemRole.ADMIN, SystemRole.OPERATIONS],
       async () => {
         const event = ProjectStateMachine.startExecution(project, userId);
         const saved = await this.projectRepository.save(project);
@@ -1559,7 +1559,7 @@ export class ProjectService implements OnModuleInit {
       next,
       userId,
       role,
-      [SystemRole.ADMIN, SystemRole.ADMIN, SystemRole.OPERATIONS],
+      [SystemRole.ADMIN, SystemRole.OPERATIONS],
       async () => {
         const event = ProjectStateMachine.startValidation(project, userId);
         const saved = await this.projectRepository.save(project);
@@ -1581,7 +1581,7 @@ export class ProjectService implements OnModuleInit {
       next,
       userId,
       role,
-      [SystemRole.ADMIN, SystemRole.ADMIN, SystemRole.OPERATIONS],
+      [SystemRole.ADMIN, SystemRole.OPERATIONS],
       async () => {
         const event = ProjectStateMachine.completeProject(project, userId);
         const saved = await this.projectRepository.save(project);
@@ -1603,7 +1603,7 @@ export class ProjectService implements OnModuleInit {
       next,
       userId,
       role,
-      [SystemRole.ADMIN, SystemRole.ADMIN, SystemRole.OPERATIONS],
+      [SystemRole.ADMIN, SystemRole.OPERATIONS],
       async () => {
         const event = ProjectStateMachine.cancelProject(project, userId);
         const saved = await this.projectRepository.save(project);
@@ -1625,7 +1625,7 @@ export class ProjectService implements OnModuleInit {
       next,
       userId,
       role,
-      [SystemRole.ADMIN, SystemRole.ADMIN, SystemRole.OPERATIONS],
+      [SystemRole.ADMIN, SystemRole.OPERATIONS],
       async () => {
         const event = ProjectStateMachine.holdProject(project, userId);
         const saved = await this.projectRepository.save(project);
@@ -1647,7 +1647,7 @@ export class ProjectService implements OnModuleInit {
       next,
       userId,
       role,
-      [SystemRole.ADMIN, SystemRole.ADMIN, SystemRole.OPERATIONS],
+      [SystemRole.ADMIN, SystemRole.OPERATIONS],
       async () => {
         const event = ProjectStateMachine.archiveProject(project, userId);
         const saved = await this.projectRepository.save(project);
