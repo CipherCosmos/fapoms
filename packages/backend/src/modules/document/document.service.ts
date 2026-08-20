@@ -163,7 +163,7 @@ export class DocumentService {
       WHERE u.is_active = true
         -- Heads also work packets themselves, so they are valid assignees alongside
         -- validators — the desk's working members.
-        AND r.name IN ('DATA_ENTRY_HEAD', 'VALIDATION_MANAGER', 'VALIDATOR')
+        AND r.name IN ('DESK', 'DESK', 'DESK_OPERATOR')
       ORDER BY name
     `);
   }

@@ -294,38 +294,38 @@ async function seed() {
      */
     const roleDefinitions = [
       {
-        name: SystemRole.SUPER_ADMINISTRATOR,
+        name: SystemRole.ADMIN,
         displayName: 'Super Administrator',
         description: 'Unlimited access to all platform features and configuration.',
-        permissionKeys: ROLE_PERMISSIONS[SystemRole.SUPER_ADMINISTRATOR],
+        permissionKeys: ROLE_PERMISSIONS[SystemRole.ADMIN],
         responsibilityNames: Array.from(responsibilityMap.keys()), // All responsibilities
       },
       {
-        name: SystemRole.ADMINISTRATOR,
+        name: SystemRole.ADMIN,
         displayName: 'Administrator',
         description: 'Full platform access excluding system configuration.',
-        permissionKeys: ROLE_PERMISSIONS[SystemRole.ADMINISTRATOR],
+        permissionKeys: ROLE_PERMISSIONS[SystemRole.ADMIN],
         responsibilityNames: ['PROJECT_MANAGEMENT', 'BRANCH_MANAGEMENT', 'ASSIGNMENT_MANAGEMENT', 'SCHEDULE_MANAGEMENT', 'DOCUMENT_MANAGEMENT', 'USER_ADMINISTRATION', 'AUDIT_ACCESS'],
       },
       {
-        name: SystemRole.OPERATIONS_MANAGER,
+        name: SystemRole.OPERATIONS,
         displayName: 'Operations Manager',
         description: 'Manages projects, assignment planning, schedules, and assayers.',
-        permissionKeys: ROLE_PERMISSIONS[SystemRole.OPERATIONS_MANAGER],
+        permissionKeys: ROLE_PERMISSIONS[SystemRole.OPERATIONS],
         responsibilityNames: ['PROJECT_MANAGEMENT', 'BRANCH_MANAGEMENT', 'ASSIGNMENT_MANAGEMENT', 'SCHEDULE_MANAGEMENT', 'DOCUMENT_MANAGEMENT'],
       },
       {
-        name: SystemRole.OPERATIONS_EXECUTIVE,
+        name: SystemRole.OPERATIONS,
         displayName: 'Operations Executive',
         description: 'Day to day assayer communication, negotiation logging, and scheduling.',
-        permissionKeys: ROLE_PERMISSIONS[SystemRole.OPERATIONS_EXECUTIVE],
+        permissionKeys: ROLE_PERMISSIONS[SystemRole.OPERATIONS],
         responsibilityNames: ['PROJECT_VIEWING', 'BRANCH_VIEWING', 'ASSIGNMENT_VIEWING', 'ASSIGNMENT_MANAGEMENT', 'SCHEDULE_MANAGEMENT', 'DOCUMENT_ACCESS'],
       },
       {
-        name: SystemRole.VALIDATOR,
+        name: SystemRole.DESK_OPERATOR,
         displayName: 'Validator',
         description: 'Performs OCR manual review and corrections.',
-        permissionKeys: ROLE_PERMISSIONS[SystemRole.VALIDATOR],
+        permissionKeys: ROLE_PERMISSIONS[SystemRole.DESK_OPERATOR],
         responsibilityNames: ['PROJECT_VIEWING', 'VALIDATION_REVIEWING', 'DOCUMENT_ACCESS'],
       },
     ];
@@ -383,11 +383,11 @@ async function seed() {
     const userRepository = AppDataSource.getRepository(UserEntity);
 
     const defaultUsers = [
-      { username: 'admin', email: 'admin@fapoms.com', firstName: 'Super', lastName: 'Admin', displayName: 'System Admin', roleName: SystemRole.SUPER_ADMINISTRATOR },
-      { username: 'admin2', email: 'admin2@fapoms.com', firstName: 'Admin2', lastName: 'User', displayName: 'Admin User', roleName: SystemRole.ADMINISTRATOR },
-      { username: 'manager', email: 'manager@fapoms.com', firstName: 'Operations', lastName: 'Manager', displayName: 'Ops Manager', roleName: SystemRole.OPERATIONS_MANAGER },
-      { username: 'executive', email: 'executive@fapoms.com', firstName: 'Operations', lastName: 'Executive', displayName: 'Ops Executive', roleName: SystemRole.OPERATIONS_EXECUTIVE },
-      { username: 'validator', email: 'validator@fapoms.com', firstName: 'Senior', lastName: 'Validator', displayName: 'Senior Validator', roleName: SystemRole.VALIDATOR },
+      { username: 'admin', email: 'admin@fapoms.com', firstName: 'Super', lastName: 'Admin', displayName: 'System Admin', roleName: SystemRole.ADMIN },
+      { username: 'admin2', email: 'admin2@fapoms.com', firstName: 'Admin2', lastName: 'User', displayName: 'Admin User', roleName: SystemRole.ADMIN },
+      { username: 'manager', email: 'manager@fapoms.com', firstName: 'Operations', lastName: 'Manager', displayName: 'Ops Manager', roleName: SystemRole.OPERATIONS },
+      { username: 'executive', email: 'executive@fapoms.com', firstName: 'Operations', lastName: 'Executive', displayName: 'Ops Executive', roleName: SystemRole.OPERATIONS },
+      { username: 'validator', email: 'validator@fapoms.com', firstName: 'Senior', lastName: 'Validator', displayName: 'Senior Validator', roleName: SystemRole.DESK_OPERATOR },
     ];
 
     const passwordHash = await bcrypt.hash('admin123', 12);

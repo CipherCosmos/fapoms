@@ -28,7 +28,7 @@ interface RequestWithPrincipal {
  * not a platform one — including it would make tenant isolation meaningless for the role most
  * likely to hold it.
  */
-const CROSS_TENANT_ROLES: string[] = [SystemRole.SUPER_ADMINISTRATOR];
+const CROSS_TENANT_ROLES: string[] = [SystemRole.ADMIN];
 
 /**
  * The organisation the current request belongs to.

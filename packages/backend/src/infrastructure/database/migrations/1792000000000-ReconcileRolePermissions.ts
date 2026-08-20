@@ -4,7 +4,7 @@ import { ROLE_PERMISSIONS, ALL_GRANTED_PERMISSIONS } from '../../../modules/auth
 /**
  * Make the permission grants match the audiences the routes declare.
  *
- * A route names its audience with `@Roles(...)` and may also require a permission. Both guards
+ @Roles(...)
  * run, so a role named by `@Roles` that lacks the permission is refused — and the refusal is
  * indistinguishable from a role that was never meant to have access. Twenty-four routes were in
  * that state, and three more required permissions that existed for nobody at all:
@@ -32,8 +32,12 @@ export class ReconcileRolePermissions1792000000000 implements MigrationInterface
     for (const key of ALL_GRANTED_PERMISSIONS) {
       const [resource, action, scope] = key.split(':');
       await q.query(
+        // The casts are load-bearing: each parameter appears both in the SELECT list, where
+        // Postgres has nothing to infer a type from, and in a comparison against a varchar
+        // column. Without them the planner reports "inconsistent types deduced for parameter $1"
+        // and the migration fails outright, taking the deploy with it.
         `INSERT INTO permissions (resource, action, scope, description, created_by, updated_by, version, is_active)
-         SELECT $1, $2, $3, $4, 'migration', 'migration', 1, true
+         SELECT $1::varchar, $2::varchar, $3::varchar, $4::varchar, 'migration', 'migration', 1, true
           WHERE NOT EXISTS (
             SELECT 1 FROM permissions WHERE resource = $1 AND action = $2 AND scope = $3)`,
         [resource, action, scope, `${action} ${resource} (${scope})`],

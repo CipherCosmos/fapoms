@@ -96,7 +96,7 @@ describe('ReportJobsWorker', () => {
     });
 
     it('passes the principal snapshot, not a user record, to the roster export', async () => {
-      const principal = { id: 'user-1', roles: ['HR_MANAGER'] };
+      const principal = { id: 'user-1', roles: ['OPERATIONS'] };
       await worker.assayerRoster(jobStub(REPORT_JOB.ASSAYER_ROSTER, { principal, scope: null }));
 
       expect(reportsService.assayerRoster).toHaveBeenCalledWith(principal, { scope: undefined }, expect.any(Function));

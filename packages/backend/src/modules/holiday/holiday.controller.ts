@@ -70,7 +70,7 @@ export class HolidayController {
   constructor(private readonly holidayService: HolidayService) {}
 
   @Post()
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   // Reference data — see the note in ZoneController.create. `holiday:*` did not exist, so
   // every role including SUPER_ADMINISTRATOR was refused and the calendar could never be edited.
   @RequirePermissions('reference_data:create:organization')
@@ -127,7 +127,7 @@ export class HolidayController {
   }
 
   @Put(':id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('reference_data:edit:organization')
   @ApiOperation({ summary: 'Update holiday record details' })
   async update(
@@ -143,7 +143,7 @@ export class HolidayController {
   }
 
   @Delete(':id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('reference_data:delete:organization')
   @ApiOperation({ summary: 'Soft delete holiday record' })
   async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {

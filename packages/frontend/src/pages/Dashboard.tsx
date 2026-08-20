@@ -88,7 +88,7 @@ export const Dashboard: React.FC = () => {
   // Only the roles that /executive-map actually admits (see config/route-permissions.ts) get the
   // button — linking anyone else there just round-trips them back here through ProtectedRoute.
   const canSeeCommandCenter = !!data?.roles.some((r) =>
-    ['SUPER_ADMINISTRATOR', 'ADMINISTRATOR', 'OPERATIONS_MANAGER', 'READ_ONLY_AUDITOR'].includes(r));
+    ['ADMIN', 'ADMIN', 'OPERATIONS', 'AUDITOR'].includes(r));
 
   // ── Chart data, derived from the same snapshot the old stat tiles read ─────
 

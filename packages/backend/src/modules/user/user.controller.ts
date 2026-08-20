@@ -32,7 +32,7 @@ import { Transform } from 'class-transformer';
  */
 const TrimmedString = () => Transform(({ value }) => (typeof value === 'string' ? value.trim() : value));
 import { UserService, CreateUserDto, UpdateUserDto } from './user.service';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AnyAuthenticated, PasswordChangeExempt } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AnyAuthenticated } from '../auth/guards';
 import { SystemRole, UserStatus } from '@fapoms/shared';
 
 /**
@@ -184,9 +184,6 @@ export class UserController {
 
   @Get('me')
   @AnyAuthenticated()
-  // Reachable while a forced password change is pending: the client reads this to discover it
-  // must show the change screen. Blocking it would trap the user before they could comply.
-  @PasswordChangeExempt()
   @ApiOperation({ summary: 'Get current user profile' })
   async getMe(@Req() req: any) {
     return {
@@ -208,27 +205,17 @@ export class UserController {
 
   @Post('me/change-password')
   @AnyAuthenticated()
-  // The one action a user with a pending forced change MUST be able to take.
-  @PasswordChangeExempt()
   @ApiOperation({ summary: 'Change current user password' })
   async changePassword(@Body() dto: SelfChangePasswordDto, @Req() req: any) {
-    // The change revokes every existing session and returns a fresh pair for THIS device, so
-    // the client must replace its stored tokens with these — otherwise its now-revoked refresh
-    // token fails at the next rotation and the user is bounced to login minutes later.
-    const tokens = await this.userService.changePassword(
-      req.user.id,
-      dto.currentPassword,
-      dto.newPassword,
-      { ipAddress: req.ip, userAgent: req.headers?.['user-agent'] },
-    );
+    await this.userService.changePassword(req.user.id, dto.currentPassword, dto.newPassword);
     return {
       success: true,
-      data: { message: 'Password changed successfully.', tokens },
+      data: { message: 'Password changed successfully.' },
     };
   }
 
   @Post('bulk/status')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @RequirePermissions('user:edit:organization')
   @ApiOperation({ summary: 'Activate or suspend a batch of users in one operation' })
   async bulkSetStatus(@Body() dto: BulkSetStatusDto, @Req() req: any) {
@@ -237,7 +224,7 @@ export class UserController {
   }
 
   @Post()
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @RequirePermissions('user:create:organization')
   @ApiOperation({ summary: 'Create a new user' })
   async create(@Body() dto: CreateUserRequestDto, @Req() req: any) {
@@ -255,7 +242,7 @@ export class UserController {
   }
 
   @Get()
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @ApiOperation({ summary: 'List all users' })
   async findAll(
     @Query('page') page = 1,
@@ -279,7 +266,7 @@ export class UserController {
   }
 
   @Get('roles')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @ApiOperation({ summary: 'List all available roles' })
   async findAllRoles() {
     const roles = await this.userService.findAllRoles();
@@ -291,7 +278,7 @@ export class UserController {
 
   /** The permission catalogue the role editor renders as a matrix. */
   @Get('permissions')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @ApiOperation({ summary: 'List every permission that can be granted to a role' })
   async findAllPermissions() {
     const permissions = await this.userService.findAllPermissions();
@@ -309,7 +296,7 @@ export class UserController {
    * deleted, a held role cannot be deleted, and SUPER_ADMINISTRATOR cannot be stripped bare.
    */
   @Post('roles')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @ApiOperation({ summary: 'Create a custom role' })
   async createRole(@Body() dto: CreateRoleRequestDto, @Req() req: any) {
     const role = await this.userService.createRole(dto, req.user.id);
@@ -317,7 +304,7 @@ export class UserController {
   }
 
   @Put('roles/:id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @ApiOperation({ summary: 'Update a role display name or description' })
   async updateRole(
     @Param('id', ParseUUIDPipe) id: string,
@@ -334,7 +321,7 @@ export class UserController {
    * invalidated, so it takes effect within seconds rather than at next sign-in.
    */
   @Put('roles/:id/permissions')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @ApiOperation({ summary: "Replace a role's permission set" })
   async setRolePermissions(
     @Param('id', ParseUUIDPipe) id: string,
@@ -346,7 +333,7 @@ export class UserController {
   }
 
   @Delete('roles/:id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @ApiOperation({ summary: 'Delete a custom (non-built-in) role that nobody holds' })
   async deleteRole(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     await this.userService.deleteRole(id, req.user.id);
@@ -354,7 +341,7 @@ export class UserController {
   }
 
   @Get(':id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Get user by ID' })
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
     const user = await this.userService.findById(id);
@@ -365,7 +352,7 @@ export class UserController {
   }
 
   @Put(':id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @RequirePermissions('user:edit:organization')
   @ApiOperation({ summary: 'Update user' })
   async update(
@@ -381,7 +368,7 @@ export class UserController {
   }
 
   @Put(':id/roles')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @RequirePermissions('user:edit:organization')
   @ApiOperation({ summary: 'Assign roles to user' })
   async assignRoles(
@@ -401,7 +388,7 @@ export class UserController {
   }
 
   @Post(':id/unlock')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @RequirePermissions('user:edit:organization')
   @ApiOperation({ summary: 'Clear a lockout without changing the password' })
   async unlockAccount(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
@@ -410,7 +397,7 @@ export class UserController {
   }
 
   @Post(':id/reset-password')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @RequirePermissions('user:edit:organization')
   @ApiOperation({ summary: 'Admin resets a user\'s password' })
   async resetPassword(

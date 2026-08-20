@@ -160,7 +160,7 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
    * button that 403s reads as a broken app, not a permissions boundary.
    */
   const canReview = roles.some((r) =>
-    [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DATA_ENTRY_HEAD, SystemRole.VALIDATION_MANAGER].includes(r));
+    [SystemRole.ADMIN, SystemRole.ADMIN, SystemRole.DESK, SystemRole.DESK].includes(r));
   const canSubmit = canReview;
 
   const [docs, setDocs] = useState<DocRow[] | null>(null);

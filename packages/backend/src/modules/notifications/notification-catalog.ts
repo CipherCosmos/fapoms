@@ -83,9 +83,15 @@ export interface NotificationTypeDef {
   };
 }
 
-const OPS = ['OPERATIONS_MANAGER', 'OPERATIONS_EXECUTIVE'];
-const ADMINS = ['SUPER_ADMINISTRATOR', 'ADMINISTRATOR'];
-const VALIDATION = ['VALIDATION_MANAGER', 'VALIDATOR'];
+/**
+ * These were pairs — OPS was manager plus executive, ADMINS was super plus administrator,
+ * VALIDATION was validation manager plus validator — and no notification in this catalogue
+ * ever addressed one half without the other. That the catalogue had already stopped
+ * distinguishing them is part of why the roles were merged.
+ */
+const OPS = ['OPERATIONS'];
+const ADMINS = ['ADMIN'];
+const VALIDATION = ['DESK', 'DESK_OPERATOR'];
 const BOTH_CHANNELS = [NotificationChannel.IN_APP, NotificationChannel.PUSH];
 const IN_APP = [NotificationChannel.IN_APP];
 /**
@@ -362,7 +368,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   VALIDATION_CORRECTION_REQUIRED: {
     category: NotificationCategory.VALIDATION,
     priority: NotificationPriority.HIGH,
-    roles: ['DATA_ENTRY_HEAD'],
+    roles: ['DESK'],
     special: ['RECORD_OWNER'],
     channels: IN_APP,
     title: 'Correction required',
@@ -393,7 +399,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   DESK_PACKET_UNASSIGNED_SLA: {
     category: NotificationCategory.DOCUMENT,
     priority: NotificationPriority.HIGH,
-    roles: ['DATA_ENTRY_HEAD', 'VALIDATION_MANAGER'],
+    roles: ['DESK', 'DESK'],
     channels: IN_APP,
     title: 'Packet waiting for assignment',
     body: '${branchName} has been at the desk ${hours}h with nobody assigned.',
@@ -403,7 +409,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   DESK_ENTRY_OVERDUE: {
     category: NotificationCategory.DOCUMENT,
     priority: NotificationPriority.NORMAL,
-    roles: ['DATA_ENTRY_HEAD', 'VALIDATION_MANAGER'],
+    roles: ['DESK', 'DESK'],
     special: ['RECORD_OWNER'],
     channels: IN_APP,
     title: 'Data entry running late',
@@ -414,7 +420,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   DESK_REWORK_STALE: {
     category: NotificationCategory.VALIDATION,
     priority: NotificationPriority.HIGH,
-    roles: ['DATA_ENTRY_HEAD', 'VALIDATION_MANAGER'],
+    roles: ['DESK', 'DESK'],
     special: ['RECORD_OWNER'],
     channels: IN_APP,
     title: 'Rework not picked up',
@@ -425,7 +431,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   DESK_REVIEW_OVERDUE: {
     category: NotificationCategory.VALIDATION,
     priority: NotificationPriority.NORMAL,
-    roles: ['DATA_ENTRY_HEAD', 'VALIDATION_MANAGER'],
+    roles: ['DESK', 'DESK'],
     channels: IN_APP,
     title: 'Review pending too long',
     body: '${branchName} has been awaiting a review decision for ${hours}h.',
@@ -435,7 +441,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   DESK_SUBMIT_OVERDUE: {
     category: NotificationCategory.VALIDATION,
     priority: NotificationPriority.HIGH,
-    roles: ['DATA_ENTRY_HEAD', 'VALIDATION_MANAGER'],
+    roles: ['DESK', 'DESK'],
     channels: IN_APP_AND_EMAIL,
     title: 'Approved report not sent to client',
     body: '${branchName} was approved ${hours}h ago and still has not been submitted.',
@@ -445,7 +451,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   DESK_OCR_STUCK: {
     category: NotificationCategory.DOCUMENT,
     priority: NotificationPriority.NORMAL,
-    roles: ['DATA_ENTRY_HEAD', 'VALIDATION_MANAGER'],
+    roles: ['DESK', 'DESK'],
     channels: IN_APP,
     title: 'Packet stuck at external OCR',
     body: '${branchName} went to the OCR application ${hours}h ago and has not come back.',
@@ -455,7 +461,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   DESK_CLARIFICATION_OVERDUE: {
     category: NotificationCategory.VALIDATION,
     priority: NotificationPriority.NORMAL,
-    roles: ['DATA_ENTRY_HEAD', 'VALIDATION_MANAGER'],
+    roles: ['DESK', 'DESK'],
     channels: IN_APP,
     title: 'Clarification unresolved',
     body: 'A clarification on ${branchName} is ${hours}h old with no resolution — the report cannot ship until it closes.',
@@ -467,7 +473,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   DOCUMENT_UPLOADED: {
     category: NotificationCategory.DOCUMENT,
     priority: NotificationPriority.NORMAL,
-    roles: ['DOCUMENT_EXECUTIVE', 'DATA_ENTRY_HEAD'],
+    roles: ['DESK', 'DESK'],
     channels: IN_APP,
     title: 'New document received',
     body: '${assayerName} uploaded ${documentName} for ${branchName}.',
@@ -504,7 +510,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   DATA_ENTRY_COMPLETED: {
     category: NotificationCategory.DOCUMENT,
     priority: NotificationPriority.NORMAL,
-    roles: ['DATA_ENTRY_HEAD'],
+    roles: ['DESK'],
     channels: IN_APP,
     title: 'Data entry ready for review',
     body: '${userName} finished data entry on ${branchName}.',
@@ -557,7 +563,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   EXPENSE_CLAIMED: {
     category: NotificationCategory.BILLING,
     priority: NotificationPriority.NORMAL,
-    roles: [...OPS, ...ADMINS, 'FINANCE_MANAGER'],
+    roles: [...OPS, ...ADMINS, 'OPERATIONS'],
     channels: IN_APP,
     title: 'Expense claim submitted',
     body: '₹${amount} (${category}) claimed against ${branchName}.',
@@ -633,7 +639,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   ASSAYER_DOCUMENT_EXPIRING: {
     category: NotificationCategory.WORKFORCE,
     priority: NotificationPriority.HIGH,
-    roles: ['HR_MANAGER'],
+    roles: ['OPERATIONS'],
     channels: IN_APP,
     title: 'Assayer document expiring',
     body: "${assayerName}'s ${documentName} expires on ${expiryDate}.",
@@ -658,7 +664,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   ASSAYER_CERTIFICATION_EXPIRING: {
     category: NotificationCategory.WORKFORCE,
     priority: NotificationPriority.HIGH,
-    roles: ['HR_MANAGER'],
+    roles: ['OPERATIONS'],
     channels: IN_APP,
     title: 'Assayer certification expiring',
     body: "${assayerName}'s ${certificationName} certification expires on ${expiryDate}. Once it lapses they cannot be assigned to work that requires it, so please start the renewal.",
@@ -670,7 +676,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     // HR and admins only. Operations was included and cannot open `/hr` — and new capacity
     // reaches them where they use it, in the planning screen's candidate list, rather than as a
     // bell item linking to a roster they are not permitted to see.
-    roles: ['HR_MANAGER', ...ADMINS],
+    roles: ['OPERATIONS', ...ADMINS],
     channels: IN_APP,
     title: 'New assayer onboarded',
     body: '${assayerName} is now active and available for assignment.',

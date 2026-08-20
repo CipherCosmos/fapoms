@@ -2029,7 +2029,7 @@ export const PlanningWorkspace: React.FC = () => {
                     /* The author's role was de-cased here, so a remark left by an operations
                        manager was attributed to "operations manager" while the user directory
                        and every other surface name the same person's role from the shared
-                       ROLE_LABELS map — and HR_MANAGER de-cased to "hr manager". */
+                       ROLE_LABELS map — and DESK_OPERATOR de-cased to "desk operator". */
                     title={[
                       `What staff have written about this assayer, scored ${remarkVerdict(m).outOfFive} out of 5 — recent remarks count for more than old ones.`,
                       latest ? `Latest (${latest.category.toLowerCase()}, ${latest.authorRole ? roleLabel(latest.authorRole) : 'staff'}): "${latest.text.length > 140 ? `${latest.text.slice(0, 137)}…` : latest.text}"` : null,

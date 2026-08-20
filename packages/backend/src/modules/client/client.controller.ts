@@ -214,7 +214,7 @@ export class ClientController {
   // -----------------------------------------------------------------------
 
   @Post()
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('client:create:organization')
   @ApiOperation({ summary: 'Create a new client profile' })
   async create(@Body() dto: CreateClientRequestDto, @Req() req: any) {
@@ -264,7 +264,7 @@ export class ClientController {
   }
 
   @Put(':id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('client:edit:organization')
   @ApiOperation({ summary: 'Update client profile and configuration' })
   async update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateClientRequestDto, @Req() req: any) {
@@ -273,7 +273,7 @@ export class ClientController {
   }
 
   @Delete(':id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @RequirePermissions('client:delete:organization')
   @ApiOperation({ summary: 'Soft delete client profile' })
   async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
@@ -286,7 +286,7 @@ export class ClientController {
   // -----------------------------------------------------------------------
 
   @Patch('bulk/lifecycle')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('client:edit:organization')
   @ApiOperation({ summary: 'Migrate a batch of clients forward to a target lifecycle stage' })
   async bulkTransitionLifecycle(
@@ -298,7 +298,7 @@ export class ClientController {
   }
 
   @Patch(':id/lifecycle')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('client:edit:organization')
   @ApiOperation({ summary: 'Transition client lifecycle status' })
   async transitionLifecycle(
@@ -322,7 +322,7 @@ export class ClientController {
   }
 
   @Post(':id/contacts')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('client:create:organization')
   @ApiOperation({ summary: 'Add contact to client' })
   async addContact(
@@ -335,7 +335,7 @@ export class ClientController {
   }
 
   @Put(':id/contacts/:contactId')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('client:edit:organization')
   @ApiOperation({ summary: 'Update client contact' })
   async updateContact(
@@ -348,7 +348,7 @@ export class ClientController {
   }
 
   @Delete(':id/contacts/:contactId')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @RequirePermissions('client:delete:organization')
   @ApiOperation({ summary: 'Remove client contact' })
   async removeContact(
@@ -371,7 +371,7 @@ export class ClientController {
   }
 
   @Post(':id/contracts')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('client:create:organization')
   @ApiOperation({ summary: 'Add contract to client' })
   async addContract(
@@ -384,7 +384,7 @@ export class ClientController {
   }
 
   @Put(':id/contracts/:contractId')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('client:edit:organization')
   @ApiOperation({ summary: 'Update client contract' })
   async updateContract(
@@ -397,7 +397,7 @@ export class ClientController {
   }
 
   @Delete(':id/contracts/:contractId')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @RequirePermissions('client:delete:organization')
   @ApiOperation({ summary: 'Soft delete client contract' })
   async removeContract(
@@ -420,7 +420,7 @@ export class ClientController {
   }
 
   @Put(':id/billing')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @RequirePermissions('client:edit:organization')
   @ApiOperation({ summary: 'Create or update client billing information' })
   async upsertBilling(

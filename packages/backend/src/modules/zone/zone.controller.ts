@@ -66,7 +66,7 @@ export class ZoneController {
   constructor(private readonly zoneService: ZoneService) {}
 
   @Post()
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   /**
    * Zones are reference data, and `reference_data:*` is the permission that actually exists.
    *
@@ -121,7 +121,7 @@ export class ZoneController {
   }
 
   @Put(':id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('reference_data:edit:organization')
   @ApiOperation({ summary: 'Update operational zone mappings' })
   async update(
@@ -137,7 +137,7 @@ export class ZoneController {
   }
 
   @Delete(':id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @RequirePermissions('reference_data:delete:organization')
   @ApiOperation({ summary: 'Soft delete zone mapping' })
   async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {

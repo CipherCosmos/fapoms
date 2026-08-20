@@ -35,7 +35,7 @@ describe('remark scoring maths', () => {
     rating,
     category: extra.category ?? 'QUALITY',
     content: extra.content ?? 'x',
-    authorRole: 'OPERATIONS_EXECUTIVE',
+    authorRole: 'OPERATIONS',
     authorName: 'Ops',
     createdAt: at(daysAgo),
   });
@@ -88,7 +88,7 @@ describe('remark scoring maths', () => {
       remark(-1, 2, { category: 'PUNCTUALITY', content: 'Late twice this week.' }),
     ], NOW);
     expect(s.latest).toEqual(expect.objectContaining({
-      rating: -1, category: 'PUNCTUALITY', text: 'Late twice this week.', authorRole: 'OPERATIONS_EXECUTIVE',
+      rating: -1, category: 'PUNCTUALITY', text: 'Late twice this week.', authorRole: 'OPERATIONS',
     }));
   });
 
@@ -105,18 +105,20 @@ describe('remark scoring maths', () => {
   });
 
   it('records the most senior authorising role for a multi-role author', () => {
-    expect(snapshotAuthorRole(['VALIDATOR', 'HR_MANAGER'])).toBe('HR_MANAGER');
-    expect(snapshotAuthorRole(['OPERATIONS_EXECUTIVE'])).toBe('OPERATIONS_EXECUTIVE');
+    expect(snapshotAuthorRole(['DESK_OPERATOR', 'OPERATIONS'])).toBe('OPERATIONS');
+    expect(snapshotAuthorRole(['OPERATIONS'])).toBe('OPERATIONS');
     expect(snapshotAuthorRole([])).toBeNull();
   });
 
   it('never lets an assayer or a client user write, and keeps moderation narrower than writing', () => {
     expect(REMARK_WRITE_ROLES).not.toContain(SystemRole.ASSAYER);
     expect(REMARK_WRITE_ROLES).not.toContain(SystemRole.CLIENT_USER);
-    expect(REMARK_WRITE_ROLES).toContain(SystemRole.OPERATIONS_EXECUTIVE);
-    expect(REMARK_WRITE_ROLES).toContain(SystemRole.DATA_ENTRY_HEAD);
+    expect(REMARK_WRITE_ROLES).toContain(SystemRole.OPERATIONS);
+    expect(REMARK_WRITE_ROLES).toContain(SystemRole.DESK);
+    // Moderation — removing someone else's remark — is strictly narrower than writing one.
     for (const r of REMARK_MODERATE_ROLES) expect(REMARK_WRITE_ROLES).toContain(r);
-    expect(REMARK_MODERATE_ROLES).not.toContain(SystemRole.OPERATIONS_EXECUTIVE);
+    expect(REMARK_MODERATE_ROLES.length).toBeLessThan(REMARK_WRITE_ROLES.length);
+    expect(REMARK_MODERATE_ROLES).not.toContain(SystemRole.DESK_OPERATOR);
   });
 });
 
@@ -135,9 +137,9 @@ describe('AssayerRemarksService', () => {
   const audit = { recordEventSafe: jest.fn().mockResolvedValue(undefined), recordEvent: jest.fn() };
   const assayerService = { recomputeAverageRating: jest.fn().mockResolvedValue(undefined) };
 
-  const ops = { userId: 'u-ops', displayName: 'Priya (Ops)', roleNames: ['OPERATIONS_EXECUTIVE'] };
-  const hr = { userId: 'u-hr', displayName: 'Ravi (HR)', roleNames: ['HR_MANAGER'] };
-  const validator = { userId: 'u-val', displayName: 'Meena', roleNames: ['VALIDATOR'] };
+  const ops = { userId: 'u-ops', displayName: 'Priya (Ops)', roleNames: ['OPERATIONS'] };
+  const hr = { userId: 'u-hr', displayName: 'Ravi (HR)', roleNames: ['OPERATIONS'] };
+  const validator = { userId: 'u-val', displayName: 'Meena', roleNames: ['DESK_OPERATOR'] };
 
   beforeEach(async () => {
     jest.clearAllMocks();
@@ -174,7 +176,7 @@ describe('AssayerRemarksService', () => {
         assayerId: 'as-1',
         authorId: 'u-ops',
         authorName: 'Priya (Ops)',
-        authorRole: 'OPERATIONS_EXECUTIVE',
+        authorRole: 'OPERATIONS',
         rating: -2,
         category: 'CONDUCT',
         content: 'Rude to the branch manager.',
@@ -187,7 +189,7 @@ describe('AssayerRemarksService', () => {
         entityType: 'ASSAYER_REMARK',
         entityId: 'r-1',
         userId: 'u-ops',
-        metadata: expect.objectContaining({ assayerId: 'as-1', rating: -2, category: 'CONDUCT', authorRole: 'OPERATIONS_EXECUTIVE' }),
+        metadata: expect.objectContaining({ assayerId: 'as-1', rating: -2, category: 'CONDUCT', authorRole: 'OPERATIONS' }),
       }));
       // The drawer's History tab gets a row that names the author, not "system".
       expect(activityRepo.save).toHaveBeenCalledWith(expect.objectContaining({
@@ -224,7 +226,7 @@ describe('AssayerRemarksService', () => {
     it('links an assignment only when it belongs to the same assayer', async () => {
       assignmentRepo.findOne.mockResolvedValue({ id: 'asg-1', assayerId: 'as-1', assignmentNumber: 'ASG-1' });
       await service.create({ assayerId: 'as-1', rating: 2, category: AssayerRemarkCategory.PAPERWORK, text: 'Spotless.', assignmentId: 'asg-1' }, validator);
-      expect(remarkRepo.save).toHaveBeenCalledWith(expect.objectContaining({ assignmentId: 'asg-1', authorRole: 'VALIDATOR' }));
+      expect(remarkRepo.save).toHaveBeenCalledWith(expect.objectContaining({ assignmentId: 'asg-1', authorRole: 'DESK_OPERATOR' }));
 
       assignmentRepo.findOne.mockResolvedValue({ id: 'asg-2', assayerId: 'someone-else', assignmentNumber: 'ASG-2' });
       await expect(service.create({ assayerId: 'as-1', rating: 2, category: AssayerRemarkCategory.PAPERWORK, text: 'x', assignmentId: 'asg-2' }, validator))
@@ -273,9 +275,9 @@ describe('AssayerRemarksService', () => {
       expect(remarkRepo.find).not.toHaveBeenCalled();
 
       remarkRepo.find.mockResolvedValue([
-        { assayerId: 'a', rating: 2, category: 'QUALITY', content: 'x', authorRole: 'VALIDATOR', authorName: 'M', createdAt: at(1) },
+        { assayerId: 'a', rating: 2, category: 'QUALITY', content: 'x', authorRole: 'DESK_OPERATOR', authorName: 'M', createdAt: at(1) },
         { assayerId: 'b', rating: -1, category: 'CONDUCT', content: 'y', authorRole: null, authorName: 'P', createdAt: at(2) },
-        { assayerId: 'a', rating: 0, category: 'OTHER', content: 'z', authorRole: 'HR_MANAGER', authorName: 'R', createdAt: at(3) },
+        { assayerId: 'a', rating: 0, category: 'OTHER', content: 'z', authorRole: 'OPERATIONS', authorName: 'R', createdAt: at(3) },
       ]);
       const out = await service.loadScoringWindow(['a', 'b', 'c'], NOW);
       expect(remarkRepo.find).toHaveBeenCalledTimes(1);
@@ -288,7 +290,7 @@ describe('AssayerRemarksService', () => {
   describe('listForAssayer', () => {
     it('returns the rows newest first with the same summary the engine scores from', async () => {
       remarkRepo.find.mockResolvedValue([
-        { id: '1', assayerId: 'as-1', rating: -2, category: 'CONDUCT', content: 'a', authorRole: 'OPERATIONS_EXECUTIVE', authorName: 'P', createdAt: new Date() },
+        { id: '1', assayerId: 'as-1', rating: -2, category: 'CONDUCT', content: 'a', authorRole: 'OPERATIONS', authorName: 'P', createdAt: new Date() },
       ]);
       const { remarks, summary } = await service.listForAssayer('as-1');
       expect(remarks).toHaveLength(1);

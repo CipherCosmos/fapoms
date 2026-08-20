@@ -30,33 +30,26 @@ export const REMARK_TEXT_MAX = 1000;
  *
  * Deliberately NOT here: ASSAYER (a field worker rating themselves or a colleague is not a
  * staff observation), CLIENT_USER (client feedback is a different channel with a different
- * weight), READ_ONLY_AUDITOR (read-only by definition), PRODUCT_SUPPORT (the product team has
- * no view of anyone's fieldwork).
+ * weight), AUDITOR (read-only by definition), PRODUCT_SUPPORT (the product team has no view of
+ * anyone's fieldwork).
  */
 export const REMARK_WRITE_ROLES: SystemRole[] = [
-  SystemRole.SUPER_ADMINISTRATOR,
-  SystemRole.ADMINISTRATOR,
-  SystemRole.HR_MANAGER,
-  SystemRole.OPERATIONS_MANAGER,
-  SystemRole.VALIDATION_MANAGER,
-  SystemRole.FINANCE_MANAGER,
-  SystemRole.OPERATIONS_EXECUTIVE,
-  SystemRole.VALIDATOR,
-  SystemRole.DATA_ENTRY_HEAD,
-  SystemRole.DOCUMENT_EXECUTIVE,
+  SystemRole.ADMIN,
+  SystemRole.OPERATIONS,
+  SystemRole.DESK,
+  SystemRole.DESK_OPERATOR,
 ];
 
 /**
  * Who may remove a remark they did not write. Authors may always retract their own.
  *
- * Moderation power, so narrower than the write list: the workforce owner (HR), the desk that
- * consumes remarks (operations management), and administrators.
+ * Moderation power, so narrower than the write list. OPERATIONS owns the workforce and reads
+ * these remarks when it plans; ADMIN can always intervene. An operator who writes a remark may
+ * retract it, but may not remove a colleague's.
  */
 export const REMARK_MODERATE_ROLES: SystemRole[] = [
-  SystemRole.SUPER_ADMINISTRATOR,
-  SystemRole.ADMINISTRATOR,
-  SystemRole.HR_MANAGER,
-  SystemRole.OPERATIONS_MANAGER,
+  SystemRole.ADMIN,
+  SystemRole.OPERATIONS,
 ];
 
 /**

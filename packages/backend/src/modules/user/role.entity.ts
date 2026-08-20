@@ -15,7 +15,7 @@ export class RoleEntity extends BaseEntity {
   @Column({
     unique: true,
     length: 50,
-    comment: 'Machine-readable role identifier, e.g. OPERATIONS_MANAGER',
+    comment: 'Machine-readable role identifier, e.g. OPERATIONS',
   })
   name: string;
 

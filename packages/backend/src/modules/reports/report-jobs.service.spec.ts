@@ -77,12 +77,12 @@ describe('ReportJobsService', () => {
       // them. Putting the whole user entity in a Redis payload would store that person's own
       // PAN, bank and contact details to answer a question about roles.
       await service.enqueueAssayerRoster(
-        { principal: { id: 'user-1', roles: ['HR_MANAGER'] }, scope: null },
+        { principal: { id: 'user-1', roles: ['OPERATIONS'] }, scope: null },
         'user-1',
       );
 
       const payload = queue.add.mock.calls[0][1];
-      expect(payload.principal).toEqual({ id: 'user-1', roles: ['HR_MANAGER'] });
+      expect(payload.principal).toEqual({ id: 'user-1', roles: ['OPERATIONS'] });
       expect(JSON.stringify(payload)).not.toMatch(/panNumber|bankAccountNumber|passwordHash/);
     });
 

@@ -22,8 +22,8 @@ describe('TenantContext', () => {
   describe('isolation between concurrent requests', () => {
     it('gives each request its own organisation with no shared state', async () => {
       const [a, b] = await Promise.all([
-        resolveFor({ id: 'u1', organizationId: 'org-1', roles: [{ name: SystemRole.OPERATIONS_MANAGER }] }),
-        resolveFor({ id: 'u2', organizationId: 'org-2', roles: [{ name: SystemRole.OPERATIONS_MANAGER }] }),
+        resolveFor({ id: 'u1', organizationId: 'org-1', roles: [{ name: SystemRole.OPERATIONS }] }),
+        resolveFor({ id: 'u2', organizationId: 'org-2', roles: [{ name: SystemRole.OPERATIONS }] }),
       ]);
 
       // The predecessor stored this in a field on a process-wide singleton, so whichever
@@ -40,19 +40,19 @@ describe('TenantContext', () => {
 
   describe('role normalisation', () => {
     it('reads roles given as entities', async () => {
-      const ctx = await resolveFor({ organizationId: 'org-1', roles: [{ name: SystemRole.VALIDATOR }] });
-      expect(ctx.roleNames).toEqual([SystemRole.VALIDATOR]);
+      const ctx = await resolveFor({ organizationId: 'org-1', roles: [{ name: SystemRole.DESK_OPERATOR }] });
+      expect(ctx.roleNames).toEqual([SystemRole.DESK_OPERATOR]);
     });
 
     it('reads roles given as plain strings', async () => {
       // The raw JWT payload carries string roles; validateJwtPayload returns entities. Both
       // shapes reach req.user depending on the path, so both must resolve.
-      const ctx = await resolveFor({ organizationId: 'org-1', roles: [SystemRole.VALIDATOR] });
-      expect(ctx.roleNames).toEqual([SystemRole.VALIDATOR]);
+      const ctx = await resolveFor({ organizationId: 'org-1', roles: [SystemRole.DESK_OPERATOR] });
+      expect(ctx.roleNames).toEqual([SystemRole.DESK_OPERATOR]);
     });
 
     it('treats an unrecognised roles value as no roles rather than throwing', async () => {
-      const ctx = await resolveFor({ organizationId: 'org-1', roles: 'VALIDATOR' as never });
+      const ctx = await resolveFor({ organizationId: 'org-1', roles: 'DESK_OPERATOR' as never });
       expect(ctx.roleNames).toEqual([]);
       // Failing closed: no roles means not cross-tenant, so a malformed principal is scoped
       // rather than accidentally granted platform-wide reach.
@@ -61,17 +61,28 @@ describe('TenantContext', () => {
   });
 
   describe('cross-tenant access', () => {
-    it('grants it to the platform operator', async () => {
-      const ctx = await resolveFor({ organizationId: 'org-1', roles: [{ name: SystemRole.SUPER_ADMINISTRATOR }] });
+    /**
+     * ADMIN reaches across organisations; every other role is scoped to its own.
+     *
+     * This used to be a distinction between two admin roles — the platform operator saw every
+     * tenant, an organisation administrator saw one. They are one role now, and the platform
+     * operator's reading wins, so an ADMIN is cross-tenant. That is a widening on paper; in
+     * practice this deployment has a single organisation, and the role that runs the platform
+     * is the role that would have to be able to see it. If a second tenant is ever added, this
+     * is the first thing to revisit.
+     */
+    it('grants it to ADMIN, which runs the platform', async () => {
+      const ctx = await resolveFor({ organizationId: 'org-1', roles: [{ name: SystemRole.ADMIN }] });
       expect(ctx.isCrossTenant).toBe(true);
     });
 
-    it('withholds it from an organisation ADMINISTRATOR', async () => {
-      // ADMINISTRATOR administers one organisation. Including it here would make tenant
-      // isolation meaningless for the role most likely to be handed out.
-      const ctx = await resolveFor({ organizationId: 'org-1', roles: [{ name: SystemRole.ADMINISTRATOR }] });
-      expect(ctx.isCrossTenant).toBe(false);
-    });
+    it.each([SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR])(
+      'withholds it from %s, which works inside one organisation',
+      async (role) => {
+        const ctx = await resolveFor({ organizationId: 'org-1', roles: [{ name: role }] });
+        expect(ctx.isCrossTenant).toBe(false);
+      },
+    );
 
     it('withholds it from an unauthenticated request', async () => {
       const ctx = await resolveFor(undefined);

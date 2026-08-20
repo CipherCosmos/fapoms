@@ -177,7 +177,7 @@ export class ValidationService implements OnModuleInit {
       JOIN user_roles ur ON ur.user_id = u.id
       JOIN roles r ON r.id = ur.role_id
       WHERE u.is_active = true
-        AND r.name IN ('VALIDATION_MANAGER', 'DATA_ENTRY_HEAD')
+        AND r.name IN ('DESK', 'DESK')
       ORDER BY name
     `);
   }
@@ -210,7 +210,7 @@ export class ValidationService implements OnModuleInit {
         JOIN roles r ON r.id = ur.role_id
         WHERE u.is_active = true
           -- The desk's two real roles: heads (assign + work + review) and validators (work).
-          AND r.name IN ('DATA_ENTRY_HEAD', 'VALIDATION_MANAGER', 'VALIDATOR')
+          AND r.name IN ('DESK', 'DESK', 'DESK_OPERATOR')
       ),
       open_docs AS (
         SELECT d.assigned_to_user_id AS uid, COUNT(*) AS open_packets,
@@ -435,7 +435,7 @@ export class ValidationService implements OnModuleInit {
     remarks?: string,
     notes?: string,
     ocrResult?: any,
-    role = SystemRole.SUPER_ADMINISTRATOR,
+    role = SystemRole.ADMIN,
   ): Promise<{ saved: ValidationCaseEntity; event: any }> {
     const validationCase = await this.findOne(id);
     const prevStatus = validationCase.status;
@@ -616,7 +616,7 @@ export class ValidationService implements OnModuleInit {
     const prevStatus = validationCase.status;
     return this.workflowEngine.executeCommand(
       'validation', validationCase.id, 'HUMAN_REVIEW_Command', prevStatus, ValidationStatus.HUMAN_REVIEW,
-      userId, SystemRole.SUPER_ADMINISTRATOR, [],
+      userId, SystemRole.ADMIN, [],
       async () => {
         const event = ValidationStateMachine.moveToReview(validationCase, userId, remarks);
         validationCase.updatedBy = userId;

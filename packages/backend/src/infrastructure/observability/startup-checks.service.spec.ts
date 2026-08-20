@@ -72,13 +72,13 @@ describe('startup checks', () => {
   });
 
   it('fails critically when a SystemRole has no row — nobody could be given it', async () => {
-    const missing = ALL_ROLES.filter((r) => r !== SystemRole.DATA_ENTRY_HEAD);
+    const missing = ALL_ROLES.filter((r) => r !== SystemRole.DESK);
     const checks = await makeService({ roles: missing, staffed: missing }).run();
 
     const roleCheck = byName(checks, 'roles');
     expect(roleCheck.ok).toBe(false);
     expect(roleCheck.critical).toBe(true);
-    expect(roleCheck.detail).toContain(SystemRole.DATA_ENTRY_HEAD);
+    expect(roleCheck.detail).toContain(SystemRole.DESK);
   });
 
   it('does not count ASSAYER as missing — assayers are not users', async () => {
@@ -87,12 +87,10 @@ describe('startup checks', () => {
   });
 
   it('warns when an event has roles but none of them are staffed', async () => {
-    // Roles all exist; nobody holds the desk roles. DESK_SUBMIT_OVERDUE is addressed to
-    // DATA_ENTRY_HEAD and VALIDATION_MANAGER only, so it reaches no one — the exact situation
-    // that let an approved-but-unsent report go unannounced.
-    const staffed = ALL_ROLES.filter(
-      (r) => r !== SystemRole.DATA_ENTRY_HEAD && r !== SystemRole.VALIDATION_MANAGER,
-    );
+    // Every role exists; nobody holds DESK. DESK_SUBMIT_OVERDUE is addressed to the desk and
+    // nowhere else, so it reaches no one — the exact situation that let an approved-but-unsent
+    // report go unannounced.
+    const staffed = ALL_ROLES.filter((r) => r !== SystemRole.DESK);
     const checks = await makeService({ staffed }).run();
 
     const recipients = byName(checks, 'notification recipients');

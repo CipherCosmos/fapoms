@@ -2453,9 +2453,9 @@ export class AssignmentService {
       const actorRoles: string[] = (actor?.roles ?? []).map((r: any) => r?.name).filter(Boolean);
       staffOverride = actorRoles.some((r) =>
         [
-          SystemRole.SUPER_ADMINISTRATOR,
-          SystemRole.ADMINISTRATOR,
-          SystemRole.OPERATIONS_MANAGER,
+          SystemRole.ADMIN,
+          SystemRole.ADMIN,
+          SystemRole.OPERATIONS,
         ].includes(r as SystemRole),
       );
       if (!staffOverride) {

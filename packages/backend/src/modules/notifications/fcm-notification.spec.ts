@@ -132,7 +132,7 @@ describe('FCM Notification & Routing E2E Test Suite', () => {
       title: 'New Branch Inspection Assignment',
       message: 'You have been assigned to inspection at HDFC Bank Branch #104',
       link: '/assignments/asn-104',
-    }, 'OPERATIONS_MANAGER');
+    }, 'OPERATIONS');
 
     expect(notificationsStore.length).toBe(1);
     expect(notificationsStore[0].userId).toBe('assayer-A-id');

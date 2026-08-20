@@ -8,7 +8,6 @@ import { RoleEntity } from './role.entity';
 import { PermissionEntity } from './permission.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { AuthService } from '../auth/auth.service';
 
 /**
  * Guard rails on the role editor.
@@ -55,9 +54,6 @@ describe('UserService — roles & permissions', () => {
         { provide: getRepositoryToken(PermissionEntity), useValue: mockPermissionRepo },
         { provide: AuditService, useValue: mockAudit },
         { provide: DomainEventPublisher, useValue: mockEvents },
-        // UserService now revokes sessions on password change/reset via AuthService; these role
-        // tests never touch that path, so a bare mock satisfies the injector.
-        { provide: AuthService, useValue: { revokeAllSessions: jest.fn(), issueFreshSessionForUser: jest.fn() } },
       ],
     }).compile();
 
@@ -87,7 +83,7 @@ describe('UserService — roles & permissions', () => {
 
   describe('setRolePermissions', () => {
     it('replaces the permission set and invalidates every holder so it applies without re-login', async () => {
-      const role = { id: 'role-1', name: 'OPERATIONS_MANAGER', permissions: [{ id: 'p1' }] };
+      const role = { id: 'role-1', name: 'OPERATIONS', permissions: [{ id: 'p1' }] };
       mockRoleRepo.findOne.mockResolvedValue(role);
       mockPermissionRepo.find.mockResolvedValue([{ id: 'p2' }, { id: 'p3' }]);
       mockUserRepo.createQueryBuilder.mockReturnValue(
@@ -116,7 +112,7 @@ describe('UserService — roles & permissions', () => {
     it('refuses to strip every permission from SUPER_ADMINISTRATOR — that lockout is unrecoverable', async () => {
       mockRoleRepo.findOne.mockResolvedValue({
         id: 'role-sa',
-        name: SystemRole.SUPER_ADMINISTRATOR,
+        name: SystemRole.ADMIN,
         permissions: [{ id: 'p1' }],
       });
       mockPermissionRepo.find.mockResolvedValue([]);
@@ -130,7 +126,7 @@ describe('UserService — roles & permissions', () => {
 
   describe('deleteRole', () => {
     it('refuses to delete a built-in role, whose name the guards compare against', async () => {
-      mockRoleRepo.findOne.mockResolvedValue({ id: 'role-1', name: SystemRole.OPERATIONS_MANAGER });
+      mockRoleRepo.findOne.mockResolvedValue({ id: 'role-1', name: SystemRole.OPERATIONS });
 
       await expect(service.deleteRole('role-1', 'actor-1')).rejects.toBeInstanceOf(BadRequestException);
       expect(mockRoleRepo.remove).not.toHaveBeenCalled();

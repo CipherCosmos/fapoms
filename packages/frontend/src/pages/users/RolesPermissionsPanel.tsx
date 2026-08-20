@@ -50,7 +50,7 @@ export const RolesPermissionsPanel: React.FC = () => {
   // tab, so locking this screen to the super administrator only made it inert, not safer.
   const roles_ = useCurrentRoles();
   const canEdit =
-    roles_.includes(SystemRole.SUPER_ADMINISTRATOR) || roles_.includes(SystemRole.ADMINISTRATOR);
+    roles_.includes(SystemRole.ADMIN) || roles_.includes(SystemRole.ADMIN);
   const { confirm, confirmDialog } = useConfirm();
 
   const { data: rolesRes, isLoading, refetch } = useQuery({

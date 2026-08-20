@@ -35,11 +35,11 @@ interface DigestSection {
 
 /** Which roles receive which sections. A user with several roles gets the union, once. */
 const SECTION_AUDIENCES: Record<string, string[]> = {
-  desk: ['DATA_ENTRY_HEAD', 'VALIDATION_MANAGER'],
+  desk: ['DESK', 'DESK'],
   // Whoever owns the feedback desk — one list, see feedback-roles.ts (super administrators only).
   feedback: FEEDBACK_TEAM_ROLE_NAMES,
-  finance: ['FINANCE_MANAGER'],
-  hr: ['HR_MANAGER'],
+  finance: ['OPERATIONS'],
+  hr: ['OPERATIONS'],
 };
 
 @Injectable()

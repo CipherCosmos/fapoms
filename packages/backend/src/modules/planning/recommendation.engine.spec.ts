@@ -859,7 +859,7 @@ describe('RecommendationEngine', () => {
     it('a −2 remark yesterday moves the candidate below an otherwise identical peer, by at most the dimension weight', async () => {
       const yesterday = new Date(Date.now() - 86_400_000);
       mockRemarksService.loadScoringWindow.mockResolvedValue({
-        'a-1': [{ rating: -2, category: 'CONDUCT', content: 'Was rude to the branch manager.', authorRole: 'OPERATIONS_EXECUTIVE', authorName: 'Ops', createdAt: yesterday }],
+        'a-1': [{ rating: -2, category: 'CONDUCT', content: 'Was rude to the branch manager.', authorRole: 'OPERATIONS', authorName: 'Ops', createdAt: yesterday }],
       });
 
       const results = await engine.recommend(branch, new Date());
@@ -880,7 +880,7 @@ describe('RecommendationEngine', () => {
 
       // And the card can say why.
       expect(remarked.remarkSummary).toEqual(expect.objectContaining({ count: 1, weightedMean: -2 }));
-      expect(remarked.remarkSummary.latest).toEqual(expect.objectContaining({ rating: -2, category: 'CONDUCT', authorRole: 'OPERATIONS_EXECUTIVE' }));
+      expect(remarked.remarkSummary.latest).toEqual(expect.objectContaining({ rating: -2, category: 'CONDUCT', authorRole: 'OPERATIONS' }));
       expect(clean.remarkSummary).toEqual({ count: 0, weightedMean: null, latest: null });
     });
 

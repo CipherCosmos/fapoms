@@ -14,10 +14,9 @@ import { NOTIFICATION_CATALOG } from './notification-catalog';
  *
  * That is not hypothetical. `BaselineSchema` squashed the migrations that created eight of the
  * thirteen roles, and `seed.ts` creates only five, so a database built from the squash held
- * five. `DESK_SUBMIT_OVERDUE` — addressed to DATA_ENTRY_HEAD and VALIDATION_MANAGER, neither of
- * which existed — could not notify anyone, and an approved audit report sitting unsent past its
- * SLA went unannounced. `RestoreWorkflowRoles` put the rows back; this test is what stops the
- * next squash losing them again.
+ * five. `DESK_SUBMIT_OVERDUE` — addressed to roles that did not exist — could not notify
+ * anyone, and an approved audit report sitting unsent past its SLA went unannounced. This test
+ * is what stops the next squash, or the next role rename, losing them again.
  *
  * The role rows are created in two places, so both are read here rather than trusting either:
  * `seed.ts` for the original five, and the restore migration for the rest. Parsing the real
@@ -26,9 +25,14 @@ import { NOTIFICATION_CATALOG } from './notification-catalog';
  */
 
 const SEED_FILE = path.resolve(__dirname, '../../infrastructure/database/seed.ts');
-const RESTORE_MIGRATION = path.resolve(
+/**
+ * The migration that consolidated thirteen roles into eight. It is the one that decides which
+ * role rows a database ends up with, so it is the one this test reads — `RestoreWorkflowRoles`
+ * before it created rows that this one merges away.
+ */
+const CONSOLIDATE_MIGRATION = path.resolve(
   __dirname,
-  '../../infrastructure/database/migrations/1790200000000-RestoreWorkflowRoles.ts',
+  '../../infrastructure/database/migrations/1792100000000-ConsolidateRoles.ts',
 );
 
 /**
@@ -46,9 +50,11 @@ function creatableRoles(): Set<string> {
   const seed = fs.readFileSync(SEED_FILE, 'utf8');
   for (const m of seed.matchAll(/name:\s*SystemRole\.([A-Z_]+)/g)) names.add(m[1]);
 
-  // The migration writes plain string literals, since migrations must not import app enums.
-  const migration = fs.readFileSync(RESTORE_MIGRATION, 'utf8');
-  for (const m of migration.matchAll(/name:\s*'([A-Z_]+)'/g)) names.add(m[1]);
+  // The migration writes plain string literals, since a migration must keep working when the
+  // enum moves on. Its DISPLAY map is the list of roles it guarantees a row for.
+  const migration = fs.readFileSync(CONSOLIDATE_MIGRATION, 'utf8');
+  const display = migration.slice(migration.indexOf('DISPLAY: Record'), migration.indexOf('public async up'));
+  for (const m of display.matchAll(/^\s{4}([A-Z_]+):\s*\[/gm)) names.add(m[1]);
 
   return names;
 }

@@ -123,7 +123,7 @@ describe('NotificationController', () => {
 
   describe('preferences', () => {
     it('resolves staff users as non-assayer recipients', async () => {
-      await controller.getPreferences({ user: { id: 'u1', roles: [{ name: 'OPERATIONS_MANAGER' }] } });
+      await controller.getPreferences({ user: { id: 'u1', roles: [{ name: 'OPERATIONS' }] } });
       expect(mockNotifService.getPreferences).toHaveBeenCalledWith('u1', false);
     });
 

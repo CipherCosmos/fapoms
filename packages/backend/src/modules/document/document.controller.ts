@@ -136,7 +136,7 @@ export class DocumentController {
   ) {}
 
   @Post('upload')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
   @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload a file for an assessment' })
@@ -214,7 +214,7 @@ export class DocumentController {
    * rule on the `documents/direct/` prefix.
    */
   @Post('upload/presign')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
   @ApiOperation({ summary: 'Get a presigned URL to upload a file directly to object storage' })
   async presignUpload(@Body() body: PresignUploadRequestDto) {
     if (typeof this.storage.getSignedUploadUrl !== 'function') {
@@ -243,7 +243,7 @@ export class DocumentController {
   }
 
   @Post('upload/finalize')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
   @ApiOperation({ summary: 'Register a file uploaded via a presigned URL as a document' })
   async finalizeUpload(@Body() body: FinalizeUploadRequestDto, @Req() req: any) {
     // Only keys minted by presignUpload can be finalized — never an arbitrary storage key,
@@ -302,7 +302,7 @@ export class DocumentController {
   }
 
   @Post('mobile-upload')
-  @Roles(SystemRole.ASSAYER, SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE)
+  @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
   @ApiOperation({ summary: 'Mobile JSON-based document upload (no multipart)' })
   async mobileUpload(@Body() body: any, @Req() req: any) {
     let targetId = body.projectBranchId || body.assessmentId || body.assignmentId;
@@ -339,12 +339,6 @@ export class DocumentController {
       size: buffer.length,
       hint: 'Scan at a lower quality, or split it.',
     });
-    // Malware scan, exactly like the multipart, presign-finalize and chunked-complete paths.
-    // This base64-JSON route was the ONE upload entry that skipped it — so a field token could
-    // post an infected file straight into storage, to be downloaded later by ops staff as a
-    // trusted "audited return PDF". scanOrThrow rejects on a hit (and, in production, on a
-    // scanner that is required but unreachable); a clean file is untouched.
-    await this.fileScanner.scanOrThrow(buffer, fileName);
 
     const savedFilePath = await this.storage.saveFile(fileName, buffer, 'application/pdf');
 
@@ -386,14 +380,7 @@ export class DocumentController {
    * Same post-upload behaviour as the JSON path — both delegate to the shared helper.
    */
   @Post('mobile-upload-binary')
-  @Roles(
-    SystemRole.ASSAYER,
-    SystemRole.SUPER_ADMINISTRATOR,
-    SystemRole.ADMINISTRATOR,
-    SystemRole.OPERATIONS_MANAGER,
-    SystemRole.OPERATIONS_EXECUTIVE,
-    SystemRole.DOCUMENT_EXECUTIVE,
-  )
+  @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
   @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Binary audited-return upload (no base64 inflation)' })
@@ -508,14 +495,7 @@ export class DocumentController {
   // send fixed-size chunks, ask what survived a disconnect, and transmit only the gaps.
 
   @Post('upload/session')
-  @Roles(
-    SystemRole.ASSAYER,
-    SystemRole.SUPER_ADMINISTRATOR,
-    SystemRole.ADMINISTRATOR,
-    SystemRole.OPERATIONS_MANAGER,
-    SystemRole.OPERATIONS_EXECUTIVE,
-    SystemRole.DOCUMENT_EXECUTIVE,
-  )
+  @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
   @ApiOperation({ summary: 'Open a resumable upload session' })
   async createUploadSession(
     @Body() body: CreateUploadSessionRequestDto,
@@ -539,14 +519,7 @@ export class DocumentController {
    * skip them. This is the difference between resuming a 90%-complete upload and repeating it.
    */
   @Get('upload/session/:uploadId')
-  @Roles(
-    SystemRole.ASSAYER,
-    SystemRole.SUPER_ADMINISTRATOR,
-    SystemRole.ADMINISTRATOR,
-    SystemRole.OPERATIONS_MANAGER,
-    SystemRole.OPERATIONS_EXECUTIVE,
-    SystemRole.DOCUMENT_EXECUTIVE,
-  )
+  @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
   @ApiOperation({ summary: 'Resume: report which chunks the server already holds' })
   async getUploadSession(@Param('uploadId') uploadId: string) {
     const session = await this.chunkedUploadService.getSession(uploadId);
@@ -565,14 +538,7 @@ export class DocumentController {
   }
 
   @Put('upload/session/:uploadId/chunk/:index')
-  @Roles(
-    SystemRole.ASSAYER,
-    SystemRole.SUPER_ADMINISTRATOR,
-    SystemRole.ADMINISTRATOR,
-    SystemRole.OPERATIONS_MANAGER,
-    SystemRole.OPERATIONS_EXECUTIVE,
-    SystemRole.DOCUMENT_EXECUTIVE,
-  )
+  @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
   @UseInterceptors(FileInterceptor('chunk'))
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload one chunk (binary, resumable)' })
@@ -589,14 +555,7 @@ export class DocumentController {
   }
 
   @Get('upload/session/:uploadId/chunk/:index/presigned-url')
-  @Roles(
-    SystemRole.ASSAYER,
-    SystemRole.SUPER_ADMINISTRATOR,
-    SystemRole.ADMINISTRATOR,
-    SystemRole.OPERATIONS_MANAGER,
-    SystemRole.OPERATIONS_EXECUTIVE,
-    SystemRole.DOCUMENT_EXECUTIVE,
-  )
+  @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
   @ApiOperation({ summary: 'Get a direct pre-signed PUT URL for uploading one chunk directly to MinIO (low 2G/3G optimization)' })
   async getChunkPresignedUrl(
     @Param('uploadId') uploadId: string,
@@ -607,14 +566,7 @@ export class DocumentController {
   }
 
   @Post('upload/session/:uploadId/complete')
-  @Roles(
-    SystemRole.ASSAYER,
-    SystemRole.SUPER_ADMINISTRATOR,
-    SystemRole.ADMINISTRATOR,
-    SystemRole.OPERATIONS_MANAGER,
-    SystemRole.OPERATIONS_EXECUTIVE,
-    SystemRole.DOCUMENT_EXECUTIVE,
-  )
+  @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
   @ApiOperation({ summary: 'Assemble the chunks into the final document' })
   async completeUpload(
     @Param('uploadId') uploadId: string,
@@ -723,7 +675,7 @@ export class DocumentController {
   }
 
   @Post('validate-customer-excel')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.OPERATIONS)
   @RequirePermissions('document:create:organization')
   @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
   @ApiOperation({ summary: 'Validate Customer Master Excel file' })
@@ -779,7 +731,7 @@ export class DocumentController {
   }
 
   @Get(':id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR, SystemRole.DATA_ENTRY_HEAD, SystemRole.READ_ONLY_AUDITOR)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
   @ApiOperation({ summary: 'Get document metadata' })
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
     const doc = await this.documentService.findOne(id);
@@ -839,13 +791,7 @@ export class DocumentController {
     // Advertises resumability so clients know they may request a byte range.
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Content-Type', doc.mimeType || 'application/pdf');
-    // `doc.fileName` is stored from client-supplied input on the JSON upload routes, so a quote or
-    // a CR/LF in it would break out of the quoted value and corrupt (or split) the response
-    // header. Strip the header-breaking characters from the quoted fallback and add the RFC 5987
-    // `filename*` form for correct Unicode — the same shape the report exports already use.
-    const safeName = (doc.fileName || 'document.pdf').replace(/[\r\n"]/g, '_');
-    const encodedName = encodeURIComponent(doc.fileName || 'document.pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${safeName}"; filename*=UTF-8''${encodedName}`);
+    res.setHeader('Content-Disposition', `attachment; filename="${doc.fileName}"`);
 
     if (req.headers['if-none-match'] === etag) {
       res.status(304).end();
@@ -890,19 +836,9 @@ export class DocumentController {
    * the assayer app's OS-browser download handoff.
    */
   @Get(':id/download-token')
-  @Roles(
-    SystemRole.ASSAYER,
-    SystemRole.SUPER_ADMINISTRATOR,
-    SystemRole.ADMINISTRATOR,
-    SystemRole.OPERATIONS_MANAGER,
-    SystemRole.OPERATIONS_EXECUTIVE,
-    SystemRole.DOCUMENT_EXECUTIVE,
-    // The whole data entry desk opens returned packets, not just the head, and
+  @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, // The whole data entry desk opens returned packets, not just the head, and
     // validation reviews them before they go back to the client.
-    SystemRole.DATA_ENTRY_HEAD,
-    SystemRole.VALIDATION_MANAGER,
-    SystemRole.VALIDATOR,
-  )
+    SystemRole.DESK, SystemRole.DESK_OPERATOR)
   @ApiOperation({ summary: 'Issue a short-lived signed download URL for a document' })
   async issueDownloadToken(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     // Confirms the document exists (and 404s if not) before minting a token for it.
@@ -929,7 +865,7 @@ export class DocumentController {
    * method — which is what answers "where is branch X's paperwork right now".
    */
   @Get(':id/trail')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR, SystemRole.DATA_ENTRY_HEAD, SystemRole.READ_ONLY_AUDITOR)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
   @ApiOperation({ summary: 'Full transport/chain-of-custody trail for a document' })
   async getTransportTrail(@Param('id', ParseUUIDPipe) id: string) {
     const doc = await this.documentService.findOne(id);
@@ -966,7 +902,7 @@ export class DocumentController {
   };
 
   @Patch(':id/status')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DOCUMENT_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.DESK)
   @RequirePermissions('document:edit:organization')
   @ApiOperation({
     summary: 'Update document status',
@@ -989,7 +925,7 @@ export class DocumentController {
   }
 
   @Post(':id/dispatch')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
   @ApiOperation({ summary: 'Dispatch a document to the assigned assessor' })
   async dispatchDocument(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     const userId = req?.user?.id || id;
@@ -998,7 +934,7 @@ export class DocumentController {
   }
 
   @Post(':id/receive')
-  @Roles(SystemRole.ASSAYER, SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE)
+  @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
   @ApiOperation({ summary: 'Mark a dispatched document as received back' })
   async receiveDocument(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     const userId = req?.user?.id || id;
@@ -1047,17 +983,7 @@ export class DocumentController {
   // Must admit every role the frontend /documents route (and the document-list gate) allows, or the
   // page's first call 403s and renders only an error banner for validation/audit viewers.
   @Get('operations/overview')
-  @Roles(
-    SystemRole.SUPER_ADMINISTRATOR,
-    SystemRole.ADMINISTRATOR,
-    SystemRole.OPERATIONS_MANAGER,
-    SystemRole.OPERATIONS_EXECUTIVE,
-    SystemRole.DOCUMENT_EXECUTIVE,
-    SystemRole.DATA_ENTRY_HEAD,
-    SystemRole.VALIDATION_MANAGER,
-    SystemRole.VALIDATOR,
-    SystemRole.READ_ONLY_AUDITOR,
-  )
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
   @ApiOperation({ summary: 'Document control console: branch context, transport trail, pipeline and action queues' })
   @ApiQuery({ name: 'page', required: false, description: 'Branch list page (1-based).' })
   @ApiQuery({ name: 'limit', required: false, description: 'Branch rows per page; clamped server-side.' })
@@ -1091,13 +1017,7 @@ export class DocumentController {
   }
 
   @Post('upload-generated-batch')
-  @Roles(
-    SystemRole.SUPER_ADMINISTRATOR,
-    SystemRole.ADMINISTRATOR,
-    SystemRole.OPERATIONS_MANAGER,
-    SystemRole.OPERATIONS_EXECUTIVE,
-    SystemRole.DOCUMENT_EXECUTIVE,
-  )
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
   @UseInterceptors(FilesInterceptor('files', 100), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: "Upload a day's generated audit PDFs together, matching each file to its branch by filename" })
@@ -1152,13 +1072,7 @@ export class DocumentController {
   }
 
   @Post('dispatch-batch')
-  @Roles(
-    SystemRole.SUPER_ADMINISTRATOR,
-    SystemRole.ADMINISTRATOR,
-    SystemRole.OPERATIONS_MANAGER,
-    SystemRole.OPERATIONS_EXECUTIVE,
-    SystemRole.DOCUMENT_EXECUTIVE,
-  )
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
   @ApiOperation({ summary: 'Release several documents to their assayers in one action' })
   async dispatchBatch(@Body() body: DispatchBatchRequestDto, @Req() req: any) {
     if (!body?.documentIds?.length) {
@@ -1173,7 +1087,7 @@ export class DocumentController {
   }
 
   @Get('project-branch/:projectBranchId/assayer-view')
-  @Roles(SystemRole.ASSAYER, SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR, SystemRole.DATA_ENTRY_HEAD, SystemRole.READ_ONLY_AUDITOR)
+  @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
   @ApiOperation({ summary: "Dispatch-gated documents for a branch, with readiness so the field app can explain what to expect" })
   async assayerBranchDocuments(@Param('projectBranchId', ParseUUIDPipe) projectBranchId: string) {
     const { documents, readiness } = await this.documentService.findDispatchedForAssayer(projectBranchId);
@@ -1181,7 +1095,7 @@ export class DocumentController {
   }
 
   @Get('assessment/:assessmentId')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR, SystemRole.DATA_ENTRY_HEAD, SystemRole.READ_ONLY_AUDITOR)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
   @ApiOperation({ summary: 'Get documents for an assessment' })
   async findByAssessment(@Param('assessmentId', ParseUUIDPipe) assessmentId: string) {
     const list = await this.documentService.findByAssessment(assessmentId);
@@ -1197,7 +1111,7 @@ export class DocumentController {
   }
 
   @Get()
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR, SystemRole.DATA_ENTRY_HEAD, SystemRole.READ_ONLY_AUDITOR)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
   @ApiOperation({ summary: 'Get all system documents' })
   async findAll() {
     const list = await this.documentService.findAll();
@@ -1205,7 +1119,7 @@ export class DocumentController {
   }
 
   @Get('stats/summary')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR, SystemRole.DATA_ENTRY_HEAD, SystemRole.READ_ONLY_AUDITOR)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
   @ApiOperation({ summary: 'Get document statistics' })
   async getStats() {
     const stats = await this.documentService.getDocumentStats();
@@ -1213,7 +1127,7 @@ export class DocumentController {
   }
 
   @Get('queue/data-entry')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DATA_ENTRY_HEAD)
+  @Roles(SystemRole.ADMIN, SystemRole.DESK)
   @ApiOperation({ summary: 'Get data entry queue — all received PDFs grouped by assessment' })
   async getDataEntryQueue() {
     const queue = await this.documentService.findDataEntryQueue();
@@ -1221,7 +1135,7 @@ export class DocumentController {
   }
 
   @Post(':id/send-external-ocr')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DATA_ENTRY_HEAD)
+  @Roles(SystemRole.ADMIN, SystemRole.DESK)
   @ApiOperation({ summary: 'Mark an audited PDF as sent to External OCR application' })
   async sendToExternalOcr(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     // Was a raw `assessmentRepository.update(...)` alongside a status write — the same
@@ -1233,7 +1147,7 @@ export class DocumentController {
   }
 
   @Post('upload-excel')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DATA_ENTRY_HEAD)
+  @Roles(SystemRole.ADMIN, SystemRole.DESK)
   @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload generated Excel report for an assessment from External OCR' })
@@ -1265,12 +1179,7 @@ export class DocumentController {
   // ── Data entry desk ───────────────────────────────────────────────────────
 
   @Get('data-entry/queue')
-  @Roles(
-    SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR,
-    SystemRole.DATA_ENTRY_HEAD, SystemRole.DOCUMENT_EXECUTIVE,
-    SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR,
-    SystemRole.OPERATIONS_MANAGER, SystemRole.READ_ONLY_AUDITOR,
-  )
+  @Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.OPERATIONS, SystemRole.AUDITOR)
   @ApiOperation({ summary: "Returned packets at the data entry desk and who owns each" })
   async dataEntryQueue(
     @Query('assignedTo') assignedTo?: string,
@@ -1283,10 +1192,7 @@ export class DocumentController {
   }
 
   @Get('data-entry/mine')
-  @Roles(
-    SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR,
-    SystemRole.DATA_ENTRY_HEAD, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.VALIDATOR,
-  )
+  @Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.DESK_OPERATOR)
   @ApiOperation({ summary: 'Packets delegated to the signed-in team member' })
   async myDataEntryQueue(
     @Req() req: any,
@@ -1299,14 +1205,14 @@ export class DocumentController {
   }
 
   @Get('data-entry/team')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DATA_ENTRY_HEAD)
+  @Roles(SystemRole.ADMIN, SystemRole.DESK)
   @ApiOperation({ summary: 'People a returned packet can be delegated to' })
   async dataEntryTeam() {
     return { success: true, data: await this.documentService.dataEntryTeam() };
   }
 
   @Post(':id/assign-data-entry')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DATA_ENTRY_HEAD)
+  @Roles(SystemRole.ADMIN, SystemRole.DESK)
   @ApiOperation({ summary: 'Delegate a returned packet to a data entry team member' })
   async assignDataEntry(
     @Param('id', ParseUUIDPipe) id: string,
@@ -1318,10 +1224,7 @@ export class DocumentController {
   }
 
   @Post(':id/complete-data-entry')
-  @Roles(
-    SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR,
-    SystemRole.DATA_ENTRY_HEAD, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.VALIDATOR,
-  )
+  @Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.DESK_OPERATOR)
   @ApiOperation({ summary: 'Hand a processed packet back to the data entry head' })
   async completeDataEntry(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     const doc = await this.documentService.completeDataEntry(id, req.user.id);

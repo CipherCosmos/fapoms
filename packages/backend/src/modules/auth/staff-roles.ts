@@ -17,15 +17,10 @@ import { SystemRole } from '@fapoms/shared';
  * that set their own `@Roles`.
  */
 export const STAFF_ROLES: SystemRole[] = [
-  SystemRole.SUPER_ADMINISTRATOR,
-  SystemRole.ADMINISTRATOR,
-  SystemRole.HR_MANAGER,
-  SystemRole.OPERATIONS_MANAGER,
-  SystemRole.OPERATIONS_EXECUTIVE,
-  SystemRole.FINANCE_MANAGER,
-  SystemRole.VALIDATION_MANAGER,
-  SystemRole.VALIDATOR,
-  SystemRole.DOCUMENT_EXECUTIVE,
-  SystemRole.DATA_ENTRY_HEAD,
-  SystemRole.READ_ONLY_AUDITOR,
+  SystemRole.ADMIN,
+  SystemRole.OPERATIONS,
+  SystemRole.DESK,
+  SystemRole.DESK_OPERATOR,
+  SystemRole.AUDITOR,
+  SystemRole.PRODUCT_SUPPORT,
 ];

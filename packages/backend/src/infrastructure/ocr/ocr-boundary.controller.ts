@@ -17,7 +17,7 @@ export class OcrBoundaryController {
   constructor(private readonly ocrProcessingService: OcrProcessingService) {}
 
   @Post('jobs')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @RequirePermissions('ocr:create:organization')
   @ApiOperation({ summary: 'Create a new OCR tracking job request' })
   async createJob(
@@ -32,7 +32,7 @@ export class OcrBoundaryController {
   }
 
   @Post('jobs/:id/results')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @RequirePermissions('ocr:edit:organization')
   @ApiOperation({ summary: 'Callback endpoint to receive external OCR engine scan results' })
   async callbackOcr(
@@ -58,7 +58,7 @@ export class OcrBoundaryController {
   }
 
   @Post('jobs/:id/retry')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DOCUMENT_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.DESK)
   @RequirePermissions('ocr:edit:organization')
   @ApiOperation({ summary: 'Retry a failed OCR job request' })
   async retryJob(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {

@@ -20,7 +20,7 @@ import { SystemRole } from '@fapoms/shared';
  * the gateway and the scheduler can read it without pulling the feedback service (and its
  * entities) into their import graph.
  */
-export const FEEDBACK_TEAM_ROLES = [SystemRole.SUPER_ADMINISTRATOR] as const;
+export const FEEDBACK_TEAM_ROLES = [SystemRole.ADMIN] as const;
 
 /** The same list as plain strings, for the places that address roles by name (socket rooms, digest audiences, catalog). */
 export const FEEDBACK_TEAM_ROLE_NAMES: string[] = [...FEEDBACK_TEAM_ROLES];

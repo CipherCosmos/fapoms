@@ -47,7 +47,7 @@ export class SchedulingController {
   ) {}
 
   @Post()
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Create a confirmed schedule from an accepted assignment' })
   async create(@Body() dto: CreateScheduleRequestDto, @Req() req: any) {
     const userId = req?.user?.id || '00000000-0000-0000-0000-000000000000';
@@ -59,7 +59,7 @@ export class SchedulingController {
   }
 
   @Get()
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.HR_MANAGER, SystemRole.READ_ONLY_AUDITOR)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.AUDITOR)
   @ApiOperation({ summary: 'List all active schedules' })
   async findAll(
     @Query('page') page = 1,
@@ -116,7 +116,7 @@ export class SchedulingController {
   }
 
   @Get(':id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.HR_MANAGER, SystemRole.READ_ONLY_AUDITOR)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.AUDITOR)
   @ApiOperation({ summary: 'Get details for a single schedule by ID' })
   async findOne(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
     await this.regionGuard.assertScheduleInScope(id, scope);
@@ -128,7 +128,7 @@ export class SchedulingController {
   }
 
   @Post(':id/transition')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Transition schedule state' })
   async transition(
     @Param('id', ParseUUIDPipe) id: string,

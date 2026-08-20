@@ -186,7 +186,7 @@ export class GeoController {
   }
 
   @Post('route/optimize')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Calculate optimized route sequence (TSP solver) for multiple destinations' })
   async optimizeRoute(@Body() dto: OptimizeRouteDto) {
     if (dto.destinations.length > 20) {
@@ -204,21 +204,21 @@ export class GeoController {
   // -----------------------------------------------------------------------
 
   @Get('precision/:target')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.HR_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'How precise the stored coordinates are, by tier' })
   async precisionSummary(@Param('target') target: string) {
     return { success: true, data: await this.geoPrecision.summary(assertTarget(target)) };
   }
 
   @Get('precision/:target/imprecise')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.HR_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Records still on a district/state centroid — the manual-pin worklist' })
   async impreciseRecords(@Param('target') target: string, @Query('limit') limit = 100) {
     return { success: true, data: await this.geoPrecision.imprecise(assertTarget(target), Number(limit) || 100) };
   }
 
   @Post('precision/:target/backfill')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @ApiOperation({ summary: 'Re-resolve coarse coordinates through the free geocoders' })
   async backfillPrecision(@Param('target') target: string, @Body() dto: BackfillDto) {
     // Bounded, and deliberately not "all". The free providers allow about one lookup a second,
@@ -228,7 +228,7 @@ export class GeoController {
   }
 
   @Post('precision/:target/:id/pin')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.HR_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Pin a record to an exact coordinate by hand (5-10 m, and never re-geocoded)' })
   async pin(
     @Param('target') target: string,

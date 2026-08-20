@@ -158,10 +158,10 @@ export const Assignments: React.FC = () => {
   // operations drive the lifecycle — so the write actions are hidden from everyone else rather than
   // offered as buttons that 403 after a confirm dialog.
   const canActOnAssignments = hasAnyRole(useCurrentRoles(), [
-    SystemRole.SUPER_ADMINISTRATOR,
-    SystemRole.ADMINISTRATOR,
-    SystemRole.OPERATIONS_MANAGER,
-    SystemRole.OPERATIONS_EXECUTIVE,
+    SystemRole.ADMIN,
+    SystemRole.ADMIN,
+    SystemRole.OPERATIONS,
+    SystemRole.OPERATIONS,
   ]);
   // The selection IS the url param — no local mirror, so the two can never disagree.
   const [selectedAsnId, selectAssignment] = useUrlSelection('id');

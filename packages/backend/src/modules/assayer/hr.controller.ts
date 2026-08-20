@@ -23,11 +23,7 @@ export class HrController {
   // Workforce administration is HR's and admins'. Operations get the coverage view
   // they need from the command centre, which is scoped to planning rather than to
   // people.
-  @Roles(
-    SystemRole.SUPER_ADMINISTRATOR,
-    SystemRole.ADMINISTRATOR,
-    SystemRole.HR_MANAGER,
-  )
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Organisation-level workforce analytics for HR' })
   async workforce() {
     return { success: true, data: await this.hrWorkforceService.overview() };

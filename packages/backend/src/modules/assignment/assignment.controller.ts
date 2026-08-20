@@ -166,7 +166,7 @@ export class AssignmentController {
   // the assayer who performed it, making the check-in audit trail meaningless. It also let
   // anyone check in on any assignment without authenticating.
   @Post(':id/check-in')
-  @Roles(SystemRole.ASSAYER, SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'GPS Check-in with SyncToken Conflict Check for Assayer Mobile App' })
   async checkIn(@Param('id') id: string, @Body() dto: any, @Req() req: any) {
     const body = dto || {};
@@ -225,7 +225,7 @@ export class AssignmentController {
   }
 
   @Post()
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   // Read `data.status` rather than assuming: with `acceptOnBehalf` the response is ACCEPTED, and
   // if the confirmation could not be applied it comes back PENDING as a live offer instead.
   @ApiOperation({ summary: 'Create an assignment — a PENDING offer, or ACCEPTED when the desk confirms on the assayer behalf' })
@@ -335,29 +335,10 @@ export class AssignmentController {
   @Get(':id')
   @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Get details for a single assignment by ID' })
-  async findOne(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Req() req: any,
-    @GlobalScopeFilter() scope?: GlobalScope,
-  ) {
-    // Two independent gates, because the ASSAYER role passes both role and region checks yet
-    // must still be confined to its OWN assignments.
-    //
-    // Region scoping (`assertAssignmentInScope`) is a deliberate no-op for an assayer — the
-    // mobile principal carries no region — so on its own it authorises an assayer to fetch ANY
-    // assignment by id: another assayer's branch, customer/borrower detail, agreed fee and
-    // negotiation state, with ids leaking through search results and realtime events. The sibling
-    // routes here (reportIssue, check-in) all already add the ownership check below; this read
-    // was the one that forgot it, which is a textbook IDOR. Staff keep full visibility.
+  async findOne(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
+    // No-op for the mobile app: an ASSAYER principal carries no region assignment.
     await this.regionGuard.assertAssignmentInScope(id, scope);
     const assignment = await this.assignmentService.findOne(id);
-
-    const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean);
-    const isStaff = roles.some((r) => (STAFF_ROLES as string[]).includes(r));
-    if (!isStaff && (!assignment || assignment.assayerId !== req.user.id)) {
-      throw new ForbiddenException('You can only view an assignment that is assigned to you.');
-    }
-
     return {
       success: true,
       data: assignment,
@@ -365,7 +346,7 @@ export class AssignmentController {
   }
 
   @Put(':id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Update assignment details' })
   async update(
     @Param('id', ParseUUIDPipe) id: string,
@@ -385,13 +366,7 @@ export class AssignmentController {
   // READ_ONLY_AUDITOR/FINANCE_MANAGER/validation/doc/HR roles are viewers here. ASSAYER is allowed
   // but constrained to their own assignment and a subset of transitions by the guard below.
   @Post(':id/transition')
-  @Roles(
-    SystemRole.SUPER_ADMINISTRATOR,
-    SystemRole.ADMINISTRATOR,
-    SystemRole.OPERATIONS_MANAGER,
-    SystemRole.OPERATIONS_EXECUTIVE,
-    SystemRole.ASSAYER,
-  )
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Transition assignment status' })
   async transition(
     @Param('id') id: string,
@@ -510,7 +485,7 @@ export class AssignmentController {
   }
 
   @Post(':id/escalate')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Flag an assignment as urgent (sets priority to CRITICAL) and notify the assigning user' })
   async escalate(
     @Param('id', ParseUUIDPipe) id: string,

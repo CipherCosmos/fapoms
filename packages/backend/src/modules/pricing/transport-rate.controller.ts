@@ -81,10 +81,10 @@ export class UpdateTransportRateRequestDto {
 }
 
 const RATE_MANAGER_ROLES = [
-  SystemRole.SUPER_ADMINISTRATOR,
-  SystemRole.ADMINISTRATOR,
-  SystemRole.OPERATIONS_MANAGER,
-  SystemRole.FINANCE_MANAGER,
+  SystemRole.ADMIN,
+  SystemRole.ADMIN,
+  SystemRole.OPERATIONS,
+  SystemRole.OPERATIONS,
 ] as const;
 
 @ApiTags('Transport Rates')

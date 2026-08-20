@@ -18,7 +18,7 @@ export class CustomerMasterController {
   ) {}
 
   @Post('upload')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.DOCUMENT_EXECUTIVE, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.OPERATIONS)
     @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload customer master Excel file, run database branch reconciliation, and register new version' })
@@ -51,7 +51,7 @@ export class CustomerMasterController {
   }
 
   @Post('versions/:versionId/approve')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
     @ApiOperation({ summary: 'Approve a reconciled customer master version and supersede prior active version' })
   async approveVersion(
     @Param('versionId', ParseUUIDPipe) versionId: string,
@@ -65,7 +65,7 @@ export class CustomerMasterController {
   }
 
   @Get('projects/:projectId/daily-run')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DATA_ENTRY_HEAD, SystemRole.READ_ONLY_AUDITOR)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.AUDITOR)
   @ApiOperation({ summary: "A single audit date's run: the client batch, its branches, and where each branch's PDF has reached" })
   async dailyRun(
     @Param('projectId', ParseUUIDPipe) projectId: string,
@@ -75,7 +75,7 @@ export class CustomerMasterController {
   }
 
   @Get('projects/:projectId/versions')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DATA_ENTRY_HEAD, SystemRole.READ_ONLY_AUDITOR)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.AUDITOR)
   @ApiOperation({ summary: 'List version history for a project mandate' })
   async findByProject(@Param('projectId', ParseUUIDPipe) projectId: string) {
     const list = await this.customerMasterService.findByProject(projectId);
@@ -86,7 +86,7 @@ export class CustomerMasterController {
   }
 
   @Get('versions/:versionId/records')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.DATA_ENTRY_HEAD, SystemRole.READ_ONLY_AUDITOR)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.AUDITOR)
   @ApiOperation({ summary: 'Get paginated customer records inside a version, optionally filtered by branchId' })
   async findRecords(
     @Param('versionId', ParseUUIDPipe) versionId: string,

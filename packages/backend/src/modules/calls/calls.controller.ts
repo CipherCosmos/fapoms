@@ -27,16 +27,7 @@ class RoomActionDto {
 // Class-level on purpose: RolesGuard is deny-by-default, so a handler without explicit
 // roles metadata (config/answer/decline/hangup) is refused for everyone. Every call route
 // shares one audience — the two sides of a clarification thread and the staff chain above it.
-@Roles(
-  SystemRole.ASSAYER,
-  SystemRole.DATA_ENTRY_HEAD,
-  SystemRole.VALIDATOR,
-  SystemRole.VALIDATION_MANAGER,
-  SystemRole.OPERATIONS_MANAGER,
-  SystemRole.OPERATIONS_EXECUTIVE,
-  SystemRole.ADMINISTRATOR,
-  SystemRole.SUPER_ADMINISTRATOR,
-)
+@Roles(SystemRole.ASSAYER, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.OPERATIONS, SystemRole.ADMIN)
 export class CallsController {
   constructor(private readonly callsService: CallsService) {}
 

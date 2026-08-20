@@ -83,7 +83,7 @@ export class NotificationDispatchService {
    * only roles guaranteed to exist on a running deployment, and the people who can either act
    * on the work or create the account that should have received it.
    */
-  private static readonly FALLBACK_ROLES = ['SUPER_ADMINISTRATOR', 'ADMINISTRATOR'];
+  private static readonly FALLBACK_ROLES = ['ADMIN', 'ADMIN'];
 
   /**
    * Every active user holding any of these roles.

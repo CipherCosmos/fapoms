@@ -89,8 +89,8 @@ export const Scheduling: React.FC = () => {
   // Create/complete/reschedule are ops-only on the backend (POST /schedules, /:id/transition). Other
   // roles reach the calendar as viewers, so the write controls are hidden rather than offered as 403s.
   const canManageSchedules = hasAnyRole(useCurrentRoles(), [
-    SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR,
-    SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE,
+    SystemRole.ADMIN, SystemRole.ADMIN,
+    SystemRole.OPERATIONS, SystemRole.OPERATIONS,
   ]);
   const [currentMonth, setCurrentMonth] = useState(today.getMonth());
   const [currentYear, setCurrentYear] = useState(today.getFullYear());

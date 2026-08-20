@@ -43,7 +43,7 @@ export class SetSettingRequestDto {
  * exception (`limits`, below), which is not configuration but the operating rules every client
  * is already subject to. The web app's `/admin/settings` route permission mirrors this list.
  */
-const SETTINGS_ADMIN_ROLES = [SystemRole.SUPER_ADMINISTRATOR] as const;
+const SETTINGS_ADMIN_ROLES = [SystemRole.ADMIN] as const;
 
 @ApiTags('Platform Settings')
 @ApiBearerAuth()

@@ -34,10 +34,7 @@ export class CallLogController {
 
   // Recording a call is part of doing the planning, so it sits with the roles that plan.
   @Post()
-  @Roles(
-    SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR,
-    SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE,
-  )
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Record a call made to an assayer about a branch' })
   async create(@Body() dto: CreateCallLogRequestDto, @Req() req: any) {
     return { success: true, data: await this.callLogService.create(dto, req.user.userId ?? req.user.id) };

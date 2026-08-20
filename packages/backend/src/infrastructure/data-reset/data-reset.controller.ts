@@ -57,7 +57,7 @@ export class ExecuteDataResetDto {
 @ApiBearerAuth()
 @Controller('admin/data-reset')
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-@Roles(SystemRole.SUPER_ADMINISTRATOR)
+@Roles(SystemRole.ADMIN)
 export class DataResetController {
   constructor(
     private readonly dataReset: DataResetService,

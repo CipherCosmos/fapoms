@@ -576,25 +576,34 @@ export function feedbackCategoryLabel(category?: string | null): string {
 /**
  * Job titles, written the way the organisation says them out loud.
  *
- * Not a de-cased enum: `SUPER_ADMINISTRATOR` de-cases to "Super Administrator", but
- * `HR_MANAGER` de-cases to "Hr Manager" and `PRODUCT_SUPPORT` to "Product Support" where the
- * team is spoken of as "Product & Support". Spelling them out is the only way both read right.
+ * Not a de-cased enum: `DESK_OPERATOR` de-cases to "Desk Operator", which is right, but
+ * `PRODUCT_SUPPORT` de-cases to "Product Support" where the team is spoken of as
+ * "Product & Support". Spelling them out is the only way they all read right.
  */
 export const ROLE_LABELS: Record<SystemRole, string> = {
-  [SystemRole.SUPER_ADMINISTRATOR]: 'Super Administrator',
-  [SystemRole.ADMINISTRATOR]: 'Administrator',
-  [SystemRole.OPERATIONS_MANAGER]: 'Operations Manager',
-  [SystemRole.OPERATIONS_EXECUTIVE]: 'Operations Executive',
-  [SystemRole.VALIDATION_MANAGER]: 'Validation Manager',
-  [SystemRole.VALIDATOR]: 'Validator',
-  [SystemRole.DOCUMENT_EXECUTIVE]: 'Document Executive',
-  [SystemRole.DATA_ENTRY_HEAD]: 'Data Entry Head',
+  [SystemRole.ADMIN]: 'Admin',
+  [SystemRole.OPERATIONS]: 'Operations',
+  [SystemRole.DESK]: 'Desk',
+  [SystemRole.DESK_OPERATOR]: 'Desk Operator',
+  [SystemRole.AUDITOR]: 'Auditor',
+  [SystemRole.PRODUCT_SUPPORT]: 'Product & Support',
   [SystemRole.ASSAYER]: 'Assayer',
   [SystemRole.CLIENT_USER]: 'Client User',
-  [SystemRole.HR_MANAGER]: 'HR Manager',
-  [SystemRole.FINANCE_MANAGER]: 'Finance Manager',
-  [SystemRole.READ_ONLY_AUDITOR]: 'Read-Only Auditor',
-  [SystemRole.PRODUCT_SUPPORT]: 'Product & Support',
+};
+
+/**
+ * What a role is for, in a sentence — for the role picker and the access screens, where a name
+ * alone leaves someone guessing which of these a new joiner should get.
+ */
+export const ROLE_DESCRIPTIONS: Record<SystemRole, string> = {
+  [SystemRole.ADMIN]: 'Runs the platform: settings, people and access, and everything the other roles can do.',
+  [SystemRole.OPERATIONS]: 'Runs the work: clients, projects, branches, planning and scheduling — and the money and the assayer workforce.',
+  [SystemRole.DESK]: 'Runs the paperwork end to end: packets out to the field, back again, through data entry and validation.',
+  [SystemRole.DESK_OPERATOR]: 'Works their own share of the desk queue: takes a packet, types it up, hands it back.',
+  [SystemRole.AUDITOR]: 'Sees everything and changes nothing.',
+  [SystemRole.PRODUCT_SUPPORT]: 'Answers feedback, bug reports and suggestions from staff, clients and assayers.',
+  [SystemRole.ASSAYER]: 'The field assayer, working from the mobile app.',
+  [SystemRole.CLIENT_USER]: "The client's own people, seeing their own work.",
 };
 
 export function roleLabel(role?: string | null): string {

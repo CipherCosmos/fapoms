@@ -4,29 +4,42 @@ import { SystemRole } from '@fapoms/shared';
 /**
  * Field-level visibility for assayer records.
  *
- * Restricting *which endpoints* a role may call is not enough: operations need to
- * see an assayer to plan work, but have no business seeing their PAN, bank
- * account or emergency contacts. Previously every reader received the whole row —
- * and the list endpoint was public, so those fields left the system entirely.
+ * Restricting *which endpoints* a role may call is not enough. Everyone who plans work needs to
+ * see an assayer; almost nobody needs to see their Aadhaar number or their bank account. Every
+ * reader used to receive the whole row, and the list endpoint was public, so those fields left
+ * the system entirely.
  *
- * HR own the workforce record, so they see everything. Finance see banking
- * because they disburse payments. Everyone else gets the operational subset.
+ * Who sees what follows from what the role has to do. OPERATIONS onboards assayers and pays
+ * them — it absorbed the separate HR and finance roles — so it sees the identity documents it
+ * has to verify and the bank details it has to pay into. That is a real widening compared with
+ * when those were three roles: an operations user can now read every assayer's identity and
+ * banking, where before a planner could read neither. It is the cost of one role doing all
+ * three jobs, and it is worth re-reading if the team ever grows enough to separate them again.
+ *
+ * DESK, DESK_OPERATOR and AUDITOR see the operational subset: enough to know who did the work,
+ * nothing about who they are. An assayer always sees their own record in full.
  */
 
-/** Personal and financial data that only HR (and administrators) may read. */
-const HR_ONLY_FIELDS = [
+/** Identity and personal data. Read to verify a new joiner, and for no other reason. */
+const IDENTITY_FIELDS = [
   'panNumber', 'aadhaarNumber', 'dateOfBirth',
   'emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation',
   'governmentDocuments',
 ];
 
-/** Banking details — HR own them; Finance need them to pay. */
+/** Banking details. Read to pay someone, and for no other reason. */
 const BANKING_FIELDS = ['bankAccountNumber', 'ifscCode', 'bankName', 'accountHolderName'];
 
 /** Never returned to anyone through the API, whatever the role. */
 const NEVER_EXPOSED = ['passwordHash'];
 
-const FULL_ACCESS: string[] = [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER];
+/**
+ * The roles that onboard and pay assayers, and therefore see the whole record.
+ *
+ * Deliberately short. Adding a role here hands it every assayer's identity documents and bank
+ * account at once — there is no partial entry.
+ */
+const FULL_ACCESS: string[] = [SystemRole.ADMIN, SystemRole.OPERATIONS];
 
 /**
  * Strips fields the viewer's roles are not entitled to.
@@ -45,11 +58,14 @@ export function scopeAssayerForRoles<T extends Record<string, any>>(
   for (const f of NEVER_EXPOSED) delete out[f];
 
   const hasFull = roles.some((r) => FULL_ACCESS.includes(r));
-  const canSeeBanking = hasFull || roles.includes(SystemRole.FINANCE_MANAGER) || isSelf;
-  const canSeePersonal = hasFull || isSelf;
+  // Both gates read the same way now that one role does the onboarding and the paying. They
+  // stay separate expressions because they answer different questions, and the moment the team
+  // splits those jobs again this is the line that has to change, not the whole function.
+  const canSeeBanking = hasFull || isSelf;
+  const canSeeIdentity = hasFull || isSelf;
 
   if (!canSeeBanking) for (const f of BANKING_FIELDS) delete out[f];
-  if (!canSeePersonal) for (const f of HR_ONLY_FIELDS) delete out[f];
+  if (!canSeeIdentity) for (const f of IDENTITY_FIELDS) delete out[f];
 
   return out as Partial<T>;
 }

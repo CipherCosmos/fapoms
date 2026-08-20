@@ -7,27 +7,22 @@ import { SystemRole } from '@fapoms/shared';
  * anything it does not name, and `@RequirePermissions('resource:action:scope')`, which the
  * PermissionsGuard resolves against the grants below. Both must pass. So a role named by
  * `@Roles` but missing the route's permission is refused — while the code says it is allowed.
+ * That is a bug every time, and `route-permission-parity.spec.ts` fails the build on it.
  *
- * That is what had happened. Twenty-four routes named a role that could not call them:
- * an OPERATIONS_MANAGER could not create a branch, run the planner, edit the holiday calendar
- * or add a zone; an ADMINISTRATOR could not create or edit an organisation; a DATA_ENTRY_HEAD
- * could not open a validation case. Worse, the `OCR` permissions did not exist as rows at all,
- * so the three OCR boundary routes were refused to every principal including the super
- * administrator — the same failure the holiday calendar hit once before, noted in a comment
- * there and never generalised.
- *
- * None of it was visible: the guard's refusal is indistinguishable from a role genuinely not
- * being allowed, and the grants lived partly in the seed and partly across a chain of
- * migrations, so no single place could be read to find out what a role actually held.
- *
- * This is now that place. The seed builds roles from it, a migration reconciles existing
- * deployments to it, and `route-permission-parity.spec.ts` fails if any route's `@Roles`
- * names a role this table does not grant the route's permission to.
+ * These lists are the union of what the thirteen roles they replaced held, so nobody lost an
+ * ability in the consolidation — see `LEGACY_ROLE_ALIASES` for what became what. The grants
+ * lived partly in the seed and partly across a chain of migrations before this, so what a role
+ * actually held could not be read anywhere.
  *
  * A grant with scope PLATFORM implies every narrower scope — see PermissionsGuard.
  */
 export const ROLE_PERMISSIONS: Record<SystemRole, string[]> = {
-  [SystemRole.SUPER_ADMINISTRATOR]: [
+  /**
+   * Everything. ADMIN is the union of what SUPER_ADMINISTRATOR and ADMINISTRATOR held —
+   * they differed by seven routes, all of them the product-feedback queue, which PRODUCT_SUPPORT
+   * owns and ADMIN keeps a copy of so nothing waits on that role being staffed.
+   */
+  [SystemRole.ADMIN]: [
     'ASSAYER:CREATE:ORGANIZATION',
     'ASSAYER:DELETE:ORGANIZATION',
     'ASSAYER:EDIT:ORGANIZATION',
@@ -93,43 +88,36 @@ export const ROLE_PERMISSIONS: Record<SystemRole, string[]> = {
     'VALIDATION:VIEW:PLATFORM',
   ],
 
-  [SystemRole.ADMINISTRATOR]: [
+  /**
+   * The work, the money and the workforce, folded into one. The union of what
+   * OPERATIONS_MANAGER, OPERATIONS_EXECUTIVE, FINANCE_MANAGER and HR_MANAGER held. The executive
+   * grade had no grant of its own; finance and workforce were folded in deliberately — see the
+   * note on SystemRole.OPERATIONS about the approval gate that trade gives up.
+   */
+  [SystemRole.OPERATIONS]: [
     'ASSAYER:CREATE:ORGANIZATION',
     'ASSAYER:DELETE:ORGANIZATION',
     'ASSAYER:EDIT:ORGANIZATION',
-    'ASSAYER:VIEW:PLATFORM',
     'ASSIGNMENT:CANCEL:ORGANIZATION',
     'ASSIGNMENT:CREATE:ORGANIZATION',
     'ASSIGNMENT:NEGOTIATE:ORGANIZATION',
     'ASSIGNMENT:VIEW:PLATFORM',
-    'AUDIT_LOG:VIEW:PLATFORM',
     'BILLING:APPROVE:ORGANIZATION',
     'BILLING:CREATE:ORGANIZATION',
     'BILLING:EDIT:ORGANIZATION',
     'BILLING:VIEW:PLATFORM',
     'BRANCH:CREATE:ORGANIZATION',
-    'BRANCH:DELETE:ORGANIZATION',
     'BRANCH:EDIT:ORGANIZATION',
     'BRANCH:IMPORT:ORGANIZATION',
     'BRANCH:VIEW:PLATFORM',
     'CLIENT:CREATE:ORGANIZATION',
-    'CLIENT:DELETE:ORGANIZATION',
     'CLIENT:EDIT:ORGANIZATION',
     'CLIENT:VIEW:PLATFORM',
-    'CONFIGURATION:VIEW:PLATFORM',
     'DOCUMENT:CREATE:ORGANIZATION',
     'DOCUMENT:DOWNLOAD:PLATFORM',
-    'DOCUMENT:EDIT:ORGANIZATION',
     'DOCUMENT:GENERATE:ORGANIZATION',
     'DOCUMENT:UPLOAD:ORGANIZATION',
-    'DOCUMENT:VIEW:PLATFORM',
-    'OCR:CREATE:ORGANIZATION',
-    'OCR:EDIT:ORGANIZATION',
-    'ORGANIZATION:CREATE:ORGANIZATION',
-    'ORGANIZATION:DELETE:ORGANIZATION',
-    'ORGANIZATION:EDIT:ORGANIZATION',
     'PLANNING:CREATE:ORGANIZATION',
-    'PLANNING:DELETE:ORGANIZATION',
     'PLANNING:EDIT:ORGANIZATION',
     'PLANNING:VIEW:PLATFORM',
     'PROJECT:ARCHIVE:ORGANIZATION',
@@ -141,120 +129,45 @@ export const ROLE_PERMISSIONS: Record<SystemRole, string[]> = {
     'REFERENCE_DATA:CREATE:ORGANIZATION',
     'REFERENCE_DATA:DELETE:ORGANIZATION',
     'REFERENCE_DATA:EDIT:ORGANIZATION',
-    'REFERENCE_DATA:VIEW:PLATFORM',
     'SCHEDULING:CREATE:ORGANIZATION',
     'SCHEDULING:MODIFY:ORGANIZATION',
     'SCHEDULING:VIEW:PLATFORM',
-    'USER:CREATE:PLATFORM',
-    'USER:EDIT:PLATFORM',
-    'USER:VIEW:PLATFORM',
-    'VALIDATION:APPROVE:ORGANIZATION',
-    'VALIDATION:ASSIGN:ORGANIZATION',
-    'VALIDATION:CREATE:ORGANIZATION',
-    'VALIDATION:EDIT:ORGANIZATION',
-    'VALIDATION:VIEW:PLATFORM',
   ],
 
-  [SystemRole.OPERATIONS_MANAGER]: [
-    'ASSIGNMENT:CANCEL:ORGANIZATION',
-    'ASSIGNMENT:CREATE:ORGANIZATION',
-    'ASSIGNMENT:NEGOTIATE:ORGANIZATION',
+  /**
+   * The whole paperwork pipeline: the union of DOCUMENT_EXECUTIVE (packets out),
+   * DATA_ENTRY_HEAD (packets back, data entry, validation) and VALIDATION_MANAGER, which could
+   * do nothing the head could not.
+   */
+  [SystemRole.DESK]: [
     'ASSIGNMENT:VIEW:PLATFORM',
-    'BRANCH:CREATE:ORGANIZATION',
-    'BRANCH:EDIT:ORGANIZATION',
-    'BRANCH:IMPORT:ORGANIZATION',
     'BRANCH:VIEW:PLATFORM',
-    'CLIENT:CREATE:ORGANIZATION',
-    'CLIENT:EDIT:ORGANIZATION',
-    'CLIENT:VIEW:PLATFORM',
     'DOCUMENT:CREATE:ORGANIZATION',
     'DOCUMENT:DOWNLOAD:PLATFORM',
+    'DOCUMENT:EDIT:ORGANIZATION',
     'DOCUMENT:GENERATE:ORGANIZATION',
     'DOCUMENT:UPLOAD:ORGANIZATION',
-    'PLANNING:CREATE:ORGANIZATION',
-    'PLANNING:EDIT:ORGANIZATION',
-    'PROJECT:ARCHIVE:ORGANIZATION',
-    'PROJECT:CLOSE:ORGANIZATION',
-    'PROJECT:CREATE:ORGANIZATION',
-    'PROJECT:DELETE:ORGANIZATION',
-    'PROJECT:EDIT:ORGANIZATION',
+    'OCR:EDIT:ORGANIZATION',
     'PROJECT:VIEW:PLATFORM',
-    'REFERENCE_DATA:CREATE:ORGANIZATION',
-    'REFERENCE_DATA:DELETE:ORGANIZATION',
-    'REFERENCE_DATA:EDIT:ORGANIZATION',
-    'SCHEDULING:CREATE:ORGANIZATION',
-    'SCHEDULING:MODIFY:ORGANIZATION',
     'SCHEDULING:VIEW:PLATFORM',
-  ],
-
-  [SystemRole.OPERATIONS_EXECUTIVE]: [
-    'ASSIGNMENT:NEGOTIATE:ORGANIZATION',
-    'ASSIGNMENT:VIEW:PLATFORM',
-    'BRANCH:VIEW:PLATFORM',
-    'DOCUMENT:DOWNLOAD:PLATFORM',
-    'PROJECT:VIEW:PLATFORM',
-    'SCHEDULING:CREATE:ORGANIZATION',
-    'SCHEDULING:MODIFY:ORGANIZATION',
-    'SCHEDULING:VIEW:PLATFORM',
-  ],
-
-  [SystemRole.VALIDATION_MANAGER]: [
-    'ASSIGNMENT:VIEW:PLATFORM',
-    'BRANCH:VIEW:PLATFORM',
-    'DOCUMENT:DOWNLOAD:PLATFORM',
-    'DOCUMENT:EDIT:ORGANIZATION',
-    'PROJECT:VIEW:PLATFORM',
     'VALIDATION:CREATE:ORGANIZATION',
     'VALIDATION:EDIT:ORGANIZATION',
   ],
 
-  [SystemRole.VALIDATOR]: [
+  /**
+   * What VALIDATOR held: enough to take a packet from the queue, type it up and
+   * hand it back. Strictly less than DESK, which is the point of it.
+   */
+  [SystemRole.DESK_OPERATOR]: [
     'DOCUMENT:DOWNLOAD:PLATFORM',
     'PROJECT:VIEW:PLATFORM',
     'VALIDATION:REVIEW:ASSIGNED_RECORDS',
   ],
 
-  [SystemRole.DATA_ENTRY_HEAD]: [
-    'ASSIGNMENT:VIEW:PLATFORM',
-    'BRANCH:VIEW:PLATFORM',
-    'DOCUMENT:DOWNLOAD:PLATFORM',
-    'DOCUMENT:EDIT:ORGANIZATION',
-    'PROJECT:VIEW:PLATFORM',
-    'VALIDATION:CREATE:ORGANIZATION',
-  ],
-
-  [SystemRole.DOCUMENT_EXECUTIVE]: [
-    'ASSIGNMENT:VIEW:PLATFORM',
-    'BRANCH:VIEW:PLATFORM',
-    'DOCUMENT:CREATE:ORGANIZATION',
-    'DOCUMENT:DOWNLOAD:PLATFORM',
-    'DOCUMENT:EDIT:ORGANIZATION',
-    'DOCUMENT:GENERATE:ORGANIZATION',
-    'DOCUMENT:UPLOAD:ORGANIZATION',
-    'OCR:EDIT:ORGANIZATION',
-    'PROJECT:VIEW:PLATFORM',
-    'SCHEDULING:VIEW:PLATFORM',
-  ],
-
-  [SystemRole.FINANCE_MANAGER]: [
-    'BILLING:APPROVE:ORGANIZATION',
-    'BILLING:CREATE:ORGANIZATION',
-    'BILLING:EDIT:ORGANIZATION',
-    'BILLING:VIEW:PLATFORM',
-  ],
-
-  [SystemRole.HR_MANAGER]: [
-    'ASSAYER:CREATE:ORGANIZATION',
-    'ASSAYER:DELETE:ORGANIZATION',
-    'ASSAYER:EDIT:ORGANIZATION',
-    'ASSIGNMENT:VIEW:PLATFORM',
-    'BRANCH:VIEW:PLATFORM',
-    'PLANNING:VIEW:PLATFORM',
-    'PROJECT:VIEW:PLATFORM',
-    'SCHEDULING:VIEW:PLATFORM',
-  ],
-
-  [SystemRole.READ_ONLY_AUDITOR]: [
+  /**
+   * Read-only oversight; formerly READ_ONLY_AUDITOR. Every grant here is a VIEW.
+   */
+  [SystemRole.AUDITOR]: [
     'ASSIGNMENT:VIEW:PLATFORM',
     'AUDIT_LOG:VIEW:PLATFORM',
     'BILLING:VIEW:PLATFORM',
@@ -265,30 +178,26 @@ export const ROLE_PERMISSIONS: Record<SystemRole, string[]> = {
     'SCHEDULING:VIEW:PLATFORM',
   ],
 
+  /**
+   * No grants. The feedback queue this role owns is gated by `@Roles` alone, so
+   * an empty list denies nothing. Stated rather than omitted.
+   */
+  [SystemRole.PRODUCT_SUPPORT]: [],
+
+  /**
+   * No grants, and none possible: an assayer authenticates from the `assayers` table and
+   * has no row in `roles`. Every route they reach is gated by name alone.
+   */
+  [SystemRole.ASSAYER]: [],
+
+  /**
+   * The client's own people, seeing their own work. An external principal.
+   */
   [SystemRole.CLIENT_USER]: [
     'BRANCH:VIEW:PLATFORM',
     'PROJECT:VIEW:PLATFORM',
     'SCHEDULING:VIEW:PLATFORM',
   ],
-
-  /**
-   * No permission grants.
-   *
-   * Every route this role reaches is gated by `@Roles` alone; none of them also asks for a
-   * permission, so an empty list here denies nothing. Listed explicitly so that the absence
-   * reads as a decision rather than an omission.
-   */
-  [SystemRole.PRODUCT_SUPPORT]: [],
-
-  /**
-   * The field assayer holds no permission grants, and cannot.
-   *
-   * An assayer is authenticated from the `assayers` table and has no row in `roles`, so the
-   * PermissionsGuard resolves nothing for them. Every route an assayer reaches is therefore
-   * gated by `@Roles` alone — and any route that paired `SystemRole.ASSAYER` with a permission
-   * would refuse them outright. The parity spec fails on exactly that pairing.
-   */
-  [SystemRole.ASSAYER]: [],
 };
 
 /** Every permission any role is granted — what the `permissions` table must contain. */

@@ -30,9 +30,9 @@ export const Billing: React.FC = () => {
   const { toast } = useToast();
 
   // Money leaving the business has one gate: finance or an administrator.
-  const canPay = hasAnyRole(roles, [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.FINANCE_MANAGER]);
+  const canPay = hasAnyRole(roles, [SystemRole.ADMIN, SystemRole.ADMIN, SystemRole.OPERATIONS]);
   // Invoicing is billing staff; operations raise invoices, they do not release cash.
-  const canInvoice = hasAnyRole(roles, [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.FINANCE_MANAGER, SystemRole.OPERATIONS_MANAGER]);
+  const canInvoice = hasAnyRole(roles, [SystemRole.ADMIN, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.OPERATIONS]);
   const canReviewClaims = canInvoice;
 
   const tab = (TABS.some((t) => t.key === params.get('tab')) ? params.get('tab') : 'overview') as Tab;

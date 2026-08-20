@@ -10,12 +10,12 @@ import { canAccessRoute, ROUTE_PERMISSIONS } from './route-permissions';
 describe('canAccessRoute', () => {
   describe('a path that declares its own roles', () => {
     it('admits a role on the list and refuses one that is not', () => {
-      expect(canAccessRoute([SystemRole.HR_MANAGER], '/hr')).toBe(true);
-      expect(canAccessRoute([SystemRole.FINANCE_MANAGER], '/hr')).toBe(false);
+      expect(canAccessRoute([SystemRole.OPERATIONS], '/hr')).toBe(true);
+      expect(canAccessRoute([SystemRole.DESK], '/hr')).toBe(false);
     });
 
     it('admits a user holding several roles when any one of them qualifies', () => {
-      expect(canAccessRoute([SystemRole.FINANCE_MANAGER, SystemRole.HR_MANAGER], '/hr')).toBe(true);
+      expect(canAccessRoute([SystemRole.DESK, SystemRole.OPERATIONS], '/hr')).toBe(true);
     });
 
     it('refuses a user with no roles at all', () => {
@@ -30,19 +30,19 @@ describe('canAccessRoute', () => {
      * role, a read-only auditor included.
      */
     it('inherits the section it sits under', () => {
-      expect(canAccessRoute([SystemRole.HR_MANAGER], '/hr/roster')).toBe(true);
-      expect(canAccessRoute([SystemRole.HR_MANAGER], '/hr/pay/history')).toBe(true);
+      expect(canAccessRoute([SystemRole.OPERATIONS], '/hr/roster')).toBe(true);
+      expect(canAccessRoute([SystemRole.OPERATIONS], '/hr/pay/history')).toBe(true);
     });
 
     it('does not leak a section to a role excluded from it', () => {
-      expect(canAccessRoute([SystemRole.FINANCE_MANAGER], '/hr/roster')).toBe(false);
-      expect(canAccessRoute([SystemRole.READ_ONLY_AUDITOR], '/hr/pay')).toBe(false);
-      expect(canAccessRoute([SystemRole.VALIDATOR], '/hr/compliance')).toBe(false);
+      expect(canAccessRoute([SystemRole.DESK], '/hr/roster')).toBe(false);
+      expect(canAccessRoute([SystemRole.AUDITOR], '/hr/pay')).toBe(false);
+      expect(canAccessRoute([SystemRole.DESK_OPERATOR], '/hr/compliance')).toBe(false);
     });
 
     it('is not fooled by a path that merely starts with the same letters', () => {
       // '/hrsomething' is not under '/hr', and must not inherit its roles.
-      expect(canAccessRoute([SystemRole.HR_MANAGER], '/hrsomething')).toBe(false);
+      expect(canAccessRoute([SystemRole.OPERATIONS], '/hrsomething')).toBe(false);
     });
 
     it('lets a sub-path override its section when it declares its own roles', () => {
@@ -58,18 +58,24 @@ describe('canAccessRoute', () => {
       '/hr/compliance', '/hr/capability', '/hr/documents', '/hr/pay', '/hr/deployment', '/hr/utilisation', '/hr/activity',
     ];
 
-    it('are all reachable by an HR manager', () => {
+    /**
+     * Workforce pages belong to OPERATIONS now.
+     *
+     * They were HR_MANAGER's, and closed to operations precisely so that planning work and
+     * administering the people who do it were different jobs. Folding HR into OPERATIONS makes
+     * them the same job, and these pages open accordingly. The desk, an operator and an auditor
+     * still cannot reach them, which is the boundary that remains.
+     */
+    it('are all reachable by OPERATIONS, which owns the workforce', () => {
       for (const page of HR_PAGES) {
-        expect(canAccessRoute([SystemRole.HR_MANAGER], page)).toBe(true);
+        expect(canAccessRoute([SystemRole.OPERATIONS], page)).toBe(true);
       }
     });
 
     it.each([
-      SystemRole.FINANCE_MANAGER,
-      SystemRole.OPERATIONS_MANAGER,
-      SystemRole.OPERATIONS_EXECUTIVE,
-      SystemRole.VALIDATOR,
-      SystemRole.READ_ONLY_AUDITOR,
+      SystemRole.DESK,
+      SystemRole.DESK_OPERATOR,
+      SystemRole.AUDITOR,
       SystemRole.CLIENT_USER,
     ])('are all closed to %s', (role) => {
       for (const page of HR_PAGES) {
@@ -80,8 +86,8 @@ describe('canAccessRoute', () => {
 
   describe('an unlisted path', () => {
     it('is denied rather than published', () => {
-      expect(canAccessRoute([SystemRole.SUPER_ADMINISTRATOR], '/not-a-real-page')).toBe(false);
-      expect(canAccessRoute([SystemRole.READ_ONLY_AUDITOR], '/internal/secrets')).toBe(false);
+      expect(canAccessRoute([SystemRole.ADMIN], '/not-a-real-page')).toBe(false);
+      expect(canAccessRoute([SystemRole.AUDITOR], '/internal/secrets')).toBe(false);
     });
   });
 
@@ -89,8 +95,8 @@ describe('canAccessRoute', () => {
     it('matches an id segment', () => {
       // The single assayer view is the roster's drawer now (/hr/roster?assayer=…), so the
       // gate that matters is the roster's.
-      expect(canAccessRoute([SystemRole.HR_MANAGER], '/hr/roster')).toBe(true);
-      expect(canAccessRoute([SystemRole.VALIDATOR], '/hr/roster')).toBe(false);
+      expect(canAccessRoute([SystemRole.OPERATIONS], '/hr/roster')).toBe(true);
+      expect(canAccessRoute([SystemRole.DESK_OPERATOR], '/hr/roster')).toBe(false);
     });
   });
 
@@ -128,7 +134,7 @@ describe('canAccessRoute', () => {
     it('grants a super administrator everything', () => {
       for (const rp of ROUTE_PERMISSIONS) {
         const path = rp.path.replace(':id', 'some-id');
-        expect(canAccessRoute([SystemRole.SUPER_ADMINISTRATOR], path)).toBe(true);
+        expect(canAccessRoute([SystemRole.ADMIN], path)).toBe(true);
       }
     });
   });

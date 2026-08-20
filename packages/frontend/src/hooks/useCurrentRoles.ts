@@ -26,7 +26,7 @@ export function useCurrentRoles(): SystemRole[] {
 /** HR own the assayer workforce record; admins retain override. */
 export function canManageAssayers(roles: SystemRole[]): boolean {
   return roles.some((r) =>
-    [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER].includes(r),
+    [SystemRole.ADMIN, SystemRole.ADMIN, SystemRole.OPERATIONS].includes(r),
   );
 }
 
@@ -37,7 +37,7 @@ export function hasAnyRole(roles: SystemRole[], allowed: SystemRole[]): boolean 
 /** Branch records are operations' to maintain; audit and finance only read them. */
 export function canManageBranches(roles: SystemRole[]): boolean {
   return roles.some((r) =>
-    [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER].includes(r),
+    [SystemRole.ADMIN, SystemRole.ADMIN, SystemRole.OPERATIONS].includes(r),
   );
 }
 
@@ -48,13 +48,13 @@ export function canManageBranches(roles: SystemRole[]): boolean {
  */
 export function canManageProjects(roles: SystemRole[]): boolean {
   return roles.some((r) =>
-    [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER].includes(r),
+    [SystemRole.ADMIN, SystemRole.ADMIN, SystemRole.OPERATIONS].includes(r),
   );
 }
 
 /** Deleting a project is admin-only on the backend. */
 export function canDeleteProjects(roles: SystemRole[]): boolean {
-  return roles.some((r) => [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR].includes(r));
+  return roles.some((r) => [SystemRole.ADMIN, SystemRole.ADMIN].includes(r));
 }
 
 /**
@@ -63,18 +63,18 @@ export function canDeleteProjects(roles: SystemRole[]): boolean {
  * only ever return 403.
  */
 export function canDeleteBranches(roles: SystemRole[]): boolean {
-  return roles.some((r) => [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR].includes(r));
+  return roles.some((r) => [SystemRole.ADMIN, SystemRole.ADMIN].includes(r));
 }
 
 /** Deleting a planning rule is admin-only on the backend, as above. */
 export function canDeleteRules(roles: SystemRole[]): boolean {
-  return roles.some((r) => [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR].includes(r));
+  return roles.some((r) => [SystemRole.ADMIN, SystemRole.ADMIN].includes(r));
 }
 
 /** Holidays: operations own audit scheduling, so they can maintain the calendar too. */
 export function canManageHolidays(roles: SystemRole[]): boolean {
   return roles.some((r) =>
-    [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER].includes(r),
+    [SystemRole.ADMIN, SystemRole.ADMIN, SystemRole.OPERATIONS].includes(r),
   );
 }
 
@@ -88,7 +88,7 @@ export function canManageHolidays(roles: SystemRole[]): boolean {
  */
 export function canAdministerPlatformSettings(roles: SystemRole[]): boolean {
   // Super administrators only, by decision (2026-08-17) — mirrors SETTINGS_ADMIN_ROLES.
-  return roles.includes(SystemRole.SUPER_ADMINISTRATOR);
+  return roles.includes(SystemRole.ADMIN);
 }
 
 /**
@@ -96,10 +96,10 @@ export function canAdministerPlatformSettings(roles: SystemRole[]): boolean {
  * `canAdministerPlatformSettings` for the same reason the comment above it gives: they gate
  * different backends, and a wipe-the-database permission check should not silently ride along
  * with whatever platform-settings decides next. Mirrors the controller-level
- * `@Roles(SystemRole.SUPER_ADMINISTRATOR)` on `DataResetController`.
+ * `@Roles(SystemRole.ADMIN)` on `DataResetController`.
  */
 export function canAdministerDataReset(roles: SystemRole[]): boolean {
-  return roles.includes(SystemRole.SUPER_ADMINISTRATOR);
+  return roles.includes(SystemRole.ADMIN);
 }
 
 /**
@@ -109,10 +109,10 @@ export function canAdministerDataReset(roles: SystemRole[]): boolean {
 export function canManageTransportRates(roles: SystemRole[]): boolean {
   return roles.some((r) =>
     [
-      SystemRole.SUPER_ADMINISTRATOR,
-      SystemRole.ADMINISTRATOR,
-      SystemRole.OPERATIONS_MANAGER,
-      SystemRole.FINANCE_MANAGER,
+      SystemRole.ADMIN,
+      SystemRole.ADMIN,
+      SystemRole.OPERATIONS,
+      SystemRole.OPERATIONS,
     ].includes(r),
   );
 }
@@ -124,34 +124,34 @@ export function canManageTransportRates(roles: SystemRole[]): boolean {
  */
 export function canAdministerNotifications(roles: SystemRole[]): boolean {
   // Super administrators only, by decision (2026-08-17) — mirrors NOTIFICATION_ADMIN_ROLES.
-  return roles.includes(SystemRole.SUPER_ADMINISTRATOR);
+  return roles.includes(SystemRole.ADMIN);
 }
 
 /** Business rules feed candidate scoring directly — operations own this too. */
 export function canManageZones(roles: SystemRole[]): boolean {
   return roles.some((r) =>
-    [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER].includes(r),
+    [SystemRole.ADMIN, SystemRole.ADMIN, SystemRole.OPERATIONS].includes(r),
   );
 }
 
 /** Deletion is the only zone action reserved to admins — it can strand branches. */
 export function canDeleteZones(roles: SystemRole[]): boolean {
-  return roles.some((r) => [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR].includes(r));
+  return roles.some((r) => [SystemRole.ADMIN, SystemRole.ADMIN].includes(r));
 }
 
 /** Suspending operational rules is administrator-only — matches the backend's @Roles gate. */
 export function canManageRuleBypass(roles: SystemRole[]): boolean {
-  return roles.some((r) => [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR].includes(r));
+  return roles.some((r) => [SystemRole.ADMIN, SystemRole.ADMIN].includes(r));
 }
 
 export function canManageRules(roles: SystemRole[]): boolean {
   return roles.some((r) =>
-    [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER].includes(r),
+    [SystemRole.ADMIN, SystemRole.ADMIN, SystemRole.OPERATIONS].includes(r),
   );
 }
 
 export function canDeleteClients(roles: SystemRole[]): boolean {
-  return roles.some((r) => [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR].includes(r));
+  return roles.some((r) => [SystemRole.ADMIN, SystemRole.ADMIN].includes(r));
 }
 
 /** The signed-in user's own id, from the same cache App.tsx populates on login. */

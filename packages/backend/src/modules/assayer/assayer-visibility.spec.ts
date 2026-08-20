@@ -18,12 +18,12 @@ const record = {
 
 describe('assayer field visibility', () => {
   it('never returns the password hash, even to a super administrator', () => {
-    const out = scopeAssayerForRoles(record, [SystemRole.SUPER_ADMINISTRATOR]);
+    const out = scopeAssayerForRoles(record, [SystemRole.ADMIN]);
     expect(out).not.toHaveProperty('passwordHash');
   });
 
-  it.each([SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.HR_MANAGER])(
-    '%s sees identity and banking — they own the workforce record',
+  it.each([SystemRole.ADMIN, SystemRole.OPERATIONS])(
+    '%s sees identity and banking — they onboard assayers and pay them',
     (role) => {
       const out = scopeAssayerForRoles(record, [role]) as any;
       expect(out.panNumber).toBe('ABCDE1234F');
@@ -32,22 +32,27 @@ describe('assayer field visibility', () => {
     },
   );
 
-  it('operations can plan with the record but cannot read identity or banking', () => {
-    const out = scopeAssayerForRoles(record, [SystemRole.OPERATIONS_MANAGER]) as any;
-    expect(out.displayName).toBe('Test Assayer');
-    expect(out.city).toBe('Pune');
-    expect(out).not.toHaveProperty('panNumber');
-    expect(out).not.toHaveProperty('aadhaarNumber');
-    expect(out).not.toHaveProperty('bankAccountNumber');
-    expect(out).not.toHaveProperty('emergencyContactPhone');
-  });
-
-  it('finance sees banking (they disburse) but not identity documents', () => {
-    const out = scopeAssayerForRoles(record, [SystemRole.FINANCE_MANAGER]) as any;
-    expect(out.bankAccountNumber).toBe('123456789');
-    expect(out.ifscCode).toBe('HDFC0000123');
-    expect(out).not.toHaveProperty('panNumber');
-    expect(out).not.toHaveProperty('aadhaarNumber');
+  /**
+   * The widening this consolidation cost, stated as a test rather than left implicit.
+   *
+   * These were three roles: a planner who could read neither identity nor banking, an HR
+   * manager who read identity, and a finance manager who read banking. They are one role now,
+   * so it reads both — you cannot verify a new joiner's documents or pay into their account
+   * without seeing them. If the team ever splits those jobs again, this is the test that should
+   * fail first.
+   */
+  it('is the only staff role that sees an assayer as a person rather than a resource', () => {
+    for (const role of [SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR]) {
+      const out = scopeAssayerForRoles(record, [role]) as any;
+      // Enough to know who did the work...
+      expect(out.displayName).toBe('Test Assayer');
+      expect(out.city).toBe('Pune');
+      // ...and nothing about who they are.
+      expect(out).not.toHaveProperty('panNumber');
+      expect(out).not.toHaveProperty('aadhaarNumber');
+      expect(out).not.toHaveProperty('bankAccountNumber');
+      expect(out).not.toHaveProperty('emergencyContactPhone');
+    }
   });
 
   it('an assayer sees their own banking and identity', () => {
@@ -72,9 +77,9 @@ describe('assayer field visibility', () => {
   });
 
   it('reads role names from both staff role entities and assayer token roles', () => {
-    expect(rolesOf({ roles: [{ name: 'HR_MANAGER' }] })).toEqual(['HR_MANAGER']);
+    expect(rolesOf({ roles: [{ name: 'OPERATIONS' }] })).toEqual(['OPERATIONS']);
     expect(rolesOf({ roles: ['ASSAYER'] })).toEqual(['ASSAYER']);
     expect(rolesOf(undefined)).toEqual([]);
-    expect(rolesOf({ roles: [null, { name: 'ADMINISTRATOR' }] })).toEqual(['ADMINISTRATOR']);
+    expect(rolesOf({ roles: [null, { name: 'ADMIN' }] })).toEqual(['ADMIN']);
   });
 });

@@ -75,8 +75,8 @@ describe('WorkflowEngine', () => {
       'CREATED',
       'ACCEPTED',
       'u-1',
-      SystemRole.SUPER_ADMINISTRATOR,
-      [SystemRole.SUPER_ADMINISTRATOR],
+      SystemRole.ADMIN,
+      [SystemRole.ADMIN],
       action
     );
 
@@ -104,7 +104,7 @@ describe('WorkflowEngine', () => {
         'ACCEPTED',
         'u-1',
         'PLANNER',
-        [SystemRole.SUPER_ADMINISTRATOR],
+        [SystemRole.ADMIN],
         action
       )
     ).rejects.toThrow(BadRequestException);

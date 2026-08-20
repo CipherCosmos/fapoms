@@ -145,48 +145,96 @@ export enum UserStatus {
   ARCHIVED = 'ARCHIVED',
 }
 
+/**
+ * Who a person is, in this business.
+ *
+ * There were thirteen of these, and the application could not tell most of them apart. Three
+ * had no capability of their own at all: OPERATIONS_EXECUTIVE could reach nothing an
+ * OPERATIONS_MANAGER could not, and VALIDATION_MANAGER and VALIDATOR were both strict subsets
+ * of DATA_ENTRY_HEAD. ADMINISTRATOR and SUPER_ADMINISTRATOR differed by seven routes, all of
+ * them the product-feedback queue. The notification catalogue had already given up on the
+ * distinctions and addressed them in fixed pairs — OPS, ADMINS, VALIDATION — never one without
+ * the other. Meanwhile eleven of the thirteen had nobody in them.
+ *
+ * A role now names a job someone actually does, and each one can do something the others
+ * cannot. The names say what the person does rather than where they sit in a hierarchy.
+ */
 export enum SystemRole {
-  SUPER_ADMINISTRATOR = 'SUPER_ADMINISTRATOR',
-  ADMINISTRATOR = 'ADMINISTRATOR',
-  OPERATIONS_MANAGER = 'OPERATIONS_MANAGER',
-  OPERATIONS_EXECUTIVE = 'OPERATIONS_EXECUTIVE',
-  VALIDATION_MANAGER = 'VALIDATION_MANAGER',
-  VALIDATOR = 'VALIDATOR',
-  DOCUMENT_EXECUTIVE = 'DOCUMENT_EXECUTIVE',
+  /** Runs the platform: configuration, users and roles, data resets, everything below. */
+  ADMIN = 'ADMIN',
+
   /**
-   * Owns the collected-paperwork queue. Per spec §12.8 the application does NOT assign work
-   * to individual data-entry operators: every returned PDF lands with the Head, who downloads
-   * it and distributes work through the existing manual process. The system tracks lifecycle,
-   * ownership and progress — it does not route to individuals.
+   * Runs the work: clients, projects, branches, planning, assignments and scheduling — and,
+   * folded in here rather than split off, the money and the workforce. One person approves a
+   * payout, issues an invoice, onboards an assayer and plans the audit they are sent on.
+   *
+   * That last point is a deliberate trade. FINANCE_MANAGER and HR_MANAGER existed so that the
+   * person who creates the work is not the person who approves payment for it. With them folded
+   * in, that check is gone unless an ADMIN does the approving — ADMIN is still on the
+   * disbursement path for exactly that reason. Worth revisiting if the team grows.
    */
-  DATA_ENTRY_HEAD = 'DATA_ENTRY_HEAD',
-  ASSAYER = 'ASSAYER',
-  CLIENT_USER = 'CLIENT_USER',
+  OPERATIONS = 'OPERATIONS',
+
   /**
-   * Owns the assayer workforce: onboarding and the lifecycle from INVITED through
-   * to ACTIVE, personal and banking details, government identity documents, and
-   * compensation terms. Assayer records were previously editable by whoever held
-   * an operations role, which mixed workforce administration into audit planning.
+   * Runs the paperwork, end to end: packets out to the field, packets back, into data entry,
+   * through validation and clarification, out as a finished report.
+   *
+   * This was three roles — DOCUMENT_EXECUTIVE for the outbound half, DATA_ENTRY_HEAD for the
+   * inbound half, VALIDATION_MANAGER for a supervisory layer that could do nothing the head
+   * could not. It is one desk, and it is one role.
    */
-  HR_MANAGER = 'HR_MANAGER',
+  DESK = 'DESK',
+
   /**
-   * Owns the money: client receivables, assayer disbursements, invoicing and
-   * financial reporting. Finance work was previously bundled into the operations
-   * roles because billing had no dedicated owner, which meant anyone who could
-   * plan an audit could also issue an invoice.
+   * Works a share of the desk's queue rather than the whole of it: takes a packet, types it up,
+   * hands it back. The one distinction the system genuinely draws here is "mine" versus "the
+   * team's", which is a real difference between doing the work and running it.
    */
-  FINANCE_MANAGER = 'FINANCE_MANAGER',
-  READ_ONLY_AUDITOR = 'READ_ONLY_AUDITOR',
+  DESK_OPERATOR = 'DESK_OPERATOR',
+
+  /** Sees everything and changes nothing. For oversight and review. */
+  AUDITOR = 'AUDITOR',
+
   /**
-   * The product / support / development team. Owns the two-way feedback channel:
-   * receives bug reports, enhancement requests and process suggestions from every
-   * other user (staff, clients and field assayers), triages them, and replies in
-   * thread. This is a product-facing responsibility, deliberately distinct from
-   * ADMINISTRATOR (system configuration) — though admins also hold the feedback
-   * queue so nothing is ever blocked waiting for this role to be staffed.
+   * The product and support team. Owns the two-way feedback channel: receives bug reports,
+   * enhancement requests and suggestions from staff, clients and field assayers, triages them
+   * and replies in thread. ADMIN holds the same queue, so nothing waits on this being staffed.
    */
   PRODUCT_SUPPORT = 'PRODUCT_SUPPORT',
+
+  /**
+   * The field assayer. An external principal: authenticated from the `assayers` table, with no
+   * row in `roles` and no permission grants — every route they reach is gated by name alone.
+   */
+  ASSAYER = 'ASSAYER',
+
+  /** The client's own people, seeing their own work. An external principal, like ASSAYER. */
+  CLIENT_USER = 'CLIENT_USER',
 }
+
+/**
+ * What each of the old thirteen became.
+ *
+ * Kept because the mapping is the explanation: it is what the migration applies to existing
+ * role rows, and it is how anyone reading old code, an old audit row or an old screenshot can
+ * find the role that replaced the one they are looking at.
+ */
+export const LEGACY_ROLE_ALIASES: Record<string, SystemRole> = {
+  SUPER_ADMINISTRATOR: SystemRole.ADMIN,
+  ADMINISTRATOR: SystemRole.ADMIN,
+  OPERATIONS_MANAGER: SystemRole.OPERATIONS,
+  OPERATIONS_EXECUTIVE: SystemRole.OPERATIONS,
+  FINANCE_MANAGER: SystemRole.OPERATIONS,
+  HR_MANAGER: SystemRole.OPERATIONS,
+  DOCUMENT_EXECUTIVE: SystemRole.DESK,
+  DATA_ENTRY_HEAD: SystemRole.DESK,
+  VALIDATION_MANAGER: SystemRole.DESK,
+  VALIDATOR: SystemRole.DESK_OPERATOR,
+  READ_ONLY_AUDITOR: SystemRole.AUDITOR,
+  PRODUCT_SUPPORT: SystemRole.PRODUCT_SUPPORT,
+  ASSAYER: SystemRole.ASSAYER,
+  CLIENT_USER: SystemRole.CLIENT_USER,
+};
 
 export enum PermissionAction {
   VIEW = 'VIEW',

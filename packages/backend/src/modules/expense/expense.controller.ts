@@ -102,21 +102,14 @@ export class ExpenseController {
   }
 
   @Get('expenses/pending')
-  @Roles(
-    SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR,
-    SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.FINANCE_MANAGER,
-  )
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Claims awaiting a decision' })
   async findPending() {
     return { success: true, data: await this.expenseService.findPending() };
   }
 
   @Get('assayers/:assayerId/expenses')
-  @Roles(
-    SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR,
-    SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE,
-    SystemRole.FINANCE_MANAGER, SystemRole.HR_MANAGER, SystemRole.READ_ONLY_AUDITOR,
-  )
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR)
   @ApiOperation({ summary: "One assayer's claim history" })
   async findForAssayer(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
@@ -127,10 +120,7 @@ export class ExpenseController {
 
   // Approving reimbursement commits money, so this is narrower than the read routes above.
   @Post('expenses/:expenseId/review')
-  @Roles(
-    SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR,
-    SystemRole.OPERATIONS_MANAGER, SystemRole.FINANCE_MANAGER,
-  )
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Approve or reject a claim' })
   async review(
     @Param('expenseId', ParseUUIDPipe) expenseId: string,

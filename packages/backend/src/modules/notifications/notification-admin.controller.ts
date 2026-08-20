@@ -99,7 +99,7 @@ export class TestEmailRequestDto {
  * both lists collapse to that one role. Kept as two names because the read/write split is a
  * real seam — if the desk is ever widened again, it is the read list that widens first.
  */
-const NOTIFICATION_ADMIN_ROLES = [SystemRole.SUPER_ADMINISTRATOR] as const;
+const NOTIFICATION_ADMIN_ROLES = [SystemRole.ADMIN] as const;
 const NOTIFICATION_ADMIN_READ_ROLES = [...NOTIFICATION_ADMIN_ROLES];
 
 @ApiTags('Notification Administration')

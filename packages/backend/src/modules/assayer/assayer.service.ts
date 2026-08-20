@@ -1007,7 +1007,7 @@ export class AssayerService implements OnModuleInit {
     targetStatus: AssayerLifecycleStatus,
     userId: string,
     reason?: string,
-    role = SystemRole.SUPER_ADMINISTRATOR,
+    role = SystemRole.ADMIN,
   ): Promise<{ saved: AssayerEntity; event: any }> {
     const assayer = await this.findOne(id);
     const currentStatus = assayer.lifecycleStatus;

@@ -20,150 +20,90 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
      * web user sees a feedback surface at all. Mirrors FEEDBACK_TEAM_ROLES on the backend.
      */
     path: '/feedback',
-    allowedRoles: [SystemRole.SUPER_ADMINISTRATOR],
+    allowedRoles: [SystemRole.ADMIN],
   },
   {
     path: '/executive-map',
-    allowedRoles: [
-      SystemRole.SUPER_ADMINISTRATOR,
-      SystemRole.ADMINISTRATOR,
-      SystemRole.OPERATIONS_MANAGER,
-      SystemRole.READ_ONLY_AUDITOR,
-    ],
+    allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR],
   },
   {
     // Everyone who works the book needs to see which project a branch belongs to.
     path: '/projects',
     allowedRoles: [
-      SystemRole.SUPER_ADMINISTRATOR,
-      SystemRole.ADMINISTRATOR,
-      SystemRole.OPERATIONS_MANAGER,
-      SystemRole.OPERATIONS_EXECUTIVE,
-      SystemRole.VALIDATION_MANAGER,
-      SystemRole.VALIDATOR,
-      SystemRole.DOCUMENT_EXECUTIVE,
-      SystemRole.DATA_ENTRY_HEAD,
-      SystemRole.FINANCE_MANAGER,
-      SystemRole.READ_ONLY_AUDITOR,
-      SystemRole.HR_MANAGER,
+      SystemRole.ADMIN,
+      SystemRole.OPERATIONS,
+      SystemRole.DESK,
+      SystemRole.DESK_OPERATOR,
+      SystemRole.AUDITOR,
     ],
   },
   {
     path: '/planning',
-    allowedRoles: [
-      SystemRole.SUPER_ADMINISTRATOR,
-      SystemRole.ADMINISTRATOR,
-      SystemRole.OPERATIONS_MANAGER,
-      SystemRole.OPERATIONS_EXECUTIVE,
-    ],
+    allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS],
   },
   {
     // The Operations Inbox: every assignment awaiting a desk decision (call tasks for
     // phone-channel assayers, counters, replacements, unscheduled, overdue). Same roles that
     // may transition assignments, since every card action IS an assignment transition.
     path: '/inbox',
-    allowedRoles: [
-      SystemRole.SUPER_ADMINISTRATOR,
-      SystemRole.ADMINISTRATOR,
-      SystemRole.OPERATIONS_MANAGER,
-      SystemRole.OPERATIONS_EXECUTIVE,
-    ],
+    allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS],
   },
   {
     // Operations executives work this queue daily; finance needs it to see what was billable.
     path: '/assignments',
-    allowedRoles: [
-      SystemRole.SUPER_ADMINISTRATOR,
-      SystemRole.ADMINISTRATOR,
-      SystemRole.OPERATIONS_MANAGER,
-      SystemRole.OPERATIONS_EXECUTIVE,
-      SystemRole.FINANCE_MANAGER,
-      SystemRole.READ_ONLY_AUDITOR,
-    ],
+    allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR],
   },
   {
     // Document dispatch is driven by the schedule, so the desk needs to see it.
     path: '/scheduling',
     allowedRoles: [
-      SystemRole.SUPER_ADMINISTRATOR,
-      SystemRole.ADMINISTRATOR,
-      SystemRole.OPERATIONS_MANAGER,
-      SystemRole.OPERATIONS_EXECUTIVE,
-      SystemRole.DOCUMENT_EXECUTIVE,
-      SystemRole.HR_MANAGER,
-      SystemRole.READ_ONLY_AUDITOR,
+      SystemRole.ADMIN,
+      SystemRole.OPERATIONS,
+      SystemRole.DESK,
+      SystemRole.AUDITOR,
     ],
   },
   {
     // CLIENT_USER stays out: `users` has no client_id, so an external user cannot be scoped.
     path: '/clients',
-    allowedRoles: [
-      SystemRole.SUPER_ADMINISTRATOR,
-      SystemRole.ADMINISTRATOR,
-      SystemRole.OPERATIONS_MANAGER,
-      SystemRole.FINANCE_MANAGER,
-      SystemRole.READ_ONLY_AUDITOR,
-    ],
+    allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR],
   },
   {
     path: '/billing',
-    allowedRoles: [
-      SystemRole.SUPER_ADMINISTRATOR,
-      SystemRole.ADMINISTRATOR,
-      SystemRole.FINANCE_MANAGER,
-      SystemRole.OPERATIONS_MANAGER,
-      SystemRole.READ_ONLY_AUDITOR,
-    ],
+    allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR],
   },
   {
     // Read-only for most; write controls are gated separately by canManageBranches().
     path: '/branches',
     allowedRoles: [
-      SystemRole.SUPER_ADMINISTRATOR,
-      SystemRole.ADMINISTRATOR,
-      SystemRole.OPERATIONS_MANAGER,
-      SystemRole.OPERATIONS_EXECUTIVE,
-      SystemRole.VALIDATION_MANAGER,
-      SystemRole.VALIDATOR,
-      SystemRole.DOCUMENT_EXECUTIVE,
-      SystemRole.DATA_ENTRY_HEAD,
-      SystemRole.FINANCE_MANAGER,
-      SystemRole.READ_ONLY_AUDITOR,
-      SystemRole.HR_MANAGER,
+      SystemRole.ADMIN,
+      SystemRole.OPERATIONS,
+      SystemRole.DESK,
+      SystemRole.DESK_OPERATOR,
+      SystemRole.AUDITOR,
     ],
   },
   {
     path: '/hr',
-    allowedRoles: [
-      SystemRole.SUPER_ADMINISTRATOR,
-      SystemRole.ADMINISTRATOR,
-      SystemRole.HR_MANAGER,
-    ],
+    allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS],
   },
   {
     path: '/documents',
     allowedRoles: [
-      SystemRole.SUPER_ADMINISTRATOR,
-      SystemRole.ADMINISTRATOR,
-      SystemRole.OPERATIONS_MANAGER,
-      SystemRole.OPERATIONS_EXECUTIVE,
-      SystemRole.DOCUMENT_EXECUTIVE,
-      SystemRole.VALIDATION_MANAGER,
-      SystemRole.VALIDATOR,
-      SystemRole.DATA_ENTRY_HEAD,
-      SystemRole.READ_ONLY_AUDITOR,
+      SystemRole.ADMIN,
+      SystemRole.OPERATIONS,
+      SystemRole.DESK,
+      SystemRole.DESK_OPERATOR,
+      SystemRole.AUDITOR,
     ],
   },
   {
     path: '/data-entry',
     allowedRoles: [
-      SystemRole.SUPER_ADMINISTRATOR,
-      SystemRole.ADMINISTRATOR,
-      SystemRole.DATA_ENTRY_HEAD,
-      SystemRole.DOCUMENT_EXECUTIVE,
-      SystemRole.VALIDATION_MANAGER,
-      SystemRole.VALIDATOR,
-      SystemRole.READ_ONLY_AUDITOR,
+      SystemRole.ADMIN,
+      SystemRole.DESK,
+      SystemRole.DESK_OPERATOR,
+      SystemRole.AUDITOR,
     ],
   },
   {
@@ -171,38 +111,25 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     // negotiate on the phone against these numbers); managing is gated by
     // canManageTransportRates() — ops + finance, mirroring the backend controller.
     path: '/transport-costs',
-    allowedRoles: [
-      SystemRole.SUPER_ADMINISTRATOR,
-      SystemRole.ADMINISTRATOR,
-      SystemRole.OPERATIONS_MANAGER,
-      SystemRole.OPERATIONS_EXECUTIVE,
-      SystemRole.FINANCE_MANAGER,
-      SystemRole.READ_ONLY_AUDITOR,
-    ],
+    allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR],
   },
   {
     // Platform configuration — super administrators only, by decision (2026-08-17; see
     // /feedback above). Wider staff used to be able to read it; the backend
     // PlatformSettingsController now admits the same single role, so the page and the API agree.
     path: '/admin/settings',
-    allowedRoles: [SystemRole.SUPER_ADMINISTRATOR],
+    allowedRoles: [SystemRole.ADMIN],
   },
   {
     // Which events the platform raises, to whom, on what channels — super administrators only,
     // by the same decision. Mirrors NOTIFICATION_ADMIN_ROLES on the backend controller.
     path: '/admin/notifications',
-    allowedRoles: [SystemRole.SUPER_ADMINISTRATOR],
+    allowedRoles: [SystemRole.ADMIN],
   },
   {
     // Read for most; create/edit/delete is gated by canManageHolidays().
     path: '/holidays',
-    allowedRoles: [
-      SystemRole.SUPER_ADMINISTRATOR,
-      SystemRole.ADMINISTRATOR,
-      SystemRole.OPERATIONS_MANAGER,
-      SystemRole.OPERATIONS_EXECUTIVE,
-      SystemRole.READ_ONLY_AUDITOR,
-    ],
+    allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR],
   },
   {
     /**
@@ -211,37 +138,22 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
      * operational decision; switching the controls off for a window is not.
      */
     path: '/admin/rule-bypass',
-    allowedRoles: [
-      SystemRole.SUPER_ADMINISTRATOR,
-      SystemRole.ADMINISTRATOR,
-    ],
+    allowedRoles: [SystemRole.ADMIN],
   },
   {
     // Operations own planning rules — they hold the write permission, so they need the page.
     path: '/rules',
-    allowedRoles: [
-      SystemRole.SUPER_ADMINISTRATOR,
-      SystemRole.ADMINISTRATOR,
-      SystemRole.OPERATIONS_MANAGER,
-    ],
+    allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS],
   },
   {
     // Territorial zones group branches for coverage planning. Read for ops; create/edit gated
     // by canManageZones(). Mirrors the zone controller's own role list.
     path: '/zones',
-    allowedRoles: [
-      SystemRole.SUPER_ADMINISTRATOR,
-      SystemRole.ADMINISTRATOR,
-      SystemRole.OPERATIONS_MANAGER,
-      SystemRole.OPERATIONS_EXECUTIVE,
-    ],
+    allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS],
   },
   {
     path: '/users',
-    allowedRoles: [
-      SystemRole.SUPER_ADMINISTRATOR,
-      SystemRole.ADMINISTRATOR,
-    ],
+    allowedRoles: [SystemRole.ADMIN],
   },
   {
     path: '/settings',
@@ -257,22 +169,15 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     // must carry the same roles as their destination or the redirect lands on a denied page.
     path: '/validation',
     allowedRoles: [
-      SystemRole.SUPER_ADMINISTRATOR,
-      SystemRole.ADMINISTRATOR,
-      SystemRole.VALIDATION_MANAGER,
-      SystemRole.VALIDATOR,
-      SystemRole.DATA_ENTRY_HEAD,
-      SystemRole.DOCUMENT_EXECUTIVE,
-      SystemRole.READ_ONLY_AUDITOR,
+      SystemRole.ADMIN,
+      SystemRole.DESK,
+      SystemRole.DESK_OPERATOR,
+      SystemRole.AUDITOR,
     ],
   },
   {
     path: '/assayers',
-    allowedRoles: [
-      SystemRole.SUPER_ADMINISTRATOR,
-      SystemRole.ADMINISTRATOR,
-      SystemRole.HR_MANAGER,
-    ],
+    allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS],
   },
 ];
 
@@ -302,13 +207,13 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
  */
 export function defaultRouteForRoles(userRoles: SystemRole[]): string {
   const has = (r: SystemRole) => userRoles.includes(r);
-  if (has(SystemRole.SUPER_ADMINISTRATOR) || has(SystemRole.ADMINISTRATOR)) return '/dashboard';
-  if (has(SystemRole.OPERATIONS_MANAGER)) return '/executive-map';   // live pipeline overview
-  if (has(SystemRole.FINANCE_MANAGER)) return '/billing';            // the billing book
-  if (has(SystemRole.HR_MANAGER)) return '/hr';                      // workforce console
-  if (has(SystemRole.OPERATIONS_EXECUTIVE)) return '/assignments';   // field-execution queue
-  if (has(SystemRole.DOCUMENT_EXECUTIVE)) return '/documents';       // document desk
-  if (has(SystemRole.VALIDATION_MANAGER) || has(SystemRole.VALIDATOR) || has(SystemRole.DATA_ENTRY_HEAD)) {
+  if (has(SystemRole.ADMIN) || has(SystemRole.ADMIN)) return '/dashboard';
+  if (has(SystemRole.OPERATIONS)) return '/executive-map';   // live pipeline overview
+  if (has(SystemRole.OPERATIONS)) return '/billing';            // the billing book
+  if (has(SystemRole.OPERATIONS)) return '/hr';                      // workforce console
+  if (has(SystemRole.OPERATIONS)) return '/assignments';   // field-execution queue
+  if (has(SystemRole.DESK)) return '/documents';       // document desk
+  if (has(SystemRole.DESK) || has(SystemRole.DESK_OPERATOR) || has(SystemRole.DESK)) {
     return '/data-entry';                                            // validation / data-entry desk
   }
   return '/dashboard';                                               // auditor and anyone else: read-only overview

@@ -88,7 +88,7 @@ describe('EventsGateway — territorial rooms', () => {
 
   it('puts a region-assigned operator only in their own region rooms', async () => {
     const { gw, jwt } = makeGateway(['WEST'], null);
-    const client = await connect(gw, jwt, ['OPERATIONS_MANAGER']);
+    const client = await connect(gw, jwt, ['OPERATIONS']);
     const joined = client.join.mock.calls.map((c: any[]) => c[0]);
     expect(joined).toContain('region:WEST');
     expect(joined).not.toContain('region:SOUTH');
@@ -97,7 +97,7 @@ describe('EventsGateway — territorial rooms', () => {
   // An unassigned account is national; it must keep seeing everything it saw before.
   it('puts an unassigned staff account in every region room', async () => {
     const { gw, jwt } = makeGateway(null, null);
-    const client = await connect(gw, jwt, ['HR_MANAGER']);
+    const client = await connect(gw, jwt, ['OPERATIONS']);
     const joined = client.join.mock.calls.map((c: any[]) => c[0]);
     expect(joined).toEqual(expect.arrayContaining(['region:WEST', 'region:SOUTH', 'region:NORTH']));
   });

@@ -17,7 +17,7 @@ import { SystemRole } from '@fapoms/shared';
 @ApiTags('Audit Log')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
-@Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.READ_ONLY_AUDITOR)
+@Roles(SystemRole.ADMIN, SystemRole.AUDITOR)
 @RequirePermissions('audit_log:view:platform')
 @Controller('audit-log')
 export class AuditLogController {

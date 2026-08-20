@@ -41,7 +41,7 @@ export class FeedbackThreadEntity extends BaseEntity {
   @Column({ name: 'reporter_name', type: 'varchar', length: 200 })
   reporterName: string;
 
-  /** The reporter's primary role/context at submit time, e.g. 'OPERATIONS_MANAGER' or 'ASSAYER'. */
+  /** The reporter's primary role/context at submit time, e.g. 'OPERATIONS' or 'ASSAYER'. */
   @Column({ name: 'reporter_role', type: 'varchar', length: 64, nullable: true })
   reporterRole: string | null;
 

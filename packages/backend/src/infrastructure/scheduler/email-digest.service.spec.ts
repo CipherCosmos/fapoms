@@ -95,7 +95,7 @@ describe('EmailDigestService', () => {
       entryOverdue: bucket(2),
       submitOverdue: bucket(1),
     });
-    audience([{ id: 'u-1', email: 'head@x.in', role_name: 'DATA_ENTRY_HEAD' }]);
+    audience([{ id: 'u-1', email: 'head@x.in', role_name: 'DESK' }]);
 
     const result = await service.run();
 
@@ -113,8 +113,8 @@ describe('EmailDigestService', () => {
       resolutionOverdue: [],
     });
     audience([
-      { id: 'u-1', email: 'both@x.in', role_name: 'DATA_ENTRY_HEAD' },
-      { id: 'u-1', email: 'both@x.in', role_name: 'SUPER_ADMINISTRATOR' },
+      { id: 'u-1', email: 'both@x.in', role_name: 'DESK' },
+      { id: 'u-1', email: 'both@x.in', role_name: 'ADMIN' },
     ]);
 
     const result = await service.run();
@@ -132,8 +132,8 @@ describe('EmailDigestService', () => {
       resolutionOverdue: [],
     });
     audience([
-      { id: 'u-1', email: 'desk@x.in', role_name: 'VALIDATION_MANAGER' },
-      { id: 'u-2', email: 'support@x.in', role_name: 'SUPER_ADMINISTRATOR' },
+      { id: 'u-1', email: 'desk@x.in', role_name: 'DESK' },
+      { id: 'u-2', email: 'support@x.in', role_name: 'ADMIN' },
     ]);
 
     await service.run();
@@ -152,7 +152,7 @@ describe('EmailDigestService', () => {
       firstResponseOverdue: [{ id: 'f1', title: 'X', ageHours: 30 }],
       resolutionOverdue: [],
     });
-    audience([{ id: 'u-1', email: 'support@x.in', role_name: 'SUPER_ADMINISTRATOR' }]);
+    audience([{ id: 'u-1', email: 'support@x.in', role_name: 'ADMIN' }]);
 
     const result = await service.run();
 

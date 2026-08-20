@@ -153,7 +153,7 @@ export class BranchController {
   // -----------------------------------------------------------------------
 
   @Post()
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('branch:create:organization')
   @ApiOperation({ summary: 'Create a new branch' })
   async create(@Body() dto: CreateBranchRequestDto, @Req() req: any) {
@@ -198,7 +198,7 @@ export class BranchController {
   }
 
   @Put(':id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('branch:edit:organization')
   @ApiOperation({ summary: 'Update branch details' })
   async update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateBranchRequestDto, @Req() req: any) {
@@ -207,7 +207,7 @@ export class BranchController {
   }
 
   @Delete(':id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @RequirePermissions('branch:delete:organization')
   @ApiOperation({ summary: 'Soft delete branch' })
   async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
@@ -227,7 +227,7 @@ export class BranchController {
   }
 
   @Post(':id/contacts')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('branch:create:organization')
   @ApiOperation({ summary: 'Add branch contact' })
   async addContact(@Param('id', ParseUUIDPipe) id: string, @Body() dto: CreateContactRequestDto, @Req() req: any) {
@@ -236,7 +236,7 @@ export class BranchController {
   }
 
   @Put(':id/contacts/:contactId')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('branch:edit:organization')
   @ApiOperation({ summary: 'Update branch contact' })
   async updateContact(@Param('contactId', ParseUUIDPipe) contactId: string, @Body() dto: UpdateContactRequestDto, @Req() req: any) {
@@ -245,7 +245,7 @@ export class BranchController {
   }
 
   @Delete(':id/contacts/:contactId')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @RequirePermissions('branch:delete:organization')
   @ApiOperation({ summary: 'Remove branch contact' })
   async removeContact(@Param('contactId', ParseUUIDPipe) contactId: string, @Req() req: any) {
@@ -265,7 +265,7 @@ export class BranchController {
   }
 
   @Post(':id/documents')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('branch:create:organization')
   @ApiOperation({ summary: 'Add branch document' })
   async addDocument(@Param('id', ParseUUIDPipe) id: string, @Body() dto: CreateDocumentRequestDto, @Req() req: any) {
@@ -274,7 +274,7 @@ export class BranchController {
   }
 
   @Delete(':id/documents/:documentId')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @RequirePermissions('branch:delete:organization')
   @ApiOperation({ summary: 'Remove branch document' })
   async removeDocument(@Param('documentId', ParseUUIDPipe) documentId: string, @Req() req: any) {
@@ -287,7 +287,7 @@ export class BranchController {
   // -----------------------------------------------------------------------
 
   @Post('import/:clientId')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('branch:create:organization')
   @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')

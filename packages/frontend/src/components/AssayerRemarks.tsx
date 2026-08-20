@@ -45,23 +45,23 @@ const CATEGORY_LABEL: Record<Category, string> = {
 
 /** Mirrors REMARK_WRITE_ROLES on the backend — the desks that work with assayers. */
 const WRITE_ROLES: SystemRole[] = [
-  SystemRole.SUPER_ADMINISTRATOR,
-  SystemRole.ADMINISTRATOR,
-  SystemRole.HR_MANAGER,
-  SystemRole.OPERATIONS_MANAGER,
-  SystemRole.VALIDATION_MANAGER,
-  SystemRole.FINANCE_MANAGER,
-  SystemRole.OPERATIONS_EXECUTIVE,
-  SystemRole.VALIDATOR,
-  SystemRole.DATA_ENTRY_HEAD,
-  SystemRole.DOCUMENT_EXECUTIVE,
+  SystemRole.ADMIN,
+  SystemRole.ADMIN,
+  SystemRole.OPERATIONS,
+  SystemRole.OPERATIONS,
+  SystemRole.DESK,
+  SystemRole.OPERATIONS,
+  SystemRole.OPERATIONS,
+  SystemRole.DESK_OPERATOR,
+  SystemRole.DESK,
+  SystemRole.DESK,
 ];
 /** Mirrors REMARK_MODERATE_ROLES — may remove anyone's remark. Authors may always retract their own. */
 const MODERATE_ROLES: SystemRole[] = [
-  SystemRole.SUPER_ADMINISTRATOR,
-  SystemRole.ADMINISTRATOR,
-  SystemRole.HR_MANAGER,
-  SystemRole.OPERATIONS_MANAGER,
+  SystemRole.ADMIN,
+  SystemRole.ADMIN,
+  SystemRole.OPERATIONS,
+  SystemRole.OPERATIONS,
 ];
 
 const RATINGS: Array<{ value: number; label: string; hint: string }> = [

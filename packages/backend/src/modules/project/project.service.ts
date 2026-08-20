@@ -1481,7 +1481,7 @@ export class ProjectService implements OnModuleInit {
     return this.findProjectBranches(projectId);
   }
 
-  async startProjectPlanning(id: string, userId: string, role = SystemRole.SUPER_ADMINISTRATOR): Promise<ProjectEntity> {
+  async startProjectPlanning(id: string, userId: string, role = SystemRole.ADMIN): Promise<ProjectEntity> {
     const project = await this.findOne(id);
     const prev = project.status;
     const next = ProjectStatus.PLANNING;
@@ -1493,7 +1493,7 @@ export class ProjectService implements OnModuleInit {
       next,
       userId,
       role,
-      [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER],
+      [SystemRole.ADMIN, SystemRole.ADMIN, SystemRole.OPERATIONS],
       async () => {
         const event = ProjectStateMachine.startPlanning(project, userId);
         const saved = await this.projectRepository.save(project);
@@ -1503,7 +1503,7 @@ export class ProjectService implements OnModuleInit {
     );
   }
 
-  async readyProjectForScheduling(id: string, userId: string, role = SystemRole.SUPER_ADMINISTRATOR): Promise<ProjectEntity> {
+  async readyProjectForScheduling(id: string, userId: string, role = SystemRole.ADMIN): Promise<ProjectEntity> {
     const project = await this.findOne(id);
     const prev = project.status;
     const next = ProjectStatus.SCHEDULING;
@@ -1515,7 +1515,7 @@ export class ProjectService implements OnModuleInit {
       next,
       userId,
       role,
-      [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER],
+      [SystemRole.ADMIN, SystemRole.ADMIN, SystemRole.OPERATIONS],
       async () => {
         const event = ProjectStateMachine.readyForScheduling(project, userId);
         const saved = await this.projectRepository.save(project);
@@ -1525,7 +1525,7 @@ export class ProjectService implements OnModuleInit {
     );
   }
 
-  async startProjectExecution(id: string, userId: string, role = SystemRole.SUPER_ADMINISTRATOR): Promise<ProjectEntity> {
+  async startProjectExecution(id: string, userId: string, role = SystemRole.ADMIN): Promise<ProjectEntity> {
     const project = await this.findOne(id);
     const prev = project.status;
     const next = ProjectStatus.EXECUTION;
@@ -1537,7 +1537,7 @@ export class ProjectService implements OnModuleInit {
       next,
       userId,
       role,
-      [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER],
+      [SystemRole.ADMIN, SystemRole.ADMIN, SystemRole.OPERATIONS],
       async () => {
         const event = ProjectStateMachine.startExecution(project, userId);
         const saved = await this.projectRepository.save(project);
@@ -1547,7 +1547,7 @@ export class ProjectService implements OnModuleInit {
     );
   }
 
-  async startProjectValidation(id: string, userId: string, role = SystemRole.SUPER_ADMINISTRATOR): Promise<ProjectEntity> {
+  async startProjectValidation(id: string, userId: string, role = SystemRole.ADMIN): Promise<ProjectEntity> {
     const project = await this.findOne(id);
     const prev = project.status;
     const next = ProjectStatus.VALIDATION;
@@ -1559,7 +1559,7 @@ export class ProjectService implements OnModuleInit {
       next,
       userId,
       role,
-      [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER],
+      [SystemRole.ADMIN, SystemRole.ADMIN, SystemRole.OPERATIONS],
       async () => {
         const event = ProjectStateMachine.startValidation(project, userId);
         const saved = await this.projectRepository.save(project);
@@ -1569,7 +1569,7 @@ export class ProjectService implements OnModuleInit {
     );
   }
 
-  async completeProject(id: string, userId: string, role = SystemRole.SUPER_ADMINISTRATOR): Promise<ProjectEntity> {
+  async completeProject(id: string, userId: string, role = SystemRole.ADMIN): Promise<ProjectEntity> {
     const project = await this.findOne(id);
     const prev = project.status;
     const next = ProjectStatus.COMPLETED;
@@ -1581,7 +1581,7 @@ export class ProjectService implements OnModuleInit {
       next,
       userId,
       role,
-      [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER],
+      [SystemRole.ADMIN, SystemRole.ADMIN, SystemRole.OPERATIONS],
       async () => {
         const event = ProjectStateMachine.completeProject(project, userId);
         const saved = await this.projectRepository.save(project);
@@ -1591,7 +1591,7 @@ export class ProjectService implements OnModuleInit {
     );
   }
 
-  async cancelProject(id: string, userId: string, role = SystemRole.SUPER_ADMINISTRATOR): Promise<ProjectEntity> {
+  async cancelProject(id: string, userId: string, role = SystemRole.ADMIN): Promise<ProjectEntity> {
     const project = await this.findOne(id);
     const prev = project.status;
     const next = ProjectStatus.CANCELLED;
@@ -1603,7 +1603,7 @@ export class ProjectService implements OnModuleInit {
       next,
       userId,
       role,
-      [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER],
+      [SystemRole.ADMIN, SystemRole.ADMIN, SystemRole.OPERATIONS],
       async () => {
         const event = ProjectStateMachine.cancelProject(project, userId);
         const saved = await this.projectRepository.save(project);
@@ -1613,7 +1613,7 @@ export class ProjectService implements OnModuleInit {
     );
   }
 
-  async holdProject(id: string, userId: string, role = SystemRole.SUPER_ADMINISTRATOR): Promise<ProjectEntity> {
+  async holdProject(id: string, userId: string, role = SystemRole.ADMIN): Promise<ProjectEntity> {
     const project = await this.findOne(id);
     const prev = project.status;
     const next = ProjectStatus.ON_HOLD;
@@ -1625,7 +1625,7 @@ export class ProjectService implements OnModuleInit {
       next,
       userId,
       role,
-      [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER],
+      [SystemRole.ADMIN, SystemRole.ADMIN, SystemRole.OPERATIONS],
       async () => {
         const event = ProjectStateMachine.holdProject(project, userId);
         const saved = await this.projectRepository.save(project);
@@ -1635,7 +1635,7 @@ export class ProjectService implements OnModuleInit {
     );
   }
 
-  async archiveProject(id: string, userId: string, role = SystemRole.SUPER_ADMINISTRATOR): Promise<ProjectEntity> {
+  async archiveProject(id: string, userId: string, role = SystemRole.ADMIN): Promise<ProjectEntity> {
     const project = await this.findOne(id);
     const prev = project.status;
     const next = ProjectStatus.ARCHIVED;
@@ -1647,7 +1647,7 @@ export class ProjectService implements OnModuleInit {
       next,
       userId,
       role,
-      [SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER],
+      [SystemRole.ADMIN, SystemRole.ADMIN, SystemRole.OPERATIONS],
       async () => {
         const event = ProjectStateMachine.archiveProject(project, userId);
         const saved = await this.projectRepository.save(project);

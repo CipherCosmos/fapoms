@@ -69,7 +69,7 @@ export class ValidationController {
   // The data entry head validates and submits, per how this team actually
   // works — they were previously locked out of the pipeline stage that is their
   // own job.
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.DATA_ENTRY_HEAD)
+  @Roles(SystemRole.ADMIN, SystemRole.DESK)
   @RequirePermissions('validation:create:organization')
   @ApiOperation({ summary: 'Register a project branch for document validation' })
   async create(@Body() dto: CreateValidationCaseRequestDto, @Req() req: any) {
@@ -114,28 +114,28 @@ export class ValidationController {
 
   // Static paths before ':id', or the router parses "team" as a uuid and 400s.
   @Get('team')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.DATA_ENTRY_HEAD)
+  @Roles(SystemRole.ADMIN, SystemRole.DESK)
   @ApiOperation({ summary: 'People a validation review can be routed to' })
   async team() {
     return { success: true, data: await this.validationService.validationTeam() };
   }
 
   @Get('workload')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.DATA_ENTRY_HEAD)
+  @Roles(SystemRole.ADMIN, SystemRole.DESK)
   @ApiOperation({ summary: 'Per-member desk workload: open packets, reviews held, aging' })
   async workload() {
     return { success: true, data: await this.validationService.workload() };
   }
 
   @Get('activity')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.DATA_ENTRY_HEAD)
+  @Roles(SystemRole.ADMIN, SystemRole.DESK)
   @ApiOperation({ summary: 'Recent desk activity: assignments, hand-backs, decisions — who did what' })
   async activity(@Query('limit') limit?: number) {
     return { success: true, data: await this.validationService.activity(limit) };
   }
 
   @Get('attention')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.DATA_ENTRY_HEAD)
+  @Roles(SystemRole.ADMIN, SystemRole.DESK)
   @ApiOperation({ summary: "The desk's SLA breaches, bucketed: what the head must unstick right now" })
   async attention() {
     return { success: true, data: await this.deskEscalation.attention() };
@@ -158,7 +158,7 @@ export class ValidationController {
   }
 
   @Post(':id/assign')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.DATA_ENTRY_HEAD)
+  @Roles(SystemRole.ADMIN, SystemRole.DESK)
   @ApiOperation({ summary: 'Assign a validation case to a validator reviewer' })
   async assign(
     @Param('id', ParseUUIDPipe) id: string,
@@ -173,7 +173,7 @@ export class ValidationController {
   }
 
   @Post('bulk/transition')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.DATA_ENTRY_HEAD)
+  @Roles(SystemRole.ADMIN, SystemRole.DESK)
   @ApiOperation({ summary: 'Transition a batch of validation cases to a target status' })
   async bulkTransition(
     @Body() dto: BulkTransitionValidationCaseDto,
@@ -184,7 +184,7 @@ export class ValidationController {
   }
 
   @Post(':id/transition')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.VALIDATION_MANAGER, SystemRole.DATA_ENTRY_HEAD)
+  @Roles(SystemRole.ADMIN, SystemRole.DESK)
   @ApiOperation({ summary: 'Transition validation case status' })
   async transition(
     @Param('id', ParseUUIDPipe) id: string,

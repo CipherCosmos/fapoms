@@ -66,7 +66,7 @@ export class OrganizationController {
 
   @Post()
   @HttpCode(201)
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @RequirePermissions('organization:create:organization')
   @ApiOperation({ summary: 'Create a new organization' })
   async create(@Body() dto: CreateOrganizationRequestDto, @Req() req: any) {
@@ -95,7 +95,7 @@ export class OrganizationController {
   }
 
   @Put(':id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @RequirePermissions('organization:edit:organization')
   @ApiOperation({ summary: 'Update an organization' })
   async update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateOrganizationRequestDto, @Req() req: any) {
@@ -105,7 +105,7 @@ export class OrganizationController {
 
   @Delete(':id')
   @HttpCode(204)
-  @Roles(SystemRole.SUPER_ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @RequirePermissions('organization:delete:organization')
   @ApiOperation({ summary: 'Soft delete an organization' })
   async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any): Promise<void> {

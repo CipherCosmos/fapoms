@@ -572,7 +572,7 @@ export const DirectoryPanel: React.FC = () => {
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', maxHeight: '180px', overflowY: 'auto', background: 'var(--bg-secondary)', padding: '12px', borderRadius: 'var(--radius-md)', border: '1px solid var(--border-color)' }}>
                     {roles.map((r) => {
                       const isChecked = editRoleIds.includes(r.id);
-                      const lockedSelfAdmin = editingSelf && r.name === 'SUPER_ADMINISTRATOR' && isChecked;
+                      const lockedSelfAdmin = editingSelf && r.name === 'ADMIN' && isChecked;
                       return (
                         <label key={r.id} style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13px', cursor: lockedSelfAdmin ? 'not-allowed' : 'pointer', opacity: lockedSelfAdmin ? 0.6 : 1 }}
                           title={lockedSelfAdmin ? 'You cannot remove your own Super Administrator role' : undefined}>

@@ -154,7 +154,7 @@ export class PlanningController {
    */
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Get('projects/:projectId/coverage-plan')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Generate detailed coverage planning statistics, capacity analysis, and cluster plans' })
   async getProjectCoveragePlan(
     @Param('projectId', ParseUUIDPipe) projectId: string,
@@ -186,7 +186,7 @@ export class PlanningController {
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('projects/:projectId/coverage-plan/jobs')
   @HttpCode(HttpStatus.ACCEPTED)
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Queue coverage plan generation; returns a job id to poll' })
   async queueProjectCoveragePlan(
     @Param('projectId', ParseUUIDPipe) projectId: string,
@@ -202,7 +202,7 @@ export class PlanningController {
   }
 
   @Post('projects/:projectId/coverage-plan')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Create or regenerate coverage plan version with manual overrides' })
   async createOrRegeneratePlan(
@@ -218,7 +218,7 @@ export class PlanningController {
   }
 
   @Put('coverage-plans/:planId/transition')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('planning:edit:organization')
   @ApiOperation({ summary: 'Transition coverage plan lifecycle status (e.g. DRAFT to APPROVED)' })
   async transitionPlan(
@@ -237,7 +237,7 @@ export class PlanningController {
   // Engine-heavy and write-heavy (spawns assignments across a whole project). Capped
   // well below the global default so one caller cannot pin the CPU with repeated runs.
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Deploy approved plan and automatically spawn operational assignments' })
   async executePlan(
@@ -269,7 +269,7 @@ export class PlanningController {
   /** Same shape of work as the coverage plan: the engine, once per unassigned branch. */
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Get('projects/:projectId/candidates')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Retrieve candidates for all unassigned branches of a project' })
   async getProjectCandidates(
     @Param('projectId', ParseUUIDPipe) projectId: string,
@@ -290,7 +290,7 @@ export class PlanningController {
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('projects/:projectId/candidates/jobs')
   @HttpCode(HttpStatus.ACCEPTED)
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Queue the project-wide candidates report; returns a job id to poll' })
   async queueProjectCandidates(
     @Param('projectId', ParseUUIDPipe) projectId: string,
@@ -305,7 +305,7 @@ export class PlanningController {
   // Runs the scoring engine across every branch × candidate for a project — the most
   // CPU-intensive endpoint in the system. Tightly throttled.
   @Throttle({ default: { limit: 6, ttl: 60_000 } })
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Generate optimized project-wide assayer matching and routing deployment plan' })
   async optimizeProjectDeployment(@Param('projectId', ParseUUIDPipe) projectId: string) {
@@ -320,7 +320,7 @@ export class PlanningController {
   // What-if simulation runs the full optimizer without persisting; heavy CPU, so it
   // gets the same tight budget as optimize.
   @Throttle({ default: { limit: 6, ttl: 60_000 } })
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Simulate planning scenario with weight and config overrides without mutating database' })
   async simulateScenario(
@@ -334,7 +334,7 @@ export class PlanningController {
   }
 
   @Get('command-center')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE, SystemRole.FINANCE_MANAGER, SystemRole.READ_ONLY_AUDITOR)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR)
   @ApiOperation({ summary: 'Executive geographic intelligence: coverage, capacity, workload and value by territory' })
   async commandCenter(@GlobalScopeFilter() scope: GlobalScope) {
     // Takes the whole global scope now — the map is the surface where an operator most expects
@@ -343,7 +343,7 @@ export class PlanningController {
   }
 
   @Get('suggest-date')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Suggest the first workable audit date for a branch (skips Sundays, holidays, off Saturdays)' })
   async suggestAuditDate(
     @Query('branchId', ParseUUIDPipe) branchId: string,
@@ -354,7 +354,7 @@ export class PlanningController {
   }
 
   @Get('recommendations')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Retrieve and rank candidate assayers for a branch, for a given audit date' })
   async getRecommendations(
     @Query('branchId', ParseUUIDPipe) branchId: string,
@@ -407,7 +407,7 @@ export class PlanningController {
    */
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Get('day-plans')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Generate day plans spanning several projects, so one assayer can cover nearby branches across engagements' })
   async getMultiProjectDayPlans(
     @Query('projectIds') projectIds: string,
@@ -455,7 +455,7 @@ export class PlanningController {
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('day-plans/jobs')
   @HttpCode(HttpStatus.ACCEPTED)
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Queue multi-project day plan generation; returns a job id to poll' })
   async queueMultiProjectDayPlans(
     @Query('projectIds') projectIds: string,
@@ -477,7 +477,7 @@ export class PlanningController {
   /** Clustering plus the engine per branch per cluster, then a route optimisation per plan. */
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Get('projects/:projectId/day-plans')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Generate multi-branch day plans grouping nearby branches for single assayer coverage' })
   async getDayPlans(
     @Param('projectId', ParseUUIDPipe) projectId: string,
@@ -503,7 +503,7 @@ export class PlanningController {
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('projects/:projectId/day-plans/jobs')
   @HttpCode(HttpStatus.ACCEPTED)
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Queue day plan generation for one project; returns a job id to poll' })
   async queueDayPlans(
     @Param('projectId', ParseUUIDPipe) projectId: string,
@@ -537,7 +537,7 @@ export class PlanningController {
    * poll is one Redis read; throttling it would break the very clients this exists to serve.
    */
   @Get('jobs/:jobId')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Poll a queued planning job for progress and, once done, its result' })
   async getPlanningJob(@Param('jobId') jobId: string, @Req() req: any) {
     return { success: true, data: await this.planningJobsService.status(jobId, req.user?.id) };
@@ -545,7 +545,7 @@ export class PlanningController {
 
   // Rule Engine Management REST Endpoints
   @Post('rules')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Create a new business planning rule' })
   async createRule(@Body() dto: CreateBusinessRuleRequestDto, @Req() req: any) {
@@ -557,7 +557,7 @@ export class PlanningController {
   }
 
   @Put('rules/:id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('planning:edit:organization')
   @ApiOperation({ summary: 'Update a business planning rule by ID' })
   async updateRule(
@@ -573,7 +573,7 @@ export class PlanningController {
   }
 
   @Delete('rules/:id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @RequirePermissions('planning:delete:organization')
   @ApiOperation({ summary: 'Soft delete/disable a business planning rule' })
   async deleteRule(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {

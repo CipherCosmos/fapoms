@@ -23,12 +23,12 @@ export class SystemDashboardController {
   // caller's roles allow, so restricting the route as well would only lock people
   // out of their own view (the validator role was 403'd by exactly that).
   @Roles(
-    SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR,
-    SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE,
-    SystemRole.FINANCE_MANAGER, SystemRole.HR_MANAGER,
-    SystemRole.VALIDATION_MANAGER, SystemRole.VALIDATOR,
-    SystemRole.DOCUMENT_EXECUTIVE, SystemRole.DATA_ENTRY_HEAD,
-    SystemRole.READ_ONLY_AUDITOR, SystemRole.CLIENT_USER,
+    SystemRole.ADMIN,
+    SystemRole.OPERATIONS,
+    SystemRole.DESK,
+    SystemRole.DESK_OPERATOR,
+    SystemRole.AUDITOR,
+    SystemRole.CLIENT_USER,
   )
   @ApiOperation({ summary: "Role-scoped operational snapshot: only the sections the caller's roles include" })
   async getOperations(@Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
@@ -40,7 +40,7 @@ export class SystemDashboardController {
   }
 
   @Get('metrics')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Retrieve live aggregated system counts and event history metrics' })
   async getMetrics(@GlobalScopeFilter() scope?: GlobalScope) {
     // Branch counts are territorial and follow the caller's region assignment; clients and

@@ -27,46 +27,33 @@ export class OperationsSnapshotService {
   /**
    * Which sections a role is shown.
    *
-   * Everyone was previously given the same page regardless of what they do, so a
-   * validator opened a screen about branch coverage and a finance manager one
-   * about paperwork dispatch. Sections are declared per role and the payload only
-   * carries what the viewer's roles actually include — the dashboard is not a
+   * Everyone was previously given the same page regardless of what they do, so someone typing
+   * up a packet opened a screen about branch coverage. Sections are declared per role and the
+   * payload only carries what the viewer's roles actually include — the dashboard is not a
    * place to render blocks the reader has no authority to act on.
    */
   private static readonly ROLE_SECTIONS: Record<string, string[]> = {
-    SUPER_ADMINISTRATOR:  ['attention', 'due', 'funnel', 'capacity', 'documents', 'money', 'projects', 'validation', 'activity'],
-    ADMINISTRATOR:        ['attention', 'due', 'funnel', 'capacity', 'documents', 'money', 'projects', 'validation', 'activity'],
-    // Runs the book: coverage, capacity and what is at risk this week.
-    OPERATIONS_MANAGER:   ['attention', 'due', 'funnel', 'capacity', 'documents', 'projects', 'activity'],
-    // Works the queues rather than steering the book — no money, no portfolio view.
-    OPERATIONS_EXECUTIVE: ['attention', 'due', 'funnel', 'documents'],
-    FINANCE_MANAGER:      ['money', 'projects', 'activity'],
-    // HR steer people, not the audit book: capacity tells them whether the
-    // workforce can absorb the work, activity gives them the audit trail. The
-    // detail lives in the dedicated workforce console at /hr.
-    HR_MANAGER:           ['capacity', 'activity'],
-    DOCUMENT_EXECUTIVE:   ['documents', 'due'],
-    DATA_ENTRY_HEAD:      ['documents'],
-    VALIDATION_MANAGER:   ['validation', 'documents', 'activity'],
-    VALIDATOR:            ['validation'],
-    READ_ONLY_AUDITOR:    ['funnel', 'projects', 'activity'],
-    CLIENT_USER:          ['projects'],
+    ADMIN:          ['attention', 'due', 'funnel', 'capacity', 'documents', 'money', 'projects', 'validation', 'activity'],
+    // Runs the book, and now the money and the workforce with it: coverage, capacity, what is
+    // at risk this week, and what is owed. This is the union of what the four roles it replaced
+    // were shown, which is the point — one person is doing all four jobs.
+    OPERATIONS:     ['attention', 'due', 'funnel', 'capacity', 'documents', 'money', 'projects', 'activity'],
+    // The whole paperwork pipeline, both halves: what is going out and what has come back.
+    DESK:           ['documents', 'due', 'validation', 'activity'],
+    // Their own share of it, and nothing about how the desk is doing overall.
+    DESK_OPERATOR:  ['validation'],
+    AUDITOR:        ['funnel', 'projects', 'activity'],
+    CLIENT_USER:    ['projects'],
   };
 
   /** Headline shown at the top, so the page states whose view it is. */
   private static readonly ROLE_FOCUS: Record<string, string> = {
-    SUPER_ADMINISTRATOR:  'Full operational picture',
-    ADMINISTRATOR:        'Full operational picture',
-    OPERATIONS_MANAGER:   'Coverage, capacity and delivery risk',
-    OPERATIONS_EXECUTIVE: 'Your queues for today',
-    FINANCE_MANAGER:      'Billing, collections and margin',
-    HR_MANAGER:           'Workforce readiness, compliance and staffing gaps',
-    DOCUMENT_EXECUTIVE:   'Paperwork in and out',
-    DATA_ENTRY_HEAD:      'Returned paperwork awaiting processing',
-    VALIDATION_MANAGER:   'Validation throughput and open queries',
-    VALIDATOR:            'Your validation queue',
-    READ_ONLY_AUDITOR:    'Read-only overview',
-    CLIENT_USER:          'Your audit programme',
+    ADMIN:          'Full operational picture',
+    OPERATIONS:     'Coverage, capacity, delivery risk and what is owed',
+    DESK:           'Paperwork in, paperwork out, and what is waiting',
+    DESK_OPERATOR:  'Your queue',
+    AUDITOR:        'Read-only overview',
+    CLIENT_USER:    'Your audit programme',
   };
 
   /**
@@ -87,13 +74,13 @@ export class OperationsSnapshotService {
     // the read-only set rather than being shown nothing at all.
     const sections = new Set<string>();
     for (const r of roles) {
-      (OperationsSnapshotService.ROLE_SECTIONS[r] ?? OperationsSnapshotService.ROLE_SECTIONS.READ_ONLY_AUDITOR)
+      (OperationsSnapshotService.ROLE_SECTIONS[r] ?? OperationsSnapshotService.ROLE_SECTIONS.AUDITOR)
         .forEach((s) => sections.add(s));
     }
-    if (sections.size === 0) OperationsSnapshotService.ROLE_SECTIONS.READ_ONLY_AUDITOR.forEach((s) => sections.add(s));
+    if (sections.size === 0) OperationsSnapshotService.ROLE_SECTIONS.AUDITOR.forEach((s) => sections.add(s));
 
     const focus = roles.map((r) => OperationsSnapshotService.ROLE_FOCUS[r]).find(Boolean)
-      ?? OperationsSnapshotService.ROLE_FOCUS.READ_ONLY_AUDITOR;
+      ?? OperationsSnapshotService.ROLE_FOCUS.AUDITOR;
 
     const n = (v: any) => Number(v ?? 0);
 

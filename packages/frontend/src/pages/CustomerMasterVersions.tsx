@@ -17,9 +17,9 @@ import {
 } from '../services/customer-master';
 
 const APPROVER_ROLES = [
-  SystemRole.SUPER_ADMINISTRATOR,
-  SystemRole.ADMINISTRATOR,
-  SystemRole.OPERATIONS_MANAGER,
+  SystemRole.ADMIN,
+  SystemRole.ADMIN,
+  SystemRole.OPERATIONS,
 ];
 const RECORDS_PAGE_SIZE = 50;
 

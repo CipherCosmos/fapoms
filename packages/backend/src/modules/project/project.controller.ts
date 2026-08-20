@@ -146,7 +146,7 @@ export class ProjectController {
   ) {}
 
   @Post()
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('project:create:organization')
   @ApiOperation({ summary: 'Create a new project linked to a client institution' })
   async create(@Body() dto: CreateProjectRequestDto, @Req() req: any) {
@@ -191,7 +191,7 @@ export class ProjectController {
   }
 
   @Put(':id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('project:edit:organization')
   @ApiOperation({ summary: 'Update project details' })
   async update(
@@ -210,7 +210,7 @@ export class ProjectController {
   // to change one field and produced a generic "updated" audit entry. This states
   // the intent, validates against the state machine, and records why.
   @Post(':id/transition')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('project:edit:organization')
   @ApiOperation({ summary: 'Move a project to another lifecycle status' })
   async transition(
@@ -223,7 +223,7 @@ export class ProjectController {
   }
 
   @Delete(':id')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR)
+  @Roles(SystemRole.ADMIN)
   @RequirePermissions('project:delete:organization')
   @ApiOperation({ summary: 'Soft delete a project' })
   async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
@@ -256,7 +256,7 @@ export class ProjectController {
   // Declaring a branch unstaffable is an operational decision with client-SLA consequences,
   // so it sits with the roles that own coverage — not with everyone who can read the book.
   @Post('branches/:projectBranchId/unable-to-cover')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Record that a branch cannot be staffed, with a reason' })
   async markBranchUnableToCover(
     @Param('projectBranchId', ParseUUIDPipe) projectBranchId: string,
@@ -270,7 +270,7 @@ export class ProjectController {
   }
 
   @Post('branches/:projectBranchId/reopen-coverage')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER, SystemRole.OPERATIONS_EXECUTIVE)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Return an uncoverable branch to the planning pool' })
   async reopenBranchCoverage(
     @Param('projectBranchId', ParseUUIDPipe) projectBranchId: string,
@@ -365,7 +365,7 @@ export class ProjectController {
   }
 
   @Post(':id/branches')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('project:create:organization')
   @ApiOperation({ summary: 'Associate branches with a project' })
   async associateBranches(
@@ -406,7 +406,7 @@ export class ProjectController {
    * knows to poll `GET /projects/:id/branches/import-jobs/:jobId`.
    */
   @Post(':id/branches/upload')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('project:create:organization')
   @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
   @ApiOperation({ summary: 'Upload branches from Excel spreadsheet; large files are queued and return 202 with a job id' })
@@ -493,7 +493,7 @@ export class ProjectController {
    * Same roles as the upload itself: whoever may start an import may read what it did.
    */
   @Get(':id/branches/import-jobs/:jobId')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('project:create:organization')
   @ApiOperation({ summary: 'State, progress and result of a queued branch import' })
   async getBranchImportJob(
@@ -509,7 +509,7 @@ export class ProjectController {
   }
 
   @Get(':id/branches/template')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Download Excel template for branch data entry' })
   async downloadTemplate(@Param('id', ParseUUIDPipe) id: string, @Res() res: Response) {
     const buffer = await this.projectService.generateBranchTemplate(id);
@@ -522,7 +522,7 @@ export class ProjectController {
   }
 
   @Delete(':id/branches/:pbId')
-  @Roles(SystemRole.SUPER_ADMINISTRATOR, SystemRole.ADMINISTRATOR, SystemRole.OPERATIONS_MANAGER)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('project:delete:organization')
   @ApiOperation({ summary: 'Remove a branch association from a project' })
   async removeBranch(

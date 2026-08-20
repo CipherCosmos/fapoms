@@ -1033,7 +1033,7 @@ const mockNotificationService = {
 
     it('lets an operations manager check in on an assayer behalf', async () => {
       mockAssignmentRepo.findOne.mockResolvedValue(acceptedAssignment());
-      mockUserRepoViaDataSource.findOne.mockResolvedValue({ id: 'ops-1', roles: [{ name: 'OPERATIONS_MANAGER' }] });
+      mockUserRepoViaDataSource.findOne.mockResolvedValue({ id: 'ops-1', roles: [{ name: 'OPERATIONS' }] });
       mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
 
       const res = await service.recordCheckIn('asn-1', 12.97, 77.59, undefined, 'ops-1');
@@ -1081,7 +1081,7 @@ const mockNotificationService = {
       // case that must pass — and the anomalous distance stays on the row as evidence.
       const assignment = acceptedAssignment();
       mockAssignmentRepo.findOne.mockResolvedValue(assignment);
-      mockUserRepoViaDataSource.findOne.mockResolvedValue({ id: 'ops-1', roles: [{ name: 'OPERATIONS_MANAGER' }] });
+      mockUserRepoViaDataSource.findOne.mockResolvedValue({ id: 'ops-1', roles: [{ name: 'OPERATIONS' }] });
       mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
 
       const res = await service.recordCheckIn('asn-1', 28.6315, 77.2167, undefined, 'ops-1');
