@@ -11,9 +11,10 @@ import { useToast, Select, useConfirm } from '../../components/ui';
 import {
   SectionCard, SettingRow, Toggle, Pill, controlStyle,
 } from '../../components/ui/settings';
-import { useCurrentRoles, canAdministerPlatformSettings, canAdministerDataReset, canManagePlanningRules } from '../../hooks/useCurrentRoles';
+import { useCurrentRoles, canAdministerPlatformSettings, canAdministerDataReset, canManagePlanningRules, canReadTravelSettings } from '../../hooks/useCurrentRoles';
 import { DangerZoneSection } from './DangerZone/DangerZoneSection';
 import { RulesSection } from '../Rules';
+import { TransportCostsSection } from '../TransportCosts';
 
 /**
  * Client-side-only nav entry — the data-reset domains have no corresponding "setting group" on
@@ -101,6 +102,7 @@ export const PlatformSettings: React.FC = () => {
    * administrator-only.
    */
   const canManageRules = canManagePlanningRules(roles);
+  const canSeeTravel = canReadTravelSettings(roles);
   const settingsAdmin = canAdministerPlatformSettings(roles);
   const queryClient = useQueryClient();
   const { toast } = useToast();
@@ -114,9 +116,6 @@ export const PlatformSettings: React.FC = () => {
    * on email delivery and letting them hunt.
    */
   const [searchParams, setSearchParams] = useSearchParams();
-  // Operations only ever see the rules section, so that is where they land rather than on a
-  // group they cannot open.
-  const activeGroup = searchParams.get('group') || (settingsAdmin ? 'email' : 'rules');
   const setActiveGroup = (key: string) => {
     setSearchParams((prev) => {
       const next = new URLSearchParams(prev);
@@ -145,8 +144,15 @@ export const PlatformSettings: React.FC = () => {
    * may — and they were previously on two different screens under two different nav headings.
    */
   const groups = useMemo(() => {
-    if (!settingsAdmin) return canManageRules ? [RULES_GROUP] : [];
     const fromServer = payload?.groups ?? [];
+    if (!settingsAdmin) {
+      // Everyone else reaches only the sections their own permission covers.
+      const travel = fromServer.filter((g) => g.key === 'transport');
+      return [
+        ...(canManageRules ? [RULES_GROUP] : []),
+        ...(canSeeTravel ? travel : []),
+      ];
+    }
     /**
      * Planning has no nav entry of its own: its one setting — how many offers before someone
      * counts as well used — is a scoring rule, and it sat on a separate heading from the rules
@@ -157,8 +163,20 @@ export const PlatformSettings: React.FC = () => {
     const at = planningAt === -1 ? withoutPlanning.length : planningAt;
     const withRules = [...withoutPlanning.slice(0, at), RULES_GROUP, ...withoutPlanning.slice(at)];
     return [...withRules, ...(canWipeData ? [DANGER_ZONE_GROUP] : [])];
-  }, [payload, canWipeData, settingsAdmin, canManageRules]);
+  }, [payload, canWipeData, settingsAdmin, canManageRules, canSeeTravel]);
   const settings = useMemo(() => payload?.settings ?? [], [payload]);
+
+  /**
+   * The open section, clamped to what this account may actually see.
+   *
+   * Operations reach only the rules section and auditors only the travel one, so a bare
+   * `/admin/settings` — or a stale link naming a section they cannot open — lands them on their
+   * first available section rather than on an empty panel.
+   */
+  const requested = searchParams.get('group');
+  const activeGroup = requested && groups.some((g) => g.key === requested)
+    ? requested
+    : (groups[0]?.key ?? 'email');
 
   const { data: emailStatusRes } = useQuery({
     queryKey: ['notification-admin', 'email-status'],
@@ -506,6 +524,17 @@ export const PlatformSettings: React.FC = () => {
               settingRows(inGroup)
             )}
           </SectionCard>
+          )}
+
+          {activeGroup === 'transport' && (
+            <SectionCard
+              title="What travel costs"
+              description="The rate card the dials above read. Offers quote their travel from these rates — the most specific scope wins."
+            >
+              <div style={{ padding: '16px' }}>
+                <TransportCostsSection />
+              </div>
+            </SectionCard>
           )}
 
           {activeGroup === 'fees' && (

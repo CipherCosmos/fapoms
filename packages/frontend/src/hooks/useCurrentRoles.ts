@@ -116,6 +116,20 @@ export function canManagePlanningRules(roles: SystemRole[]): boolean {
 }
 
 /**
+ * The travel section of Platform Settings — the rate card and the dials that read it.
+ *
+ * Auditors could read the rate card when it was a page of its own; they negotiate and check
+ * offers against those numbers. Folding it into Platform Settings must not quietly take that
+ * away, so they reach this section and nothing else on the screen. Managing the rates is still
+ * `canManageTransportRates`, which the section applies itself.
+ */
+export function canReadTravelSettings(roles: SystemRole[]): boolean {
+  return roles.includes(SystemRole.ADMIN)
+    || roles.includes(SystemRole.OPERATIONS)
+    || roles.includes(SystemRole.AUDITOR);
+}
+
+/**
  * Transport rates price the travel in every offer. Operations own them — the finance role that
  * used to share this folded into OPERATIONS. Mirrors RATE_MANAGER_ROLES on the backend.
  */

@@ -14,7 +14,7 @@ import {
   Users,
   Building2,
   Receipt,
-  UserCog, Inbox, MessageSquare, Bus, BellRing, SlidersHorizontal, AlertTriangle } from 'lucide-react';
+  UserCog, Inbox, MessageSquare, BellRing, SlidersHorizontal, AlertTriangle } from 'lucide-react';
 import { GlobalSearch } from './GlobalSearch';
 import { canAccessRoute } from '../config/route-permissions';
 import { WORK_TABS } from '../pages/work/workTabs';
@@ -99,7 +99,6 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
       items: [
         { name: 'Holiday Calendar', path: '/holidays', icon: CalendarDays },
         { name: 'Service Areas', path: '/zones', icon: Map },
-        { name: 'Transport Costs', path: '/transport-costs', icon: Bus },
         // "Business Rules" pointed at /rules, a second screen for changing how the system
         // behaves sitting under a different nav heading from Platform Settings — so the
         // question "where do I change X" had two answers and nothing to choose between them.

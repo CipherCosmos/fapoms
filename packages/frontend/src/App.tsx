@@ -42,7 +42,6 @@ const AssayerStatementPage = React.lazy(() => import('./pages/billing/AssayerSta
 const Notifications = React.lazy(() => import('./pages/Notifications'));
 const FeedbackPage = React.lazy(() => import('./pages/feedback/FeedbackPage').then((m) => ({ default: m.FeedbackPage })));
 const Holidays = React.lazy(() => import('./pages/Holidays'));
-const TransportCosts = React.lazy(() => import('./pages/TransportCosts'));
 const NotificationAdmin = React.lazy(() => import('./pages/admin/NotificationAdmin'));
 const PlatformSettings = React.lazy(() => import('./pages/admin/PlatformSettings'));
 const Zones = React.lazy(() => import('./pages/Zones'));
@@ -379,7 +378,8 @@ export const App: React.FC = () => {
           {/* Eligibility rules are a section of Platform Settings now; keep the old path working. */}
           <Route path="/rules" element={<Navigate to="/admin/settings?group=rules" replace />} />
           <Route path="/holidays" element={<Holidays />} />
-          <Route path="/transport-costs" element={<TransportCosts />} />
+          {/* Travel costs live beside the dials that read them, in Platform Settings. */}
+          <Route path="/transport-costs" element={<Navigate to="/admin/settings?group=transport" replace />} />
           <Route path="/admin/notifications" element={<NotificationAdmin />} />
           <Route path="/admin/settings" element={<PlatformSettings />} />
           <Route path="/zones" element={<Zones />} />

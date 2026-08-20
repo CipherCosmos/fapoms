@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Bus, Plus, Edit2, Archive, Calculator, Info, Star } from 'lucide-react';
+import { Plus, Edit2, Archive, Calculator, Info, Star } from 'lucide-react';
 import {
   TravelMode,
   TRAVEL_MODE_ORDER,
@@ -89,7 +89,17 @@ const emptyForm = {
   notes: '',
 };
 
-export const TransportCosts: React.FC = () => {
+/**
+ * What travel costs, and how the recommended way to travel is chosen.
+ *
+ * This was a page at `/transport-costs` while the speeds each mode is assumed to do, the
+ * distances at which a mode is ruled out, and the weighting of cost against time all lived in
+ * Platform Settings under "Transport recommendation". One subject, two screens, in two
+ * different nav headings, neither mentioning the other — so "change how travel is worked out"
+ * had two answers. It is one section of Platform Settings now, with the rate card and the
+ * dials that read it on the same screen.
+ */
+export const TransportCostsSection: React.FC = () => {
   const canManage = canManageTransportRates(useCurrentRoles());
   const queryClient = useQueryClient();
 
@@ -296,15 +306,8 @@ export const TransportCosts: React.FC = () => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
       {confirmDialog}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
-        <div>
-          <h2 style={{ fontSize: '20px', fontWeight: 700, margin: 0, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Bus style={{ color: 'var(--accent)' }} /> Transport Costs
-          </h2>
-          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            What travel costs by each mode, per place. Offers quote their travel from these rates — the most specific scope wins.
-          </span>
-        </div>
+      {/* The section card above carries the heading and the description; this row is the controls. */}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', color: 'var(--text-muted)', cursor: 'pointer' }}>
             <input type="checkbox" checked={showRetired} onChange={(e) => setShowRetired(e.target.checked)} />
@@ -610,4 +613,4 @@ export const TransportCosts: React.FC = () => {
   );
 };
 
-export default TransportCosts;
+export default TransportCostsSection;

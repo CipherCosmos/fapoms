@@ -113,9 +113,9 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     ],
   },
   {
-    // The transport rate card behind offer travel recommendations. Executives read it (they
-    // negotiate on the phone against these numbers); managing is gated by
-    // canManageTransportRates() — ops + finance, mirroring the backend controller.
+    // Now a redirect into Platform Settings' travel section, which holds the rate card and the
+    // dials that read it. Kept permitted so old links land where the page moved. Managing the
+    // rates is still gated by canManageTransportRates().
     path: '/transport-costs',
     allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR],
   },
@@ -123,11 +123,12 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     // Platform configuration — super administrators only, by decision (2026-08-17; see
     // /feedback above). Wider staff used to be able to read it; the backend
     // PlatformSettingsController now admits the same single role, so the page and the API agree.
-    // OPERATIONS reach exactly one section of it — the eligibility rules folded in from the old
-    // `/rules` page, which they own and hold the write permission for. The page itself shows
-    // them nothing else; see canManagePlanningRules.
+    // Two other roles reach one section each and see nothing else on the page: OPERATIONS the
+    // eligibility rules folded in from `/rules`, which they own and hold the write permission
+    // for, and AUDITOR the travel rate card folded in from `/transport-costs`, which they could
+    // always read. See canManagePlanningRules and canReadTravelSettings.
     path: '/admin/settings',
-    allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS],
+    allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR],
   },
   {
     // Which events the platform raises, to whom, on what channels — super administrators only,

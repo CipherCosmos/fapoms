@@ -4,6 +4,7 @@ import { SystemRole } from '@fapoms/shared';
 import {
   canManageAssayers, canManageBranches, canManageProjects, canDeleteProjects,
   canManageTransportRates, canAdministerPlatformSettings, canManagePlanningRules,
+  canReadTravelSettings,
 } from '../hooks/useCurrentRoles';
 
 /**
@@ -57,5 +58,39 @@ describe('role lists', () => {
     // The whole point of folding /rules into Platform Settings without widening it.
     expect(canManagePlanningRules([SystemRole.OPERATIONS])).toBe(true);
     expect(canAdministerPlatformSettings([SystemRole.OPERATIONS])).toBe(false);
+  });
+});
+
+/**
+ * Folding a page into Platform Settings must not change who can reach it.
+ *
+ * Two pages moved in: `/rules`, which Operations owned, and `/transport-costs`, which Auditors
+ * could read. Platform Settings itself is administrator-only and stays that way, so both would
+ * have lost their feature to the move. Each reaches its own section and nothing else.
+ */
+describe('sections folded into Platform Settings', () => {
+  const only = (can: (r: SystemRole[]) => boolean) =>
+    Object.values(SystemRole).filter((r) => can([r]));
+
+  it('keeps eligibility rules with the roles that owned them', () => {
+    expect(only(canManagePlanningRules).sort()).toEqual([SystemRole.ADMIN, SystemRole.OPERATIONS].sort());
+  });
+
+  it('keeps the travel rate card readable by the roles that could read it', () => {
+    expect(only(canReadTravelSettings).sort())
+      .toEqual([SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR].sort());
+  });
+
+  it('does not widen Platform Settings itself to either of them', () => {
+    for (const role of [SystemRole.OPERATIONS, SystemRole.AUDITOR]) {
+      expect(canAdministerPlatformSettings([role])).toBe(false);
+    }
+  });
+
+  it('leaves every other role out of both sections', () => {
+    for (const role of [SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.ASSAYER, SystemRole.CLIENT_USER, SystemRole.PRODUCT_SUPPORT]) {
+      expect({ role, rules: canManagePlanningRules([role]), travel: canReadTravelSettings([role]) })
+        .toEqual({ role, rules: false, travel: false });
+    }
   });
 });
