@@ -79,6 +79,64 @@ export function scopeAssayerListForRoles<T extends Record<string, any>>(
 }
 
 /**
+ * Strip assayer identity and banking from a whole response, wherever they appear in it.
+ *
+ * `scopeAssayerForRoles` guards the four assayer routes. It guarded nothing else, and the
+ * assayer record is joined into a great deal: schedules, assignments, the operations inbox,
+ * documents, clarification threads. `pan_number` and `bank_account_number` decrypt on entity
+ * load through a column transformer, so every one of those joins returned them in clear — to
+ * DESK, DESK_OPERATOR and AUDITOR, the exact roles the comment at the top of this file says
+ * must not see them. The front door was locked and the side windows were open.
+ *
+ * Rather than remember to redact at each of a dozen call sites, this walks the payload and
+ * applies the same policy to anything that *is* an assayer — identified by carrying both an
+ * `id` and an `assayerCode`, so it works however deeply the relation is nested and whatever
+ * the property is called. A payload with no assayer in it is returned untouched.
+ *
+ * Cost is one pass over an object graph the database has already produced; against the query
+ * that fetched it, that is nothing.
+ */
+export function redactAssayersDeep<T>(payload: T, roles: string[], selfId?: string): T {
+  const hasFull = roles.some((r) => FULL_ACCESS.includes(r));
+  // Nothing to strip for a role that may see everything — skip the walk entirely.
+  if (hasFull) return payload;
+
+  // Guards against a cyclic graph: TypeORM hands back parent↔child references in both
+  // directions, and a naive walk would not terminate.
+  const seen = new WeakSet<object>();
+
+  const walk = (node: any): any => {
+    if (node === null || typeof node !== 'object') return node;
+    if (seen.has(node)) return node;
+    seen.add(node);
+
+    if (Array.isArray(node)) {
+      for (let i = 0; i < node.length; i++) node[i] = walk(node[i]);
+      return node;
+    }
+
+    // Dates, Buffers and the like are objects but carry nothing to redact, and copying them
+    // would break their prototypes.
+    if (node instanceof Date || Buffer.isBuffer(node)) return node;
+
+    if (typeof node.assayerCode === 'string' && 'id' in node) {
+      const isSelf = !!selfId && node.id === selfId;
+      const scoped = scopeAssayerForRoles(node as Record<string, any>, roles, isSelf);
+      // Delete in place rather than returning a copy: the node may be referenced from several
+      // places in the graph, and replacing only this one would leave the others unredacted.
+      for (const key of Object.keys(node)) {
+        if (!(key in scoped)) delete node[key];
+      }
+    }
+
+    for (const key of Object.keys(node)) node[key] = walk(node[key]);
+    return node;
+  };
+
+  return walk(payload);
+}
+
+/**
  * `req.user.roles` holds RoleEntity rows for staff logins but plain `{ name }`
  * objects for assayer tokens (see AuthService.validateJwtPayload). Normalise both
  * to names so callers don't have to care which kind of principal they have.

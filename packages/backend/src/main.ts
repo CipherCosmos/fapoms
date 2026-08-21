@@ -15,6 +15,7 @@ import { realtimeHealth } from './infrastructure/realtime/realtime-health';
 import { correlationIdMiddleware } from './infrastructure/http/correlation-id.middleware';
 import { GlobalExceptionFilter } from './infrastructure/http/global-exception.filter';
 import { ResponseInterceptor } from './infrastructure/http/response.interceptor';
+import { AssayerRedactionInterceptor } from './infrastructure/http/assayer-redaction.interceptor';
 import { TrimStringsPipe } from './infrastructure/http/trim-strings.pipe';
 import { Reflector } from '@nestjs/core';
 
@@ -270,7 +271,14 @@ async function bootstrap() {
   // Single success-response boundary, mirroring the error boundary above. Idempotent by
   // design: the 285 controller sites that already hand-build `{ success, data }` pass straight
   // through, so this ships without touching them and they can be de-enveloped one at a time.
-  app.useGlobalInterceptors(new ResponseInterceptor(app.get(Reflector)));
+  /**
+   * Order matters: redaction runs before the envelope wraps the payload, so it walks the
+   * response the handler actually returned rather than an `{ success, data }` shell.
+   */
+  app.useGlobalInterceptors(
+    new AssayerRedactionInterceptor(),
+    new ResponseInterceptor(app.get(Reflector)),
+  );
 
   /**
    * Security response headers.
