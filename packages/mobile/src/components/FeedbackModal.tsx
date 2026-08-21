@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Modal, View, TextInput, ScrollView, ActivityIndicator, Platform } from 'react-native';
 import Constants from 'expo-constants';
+import * as DocumentPicker from 'expo-document-picker';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Icon, IconButton, Card, Tappable, Badge, EmptyState } from './ui/primitives';
 import { MobileApiService } from '../services/api.service';
@@ -55,6 +56,8 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
   const [body, setBody] = useState('');
   const [sending, setSending] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  /** Picked but not yet uploaded — nothing is sent for a report that gets abandoned. */
+  const [files, setFiles] = useState<any[]>([]);
 
   // thread
   const [activeId, setActiveId] = useState<string | null>(null);
@@ -63,6 +66,21 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
   const [draft, setDraft] = useState('');
   const [replying, setReplying] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
+
+  /** At most five, matching the server's own ceiling so the sixth is refused before upload. */
+  const pickFiles = useCallback(async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: ['image/*', 'application/pdf'],
+        copyToCacheDirectory: true,
+        multiple: true,
+      });
+      if (result.canceled || !result.assets?.length) return;
+      setFiles((prev) => [...prev, ...result.assets].slice(0, 5));
+    } catch {
+      setErr('Could not open the file picker.');
+    }
+  }, []);
 
   const loadList = useCallback(() => {
     setThreads(null);
@@ -88,15 +106,30 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
     if (!body.trim() || sending) return;
     setSending(true);
     setErr(null);
+    /**
+     * Upload first, then file the report carrying the descriptors.
+     *
+     * An upload that fails returns nothing rather than throwing, so a photo that will not go
+     * up never costs the assayer the report they already wrote — they are told, and the report
+     * still sends. This matters more here than on the desk: this runs on a branch connection.
+     */
+    const attachments = files.length
+      ? await MobileApiService.uploadFeedbackAttachments(files)
+      : [];
+    if (files.length && attachments.length < files.length) {
+      setErr(`${files.length - attachments.length} file(s) could not be attached — sending the report without them.`);
+    }
+
     const res = await MobileApiService.createFeedback({
       title: title.trim() || undefined,
       body: body.trim(),
       category: category || undefined,
+      attachments: attachments.length ? attachments : undefined,
       appContext: { platform: 'mobile', appVersion: Constants.expoConfig?.version ?? '1.0.0' },
     });
     setSending(false);
     if (res.success) {
-      setTitle(''); setBody(''); setCategory('');
+      setTitle(''); setBody(''); setCategory(''); setFiles([]);
       loadList();
       if (res.id) openThread(res.id); else setView('list');
     } else {
@@ -202,6 +235,51 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
                     multiline numberOfLines={5} maxLength={4000}
                     style={{ color: t.colors.text, paddingVertical: t.space.md, minHeight: 120, textAlignVertical: 'top', ...(t.type.body as object) }} />
                 </View>
+              </View>
+
+              {/*
+                * Attach a photo of the screen.
+                * An assayer describing a problem on a branch connection is far better served by
+                * one photo than by three paragraphs typed on a phone.
+                */}
+              <View style={{ gap: t.space.sm }}>
+                <Tappable
+                  onPress={pickFiles}
+                  accessibilityLabel="Attach a photo or file"
+                  style={{
+                    flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start',
+                    paddingVertical: t.space.sm, paddingHorizontal: t.space.md,
+                    borderRadius: t.radius.md, borderWidth: 1, borderStyle: 'dashed', borderColor: t.colors.border,
+                  }}
+                >
+                  <Icon name="attach" size={14} color={t.colors.textMuted} />
+                  <AppText variant="caption" tone="muted">
+                    {files.length ? 'Add another' : 'Attach a photo or file'}
+                  </AppText>
+                </Tappable>
+
+                {files.map((f, i) => (
+                  <View
+                    key={`${f.name ?? f.uri}-${i}`}
+                    style={{
+                      flexDirection: 'row', alignItems: 'center', gap: t.space.sm,
+                      backgroundColor: t.colors.surface, borderRadius: t.radius.sm,
+                      paddingVertical: 6, paddingHorizontal: t.space.md,
+                    }}
+                  >
+                    <Icon name="attach" size={12} color={t.colors.textMuted} />
+                    <AppText variant="caption" numberOfLines={1} style={{ flex: 1 }}>
+                      {f.name ?? 'Attachment'}
+                    </AppText>
+                    <Tappable
+                      onPress={() => setFiles((prev) => prev.filter((_, idx) => idx !== i))}
+                      accessibilityLabel={`Remove ${f.name ?? 'attachment'}`}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    >
+                      <Icon name="close" size={12} color={t.colors.textMuted} />
+                    </Tappable>
+                  </View>
+                ))}
               </View>
 
               {err && <AppText variant="caption" tone="danger">{err}</AppText>}

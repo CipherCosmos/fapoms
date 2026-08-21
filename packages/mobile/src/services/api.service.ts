@@ -1651,7 +1651,47 @@ export class MobileApiService {
     }
   }
 
-  static async createFeedback(input: { title?: string; body: string; category?: string; appContext?: Record<string, unknown> }): Promise<{ success: boolean; id?: string; error?: string }> {
+  /**
+   * Attach a photo or a file to a report.
+   *
+   * The same shape as `uploadChatAttachment` and pointed at the feedback route, which applies
+   * the same type allowlist, size ceiling and malware scan as every other upload. The reply is
+   * the descriptors the report carries; the bytes never travel with the report itself.
+   *
+   * Returns `[]` rather than throwing on failure — an attachment that will not upload must not
+   * cost the assayer the report they have already written. The caller says so and lets them
+   * send it without.
+   */
+  static async uploadFeedbackAttachments(assets: any[]): Promise<any[]> {
+    if (!assets?.length) return [];
+    try {
+      const formData = new FormData();
+      for (const file of assets) {
+        if (Platform.OS === 'web') {
+          formData.append('files', file.file ?? file);
+        } else {
+          formData.append('files', {
+            uri: file.uri,
+            name: file.name || file.fileName || `feedback_${Date.now()}`,
+            type: file.mimeType || file.type || 'application/octet-stream',
+          } as any);
+        }
+      }
+      const headers: Record<string, string> = {};
+      if (this.authToken) headers['Authorization'] = `Bearer ${this.authToken}`;
+
+      const response = await this.fetchWithTimeout(`${API_BASE_URL}/feedback/attachments`, {
+        method: 'POST', headers, body: formData,
+      }, 60_000);
+      if (!response.ok) return [];
+      const data = await response.json().catch(() => ({}));
+      return data?.data ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  static async createFeedback(input: { title?: string; body: string; category?: string; appContext?: Record<string, unknown>; attachments?: any[] }): Promise<{ success: boolean; id?: string; error?: string }> {
     try {
       const res = await this.fetchWithAuth(`${API_BASE_URL}/feedback`, { method: 'POST', body: JSON.stringify(input) });
       const data = await res.json().catch(() => ({}));

@@ -47,10 +47,32 @@ export interface FeedbackMessage {
   authorType: 'REPORTER' | 'TEAM' | 'SYSTEM';
   authorName: string | null;
   body: string | null;
-  attachments: { url: string; fileName: string; fileType: string }[] | null;
+  attachments: FeedbackAttachment[] | null;
   isInternal: boolean;
   isRead: boolean;
   createdAt: string;
+}
+
+/**
+ * A file attached to a report.
+ *
+ * `url` is issued by the upload route and posted back verbatim — the server refuses any other
+ * shape, so a report cannot carry a link to somewhere the server did not put a file. Fetching
+ * it needs the session: the download is scoped to whoever may read the report it hangs off.
+ */
+/** The server refuses a sixth; the picker says so before anything is uploaded. */
+export const MAX_FEEDBACK_FILES = 5;
+
+/** Bytes as something a person reads. */
+export const formatFileSize = (bytes: number): string =>
+  bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+
+export interface FeedbackAttachment {
+  url: string;
+  fileName: string;
+  fileType: string;
+  storageKey?: string;
+  size?: number;
 }
 
 export interface CreateFeedbackInput {
@@ -59,6 +81,7 @@ export interface CreateFeedbackInput {
   category?: FeedbackCategory;
   area?: string;
   appContext?: Record<string, unknown>;
+  attachments?: FeedbackAttachment[];
 }
 
 export interface FeedbackStats {
@@ -164,8 +187,47 @@ export const reopenFeedback = (id: string) =>
 export const getThread = (id: string) => api.request<FeedbackThread>(`/feedback/${id}`);
 export const getMessages = (id: string) => api.request<FeedbackMessage[]>(`/feedback/${id}/messages`);
 
-export const postMessage = (id: string, body: string, isInternal = false) =>
-  api.request<FeedbackMessage>(`/feedback/${id}/messages`, { method: 'POST', body: JSON.stringify({ body, isInternal }) });
+export const postMessage = (id: string, body: string, isInternal = false, attachments?: FeedbackAttachment[]) =>
+  api.request<FeedbackMessage>(`/feedback/${id}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ body, isInternal, attachments }),
+  });
+
+/**
+ * Send files to the server and get back the descriptors a report or reply carries.
+ *
+ * Multipart, so `api.request` must not set a JSON content type — the browser supplies the
+ * multipart boundary itself and overriding it makes the body unparseable.
+ */
+export const uploadFeedbackAttachments = async (files: File[]): Promise<FeedbackAttachment[]> => {
+  const form = new FormData();
+  for (const file of files) form.append('files', file);
+  return api.request<FeedbackAttachment[]>('/feedback/attachments', { method: 'POST', body: form });
+};
+
+/**
+ * Fetch an attachment and hand it to the browser as a download.
+ *
+ * Not a plain `<a href>`: the route needs the Authorization header, so the bytes come through
+ * `api.request` and are handed over as a blob. The server sends every attachment as
+ * `application/octet-stream` with `nosniff`, so nothing a reporter uploads can execute in the
+ * app's own origin.
+ */
+export const downloadFeedbackAttachment = async (attachment: FeedbackAttachment): Promise<void> => {
+  const blob = await api.request<Blob>(attachment.url.replace(/^\/api\/v1/, ''), { raw: true });
+  const href = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = href;
+    a.download = attachment.fileName || 'attachment';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    // Revoked on the next tick — Safari has not started reading the blob when click() returns.
+    setTimeout(() => URL.revokeObjectURL(href), 10_000);
+  }
+};
 
 export const markThreadRead = (id: string) =>
   api.request<{ updated: number }>(`/feedback/${id}/messages/read`, { method: 'POST' });

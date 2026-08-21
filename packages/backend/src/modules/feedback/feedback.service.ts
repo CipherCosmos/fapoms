@@ -35,7 +35,7 @@ export interface CreateFeedbackDto {
   /** The part of the product the item is about, e.g. 'planning' — usually the page they filed from. */
   area?: string;
   appContext?: Record<string, unknown>;
-  attachments?: { url: string; fileName: string; fileType: string }[];
+  attachments?: { url: string; fileName: string; fileType: string; storageKey?: string; size?: number }[];
 }
 
 export interface TriageFeedbackDto {

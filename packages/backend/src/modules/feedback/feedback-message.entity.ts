@@ -45,7 +45,9 @@ export class FeedbackMessageEntity extends BaseEntity {
 
   /** Screenshots / logs / files attached to the message. */
   @Column({ name: 'attachments', type: 'jsonb', nullable: true })
-  attachments: { url: string; fileName: string; fileType: string }[] | null;
+  attachments:
+    | { url: string; fileName: string; fileType: string; storageKey?: string; size?: number }[]
+    | null;
 
   /** Team-only note, never shown to the reporter. */
   @Column({ name: 'is_internal', type: 'boolean', default: false })

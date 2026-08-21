@@ -11,6 +11,8 @@ import { FeedbackEscalationService } from './feedback-escalation.service';
 import { FeedbackController } from './feedback.controller';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { FEEDBACK_INTELLIGENCE, HeuristicFeedbackIntelligence } from './feedback-intelligence';
+import { StorageModule } from '../../infrastructure/storage/storage.module';
+import { SecurityModule } from '../../infrastructure/security/security.module';
 
 /**
  * The feedback & collaboration channel between every FAPOMS user and the
@@ -24,6 +26,10 @@ import { FEEDBACK_INTELLIGENCE, HeuristicFeedbackIntelligence } from './feedback
   imports: [
     TypeOrmModule.forFeature([FeedbackThreadEntity, FeedbackMessageEntity, FeedbackVoteEntity, UserEntity]),
     NotificationsModule,
+    // Provides the 'StorageEngine' token the attachment routes inject, and the malware
+    // scanner behind FileScanInterceptor. Attachments go to object storage, never to disk.
+    StorageModule,
+    SecurityModule,
   ],
   controllers: [FeedbackController],
   providers: [

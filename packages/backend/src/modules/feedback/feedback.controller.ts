@@ -1,12 +1,37 @@
-import { Controller, Get, Post, Body, Param, Query, UseGuards, ParseUUIDPipe, Req } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { IsOptional, IsString, IsNotEmpty, IsEnum, IsArray, IsObject, IsBoolean } from 'class-validator';
+import {
+  Controller, Get, Post, Body, Param, Query, UseGuards, ParseUUIDPipe, Req, Res,
+  UseInterceptors, UploadedFiles, BadRequestException, NotFoundException, Inject,
+} from '@nestjs/common';
+import { FilesInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
+import {
+  IsOptional, IsString, IsNotEmpty, IsEnum, IsArray, IsObject, IsBoolean, ValidateNested,
+} from 'class-validator';
+import { Type } from 'class-transformer';
 
 import { FeedbackService, FEEDBACK_TEAM_ROLES } from './feedback.service';
 import { FeedbackThreadService, FeedbackActor } from './feedback-thread.service';
 import { FeedbackEscalationService } from './feedback-escalation.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, AnyAuthenticated } from '../auth/guards';
 import { FeedbackCategory, FeedbackSeverity, FeedbackStatus, SystemRole } from '@fapoms/shared';
+import { FeedbackAttachmentDto } from './feedback-attachment.dto';
+import { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
+import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
+import { assertUploadAllowed, MAX_UPLOAD_BYTES } from '../document/upload-validation';
+
+/** A report is a few screenshots, not an album. */
+const FEEDBACK_MAX_ATTACHMENTS = 5;
+
+/**
+ * Files arrive in memory and go straight to object storage; nothing touches the local disk.
+ * The multer ceiling is a first line only — `assertUploadAllowed` applies the real one, which
+ * is configurable per deployment, and the type allowlist that multer knows nothing about.
+ */
+const feedbackMulterOptions = {
+  storage: memoryStorage(),
+  limits: { fileSize: MAX_UPLOAD_BYTES, files: FEEDBACK_MAX_ATTACHMENTS },
+};
 
 // Real classes, not inline TS types: the global ValidationPipe runs `whitelist: true`,
 // which strips any property without a class-validator decorator on it.
@@ -17,12 +42,14 @@ class CreateFeedbackRequestDto {
   @IsOptional() @IsEnum(FeedbackCategory) category?: FeedbackCategory;
   @IsOptional() @IsString() area?: string;
   @IsOptional() @IsObject() appContext?: Record<string, unknown>;
-  @IsOptional() @IsArray() attachments?: { url: string; fileName: string; fileType: string }[];
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => FeedbackAttachmentDto)
+  attachments?: FeedbackAttachmentDto[];
 }
 
 class PostFeedbackMessageRequestDto {
   @IsOptional() @IsString() body?: string;
-  @IsOptional() @IsArray() attachments?: { url: string; fileName: string; fileType: string }[];
+  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => FeedbackAttachmentDto)
+  attachments?: FeedbackAttachmentDto[];
   @IsOptional() @IsBoolean() isInternal?: boolean;
 }
 
@@ -60,6 +87,7 @@ export class FeedbackController {
     private readonly feedbackService: FeedbackService,
     private readonly threadService: FeedbackThreadService,
     private readonly escalation: FeedbackEscalationService,
+    @Inject('StorageEngine') private readonly storage: StorageEngine,
   ) {}
 
   /** Resolve the caller into a reporter/team actor across both identity spaces. */
@@ -84,6 +112,92 @@ export class FeedbackController {
   async create(@Body() dto: CreateFeedbackRequestDto, @Req() req: any) {
     const thread = await this.feedbackService.create(dto, this.actor(req));
     return { success: true, data: thread };
+  }
+
+  /**
+   * Attach a screenshot, a log or a document to a report.
+   *
+   * Feedback is where somebody says "this screen is wrong", and a picture of the screen settles
+   * in one glance what a paragraph of description cannot. The column and the DTO field for it
+   * had existed since the channel was built; nothing could ever fill them, because there was no
+   * route to put a file anywhere.
+   *
+   * Deliberately reusing what already guards every other upload here rather than starting a
+   * second set of rules: `assertUploadAllowed` for the type allowlist and the size ceiling, and
+   * `FileScanInterceptor` for malware. A file arriving on this route is exactly as constrained
+   * as one arriving on a document upload.
+   *
+   * The reply is the descriptor the create and reply routes expect back verbatim.
+   */
+  @Post('attachments')
+  @AnyAuthenticated()
+  @UseInterceptors(FilesInterceptor('files', FEEDBACK_MAX_ATTACHMENTS, feedbackMulterOptions), FileScanInterceptor)
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Upload files to attach to a report or a reply' })
+  async uploadAttachments(@UploadedFiles() files: Express.Multer.File[], @Req() req: any) {
+    if (!files?.length) throw new BadRequestException('No file was uploaded.');
+
+    const saved = await Promise.all(
+      files.map(async (file) => {
+        assertUploadAllowed({
+          contentType: file.mimetype,
+          size: file.size,
+          hint: 'A screenshot is usually enough — a full screen recording rarely is.',
+        });
+        const key = await this.storage.saveFile(
+          `feedback/${file.originalname}`,
+          file.buffer,
+          file.mimetype,
+        );
+        return {
+          // The only URL shape the attachment DTO accepts, so a client cannot post a link to
+          // anywhere this server did not put a file.
+          url: `/api/v1/feedback/attachments/${encodeURIComponent(key)}`,
+          storageKey: key,
+          fileName: file.originalname,
+          fileType: file.mimetype,
+          size: file.size,
+        };
+      }),
+    );
+    return { success: true, data: saved };
+  }
+
+  /**
+   * Fetch an attachment, if this caller may read the report it is attached to.
+   *
+   * Scoped to the report rather than served on the strength of a session alone: feedback can
+   * contain a screenshot of somebody's pay, their bank details or a client's branch list, and
+   * "any signed-in account may file feedback" is a far wider door than "may read this report".
+   *
+   * The key names the file; the *thread that references it* decides who may have it. `findOne`
+   * already encodes that rule — the reporter, or the product team — so this cannot drift from
+   * what the thread itself allows. A key no message references belongs to nobody and is not
+   * served, which covers both an abandoned upload and a guessed key.
+   */
+  @Get('attachments/*path')
+  @AnyAuthenticated()
+  @ApiOperation({ summary: 'Download a file attached to a report you can see' })
+  async downloadAttachment(
+    @Param('path') path: string | string[],
+    @Req() req: any,
+    @Res() res: any,
+  ) {
+    const key = decodeURIComponent(Array.isArray(path) ? path.join('/') : path);
+    const threadId = await this.threadService.threadIdForAttachment(key);
+    if (!threadId) throw new NotFoundException('That file is not attached to any report.');
+
+    // Throws Forbidden for anyone who is neither the reporter nor the product team.
+    await this.feedbackService.findOne(threadId, this.actor(req));
+
+    const stream = await this.storage.getFileStream(key);
+    // `attachment`, and never the uploader's own content type: these are files a stranger sent,
+    // and rendering one inline on the app's own origin is how an SVG or an HTML file becomes
+    // stored XSS against whoever opens the report.
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('Content-Disposition', `attachment; filename="${(key.split('/').pop() ?? 'file').replace(/"/g, '')}"`);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    stream.pipe(res);
   }
 
   @Get('mine')

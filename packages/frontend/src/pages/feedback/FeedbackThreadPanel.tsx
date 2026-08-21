@@ -1,9 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Send, Loader2, AlertTriangle, MessageSquare, Lock } from 'lucide-react';
+import { Send, Loader2, AlertTriangle, MessageSquare, Lock, Paperclip } from 'lucide-react';
 
 import { connectSocket, getSocket } from '../../services/socket';
 import { userMessage } from '../../services/errors';
-import { getMessages, postMessage, markThreadRead, type FeedbackMessage } from '../../services/feedback';
+import {
+  getMessages, postMessage, markThreadRead, downloadFeedbackAttachment, formatFileSize,
+  type FeedbackMessage,
+} from '../../services/feedback';
 import { fmtWhen } from './feedbackUi';
 
 /**
@@ -128,6 +131,39 @@ export const FeedbackThreadPanel: React.FC<Props> = ({ threadId, isTeam, onChang
                 border: m.isInternal ? '1px dashed var(--warning)' : mine ? 'none' : '1px solid var(--border-color)',
               }}>
                 {m.body}
+
+                {/*
+                  * Attachments.
+                  *
+                  * Downloaded rather than rendered inline: these are files a stranger uploaded,
+                  * and the server sends them as `application/octet-stream` with `nosniff` for
+                  * exactly that reason. The fetch carries the session, and the server checks
+                  * that this account may read this report before it sends a byte.
+                  */}
+                {(m.attachments ?? []).length > 0 && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginTop: m.body ? '9px' : 0 }}>
+                    {(m.attachments ?? []).map((a) => (
+                      <button
+                        key={a.url}
+                        type="button"
+                        onClick={() => downloadFeedbackAttachment(a).catch((e) => setErr(userMessage(e)))}
+                        style={{
+                          display: 'inline-flex', alignItems: 'center', gap: '6px', textAlign: 'left',
+                          padding: '5px 9px', borderRadius: '7px', cursor: 'pointer', fontSize: '11.5px',
+                          background: mine && !m.isInternal ? 'rgba(255,255,255,0.18)' : 'var(--bg-card)',
+                          color: mine && !m.isInternal ? '#ffffff' : 'var(--accent)',
+                          border: 'none', fontWeight: 600,
+                        }}
+                      >
+                        <Paperclip size={11} style={{ flexShrink: 0 }} />
+                        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.fileName}</span>
+                        {a.size != null && (
+                          <span style={{ opacity: 0.75, flexShrink: 0 }}>{formatFileSize(a.size)}</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           );

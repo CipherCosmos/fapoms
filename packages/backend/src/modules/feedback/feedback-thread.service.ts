@@ -24,7 +24,7 @@ export interface FeedbackActor {
 
 export interface PostFeedbackMessageDto {
   body?: string;
-  attachments?: { url: string; fileName: string; fileType: string }[];
+  attachments?: { url: string; fileName: string; fileType: string; storageKey?: string; size?: number }[];
   /** Team-only note, never shown to the reporter. Ignored for non-team actors. */
   isInternal?: boolean;
 }
@@ -64,6 +64,29 @@ export class FeedbackThreadService {
       throw new ForbiddenException('You can only view feedback you reported.');
     }
     return thread;
+  }
+
+  /**
+   * Which thread, if any, has a message referencing this stored file.
+   *
+   * The download route asks this first and then applies that thread's own access rule, so the
+   * key in the URL is never taken on trust. A file that no message references — uploaded and
+   * then abandoned, or a key somebody guessed — belongs to no thread and is not served at all.
+   */
+  async threadIdForAttachment(storageKey: string): Promise<string | null> {
+    if (!storageKey) return null;
+    const row = await this.messageRepository
+      .createQueryBuilder('m')
+      .select('m.feedback_thread_id', 'threadId')
+      .where(
+        // Matching the stored object rather than a string, so a key that is a prefix of another
+        // cannot borrow its permission.
+        `m.attachments @> :probe::jsonb`,
+        { probe: JSON.stringify([{ storageKey }]) },
+      )
+      .limit(1)
+      .getRawOne<{ threadId: string }>();
+    return row?.threadId ?? null;
   }
 
   async listMessages(threadId: string, actor: FeedbackActor): Promise<FeedbackMessageEntity[]> {

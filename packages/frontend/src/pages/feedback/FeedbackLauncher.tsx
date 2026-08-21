@@ -1,10 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { MessageSquarePlus, X, Loader2, CheckCircle2, Sparkles, Users } from 'lucide-react';
+import { MessageSquarePlus, X, Loader2, CheckCircle2, Sparkles, Users, Paperclip } from 'lucide-react';
 import { FeedbackCategory } from '@fapoms/shared';
 
-import { createFeedback, getSimilarFeedback, voteFeedback, type SimilarFeedback } from '../../services/feedback';
+import {
+  createFeedback, getSimilarFeedback, voteFeedback, uploadFeedbackAttachments,
+  MAX_FEEDBACK_FILES, formatFileSize, type SimilarFeedback,
+} from '../../services/feedback';
 import { userMessage } from '../../services/errors';
 import { CATEGORY, areaFromPath } from './feedbackUi';
 import { useCurrentRoles } from '../../hooks/useCurrentRoles';
@@ -48,9 +51,18 @@ export const FeedbackLauncher: React.FC = () => {
   const [doneId, setDoneId] = useState<string | null>(null);
   const [similar, setSimilar] = useState<SimilarFeedback[]>([]);
   const [votedMsg, setVotedMsg] = useState<string | null>(null);
+  /**
+   * Files chosen but not yet sent.
+   *
+   * Held as real `File` objects until submit so the picker is instant and nothing is uploaded
+   * for a report that gets abandoned — an upload that no report references is unreachable by
+   * design, but not creating it at all is better than relying on that.
+   */
+  const [files, setFiles] = useState<File[]>([]);
 
   const reset = () => {
     setTitle(''); setBody(''); setCategory(''); setErr(null); setDoneId(null); setSimilar([]); setVotedMsg(null);
+    setFiles([]);
   };
   const close = () => { setOpen(false); reset(); };
 
@@ -76,10 +88,14 @@ export const FeedbackLauncher: React.FC = () => {
     setBusy(true);
     setErr(null);
     try {
+      // Upload first: the report carries descriptors, not the bytes. If this throws, the
+      // report is not filed and the reporter still has everything they typed.
+      const attachments = files.length ? await uploadFeedbackAttachments(files) : undefined;
       const thread = await createFeedback({
         title: title.trim() || undefined,
         body: body.trim(),
         category: category || undefined,
+        attachments,
         area: areaFromPath(location.pathname),
         appContext: {
           route: location.pathname + location.search,
@@ -177,6 +193,57 @@ export const FeedbackLauncher: React.FC = () => {
                     style={{ padding: '9px 11px', fontSize: '13px', borderRadius: '8px', resize: 'vertical', background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)', outline: 'none', lineHeight: 1.5 }}
                   />
                 </label>
+
+                {/*
+                  * Attach a screenshot.
+                  *
+                  * Feedback is where somebody says "this screen is wrong", and a picture of the
+                  * screen settles in one glance what a paragraph cannot. Files are held here
+                  * until submit, so choosing one is instant and an abandoned report uploads
+                  * nothing.
+                  */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <label style={{
+                    display: 'inline-flex', alignItems: 'center', gap: '6px', alignSelf: 'flex-start',
+                    padding: '6px 11px', borderRadius: '8px', cursor: 'pointer', fontSize: '12px', fontWeight: 600,
+                    border: '1px dashed var(--border-color)', color: 'var(--text-secondary)',
+                  }}>
+                    <Paperclip size={13} />
+                    {files.length ? 'Add another' : 'Attach a screenshot or file'}
+                    <input
+                      type="file" multiple hidden
+                      onChange={(e) => {
+                        const picked = Array.from(e.target.files ?? []);
+                        // Same ceiling the server enforces, said here so the fifth file is
+                        // refused before it is uploaded rather than after.
+                        setFiles((prev) => [...prev, ...picked].slice(0, MAX_FEEDBACK_FILES));
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+
+                  {files.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                      {files.map((f, i) => (
+                        <div key={`${f.name}-${i}`} style={{
+                          display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px',
+                          padding: '5px 9px', borderRadius: '7px', background: 'var(--bg-surface-2)',
+                        }}>
+                          <Paperclip size={11} style={{ flexShrink: 0, color: 'var(--text-muted)' }} />
+                          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
+                          <span style={{ color: 'var(--text-muted)', fontSize: '11px', flexShrink: 0 }}>{formatFileSize(f.size)}</span>
+                          <button
+                            type="button" aria-label={`Remove ${f.name}`}
+                            onClick={() => setFiles((prev) => prev.filter((_, idx) => idx !== i))}
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 0, display: 'flex' }}
+                          >
+                            <X size={12} />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
 
                 {/* Similar open items — vote instead of duplicating. */}
                 {similar.length > 0 && (
