@@ -25,6 +25,21 @@ import { errorAlerter, ErrorAlerter } from '../observability/error-alerter';
  *     detail is logged server-side against the request's correlation id; the client gets a
  *     generic 500 that reveals nothing about the database, cache or storage internals.
  */
+/**
+ * Whether this failure is the client going away rather than the server going wrong.
+ *
+ * Express and multer both surface an aborted upload as a plain `Error` whose message is
+ * `Request aborted`; a socket that dies mid-response arrives as one of the ECONN* codes. The
+ * response object having no writable socket left is the corroborating signal, so a genuine
+ * server error that merely happens to mention "aborted" is not swallowed.
+ */
+function isClientDisconnect(exception: unknown, res: Response): boolean {
+  if (!(exception instanceof Error)) return false;
+  const code = (exception as NodeJS.ErrnoException).code;
+  if (code === 'ECONNRESET' || code === 'ECONNABORTED' || code === 'EPIPE') return true;
+  return exception.message === 'Request aborted' && (res.destroyed || !res.writable);
+}
+
 @Catch()
 export class GlobalExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger('ExceptionFilter');
@@ -65,6 +80,24 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         });
       }
       res.status(status).json(payload);
+      return;
+    }
+
+    /**
+     * The reader hung up. Not an error on this side, and nothing left to reply to.
+     *
+     * A browser that navigates away, a phone that loses signal mid-upload, a user who gives up
+     * on a slow attachment — each aborts the request, and Express surfaces that as a thrown
+     * `Request aborted`. Treating it as a 500 logged a server fault for something the server
+     * did nothing wrong in, alarmed whoever read the log, and paged the alerter. It also tried
+     * to write a response body onto a socket that is already gone.
+     *
+     * The connection is closed, so this only stops the noise; there is no client left to tell.
+     */
+    if (isClientDisconnect(exception, res)) {
+      this.logger.warn(
+        `[${correlationId}] ${req.method} ${req.originalUrl} — client disconnected before the request completed`,
+      );
       return;
     }
 

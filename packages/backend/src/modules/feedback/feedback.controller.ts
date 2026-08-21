@@ -1,6 +1,6 @@
 import {
   Controller, Get, Post, Body, Param, Query, UseGuards, ParseUUIDPipe, Req, Res,
-  UseInterceptors, UploadedFiles, BadRequestException, NotFoundException, Inject,
+  UseInterceptors, UploadedFiles, BadRequestException, NotFoundException, Inject, Logger,
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
@@ -18,19 +18,31 @@ import { FeedbackCategory, FeedbackSeverity, FeedbackStatus, SystemRole } from '
 import { FeedbackAttachmentDto } from './feedback-attachment.dto';
 import { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
-import { assertUploadAllowed, MAX_UPLOAD_BYTES } from '../document/upload-validation';
+import { assertUploadAllowed } from '../document/upload-validation';
+import { MAX_FEEDBACK_ATTACHMENT_MB, MAX_FEEDBACK_ATTACHMENTS } from '@fapoms/shared';
 
-/** A report is a few screenshots, not an album. */
-const FEEDBACK_MAX_ATTACHMENTS = 5;
+/**
+ * The ceiling for a file attached to a report, in bytes.
+ *
+ * Deliberately far below the audit-document limit. That one exists for multi-hundred-page colour
+ * scans; these are screenshots. Using it here meant five attachments could buffer a quarter of a
+ * gigabyte of request body in the server's heap for one report — and, on the connections this is
+ * used over, an upload nobody would wait for. `DOCUMENT_MAX_UPLOAD_MB` deliberately does not
+ * raise this: a deployment that accepts bigger scans has not asked for bigger screenshots.
+ */
+const FEEDBACK_MAX_ATTACHMENT_BYTES = MAX_FEEDBACK_ATTACHMENT_MB * 1024 * 1024;
 
 /**
  * Files arrive in memory and go straight to object storage; nothing touches the local disk.
- * The multer ceiling is a first line only — `assertUploadAllowed` applies the real one, which
- * is configurable per deployment, and the type allowlist that multer knows nothing about.
+ *
+ * The multer ceiling matters as much as the check in the handler: multer enforces it *while*
+ * reading the body, so an oversized file is cut off early rather than fully buffered and then
+ * rejected. `assertUploadAllowed` still runs, for the type allowlist multer knows nothing about
+ * and to produce the message a person reads.
  */
 const feedbackMulterOptions = {
   storage: memoryStorage(),
-  limits: { fileSize: MAX_UPLOAD_BYTES, files: FEEDBACK_MAX_ATTACHMENTS },
+  limits: { fileSize: FEEDBACK_MAX_ATTACHMENT_BYTES, files: MAX_FEEDBACK_ATTACHMENTS },
 };
 
 // Real classes, not inline TS types: the global ValidationPipe runs `whitelist: true`,
@@ -90,6 +102,8 @@ export class FeedbackController {
     @Inject('StorageEngine') private readonly storage: StorageEngine,
   ) {}
 
+  private readonly logger = new Logger(FeedbackController.name);
+
   /** Resolve the caller into a reporter/team actor across both identity spaces. */
   private actor(req: any): FeedbackActor {
     const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean);
@@ -131,7 +145,7 @@ export class FeedbackController {
    */
   @Post('attachments')
   @AnyAuthenticated()
-  @UseInterceptors(FilesInterceptor('files', FEEDBACK_MAX_ATTACHMENTS, feedbackMulterOptions), FileScanInterceptor)
+  @UseInterceptors(FilesInterceptor('files', MAX_FEEDBACK_ATTACHMENTS, feedbackMulterOptions), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload files to attach to a report or a reply' })
   async uploadAttachments(@UploadedFiles() files: Express.Multer.File[], @Req() req: any) {
@@ -142,6 +156,7 @@ export class FeedbackController {
         assertUploadAllowed({
           contentType: file.mimetype,
           size: file.size,
+          maxBytes: FEEDBACK_MAX_ATTACHMENT_BYTES,
           hint: 'A screenshot is usually enough — a full screen recording rarely is.',
         });
         const key = await this.storage.saveFile(
@@ -197,6 +212,27 @@ export class FeedbackController {
     res.setHeader('Content-Type', 'application/octet-stream');
     res.setHeader('Content-Disposition', `attachment; filename="${(key.split('/').pop() ?? 'file').replace(/"/g, '')}"`);
     res.setHeader('X-Content-Type-Options', 'nosniff');
+
+    /**
+     * A stream that fails must not take the process with it.
+     *
+     * An unhandled `error` event on a Node readable throws, and a throw from a stream callback
+     * is outside any request's try/catch — it reaches the process, not the exception filter. So
+     * object storage being briefly unreachable, or an object having been removed underneath a
+     * link somebody kept, would end the server for everybody rather than failing one download.
+     *
+     * Headers are already sent by the time bytes flow, so there is no status left to change:
+     * the honest thing is to log it and cut the response, which surfaces client-side as a
+     * truncated download rather than as a silent, plausible-looking half a file.
+     */
+    stream.on('error', (err: Error) => {
+      this.logger.error(`Attachment ${key} could not be streamed: ${err.message}`);
+      res.destroy(err);
+    });
+    // The other half: if the reader goes away mid-download, stop reading. Without this the
+    // stream keeps pulling from storage into a socket nobody is listening to.
+    res.on('close', () => stream.destroy());
+
     stream.pipe(res);
   }
 

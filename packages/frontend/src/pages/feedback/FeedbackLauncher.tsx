@@ -5,9 +5,11 @@ import { MessageSquarePlus, X, Loader2, CheckCircle2, Sparkles, Users, Paperclip
 import { FeedbackCategory } from '@fapoms/shared';
 
 import {
-  createFeedback, getSimilarFeedback, voteFeedback, uploadFeedbackAttachments,
-  MAX_FEEDBACK_FILES, formatFileSize, type SimilarFeedback,
+  createFeedback, getSimilarFeedback, voteFeedback, uploadFeedbackAttachment,
+  MAX_FEEDBACK_FILES, FEEDBACK_ACCEPT, formatFileSize,
+  type SimilarFeedback, type FeedbackAttachment,
 } from '../../services/feedback';
+import { MAX_FEEDBACK_ATTACHMENT_MB } from '@fapoms/shared';
 import { userMessage } from '../../services/errors';
 import { CATEGORY, areaFromPath } from './feedbackUi';
 import { useCurrentRoles } from '../../hooks/useCurrentRoles';
@@ -21,6 +23,21 @@ import { canAccessRoute } from '../../config/route-permissions';
  * were on and their platform automatically, so the team can reproduce, and leaves
  * category detection to the classifier unless the reporter picks one.
  */
+/**
+ * One chosen file and how its upload is going.
+ *
+ * `uploaded` is set when the server has the file and returned its descriptor; until then the
+ * row shows progress, and `error` replaces it if the upload was refused — by size, by type, or
+ * by the connection.
+ */
+interface PendingAttachment {
+  file: File;
+  progress: number;
+  uploaded?: FeedbackAttachment;
+  error?: string;
+  abort: AbortController;
+}
+
 export const FeedbackLauncher: React.FC = () => {
   const location = useLocation();
   const navigate = useNavigate();
@@ -52,13 +69,20 @@ export const FeedbackLauncher: React.FC = () => {
   const [similar, setSimilar] = useState<SimilarFeedback[]>([]);
   const [votedMsg, setVotedMsg] = useState<string | null>(null);
   /**
-   * Files chosen but not yet sent.
+   * Attachments, uploading in the background as they are chosen.
    *
-   * Held as real `File` objects until submit so the picker is instant and nothing is uploaded
-   * for a report that gets abandoned — an upload that no report references is unreachable by
-   * design, but not creating it at all is better than relying on that.
+   * They used to be held until submit and uploaded inside it. That made Send do all the waiting:
+   * the dialog locked behind one spinner for however long a multi-megabyte screenshot took over
+   * whatever connection was available, with no progress and no way out. People read that as the
+   * app hanging, and gave up — which aborted the request and left a 500 in the log for something
+   * the server had done nothing wrong in.
+   *
+   * Uploading on pick moves the wait to where the person is not blocked by it: they carry on
+   * typing while the bar fills, and Send posts a small piece of JSON. The trade is a file
+   * uploaded for a report that is then abandoned — harmless, because an attachment no message
+   * references is served to nobody and reachable by no one.
    */
-  const [files, setFiles] = useState<File[]>([]);
+  const [files, setFiles] = useState<PendingAttachment[]>([]);
 
   const reset = () => {
     setTitle(''); setBody(''); setCategory(''); setErr(null); setDoneId(null); setSimilar([]); setVotedMsg(null);
@@ -75,6 +99,50 @@ export const FeedbackLauncher: React.FC = () => {
     return () => clearTimeout(t);
   }, [title, body, doneId]);
 
+  /**
+   * Take the picked files and start uploading them straight away.
+   *
+   * The ceiling and the type list are checked here so the fifth file, or a video, is refused
+   * before anything is sent rather than after a long upload — but the server still decides:
+   * this only saves the wait, it does not grant anything.
+   */
+  const addFiles = (picked: File[]) => {
+    const room = MAX_FEEDBACK_FILES - files.length;
+    if (room <= 0) {
+      setErr(`A report can carry ${MAX_FEEDBACK_FILES} files.`);
+      return;
+    }
+    const accepted = picked.slice(0, room);
+    if (picked.length > room) setErr(`Only the first ${room} of those were added — a report can carry ${MAX_FEEDBACK_FILES}.`);
+
+    for (const file of accepted) {
+      const entry: PendingAttachment = { file, progress: 0, abort: new AbortController() };
+      setFiles((prev) => [...prev, entry]);
+
+      if (file.size > MAX_FEEDBACK_ATTACHMENT_MB * 1024 * 1024) {
+        update(file, { error: `Too large — the limit is ${MAX_FEEDBACK_ATTACHMENT_MB} MB.` });
+        continue;
+      }
+
+      uploadFeedbackAttachment(file, (fraction) => update(file, { progress: fraction }), entry.abort.signal)
+        .then((uploaded) => update(file, { uploaded, progress: 1 }))
+        .catch((e) => {
+          // A cancelled upload is the person's own doing; the row is already gone.
+          if ((e as DOMException)?.name === 'AbortError') return;
+          update(file, { error: userMessage(e) });
+        });
+    }
+  };
+
+  /** Patch one row by identity — the list is re-created on every state change. */
+  const update = (file: File, patch: Partial<PendingAttachment>) =>
+    setFiles((prev) => prev.map((f) => (f.file === file ? { ...f, ...patch } : f)));
+
+  const removeFile = (entry: PendingAttachment) => {
+    entry.abort.abort();
+    setFiles((prev) => prev.filter((f) => f !== entry));
+  };
+
   const meToo = async (id: string) => {
     try {
       const res = await voteFeedback(id);
@@ -83,19 +151,23 @@ export const FeedbackLauncher: React.FC = () => {
     } catch (e) { setErr(userMessage(e)); }
   };
 
+  /** Still going up. Send waits for these rather than quietly filing the report without them. */
+  const uploading = files.some((f) => !f.uploaded && !f.error);
+
   const submit = async () => {
     if (!body.trim()) { setErr('Please describe the issue or idea.'); return; }
+    if (uploading) { setErr('One moment — an attachment is still uploading.'); return; }
     setBusy(true);
     setErr(null);
     try {
-      // Upload first: the report carries descriptors, not the bytes. If this throws, the
-      // report is not filed and the reporter still has everything they typed.
-      const attachments = files.length ? await uploadFeedbackAttachments(files) : undefined;
+      // Whatever finished uploading. Anything still in flight or failed is named below rather
+      // than silently dropped, and never blocks the report itself.
+      const attachments = files.map((f) => f.uploaded).filter(Boolean) as FeedbackAttachment[];
       const thread = await createFeedback({
         title: title.trim() || undefined,
         body: body.trim(),
         category: category || undefined,
-        attachments,
+        attachments: attachments.length ? attachments : undefined,
         area: areaFromPath(location.pathname),
         appContext: {
           route: location.pathname + location.search,
@@ -212,12 +284,11 @@ export const FeedbackLauncher: React.FC = () => {
                     {files.length ? 'Add another' : 'Attach a screenshot or file'}
                     <input
                       type="file" multiple hidden
+                      accept={FEEDBACK_ACCEPT}
                       onChange={(e) => {
                         const picked = Array.from(e.target.files ?? []);
-                        // Same ceiling the server enforces, said here so the fifth file is
-                        // refused before it is uploaded rather than after.
-                        setFiles((prev) => [...prev, ...picked].slice(0, MAX_FEEDBACK_FILES));
                         e.target.value = '';
+                        addFiles(picked);
                       }}
                     />
                   </label>
@@ -225,20 +296,37 @@ export const FeedbackLauncher: React.FC = () => {
                   {files.length > 0 && (
                     <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                       {files.map((f, i) => (
-                        <div key={`${f.name}-${i}`} style={{
-                          display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px',
+                        <div key={`${f.file.name}-${i}`} style={{
+                          display: 'flex', flexDirection: 'column', gap: '4px',
                           padding: '5px 9px', borderRadius: '7px', background: 'var(--bg-surface-2)',
                         }}>
-                          <Paperclip size={11} style={{ flexShrink: 0, color: 'var(--text-muted)' }} />
-                          <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</span>
-                          <span style={{ color: 'var(--text-muted)', fontSize: '11px', flexShrink: 0 }}>{formatFileSize(f.size)}</span>
-                          <button
-                            type="button" aria-label={`Remove ${f.name}`}
-                            onClick={() => setFiles((prev) => prev.filter((_, idx) => idx !== i))}
-                            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 0, display: 'flex' }}
-                          >
-                            <X size={12} />
-                          </button>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px' }}>
+                            {f.uploaded
+                              ? <CheckCircle2 size={11} style={{ flexShrink: 0, color: 'var(--status-active)' }} />
+                              : <Paperclip size={11} style={{ flexShrink: 0, color: 'var(--text-muted)' }} />}
+                            <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.file.name}</span>
+                            <span style={{ color: 'var(--text-muted)', fontSize: '11px', flexShrink: 0 }}>{formatFileSize(f.file.size)}</span>
+                            <button
+                              type="button" aria-label={`Remove ${f.file.name}`}
+                              onClick={() => removeFile(f)}
+                              style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 0, display: 'flex' }}
+                            >
+                              <X size={12} />
+                            </button>
+                          </div>
+
+                          {/* The bar only exists while there is something to report about. */}
+                          {!f.uploaded && !f.error && (
+                            <div style={{ height: 3, borderRadius: 999, background: 'var(--bg-card)', overflow: 'hidden' }}>
+                              <div style={{
+                                height: '100%', width: `${Math.round(f.progress * 100)}%`,
+                                background: 'var(--accent)', transition: 'width 120ms linear',
+                              }} />
+                            </div>
+                          )}
+                          {f.error && (
+                            <span style={{ fontSize: '11px', color: 'var(--danger)' }}>{f.error}</span>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -279,7 +367,7 @@ export const FeedbackLauncher: React.FC = () => {
 
                 <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '2px' }}>
                   <button className="btn btn-secondary" onClick={close}>Cancel</button>
-                  <button className="btn btn-primary" onClick={submit} disabled={busy || !body.trim()} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <button className="btn btn-primary" onClick={submit} disabled={busy || uploading || !body.trim()} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                     {busy ? <Loader2 size={14} className="spin" /> : <MessageSquarePlus size={14} />} Send
                   </button>
                 </div>

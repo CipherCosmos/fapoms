@@ -1,5 +1,6 @@
 import { api } from './api';
 import type { FeedbackCategory, FeedbackSeverity, FeedbackStatus } from '@fapoms/shared';
+import { MAX_FEEDBACK_ATTACHMENTS } from '@fapoms/shared';
 
 /**
  * Typed API layer for the feedback & collaboration channel.
@@ -61,7 +62,15 @@ export interface FeedbackMessage {
  * it needs the session: the download is scoped to whoever may read the report it hangs off.
  */
 /** The server refuses a sixth; the picker says so before anything is uploaded. */
-export const MAX_FEEDBACK_FILES = 5;
+export const MAX_FEEDBACK_FILES = MAX_FEEDBACK_ATTACHMENTS;
+
+/**
+ * What the file picker offers.
+ *
+ * Narrower than the server's allowlist on purpose — a picker that offers everything and then
+ * rejects most of it wastes the choice. The server still decides.
+ */
+export const FEEDBACK_ACCEPT = 'image/*,application/pdf,.csv,.xlsx';
 
 /** Bytes as something a person reads. */
 export const formatFileSize = (bytes: number): string =>
@@ -194,16 +203,53 @@ export const postMessage = (id: string, body: string, isInternal = false, attach
   });
 
 /**
- * Send files to the server and get back the descriptors a report or reply carries.
+ * Send one file to the server and get back the descriptor a report carries.
  *
- * Multipart, so `api.request` must not set a JSON content type — the browser supplies the
- * multipart boundary itself and overriding it makes the body unparseable.
+ * XHR rather than `fetch`, for one reason: `fetch` cannot report upload progress. Without it
+ * the composer could only show a spinner, and on the connections this runs over — a phone on a
+ * branch link, an office pushing a screenshot through a tunnel — a multi-megabyte upload is a
+ * minute of a frozen-looking dialog with nothing to say how far along it is or any way to stop.
+ * That is exactly what people described as the app hanging.
+ *
+ * One file per call so a failure is attributable and the others still land, and so progress is
+ * per-file rather than one bar for the batch.
  */
-export const uploadFeedbackAttachments = async (files: File[]): Promise<FeedbackAttachment[]> => {
-  const form = new FormData();
-  for (const file of files) form.append('files', file);
-  return api.request<FeedbackAttachment[]>('/feedback/attachments', { method: 'POST', body: form });
-};
+export const uploadFeedbackAttachment = (
+  file: File,
+  onProgress?: (fraction: number) => void,
+  signal?: AbortSignal,
+): Promise<FeedbackAttachment> =>
+  new Promise((resolve, reject) => {
+    const form = new FormData();
+    form.append('files', file);
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/v1/feedback/attachments');
+    const token = localStorage.getItem('fapoms_token');
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    // No Content-Type: the browser sets it with the multipart boundary, and overriding it
+    // makes the body unparseable on the server.
+
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total);
+    };
+    xhr.onload = () => {
+      let payload: any = {};
+      try { payload = JSON.parse(xhr.responseText || '{}'); } catch { /* handled below */ }
+      if (xhr.status >= 200 && xhr.status < 300 && payload?.data?.[0]) {
+        resolve(payload.data[0] as FeedbackAttachment);
+        return;
+      }
+      // The server's message names the limit and the allowed types — far more use than a code.
+      const message = Array.isArray(payload?.message) ? payload.message[0] : payload?.message;
+      reject(new Error(message || `Upload failed (${xhr.status})`));
+    };
+    xhr.onerror = () => reject(new Error('The upload could not reach the server.'));
+    xhr.onabort = () => reject(new DOMException('Upload cancelled', 'AbortError'));
+    signal?.addEventListener('abort', () => xhr.abort(), { once: true });
+
+    xhr.send(form);
+  });
 
 /**
  * Fetch an attachment and hand it to the browser as a download.

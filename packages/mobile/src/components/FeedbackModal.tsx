@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Modal, View, TextInput, ScrollView, ActivityIndicator, Platform } from 'react-native';
 import Constants from 'expo-constants';
 import * as DocumentPicker from 'expo-document-picker';
+import { MAX_FEEDBACK_ATTACHMENTS } from '@fapoms/shared';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Icon, IconButton, Card, Tappable, Badge, EmptyState } from './ui/primitives';
 import { MobileApiService } from '../services/api.service';
@@ -56,7 +57,7 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
   const [body, setBody] = useState('');
   const [sending, setSending] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  /** Picked but not yet uploaded — nothing is sent for a report that gets abandoned. */
+  /** Chosen files and how each upload is going. Uploads start on pick, not on send. */
   const [files, setFiles] = useState<any[]>([]);
 
   // thread
@@ -67,7 +68,12 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
   const [replying, setReplying] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
 
-  /** At most five, matching the server's own ceiling so the sixth is refused before upload. */
+  /**
+   * Pick files and start sending them straight away.
+   *
+   * At most five, matching the server's ceiling, and each one goes up on its own so a failure
+   * is attributable and the rest still land. The assayer carries on typing while they upload.
+   */
   const pickFiles = useCallback(async () => {
     try {
       const result = await DocumentPicker.getDocumentAsync({
@@ -76,11 +82,28 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
         multiple: true,
       });
       if (result.canceled || !result.assets?.length) return;
-      setFiles((prev) => [...prev, ...result.assets].slice(0, 5));
+
+      const room = MAX_FEEDBACK_ATTACHMENTS - files.length;
+      if (room <= 0) { setErr(`A report can carry ${MAX_FEEDBACK_ATTACHMENTS} files.`); return; }
+
+      for (const asset of result.assets.slice(0, room)) {
+        const entry = { asset, uploading: true } as any;
+        setFiles((prev) => [...prev, entry]);
+
+        MobileApiService.uploadFeedbackAttachments([asset])
+          .then(([uploaded]) => setFiles((prev) => prev.map((f) => (
+            f.asset === asset
+              ? { ...f, uploading: false, uploaded, error: uploaded ? undefined : 'Could not be attached.' }
+              : f
+          ))))
+          .catch(() => setFiles((prev) => prev.map((f) => (
+            f.asset === asset ? { ...f, uploading: false, error: 'Could not be attached.' } : f
+          ))));
+      }
     } catch {
       setErr('Could not open the file picker.');
     }
-  }, []);
+  }, [files.length]);
 
   const loadList = useCallback(() => {
     setThreads(null);
@@ -104,20 +127,22 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
 
   const submitNew = async () => {
     if (!body.trim() || sending) return;
+    if (files.some((f) => f.uploading)) { setErr('One moment — an attachment is still sending.'); return; }
     setSending(true);
     setErr(null);
     /**
-     * Upload first, then file the report carrying the descriptors.
+     * Whatever finished uploading while the report was being written.
      *
-     * An upload that fails returns nothing rather than throwing, so a photo that will not go
-     * up never costs the assayer the report they already wrote — they are told, and the report
-     * still sends. This matters more here than on the desk: this runs on a branch connection.
+     * Uploads start when a file is picked, not here — on a branch connection, doing them inside
+     * Send meant the button sat spinning for as long as the photo took, with nothing to show for
+     * it. Anything that failed is named rather than silently dropped, and never blocks the
+     * report: an assayer who has typed the problem out must not lose it to a photo that will
+     * not go up.
      */
-    const attachments = files.length
-      ? await MobileApiService.uploadFeedbackAttachments(files)
-      : [];
-    if (files.length && attachments.length < files.length) {
-      setErr(`${files.length - attachments.length} file(s) could not be attached — sending the report without them.`);
+    const attachments = files.map((f) => f.uploaded).filter(Boolean);
+    const failed = files.filter((f) => f.error).length;
+    if (failed) {
+      setErr(`${failed} file(s) could not be attached — sending the report without them.`);
     }
 
     const res = await MobileApiService.createFeedback({
@@ -260,20 +285,30 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
 
                 {files.map((f, i) => (
                   <View
-                    key={`${f.name ?? f.uri}-${i}`}
+                    key={`${f.asset?.name ?? f.asset?.uri}-${i}`}
                     style={{
                       flexDirection: 'row', alignItems: 'center', gap: t.space.sm,
                       backgroundColor: t.colors.surface, borderRadius: t.radius.sm,
                       paddingVertical: 6, paddingHorizontal: t.space.md,
                     }}
                   >
-                    <Icon name="attach" size={12} color={t.colors.textMuted} />
-                    <AppText variant="caption" numberOfLines={1} style={{ flex: 1 }}>
-                      {f.name ?? 'Attachment'}
+                    <Icon
+                      name={f.uploaded ? 'checkmark-circle' : 'attach'}
+                      size={12}
+                      color={f.error ? t.colors.danger : f.uploaded ? t.colors.success : t.colors.textMuted}
+                    />
+                    <AppText
+                      variant="caption"
+                      numberOfLines={1}
+                      style={{ flex: 1 }}
+                      tone={f.error ? 'danger' : undefined}
+                    >
+                      {f.asset?.name ?? 'Attachment'}
+                      {f.uploading ? ' · sending…' : f.error ? ` · ${f.error}` : ''}
                     </AppText>
                     <Tappable
                       onPress={() => setFiles((prev) => prev.filter((_, idx) => idx !== i))}
-                      accessibilityLabel={`Remove ${f.name ?? 'attachment'}`}
+                      accessibilityLabel={`Remove ${f.asset?.name ?? 'attachment'}`}
                       hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                     >
                       <Icon name="close" size={12} color={t.colors.textMuted} />

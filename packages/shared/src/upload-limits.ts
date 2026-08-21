@@ -27,6 +27,21 @@ export const MAX_UPLOAD_MB = 50;
  */
 export const MAX_RESUMABLE_UPLOAD_MB = 100;
 
+/**
+ * Files attached to a piece of feedback. Far smaller than the audit-document ceiling, on purpose.
+ *
+ * These are screenshots and short logs — the thing somebody grabs to show that a screen is wrong.
+ * The document limit exists for multi-hundred-page colour scans of a branch file and has no
+ * business applying here: at 50 MB apiece, five attachments is a quarter of a gigabyte buffered
+ * in the server's memory for one report, and on the connections this is actually used over it is
+ * an upload nobody will wait for. A screenshot is under a megabyte; ten leaves generous room for
+ * a photo of a screen taken on a phone.
+ */
+export const MAX_FEEDBACK_ATTACHMENT_MB = 10;
+
+/** How many files one report may carry. */
+export const MAX_FEEDBACK_ATTACHMENTS = 5;
+
 /** What to put next to a file picker, before anything is chosen. */
 export const UPLOAD_LIMIT_HINT =
   `PDF, image, Excel or CSV — up to ${MAX_UPLOAD_MB} MB per file.`;
