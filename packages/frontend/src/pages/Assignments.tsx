@@ -159,8 +159,6 @@ export const Assignments: React.FC = () => {
   // offered as buttons that 403 after a confirm dialog.
   const canActOnAssignments = hasAnyRole(useCurrentRoles(), [
     SystemRole.ADMIN,
-    SystemRole.ADMIN,
-    SystemRole.OPERATIONS,
     SystemRole.OPERATIONS,
   ]);
   // The selection IS the url param — no local mirror, so the two can never disagree.

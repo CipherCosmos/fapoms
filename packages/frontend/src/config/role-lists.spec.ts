@@ -1,4 +1,5 @@
 import { readFileSync } from 'fs';
+import { execSync } from 'child_process';
 import { join } from 'path';
 import { SystemRole } from '@fapoms/shared';
 import {
@@ -18,25 +19,52 @@ import {
  * the thing that did change: two lists that used to differ now being identical.
  */
 describe('role lists', () => {
-  const FILES = [
-    '../hooks/useCurrentRoles.ts',
-    '../pages/Billing.tsx',
-    '../pages/dataentry/deskRoles.ts',
-    '../pages/dataentry/CaseWorkspace.tsx',
-    '../pages/hr/HrDocumentsPage.tsx',
-    './route-permissions.ts',
-  ];
+  /**
+   * Every source file in the app, not a hand-kept list of six.
+   *
+   * The first version of this test named the files to scan. Four of the files that actually
+   * carried duplicates were not among them, so it certified a tree it had never looked at.
+   * Walking the sources removes the possibility.
+   */
+  const SRC = join(__dirname, '..');
+  const sourceFiles = (): string[] =>
+    execSync(`find ${SRC} -name '*.ts' -o -name '*.tsx'`, { encoding: 'utf8' })
+      .trim().split('\n')
+      .filter((f) => f && !f.endsWith('.spec.ts') && !f.endsWith('.spec.tsx'));
 
-  it.each(FILES)('names each role at most once in %s', (relative) => {
-    const source = readFileSync(join(__dirname, relative), 'utf8');
-    const lists = [...source.matchAll(/[[(]((?:\s*SystemRole\.[A-Z_]+\s*,?){2,})[\])]/g)];
-    for (const list of lists) {
-      const names = [...list[1].matchAll(/SystemRole\.([A-Z_]+)/g)].map((m) => m[1]);
-      expect({ list: names.join(', '), unique: names.length }).toEqual({
-        list: names.join(', '),
-        unique: new Set(names).size,
-      });
+  /**
+   * A bracketed list of roles, however it is laid out.
+   *
+   * The first version required the closing bracket to follow the last entry immediately, so it
+   * matched only single-line arrays — and every list long enough to be formatted across lines,
+   * which is every list long enough to grow a duplicate, was invisible to it. It passed while
+   * eight duplicates sat in the tree, one of them inside a file it was scanning.
+   *
+   * The trailing `\s*` before the bracket is the whole fix.
+   */
+  const ROLE_LIST = /[[(]((?:\s*SystemRole\.[A-Z_]+\s*,?)+\s*)[\])]/g;
+
+  it('names each role at most once, anywhere in the app', () => {
+    const offenders: string[] = [];
+
+    for (const file of sourceFiles()) {
+      const source = readFileSync(file, 'utf8');
+      for (const list of source.matchAll(ROLE_LIST)) {
+        const names = [...list[1].matchAll(/SystemRole\.([A-Z_]+)/g)].map((m) => m[1]);
+        if (names.length !== new Set(names).size) {
+          const line = source.slice(0, list.index).split('\n').length;
+          offenders.push(`${file.replace(SRC, 'src')}:${line} → ${names.join(', ')}`);
+        }
+      }
     }
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('actually finds role lists, so a passing run cannot mean it scanned nothing', () => {
+    const total = sourceFiles()
+      .reduce((n, f) => n + [...readFileSync(f, 'utf8').matchAll(ROLE_LIST)].length, 0);
+    expect(total).toBeGreaterThan(20);
   });
 
   /** The helpers still answer the same question they did before the duplicates came out. */

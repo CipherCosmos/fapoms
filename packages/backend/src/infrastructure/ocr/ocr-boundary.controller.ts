@@ -47,7 +47,21 @@ export class OcrBoundaryController {
     };
   }
 
+  /**
+   * Reading a job's status, which nobody could do.
+   *
+   * This carried no `@Roles`, and the class runs `RolesGuard` — which denies by default, so a
+   * route naming no audience is refused for everyone including an administrator. Its three
+   * siblings all name one; this one was simply missed, and the failure mode is silent because
+   * a 403 from a missing list is indistinguishable from a 403 on purpose.
+   *
+   * It takes the audience and the grant of the route below it, which is the other half of the
+   * same job. `ocr:view` would be the truer name, but no role holds it — and inventing a
+   * permission nobody grants is how a route becomes uncallable, which is the bug being fixed.
+   */
   @Get('jobs/:id')
+  @Roles(SystemRole.ADMIN, SystemRole.DESK)
+  @RequirePermissions('ocr:edit:organization')
   @ApiOperation({ summary: 'Get status tracking details of an OCR job' })
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
     const job = await this.ocrProcessingService.findOne(id);

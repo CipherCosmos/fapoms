@@ -18,7 +18,6 @@ import {
 
 const APPROVER_ROLES = [
   SystemRole.ADMIN,
-  SystemRole.ADMIN,
   SystemRole.OPERATIONS,
 ];
 const RECORDS_PAGE_SIZE = 50;

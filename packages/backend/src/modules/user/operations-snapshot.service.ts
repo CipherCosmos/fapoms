@@ -43,7 +43,17 @@ export class OperationsSnapshotService {
     // Their own share of it, and nothing about how the desk is doing overall.
     DESK_OPERATOR:  ['validation'],
     AUDITOR:        ['funnel', 'projects', 'activity'],
-    CLIENT_USER:    ['projects'],
+    /**
+     * Nothing, until a client user can be scoped to their own client.
+     *
+     * This read `['projects']` under the heading "Your audit programme". It was not their audit
+     * programme: `projects` is a territorial section, narrowed only by region, and a client user
+     * holds no region assignment — so every client user was shown every client's projects, with
+     * a label asserting the rows were theirs. `users` has no client column and there is no
+     * user↔client table, so there is no correct answer to give here yet; an empty dashboard is
+     * the honest one. Restored the moment the client boundary lands.
+     */
+    CLIENT_USER:    [],
   };
 
   /** Headline shown at the top, so the page states whose view it is. */
@@ -53,7 +63,7 @@ export class OperationsSnapshotService {
     DESK:           'Paperwork in, paperwork out, and what is waiting',
     DESK_OPERATOR:  'Your queue',
     AUDITOR:        'Read-only overview',
-    CLIENT_USER:    'Your audit programme',
+    CLIENT_USER:    'Your audit programme',  // Restored with the section above.
   };
 
   /**

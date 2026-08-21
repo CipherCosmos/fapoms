@@ -82,12 +82,47 @@ export class PlatformSettingsController {
     return { success: true, data: { maxNegotiationRounds, checkInGeofenceMeters, maxSingleExpenseClaim } };
   }
 
+  /**
+   * Which groups a role may read, for the two roles that reach one section and no more.
+   *
+   * The rest of this controller is administrator-only by the platform owner's decision, and
+   * that stands. But two features were folded into the settings page — the eligibility rules
+   * OPERATIONS owns, and the travel rate card AUDITOR has always been able to read — and
+   * neither should have cost their owners access to them. The web route was widened to admit
+   * both roles without this endpoint being widened to match, so an auditor opened the page,
+   * every group came back 403, and they were shown an empty screen.
+   *
+   * A role listed here gets those groups and nothing else. Writes remain administrator-only:
+   * `@Put`/`@Delete` below carry their own `@Roles(...SETTINGS_ADMIN_ROLES)`.
+   */
+  private static readonly READABLE_GROUPS: Record<string, string[]> = {
+    [SystemRole.AUDITOR]: ['transport'],
+    // Operations reach the page for the eligibility rules, which are served by the planning
+    // module, not from here — so they read no settings groups at all.
+    [SystemRole.OPERATIONS]: [],
+  };
+
   @Get()
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR)
   @ApiOperation({ summary: 'Every platform setting, its value in force, and where that value came from' })
-  async findAll(): Promise<{ success: boolean; data: { groups: typeof SETTINGS_GROUPS; settings: ResolvedSetting[] } }> {
+  async findAll(@Req() req: any): Promise<{ success: boolean; data: { groups: (typeof SETTINGS_GROUPS)[number][]; settings: ResolvedSetting[] } }> {
+    const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean);
+    const isAdmin = roles.includes(SystemRole.ADMIN);
+
+    const settings = await this.settings.describeAll();
+    if (isAdmin) return { success: true, data: { groups: [...SETTINGS_GROUPS], settings } };
+
+    // The union of what this caller's roles may read — empty for anyone not listed above,
+    // which is the safe direction and matches the class gate they would otherwise have hit.
+    const allowed = new Set(
+      roles.flatMap((r) => PlatformSettingsController.READABLE_GROUPS[r] ?? []),
+    );
     return {
       success: true,
-      data: { groups: SETTINGS_GROUPS, settings: await this.settings.describeAll() },
+      data: {
+        groups: SETTINGS_GROUPS.filter((g) => allowed.has(g.key)),
+        settings: settings.filter((s) => allowed.has(s.group)),
+      },
     };
   }
 

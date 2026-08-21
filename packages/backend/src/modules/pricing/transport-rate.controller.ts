@@ -82,8 +82,6 @@ export class UpdateTransportRateRequestDto {
 
 const RATE_MANAGER_ROLES = [
   SystemRole.ADMIN,
-  SystemRole.ADMIN,
-  SystemRole.OPERATIONS,
   SystemRole.OPERATIONS,
 ] as const;
 

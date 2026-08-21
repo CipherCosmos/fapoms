@@ -2613,7 +2613,6 @@ export class AssignmentService {
       staffOverride = actorRoles.some((r) =>
         [
           SystemRole.ADMIN,
-          SystemRole.ADMIN,
           SystemRole.OPERATIONS,
         ].includes(r as SystemRole),
       );

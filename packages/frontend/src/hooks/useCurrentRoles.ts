@@ -137,8 +137,6 @@ export function canManageTransportRates(roles: SystemRole[]): boolean {
   return roles.some((r) =>
     [
       SystemRole.ADMIN,
-      SystemRole.ADMIN,
-      SystemRole.OPERATIONS,
       SystemRole.OPERATIONS,
     ].includes(r),
   );
