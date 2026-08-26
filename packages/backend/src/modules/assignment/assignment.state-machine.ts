@@ -5,7 +5,16 @@ import { AssignmentStatus } from '@fapoms/shared';
 export class AssignmentStateMachine {
   private static readonly VALID_PATHS: Record<AssignmentStatus, AssignmentStatus[]> = {
     [AssignmentStatus.PENDING]: [AssignmentStatus.ACCEPTED, AssignmentStatus.REJECTED, AssignmentStatus.CANCELLED],
-    [AssignmentStatus.ACCEPTED]: [AssignmentStatus.ACCEPTED, AssignmentStatus.CHECKED_IN, AssignmentStatus.CANCELLED],
+    // COMPLETED is reachable from ACCEPTED, but only through `completeAudit`, which refuses it
+    // without a stated reason — see there. The desk cannot check in for somebody (the check-in
+    // is geofenced and lives in the field app), so without this a job whose assayer never
+    // opened the app could not be closed at all.
+    [AssignmentStatus.ACCEPTED]: [
+      AssignmentStatus.ACCEPTED,
+      AssignmentStatus.CHECKED_IN,
+      AssignmentStatus.COMPLETED,
+      AssignmentStatus.CANCELLED,
+    ],
     [AssignmentStatus.CHECKED_IN]: [AssignmentStatus.CHECKED_IN, AssignmentStatus.ACCEPTED, AssignmentStatus.IN_PROGRESS, AssignmentStatus.COMPLETED, AssignmentStatus.CANCELLED],
     // CHECKED_IN is reachable from IN_PROGRESS because a field check-in is retried: a flaky
     // mobile connection, a GPS refresh, or a second attempt at the geofence all re-issue it
@@ -81,14 +90,35 @@ export class AssignmentStateMachine {
   }
 
   /**
-   * Completion must go through the machine like every other transition. Bypassing it let an
-   * assignment be marked COMPLETED straight from PENDING/ACCEPTED — no on-site check-in, no
-   * evidence — which then triggered the auto-bill listener and produced a real client invoice
-   * and assayer payable for a visit that never happened. VALID_PATHS only permits
-   * CHECKED_IN/IN_PROGRESS -> COMPLETED, so this refuses completion of work that was never begun.
+   * Closing out the field work.
+   *
+   * Completion triggers the auto-bill listener: a real client invoice line and a real assayer
+   * payable. So an assignment marked done straight from PENDING — an offer nobody even
+   * accepted — would bill for a visit that never happened, and VALID_PATHS still refuses that.
+   *
+   * The check-in is the evidence that somebody attended, and it is a geofenced action in the
+   * field app. The desk cannot perform one. That left an accepted job whose assayer never
+   * opened the app impossible to close by anyone, which is not a safeguard — it is a dead end,
+   * and it is what operations hit. The desk may close it, and must say why: a job completed
+   * without a check-in behind it records the reason on the assignment, so money booked on
+   * somebody's word rather than on attendance is visible wherever the job is reviewed.
+   *
+   * The test is `checkedInAt`, not the status — that is the actual evidence, and it survives an
+   * assignment moving back and forth between CHECKED_IN and IN_PROGRESS on a retried check-in.
    */
-  static completeAudit(assignment: AssignmentEntity, userId: string) {
+  static completeAudit(assignment: AssignmentEntity, userId: string, reason?: string) {
     AssignmentStateMachine.validateTransition(assignment.status, AssignmentStatus.COMPLETED);
+
+    const attended = !!assignment.checkedInAt;
+    const stated = (reason ?? '').trim();
+    if (!attended && !stated) {
+      throw new BadRequestException(
+        'This assignment has no check-in, so completing it books the payout and the client '
+        + 'line on your word alone. Say why it is being closed without one.',
+      );
+    }
+    if (!attended) assignment.completedWithoutCheckInReason = stated;
+
     const prev = assignment.status;
     assignment.status = AssignmentStatus.COMPLETED;
     return { previousState: prev, newState: assignment.status, userId };

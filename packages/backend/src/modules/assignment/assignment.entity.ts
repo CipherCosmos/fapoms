@@ -157,6 +157,23 @@ export class AssignmentEntity extends BaseEntity {
   @Column({ name: 'reject_reason', type: 'text', nullable: true })
   rejectReason: string | null;
 
+  /**
+   * Why this job was closed without a check-in behind it.
+   *
+   * Completion books money — it raises the assayer's payable and the client's billing line —
+   * so the rule is that only attended work completes. But the check-in is a geofenced action
+   * in the field app, and the desk has no way to perform one: a dead phone, no signal at the
+   * branch, or an assayer who simply does not use the app left the job impossible to close,
+   * which is what operations ran into.
+   *
+   * So the desk may close it, and must say why. Set only on that path — a job completed the
+   * ordinary way, after a real check-in, leaves this null. A value here means the money was
+   * booked on somebody's word rather than on attendance evidence, and it is shown wherever
+   * the assignment is reviewed so that is visible rather than silent.
+   */
+  @Column({ name: 'completed_without_check_in_reason', type: 'text', nullable: true })
+  completedWithoutCheckInReason: string | null;
+
   @ManyToOne(() => ProjectBranchEntity, { onDelete: 'CASCADE', nullable: true })
   @JoinColumn({ name: 'project_branch_id' })
   projectBranch: ProjectBranchEntity | null;

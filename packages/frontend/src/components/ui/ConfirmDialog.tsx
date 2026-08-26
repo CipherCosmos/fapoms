@@ -77,6 +77,18 @@ export interface ConfirmOptions {
    * Pass the record's own name. Reserved for deleting records and moving money.
    */
   confirmPhrase?: string;
+  /**
+   * Ask for a short written reason, and require one before the action can proceed.
+   *
+   * For decisions that are allowed but should be accounted for — closing a job with no
+   * check-in behind it books real money on somebody's word, and the person doing it is the
+   * only one who can say why. The text is returned to the caller to store; the dialog only
+   * insists it is not blank.
+   */
+  reasonPrompt?: {
+    label: string;
+    placeholder?: string;
+  };
 }
 
 interface PendingConfirm extends ConfirmOptions {
@@ -85,16 +97,37 @@ interface PendingConfirm extends ConfirmOptions {
 
 export const useConfirm = (): {
   confirm: (options: ConfirmOptions) => Promise<boolean>;
+  /** Like `confirm`, but also hands back the reason the user typed. */
+  confirmWithReason: (options: ConfirmOptions) => Promise<{ confirmed: boolean; reason: string }>;
   confirmDialog: React.ReactNode;
 } => {
   const [pending, setPending] = React.useState<PendingConfirm | null>(null);
   const [typed, setTyped] = React.useState('');
+  const [reason, setReason] = React.useState('');
+  // Read by `settle`, which is a stable callback and would otherwise close over the first
+  // render's empty string — the reason would always come back blank.
+  const reasonRef = React.useRef('');
+  reasonRef.current = reason;
 
   const confirm = React.useCallback(
     (options: ConfirmOptions) =>
       new Promise<boolean>((resolve) => {
         setTyped('');
-        setPending({ ...options, resolve });
+        setReason('');
+        setPending({ ...options, resolve: (ok) => resolve(ok) });
+      }),
+    [],
+  );
+
+  const confirmWithReason = React.useCallback(
+    (options: ConfirmOptions) =>
+      new Promise<{ confirmed: boolean; reason: string }>((resolve) => {
+        setTyped('');
+        setReason('');
+        setPending({
+          ...options,
+          resolve: (ok) => resolve({ confirmed: ok, reason: ok ? reasonRef.current.trim() : '' }),
+        });
       }),
     [],
   );
@@ -109,10 +142,14 @@ export const useConfirm = (): {
       return null;
     });
     setTyped('');
+    setReason('');
   }, []);
 
   const phrase = pending?.confirmPhrase?.trim() ?? '';
   const phraseSatisfied = !phrase || typed.trim() === phrase;
+  // A reason that was asked for has to be given. Blank does not count.
+  const reasonSatisfied = !pending?.reasonPrompt || reason.trim().length > 0;
+  const canConfirm = phraseSatisfied && reasonSatisfied;
   const danger = pending?.tone === 'danger';
 
   const reversibleNote =
@@ -148,12 +185,12 @@ export const useConfirm = (): {
             className="btn btn-primary"
             // The action button is disabled — not merely warned about — until the phrase
             // matches, so the dangerous path cannot be completed by clicking through.
-            disabled={!phraseSatisfied}
+            disabled={!canConfirm}
             onClick={() => settle(true)}
             style={
               danger
-                ? { background: 'var(--danger)', borderColor: 'var(--danger)', opacity: phraseSatisfied ? 1 : 0.5 }
-                : { opacity: phraseSatisfied ? 1 : 0.5 }
+                ? { background: 'var(--danger)', borderColor: 'var(--danger)', opacity: canConfirm ? 1 : 0.5 }
+                : { opacity: canConfirm ? 1 : 0.5 }
             }
           >
             {pending?.confirmLabel}
@@ -175,6 +212,25 @@ export const useConfirm = (): {
           {reversibleNote}
         </div>
       )}
+      {pending?.reasonPrompt && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+          <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
+            {pending.reasonPrompt.label}
+          </label>
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder={pending.reasonPrompt.placeholder}
+            rows={3}
+            autoFocus
+            style={{
+              padding: '9px 11px', fontSize: '13px', borderRadius: '8px', resize: 'vertical',
+              background: 'var(--bg-input)', color: 'inherit',
+              border: '1px solid var(--border-color)', outline: 'none', lineHeight: 1.5,
+            }}
+          />
+        </div>
+      )}
       {phrase && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
           <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
@@ -184,12 +240,12 @@ export const useConfirm = (): {
             value={typed}
             onChange={(e) => setTyped(e.target.value)}
             placeholder={phrase}
-            autoFocus
+            autoFocus={!pending?.reasonPrompt}
           />
         </div>
       )}
     </Modal>
   );
 
-  return { confirm, confirmDialog };
+  return { confirm, confirmWithReason, confirmDialog };
 };

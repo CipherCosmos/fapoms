@@ -909,9 +909,9 @@ export class AssignmentService {
         assignment.projectBranch.status = ProjectBranchStatus.CANDIDATE_SEARCH;
       }
     } else if (targetStatus === AssignmentStatus.COMPLETED) {
-      // Validated: only CHECKED_IN/IN_PROGRESS may complete. Prevents marking un-visited work done
-      // and auto-billing it (see AssignmentStateMachine.completeAudit).
-      event = AssignmentStateMachine.completeAudit(assignment, userId);
+      // Refuses completion of work that was never accepted, and refuses closing an unattended
+      // job without a stated reason — see AssignmentStateMachine.completeAudit.
+      event = AssignmentStateMachine.completeAudit(assignment, userId, reason);
       assignment.completionDate = new Date();
       if (assignment.projectBranch && assignment.projectBranch.status !== ProjectBranchStatus.AUDIT_COMPLETED) {
         pbEvent = ProjectBranchStateMachine.completeAudit(assignment.projectBranch, userId);

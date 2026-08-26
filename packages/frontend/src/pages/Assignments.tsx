@@ -107,6 +107,28 @@ const COMPLETE_CONFIRM = {
   reversible: false,
 } as const;
 
+/**
+ * Closing out a job with no check-in behind it.
+ *
+ * The check-in is the evidence somebody attended, and it happens in the field app — the desk
+ * cannot perform one. When it never happened, completing still raises the assayer's payout and
+ * the client's billing line, so the desk is asked to say why rather than being either blocked
+ * or waved through. The reason is stored on the assignment and shown with it afterwards.
+ */
+const COMPLETE_WITHOUT_CHECK_IN_CONFIRM = {
+  title: 'Complete without a check-in?',
+  message:
+    'Nobody checked in on site for this one. Completing it still books the assayer’s payout and '
+    + 'the client’s billing line, so this will be recorded against your name with the reason below.',
+  confirmLabel: 'Complete and record the reason',
+  reversible: false,
+  tone: 'danger' as const,
+  reasonPrompt: {
+    label: 'Why is this being closed without a check-in?',
+    placeholder: 'e.g. Attended, but no signal at the branch to check in',
+  },
+} as const;
+
 // ── Shared status badge — single source of truth, used by both the list rows
 // and the detail panel header (previously duplicated as two separate inline IIFEs).
 // Colours come from the canonical branch-status tone in statusLabels, so this badge
@@ -199,7 +221,7 @@ export const Assignments: React.FC = () => {
   // The in-app confirmation dialog. `window.confirm` renders the browser's own pop-up, which the
   // office staff who run this desk have been trained to dismiss unread, and whose "OK" button
   // never names the action it is about to take.
-  const { confirm, confirmDialog } = useConfirm();
+  const { confirm, confirmWithReason, confirmDialog } = useConfirm();
   /**
    * Whether the detail panel's secondary lifecycle actions (cancel / reassign / escalate) are
    * showing. The panel used to present six equal-weight buttons at once, so the one normal next
@@ -257,15 +279,36 @@ export const Assignments: React.FC = () => {
 
   // Row-level quick actions: act straight from the list without opening the detail panel first —
   // the two commonest desk actions (confirm an offer, close out finished work) become one click.
+  /**
+   * Ask the right question for this job, and hand back the reason if one was needed.
+   *
+   * Completion is offered from the row and from the detail panel, and both must behave the
+   * same. Which dialog appears depends on whether anyone checked in: with a check-in it is a
+   * plain confirmation, without one the desk is asked to account for it, because completing
+   * books the payout and the client line either way.
+   *
+   * `null` means the operator backed out.
+   */
+  const askToComplete = async (attended: boolean): Promise<{ reason?: string } | null> => {
+    if (attended) return (await confirm(COMPLETE_CONFIRM)) ? {} : null;
+    const { confirmed, reason } = await confirmWithReason(COMPLETE_WITHOUT_CHECK_IN_CONFIRM);
+    return confirmed ? { reason } : null;
+  };
+
   const [quickBusyId, setQuickBusyId] = useState<string | null>(null);
-  const quickAction = async (asnId: string, targetStatus: 'ACCEPTED' | 'COMPLETED') => {
+  const quickAction = async (asnId: string, targetStatus: 'ACCEPTED' | 'COMPLETED', attended = true) => {
     if (quickBusyId) return;
-    if (targetStatus === 'COMPLETED' && !(await confirm(COMPLETE_CONFIRM))) return;
+    let reason: string | undefined;
+    if (targetStatus === 'COMPLETED') {
+      const answer = await askToComplete(attended);
+      if (!answer) return;
+      reason = answer.reason;
+    }
     setQuickBusyId(asnId);
     try {
       await api.request(`/assignments/${asnId}/transition`, {
         method: 'POST',
-        body: JSON.stringify({ targetStatus }),
+        body: JSON.stringify({ targetStatus, reason }),
       });
       queryClient.invalidateQueries({ queryKey: queryKeys.assignments.all });
     } catch (err: any) {
@@ -931,7 +974,7 @@ export const Assignments: React.FC = () => {
                             </button>
                           )}
                           {canComplete && (
-                            <button onClick={() => quickAction(asn.id, 'COMPLETED')} disabled={rowBusy}
+                            <button onClick={() => quickAction(asn.id, 'COMPLETED', !!asn.checkedInAt)} disabled={rowBusy}
                               className="btn btn-primary" style={{ padding: '3px 9px', fontSize: '10.5px' }}>
                               {rowBusy ? '…' : 'Complete'}
                             </button>
@@ -1045,7 +1088,10 @@ export const Assignments: React.FC = () => {
                           )}
                           {canComplete && (
                             <button
-                              onClick={async () => { if (await confirm(COMPLETE_CONFIRM)) runTransition('COMPLETED'); }}
+                              onClick={async () => {
+                                const answer = await askToComplete(!!selectedAsn.checkedInAt);
+                                if (answer) runTransition('COMPLETED', answer.reason);
+                              }}
                               disabled={actionBusy}
                               className="btn btn-primary"
                               style={{ padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700, background: 'var(--success)', borderColor: 'var(--success)' }}
