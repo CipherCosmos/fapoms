@@ -32,6 +32,9 @@ export const ACTION_AREA_LABELS: Record<string, string> = {
   Record: 'Personal details',
   Onboarding: 'Onboarding',
   Compliance: 'Certificates & IDs',
+  // Distinct from Compliance above, which is about paper that lapses. This one is about whether
+  // the person attending is the person we vetted — the concern the drawer's Vetting tab holds.
+  Vetting: 'Vetting',
   Staffing: 'Coverage',
   Utilisation: 'Workload',
 };

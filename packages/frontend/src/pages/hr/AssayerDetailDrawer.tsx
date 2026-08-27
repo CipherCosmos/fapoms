@@ -4,7 +4,7 @@ import {
   X, Edit2, ArrowRightLeft, AlertTriangle, CheckCircle2,
   User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, MapPin, KeyRound, ShieldCheck,
 } from 'lucide-react';
-import { nextAssayerLifecycleStates, AssayerLifecycleStatus, assayerLifecycleLabel, activityEventLabel, employmentTypeLabel, daysUntilExpiry } from '@fapoms/shared';
+import { nextAssayerLifecycleStates, AssayerLifecycleStatus, assayerLifecycleLabel, activityEventLabel, employmentTypeLabel, daysUntilExpiry, AssayerEngagementType, AssayerUnavailableReason } from '@fapoms/shared';
 
 import { api } from '../../services/api';
 import { Select, useConfirm } from '../../components/ui';
@@ -23,6 +23,41 @@ import { AssayerVettingTab } from './AssayerVettingTab';
 import { attributeTypeLabel } from './HrCapabilityPage';
 import { todayDateKey, localDateKey } from '../../utils/statusLabels';
 import { counted } from '../../utils/plural';
+
+/**
+ * How they are engaged, and why they are not available — the two halves of the roster's
+ * "Active / Inactive" column, which was one cell holding several separate facts.
+ */
+const ENGAGEMENT_LABELS: Record<string, string> = {
+  [AssayerEngagementType.REGULAR]: 'Regular',
+  [AssayerEngagementType.LOCAL]: 'Local',
+  [AssayerEngagementType.BACK_UP]: 'Back-up',
+  [AssayerEngagementType.AGENCY_AUDIT]: 'Agency audits',
+  [AssayerEngagementType.MYSTERY_AUDIT]: 'Mystery audits',
+};
+
+const UNAVAILABLE_LABELS: Record<string, string> = {
+  [AssayerUnavailableReason.REJECTED_BY_US]: 'We rejected them',
+  [AssayerUnavailableReason.NOT_INTERESTED]: 'Not interested',
+  // The spreadsheet's word for this is "Expired"; it means the person has died, and the record
+  // should not say "expired" to whoever opens it next.
+  [AssayerUnavailableReason.DECEASED]: 'Deceased',
+  [AssayerUnavailableReason.NO_WORK_IN_AREA]: 'No work in their area',
+  [AssayerUnavailableReason.MOVED_ABROAD]: 'Moved out of India',
+  [AssayerUnavailableReason.MOVED_TO_COMPANY]: 'Now engaged through a company',
+};
+
+/**
+ * Aadhaar shown as the last four digits only.
+ *
+ * Enough to confirm which document is on file, which is the only reason this screen shows it.
+ * The whole number is a KYC identifier and is reachable through the edit form by the two roles
+ * entitled to it — printing it on a summary anyone with the record open can read over is not.
+ */
+const maskAadhaar = (v?: string | null): string | null => {
+  const digits = String(v ?? '').replace(/\D/g, '');
+  return digits.length >= 4 ? `•••• •••• ${digits.slice(-4)}` : null;
+};
 
 /** Whole days until a recorded expiry; null when nothing is recorded. See daysUntilExpiry. */
 const expiryDays = (iso?: string | null): number | null => daysUntilExpiry(iso);
@@ -383,6 +418,29 @@ export const AssayerDetailDrawer: React.FC<{
 
               {tab === 'summary' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                  {/*
+                    Above the fold, in the alarm colour, because it is the one fact on this screen
+                    that says the person being planned is not the person who will attend.
+
+                    21 rows of the appraiser roster record it — "Staff doing audit", "Husband doing
+                    audit" — and every audit those rows cover was signed off by somebody the client
+                    never empanelled and we never vetted. Left in a fact grid it reads as another
+                    field; it is the reason to stop.
+                  */}
+                  {a.workDoneBySomeoneElse && (
+                    <div style={{ padding: '11px 13px', borderRadius: '8px', background: 'var(--status-cancelled-bg, rgba(220,80,80,0.10))', border: '1px solid var(--danger)' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '7px', color: 'var(--danger)', fontWeight: 700, fontSize: '12.5px' }}>
+                        <AlertTriangle size={14} /> Their work is being done by somebody else
+                      </div>
+                      <div style={{ margin: '7px 0 0', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                        The roster records that audits under this code are attended by a member of
+                        staff, a relative or a friend — not by the person empanelled here. Nobody
+                        has vetted whoever is entering the branch, and the client has not accepted
+                        them. Resolve this before planning any further work on this code.
+                      </div>
+                    </div>
+                  )}
+
                   {missing.length > 0 && (
                     <div style={{ padding: '11px 13px', borderRadius: '8px', background: 'var(--status-pending-bg)', border: '1px solid rgba(216,174,71,0.25)' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '7px', color: 'var(--warning)', fontWeight: 700, fontSize: '12.5px' }}>
@@ -480,6 +538,13 @@ export const AssayerDetailDrawer: React.FC<{
                     ['Employment', employmentTypeLabel(a.employmentType)], ['Employee ID', a.employeeId],
                     ['Department', a.department],
                     ['Joined', fmtDate(a.joiningDate)], ['Experience', `${a.experienceYears ?? 0} years`],
+                    ['Engaged as', a.engagementType ? (ENGAGEMENT_LABELS[a.engagementType] ?? a.engagementType) : null],
+                    ['Not available because', a.unavailableReason ? (UNAVAILABLE_LABELS[a.unavailableReason] ?? a.unavailableReason) : null],
+                    ['HR owner', a.hrOwnerName],
+                  ]} />
+                  <FactGroup title="Who they are" rows={[
+                    ['Date of birth', fmtDate(a.dateOfBirth)], ['Qualification', a.qualification],
+                    ['Aadhaar', maskAadhaar(a.aadhaarNumber)], ['VSTS code', a.vstsCode],
                   ]} />
                   <FactGroup title="How much work they can take" rows={[
                     ['Most jobs in a day', a.maxDailyWorkload], ['Most jobs in a week', a.maxWeeklyWorkload],

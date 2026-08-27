@@ -374,12 +374,39 @@ export class HrWorkforceService {
           WHERE d.is_active = true AND ${ON_ROSTER_A}) AS "withFile"
     `);
 
+    /**
+     * People whose audits are attended by somebody other than the person empanelled.
+     *
+     * The roster records it in words — "Staff doing audit", "Husband doing audit" — and every
+     * audit those rows cover was signed off by somebody no client empanelled and nobody vetted.
+     * It is the most serious thing the import surfaces, so it gets a count of its own rather
+     * than living inside a per-record completeness percentage.
+     *
+     * Counted separately from the list, for the reason spelled out above `incompleteTotals`:
+     * a capped list's length is not a total, and a compliance figure that quietly stops at the
+     * cap reads as "that is all of them".
+     */
+    const [workByOthersTotal] = await this.dataSource.query(`
+      SELECT COUNT(*)::int AS count FROM assayers
+      WHERE ${ON_ROSTER} AND work_done_by_someone_else = true
+    `);
+    const workByOthers = await this.dataSource.query(`
+      SELECT id, assayer_code AS "assayerCode", display_name AS "displayName",
+             state, lifecycle_status AS "lifecycleStatus"
+      FROM assayers
+      WHERE ${ON_ROSTER} AND work_done_by_someone_else = true
+      ORDER BY assayer_code
+      LIMIT 100
+    `);
+
     return {
       roster: total,
       fields,
       incomplete,
       incompleteCount: HrWorkforceService.num(incompleteTotals?.count),
       governmentDocuments: { byStatus: govDocs, ...docCoverage },
+      workByOthers,
+      workByOthersCount: HrWorkforceService.num(workByOthersTotal?.count),
     };
   }
 
@@ -870,6 +897,20 @@ export class HrWorkforceService {
    */
   private deriveActions(parts: any): any[] {
     const actions: any[] = [];
+
+    // First, and on its own severity: this is not a gap in a record, it is somebody unvetted
+    // walking into a bank vault under a code we issued.
+    const workByOthers = parts.compliance?.workByOthersCount ?? 0;
+    if (workByOthers > 0) {
+      actions.push({
+        severity: 'critical',
+        area: 'Vetting',
+        title: `${workByOthers} ${workByOthers === 1 ? 'appraiser has' : 'appraisers have'} work attended by somebody else`,
+        detail: 'A member of staff, a relative or a friend is attending under their code. '
+          + 'That person is not vetted by us and not empanelled by the client.',
+        link: '/hr/roster?segment=someone-else',
+      });
+    }
 
     const criticalGaps = (parts.compliance?.fields ?? []).filter((f: any) => f.critical && f.missing > 0);
     for (const gap of criticalGaps) {

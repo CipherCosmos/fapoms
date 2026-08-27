@@ -50,6 +50,26 @@ export interface Assayer {
   workingHours: { start: string; end: string } | null;
   maxDailyWorkload: number;
   maxWeeklyWorkload: number;
+
+  /**
+   * Facts the appraiser roster carries that the record had no home for.
+   *
+   * `engagementType`, `unavailableReason` and `workDoneBySomeoneElse` come out of the roster's
+   * single "Active / Inactive" column, which was holding three separate things in one cell.
+   * The last is a compliance matter — the person empanelled is not the person attending — and
+   * 21 rows of the roster say so.
+   *
+   * Optional because a record created in this app rather than imported has none of them.
+   */
+  aadhaarNumber?: string | null;
+  bankName?: string | null;
+  dateOfBirth?: string | null;
+  qualification?: string | null;
+  vstsCode?: string | null;
+  hrOwnerName?: string | null;
+  engagementType?: string | null;
+  unavailableReason?: string | null;
+  workDoneBySomeoneElse?: boolean;
 }
 
 export const STATUS_COLORS: Record<string, string> = {

@@ -90,6 +90,15 @@ const SEGMENTS: { key: string; label: string; match: (a: Assayer) => boolean }[]
     label: 'Exited',
     match: (a) => EXITED_STAGES.includes(a.lifecycleStatus) || !!a.exitDate || !!a.terminationDate,
   },
+  // 21 people on the roster have audits attended by a member of staff, a relative or a friend
+  // rather than by the person empanelled. The drawer says so once the record is open; without a
+  // chip there is no way to ask who they all are, and that is the only question worth asking
+  // about a compliance flag.
+  {
+    key: 'someone-else',
+    label: 'Work done by somebody else',
+    match: (a) => a.workDoneBySomeoneElse === true,
+  },
 ];
 
 type SortKey = 'displayName' | 'assayerCode' | 'lifecycleStatus' | 'state' | 'experienceYears' | 'completeness' | 'joiningDate';
@@ -122,7 +131,13 @@ const head: React.CSSProperties = {
   whiteSpace: 'nowrap', userSelect: 'none',
 };
 
-export const AssayerRoster: React.FC = () => {
+export const AssayerRoster: React.FC<{
+  /**
+   * True totals for segments whose count must not be the loaded window's.
+   * Keyed by segment key; a segment with no entry counts what arrived, as before.
+   */
+  exactCounts?: Partial<Record<string, number | undefined>>;
+}> = ({ exactCounts }) => {
 
   const navigate = useNavigate();
   const canManage = canManageAssayers(useCurrentRoles());
@@ -142,7 +157,15 @@ export const AssayerRoster: React.FC = () => {
   >(null);
   const [noticeExpanded, setNoticeExpanded] = useState(false);
 
-  const [segment, setSegment] = useState('all');
+  // Worklists elsewhere link straight to a segment (`/hr/roster?segment=someone-else`), so a
+  // row that says "21 appraisers have work attended by somebody else" lands on those 21 rather
+  // than on the roster with the reader left to find the chip.
+  const [segment, setSegment] = useState(
+    () => {
+      const wanted = new URLSearchParams(window.location.search).get('segment');
+      return wanted && SEGMENTS.some((s) => s.key === wanted) ? wanted : 'all';
+    },
+  );
   const [search, setSearch] = useState('');
   const [stateFilter, setStateFilter] = useState('ALL');
   const [statusFilter, setStatusFilter] = useState('ALL');
@@ -270,6 +293,17 @@ export const AssayerRoster: React.FC = () => {
       .sort((a, b) => assayerLifecycleLabel(a).localeCompare(assayerLifecycleLabel(b))),
     [assayers],
   );
+
+  /**
+   * When the active segment's true total is bigger than what is listed, by how much.
+   * Null when they agree, when there is no exact total, or when another filter is narrowing.
+   */
+  const segmentShortfall = useMemo(() => {
+    const total = exactCounts?.[segment];
+    if (total === undefined) return null;
+    const shown = assayers.filter(SEGMENTS.find((s) => s.key === segment)!.match).length;
+    return total > shown ? { total, shown } : null;
+  }, [exactCounts, segment, assayers]);
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -622,7 +656,7 @@ export const AssayerRoster: React.FC = () => {
       )}
       <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
         {SEGMENTS.map((s) => {
-          const n = assayers.filter(s.match).length;
+          const n = exactCounts?.[s.key] ?? assayers.filter(s.match).length;
           const on = segment === s.key;
           return (
             <button
@@ -640,6 +674,23 @@ export const AssayerRoster: React.FC = () => {
           );
         })}
       </div>
+
+      {/*
+        A chip counting the whole roster above a list holding part of it.
+        
+        The banner higher up says the chips describe the loaded page, and for most of them it is
+        true. A segment given an exact total is the exception, and leaving the two numbers to sit
+        side by side unexplained is worse than either alone — the reader cannot tell whether six
+        people are missing or the count is wrong. Said plainly, and only when they disagree.
+      */}
+      {segmentShortfall !== null && (
+        <div style={{ fontSize: '12px', color: 'var(--warning)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <AlertTriangle size={13} />
+          Showing {segmentShortfall.shown} of {segmentShortfall.total}. The other{' '}
+          {segmentShortfall.total - segmentShortfall.shown} are outside the {ROSTER_LIMIT} rows
+          loaded here — search by name or code to reach them.
+        </div>
+      )}
 
       {/* Toolbar */}
       <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>

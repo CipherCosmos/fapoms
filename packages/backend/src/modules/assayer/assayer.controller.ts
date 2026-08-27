@@ -1174,8 +1174,17 @@ export class AssayerController {
   // than spread across the controller because they answer one question together — may we send
   // this person out, and to whom — and `dossier` is how the workspace asks it.
 
+  /**
+   * ADMIN and OPERATIONS only, matching `FULL_ACCESS` in assayer-visibility.ts.
+   *
+   * The dossier carries background-check verdicts — criminal and civil cases — and the names and
+   * personal phone numbers of third parties who acted as references. `assayer-visibility.ts`
+   * states the rule for the other staff roles: enough to know who did the work, nothing about who
+   * they are. This is entirely the second kind, and the redaction interceptor cannot help here —
+   * it identifies assayers by their `assayerCode`, which a reference row does not carry.
+   */
   @Get(':assayerId/dossier')
-  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Everything the roster holds about one person beyond their own row' })
   async getDossier(@Param('assayerId', ParseUUIDPipe) assayerId: string) {
     const data = await this.rosterRecords.dossier(assayerId);

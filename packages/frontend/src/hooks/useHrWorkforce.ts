@@ -30,6 +30,12 @@ export interface HrWorkforceOverview {
     fields: { label: string; column: string; critical: boolean; blocks: string; have: number; missing: number; pct: number }[];
     incomplete: { id: string; assayerCode: string; displayName: string; state: string; district: string; lifecycleStatus: string; missing: string[] }[];
     governmentDocuments: { byStatus: { status: string; count: number }[]; roster: number; withGovDoc: number; withFile: number };
+    /**
+     * People whose audits are attended by somebody other than the person empanelled.
+     * The count is an aggregate; the list is capped at 100, so never derive one from the other.
+     */
+    workByOthers: { id: string; assayerCode: string; displayName: string; state: string; lifecycleStatus: string }[];
+    workByOthersCount: number;
   };
   expiries: {
     certifications: { rows: any[]; expired: number; within30: number; within90: number; within180: number };
