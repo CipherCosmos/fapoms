@@ -235,3 +235,27 @@ export function buildAssayerEditBody(
 
   return { body, problems };
 }
+
+/**
+ * The boxes whose value differs from what the record held when the form opened.
+ *
+ * The edit form pre-fills every field with its current value, which is right — an edit screen
+ * shows what is there. But handing all of that to `buildAssayerEditBody` meant every save
+ * rewrote every column: correcting a phone number sent the address, the bank account and the
+ * workload caps back with whatever they held when the modal opened, so two people editing
+ * different sections of the same person silently overwrote each other. Both saves returned 200.
+ *
+ * Working hours travel as a pair whenever either half moved. The server stores them as one
+ * object, so a changed start without the unchanged end reads as "clear the end time".
+ */
+export function changedFormKeys(
+  form: Record<string, string>,
+  initial: Record<string, string>,
+): string[] {
+  const changed = Object.keys(form).filter((k) => form[k] !== initial[k]);
+  const HOURS = ['workingHoursStart', 'workingHoursEnd'];
+  if (HOURS.some((k) => changed.includes(k))) {
+    for (const k of HOURS) if (!changed.includes(k)) changed.push(k);
+  }
+  return changed;
+}

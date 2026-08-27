@@ -1,14 +1,15 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { User, MapPin, Briefcase, Award, CreditCard, Clock, Phone, X, CheckCircle, Edit2, AlertTriangle } from 'lucide-react';
 import { INDIAN_STATES, todayDateKey, REGION_ORDER, REGION_LABELS, AssayerEngagementType, AssayerUnavailableReason } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { Modal, Select, useToast } from '../../components/ui';
 import { Autocomplete } from '../../components/ui/Autocomplete';
+import { counted } from '../../utils/plural';
 import { ChipMultiSelect } from '../../components/ui/ChipMultiSelect';
 import { useWorkforceVocabulary, asOptions } from '../../hooks/useWorkforceVocabulary';
 import type { Assayer } from './assayer-shared';
-import { STATUS_COLORS, buildAssayerEditBody } from './assayer-shared';
+import { STATUS_COLORS, buildAssayerEditBody, changedFormKeys, missingCriticalFields, CRITICAL_FIELDS } from './assayer-shared';
 import { userMessage } from '../../services/errors';
 import { fetchWithTimeout } from '../../services/http';
 
@@ -459,10 +460,32 @@ const renderFormField = (
     }
   };
 
+  /**
+   * What this field being empty stops the company doing.
+   *
+   * `CRITICAL_FIELDS` has carried this sentence all along — the record's Summary prints
+   * "Bank account — blocks payouts" and offers a Fill them in button. Pressing it opened a grid
+   * of identical grey boxes with none of that. Shown only while the box is still empty: once it
+   * is filled, the consequence has stopped applying and the line is noise.
+   */
+  const gap = CRITICAL_FIELDS.find((c) => String(c.key) === field.key);
+  const blocking = gap && !String(val ?? '').trim() ? gap.why : null;
+
   return (
     <div key={field.key} style={field.full ? { gridColumn: '1 / -1' } : {}}>
       <label style={labelStyle}>
-        {field.label}{field.required && <span style={{ color: 'var(--danger)', marginLeft: '2px' }}>*</span>}
+        {field.label}
+        {field.required && <span style={{ color: 'var(--danger)', marginLeft: '2px' }}>*</span>}
+        {blocking && (
+          <span
+            style={{
+              marginLeft: '6px', fontWeight: 600, fontSize: '10.5px', color: 'var(--danger)',
+              textTransform: 'none', letterSpacing: 0,
+            }}
+          >
+            needed — blocks {blocking}
+          </span>
+        )}
       </label>
       {field.people ? (
         /**
@@ -1230,7 +1253,18 @@ export const EditAssayerModal: React.FC<{
   const { toast } = useToast();
   const [urlParams] = useSearchParams();
   const wantedTab = sectionTabIndex(initialSection ?? urlParams.get('section'), EDIT_FIELD_GROUPS);
-  const [form, setForm] = useState<Record<string, string>>(() => {
+  /**
+   * The record as boxes, and the same thing kept aside untouched.
+   *
+   * The form is pre-filled with every current value, which is right — an edit screen shows what
+   * is there. But it meant `buildAssayerEditBody` received all 42 fields on every save, so
+   * correcting a phone number rewrote the address, the bank account and the workload caps with
+   * whatever they held when the modal opened. Two people editing different sections of the same
+   * person overwrote each other, and neither had touched the other's fields.
+   *
+   * `initial` is the comparison that turns "everything on screen" back into "what changed".
+   */
+  const snapshot = (): Record<string, string> => {
     const f: Record<string, string> = {};
     EDIT_FIELDS.forEach(field => {
       let val = (assayer as any)[field.key];
@@ -1246,7 +1280,10 @@ export const EditAssayerModal: React.FC<{
       f[field.key] = val;
     });
     return f;
-  });
+  };
+
+  const [initial] = useState<Record<string, string>>(snapshot);
+  const [form, setForm] = useState<Record<string, string>>(snapshot);
   const [activeEditTab, setActiveEditTab] = useState(wantedTab ?? 0);
   const [submitting, setSubmitting] = useState(false);
   const { skills, languages, certifications } = useWorkforceVocabulary();
@@ -1255,10 +1292,38 @@ export const EditAssayerModal: React.FC<{
   // so nobody can be saved as their own manager, which the column would happily have stored.
   const managers = useManagerOptions(true, assayer.id);
 
+  /** The boxes whose value differs from what the record held when this opened. */
+  const changedKeys = useMemo(() => changedFormKeys(form, initial), [form, initial]);
+  const changedCount = changedKeys.length;
+
+  /**
+   * What each section is carrying: gaps the record already knows about, and edits not yet saved.
+   *
+   * The record's Summary says "Bank account — blocks payouts" and offers a Fill them in button.
+   * Pressing it opened a form of identical grey boxes across seven tabs, with nothing to say
+   * which one held the thing you came for. Both facts exist already — `missingCriticalFields`
+   * for the gaps, `form` for the edits — and neither was on screen.
+   */
+  const sectionState = useMemo(() => {
+    const gapKeys = new Set(missingCriticalFields(assayer).map((f) => String(f.key)));
+    return EDIT_FIELD_GROUPS.map((group) => ({
+      gaps: group.fields.filter((k) => gapKeys.has(k)).length,
+      edits: group.fields.filter((k) => changedKeys.includes(k)).length,
+    }));
+  }, [assayer, changedKeys]);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault(); setSubmitting(true);
     try {
-      const { body, problems } = buildAssayerEditBody(EDIT_FIELDS, form, assayer);
+      /*
+        Only what changed. `buildAssayerEditBody` skips a key whose value is `undefined`, so
+        handing it just the altered ones is how a save stops rewriting the whole record — see
+        `changedFormKeys`, which also keeps the working-hours pair together.
+      */
+      const touched: Record<string, string | undefined> = {};
+      for (const key of changedKeys) touched[key] = form[key];
+
+      const { body, problems } = buildAssayerEditBody(EDIT_FIELDS, touched, assayer);
       if (problems.length) {
         toast({ type: 'error', title: 'Could not save changes', message: problems.join(' ') });
         return;
@@ -1285,35 +1350,35 @@ export const EditAssayerModal: React.FC<{
       onSubmit={handleSubmit}
       title={<><Edit2 size={18} style={{ color: 'var(--accent-primary)' }} /> Edit Assayer</>}
       footer={
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
-          <div style={{ display: 'flex', gap: '8px' }}>
-            {activeEditTab > 0 && (
-              <button type="button" onClick={() => setActiveEditTab(activeEditTab - 1)} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                ← Previous
-              </button>
-            )}
+        /*
+          SAVE FROM ANYWHERE — this was a seven-step wizard.
+          
+          Previous / Next walked the sections and the Save button appeared only on the last one,
+          so correcting a phone number meant pressing Next six times past sections nobody had
+          asked about. A wizard is for building something that does not exist yet; this is an
+          edit of a record that already does, and its sections are places to look, not steps to
+          complete. The tab bar has always been clickable, which made the arrows pure friction.
+
+          Only touched fields are sent (see `buildAssayerEditBody`), so saving from the first tab
+          cannot clear anything on the sixth.
+        */
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', gap: '12px' }}>
+          <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', minWidth: 0 }}>
+            {changedCount > 0
+              ? `${counted(changedCount, 'change')} not saved yet`
+              : 'No changes yet'}
           </div>
           <div style={{ display: 'flex', gap: '8px' }}>
             <button type="button" onClick={onClose} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px' }}>Cancel</button>
-            {activeEditTab < EDIT_FIELD_GROUPS.length - 1 ? (
-              <>
-                {/* Someone sent here by a "no bank details" link came to fill in one section and
-                    leave. Without this they would have to press Next through four tabs they were
-                    never asked about before the only Save button appeared. */}
-                {wantedTab !== null && (
-                  <button type="submit" disabled={submitting} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    {submitting ? 'Saving...' : <><CheckCircle size={14} /> Save Changes</>}
-                  </button>
-                )}
-                <button type="button" onClick={() => setActiveEditTab(activeEditTab + 1)} className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  Next →
-                </button>
-              </>
-            ) : (
-              <button type="submit" disabled={submitting} className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                {submitting ? 'Saving...' : <><CheckCircle size={14} /> Save Changes</>}
-              </button>
-            )}
+            <button
+              type="submit"
+              disabled={submitting || changedCount === 0}
+              title={changedCount === 0 ? 'Nothing has been changed yet' : undefined}
+              className="btn btn-primary"
+              style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}
+            >
+              {submitting ? 'Saving...' : <><CheckCircle size={14} /> Save changes</>}
+            </button>
           </div>
         </div>
       }
@@ -1342,6 +1407,23 @@ export const EditAssayerModal: React.FC<{
               transition: 'all 0.15s', opacity: activeEditTab === i ? 1 : 0.6,
             }}>
             {group.icon} {group.title}
+            {/*
+              A red dot means this section holds something the record is missing; an accent dot
+              means unsaved edits. Both are counts the form already had and never showed, which
+              is how somebody sent here to fix one field ended up opening all seven tabs.
+            */}
+            {sectionState[i].gaps > 0 && (
+              <span
+                title={`${sectionState[i].gaps} required ${sectionState[i].gaps === 1 ? 'field is' : 'fields are'} still empty here`}
+                style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--danger)' }}
+              />
+            )}
+            {sectionState[i].edits > 0 && (
+              <span
+                title={`${counted(sectionState[i].edits, 'unsaved change')} here`}
+                style={{ width: '6px', height: '6px', borderRadius: '50%', background: 'var(--accent-primary)' }}
+              />
+            )}
           </button>
         ))}
       </div>
