@@ -11,6 +11,7 @@ import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { connectSocket } from '../../services/socket';
 import { Select, UploadExcelControls, useConfirm } from '../../components/ui';
+import { ImportIssuesPanel } from './ImportIssuesPanel';
 import { visibleSelection, hiddenSelectionNote } from '../../utils/selection';
 import { useSearchParams } from 'react-router-dom';
 import { useCurrentRoles, canManageAssayers } from '../../hooks/useCurrentRoles';
@@ -720,6 +721,9 @@ export const AssayerRoster: React.FC = () => {
         <strong style={{ fontWeight: 600 }}>Full roster + pay rates</strong> ignores the filters and
         covers everyone, adding assignment history and the payroll rate card, as an Excel workbook.
       </div>
+
+      {/* Directly under the import controls, because that is what puts entries in it. */}
+      <ImportIssuesPanel canManage={canManage} onResolved={load} />
 
       {showFilters && (
         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', padding: '10px 12px', borderRadius: '8px', background: 'var(--bg-surface-2)' }}>
