@@ -440,3 +440,28 @@ export function readPhoneNumbers(...cells: unknown[]): string[] {
   }
   return [...seen];
 }
+
+/**
+ * Where a signed original is physically kept.
+ *
+ * This column was free text, and one place was typed five different ways — "Sent to Bangalore
+ * office", "Sent to Bangalore Office", "Bangalore office", "Bangalore Office", "sent to
+ * Bangalore office" — across 112 rows, so "which documents are in Bangalore?" had no answer any
+ * query could give. Two of the values were not places at all ("Recieved", "Recived"): they were
+ * saying the original had arrived, in the column meant for where it went.
+ *
+ * A short list a clerk picks from. Add an office here rather than letting one be typed.
+ */
+export const HARD_COPY_LOCATIONS = [
+  'Bangalore office',
+  'Vasai office',
+] as const;
+
+/** Folds the spellings the file already contains onto the canonical name; null if not a place. */
+export function readHardCopyLocation(raw: unknown): string | null {
+  const key = vocabularyKey(blankToNull(raw));
+  if (!key) return null;
+  if (key.includes('bangalore')) return 'Bangalore office';
+  if (key.includes('vasai')) return 'Vasai office';
+  return null;
+}

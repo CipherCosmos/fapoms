@@ -295,6 +295,53 @@ export class RosterRecordsService {
   }
 
   /**
+   * Attach a scan to a document, and say the copy arrived.
+   *
+   * The record could say a soft copy had been received and hold nothing to show for it, which is
+   * the difference between a filing system and a note about one. An audit asks to see the
+   * document, not to be told somebody once saw it.
+   *
+   * Recording the file also sets `softCopyReceived`, because a scan on the record *is* the soft
+   * copy: leaving a clerk to tick a box next to a file they just uploaded is asking them to
+   * state something the system can see for itself.
+   */
+  async attachFile(assayerId: string, requirement: OnboardingDocument, key: string, actorId: string) {
+    const existing = await this.onboarding.findOne({ where: { assayerId, requirement } });
+    const row = existing ?? this.onboarding.create({ assayerId, requirement, createdBy: actorId });
+    row.filePaths = [...(row.filePaths ?? []), key];
+    if (row.softCopyReceived !== true) row.softCopyReceived = true;
+    row.isActive = true;
+    row.updatedBy = actorId;
+    return this.onboarding.save(row);
+  }
+
+  /** The stored key at one position, or null — the caller decides what a miss means. */
+  async fileKey(documentId: string, index: number): Promise<{ key: string; requirement: string } | null> {
+    const row = await this.onboarding.findOne({ where: { id: documentId } });
+    const key = row?.filePaths?.[index];
+    return key ? { key, requirement: row!.requirement } : null;
+  }
+
+  /**
+   * Detach a scan.
+   *
+   * The stored object is deleted by the caller, which owns the storage engine. This only forgets
+   * the reference — and does *not* clear `softCopyReceived`, because somebody may have removed a
+   * bad scan of a document that did genuinely arrive, and quietly retracting that is a second
+   * decision nobody made.
+   */
+  async detachFile(documentId: string, index: number, actorId: string): Promise<string | null> {
+    const row = await this.onboarding.findOne({ where: { id: documentId } });
+    if (!row) throw new NotFoundException('No such document.');
+    const key = row.filePaths?.[index];
+    if (!key) return null;
+    row.filePaths = row.filePaths.filter((_, i) => i !== index);
+    row.updatedBy = actorId;
+    await this.onboarding.save(row);
+    return key;
+  }
+
+  /**
    * Record that somebody checked an identity document against the original.
    *
    * Only identity documents are verified. The rest of the list is paperwork that either arrived

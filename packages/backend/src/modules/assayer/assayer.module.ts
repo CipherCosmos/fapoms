@@ -14,6 +14,7 @@ import { AssayerImportIssueEntity } from './assayer-import-issue.entity';
 import { ClientEntity } from '../client/client.entity';
 import { RosterImportService } from './roster-import.service';
 import { RosterRecordsService } from './roster-records.service';
+import { StorageModule } from '../../infrastructure/storage/storage.module';
 import { HrController } from './hr.controller';
 import { HrWorkforceService } from './hr-workforce.service';
 import { AssayerService } from './assayer.service';
@@ -25,6 +26,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
   imports: [
     // HR and ops learn when someone becomes assignable, and when credentials fall due.
     NotificationsModule,
+    StorageModule,
     TypeOrmModule.forFeature([
       AssayerEntity,
       AssayerCommercialProfileEntity,

@@ -22,10 +22,16 @@ import {
   UploadedFile,
   Res,
   BadRequestException,
+  NotFoundException,
+  Inject,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
-import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
+import type { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
+// The one place the upload rules live — see modules/document/upload-validation.ts. A second copy
+// here is how four upload paths came to disagree about what they accept.
+import { assertUploadAllowed, SCAN_UPLOAD_TYPES } from '../document/upload-validation';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsEmail, IsArray, IsInt, IsObject, IsEnum, IsDateString, IsUUID, IsBoolean, MinLength, MaxLength, ValidateNested, ArrayMaxSize, Matches } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -720,6 +726,7 @@ export class AssayerController {
     private readonly assayerService: AssayerService,
     private readonly rosterImport: RosterImportService,
     private readonly rosterRecords: RosterRecordsService,
+    @Inject('StorageEngine') private readonly storage: StorageEngine,
     private readonly regionGuard: RegionGuardService,
     private readonly locationTrail: LocationTrailService,
   ) {}
@@ -1323,6 +1330,93 @@ export class AssayerController {
     assertSelfOrPrivileged(req.user, assayerId, 'update documents');
     const data = await this.rosterRecords.setDocument(assayerId, requirement as any, body, req.user.id);
     return { success: true, data };
+  }
+
+  /**
+   * The document itself, not just a note that it exists.
+   *
+   * The record could say a soft copy had arrived and hold nothing to show for it. An audit asks
+   * to see the document; "somebody ticked a box in 2024" is not an answer.
+   *
+   * Goes through the same door as every other upload in this system — the shared allow-list and
+   * size cap in `assertUploadAllowed`, the virus scanner, and the storage engine — rather than a
+   * second set of rules that would drift from those.
+   */
+  @Post(':assayerId/document/:requirement/file')
+  @HttpCode(201)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
+  @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({ summary: 'Attach a scan or photograph to a document' })
+  async attachDocumentFile(
+    @Param('assayerId', ParseUUIDPipe) assayerId: string,
+    @Param('requirement') requirement: string,
+    @UploadedFile() file: any,
+    @Req() req: any,
+  ) {
+    assertSelfOrPrivileged(req.user, assayerId, 'attach documents');
+    // A submitted form with no file reaches here as `undefined`; reading `.buffer` off it is a
+    // TypeError the caller sees as "Internal server error" instead of "choose a file".
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('No file was uploaded. Choose a file and try again.');
+    }
+    // Narrower than the general allow-list: an identity document is a picture or a PDF, never a
+    // spreadsheet and never an unknown blob. `fileName` is passed so an octet-stream upload is
+    // judged on its extension rather than waved through.
+    assertUploadAllowed({
+      contentType: file.mimetype,
+      fileName: file.originalname,
+      size: file.size,
+      allowed: SCAN_UPLOAD_TYPES,
+      hint: 'Photograph the document in better light rather than at higher resolution.',
+    });
+    const key = await this.storage.saveFile(file.originalname, file.buffer, file.mimetype, file.size);
+    const data = await this.rosterRecords.attachFile(assayerId, requirement as any, key, req.user.id);
+    return { success: true, data };
+  }
+
+  /**
+   * Streamed through the API rather than handed out as a signed URL.
+   *
+   * These are identity documents — an Aadhaar card, a PAN card, a passport page. A signed URL is
+   * a bearer credential for that image that survives being pasted anywhere, and there is no
+   * reason to create one when the only viewer is a logged-in workspace tab.
+   */
+  @Get('document/:id/file/:index')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @ApiOperation({ summary: 'Fetch one attached scan' })
+  async getDocumentFile(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('index') index: string,
+    @Res() res: any,
+  ): Promise<void> {
+    const found = await this.rosterRecords.fileKey(id, Number(index));
+    if (!found) throw new NotFoundException('No such file on this document.');
+    const stream = await this.storage.getFileStream(found.key);
+    // Served as an opaque download with nosniff: nothing uploaded to a personnel file should be
+    // able to execute in this application's own origin.
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Disposition', `inline; filename="${found.requirement}"`);
+    stream.on('error', () => { if (!res.headersSent) res.status(500).end(); else res.destroy(); });
+    res.on('close', () => stream.destroy());
+    stream.pipe(res);
+  }
+
+  @Delete('document/:id/file/:index')
+  @HttpCode(204)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: 'Remove an attached scan' })
+  async removeDocumentFile(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('index') index: string,
+    @Req() req: any,
+  ): Promise<void> {
+    const key = await this.rosterRecords.detachFile(id, Number(index), req.user.id);
+    // The reference is gone whether or not the object was; a storage failure must not leave the
+    // record pointing at something nobody can fetch.
+    if (key) await this.storage.deleteFile(key).catch(() => undefined);
   }
 
   /**

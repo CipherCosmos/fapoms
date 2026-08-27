@@ -4,7 +4,7 @@ import * as xlsx from 'xlsx';
 import {
   AssayerLifecycleStatus, Region, resolveRegion,
   readAvailability, readYesNo, readCibilBand, readBackgroundCheck, readEmpanelment,
-  readPhoneNumbers, blankToNull, vocabularyKey,
+  readPhoneNumbers, blankToNull, vocabularyKey, readHardCopyLocation,
   OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, EmpanelmentStatus,
   AssayerUnavailableReason, BackgroundCheckVerdict, CibilBand,
 } from '@fapoms/shared';
@@ -371,8 +371,10 @@ export class RosterImportService {
         assayerId,
         requirement: OnboardingDocument.NDA,
         hardCopyReceived: readYesNo(ndaHard),
-        // "Sent to Bangalore office" is a place, not a status — kept as written.
-        hardCopyLocation: readYesNo(ndaHard) === null ? ndaHard : null,
+        // "Sent to Bangalore office" is a place, not a status. Read to the canonical office name
+        // rather than kept as written: the file spells that one place five different ways, and
+        // storing each of them is what made "which originals are in Bangalore?" unanswerable.
+        hardCopyLocation: readHardCopyLocation(ndaHard),
       });
     }
     return written;

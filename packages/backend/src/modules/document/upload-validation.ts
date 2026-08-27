@@ -78,6 +78,18 @@ export const MAX_RESUMABLE_UPLOAD_BYTES =
 
 const HUMAN_ALLOWED = 'PDF, images (JPEG/PNG/WebP/HEIC), Excel and CSV';
 
+/** What the narrower set is called when a route refuses something for being outside it. */
+const HUMAN_SCANS = 'PDF or an image (JPEG/PNG/WebP/HEIC)';
+
+/**
+ * The refusal names what *this* route takes, not what the system takes somewhere else.
+ *
+ * Telling somebody uploading a passport scan that Excel is allowed, on the route that had just
+ * refused their file, is a message that sends them to try a spreadsheet.
+ */
+const humanList = (allowed: Set<string>): string =>
+  allowed === SCAN_UPLOAD_TYPES ? HUMAN_SCANS : HUMAN_ALLOWED;
+
 function mb(bytes: number): string {
   return (bytes / 1024 / 1024).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0);
 }
@@ -89,9 +101,39 @@ function mb(bytes: number): string {
  * the type is all we can know, and the cap is applied again on finalize once the object's real
  * size is observable. Every route that already holds the bytes must pass both.
  */
+/** PDFs and pictures. What an identity document or a signed form can actually be. */
+export const SCAN_UPLOAD_TYPES = new Set([
+  'application/pdf',
+  'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif',
+]);
+
+/**
+ * What an extension says, for the cases where the declared type says nothing.
+ *
+ * `application/octet-stream` is in `ALLOWED_UPLOAD_TYPES` on purpose — mobile clients send it
+ * for perfectly ordinary scans — but it means the declared type is not, on its own, a check.
+ * A caller that passes `fileName` gets the extension consulted instead, which is what stops
+ * `payload.exe` walking through the door marked "unknown type".
+ */
+const EXTENSION_TYPES: Record<string, string> = {
+  pdf: 'application/pdf',
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
+  heic: 'image/heic', heif: 'image/heif',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  xls: 'application/vnd.ms-excel',
+  csv: 'text/csv',
+};
+
 export function assertUploadAllowed(input: {
   contentType?: string | null;
   size?: number | null;
+  /**
+   * Consulted when the declared type is `application/octet-stream`, which tells us nothing.
+   * An extension nothing recognises is refused rather than waved through.
+   */
+  fileName?: string | null;
+  /** A narrower set than `ALLOWED_UPLOAD_TYPES` — see `SCAN_UPLOAD_TYPES`. */
+  allowed?: Set<string>;
   /** Appended to the size message so an assayer is told what to do about a huge scan. */
   hint?: string;
   /**
@@ -101,10 +143,26 @@ export function assertUploadAllowed(input: {
   maxBytes?: number;
 }): void {
   const maxBytes = input.maxBytes ?? MAX_UPLOAD_BYTES;
-  const declared = (input.contentType || 'application/octet-stream').toLowerCase().split(';')[0].trim();
-  if (!ALLOWED_UPLOAD_TYPES.has(declared)) {
+  const allowed = input.allowed ?? ALLOWED_UPLOAD_TYPES;
+  let declared = (input.contentType || 'application/octet-stream').toLowerCase().split(';')[0].trim();
+
+  // An unknown declared type is not an answer. Where the caller gave a filename, the extension
+  // is asked instead — and an extension nothing recognises is refused, rather than passing
+  // because "unknown" happens to be on the list.
+  if (declared === 'application/octet-stream' && input.fileName) {
+    const ext = input.fileName.toLowerCase().split('.').pop() ?? '';
+    const fromExtension = EXTENSION_TYPES[ext];
+    if (!fromExtension) {
+      throw new BadRequestException(
+        `"${input.fileName}" is not a kind of file this accepts. Allowed: ${humanList(allowed)}.`,
+      );
+    }
+    declared = fromExtension;
+  }
+
+  if (!allowed.has(declared)) {
     throw new BadRequestException(
-      `Files of type "${declared}" are not accepted. Allowed: ${HUMAN_ALLOWED}.`,
+      `Files of type "${declared}" are not accepted. Allowed: ${humanList(allowed)}.`,
     );
   }
   if (input.size != null && input.size > maxBytes) {

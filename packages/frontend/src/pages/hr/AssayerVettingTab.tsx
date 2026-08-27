@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ShieldCheck, ShieldAlert, Building2, Phone, FileCheck, AlertTriangle, Plus, Check } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, Building2, Phone, FileCheck, AlertTriangle, Plus, Check, Paperclip, Trash2 } from 'lucide-react';
 import {
-  EmpanelmentStatus, BackgroundCheckVerdict, RiskGrade, CibilBand,
+  EmpanelmentStatus, BackgroundCheckVerdict, RiskGrade, CibilBand, HARD_COPY_LOCATIONS,
 } from '@fapoms/shared';
 
 import { api } from '../../services/api';
@@ -116,12 +116,6 @@ const yesNo = (v: boolean | null | undefined) =>
     : v === false ? <span style={{ color: 'var(--text-muted)' }}>No</span>
       : <span style={{ color: 'var(--text-muted)' }}>—</span>;
 
-/** Whether a copy of an identity document has arrived, said in one cell rather than two. */
-const copyState = (d: { softCopyReceived?: boolean | null; hardCopyReceived?: boolean | null }) =>
-  d.hardCopyReceived === true ? <span style={{ color: 'var(--success)' }}>Original</span>
-    : d.softCopyReceived === true ? <span style={{ color: 'var(--warning)' }}>Scan only</span>
-      : <span style={{ color: 'var(--text-muted)' }}>—</span>;
-
 /**
  * Nothing recorded is not the same as checked-and-fine, so an unverified document says so
  * rather than showing a blank the eye slides over.
@@ -131,6 +125,151 @@ const VerificationChip: React.FC<{ status?: string | null }> = ({ status }) => {
   if (status === 'REJECTED') return <span style={{ color: 'var(--danger)' }}>Rejected</span>;
   return <span style={{ color: 'var(--text-muted)' }}>Not checked</span>;
 };
+
+/**
+ * The attached scans for one document, as thumbnails you can open.
+ *
+ * The route needs an Authorization header, so a plain `<img src>` cannot fetch it — the bytes
+ * come through `api.request` as a blob and become an object URL, the same way every other
+ * protected file in this app is read. Revoked on unmount, or the tab leaks a copy of every
+ * identity document somebody scrolls past.
+ *
+ * Everything is served as `application/octet-stream` with `nosniff`, so what renders as an image
+ * here can never execute in the app's own origin. That is also why the type is guessed from the
+ * key's extension rather than trusted from the response.
+ */
+const Attachments: React.FC<{
+  documentId: string | null;
+  filePaths: string[];
+  canManage: boolean;
+  onRemoved: () => void;
+}> = ({ documentId, filePaths, canManage, onRemoved }) => {
+  const [urls, setUrls] = useState<(string | null)[]>([]);
+  const { toast } = useToast();
+
+  useEffect(() => {
+    if (!documentId || filePaths.length === 0) { setUrls([]); return undefined; }
+    let live = true;
+    const made: string[] = [];
+    Promise.all(filePaths.map((_, i) =>
+      api.request<Blob>(`/assayers/document/${documentId}/file/${i}`, { raw: true })
+        .then((b) => { const u = URL.createObjectURL(b); made.push(u); return u; })
+        .catch(() => null),
+    )).then((list) => { if (live) setUrls(list); });
+    return () => { live = false; made.forEach((u) => URL.revokeObjectURL(u)); };
+  }, [documentId, filePaths.join('|')]);
+
+  const isImage = (key: string) => /\.(jpe?g|png|webp|heic|heif)$/i.test(key);
+
+  const remove = async (index: number) => {
+    if (!documentId) return;
+    try {
+      await api.request(`/assayers/document/${documentId}/file/${index}`, { method: 'DELETE' });
+      onRemoved();
+    } catch (e) { toast({ type: 'error', message: userMessage(e) }); }
+  };
+
+  if (filePaths.length === 0) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
+
+  return (
+    <div style={{ display: 'flex', gap: '6px', alignItems: 'center', flexWrap: 'wrap' }}>
+      {filePaths.map((key, i) => {
+        const url = urls[i];
+        const name = key.split('/').pop() ?? 'file';
+        return (
+          <span key={key} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+            <a
+              href={url ?? undefined}
+              target="_blank"
+              rel="noopener noreferrer"
+              title={name}
+              style={{ display: 'inline-flex', alignItems: 'center', textDecoration: 'none', color: 'var(--primary)' }}
+            >
+              {url && isImage(key) ? (
+                <img
+                  src={url}
+                  alt={name}
+                  style={{
+                    width: '34px', height: '34px', objectFit: 'cover', borderRadius: '5px',
+                    border: '1px solid var(--border-color)', display: 'block',
+                  }}
+                />
+              ) : (
+                <span style={{ fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                  <Paperclip size={11} /> {url ? 'Open' : 'Loading…'}
+                </span>
+              )}
+            </a>
+            {canManage && (
+              <button onClick={() => remove(i)} title="Remove this scan"
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 0 }}>
+                <Trash2 size={11} />
+              </button>
+            )}
+          </span>
+        );
+      })}
+    </div>
+  );
+};
+
+/**
+ * Choose a file, in one click, with no dialog in between.
+ *
+ * A hidden input behind a label is the only way to style a file picker, and the value is cleared
+ * after each pick so choosing the same file twice — a re-scan of the same page — still fires a
+ * change event. Without that the second attempt silently does nothing.
+ */
+const UploadButton: React.FC<{
+  requirement: string;
+  onPick: (requirement: string, file: File) => void;
+}> = ({ requirement, onPick }) => (
+  <label
+    style={{ color: 'var(--primary)', fontSize: '12px', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}
+    title="PDF or a photo of the document"
+  >
+    <Paperclip size={11} style={{ verticalAlign: '-1px' }} /> Attach
+    <input
+      type="file"
+      accept="application/pdf,image/jpeg,image/png,image/webp,image/heic,image/heif"
+      style={{ display: 'none' }}
+      onChange={(e) => {
+        const file = e.target.files?.[0];
+        e.target.value = '';
+        if (file) onPick(requirement, file);
+      }}
+    />
+  </label>
+);
+
+/**
+ * How a referee knows the person.
+ *
+ * Free text here produced nothing usable — every one of the 1,983 imported references has this
+ * blank — and free text is also how one relationship becomes "Ex-manager", "ex manager" and
+ * "Former Manager". A short list covers what a reference actually is; anything else is a note,
+ * not a relationship.
+ */
+const RELATIONSHIPS = [
+  'Former manager', 'Former colleague', 'Current colleague', 'Client contact',
+  'Friend', 'Neighbour', 'Relative',
+] as const;
+
+/** The office a signed original sits in, chosen rather than typed. */
+const LocationPicker: React.FC<{ value: string | null; onChange: (v: string) => void }> = ({ value, onChange }) => (
+  <select
+    value={value ?? ''}
+    onChange={(e) => onChange(e.target.value)}
+    style={{
+      padding: '4px 7px', fontSize: '11.5px', background: 'var(--bg-surface)',
+      color: value ? 'var(--text-primary)' : 'var(--text-muted)',
+      border: '1px solid var(--border-color)', borderRadius: '6px', fontFamily: 'inherit',
+    }}
+  >
+    <option value="">Not recorded</option>
+    {HARD_COPY_LOCATIONS.map((l) => <option key={l} value={l}>{l}</option>)}
+  </select>
+);
 
 const linkButton: React.CSSProperties = {
   background: 'none', border: 'none', padding: 0, cursor: 'pointer',
@@ -302,6 +441,34 @@ export const AssayerVettingTab: React.FC<{
     try {
       await api.request(`/assayers/document/${doc.id}/verify`, {
         method: 'POST', body: JSON.stringify({ verdict }),
+      });
+      reload();
+    } catch (e) { toast({ type: 'error', message: userMessage(e) }); } finally { setBusy(false); }
+  };
+
+  /**
+   * Attaching the scan also records that the soft copy arrived — the file on the record *is* the
+   * soft copy, and asking a clerk to tick a box next to a document they just uploaded is asking
+   * them to state something the screen can already see.
+   */
+  const attach = async (requirement: string, file: File) => {
+    setBusy(true);
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      await api.request(`/assayers/${assayerId}/document/${requirement}/file`, {
+        method: 'POST', body: form,
+      });
+      reload();
+    } catch (e) { toast({ type: 'error', message: userMessage(e) }); } finally { setBusy(false); }
+  };
+
+  /** Where the signed original is kept. A picked office, never a typed one — see the migration. */
+  const setWhere = async (requirement: string, hardCopyLocation: string) => {
+    setBusy(true);
+    try {
+      await api.request(`/assayers/${assayerId}/document/${requirement}`, {
+        method: 'PUT', body: JSON.stringify({ hardCopyLocation }),
       });
       reload();
     } catch (e) { toast({ type: 'error', message: userMessage(e) }); } finally { setBusy(false); }
@@ -590,8 +757,11 @@ export const AssayerVettingTab: React.FC<{
                 onChange={(e) => setRefDraft({ ...refDraft, fullName: e.target.value })} />
             </Field>
             <Field title="Relationship">
-              <input style={inputStyle} placeholder="e.g. former manager" value={refDraft.relationship}
-                onChange={(e) => setRefDraft({ ...refDraft, relationship: e.target.value })} />
+              <Select
+                value={refDraft.relationship}
+                onChange={(v) => setRefDraft({ ...refDraft, relationship: String(v) })}
+                options={[{ value: '', label: 'Not recorded' }, ...RELATIONSHIPS.map((r) => ({ value: r, label: r }))]}
+              />
             </Field>
             <Field title="Phone">
               <input style={inputStyle} inputMode="tel" value={refDraft.phone}
@@ -652,7 +822,7 @@ export const AssayerVettingTab: React.FC<{
         */}
         <div style={{ ...label, marginBottom: '8px' }}>Identity</div>
         <Table
-          head={canManage ? ['Document', 'Number', 'Expires', 'Checked', 'Copy', ''] : ['Document', 'Number', 'Expires', 'Checked', 'Copy']}
+          head={canManage ? ['Document', 'Number', 'Expires', 'Checked', 'Scan', ''] : ['Document', 'Number', 'Expires', 'Checked', 'Scan']}
           rows={paperwork.identity.map((d) => {
             const cells: React.ReactNode[] = [
               d.label,
@@ -661,7 +831,7 @@ export const AssayerVettingTab: React.FC<{
                 : <span style={{ color: 'var(--text-muted)' }}>—</span>,
               d.expiryDate ? fmtDate(d.expiryDate) : <span style={{ color: 'var(--text-muted)' }}>—</span>,
               <VerificationChip status={d.verificationStatus} />,
-              copyState(d),
+              <Attachments documentId={d.id} filePaths={d.filePaths ?? []} canManage={canManage} onRemoved={reload} />,
             ];
             if (canManage) {
               cells.push(
@@ -676,6 +846,7 @@ export const AssayerVettingTab: React.FC<{
                   {d.id && d.documentNumber && d.verificationStatus !== 'VERIFIED' && (
                     <button style={linkButton} onClick={() => verify(d, 'VERIFIED')}>Verify</button>
                   )}
+                  <UploadButton requirement={d.requirement} onPick={attach} />
                 </div>,
               );
             }
@@ -709,22 +880,29 @@ export const AssayerVettingTab: React.FC<{
 
         <div style={{ ...label, margin: '18px 0 8px' }}>Joining paperwork</div>
         <Table
-          head={canManage ? ['Document', 'Soft copy', 'Hard copy', 'Where', ''] : ['Document', 'Soft copy', 'Hard copy', 'Where']}
+          head={canManage ? ['Document', 'Scan', 'Hard copy', 'Where', ''] : ['Document', 'Scan', 'Hard copy', 'Where']}
           rows={paperwork.joining.map((d) => {
             const cells: React.ReactNode[] = [
               d.label,
-              yesNo(d.softCopyReceived),
+              // The scan itself where there is one; the tick only where somebody said a copy
+              // arrived without attaching it. A column that can show the document should.
+              (d.filePaths ?? []).length > 0
+                ? <Attachments documentId={d.id} filePaths={d.filePaths} canManage={canManage} onRemoved={reload} />
+                : yesNo(d.softCopyReceived),
               yesNo(d.hardCopyReceived),
-              d.hardCopyLocation || '—',
+              canManage
+                ? <LocationPicker
+                    value={d.hardCopyLocation}
+                    onChange={(v) => setWhere(d.requirement, v)}
+                  />
+                : (d.hardCopyLocation || '—'),
             ];
             if (canManage) {
               cells.push(
                 <div style={{ display: 'flex', gap: '10px', whiteSpace: 'nowrap' }}>
-                  <button style={linkButton} onClick={() => togglePaperwork(d.requirement, 'softCopyReceived', d.softCopyReceived !== true)}>
-                    {d.softCopyReceived === true ? 'Unset soft' : 'Soft in'}
-                  </button>
+                  <UploadButton requirement={d.requirement} onPick={attach} />
                   <button style={linkButton} onClick={() => togglePaperwork(d.requirement, 'hardCopyReceived', d.hardCopyReceived !== true)}>
-                    {d.hardCopyReceived === true ? 'Unset hard' : 'Hard in'}
+                    {d.hardCopyReceived === true ? 'Original out' : 'Original in'}
                   </button>
                 </div>,
               );
