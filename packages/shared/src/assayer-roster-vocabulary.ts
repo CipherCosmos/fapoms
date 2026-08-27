@@ -117,6 +117,57 @@ export enum EmpanelmentStatus {
   TERMINATED = 'TERMINATED',
 }
 
+/**
+ * The onboarding paperwork the roster tracks, one column per item.
+ *
+ * Fifteen Yes/No columns in the spreadsheet — every one of them the same question about a
+ * different document. As columns they cannot be counted, cannot carry a date, and cannot grow
+ * without another migration. As rows they answer "what is outstanding for this person" and
+ * "who is missing an NDA" with the same query.
+ */
+export enum OnboardingDocument {
+  JOINING_FORM = 'JOINING_FORM',
+  NDA = 'NDA',
+  CODE_OF_CONDUCT = 'CODE_OF_CONDUCT',
+  APPOINTMENT_LETTER = 'APPOINTMENT_LETTER',
+  ID_CARD = 'ID_CARD',
+  PHOTOGRAPH = 'PHOTOGRAPH',
+  AADHAAR_FRONT = 'AADHAAR_FRONT',
+  AADHAAR_BACK = 'AADHAAR_BACK',
+  PAN_CARD = 'PAN_CARD',
+  BANK_PASSBOOK = 'BANK_PASSBOOK',
+  REFERENCE_CHECK = 'REFERENCE_CHECK',
+  PENALTY_FORM = 'PENALTY_FORM',
+  COMPANY_STAMP = 'COMPANY_STAMP',
+  GOVERNANCE_AUDIT = 'GOVERNANCE_AUDIT',
+  ETHICAL_CONDUCT_LETTER = 'ETHICAL_CONDUCT_LETTER',
+  ID_PROOF = 'ID_PROOF',
+  ADDRESS_PROOF = 'ADDRESS_PROOF',
+  OFFICE_ADDRESS_PROOF = 'OFFICE_ADDRESS_PROOF',
+}
+
+/** Which spreadsheet column carries each requirement, so the importer needs no second list. */
+export const ONBOARDING_DOCUMENT_COLUMNS: Record<OnboardingDocument, string> = {
+  [OnboardingDocument.JOINING_FORM]: 'Sumeru Joining Form',
+  [OnboardingDocument.NDA]: 'NDA',
+  [OnboardingDocument.CODE_OF_CONDUCT]: 'COC (Buisness Ethics)',
+  [OnboardingDocument.APPOINTMENT_LETTER]: 'Appointment Letter',
+  [OnboardingDocument.ID_CARD]: 'ID card',
+  [OnboardingDocument.PHOTOGRAPH]: 'Photo',
+  [OnboardingDocument.AADHAAR_FRONT]: 'Aadhar front',
+  [OnboardingDocument.AADHAAR_BACK]: 'Aadhar Back',
+  [OnboardingDocument.PAN_CARD]: 'PAN',
+  [OnboardingDocument.BANK_PASSBOOK]: 'Bank Paasbook',
+  [OnboardingDocument.REFERENCE_CHECK]: 'Refference Check',
+  [OnboardingDocument.PENALTY_FORM]: 'Penalty Form',
+  [OnboardingDocument.COMPANY_STAMP]: 'Sumeru Stamp',
+  [OnboardingDocument.GOVERNANCE_AUDIT]: 'Governance Audit',
+  [OnboardingDocument.ETHICAL_CONDUCT_LETTER]: 'Letter for Commitment on Ethical Conduct',
+  [OnboardingDocument.ID_PROOF]: 'ID Proof',
+  [OnboardingDocument.ADDRESS_PROOF]: 'Address Proof',
+  [OnboardingDocument.OFFICE_ADDRESS_PROOF]: 'Office Address Proof',
+};
+
 /** Case, spacing and punctuation are noise. Fold them before matching anything. */
 export function vocabularyKey(raw: unknown): string {
   return String(raw ?? '')

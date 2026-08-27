@@ -8,6 +8,11 @@ import { AssayerDocumentEntity } from './assayer-document.entity';
 import { AssayerRemarkEntity } from './assayer-remark.entity';
 import { AssayerActivityEntity } from './assayer-activity.entity';
 import { AssayerLocationPingEntity } from './assayer-location-ping.entity';
+import { AssayerReferenceEntity } from './assayer-reference.entity';
+import { AssayerClientEmpanelmentEntity } from './assayer-client-empanelment.entity';
+import { AssayerBackgroundCheckEntity } from './assayer-background-check.entity';
+import { AssayerOnboardingDocumentEntity } from './assayer-onboarding-document.entity';
+import { AssayerImportIssueEntity } from './assayer-import-issue.entity';
 import { HrController } from './hr.controller';
 import { HrWorkforceService } from './hr-workforce.service';
 import { AssayerService } from './assayer.service';
@@ -28,6 +33,11 @@ import { NotificationsModule } from '../notifications/notifications.module';
       AssayerRemarkEntity,
       AssayerActivityEntity,
       AssayerLocationPingEntity,
+      AssayerReferenceEntity,
+      AssayerClientEmpanelmentEntity,
+      AssayerBackgroundCheckEntity,
+      AssayerOnboardingDocumentEntity,
+      AssayerImportIssueEntity,
     ]),
   ],
   controllers: [AssayerController, HrController],

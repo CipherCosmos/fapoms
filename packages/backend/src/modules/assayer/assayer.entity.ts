@@ -1,6 +1,9 @@
 import { Entity, Column, Index, ManyToOne, JoinColumn } from 'typeorm';
 import { BaseEntity } from '../../core/entities/base.entity';
-import { AssayerStatus, AssayerLifecycleStatus } from '@fapoms/shared';
+import {
+  AssayerStatus, AssayerLifecycleStatus,
+  AssayerEngagementType, AssayerUnavailableReason,
+} from '@fapoms/shared';
 import { encryptedColumn } from '../../infrastructure/security/field-encryption';
 
 @Entity('assayers')
@@ -226,6 +229,66 @@ export class AssayerEntity extends BaseEntity {
 
   @Column({ name: 'ifsc_code', type: 'varchar', length: 20, nullable: true })
   ifscCode: string | null;
+
+  /** Encrypted like the PAN beside it — an Aadhaar is the most sensitive identifier we hold. */
+  @Column({ name: 'aadhaar_number', type: 'text', nullable: true, transformer: encryptedColumn })
+  aadhaarNumber: string | null;
+
+  /**
+   * The bank, plainly. Not derivable from the IFSC without a lookup table we do not have, and
+   * the roster records it for 98% of people, so it is a column rather than a join.
+   */
+  @Column({ name: 'bank_name', type: 'varchar', length: 150, nullable: true })
+  bankName: string | null;
+
+  @Column({ name: 'date_of_birth', type: 'date', nullable: true })
+  dateOfBirth: Date | null;
+
+  /**
+   * Highest qualification, as recorded. Free text on purpose: the roster holds 104 distinct
+   * values — "B.A", "Graduate", "10th Standard", "C.A" — mixing a level with a degree with a
+   * professional certification. Forcing that into an enum would either lose detail or invent a
+   * taxonomy nobody uses. It is displayed, not decided on.
+   */
+  @Column({ type: 'varchar', length: 150, nullable: true })
+  qualification: string | null;
+
+  /** The assayer's identifier in VSTS, the client-side system some audits are logged in. */
+  @Column({ name: 'vsts_code', type: 'varchar', length: 60, nullable: true })
+  vstsCode: string | null;
+
+  /** Which HR person owns this record. The roster's "HR NAME" column. */
+  @Column({ name: 'hr_owner_name', type: 'varchar', length: 120, nullable: true })
+  hrOwnerName: string | null;
+
+  /**
+   * How the business engages this person — regular rotation, local only, cover, agency or
+   * mystery audits. Separate from whether they are currently available, which is
+   * `lifecycleStatus`: the roster wrote both into one cell and the two answer different
+   * questions. See `readAvailability` for the reading.
+   */
+  @Column({ name: 'engagement_type', type: 'varchar', length: 30, nullable: true })
+  engagementType: AssayerEngagementType | null;
+
+  /**
+   * Why they are unavailable, when they are.
+   *
+   * "Inactive" alone does not tell an operations lead whether to try again next month. Rejected
+   * by us, not interested, no work in their area and deceased are four different futures.
+   */
+  @Column({ name: 'unavailable_reason', type: 'varchar', length: 40, nullable: true })
+  unavailableReason: AssayerUnavailableReason | null;
+
+  /**
+   * The roster says somebody other than this person is doing their audits.
+   *
+   * Twenty-one rows say it — "Staff doing audit", "Friend is doing audit", "Husband doing
+   * audit". Whoever wrote it meant it as an aside; it is a compliance matter, because the
+   * person empanelled and background-checked is not the person entering the vault. Surfaced as
+   * a flag rather than left in a notes field where nothing can count it.
+   */
+  @Column({ name: 'work_done_by_someone_else', type: 'boolean', default: false })
+  workDoneBySomeoneElse: boolean;
 
   @Column({ type: 'text', nullable: true })
   notes: string | null;
