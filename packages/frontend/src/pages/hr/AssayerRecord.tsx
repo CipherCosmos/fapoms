@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  X, Edit2, ArrowRightLeft, AlertTriangle, CheckCircle2,
+  Edit2, ArrowRightLeft, AlertTriangle, CheckCircle2,
   User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, MapPin, KeyRound, ShieldCheck,
 } from 'lucide-react';
 import { nextAssayerLifecycleStates, AssayerLifecycleStatus, assayerLifecycleLabel, activityEventLabel, employmentTypeLabel, AssayerEngagementType, AssayerUnavailableReason } from '@fapoms/shared';
@@ -57,7 +57,7 @@ const maskAadhaar = (v?: string | null): string | null => {
 };
 
 /**
- * Everything about one person, in a slide-over.
+ * Everything about one person, on its own page.
  *
  * The old page put this in a fixed side panel, so reading someone's history meant
  * losing the list you were working through. A drawer keeps the roster underneath:
@@ -124,7 +124,7 @@ export const HARD_TO_REVERSE_STAGES: string[] = [
   AssayerLifecycleStatus.ARCHIVED,
 ];
 
-export const AssayerDetailDrawer: React.FC<{
+export const AssayerRecord: React.FC<{
   assayerId: string;
   canManage: boolean;
   onClose: () => void;
@@ -163,7 +163,8 @@ export const AssayerDetailDrawer: React.FC<{
   // too, or the Pay and Skills tabs keep serving what they fetched before the edit.
   useEffect(() => { setLoaded({}); }, [assayerId, reloadKey]);
 
-  // Escape closes, matching every other overlay in the app.
+  // Escape goes back to the list. It closed the drawer this used to be, and the habit outlives
+  // the drawer; the page carries a Back link for everyone else.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
     window.addEventListener('keydown', onKey);
@@ -304,25 +305,18 @@ export const AssayerDetailDrawer: React.FC<{
     <>
       {confirmDialog}
       {/*
-        * Z-INDEX HAS TO CLEAR THE MOBILE BOTTOM NAV, WHICH IS 990.
-        *
-        * This drawer was written at 60/61, so on any screen narrow enough for the bottom tab bar
-        * to appear (<=1024px) the bar was painted OVER it: the drawer still ran the full height,
-        * but its last 60px — and whatever action happened to sit there — were covered by a nav
-        * the drawer had no way to dismiss. It read as the panel spilling off the bottom of the
-        * screen. `src/components/ui/DetailDrawer.tsx` already established 1090/1091 for exactly
-        * this reason; those are the numbers used here so there is one convention, not two.
-        */}
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', zIndex: 1090 }} />
-      <aside
-        role="dialog"
-        aria-label="Assayer detail"
-        style={{
-          position: 'fixed', top: 0, right: 0, bottom: 0, width: 'min(560px, 100vw)', zIndex: 1091,
-          background: 'var(--bg-card)', borderLeft: '1px solid var(--border-color)',
-          display: 'flex', flexDirection: 'column', boxShadow: '-16px 0 40px rgba(0,0,0,0.4)',
-        }}
-      >
+        A PAGE, NOT A SLIDE-OVER.
+
+        This was a 560px drawer over the roster, which was right when it held a summary and a
+        list of remarks. It now holds the whole record — vetting, client standing, references,
+        twenty-one documents split into identity and paperwork, skills with their renewal dates —
+        and 560px turned all of that into a column of wrapped two-word cells. Reading somebody's
+        file meant scrolling a narrow strip beside a list nobody was looking at any more.
+
+        The roster is one click away and the record has its own URL, so the thing the drawer was
+        protecting — not losing your place in the list — is handled by the back button instead.
+      */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
         {!a ? (
           <div style={{ padding: '28px' }}>{err ?? 'Loading…'}</div>
         ) : (
@@ -337,9 +331,6 @@ export const AssayerDetailDrawer: React.FC<{
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><MapPin size={10} /> {[a.city, a.state].filter(Boolean).join(', ') || '—'}</span>
                   </div>
                 </div>
-                <button onClick={onClose} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', height: 'fit-content' }}>
-                  <X size={18} />
-                </button>
               </div>
 
               <div style={{ display: 'flex', gap: '6px', marginTop: '12px', flexWrap: 'wrap' }}>
@@ -639,7 +630,7 @@ export const AssayerDetailDrawer: React.FC<{
             </div>
           </>
         )}
-      </aside>
+      </div>
       <CommercialProfileModal
         open={payModal.open}
         onClose={() => setPayModal({ open: false, profile: null })}
@@ -686,4 +677,4 @@ const List: React.FC<{ rows: any[] | undefined; empty: string; render: (r: any) 
   return <>{rows.map(render)}</>;
 };
 
-export default AssayerDetailDrawer;
+export default AssayerRecord;

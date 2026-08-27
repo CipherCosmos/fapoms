@@ -52,6 +52,7 @@ import { LEGACY_PATHS as HR_LEGACY_PATHS } from './pages/hr/hr-destinations';
 const HrLayout = React.lazy(() => import('./pages/hr/HrLayout').then((m) => ({ default: m.HrLayout })));
 const HrOverviewPage = React.lazy(() => import('./pages/hr/HrOverviewPage').then((m) => ({ default: m.HrOverviewPage })));
 const HrRosterPage = React.lazy(() => import('./pages/hr/HrRosterPage').then((m) => ({ default: m.HrRosterPage })));
+const AssayerRecordPage = React.lazy(() => import('./pages/hr/AssayerRecordPage').then((m) => ({ default: m.AssayerRecordPage })));
 const HrPayPage = React.lazy(() => import('./pages/hr/HrPayPage').then((m) => ({ default: m.HrPayPage })));
 const HrWherePeopleArePage = React.lazy(() => import('./pages/hr/HrWherePeopleArePage').then((m) => ({ default: m.HrWherePeopleArePage })));
 const DataEntryOverview = React.lazy(() => import('./pages/dataentry/DataEntryOverview'));
@@ -110,7 +111,7 @@ const PostLoginRedirect: React.FC<{ fallback: string }> = ({ fallback }) => {
 /** Turns `/assayers/:id` into the roster's own deep link, so the record opens where it lives. */
 const AssayerDeepLink: React.FC = () => {
   const { id } = useParams<{ id: string }>();
-  return <Navigate to={id ? `/hr/roster?assayer=${encodeURIComponent(id)}` : '/hr/roster'} replace />;
+  return <Navigate to={id ? `/hr/roster/${encodeURIComponent(id)}` : '/hr/roster'} replace />;
 };
 
 const RememberAndRedirectToLogin: React.FC = () => {
@@ -353,6 +354,7 @@ export const App: React.FC = () => {
           <Route path="/hr" element={<HrLayout />}>
             <Route index element={<HrOverviewPage />} />
             <Route path="roster" element={<HrRosterPage />} />
+            <Route path="roster/:assayerId" element={<AssayerRecordPage />} />
             <Route path="pay" element={<HrPayPage />} />
             <Route path="where" element={<HrWherePeopleArePage />} />
 

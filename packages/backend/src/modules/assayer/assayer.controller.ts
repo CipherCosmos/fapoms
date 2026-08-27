@@ -56,7 +56,7 @@ import { AssayerService, CreateAssayerDto, UpdateAssayerDto } from './assayer.se
 import { LocationTrailService } from './location-trail.service';
 import { LocationPingSource } from './assayer-location-ping.entity';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public, AnyAuthenticated } from '../auth/guards';
-import { SystemRole, AssayerLifecycleStatus } from '@fapoms/shared';
+import { SystemRole, AssayerLifecycleStatus, AssayerEngagementType, AssayerUnavailableReason } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { scopeAssayerForRoles, scopeAssayerListForRoles, rolesOf, assertSelfOrPrivileged } from './assayer-visibility';
@@ -245,6 +245,38 @@ class CreateAssayerRequestDto implements CreateAssayerDto {
 
   @IsOptional() @IsArray()
   eligibleClients?: string[];
+
+  /**
+   * Facts the appraiser roster carries.
+   *
+   * The service interface and this class have to be extended together: the global validation
+   * pipe whitelists against *this*, so a field added only to `UpdateAssayerDto` is stripped
+   * before the service ever sees it — the request succeeds, the value is silently dropped, and
+   * the form reports a save that did not happen.
+   */
+  @IsOptional() @IsString()
+  aadhaarNumber?: string;
+
+  @IsOptional() @IsString()
+  bankName?: string;
+
+  @IsOptional() @IsDateString()
+  dateOfBirth?: string;
+
+  @IsOptional() @IsString()
+  qualification?: string;
+
+  @IsOptional() @IsString()
+  vstsCode?: string;
+
+  @IsOptional() @IsString()
+  hrOwnerName?: string;
+
+  @IsOptional() @IsEnum(AssayerEngagementType)
+  engagementType?: AssayerEngagementType;
+
+  @IsOptional() @IsEnum(AssayerUnavailableReason)
+  unavailableReason?: AssayerUnavailableReason;
 }
 
 class UpdateAssayerRequestDto implements UpdateAssayerDto {
@@ -370,6 +402,35 @@ class UpdateAssayerRequestDto implements UpdateAssayerDto {
 
   @IsOptional() @IsArray()
   eligibleClients?: string[];
+
+  /**
+   * The service interface and this class must be extended together: the global validation pipe
+   * whitelists against *this*, so a field added only to `UpdateAssayerDto` is stripped before the
+   * service sees it. `update-dto-parity.spec.ts` fails the build when they drift.
+   */
+  @IsOptional() @IsString()
+  aadhaarNumber?: string;
+
+  @IsOptional() @IsString()
+  bankName?: string;
+
+  @IsOptional() @IsDateString()
+  dateOfBirth?: string;
+
+  @IsOptional() @IsString()
+  qualification?: string;
+
+  @IsOptional() @IsString()
+  vstsCode?: string;
+
+  @IsOptional() @IsString()
+  hrOwnerName?: string;
+
+  @IsOptional() @IsEnum(AssayerEngagementType)
+  engagementType?: AssayerEngagementType;
+
+  @IsOptional() @IsEnum(AssayerUnavailableReason)
+  unavailableReason?: AssayerUnavailableReason;
 }
 
 export class UpdateLiveLocationDto {

@@ -14,7 +14,7 @@ import { AssayerStateMachine } from './assayer.state-machine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
-import { EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, toWorkflowTransitions } from '@fapoms/shared';
+import { EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason } from '@fapoms/shared';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { geocodeIndia, pincodeAuthority } from '../geo/india-geocoder';
 import { parseSheet, rowReader, describeMissingColumn } from '../../core/excel/sheet-reader';
@@ -205,9 +205,39 @@ export interface CreateAssayerDto {
   maxDailyWorkload?: number;
   maxWeeklyWorkload?: number;
   eligibleClients?: string[];
+
+  /**
+   * Facts the appraiser roster carries. They arrived through the importer, which writes the
+   * entity directly, so the record could be read but not corrected: an operator opening somebody
+   * imported from the spreadsheet saw a date of birth and a qualification with no field to
+   * change either.
+   *
+   * `engagementType` and `unavailableReason` are the two halves of the roster's
+   * "Active / Inactive" column, which held an availability, a reason and an engagement type in
+   * one cell.
+   */
+  aadhaarNumber?: string;
+  bankName?: string;
+  dateOfBirth?: string;
+  qualification?: string;
+  vstsCode?: string;
+  hrOwnerName?: string;
+  engagementType?: AssayerEngagementType;
+  unavailableReason?: AssayerUnavailableReason;
 }
 
 export interface UpdateAssayerDto {
+  /**
+   * `organizationId` is deliberately absent.
+   *
+   * Which organisation an assayer belongs to is tenancy, taken from the authenticated principal
+   * at create time — see `create()`, which receives it as an argument rather than from the body.
+   * Accepting it on update would let a caller move somebody else's assayer into their own
+   * organisation. The request DTO has always omitted it; the parity spec would have had somebody
+   * "fix" that by adding it, so it says so here.
+   */
+  employeeId?: string;
+  employeeCode?: string;
   firstName?: string;
   lastName?: string;
   email?: string;
@@ -220,7 +250,6 @@ export interface UpdateAssayerDto {
   pincode?: string;
   latitude?: number;
   longitude?: number;
-  organizationId?: string;
   panNumber?: string;
   bankAccountNumber?: string;
   ifscCode?: string;
@@ -248,6 +277,19 @@ export interface UpdateAssayerDto {
   maxDailyWorkload?: number;
   maxWeeklyWorkload?: number;
   eligibleClients?: string[];
+  /**
+   * Facts the appraiser roster carries. They arrived through the importer, which writes the
+   * entity directly, so an operator opening somebody imported from the spreadsheet saw a date of
+   * birth and a qualification with no field to change either.
+   */
+  aadhaarNumber?: string;
+  bankName?: string;
+  dateOfBirth?: string;
+  qualification?: string;
+  vstsCode?: string;
+  hrOwnerName?: string;
+  engagementType?: AssayerEngagementType;
+  unavailableReason?: AssayerUnavailableReason;
 }
 
 @Injectable()

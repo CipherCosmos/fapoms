@@ -33,6 +33,28 @@ import { AssayerImportIssueEntity } from './assayer-import-issue.entity';
  * is the latest one. These are the grounds on which somebody is admitted to a bank vault, and
  * "cleared in 2022, civil case in 2026" is a sentence the column version could not say.
  */
+/**
+ * Identity documents whose number is already a column on the person.
+ *
+ * A PAN number is a fact about somebody, not about the card: payroll reads `pan_number`,
+ * `ASSAYER_RECORD_FIELDS` counts it as a critical gap, and the mobile app shows it. The card is
+ * the document that evidences it, which is what the document record tracks — whether a copy
+ * arrived, whether anybody checked it against the original.
+ *
+ * So the number is stored once, on the person, and surfaced in both places. Writing it through
+ * the document record writes the column; reading the document record reads the column back.
+ * Storing it twice would mean the record and the document could disagree about somebody's PAN,
+ * with nothing to say which was right.
+ *
+ * Documents with no column of their own — passport, driving licence, voter ID — keep their
+ * number on the document record, where it is the only copy.
+ */
+const NUMBER_LIVES_ON_THE_PERSON: Partial<Record<OnboardingDocument, 'panNumber' | 'aadhaarNumber'>> = {
+  [OnboardingDocument.PAN_CARD]: 'panNumber',
+  [OnboardingDocument.AADHAAR_FRONT]: 'aadhaarNumber',
+  [OnboardingDocument.AADHAAR_BACK]: 'aadhaarNumber',
+};
+
 @Injectable()
 export class RosterRecordsService {
   constructor(
@@ -66,7 +88,7 @@ export class RosterRecordsService {
       })),
       backgroundChecks: checks,
       currentCheck: checks[0] ?? null,
-      onboarding: this.paperworkChecklist(onboarding),
+      onboarding: this.paperworkChecklist(onboarding, assayer),
       openIssues,
     };
   }
@@ -78,7 +100,7 @@ export class RosterRecordsService {
    * so every requirement appears whether or not the import found it. Listing only what exists
    * would show a person with nothing on file as having nothing outstanding.
    */
-  private paperworkChecklist(rows: AssayerDocumentEntity[]) {
+  private paperworkChecklist(rows: AssayerDocumentEntity[], assayer: AssayerEntity) {
     const byRequirement = new Map(rows.map((r) => [r.requirement, r]));
     return Object.keys(ONBOARDING_DOCUMENT_COLUMNS).map((key) => {
       const requirement = key as OnboardingDocument;
@@ -96,7 +118,11 @@ export class RosterRecordsService {
         hardCopyLocation: row?.hardCopyLocation ?? null,
         courierReference: row?.courierReference ?? null,
         receivedAt: row?.receivedAt ?? null,
-        documentNumber: row?.documentNumber ?? null,
+        // Read back from the person where that is where it lives — see
+        // NUMBER_LIVES_ON_THE_PERSON. One value, two places to see it, no way for them to differ.
+        documentNumber: NUMBER_LIVES_ON_THE_PERSON[requirement]
+          ? (assayer[NUMBER_LIVES_ON_THE_PERSON[requirement]!] ?? null)
+          : (row?.documentNumber ?? null),
         expiryDate: row?.expiryDate ?? null,
         verificationStatus: row?.verificationStatus ?? null,
         verifiedAt: row?.verifiedAt ?? null,
@@ -240,7 +266,19 @@ export class RosterRecordsService {
           + 'no number or expiry date.',
         );
       }
-      if (dto.documentNumber !== undefined) row.documentNumber = dto.documentNumber || null;
+      const column = NUMBER_LIVES_ON_THE_PERSON[requirement];
+      if (dto.documentNumber !== undefined) {
+        if (column) {
+          const person = await this.assayers.findOne({ where: { id: assayerId } });
+          if (person) {
+            person[column] = dto.documentNumber || null;
+            person.updatedBy = actorId;
+            await this.assayers.save(person);
+          }
+        } else {
+          row.documentNumber = dto.documentNumber || null;
+        }
+      }
       if (dto.expiryDate !== undefined) row.expiryDate = dto.expiryDate ? new Date(dto.expiryDate) : null;
       // Changing what the document says undoes any verification of it: somebody checked the old
       // number against the original, and that is no longer the number on the record.

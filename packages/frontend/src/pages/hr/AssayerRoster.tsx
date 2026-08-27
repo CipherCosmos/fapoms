@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import {
-  Plus, Search, X, ChevronUp, ChevronDown, ExternalLink, Edit2, Trash2,
+  Plus, Search, X, ChevronUp, ChevronDown, Edit2, Trash2,
   AlertTriangle, Download, ArrowRightLeft, MapPin, CheckCircle2, Users, SlidersHorizontal, FileSpreadsheet,
 } from 'lucide-react';
 import { AssayerLifecycleStatus, assayerLifecyclePath, assayerLifecycleLabel, daysUntilExpiry } from '@fapoms/shared';
@@ -19,7 +19,7 @@ import { useExcelExport } from '../../hooks/useExcelExport';
 import { CreateAssayerModal, EditAssayerModal } from './AssayerForms';
 import type { Assayer } from './assayer-shared';
 import { STATUS_COLORS, missingCriticalFields } from './assayer-shared';
-import { AssayerDetailDrawer, STAGE_CONSEQUENCE, HARD_TO_REVERSE_STAGES } from './AssayerDetailDrawer';
+import { STAGE_CONSEQUENCE, HARD_TO_REVERSE_STAGES } from './AssayerRecord';
 import { fmtDate } from '../../utils/dates';
 import { queryKeys } from '../../hooks/queryKeys';
 import { counted } from '../../utils/plural';
@@ -183,18 +183,23 @@ export const AssayerRoster: React.FC<{
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'displayName', dir: 'asc' });
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  /**
-   * Opened from the list, or landed on directly.
-   *
-   * `?assayer=<id>` exists because global search and the planning screen's excluded-candidates
-   * list used to link to a separate full-page assayer profile — a second implementation of this
-   * same drawer. They now arrive here instead, and this is what makes that link land on the
-   * person rather than the top of the roster.
-   */
   const [searchParams] = useSearchParams();
-  const [openId, setOpenId] = useState<string | null>(searchParams.get('assayer'));
-  /** Incremented by `refresh()`; the detail drawer re-reads the record when it changes. */
-  const [detailVersion, setDetailVersion] = useState(0);
+  /**
+   * Opening somebody is navigation, not a panel.
+   *
+   * `?assayer=<id>` is still honoured because it is in bookmarks, in notification payloads, and
+   * in links from global search and the planning screen's excluded-candidates list. It now
+   * forwards to the record's own URL rather than opening a drawer over the list.
+   */
+  const openRecord = useCallback(
+    (id: string) => navigate(`/hr/roster/${id}`),
+    [navigate],
+  );
+
+  useEffect(() => {
+    const wanted = searchParams.get('assayer');
+    if (wanted) navigate(`/hr/roster/${wanted}`, { replace: true });
+  }, [searchParams, navigate]);
   const [editing, setEditing] = useState<Assayer | null>(null);
   const [creating, setCreating] = useState(false);
   const [bulkTarget, setBulkTarget] = useState('');
@@ -271,9 +276,8 @@ export const AssayerRoster: React.FC<{
   const refresh = useCallback(() => {
     load();
     queryClient.invalidateQueries({ queryKey: queryKeys.hr.workforce });
-    // And the open record itself. The list reloading is not enough: the detail drawer holds its
-    // own copy, fetched when it opened, and showed stale values behind every save until reload.
-    setDetailVersion((v) => v + 1);
+    // The record is its own page now and re-reads itself on entry, so there is nothing open
+    // behind this list holding a stale copy.
   }, [load, queryClient]);
 
   // Lifecycle changes can come from anywhere — a bulk action here, an admin
@@ -486,7 +490,6 @@ export const AssayerRoster: React.FC<{
     try {
       await api.request(`/assayers/${a.id}`, { method: 'DELETE' });
       setNotice({ tone: 'ok', text: `${a.displayName} deleted.` });
-      setOpenId(null);
       refresh();
     } catch (e) {
       setNotice({ tone: 'err', text: userMessage(e) });
@@ -953,7 +956,7 @@ export const AssayerRoster: React.FC<{
                 return (
                   <tr
                     key={a.id}
-                    onClick={() => setOpenId(a.id)}
+                    onClick={() => openRecord(a.id)}
                     style={{
                       borderTop: '1px solid var(--border-hair)', cursor: 'pointer',
                       background: selectedIds.has(a.id) ? 'rgba(216,174,71,0.12)' : undefined,
@@ -1010,7 +1013,6 @@ export const AssayerRoster: React.FC<{
                     </td>
                     <td style={cell}>{a.experienceYears ?? 0}y</td>
                     <td style={{ ...cell, textAlign: 'right', whiteSpace: 'nowrap' }} onClick={(e) => e.stopPropagation()}>
-                      <IconBtn title="Open full profile" onClick={() => navigate(`/assayers/${a.id}`)}><ExternalLink size={13} /></IconBtn>
                       {canManage && <IconBtn title="Edit" onClick={() => setEditing(a)}><Edit2 size={13} /></IconBtn>}
                       {canManage && <IconBtn title="Delete" tone="var(--danger)" onClick={() => remove(a)}><Trash2 size={13} /></IconBtn>}
                     </td>
@@ -1040,16 +1042,6 @@ export const AssayerRoster: React.FC<{
         )}
       </div>
 
-      {openId && (
-        <AssayerDetailDrawer
-          assayerId={openId}
-          canManage={canManage}
-          onClose={() => setOpenId(null)}
-          onEdit={(a) => setEditing(a)}
-          onChanged={refresh}
-          reloadKey={detailVersion}
-        />
-      )}
       {creating && (
         <CreateAssayerModal
           onClose={() => setCreating(false)}

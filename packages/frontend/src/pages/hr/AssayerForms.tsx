@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { User, MapPin, Briefcase, Award, CreditCard, Clock, Phone, X, CheckCircle, Edit2, AlertTriangle } from 'lucide-react';
-import { INDIAN_STATES, todayDateKey, REGION_ORDER, REGION_LABELS } from '@fapoms/shared';
+import { INDIAN_STATES, todayDateKey, REGION_ORDER, REGION_LABELS, AssayerEngagementType, AssayerUnavailableReason } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { Modal, Select, useToast } from '../../components/ui';
 import { Autocomplete } from '../../components/ui/Autocomplete';
@@ -44,6 +44,32 @@ const DEPARTMENTS: { value: string; label: string }[] = [
   { value: 'Quality Assurance', label: 'Quality Assurance' }, { value: 'Administration', label: 'Administration' },
   { value: 'Finance', label: 'Finance' }, { value: 'Human Resources', label: 'Human Resources' },
   { value: 'Information Technology', label: 'Information Technology' },
+];
+
+/**
+ * The two halves of the roster's "Active / Inactive" column, which held an availability, a
+ * reason and an engagement type in one cell. Labels match the record's Summary so a clerk does
+ * not meet "Back-up" in one place and `BACK_UP` in the other.
+ */
+const ENGAGEMENT_OPTIONS: { value: string; label: string }[] = [
+  { value: '', label: 'Not recorded' },
+  { value: AssayerEngagementType.REGULAR, label: 'Regular' },
+  { value: AssayerEngagementType.LOCAL, label: 'Local' },
+  { value: AssayerEngagementType.BACK_UP, label: 'Back-up' },
+  { value: AssayerEngagementType.AGENCY_AUDIT, label: 'Agency audits' },
+  { value: AssayerEngagementType.MYSTERY_AUDIT, label: 'Mystery audits' },
+];
+
+const UNAVAILABLE_OPTIONS: { value: string; label: string }[] = [
+  { value: '', label: 'They are available' },
+  { value: AssayerUnavailableReason.REJECTED_BY_US, label: 'We rejected them' },
+  { value: AssayerUnavailableReason.NOT_INTERESTED, label: 'Not interested' },
+  // The spreadsheet's word for this is "Expired"; it means the person has died, and the form
+  // should not ask a clerk to pick a word that reads like a lapsed certificate.
+  { value: AssayerUnavailableReason.DECEASED, label: 'Deceased' },
+  { value: AssayerUnavailableReason.NO_WORK_IN_AREA, label: 'No work in their area' },
+  { value: AssayerUnavailableReason.MOVED_ABROAD, label: 'Moved out of India' },
+  { value: AssayerUnavailableReason.MOVED_TO_COMPANY, label: 'Now engaged through a company' },
 ];
 
 const EMERGENCY_CONTACT_RELATIONS: { value: string; label: string }[] = [
@@ -366,6 +392,17 @@ const EDIT_FIELDS: FieldDef[] = [
     key: 'maxWeeklyWorkload', label: 'Most jobs per week', type: 'number',
     hint: 'How many jobs this person may be given in one week.',
   },
+  // Facts the appraiser roster carries that this form had no field for, so 1,155 imported
+  // records could be read but not corrected. `engagementType` and `unavailableReason` are the
+  // two halves of the roster's "Active / Inactive" column, which was one cell holding several
+  // separate things.
+  { key: 'dateOfBirth', label: 'Date of Birth', type: 'date' },
+  { key: 'qualification', label: 'Qualification', placeholder: 'e.g. B.Com, C.A Final' },
+  { key: 'bankName', label: 'Bank Name' },
+  { key: 'vstsCode', label: 'VSTS Code', placeholder: 'Their code in the vault system' },
+  { key: 'hrOwnerName', label: 'HR Owner', placeholder: 'Who in HR looks after this person' },
+  { key: 'engagementType', label: 'Engaged As', options: ENGAGEMENT_OPTIONS },
+  { key: 'unavailableReason', label: 'Unavailable Because', options: UNAVAILABLE_OPTIONS },
   { key: 'emergencyContactName', label: 'Emergency Contact Name' },
   { key: 'emergencyContactPhone', label: 'Emergency Contact Phone' },
   { key: 'emergencyContactRelation', label: 'Emergency Contact Relation', options: EMERGENCY_CONTACT_RELATIONS },
@@ -1158,19 +1195,27 @@ interface FieldGroup {
 }
 
 const EDIT_FIELD_GROUPS: FieldGroup[] = [
-  { title: 'Personal', icon: <User size={13} />, fields: ['firstName', 'lastName', 'email', 'phone', 'alternatePhone'] },
+  { title: 'Personal', icon: <User size={13} />, fields: ['firstName', 'lastName', 'email', 'phone', 'alternatePhone', 'dateOfBirth', 'qualification'] },
   { title: 'Address', icon: <MapPin size={13} />, fields: ['address', 'city', 'district', 'state', 'pincode', 'region'] },
-  { title: 'Employment', icon: <Briefcase size={13} />, fields: ['employeeId', 'employeeCode', 'employmentType', 'department', 'joiningDate', 'exitDate', 'terminationDate', 'managerId'] },
+  { title: 'Employment', icon: <Briefcase size={13} />, fields: ['employeeId', 'employeeCode', 'employmentType', 'department', 'joiningDate', 'exitDate', 'terminationDate', 'managerId', 'engagementType', 'unavailableReason', 'vstsCode', 'hrOwnerName'] },
   // Named "Money" to match the create form, so the same thing is not called two different things
   // in the two places a clerk meets it. The old `?section=financial` links still land here.
   {
     title: 'Money', icon: <CreditCard size={13} />, aliases: ['financial', 'pay', 'bank'],
-    fields: ['panNumber', 'bankAccountNumber', 'ifscCode'],
+    // PAN is not here. It is one value — payroll reads the column, and the same number is what
+    // the PAN card evidences — and it is entered and verified on the record's Vetting tab,
+    // beside the document it comes off. Two boxes for one number is how a record ends up
+    // disagreeing with itself about somebody's PAN.
+    fields: ['bankName', 'bankAccountNumber', 'ifscCode'],
     blocks: [
-      { title: 'How we pay them', note: 'Bank and tax details. Needed before this person can be paid. Rates are set on the Pay screen.', fields: ['panNumber', 'bankAccountNumber', 'ifscCode'] },
+      { title: 'How we pay them', note: 'Bank details. Needed before this person can be paid; PAN is recorded with their identity documents, and rates are set on the Pay screen.', fields: ['bankName', 'bankAccountNumber', 'ifscCode'] },
     ],
   },
-  { title: 'Skills', icon: <Award size={13} />, fields: ['experienceYears', 'skills', 'languages', 'certifications', 'performanceRating', 'maxDailyWorkload', 'maxWeeklyWorkload'] },
+  // `skills`, `languages` and `certifications` are deliberately NOT here. They are rows in
+  // workforce_attributes, edited on the record's Skills tab — the only place that can record a
+  // certificate's expiry date, which is what decides whether the person may be assigned at all.
+  // As free-text boxes on this form they wrote names with no expiry and read as the whole story.
+  { title: 'Capacity', icon: <Award size={13} />, fields: ['experienceYears', 'performanceRating', 'maxDailyWorkload', 'maxWeeklyWorkload'] },
   { title: 'Emergency', icon: <Phone size={13} />, fields: ['emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation'] },
   { title: 'Other', icon: <Clock size={13} />, fields: ['workingHoursStart', 'workingHoursEnd', 'notes'] },
 ];
