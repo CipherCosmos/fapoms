@@ -38,6 +38,9 @@ export class GeoModule implements OnModuleInit {
    * costs nobody anything.
    */
   private static readonly SWEEP_CRON = '30 2 * * *';
+
+  /** An hour after the branch sweep — see the note where these are registered. */
+  private static readonly ASSAYER_SWEEP_CRON = '30 3 * * *';
   private static readonly TZ = 'Asia/Kolkata';
 
   constructor(@InjectQueue(GEO_PRECISION_QUEUE) private readonly queue: Queue) {}
@@ -52,14 +55,39 @@ export class GeoModule implements OnModuleInit {
      */
     ensureRepeatableSchedules(
       this.queue,
+      /*
+        TWO SCHEDULES, AND EACH SAYS WHICH TARGET IT IS FOR.
+
+        The comment above has always described two. There was one, carrying no data, and the
+        worker reads `job.data?.target ?? 'branch'` — so branches were swept nightly and assayer
+        home pins never, in any environment, since the sweep was written. 1,155 of 1,163
+        appraisers sat on no coordinates at all with a backfill job running past them every
+        night.
+
+        `jobId` is what lets both exist: Bull keys a repeatable by name, cron and jobId together,
+        so two registrations of one job name without it replace each other rather than joining.
+
+        An hour apart because both walk the same rate-limited free geocoders — Nominatim and
+        Photon allow roughly one request a second between them — and two sweeps overlapping would
+        halve the throughput of each while doubling the chance of being throttled.
+      */
       [
         {
           name: GEO_PRECISION_SWEEP_JOB,
           cron: GeoModule.SWEEP_CRON,
           tz: GeoModule.TZ,
+          jobId: 'sweep-branch',
+          data: { target: 'branch' },
           // One attempt: the sweep is idempotent and runs again tomorrow; a retry inside the same
-          // night just re-spends the rate budget on whatever made it fail. `ensureRepeatableSchedules`
-          // adds the job with empty data, so the worker reads target and limit from the environment.
+          // night just re-spends the rate budget on whatever made it fail.
+          jobOptions: { attempts: 1 },
+        },
+        {
+          name: GEO_PRECISION_SWEEP_JOB,
+          cron: GeoModule.ASSAYER_SWEEP_CRON,
+          tz: GeoModule.TZ,
+          jobId: 'sweep-assayer',
+          data: { target: 'assayer' },
           jobOptions: { attempts: 1 },
         },
       ],

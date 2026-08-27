@@ -4,7 +4,7 @@ import * as xlsx from 'xlsx';
 import {
   AssayerLifecycleStatus, Region, resolveRegion,
   readAvailability, readYesNo, readCibilBand, readBackgroundCheck, readEmpanelment,
-  readPhoneNumbers, blankToNull, vocabularyKey, readHardCopyLocation,
+  readPhoneNumbers, blankToNull, vocabularyKey, readHardCopyLocation, pincodeFromAddress,
   OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, EmpanelmentStatus,
   AssayerUnavailableReason, BackgroundCheckVerdict, CibilBand,
 } from '@fapoms/shared';
@@ -238,6 +238,25 @@ export class RosterImportService {
     a.city = blankToNull(read('Location', 'City')) ?? a.city ?? null;
     a.district = blankToNull(read('District')) ?? a.district ?? null;
     a.state = blankToNull(read('State')) ?? a.state ?? null;
+
+    /**
+     * The pincode the file writes at the end of the address rather than in a column.
+     *
+     * 1,111 of 1,163 rows carry one there and the sheet has no pincode column at all, so this
+     * is the only place it exists. Checked against the state before it is taken — a pincode
+     * from the wrong postal circle is worse than a blank one, because it is the strongest
+     * signal the geocoder has.
+     */
+    if (!a.pincode) {
+      const reading = pincodeFromAddress(a.address, a.state);
+      if (reading.pincode) a.pincode = reading.pincode;
+      else if (reading.reason && /postal circle|not a civilian/.test(reading.reason)) {
+        issues.push({
+          sourceSheet: sheet, sourceRow, sourceColumn: 'Residence Address', rawValue: a.address ?? '',
+          reason: reading.reason,
+        });
+      }
+    }
 
     // `west` and `West` are one region — `resolveRegion` is the canonical reading, and it is
     // why the sheet's 7 distinct zone values become 4.

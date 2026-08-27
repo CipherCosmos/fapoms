@@ -10,6 +10,19 @@ export interface WantedSchedule {
   tz?: string;
   /** Extra Bull job options (attempts, backoff…). `repeat`/`removeOnComplete` are set here. */
   jobOptions?: Omit<JobOptions, 'repeat'>;
+  /**
+   * The payload each firing carries. Defaults to `{}`, which is what every caller got before
+   * this existed — and what made the geo sweep run branches twice and assayers never: two
+   * schedules were registered under one job name with no data, so the worker's
+   * `job.data?.target ?? 'branch'` answered the same way for both.
+   */
+  data?: Record<string, unknown>;
+  /**
+   * Distinguishes two schedules of the same job name. Bull keys a repeatable by name, cron and
+   * jobId together, so without this the second registration of a name replaces the first
+   * instead of joining it.
+   */
+  jobId?: string;
 }
 
 /**
@@ -68,12 +81,18 @@ export function ensureRepeatableSchedules(
   void attempt(0);
 }
 
+/** A schedule's identity: the job name, plus the jobId when one distinguishes it from a sibling. */
+const scheduleKey = (name: string, jobId?: string | null): string => `${name}::${jobId ?? ''}`;
+
 async function convergeOnce(queue: Queue, wanted: WantedSchedule[], logger: Logger): Promise<void> {
-  const wantedByName = new Map(wanted.map((w) => [w.name, w]));
+  // Keyed by name AND jobId. Keyed by name alone, two schedules of one job name collapsed to
+  // whichever was listed last, and the stale-removal below then compared every firing against
+  // that one — so a sibling with a different cron was deleted as though it had drifted.
+  const wantedByName = new Map(wanted.map((w) => [scheduleKey(w.name, w.jobId), w]));
 
   const existing = await queue.getRepeatableJobs();
   for (const job of existing) {
-    const want = wantedByName.get(job.name);
+    const want = wantedByName.get(scheduleKey(job.name, (job as { id?: string | null }).id));
     if (want && (job.cron !== want.cron || (want.tz && job.tz !== want.tz))) {
       await queue.removeRepeatableByKey(job.key);
       logger.warn(`Removed stale ${job.name} schedule on "${queue.name}": ${job.cron}${job.tz ? ` ${job.tz}` : ''}`);
@@ -83,11 +102,12 @@ async function convergeOnce(queue: Queue, wanted: WantedSchedule[], logger: Logg
   for (const w of wanted) {
     await queue.add(
       w.name,
-      {},
+      w.data ?? {},
       {
         removeOnComplete: true,
         removeOnFail: false,
         ...w.jobOptions,
+        ...(w.jobId ? { jobId: w.jobId } : {}),
         repeat: { cron: w.cron, ...(w.tz ? { tz: w.tz } : {}) },
       },
     );

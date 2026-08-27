@@ -10,6 +10,7 @@ export * from './enums';
 
 // Canonical geographic regions and the state → region map
 export * from './regions';
+export * from './pincode';
 
 // Domain entity interfaces
 export * from './interfaces';

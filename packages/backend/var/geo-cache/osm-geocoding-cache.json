@@ -1,0 +1,884 @@
+{
+  "pin|560068|bangalore": {
+    "lat": 12.8942249,
+    "lng": 77.6423499,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "560068, Hosapalya, Bengaluru South City Corporation"
+  },
+  "free|rbl|hongasandra|1st floor, 17/117, begur main rd, maruthi layout, hongasandra, bengaluru, karnataka, pin - 560068|bangalore|bangalore|karnataka|560068": {
+    "lat": 12.8924999,
+    "lng": 77.6197458,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Ajna Spa - Massage Centre Bangalore, floor Site no. 265, above Rayen Kids school, Maruthi Layout, Royal Shelters, Devarachikanahalli, Bommanahalli, begur road hongasandra, Bengaluru"
+  },
+  "pin|600037|chennai": {
+    "lat": 13.0827491,
+    "lng": 80.1715078,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "600037, Zone 7 Ambattur, Chennai Corporation"
+  },
+  "free|rbl|mogappair|pc 10, 1st floor, mogapair east, opp to east depo, chennai, tamil nadu, pin - 600037|chennai|chennai|tamil nadu|600037": {
+    "lat": 13.0822583,
+    "lng": 80.1697177,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Lenovo Exclusive Store & Showroom in Mogappair Chennai, 1st Avenue, bus stand street, Chennai"
+  },
+  "pin|600049|chennai": {
+    "lat": 13.1061131,
+    "lng": 80.2067436,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "600049, Zone 8 Anna Nagar, Chennai Corporation"
+  },
+  "free|rbl|villivakkam|no: 197, old no: 81 first floor, m.t.h road, villivakkam, thiruvallur, tamil nadu, pin - 600049|chennai|chennai|tamil nadu|600049": {
+    "lat": 13.1125875,
+    "lng": 80.2081378,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Villivakkam, Chennai"
+  },
+  "free|rbl|royapuram|#22(187), manarsamy kovil street, royapuram, chennai, pin - 600013|chennai|chennai|tamil nadu|600013": {
+    "lat": 13.084889,
+    "lng": 80.2826483,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Tamil Nadu Government Dental College & Hospital, Chennai, Muthuswamy Road, Chennai"
+  },
+  "pin|641301|coimbatore": {
+    "lat": 11.3215841,
+    "lng": 76.9945703,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "641301, Mettupalayam, Coimbatore"
+  },
+  "pin|641034|coimbatore": {
+    "lat": 11.0771034,
+    "lng": 76.9425038,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "641034, Ward 1, North Zone"
+  },
+  "free|rbl|narasimhanaikenpalayam|116-c16, first floor, senthur complex, mettupalayam road, thudiyalur, coimbatore, tamil nadu, pin - 641034|coimbatore|coimbatore|tamil nadu|641034": {
+    "lat": 11.1011436,
+    "lng": 76.9383993,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Coimbatore-Mettupalayam Road, Coimbatore"
+  },
+  "pin|642001|coimbatore": {
+    "lat": 10.6494188,
+    "lng": 77.0434539,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "642001, Pollachi, Coimbatore"
+  },
+  "free|rbl|pollachi|door no.: 170/2, 1st floor, s s kovil street, pollachi, tamil nadu, pin - 642001|coimbatore|coimbatore|tamil nadu|642001": {
+    "lat": 10.6617248,
+    "lng": 77.0079899,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Pollachi - Coimbatore Road, Pollachi"
+  },
+  "pin|560001|bangalore": {
+    "lat": 12.9797037,
+    "lng": 77.594695,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "560001, Sampangirama Nagar, Bengaluru Central City Corporation"
+  },
+  "free|state bank of india|bangalore mg road|202 mahatma gandhi road, bangalore|bangalore|bangalore urban|karnataka|560001": {
+    "lat": 12.9740313,
+    "lng": 77.6194834,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "The Park Bangalore, Mahatma Gandhi Road, Bengaluru"
+  },
+  "pin|641024|coimbatore": {
+    "lat": 10.9554064,
+    "lng": 76.9740269,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "641024, Ward 94, South Zone"
+  },
+  "free|rbl|sundharapuram|189m, grd flr, pollachi main road, gandhi nagar, coimbatore, tamil nadu, pin - 641024|coimbatore|coimbatore|tamil nadu|641024": {
+    "lat": 10.9521673,
+    "lng": 76.9758815,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Ganapathy Pc Sundarapuram,, Pollachi road, Podanur"
+  },
+  "pin|641025|coimbatore": {
+    "lat": 11.037773,
+    "lng": 76.9279112,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "641025, Ward 8, West Zone"
+  },
+  "free|rbl|edayar palayam|no :1/11-1, 1st floor, ks complex, tvs nagar, thadagam road, coimbatore, tamil nadu, pin - 641025|coimbatore|coimbatore|tamil nadu|641025": {
+    "lat": 10.9995252,
+    "lng": 76.9511992,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Guru Kirupa Hospital, Pn Palayam, Coimbatore, Sukrawarpettai Mill Road, Perur"
+  },
+  "pin|641001|coimbatore": {
+    "lat": 10.9908477,
+    "lng": 76.9742933,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "641001, Ward 74, Central Zone"
+  },
+  "pin|641012|coimbatore": {
+    "lat": 11.0203194,
+    "lng": 76.9619764,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "641012, Ward 52, Central Zone"
+  },
+  "pin|753012|cuttack": {
+    "lat": 20.453877,
+    "lng": 85.8885014,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "753012, Cuttack (M.Corp.) P.S, Cuttack"
+  },
+  "free|rbl|link road - cuttack|building no: 662/c/5, 1st floor, holding no.-662/c/5, ahalya mandap, arundoya market.p.o., badambadi-p.s., cuttack district, odisha, pin - 753012|cuttack|cuttack|odisha|753012": {
+    "lat": 20.4499362,
+    "lng": 85.8948607,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Door Sanchar Bhawan Cuttack, Link Road, Cuttack"
+  },
+  "pin|754021|cuttack": {
+    "lat": 20.4922228,
+    "lng": 85.9546328,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "754021, Jagatpur, Cuttack"
+  },
+  "free|rbl|jagatpur|building no: 509/49, first floor, at: khaira, po/ps jagatpur, cuttack district, odisha, pin - 754021|cuttack|cuttack|odisha|754021": {
+    "lat": 20.496974,
+    "lng": 85.9197807,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Jagatpur"
+  },
+  "pin|754202|cuttack": {
+    "lat": 20.4692114,
+    "lng": 85.9930003,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "754202, Jagatpur, Cuttack"
+  },
+  "free|rbl|salipur|building no: 1953, 1st floor, chandradel pur, po/ps salepur, cuttack district, odisha, pin-754202|cuttack|cuttack|odisha|754202": {
+    "lat": 20.4794306,
+    "lng": 86.1065223,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "salipur, kuanpal road, Salepur"
+  },
+  "free|rbl|choudwar|first floor, kapaleswar, po/ps/- choudwar, dist- cuttack, odisha, pin - 754071|cuttack|cuttack|odisha|754071": {
+    "lat": 20.6007612,
+    "lng": 85.8912043,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Choudwar"
+  },
+  "pin|580024|dharwad": {
+    "lat": 15.335146,
+    "lng": 75.1283924,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "580024, Hubballi Urban Taluku, Dharwad"
+  },
+  "free|rbl|hubli|1st floor, #sf1 krishnendra complex, hahimsa circle, old hubli, hubli, karnataka, pin - 580024|dharwad|dharwad|karnataka|580024": {
+    "lat": 15.3273103,
+    "lng": 75.1215805,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Hubli-Dharwad Bypass, Hubli"
+  },
+  "pin|624401|dindigul": {
+    "lat": 10.1913265,
+    "lng": 78.2144833,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "624401, Natham, Dindigul"
+  },
+  "free|rbl|natham|4b, balagurunatham chetty street, opp to dr.a. ramakrishnan clinic, ward 18, thangaiya shopping complex, natham, dindigul, tamil nadu, pin - 624401|dindigul|dindigul|tamil nadu|624401": {
+    "lat": 10.2419953,
+    "lng": 78.1551753,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Dindigul - Natham - Singampunari - Tiruppattur - Karaikudi Road"
+  },
+  "pin|624001|dindigul": {
+    "lat": 10.3558126,
+    "lng": 77.9834859,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "624001, Dindigul, Tamil Nadu"
+  },
+  "free|rbl|dindugal|door no:110, first floor, rly station road, dindugal, tamil nadu, pin - 624001|dindigul|dindigul|tamil nadu|624001": {
+    "lat": 10.3658056,
+    "lng": 77.977556,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Saravana Hospitals, Dindigul, Chennai - Trichy - Dindugal Road (Old NH45), Dindigul"
+  },
+  "pin|760002|ganjam": {
+    "lat": 19.3131322,
+    "lng": 84.7765778,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "760002, Rangeilunda, Ganjam"
+  },
+  "free|rbl|berhampur aska road|plot no- 147/1422, hanuman nagar, infront of sbi, aska road, berhampur, ganjam, odisha, pin - 760002|ganjam|ganjam|odisha|760002": {
+    "lat": 19.3045935,
+    "lng": 84.8078255,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "District Court, Berhampur, Ganjam, Komapalli Main Road, Brahmapur"
+  },
+  "pin|761020|ganjam": {
+    "lat": 19.3609717,
+    "lng": 84.9900608,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "761020, Chhatrapur, Ganjam"
+  },
+  "free|rbl|chatrapur|house no.574, main road, infront of union bankhouse no.574, main road, infront of union bank, chatrapur, ganjam, odisha, pin - 761020|ganjam|ganjam|odisha|761020": {
+    "lat": 19.3536353,
+    "lng": 84.9881145,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Ganjam RTO, Way to Collectratate, Chatrapur"
+  },
+  "pin|685531|idukki": {
+    "lat": 9.5764757,
+    "lng": 76.9980802,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "685531, Peerumade, Idukki"
+  },
+  "pin|685533|idukki": {
+    "lat": 9.5756099,
+    "lng": 77.0852765,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "685533, Peerumade, Idukki"
+  },
+  "free|rbl|vandiperiyar|ground floor, snv building, near bus stand, vandiperiyar, idukki, kerala, pin - 685533|idukki|idukki|kerala|685533": {
+    "lat": 9.5729206,
+    "lng": 77.0918879,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Vandiperiyar"
+  },
+  "pin|685501|idukki": {
+    "lat": 9.6366146,
+    "lng": 76.9789568,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "685501, Peerumade, Idukki"
+  },
+  "free|rbl|elappara|first floor, design park complex, elappara, idukki, kerala, pin - 685501|idukki|idukki|kerala|685501": {
+    "lat": 9.6306232,
+    "lng": 76.9784714,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Elappara"
+  },
+  "pin|755019|jajpur": {
+    "lat": 20.9536906,
+    "lng": 86.1291375,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "755019, Jajpur Road, Jajapur Road"
+  },
+  "pin|754296|jajpur": {
+    "lat": 20.6758612,
+    "lng": 86.2010696,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "754296, Badachana, Jajpur"
+  },
+  "free|rbl|chandikhol|first floor, chandikhol acharya market complex (gramya bank building), po - sunguda, ps - badachhana, dist - jajpur, odisha, pin - 754296|jajpur|jajpur|odisha|754296": {
+    "lat": 20.7011976,
+    "lng": 86.1345712,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Chandikhol"
+  },
+  "pin|333001|jhunjhunu": {
+    "lat": 28.1293415,
+    "lng": 75.3997893,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "333001, Jhunjhunun Tehsil, Jhunjhunu"
+  },
+  "free|rbl|jhunjhunu station road|shah market, near by sbi bank, sawa wala kua, station road, jhunjhunu – 333001|jhunjhunu|jhunjhunu|rajasthan|333001": {
+    "lat": 28.1179142,
+    "lng": 75.3797747,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "double road behind jb shah college, Jhunjhunu"
+  },
+  "pin|333042|jhunjhunu": {
+    "lat": 27.8522361,
+    "lng": 75.2758053,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "333042, Nawalgarh Tehsil, Jhunjhunu"
+  },
+  "free|rbl|nawalgarh|opp roadways bus depo near barod gramin bank, jhunjhunu road nawalgarh-333042|jhunjhunu|jhunjhunu|rajasthan|333042": {
+    "lat": 27.8503,
+    "lng": 75.2741,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Nawalgarh"
+  },
+  "pin|505001|karimnagar": {
+    "lat": 18.4376784,
+    "lng": 79.1328949,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "505001, Karimnagar mandal, Karimnagar"
+  },
+  "pin|507165|khammam": {
+    "lat": 17.1412332,
+    "lng": 80.3715928,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "507165, Wyra mandal, Khammam"
+  },
+  "pin|625016|madurai": {
+    "lat": 9.928059,
+    "lng": 78.0960299,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "625016, Madurai, Madurai South"
+  },
+  "free|rbl|arapalayam|42, 42a, new no 140, ahila complex, ground floor, aarapalayam main road, near sbi atm, aarapalayam, madurai, tamil nadu, pin - 625016|madurai|madurai|tamil nadu|625016": {
+    "lat": 9.9320311,
+    "lng": 78.1007468,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Arasaradi Arapalayam Road, Madurai"
+  },
+  "pin|625003|madurai": {
+    "lat": 9.9022889,
+    "lng": 78.0986428,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "625003, Madurai, Madurai South"
+  },
+  "pin|625532|madurai": {
+    "lat": 9.9707796,
+    "lng": 77.8265666,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "625532, Usilampatti, Madurai"
+  },
+  "free|rbl|usilampetti|no 90, 1st floor, post office street, peraiyur road, usilampatti, madurai, tamil nadu, pin - 625532|madurai|madurai|tamil nadu|625532": {
+    "lat": 9.9603304,
+    "lng": 77.8079846,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Madurai - Theni Road, Usilampatti"
+  },
+  "pin|625007|madurai": {
+    "lat": 9.9488345,
+    "lng": 78.1484313,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "625007, Madurai, Madurai South"
+  },
+  "free|rbl|k pudhur|11a, azhagarkovil main road, k pudhur, madurai, tamil nadu, pin - 625007|madurai|madurai|tamil nadu|625007": {
+    "lat": 9.9482581,
+    "lng": 78.1460337,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "BG Naidu Sweets Shop K.Pudur Madurai, Azhagarkovil Road"
+  },
+  "pin|625014|madurai": {
+    "lat": 9.9685552,
+    "lng": 78.1343354,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "625014, Madurai, Madurai South"
+  },
+  "free|rbl|iyer bungalow|1119-1, 1st floor, ezhil nagar, opp. bgm hospital, madurai, tamil nadu, pin - 625014|madurai|madurai|tamil nadu|625014": {
+    "lat": 9.9677788,
+    "lng": 78.1363804,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Iyer Bungalow"
+  },
+  "pin|400001|mumbai": {
+    "lat": 18.9913104,
+    "lng": 72.853839,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "400001, F/S Ward, Mumbai Zone 2"
+  },
+  "free|state bank of india|mumbai fort branch|789 fort chambers, fort, mumbai|mumbai city|mumbai|maharashtra|400001": {
+    "lat": 18.9279712,
+    "lng": 72.8329063,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Maharashtra Chambers, New Bakehouse, Lane, Kala Ghoda, Fort, Mumbai"
+  },
+  "free|rbl|k r nagara|1st floor, #70/69, opp main post office, v.v road, mysore hassan main road, k.r nagara, karnataka, pin - 571602|mysore|mysore|karnataka|571602": {
+    "lat": 12.2895861,
+    "lng": 76.6170759,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Mysore One, 2nd Main Road, Ramakrishna Nagara, Mysuru"
+  },
+  "pin|440012|nagpur": {
+    "lat": 21.1374279,
+    "lng": 79.0815792,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "440012, Nagpur City, Nagpur Urban Taluka"
+  },
+  "free|state bank of india|nagpur sitabuldi branch|101 sitabuldi road, nagpur|nagpur|nagpur|maharashtra|440012": {
+    "lat": 21.1471942,
+    "lng": 79.0753726,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Institute of Science Nagpur, R.T. Road, Redcross Rd, Board Office Square, Opposite Air India Office, Sitabuldi, Civil Lines, Nagpur"
+  },
+  "pin|440036|nagpur": {
+    "lat": 21.1164465,
+    "lng": 79.0273868,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "440036, Nagpur City, Nagpur Urban Taluka"
+  },
+  "free|rbl|hingna|g-02, unique jheel apartments, hingna road, nagpur, maharashtra, pin - 440036|nagpur|nagpur|maharashtra|440036": {
+    "lat": 21.0751769,
+    "lng": 78.9683723,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Hingna"
+  },
+  "pin|440024|nagpur": {
+    "lat": 21.0856024,
+    "lng": 79.0240986,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "440024, Nagpur City, Nagpur Urban Taluka"
+  },
+  "free|rbl|dattatray nagar|house no 6735/a/1/a, city survey no 2544, dattatraya nagar, nagpur, maharashtra, pin - 440024|nagpur|nagpur|maharashtra|440024": {
+    "lat": 21.1170055,
+    "lng": 79.1127244,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Dattatray Nagar, Nagpur"
+  },
+  "pin|422001|nashik": {
+    "lat": 20.0010224,
+    "lng": 73.7988333,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "422001, Nashik Subdistrict, Nashik"
+  },
+  "pin|422005|nashik": {
+    "lat": 20.0058481,
+    "lng": 73.7663822,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "422005, Nashik Subdistrict, Nashik"
+  },
+  "free|state bank of india|nashik gangapur road branch|45 gangapur road, nashik|nashik|nashik|maharashtra|422005": {
+    "lat": 20.007559,
+    "lng": 73.776706,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Urban Health Centre, Nashik, Gangapur Road, Nashik"
+  },
+  "pin|201304|noida": {
+    "lat": 28.5286715,
+    "lng": 77.3880074,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "201304, Noida, Dadri"
+  },
+  "free|rbl|bhangel|ground floor 1/7, tyagi house, bhangel, gautam budhnagar, noida, utter pradesh, pin - 201304|noida|noida|uttar pradesh|201304": {
+    "lat": 28.5272381,
+    "lng": 77.3882213,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Bhangel Road, Noida"
+  },
+  "pin|679311|palakkad": {
+    "lat": 10.7996557,
+    "lng": 76.0688529,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "679311, Pattambi, Palakkad"
+  },
+  "free|rbl|nhangattiri|trade centre, nhangattiri, palakkad, kerala, pin - 679311|palakkad|palakkad|kerala|679311": {
+    "lat": 10.784762,
+    "lng": 76.1698511,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Nhangattiri"
+  },
+  "pin|678581|palakkad": {
+    "lat": 11.0674723,
+    "lng": 76.6820208,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "678581, Mannarkad, Palakkad"
+  },
+  "free|rbl|goolikadavu|1st floor, padijarethil building, near juma mazjid, anakkatty road, goolikkadavu, palakkad, kerala, pin - 678581|palakkad|palakkad|kerala|678581": {
+    "lat": 11.1410151,
+    "lng": 76.670681,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Kottathara - Goolikadavu Road, Kottathara"
+  },
+  "pin|678555|palakkad": {
+    "lat": 10.7367603,
+    "lng": 76.8375025,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "678555, Chittur, Palakkad"
+  },
+  "pin|678671|palakkad": {
+    "lat": 10.6990075,
+    "lng": 76.6290211,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "678671, Alathur, Palakkad"
+  },
+  "free|rbl|thenkurissi|ground floor, zayan arcade, near kottakkal arya vaidya sala, kayaramkulam junction, thenkurissi po, palakkad, kerala, pin - 678671|palakkad|palakkad|kerala|678671": {
+    "lat": 10.6827784,
+    "lng": 76.6227094,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Thenkurissi, Thenkkurussi"
+  },
+  "pin|411001|pune": {
+    "lat": 18.5336118,
+    "lng": 73.8806684,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "411001, Pune City Subdistrict, Pune"
+  },
+  "free|state bank of india|pune main branch|123 shivaji road, deccan, pune|pune city|pune|maharashtra|411001": {
+    "lat": 18.5164917,
+    "lng": 73.8432283,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Deccan PMPML Bus Stand Road, Pune"
+  },
+  "pin|411007|pune": {
+    "lat": 18.5593315,
+    "lng": 73.8100582,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "411007, Pune City Subdistrict, Pune"
+  },
+  "free|state bank of india|pune aundh branch|45 aundh road, pune|pune city|pune|maharashtra|411007": {
+    "lat": 18.5608014,
+    "lng": 73.8109843,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "State Bank of India, Sanghvi Kesari Road, Pune"
+  },
+  "pin|411006|pune": {
+    "lat": 18.5615453,
+    "lng": 73.9188611,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "411006, Pune City Subdistrict, Pune"
+  },
+  "free|state bank of india|pune yerwada branch|89 yerwada central, pune|pune city|pune|maharashtra|411006": {
+    "lat": 18.564192,
+    "lng": 73.8904432,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Yerwada Central Jail, National Games Marg, Pune"
+  },
+  "pin|411057|pune": {
+    "lat": 18.59111,
+    "lng": 73.739834,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "411057, Mulshi Subdistrict, Pune"
+  },
+  "free|state bank of india|pune hinjewadi branch|12 rajiv gandhi it park, hinjewadi, pune|pune city|pune|maharashtra|411057": {
+    "lat": 18.5642989,
+    "lng": 73.7812936,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "State Bank of India, Gopal Hari Deshmukh Marg, Pune"
+  },
+  "free|state bank of india|pune koregaon park branch|77 north main road, koregaon park, pune|pune city|pune|maharashtra|411001": {
+    "lat": 18.5416145,
+    "lng": 73.8862008,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Bank of India,koregaon park branch, Burning Ghat Road, Pune"
+  },
+  "pin|411033|pune": {
+    "lat": 18.6241222,
+    "lng": 73.7721128,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "411033, Mulshi Subdistrict, Pune"
+  },
+  "free|rbl|chinchwad|shop no 25, kakde corner near indian overseas bank, chinchwad gaon pune, maharashtra, pin - 411033|pune|pune|maharashtra|411033": {
+    "lat": 18.6421729,
+    "lng": 73.7703049,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "s/o;shanthappa mulage servey no.62,guratara niwas shivnagari nalawade wasti bijalinagar,chinchwad pune city chinchwadgaon pune city pune 411033, Akurdi Chikhali Road, Pimpri-Chinchwad"
+  },
+  "pin|411014|pune": {
+    "lat": 18.5536387,
+    "lng": 73.9336292,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "411014, Pune City Subdistrict, Pune"
+  },
+  "free|rbl|chandan nagar|sr no 49/2, pune-bangalore road, near jija mata bank, chandan nagar, pune, maharashtra, pin - 411014|pune|pune|maharashtra|411014": {
+    "lat": 18.5570956,
+    "lng": 73.9280864,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Chandan nagar police, Old Mundhwa Road, Pune"
+  },
+  "pin|410501|pune": {
+    "lat": 18.7444898,
+    "lng": 73.8258949,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "410501, Khed, Pune"
+  },
+  "free|rbl|chakan|570, brahmin gali, near new shree jewellers manik chowk chakan, pune, maharashtra, pin - 410501|pune|pune|maharashtra|410501": {
+    "lat": 18.7463618,
+    "lng": 73.8600762,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "RBL Bank, Pune Nashik Road, Chakan"
+  },
+  "pin|411026|pune": {
+    "lat": 18.6392742,
+    "lng": 73.8341598,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "411026, Haveli Subdistrict, Pune"
+  },
+  "free|rbl|bhosari|survey no 681/1 a sadashiv palace, below muthoot finance ltd, landewadi bhosari, pin - 411026|pune|pune|maharashtra|411026": {
+    "lat": 18.6322438,
+    "lng": 73.8491619,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Bhosari Depot, Bhosari Depot, Pimpri-Chinchwad"
+  },
+  "pin|411043|pune": {
+    "lat": 18.4662395,
+    "lng": 73.8542249,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "411043, Pune City Subdistrict, Pune"
+  },
+  "free|rbl|dhankawadi|102b, 1st floor, waris heights, opp ellora palace, dhankawadi, pune, maharashtra, pin - 411043|pune|pune|maharashtra|411043": {
+    "lat": 18.4654198,
+    "lng": 73.850152,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Dhankawadi, Gulab Nagar Road, Pune"
+  },
+  "pin|411028|pune": {
+    "lat": 18.5043896,
+    "lng": 73.9349501,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "411028, Pune City Subdistrict, Pune"
+  },
+  "free|rbl|hadapsar|sr no:171 hadapsar gaon solapur road hadapsar, maharashtra, pin - 411028|pune|pune|maharashtra|411028": {
+    "lat": 18.4928501,
+    "lng": 73.99287,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Healing Hands Clinic - Hadapsar, Pune, Solapur Road, Pune"
+  },
+  "pin|412202|pune": {
+    "lat": 18.4858437,
+    "lng": 74.1428656,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "412202, Haveli Subdistrict, Pune"
+  },
+  "free|rbl|uruli kanchan|gat no 1002, pune solapur road, near bank of india, uruli kanchan, taluka-haveli, pune maharashtra-412202|pune|pune|maharashtra|412202": {
+    "lat": 18.4872401,
+    "lng": 74.133,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Uruli Kanchan"
+  },
+  "pin|500070|rangareddy": {
+    "lat": 17.3330243,
+    "lng": 78.5733135,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "500070, Ward 15 Vanasthalipuram, Greater Hyderabad Municipal Corporation East Zone"
+  },
+  "free|rbl|vanasthalipuram|building no: plot no 17, 5-5-107/1, 1st floor, hill colony, vanasthalipuram, telangana, pin - 500070|rangareddy|rangareddy|telangana|500070": {
+    "lat": 17.3317054,
+    "lng": 78.5754407,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Govt. Homoeo Dispensary, Vanasthalipuram, Vanasthalipuram"
+  },
+  "pin|636001|salem": {
+    "lat": 11.6545736,
+    "lng": 78.1584272,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "636001, Salem, Tamil Nadu"
+  },
+  "pin|636004|salem": {
+    "lat": 11.6804057,
+    "lng": 78.1371075,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "636004, Salem West, Salem"
+  },
+  "free|rbl|alagapuram|1/1 first floor, saratha college main road, south alagapuram, salem, tamil nadu, pin - 636004|salem|salem|tamil nadu|636004": {
+    "lat": 11.6861722,
+    "lng": 78.148412,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Alagapuram"
+  },
+  "pin|636502|salem": {
+    "lat": 11.6992487,
+    "lng": 77.9656664,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "636502, Omalur, Salem"
+  },
+  "free|rbl|tharamangalam|2/5-166 sankagiri road, tharamangalam, salem, tamil nadu, pin - 636502|salem|salem|tamil nadu|636502": {
+    "lat": 11.6916951,
+    "lng": 77.96677,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Tharamangalam, Omalur - Sankari - Thiruchengodu - Paramathi Road, Taramangalam"
+  },
+  "pin|636501|salem": {
+    "lat": 11.6981825,
+    "lng": 77.8716053,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "636501, Mettur, Salem"
+  },
+  "free|rbl|jalakandapuram|ist floor, 6.2/1, tharamanagalam main road, salem, tamil nadu, pin - 636501|salem|salem|tamil nadu|636501": {
+    "lat": 11.6993908,
+    "lng": 77.8781257,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Jalakandapuram"
+  },
+  "pin|637301|salem": {
+    "lat": 11.4764343,
+    "lng": 77.9174229,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "637301, Sankari, Salem"
+  },
+  "free|rbl|sankari|1-67c3, ground floor, new edapadi road. sankari, salem (dt), tamil nadu, pin - 637301|salem|salem|tamil nadu|637301": {
+    "lat": 11.4480638,
+    "lng": 77.8708098,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Sankari Durg, Erode Privu Road - Sankari R.S. Road, Sankagiri"
+  },
+  "pin|415409|sangli": {
+    "lat": 17.047434,
+    "lng": 74.2751964,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "415409, Walwa, Sangli"
+  },
+  "free|rbl|islampur|c s no 2943, opp post office islampur tal-walwa, sangli, maharashtra, pin - 415409|sangli|sangli|maharashtra|415409": {
+    "lat": 17.0461797,
+    "lng": 74.2603597,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Islampur Bus Station, Peth-Sangli Road, Ishwarpur"
+  },
+  "pin|620003|tiruchirappalli": {
+    "lat": 10.8021375,
+    "lng": 78.6832532,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "620003, Trichy Zone IV, Trichy Corporation Limits"
+  },
+  "free|rbl|woraiyur|d,no,41 big sourashtra street, woraiyur trichy-3, pin - 620003|tiruchirappalli|tiruchirappalli|tamil nadu|620003": {
+    "lat": 10.8280539,
+    "lng": 78.6731113,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Woraiyur, Tiruchirappalli"
+  },
+  "pin|620005|tiruchirappalli": {
+    "lat": 10.8505148,
+    "lng": 78.6996312,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "620005, Trichy Zone I, Trichy Corporation Limits"
+  },
+  "free|rbl|thiruvanakoil|4a trunk road, thiruvanakoil, trichy - 620005|tiruchirappalli|tiruchirappalli|tamil nadu|620005": {
+    "lat": 10.8163636,
+    "lng": 78.6935509,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Madras trunk road, Tiruchirappalli"
+  },
+  "free|rbl|hanamkonda|building no: 2-2-431/1, 1st floor, kishanpura, hanamkonda, warangal, telangana, pin - 506001|warangal|warangal|telangana|506001": {
+    "lat": 18.0064293,
+    "lng": 79.569389,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Warangal District Cooperative Bank Limited, Hanamkonda Branch, Hanamkonda"
+  },
+  "pin|506002|warangal": {
+    "lat": 17.9772682,
+    "lng": 79.6025426,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "506002, Warangal mandal, Warangal"
+  },
+  "free|rbl|narsampet|1-340, angadi center, opp to mro office, narsampet, telangana, pin - 506312|warangal|warangal|telangana|506312": {
+    "lat": 17.974477,
+    "lng": 79.6156589,
+    "precision": "osm_locality",
+    "accuracyMeters": 900,
+    "matchedName": "Narsampet Rd-warangal rd, Warangal"
+  },
+  "pin|411004|pune": {
+    "lat": 18.516534,
+    "lng": 73.8362142,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "411004, Pune City Subdistrict, Pune"
+  },
+  "pin|486889|singrauli": {
+    "lat": 24.1988618,
+    "lng": 82.6739082,
+    "precision": "pincode",
+    "accuracyMeters": 3000,
+    "matchedName": "486889, Waidhan, Singrauli Tahsil"
+  }
+}
