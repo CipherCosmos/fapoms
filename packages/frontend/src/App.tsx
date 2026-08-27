@@ -50,10 +50,7 @@ const RuleBypassPanel = React.lazy(() => import('./pages/admin/RuleBypassPanel')
 const HrLayout = React.lazy(() => import('./pages/hr/HrLayout').then((m) => ({ default: m.HrLayout })));
 const HrOverviewPage = React.lazy(() => import('./pages/hr/HrOverviewPage').then((m) => ({ default: m.HrOverviewPage })));
 const HrRosterPage = React.lazy(() => import('./pages/hr/HrRosterPage').then((m) => ({ default: m.HrRosterPage })));
-const HrOnboardingPage = React.lazy(() => import('./pages/hr/HrOnboardingPage').then((m) => ({ default: m.HrOnboardingPage })));
-const HrCapabilityPage = React.lazy(() => import('./pages/hr/HrCapabilityPage').then((m) => ({ default: m.HrCapabilityPage })));
 const HrPayPage = React.lazy(() => import('./pages/hr/HrPayPage').then((m) => ({ default: m.HrPayPage })));
-const HrPaperworkPage = React.lazy(() => import('./pages/hr/HrPaperworkPage').then((m) => ({ default: m.HrPaperworkPage })));
 const HrWherePeopleArePage = React.lazy(() => import('./pages/hr/HrWherePeopleArePage').then((m) => ({ default: m.HrWherePeopleArePage })));
 const DataEntryOverview = React.lazy(() => import('./pages/dataentry/DataEntryOverview'));
 const PacketsQueue = React.lazy(() => import('./pages/dataentry/PacketsQueue'));
@@ -354,19 +351,19 @@ export const App: React.FC = () => {
           <Route path="/hr" element={<HrLayout />}>
             <Route index element={<HrOverviewPage />} />
             <Route path="roster" element={<HrRosterPage />} />
-            <Route path="onboarding" element={<HrOnboardingPage />} />
-            <Route path="paperwork" element={<HrPaperworkPage />} />
-            <Route path="skills" element={<HrCapabilityPage />} />
             <Route path="pay" element={<HrPayPage />} />
             <Route path="where" element={<HrWherePeopleArePage />} />
 
-            {/* Retired URLs — kept resolving, each landing on the chip that replaced it.
-                These duplicate LEGACY_PATHS in HrLayout.tsx on purpose: importing it here as a
-                value would drag HrLayout out of its lazy chunk. Keep the two in step. */}
-            <Route path="records" element={<Navigate to="/hr/paperwork?view=details" replace />} />
-            <Route path="compliance" element={<Navigate to="/hr/paperwork?view=certificates" replace />} />
-            <Route path="documents" element={<Navigate to="/hr/paperwork?view=ids" replace />} />
-            <Route path="capability" element={<Navigate to="/hr/skills" replace />} />
+            {/* Retired URLs — kept resolving, each landing on the chip that answers the same
+                question. These duplicate LEGACY_PATHS in HrLayout.tsx on purpose: importing it
+                here as a value would drag HrLayout out of its lazy chunk. Keep the two in step. */}
+            <Route path="onboarding" element={<Navigate to="/hr/roster?segment=onboarding" replace />} />
+            <Route path="paperwork" element={<Navigate to="/hr/roster?segment=incomplete" replace />} />
+            <Route path="records" element={<Navigate to="/hr/roster?segment=incomplete" replace />} />
+            <Route path="compliance" element={<Navigate to="/hr/roster?segment=lapsed" replace />} />
+            <Route path="documents" element={<Navigate to="/hr/roster?segment=incomplete" replace />} />
+            <Route path="skills" element={<Navigate to="/hr/roster?segment=lapsed" replace />} />
+            <Route path="capability" element={<Navigate to="/hr/roster?segment=lapsed" replace />} />
             <Route path="deployment" element={<Navigate to="/hr/where?view=coverage" replace />} />
             <Route path="utilisation" element={<Navigate to="/hr/where?view=workload" replace />} />
             <Route path="activity" element={<Navigate to="/hr/where?view=changes" replace />} />

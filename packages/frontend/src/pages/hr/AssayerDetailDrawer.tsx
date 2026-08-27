@@ -1,10 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
 import {
   X, Edit2, ArrowRightLeft, AlertTriangle, CheckCircle2,
   User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, MapPin, KeyRound, ShieldCheck,
 } from 'lucide-react';
-import { nextAssayerLifecycleStates, AssayerLifecycleStatus, assayerLifecycleLabel, activityEventLabel, employmentTypeLabel, daysUntilExpiry, AssayerEngagementType, AssayerUnavailableReason } from '@fapoms/shared';
+import { nextAssayerLifecycleStates, AssayerLifecycleStatus, assayerLifecycleLabel, activityEventLabel, employmentTypeLabel, AssayerEngagementType, AssayerUnavailableReason } from '@fapoms/shared';
 
 import { api } from '../../services/api';
 import { Select, useConfirm } from '../../components/ui';
@@ -18,9 +17,7 @@ import { userMessage } from '../../services/errors';
 import { CommercialProfileModal, type CommercialProfile } from './CommercialProfileModal';
 import { AssayerRemarks } from '../../components/AssayerRemarks';
 import { AssayerVettingTab } from './AssayerVettingTab';
-// The capability page owns the wording for a workforce attribute's type; this tab reads it from
-// there rather than keeping a second map that would drift. Both modules are lazy-loaded under /hr.
-import { attributeTypeLabel } from './HrCapabilityPage';
+import { AssayerSkillsPanel } from './AssayerSkillsPanel';
 import { todayDateKey, localDateKey } from '../../utils/statusLabels';
 import { counted } from '../../utils/plural';
 
@@ -58,9 +55,6 @@ const maskAadhaar = (v?: string | null): string | null => {
   const digits = String(v ?? '').replace(/\D/g, '');
   return digits.length >= 4 ? `•••• •••• ${digits.slice(-4)}` : null;
 };
-
-/** Whole days until a recorded expiry; null when nothing is recorded. See daysUntilExpiry. */
-const expiryDays = (iso?: string | null): number | null => daysUntilExpiry(iso);
 
 /**
  * Everything about one person, in a slide-over.
@@ -193,29 +187,6 @@ export const AssayerDetailDrawer: React.FC<{
   }, [tab, assayerId, loaded]);
 
   const missing = useMemo(() => missingCriticalFields(a), [a]);
-
-  /**
-   * Skills, languages and certifications with the ones that stop working soonest at the top, and
-   * the expired ones called out separately above the list. Server order was insertion order.
-   */
-  const sortedAttributes = useMemo(() => {
-    const rows: any[] | undefined = loaded.skills;
-    if (!rows) return rows;
-    return [...rows].sort((x, y) => {
-      const ex = x.expiryDate ? new Date(x.expiryDate).getTime() : Number.POSITIVE_INFINITY;
-      const ey = y.expiryDate ? new Date(y.expiryDate).getTime() : Number.POSITIVE_INFINITY;
-      if (ex !== ey) return ex - ey;
-      return String(x.name).localeCompare(String(y.name));
-    });
-  }, [loaded.skills]);
-
-  const lapsedCertifications = useMemo(
-    () => (loaded.skills ?? []).filter((w: any) => {
-      const d = expiryDays(w.expiryDate);
-      return d !== null && d < 0;
-    }),
-    [loaded.skills],
-  );
 
   /**
    * The pay structure that is actually being quoted today, and whether a later one is queued.
@@ -629,51 +600,7 @@ export const AssayerDetailDrawer: React.FC<{
               )}
 
               {tab === 'skills' && (
-                <>
-                  {/*
-                    An expired certification is refused by the eligibility gate, so the person is
-                    quietly unassignable. Said here, at the top, rather than left to be worked out
-                    from a date halfway down a list — with the way to fix it one click away.
-                  */}
-                  {lapsedCertifications.length > 0 && (
-                    <div style={{ padding: '11px 13px', borderRadius: '8px', marginBottom: '12px', background: 'var(--status-cancelled-bg)', border: '1px solid rgba(220,80,80,0.3)' }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: '7px', color: 'var(--danger)', fontWeight: 700, fontSize: '12.5px' }}>
-                        <AlertTriangle size={14} /> {counted(lapsedCertifications.length, 'certificate')} expired
-                      </div>
-                      <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '5px' }}>
-                        {lapsedCertifications.map((c: any) => c.name).join(', ')} — any branch that requires these will
-                        refuse this assayer until the renewal date is recorded.
-                      </div>
-                      {canManage && (
-                        <Link to={`/hr/skills?assayer=${assayerId}`} className="btn btn-secondary"
-                          style={{ fontSize: '11.5px', padding: '5px 10px', marginTop: '9px', display: 'inline-block', textDecoration: 'none' }}>
-                          Record the renewal
-                        </Link>
-                      )}
-                    </div>
-                  )}
-                  <List
-                    rows={sortedAttributes}
-                    empty="No skills, languages or certifications recorded — planning cannot match this person on competency."
-                    render={(w: any) => {
-                      const days = expiryDays(w.expiryDate);
-                      return (
-                        <div key={w.id} style={{ display: 'flex', justifyContent: 'space-between', gap: '10px', padding: '8px 0', borderBottom: '1px solid var(--border-hair)', fontSize: '12.5px' }}>
-                          {/* Was the raw column value — "CERTIFICATION" next to the name. */}
-                          <span><strong>{w.name}</strong> <span style={{ ...label, marginLeft: '6px' }}>{attributeTypeLabel(w.type)}</span></span>
-                          <span style={{ color: days !== null && days < 0 ? 'var(--danger)' : days !== null && days <= 30 ? 'var(--warning)' : 'var(--text-muted)', fontSize: '11.5px', whiteSpace: 'nowrap' }}>
-                            {w.level ?? ''}
-                            {w.expiryDate && (
-                              days !== null && days < 0
-                                ? ` · expired ${fmtDate(w.expiryDate)}`
-                                : ` · expires ${fmtDate(w.expiryDate)}`
-                            )}
-                          </span>
-                        </div>
-                      );
-                    }}
-                  />
-                </>
+                <AssayerSkillsPanel assayerId={assayerId} assayerName={a.displayName} canManage={canManage} />
               )}
 
               {/*

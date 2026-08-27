@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { ShieldCheck, ShieldAlert, Building2, Phone, FileCheck, AlertTriangle, Plus, Check } from 'lucide-react';
 import {
   EmpanelmentStatus, BackgroundCheckVerdict, RiskGrade, CibilBand,
-  ONBOARDING_DOCUMENT_LABELS,
 } from '@fapoms/shared';
 
 import { api } from '../../services/api';
@@ -111,6 +110,28 @@ const Field: React.FC<{ title: string; children: React.ReactNode; wide?: boolean
   </div>
 );
 
+/** A yes/no cell where "we have not asked" and "no" are different answers. */
+const yesNo = (v: boolean | null | undefined) =>
+  v === true ? <span style={{ color: 'var(--success)' }}>Yes</span>
+    : v === false ? <span style={{ color: 'var(--text-muted)' }}>No</span>
+      : <span style={{ color: 'var(--text-muted)' }}>—</span>;
+
+/** Whether a copy of an identity document has arrived, said in one cell rather than two. */
+const copyState = (d: { softCopyReceived?: boolean | null; hardCopyReceived?: boolean | null }) =>
+  d.hardCopyReceived === true ? <span style={{ color: 'var(--success)' }}>Original</span>
+    : d.softCopyReceived === true ? <span style={{ color: 'var(--warning)' }}>Scan only</span>
+      : <span style={{ color: 'var(--text-muted)' }}>—</span>;
+
+/**
+ * Nothing recorded is not the same as checked-and-fine, so an unverified document says so
+ * rather than showing a blank the eye slides over.
+ */
+const VerificationChip: React.FC<{ status?: string | null }> = ({ status }) => {
+  if (status === 'VERIFIED') return <span style={{ color: 'var(--success)' }}>Verified</span>;
+  if (status === 'REJECTED') return <span style={{ color: 'var(--danger)' }}>Rejected</span>;
+  return <span style={{ color: 'var(--text-muted)' }}>Not checked</span>;
+};
+
 const linkButton: React.CSSProperties = {
   background: 'none', border: 'none', padding: 0, cursor: 'pointer',
   color: 'var(--primary)', fontSize: '12px', fontWeight: 600,
@@ -128,6 +149,9 @@ export const AssayerVettingTab: React.FC<{ assayerId: string; canManage: boolean
     { verdict: string; riskGrade: string; cibilScore: string; cibilBand: string; checkedOn: string; findings: string } | null
   >(null);
   const [refDraft, setRefDraft] = useState<{ fullName: string; relationship: string; phone: string } | null>(null);
+  const [idDraft, setIdDraft] = useState<
+    { requirement: string; label: string; documentNumber: string; expiryDate: string } | null
+  >(null);
   const [standing, setStandingModal] = useState<
     { clientId: string; clientName: string; status: string; statusReason: string } | null
   >(null);
@@ -161,10 +185,16 @@ export const AssayerVettingTab: React.FC<{ assayerId: string; canManage: boolean
   const paperwork = useMemo(() => {
     const rows = data?.onboarding ?? [];
     // "In hand" means the hard copy is actually in the building. A soft copy is progress, not
-    // completion — the file the roster tracks is a physical one.
+    // completion — the file this tracks is a physical one.
     const inHand = rows.filter((r) => r.hardCopyReceived === true).length;
     const softOnly = rows.filter((r) => r.hardCopyReceived !== true && r.softCopyReceived === true).length;
-    return { rows, inHand, softOnly, total: rows.length };
+    // The server decides which are identity documents — one definition, in @fapoms/shared.
+    return {
+      rows,
+      identity: rows.filter((r) => r.identity),
+      joining: rows.filter((r) => !r.identity),
+      inHand, softOnly, total: rows.length,
+    };
   }, [data]);
 
   const blocking = useMemo(
@@ -234,10 +264,43 @@ export const AssayerVettingTab: React.FC<{ assayerId: string; canManage: boolean
     } catch (e) { toast({ type: 'error', message: userMessage(e) }); } finally { setBusy(false); }
   };
 
+  const saveIdentity = async () => {
+    if (!idDraft) return;
+    setBusy(true);
+    try {
+      await api.request(`/assayers/${assayerId}/document/${idDraft.requirement}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          documentNumber: idDraft.documentNumber.trim(),
+          expiryDate: idDraft.expiryDate || null,
+        }),
+      });
+      setIdDraft(null);
+      reload();
+    } catch (e) { toast({ type: 'error', message: userMessage(e) }); } finally { setBusy(false); }
+  };
+
+  const verify = async (doc: any, verdict: string) => {
+    const ok = await confirm({
+      title: `Confirm ${doc.label} against the original?`,
+      message: `This records that you checked ${doc.documentNumber} against the document itself. `
+        + 'A client\u2019s branch relies on it to admit this person to a vault.',
+      confirmLabel: 'Yes, I checked it',
+    });
+    if (!ok) return;
+    setBusy(true);
+    try {
+      await api.request(`/assayers/document/${doc.id}/verify`, {
+        method: 'POST', body: JSON.stringify({ verdict }),
+      });
+      reload();
+    } catch (e) { toast({ type: 'error', message: userMessage(e) }); } finally { setBusy(false); }
+  };
+
   const togglePaperwork = async (requirement: string, field: 'softCopyReceived' | 'hardCopyReceived', value: boolean) => {
     setBusy(true);
     try {
-      await api.request(`/assayers/${assayerId}/onboarding-document/${requirement}`, {
+      await api.request(`/assayers/${assayerId}/document/${requirement}`, {
         method: 'PUT', body: JSON.stringify({ [field]: value }),
       });
       reload();
@@ -559,19 +622,82 @@ export const AssayerVettingTab: React.FC<{ assayerId: string; canManage: boolean
       </Section>
 
       <Section
-        title="Joining paperwork"
+        title="Documents"
         icon={FileCheck}
-        hint={`${paperwork.inHand} of ${paperwork.total} in hand${paperwork.softOnly ? `, ${paperwork.softOnly} soft copy only` : ''}. A soft copy is progress; the file the roster tracks is a physical one.`}
+        hint={`${paperwork.inHand} of ${paperwork.total} in hand${paperwork.softOnly ? `, ${paperwork.softOnly} soft copy only` : ''}. A soft copy is progress; the file this tracks is a physical one.`}
       >
+        {/*
+          Identity documents first, and separately.
+
+          They are the ones a client's branch asks for before letting somebody near a vault, so
+          they carry a number, an expiry and a verification. The rest is paperwork that either
+          arrived or did not. Showing one table with four mostly-empty columns taught people to
+          ignore the columns; showing an expiry box against a code-of-conduct letter taught them
+          to ignore the expiry.
+        */}
+        <div style={{ ...label, marginBottom: '8px' }}>Identity</div>
+        <Table
+          head={canManage ? ['Document', 'Number', 'Expires', 'Checked', 'Copy', ''] : ['Document', 'Number', 'Expires', 'Checked', 'Copy']}
+          rows={paperwork.identity.map((d) => {
+            const cells: React.ReactNode[] = [
+              d.label,
+              d.documentNumber
+                ? <code style={{ fontSize: '11.5px' }}>{d.documentNumber}</code>
+                : <span style={{ color: 'var(--text-muted)' }}>—</span>,
+              d.expiryDate ? fmtDate(d.expiryDate) : <span style={{ color: 'var(--text-muted)' }}>—</span>,
+              <VerificationChip status={d.verificationStatus} />,
+              copyState(d),
+            ];
+            if (canManage) {
+              cells.push(
+                <div style={{ display: 'flex', gap: '10px', whiteSpace: 'nowrap' }}>
+                  <button style={linkButton} onClick={() => setIdDraft({
+                    requirement: d.requirement, label: d.label,
+                    documentNumber: d.documentNumber ?? '',
+                    expiryDate: d.expiryDate ? String(d.expiryDate).slice(0, 10) : '',
+                  })}>
+                    {d.documentNumber ? 'Edit' : 'Add number'}
+                  </button>
+                  {d.id && d.documentNumber && d.verificationStatus !== 'VERIFIED' && (
+                    <button style={linkButton} onClick={() => verify(d, 'VERIFIED')}>Verify</button>
+                  )}
+                </div>,
+              );
+            }
+            return cells;
+          })}
+        />
+
+        {idDraft && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--border-hair)' }}>
+            <Field title={`${idDraft.label} number`}>
+              <input style={inputStyle} autoFocus value={idDraft.documentNumber}
+                onChange={(e) => setIdDraft({ ...idDraft, documentNumber: e.target.value })} />
+            </Field>
+            <Field title="Expires">
+              <input style={inputStyle} type="date" value={idDraft.expiryDate}
+                onChange={(e) => setIdDraft({ ...idDraft, expiryDate: e.target.value })} />
+            </Field>
+            <div style={{ flexBasis: '100%', display: 'flex', justifyContent: 'flex-end', gap: '10px', alignItems: 'center' }}>
+              <span style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginRight: 'auto' }}>
+                Changing the number clears any verification — somebody checked the old one against
+                the original.
+              </span>
+              <button style={{ ...linkButton, color: 'var(--text-muted)' }} onClick={() => setIdDraft(null)}>Cancel</button>
+              <button onClick={saveIdentity} disabled={busy} style={{
+                background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '7px',
+                padding: '7px 14px', fontSize: '12.5px', fontWeight: 600, cursor: busy ? 'default' : 'pointer',
+              }}>Save</button>
+            </div>
+          </div>
+        )}
+
+        <div style={{ ...label, margin: '18px 0 8px' }}>Joining paperwork</div>
         <Table
           head={canManage ? ['Document', 'Soft copy', 'Hard copy', 'Where', ''] : ['Document', 'Soft copy', 'Hard copy', 'Where']}
-          rows={paperwork.rows.map((d) => {
-            const yesNo = (v: boolean | null) =>
-              v === true ? <span style={{ color: 'var(--success)' }}>Yes</span>
-                : v === false ? <span style={{ color: 'var(--text-muted)' }}>No</span>
-                  : <span style={{ color: 'var(--text-muted)' }}>—</span>;
+          rows={paperwork.joining.map((d) => {
             const cells: React.ReactNode[] = [
-              ONBOARDING_DOCUMENT_LABELS[d.requirement as keyof typeof ONBOARDING_DOCUMENT_LABELS] ?? d.label,
+              d.label,
               yesNo(d.softCopyReceived),
               yesNo(d.hardCopyReceived),
               d.hardCopyLocation || '—',

@@ -5,7 +5,7 @@ import {
   Plus, Search, X, ChevronUp, ChevronDown, ExternalLink, Edit2, Trash2,
   AlertTriangle, Download, ArrowRightLeft, MapPin, CheckCircle2, Users, SlidersHorizontal, FileSpreadsheet,
 } from 'lucide-react';
-import { AssayerLifecycleStatus, assayerLifecyclePath, assayerLifecycleLabel } from '@fapoms/shared';
+import { AssayerLifecycleStatus, assayerLifecyclePath, assayerLifecycleLabel, daysUntilExpiry } from '@fapoms/shared';
 
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
@@ -98,6 +98,16 @@ const SEGMENTS: { key: string; label: string; match: (a: Assayer) => boolean }[]
     key: 'someone-else',
     label: 'Work done by somebody else',
     match: (a) => a.workDoneBySomeoneElse === true,
+  },
+  // An expired certificate is refused by the eligibility gate, so the person is quietly
+  // unassignable. This was the one question the retired compliance page answered that nothing
+  // else did — "who has lapsed" — and it belongs with the other "who needs something" chips.
+  {
+    key: 'lapsed',
+    label: 'Certificate lapsed',
+    match: (a) => (a.certifications ?? []).some(
+      (c) => c.expiryDate && (daysUntilExpiry(c.expiryDate) ?? 1) < 0,
+    ),
   },
 ];
 

@@ -1,7 +1,7 @@
 import React from 'react';
 import { NavLink, Navigate, Outlet, useOutletContext, useSearchParams } from 'react-router-dom';
 import {
-  Users, UserPlus, MapPin, ClipboardList, Wallet, Award, FileCheck,
+  Users, MapPin, ClipboardList, Wallet,
 } from 'lucide-react';
 
 import { useHrWorkforce } from '../../hooks/useHrWorkforce';
@@ -9,7 +9,6 @@ import type { HrWorkforceOverview } from '../../hooks/useHrWorkforce';
 import { useCurrentRoles, canManageAssayers } from '../../hooks/useCurrentRoles';
 import { HrHeader } from './hr-ui';
 import { userMessage } from '../../services/errors';
-import { counted } from '../../utils/plural';
 
 /**
  * The shell every HR page sits in.
@@ -40,71 +39,56 @@ export function useHr(): HrContext {
 }
 
 /**
- * ELEVEN TABS BECAME SEVEN — the WHY, so nobody re-splits them.
+ * SEVEN TABS BECAME FOUR — the WHY, so nobody re-splits them.
  *
- * Records, Compliance and Documents all badged off the same underlying number: Records and
- * Compliance both showed `compliance.incompleteCount`, and Documents showed the government-
- * document gap, which is the other half of the same "this person's file is incomplete" problem.
- * An HR manager reading "26 missing bank accounts" on the Overview therefore had three tabs to
- * guess between, and no way to tell which one fixed it. Records made that worse: it was built
- * and routed but left out of this list entirely, so the only way in was an old `?tab=records`
- * bookmark — the alert the Overview shouts loudest about had no reachable answer at all.
- * The three are now one destination, **Paperwork**, with plain-language filter chips.
+ * The section had grown a page per concern, and every one of them was a cross-roster view of a
+ * fact that also lived on the person. So HR carried two mental models for the same work: find
+ * the concern then find the person, or find the person then find the concern. Both existed for
+ * everything, neither was named in a way that said which, and the editing was split between them
+ * — Skills & Certificates was a person-picker with the write controls, while the same rows sat
+ * read-only on the record with a link across to it. A dead end that sent you elsewhere to do the
+ * obvious thing.
  *
- * Utilisation, Deployment and Activity carried no badge between them and answered one question
- * asked in one breath — "where is everybody, and are they busy?" — across three visits. They are
- * now **Where people are**, again with chips.
+ * What is left is the shape of the work rather than the shape of the data:
  *
- * Capability is renamed **Skills & Certificates**: the audience is non-technical HR staff, and
- * "capability" is not a word they use for "does this person's certificate still hold".
+ *   Overview        what needs doing today, ranked
+ *   People          the roster; a chip for every "who needs X", and the whole record on opening
+ *                   somebody — including everything the retired pages could edit
+ *   Pay & terms     the one screen that is genuinely a comparison: rate cards side by side, which
+ *                   is a question about the roster and not about a person
+ *   Where people are  utilisation, coverage and recent changes — the only concern here that is
+ *                   not a per-person fact at all
  *
- * Pay & Terms is deliberately left on its own. It is the only screen backed by the commercial-
- * profile API rather than the workforce overview, and "what is this person paid" is not a
- * question anyone asks while chasing a missing bank account or a lapsed licence — folding it
- * into Paperwork would have recreated exactly the ambiguity the merge removed.
+ * ONBOARDING, PAPERWORK and SKILLS are gone as destinations. Each was a list of people needing
+ * something, which is what the roster's chips are, plus an editor for one person, which is what
+ * the record is. Their URLs still resolve, landing on the chip that answers the same question.
  *
- * BADGE RULE, now that badges are the navigation: a number appears on exactly one tab — the one
- * that can resolve it. Paperwork counts incomplete personnel fields plus people with no identity
- * document. Expired certifications stay on Skills & Certificates because that is the only screen
- * that can record a renewal, even though Paperwork also *shows* the expiry list.
- *
- * A badge also has to say whether it is a PROBLEM or just a SIZE. Every badge here used to be
- * painted red as soon as it was above zero, so Roster's headcount — a perfectly healthy "8 people
- * on the books" — was drawn in the same alarm colour as "8 people with no bank account", and a
- * fully-staffed team looked like an outstanding task. `tone` now marks which is which: 'count'
- * badges are neutral at any value, 'alert' badges go red only when there is something to do.
+ * BADGE RULE, unchanged and now easier to hold: a number appears on exactly one tab — the one
+ * that can resolve it — and `tone` says whether it is a PROBLEM or a SIZE. People's badge is the
+ * headcount, which is neutral at any value; a fully-staffed team must not look like an
+ * outstanding task.
  */
-const PAGES = [
+/**
+ * `tone` is declared rather than inferred. Every destination that is left carries a neutral
+ * count — the alarming numbers are all on the Overview now, which is where "what needs doing"
+ * belongs — and letting `as const` narrow the type to `'count'` would delete the alert branch
+ * below, so the next badge that ought to go red would quietly not.
+ */
+const PAGES: readonly {
+  to: string; end?: boolean; label: string; icon: React.ElementType;
+  tone: 'count' | 'alert';
+  badge: (d: HrWorkforceOverview) => number | null;
+  hint: (d: HrWorkforceOverview) => string;
+}[] = [
   { to: '/hr', end: true, label: 'Overview', icon: ClipboardList, badge: () => null, tone: 'count', hint: () => 'Everything that needs attention today, in one list' },
   {
-    to: '/hr/roster', label: 'Roster', icon: Users, tone: 'count',
+    to: '/hr/roster', label: 'People', icon: Users, tone: 'count',
     badge: (d: HrWorkforceOverview) => d.headcount.total,
-    hint: (d: HrWorkforceOverview) => `${d.headcount.total} people on the books — this is a total, not a task`,
+    hint: (d: HrWorkforceOverview) => `${d.headcount.total} people on the books — open anyone to see and edit their whole record`,
   },
-  {
-    to: '/hr/onboarding', label: 'Onboarding', icon: UserPlus, tone: 'alert',
-    badge: (d: HrWorkforceOverview) => d.pipeline.stalled.length,
-    hint: (d: HrWorkforceOverview) =>
-      `${d.pipeline.stalled.length} joining ${d.pipeline.stalled.length === 1 ? 'has' : 'have'} not moved on in over ${d.pipeline.stalledAfterDays} days`,
-  },
-  {
-    to: '/hr/paperwork',
-    label: 'Paperwork',
-    icon: FileCheck,
-    tone: 'alert',
-    badge: (d: HrWorkforceOverview) =>
-      d.compliance.incompleteCount + Math.max(d.compliance.roster - d.compliance.governmentDocuments.withGovDoc, 0),
-    hint: (d: HrWorkforceOverview) =>
-      `${d.compliance.incompleteCount} with missing bank or personal details, plus ${Math.max(d.compliance.roster - d.compliance.governmentDocuments.withGovDoc, 0)} with no ID document on file`,
-  },
-  {
-    to: '/hr/skills', label: 'Skills & Certificates', icon: Award, tone: 'alert',
-    badge: (d: HrWorkforceOverview) => d.expiries.certifications.expired,
-    hint: (d: HrWorkforceOverview) => `${counted(d.expiries.certifications.expired, 'certificate')} ${d.expiries.certifications.expired === 1 ? 'has' : 'have'} already run out and need renewing`,
-  },
-  { to: '/hr/pay', label: 'Pay & Terms', icon: Wallet, badge: () => null, tone: 'count', hint: () => 'What each person is paid, and on what terms' },
+  { to: '/hr/pay', label: 'Pay & terms', icon: Wallet, badge: () => null, tone: 'count', hint: () => 'What each person is paid, and on what terms, side by side' },
   { to: '/hr/where', label: 'Where people are', icon: MapPin, badge: () => null, tone: 'count', hint: () => 'Who is busy, which states are covered, and what changed recently' },
-] as const;
+];
 
 /**
  * Old URLs must keep resolving: `?tab=` values live in notification payloads and bookmarks, and
@@ -113,15 +97,34 @@ const PAGES = [
  * used to be already selected, so an old link still shows the same content, not just the same
  * neighbourhood.
  */
+/**
+ * Every screen this section has ever had, pointed at what answers the same question now.
+ *
+ * These are not decoration: the backend worklist hands the Overview `link: '/hr/records'` and
+ * friends, notification payloads carry `?tab=` values, and people bookmark. A retired page must
+ * land on the thing that replaced it, not on the section's front door — arriving somewhere
+ * plausible with no idea which of four tabs held the answer is how a redirect wastes more time
+ * than a dead link.
+ *
+ * The concern pages now resolve to the roster chip that lists the same people.
+ */
 const LEGACY_TABS: Record<string, string> = {
   overview: '/hr',
   roster: '/hr/roster',
-  onboarding: '/hr/onboarding',
-  records: '/hr/paperwork?view=details',
-  compliance: '/hr/paperwork?view=certificates',
-  documents: '/hr/paperwork?view=ids',
-  capability: '/hr/skills',
+  people: '/hr/roster',
   pay: '/hr/pay',
+
+  // Retired: each was a list of people needing something, which is a chip, plus an editor for
+  // one person, which is the record.
+  onboarding: '/hr/roster?segment=onboarding',
+  paperwork: '/hr/roster?segment=incomplete',
+  records: '/hr/roster?segment=incomplete',
+  compliance: '/hr/roster?segment=lapsed',
+  documents: '/hr/roster?segment=incomplete',
+  skills: '/hr/roster?segment=lapsed',
+  capability: '/hr/roster?segment=lapsed',
+
+  // Merged into "Where people are" and still reachable by their own chips.
   deployment: '/hr/where?view=coverage',
   utilisation: '/hr/where?view=workload',
   activity: '/hr/where?view=changes',
@@ -129,9 +132,12 @@ const LEGACY_TABS: Record<string, string> = {
 
 /** The retired paths, keyed without the `/hr/` prefix — same destinations as the tab keys. */
 export const LEGACY_PATHS: Record<string, string> = {
+  onboarding: LEGACY_TABS.onboarding,
+  paperwork: LEGACY_TABS.paperwork,
   records: LEGACY_TABS.records,
   compliance: LEGACY_TABS.compliance,
   documents: LEGACY_TABS.documents,
+  skills: LEGACY_TABS.skills,
   capability: LEGACY_TABS.capability,
   deployment: LEGACY_TABS.deployment,
   utilisation: LEGACY_TABS.utilisation,

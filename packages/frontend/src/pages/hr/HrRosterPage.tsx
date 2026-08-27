@@ -16,5 +16,12 @@ import { useHr } from './HrLayout';
  */
 export const HrRosterPage: React.FC = () => {
   const { data } = useHr();
-  return <AssayerRoster exactCounts={{ 'someone-else': data?.compliance?.workByOthersCount }} />;
+  return (
+    <AssayerRoster
+      exactCounts={{
+        'someone-else': data?.compliance?.workByOthersCount,
+        lapsed: data?.expiries?.certifications?.expired,
+      }}
+    />
+  );
 };
