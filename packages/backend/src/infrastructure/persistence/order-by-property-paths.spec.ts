@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { execSync } from 'child_process';
 
@@ -35,7 +35,12 @@ describe('query builder ordering', () => {
 
     const found: { file: string; line: number; term: string }[] = [];
     for (const relative of files) {
-      const lines = readFileSync(join(ROOT, relative), 'utf8').split('\n');
+      // `git ls-files` lists what is tracked, which includes a file deleted in the working tree
+      // but not yet staged. A file that is not there has no ordering terms in it; crashing the
+      // whole lint over one is a confusing failure a long way from its cause.
+      const path = join(ROOT, relative);
+      if (!existsSync(path)) continue;
+      const lines = readFileSync(path, 'utf8').split('\n');
       lines.forEach((text, i) => {
         for (const m of text.matchAll(/\.(?:add)?orderBy\(\s*'([^']+)'/gi)) {
           found.push({ file: relative, line: i + 1, term: m[1] });

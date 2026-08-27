@@ -13,7 +13,7 @@ import { AssayerEntity } from './assayer.entity';
 import { AssayerReferenceEntity } from './assayer-reference.entity';
 import { AssayerClientEmpanelmentEntity } from './assayer-client-empanelment.entity';
 import { AssayerBackgroundCheckEntity } from './assayer-background-check.entity';
-import { AssayerOnboardingDocumentEntity } from './assayer-onboarding-document.entity';
+import { AssayerDocumentEntity } from './assayer-document.entity';
 import { AssayerImportIssueEntity } from './assayer-import-issue.entity';
 import { ClientEntity } from '../client/client.entity';
 
@@ -339,15 +339,19 @@ export class RosterImportService {
   ): Promise<number> {
     let written = 0;
     for (const [requirement, column] of Object.entries(ONBOARDING_DOCUMENT_COLUMNS)) {
+      // Requirements that came from the identity register have no column in this file. An empty
+      // alias would normalise to the same key as the sheet's 28 blank-headed columns and read
+      // whichever one landed there first, so it is refused here rather than left to the lookup.
+      if (!column) continue;
       const raw = read(column);
       const received = readYesNo(raw);
       if (received === null) continue;
       written++;
 
-      const existing = await manager.findOne(AssayerOnboardingDocumentEntity, {
+      const existing = await manager.findOne(AssayerDocumentEntity, {
         where: { assayerId, requirement: requirement as OnboardingDocument },
       });
-      await manager.save(AssayerOnboardingDocumentEntity, {
+      await manager.save(AssayerDocumentEntity, {
         ...(existing ?? {}),
         assayerId,
         requirement: requirement as OnboardingDocument,
@@ -359,10 +363,10 @@ export class RosterImportService {
     // signed original is what an audit asks for and it is usually still in the post.
     const ndaHard = blankToNull(read('NDA Hard copy status'));
     if (ndaHard) {
-      const existing = await manager.findOne(AssayerOnboardingDocumentEntity, {
+      const existing = await manager.findOne(AssayerDocumentEntity, {
         where: { assayerId, requirement: OnboardingDocument.NDA },
       });
-      await manager.save(AssayerOnboardingDocumentEntity, {
+      await manager.save(AssayerDocumentEntity, {
         ...(existing ?? {}),
         assayerId,
         requirement: OnboardingDocument.NDA,

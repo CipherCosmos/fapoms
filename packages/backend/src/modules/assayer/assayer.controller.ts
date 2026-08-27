@@ -1122,52 +1122,6 @@ export class AssayerController {
     return { success: true, data: assayer };
   }
 
-  // Government Documents
-  @Post(':assayerId/government-document')
-  @HttpCode(201)
-  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
-  @ApiOperation({ summary: 'Add a government document to an assayer' })
-  async addGovernmentDocument(
-    @Param('assayerId', ParseUUIDPipe) assayerId: string,
-    @Body() dto: CreateGovernmentDocumentRequestDto,
-    @Req() req: any,
-  ) {
-    assertSelfOrPrivileged(req.user, assayerId, 'upload documents');
-    const doc = await this.assayerService.addGovernmentDocument(assayerId, dto, req.user.id);
-    return { success: true, data: doc };
-  }
-
-  @Put('government-document/:id')
-  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
-  @RequirePermissions('assayer:edit:organization')
-  @ApiOperation({ summary: 'Update a government document verification status' })
-  async updateGovernmentDocument(
-    @Param('id', ParseUUIDPipe) id: string,
-    @Body() dto: UpdateGovernmentDocumentRequestDto,
-    @Req() req: any,
-  ) {
-    const doc = await this.assayerService.updateGovernmentDocument(id, dto, req.user.id);
-    return { success: true, data: doc };
-  }
-
-  // Government identity documents — staff only.
-  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
-  @Get(':assayerId/government-document')
-  @ApiOperation({ summary: 'List government documents for an assayer' })
-  async getGovernmentDocuments(@Param('assayerId', ParseUUIDPipe) assayerId: string) {
-    const docs = await this.assayerService.getGovernmentDocuments(assayerId);
-    return { success: true, data: docs };
-  }
-
-  @Delete('government-document/:id')
-  @HttpCode(204)
-  @Roles(SystemRole.ADMIN)
-  @RequirePermissions('assayer:delete:organization')
-  @ApiOperation({ summary: 'Soft delete a government document' })
-  async removeGovernmentDocument(@Param('id', ParseUUIDPipe) id: string, @Req() req: any): Promise<void> {
-    await this.assayerService.removeGovernmentDocument(id, req.user.id);
-  }
-
   // ── Roster records: references, client standing, vetting, paperwork ───
   //
   // These were columns in the spreadsheet before they were tables. They are grouped here rather
@@ -1283,66 +1237,51 @@ export class AssayerController {
     return { success: true, data };
   }
 
-  @Put(':assayerId/onboarding-document/:requirement')
-  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
-  @RequirePermissions('assayer:edit:organization')
-  @ApiOperation({ summary: 'Record progress on one piece of joining paperwork' })
-  async setOnboardingDocument(
+  /**
+   * Documents — one set of routes, for one record per document.
+   *
+   * There used to be three: a government-document register, a versioned file store, and the
+   * joining checklist. Two were never written to in any environment while the third held 11,021
+   * rows, and HR had three screens to check to answer one question. See the OneDocumentRecord
+   * migration and `AssayerDocumentEntity`.
+   *
+   * `PUT` by requirement rather than `POST` by id, because a person has exactly one row per
+   * requirement — the unique constraint says so — and "record that the NDA arrived" is setting a
+   * known fact rather than creating an unknown one. There is nothing to create, and nothing to
+   * choose between.
+   */
+  @Put(':assayerId/document/:requirement')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
+  @ApiOperation({ summary: 'Record progress on one document' })
+  async setDocument(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
     @Param('requirement') requirement: string,
     @Body() body: any,
     @Req() req: any,
   ) {
-    const data = await this.rosterRecords.setOnboardingDocument(
-      assayerId, requirement as any, body, req.user.id,
-    );
+    assertSelfOrPrivileged(req.user, assayerId, 'update documents');
+    const data = await this.rosterRecords.setDocument(assayerId, requirement as any, body, req.user.id);
     return { success: true, data };
   }
 
-  // Assayer Documents
-  @Post(':assayerId/document')
-  @HttpCode(201)
-  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
-  @ApiOperation({ summary: 'Upload a new versioned document for an assayer' })
-  async addAssayerDocument(
-    @Param('assayerId', ParseUUIDPipe) assayerId: string,
-    @Body() dto: CreateAssayerDocumentRequestDto,
-    @Req() req: any,
-  ) {
-    assertSelfOrPrivileged(req.user, assayerId, 'upload documents');
-    const doc = await this.assayerService.addAssayerDocument(assayerId, dto, req.user.id);
-    return { success: true, data: doc };
-  }
-
-  @Put(':assayerId/document/:docId')
+  /**
+   * Verifying is a separate action from recording, and a narrower one.
+   *
+   * Saying a document arrived is clerical. Saying its number matches the original is what a
+   * client's branch relies on to admit somebody to a vault, so an assayer cannot do it to their
+   * own record — which is why this route, unlike the one above, does not take `ASSAYER`.
+   */
+  @Post('document/:id/verify')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:edit:organization')
-  @ApiOperation({ summary: 'Update document metadata' })
-  async updateAssayerDocument(
-    @Param('assayerId', ParseUUIDPipe) assayerId: string,
-    @Param('docId', ParseUUIDPipe) docId: string,
-    @Body() dto: UpdateAssayerDocumentRequestDto,
+  @ApiOperation({ summary: 'Record that an identity document was checked against the original' })
+  async verifyDocument(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { verdict: string; remarks?: string },
     @Req() req: any,
   ) {
-    const doc = await this.assayerService.updateAssayerDocument(docId, dto, req.user.id);
-    return { success: true, data: doc };
-  }
-
-  @Get(':assayerId/document')
-  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
-  @ApiOperation({ summary: 'List documents for an assayer' })
-  async getAssayerDocuments(@Param('assayerId', ParseUUIDPipe) assayerId: string) {
-    const docs = await this.assayerService.getAssayerDocuments(assayerId);
-    return { success: true, data: docs };
-  }
-
-  @Delete('document/:id')
-  @HttpCode(204)
-  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
-  @RequirePermissions('assayer:delete:organization')
-  @ApiOperation({ summary: 'Soft delete an assayer document' })
-  async removeAssayerDocument(@Param('id', ParseUUIDPipe) id: string, @Req() req: any): Promise<void> {
-    await this.assayerService.removeAssayerDocument(id, req.user.id);
+    const data = await this.rosterRecords.verifyDocument(id, body?.verdict as any, req.user.id, body?.remarks);
+    return { success: true, data };
   }
 
   // Staff remarks about an assayer live under /assayer-remarks (modules/assayer-remarks).

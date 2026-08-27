@@ -4,12 +4,13 @@ import { Repository, IsNull } from 'typeorm';
 import {
   EmpanelmentStatus, BackgroundCheckVerdict, RiskGrade, CibilBand,
   OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS,
+  DocumentVerification, isIdentityDocument,
 } from '@fapoms/shared';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerReferenceEntity } from './assayer-reference.entity';
 import { AssayerClientEmpanelmentEntity } from './assayer-client-empanelment.entity';
 import { AssayerBackgroundCheckEntity } from './assayer-background-check.entity';
-import { AssayerOnboardingDocumentEntity } from './assayer-onboarding-document.entity';
+import { AssayerDocumentEntity } from './assayer-document.entity';
 import { AssayerImportIssueEntity } from './assayer-import-issue.entity';
 
 /**
@@ -39,7 +40,7 @@ export class RosterRecordsService {
     @InjectRepository(AssayerReferenceEntity) private readonly references: Repository<AssayerReferenceEntity>,
     @InjectRepository(AssayerClientEmpanelmentEntity) private readonly empanelments: Repository<AssayerClientEmpanelmentEntity>,
     @InjectRepository(AssayerBackgroundCheckEntity) private readonly checks: Repository<AssayerBackgroundCheckEntity>,
-    @InjectRepository(AssayerOnboardingDocumentEntity) private readonly onboarding: Repository<AssayerOnboardingDocumentEntity>,
+    @InjectRepository(AssayerDocumentEntity) private readonly onboarding: Repository<AssayerDocumentEntity>,
     @InjectRepository(AssayerImportIssueEntity) private readonly issues: Repository<AssayerImportIssueEntity>,
   ) {}
 
@@ -77,7 +78,7 @@ export class RosterRecordsService {
    * so every requirement appears whether or not the import found it. Listing only what exists
    * would show a person with nothing on file as having nothing outstanding.
    */
-  private paperworkChecklist(rows: AssayerOnboardingDocumentEntity[]) {
+  private paperworkChecklist(rows: AssayerDocumentEntity[]) {
     const byRequirement = new Map(rows.map((r) => [r.requirement, r]));
     return Object.keys(ONBOARDING_DOCUMENT_COLUMNS).map((key) => {
       const requirement = key as OnboardingDocument;
@@ -85,12 +86,21 @@ export class RosterRecordsService {
       return {
         requirement,
         label: ONBOARDING_DOCUMENT_LABELS[requirement],
+        // Which half of the list this belongs to. The screen shows a number, an expiry and a
+        // verification for identity documents and nothing of the sort for a code-of-conduct
+        // letter, and this is what tells it apart.
+        identity: isIdentityDocument(requirement),
         id: row?.id ?? null,
         softCopyReceived: row?.softCopyReceived ?? null,
         hardCopyReceived: row?.hardCopyReceived ?? null,
         hardCopyLocation: row?.hardCopyLocation ?? null,
         courierReference: row?.courierReference ?? null,
         receivedAt: row?.receivedAt ?? null,
+        documentNumber: row?.documentNumber ?? null,
+        expiryDate: row?.expiryDate ?? null,
+        verificationStatus: row?.verificationStatus ?? null,
+        verifiedAt: row?.verifiedAt ?? null,
+        filePaths: row?.filePaths ?? [],
         remarks: row?.remarks ?? null,
       };
     });
@@ -200,11 +210,12 @@ export class RosterRecordsService {
 
   // ── Onboarding paperwork ──────────────────────────────────────────────
 
-  async setOnboardingDocument(
+  async setDocument(
     assayerId: string,
     requirement: OnboardingDocument,
     dto: { softCopyReceived?: boolean | null; hardCopyReceived?: boolean | null;
-           hardCopyLocation?: string; courierReference?: string; receivedAt?: string; remarks?: string },
+           hardCopyLocation?: string; courierReference?: string; receivedAt?: string; remarks?: string;
+           documentNumber?: string; expiryDate?: string | null },
     actorId: string,
   ) {
     if (!ONBOARDING_DOCUMENT_COLUMNS[requirement]) {
@@ -219,7 +230,63 @@ export class RosterRecordsService {
     if (dto.courierReference !== undefined) row.courierReference = dto.courierReference || null;
     if (dto.receivedAt !== undefined) row.receivedAt = dto.receivedAt ? new Date(dto.receivedAt) : null;
     if (dto.remarks !== undefined) row.remarks = dto.remarks || null;
+
+    // A number and an expiry belong to an identity document and to nothing else. Accepting them
+    // on a joining form would put a field on screen that can never be filled in correctly.
+    if (dto.documentNumber !== undefined || dto.expiryDate !== undefined) {
+      if (!isIdentityDocument(requirement)) {
+        throw new BadRequestException(
+          `${ONBOARDING_DOCUMENT_LABELS[requirement]} is not an identity document, so it carries `
+          + 'no number or expiry date.',
+        );
+      }
+      if (dto.documentNumber !== undefined) row.documentNumber = dto.documentNumber || null;
+      if (dto.expiryDate !== undefined) row.expiryDate = dto.expiryDate ? new Date(dto.expiryDate) : null;
+      // Changing what the document says undoes any verification of it: somebody checked the old
+      // number against the original, and that is no longer the number on the record.
+      if (row.verificationStatus === DocumentVerification.VERIFIED) {
+        row.verificationStatus = DocumentVerification.PENDING;
+        row.verifiedAt = null;
+        row.verifiedBy = null;
+      }
+    }
+
     row.isActive = true;
+    row.updatedBy = actorId;
+    return this.onboarding.save(row);
+  }
+
+  /**
+   * Record that somebody checked an identity document against the original.
+   *
+   * Only identity documents are verified. The rest of the list is paperwork that either arrived
+   * or did not, and a code-of-conduct letter reading "Pending verification" for ever is an alarm
+   * nobody can clear — which is why the register this replaced had every row start there.
+   */
+  async verifyDocument(
+    id: string,
+    verdict: DocumentVerification,
+    actorId: string,
+    remarks?: string,
+  ) {
+    const row = await this.onboarding.findOne({ where: { id } });
+    if (!row) throw new NotFoundException('No such document.');
+    if (!isIdentityDocument(row.requirement)) {
+      throw new BadRequestException(
+        `${ONBOARDING_DOCUMENT_LABELS[row.requirement]} is not an identity document. `
+        + 'Record whether it arrived instead.',
+      );
+    }
+    if (verdict !== DocumentVerification.PENDING && !row.documentNumber) {
+      throw new BadRequestException(
+        'There is no document number on this record, so there is nothing to have checked against '
+        + 'the original.',
+      );
+    }
+    row.verificationStatus = verdict;
+    row.verifiedAt = verdict === DocumentVerification.PENDING ? null : new Date();
+    row.verifiedBy = verdict === DocumentVerification.PENDING ? null : actorId;
+    if (remarks !== undefined) row.remarks = remarks || null;
     row.updatedBy = actorId;
     return this.onboarding.save(row);
   }

@@ -7,8 +7,6 @@ import { AssayerService } from './assayer.service';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity';
 import { WorkforceAttributeEntity } from './workforce-attribute.entity';
-import { AssayerGovernmentDocumentEntity } from './assayer-government-document.entity';
-import { AssayerDocumentEntity } from './assayer-document.entity';
 import { AssayerRemarkEntity } from './assayer-remark.entity';
 import { AssayerActivityEntity } from './assayer-activity.entity';
 import { AuditService } from '../../core/audit/audit.service';
@@ -58,20 +56,6 @@ describe('AssayerService', () => {
     delete: jest.fn(),
   };
 
-  const mockGovDocRepo = {
-    create: jest.fn(),
-    save: jest.fn(),
-    findOne: jest.fn(),
-    find: jest.fn(),
-  };
-
-  const mockAssayerDocRepo = {
-    create: jest.fn(),
-    save: jest.fn(),
-    findOne: jest.fn(),
-    find: jest.fn(),
-  };
-
   const mockRemarkRepo = {
     create: jest.fn(),
     save: jest.fn(),
@@ -110,8 +94,6 @@ describe('AssayerService', () => {
         { provide: getRepositoryToken(AssayerEntity), useValue: mockAssayerRepo },
         { provide: getRepositoryToken(AssayerCommercialProfileEntity), useValue: mockCommercialRepo },
         { provide: getRepositoryToken(WorkforceAttributeEntity), useValue: mockWorkforceRepo },
-        { provide: getRepositoryToken(AssayerGovernmentDocumentEntity), useValue: mockGovDocRepo },
-        { provide: getRepositoryToken(AssayerDocumentEntity), useValue: mockAssayerDocRepo },
         { provide: getRepositoryToken(AssayerRemarkEntity), useValue: mockRemarkRepo },
         { provide: getRepositoryToken(AssayerActivityEntity), useValue: mockActivityRepo },
         { provide: AuditService, useValue: mockAuditService },
@@ -512,94 +494,6 @@ describe('AssayerService', () => {
       const result = await service.activateAssayer('asr-1', 'user-1');
 
       expect(result.status).toBe('ACTIVE');
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // Government Documents
-  // ---------------------------------------------------------------------------
-
-  describe('addGovernmentDocument', () => {
-    it('should reject duplicate active document type', async () => {
-      mockAssayerRepo.findOne.mockResolvedValue({ id: 'asr-1', isActive: true });
-      mockGovDocRepo.findOne.mockResolvedValue({ id: 'existing', documentType: 'AADHAAR' });
-
-      await expect(
-        service.addGovernmentDocument('asr-1', { documentType: 'AADHAAR', documentNumber: '1234' }, 'user-1'),
-      ).rejects.toThrow(ConflictException);
-    });
-
-    it('should add document if no duplicate exists', async () => {
-      mockAssayerRepo.findOne.mockResolvedValue({ id: 'asr-1', isActive: true });
-      mockGovDocRepo.findOne.mockResolvedValue(null);
-      const saved = { id: 'doc-1', documentType: 'PAN', documentNumber: 'ABCDE1234F', verificationStatus: 'PENDING' };
-      mockGovDocRepo.create.mockReturnValue(saved);
-      mockGovDocRepo.save.mockResolvedValue(saved);
-
-      const result = await service.addGovernmentDocument('asr-1', { documentType: 'PAN', documentNumber: 'ABCDE1234F' }, 'user-1');
-
-      expect(result.verificationStatus).toBe('PENDING');
-      expect(mockAuditService.recordEvent).toHaveBeenCalled();
-    });
-  });
-
-  describe('removeGovernmentDocument', () => {
-    it('should soft delete and audit', async () => {
-      mockGovDocRepo.findOne.mockResolvedValue({ id: 'doc-1', assayerId: 'asr-1', documentType: 'PAN', isActive: true });
-      mockGovDocRepo.save.mockImplementation((e) => Promise.resolve(e));
-
-      await service.removeGovernmentDocument('doc-1', 'user-1');
-
-      expect(mockAuditService.recordEvent).toHaveBeenCalledWith(
-        expect.objectContaining({ eventType: 'GOVERNMENT_DOCUMENT_REMOVED' }),
-      );
-    });
-  });
-
-  // ---------------------------------------------------------------------------
-  // Enterprise Documents
-  // ---------------------------------------------------------------------------
-
-  describe('addAssayerDocument', () => {
-    it('should create v1 document without parent', async () => {
-      mockAssayerRepo.findOne.mockResolvedValue({ id: 'asr-1', isActive: true });
-      const saved = { id: 'doc-1', documentType: 'RESUME', fileName: 'resume.pdf', docVersion: 1 };
-      mockAssayerDocRepo.create.mockReturnValue(saved);
-      mockAssayerDocRepo.save.mockResolvedValue(saved);
-
-      const result = await service.addAssayerDocument('asr-1', {
-        documentType: 'RESUME', fileName: 'resume.pdf', filePath: '/resume.pdf', fileSize: 1000,
-      }, 'user-1');
-
-      expect(result.docVersion).toBe(1);
-    });
-
-    it('should increment version with parentDocumentId', async () => {
-      mockAssayerRepo.findOne.mockResolvedValue({ id: 'asr-1', isActive: true });
-      mockAssayerDocRepo.findOne.mockResolvedValue({ id: 'parent', docVersion: 2 });
-      const saved = { id: 'doc-2', documentType: 'RESUME', fileName: 'resume-v3.pdf', docVersion: 3 };
-      mockAssayerDocRepo.create.mockReturnValue(saved);
-      mockAssayerDocRepo.save.mockResolvedValue(saved);
-
-      const result = await service.addAssayerDocument('asr-1', {
-        documentType: 'RESUME', fileName: 'resume-v3.pdf', filePath: '/resume-v3.pdf', fileSize: 1000,
-        parentDocumentId: 'parent',
-      }, 'user-1');
-
-      expect(result.docVersion).toBe(3);
-    });
-  });
-
-  describe('updateAssayerDocument', () => {
-    it('should update document metadata', async () => {
-      mockAssayerDocRepo.findOne.mockResolvedValue({ id: 'doc-1', assayerId: 'asr-1', documentType: 'RESUME', docVersion: 1 });
-      mockAssayerDocRepo.save.mockImplementation((e) => Promise.resolve(e));
-
-      const result = await service.updateAssayerDocument('doc-1', { remarks: 'Updated remarks' }, 'user-1');
-
-      expect(mockAuditService.recordEvent).toHaveBeenCalledWith(
-        expect.objectContaining({ eventType: 'ASSAYER_DOCUMENT_UPDATED' }),
-      );
     });
   });
 

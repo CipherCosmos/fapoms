@@ -5,7 +5,7 @@ import { CacheService } from '../../infrastructure/cache/cache.service';
 
 import { canonicalState } from '../planning/command-center.service';
 import { IN_FLIGHT_ASSIGNMENT_STATUSES, sqlStatusList } from '../assignment/assignment-workload';
-import { BUSINESS_TODAY_SQL, ASSAYER_RECORD_FIELDS } from '@fapoms/shared';
+import { BUSINESS_TODAY_SQL, ASSAYER_RECORD_FIELDS, IDENTITY_DOCUMENTS } from '@fapoms/shared';
 
 /**
  * FAPOMS — HR workforce analytics.
@@ -330,9 +330,14 @@ export class HrWorkforceService {
         AND (${criticalCols.map((c) => `${c} IS NULL OR ${c}::text = ''`).join(' OR ')})
     `);
 
+    // Only identity documents are verified, so only they are counted here. The register this
+    // replaced defaulted every row to PENDING, which meant a joining form counted as an
+    // unverified document for ever.
     const govDocs = await this.dataSource.query(`
-      SELECT COALESCE(verification_status, 'PENDING') AS status, COUNT(*)::int AS count
-      FROM assayer_government_documents WHERE is_active = true GROUP BY 1
+      SELECT verification_status AS status, COUNT(*)::int AS count
+      FROM assayer_documents
+      WHERE is_active = true AND verification_status IS NOT NULL
+      GROUP BY 1
     `);
 
     /**
@@ -361,18 +366,26 @@ export class HrWorkforceService {
      * `withGovDoc === 0` branch that prints "No identity document has been recorded for anyone
      * on the roster." An estimate that lands on zero would publish that as a finding.
      */
+    // The identity half of the list, passed in rather than inlined so the one definition in
+    // @fapoms/shared stays the only one.
     const [docCoverage] = await this.dataSource.query(`
       SELECT
         (SELECT COUNT(*)::int FROM assayers WHERE ${ON_ROSTER}) AS roster,
         (SELECT COUNT(DISTINCT g.assayer_id)::int
-           FROM assayer_government_documents g
+           FROM assayer_documents g
            JOIN assayers a ON a.id = g.assayer_id
-          WHERE g.is_active = true AND ${ON_ROSTER_A}) AS "withGovDoc",
+          WHERE g.is_active = true AND ${ON_ROSTER_A}
+            AND g.requirement = ANY($1)
+            -- On file means a copy arrived or a number was taken. A row that exists only to say
+            -- "not received" is the absence this figure is measuring, not the presence of it.
+            AND (g.soft_copy_received IS TRUE OR g.hard_copy_received IS TRUE
+                 OR NULLIF(g.document_number, '') IS NOT NULL)) AS "withGovDoc",
         (SELECT COUNT(DISTINCT d.assayer_id)::int
            FROM assayer_documents d
            JOIN assayers a ON a.id = d.assayer_id
-          WHERE d.is_active = true AND ${ON_ROSTER_A}) AS "withFile"
-    `);
+          WHERE d.is_active = true AND ${ON_ROSTER_A}
+            AND jsonb_array_length(d.file_paths) > 0) AS "withFile"
+    `, [IDENTITY_DOCUMENTS as unknown as string[]]);
 
     /**
      * People whose audits are attended by somebody other than the person empanelled.
@@ -420,7 +433,7 @@ export class HrWorkforceService {
    *
    * ## Why certifications are in here now
    *
-   * This used to read `assayer_government_documents` alone, and certifications live in
+   * This used to read the identity register alone, and certifications live in
    * `workforce_attributes` with `type = 'CERTIFICATION'`. That produced the worst possible
    * split: `assayer.service.ts` REFUSES to assign an assayer whose certification has expired,
    * `HrCompliancePage` paints a panel titled "Certifications falling due", and the only thing
@@ -454,10 +467,10 @@ export class HrWorkforceService {
     return this.dataSource.query(
       `
       SELECT * FROM (
-        SELECT g.id, g.document_type AS "documentName", g.expiry_date::date::text AS "expiryDate",
+        SELECT g.id, g.requirement AS "documentName", g.expiry_date::date::text AS "expiryDate",
                a.id AS "assayerId", a.display_name AS "assayerName",
                'DOCUMENT' AS "credentialKind"
-        FROM assayer_government_documents g
+        FROM assayer_documents g
         JOIN assayers a ON a.id = g.assayer_id
         WHERE g.is_active = true AND g.expiry_date IS NOT NULL
           AND ${ON_ROSTER_A}
@@ -502,11 +515,11 @@ export class HrWorkforceService {
     `);
 
     const documents = await this.dataSource.query(`
-      SELECT g.id, g.document_type AS "documentType", g.expiry_date AS "expiryDate",
+      SELECT g.id, g.requirement AS "documentType", g.expiry_date AS "expiryDate",
              g.verification_status AS "verificationStatus",
              a.id AS "assayerId", a.assayer_code AS "assayerCode", a.display_name AS "displayName",
              (g.expiry_date::date - ${BUSINESS_TODAY_SQL})::int AS "daysToExpiry"
-      FROM assayer_government_documents g
+      FROM assayer_documents g
       JOIN assayers a ON a.id = g.assayer_id
       WHERE g.is_active = true AND g.expiry_date IS NOT NULL
         AND ${ON_ROSTER_A}
@@ -550,7 +563,7 @@ export class HrWorkforceService {
 
     const [certificationCounts, documentCounts] = await Promise.all([
       bucketsFor('workforce_attributes', 'w', 'expiry_date'),
-      bucketsFor('assayer_government_documents', 'g', 'expiry_date'),
+      bucketsFor('assayer_documents', 'g', 'expiry_date'),
     ]);
 
     return {

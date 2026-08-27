@@ -125,6 +125,20 @@ export enum EmpanelmentStatus {
  * without another migration. As rows they answer "what is outstanding for this person" and
  * "who is missing an NDA" with the same query.
  */
+/**
+ * Every document the company holds about an appraiser, whatever it is for.
+ *
+ * There used to be three answers to "have we got their PAN?": a column on the assayer record
+ * holding the number, an identity register holding a verified document with a file, and this
+ * checklist holding whether a copy had arrived. The register was never used — no rows in any
+ * environment — while this list carried 11,021, and the two vocabularies had already begun to
+ * collide (the shared label map carries both `PAN` and `PAN_CARD`, both `AADHAAR` and
+ * `AADHAAR_CARD`). They are one thing now.
+ *
+ * The last four are what the register could name and this list could not. Identity documents
+ * are the ones that carry a number and an expiry and are worth verifying; the rest are papers
+ * that either arrived or did not. `IDENTITY_DOCUMENTS` below is what separates them.
+ */
 export enum OnboardingDocument {
   JOINING_FORM = 'JOINING_FORM',
   NDA = 'NDA',
@@ -144,6 +158,39 @@ export enum OnboardingDocument {
   ID_PROOF = 'ID_PROOF',
   ADDRESS_PROOF = 'ADDRESS_PROOF',
   OFFICE_ADDRESS_PROOF = 'OFFICE_ADDRESS_PROOF',
+  DRIVING_LICENCE = 'DRIVING_LICENCE',
+  VOTER_ID = 'VOTER_ID',
+  PASSPORT = 'PASSPORT',
+}
+
+/**
+ * The documents that prove who somebody is.
+ *
+ * These are the ones a client's branch asks for before letting a person near a vault, so they
+ * are the ones that carry a number, an expiry and a verification — the rest of the list is
+ * paperwork that either arrived or did not. Nothing else in the record distinguishes them, and
+ * showing an expiry field against a code-of-conduct letter is how a form teaches people to
+ * ignore it.
+ */
+export const IDENTITY_DOCUMENTS: readonly OnboardingDocument[] = [
+  OnboardingDocument.AADHAAR_FRONT,
+  OnboardingDocument.AADHAAR_BACK,
+  OnboardingDocument.PAN_CARD,
+  OnboardingDocument.DRIVING_LICENCE,
+  OnboardingDocument.VOTER_ID,
+  OnboardingDocument.PASSPORT,
+  OnboardingDocument.ID_PROOF,
+  OnboardingDocument.ADDRESS_PROOF,
+];
+
+export const isIdentityDocument = (d: OnboardingDocument | string): boolean =>
+  IDENTITY_DOCUMENTS.includes(d as OnboardingDocument);
+
+/** Where a document is up to. Only identity documents are verified; the rest just arrive. */
+export enum DocumentVerification {
+  PENDING = 'PENDING',
+  VERIFIED = 'VERIFIED',
+  REJECTED = 'REJECTED',
 }
 
 /** Which spreadsheet column carries each requirement, so the importer needs no second list. */
@@ -173,6 +220,11 @@ export const ONBOARDING_DOCUMENT_COLUMNS: Record<OnboardingDocument, string> = {
   [OnboardingDocument.ID_PROOF]: 'ID Proof',
   [OnboardingDocument.ADDRESS_PROOF]: 'Address Proof',
   [OnboardingDocument.OFFICE_ADDRESS_PROOF]: 'Office Address Proof',
+  // The roster spreadsheet has no column for these three; they came from the identity register.
+  // An empty string means "no column to read", which `rowReader` treats as absent.
+  [OnboardingDocument.DRIVING_LICENCE]: '',
+  [OnboardingDocument.VOTER_ID]: '',
+  [OnboardingDocument.PASSPORT]: '',
 };
 
 /** What the paperwork is called on screen — the same list, spelled properly. */
@@ -195,6 +247,9 @@ export const ONBOARDING_DOCUMENT_LABELS: Record<OnboardingDocument, string> = {
   [OnboardingDocument.ID_PROOF]: 'Identity proof',
   [OnboardingDocument.ADDRESS_PROOF]: 'Address proof',
   [OnboardingDocument.OFFICE_ADDRESS_PROOF]: 'Office address proof',
+  [OnboardingDocument.DRIVING_LICENCE]: 'Driving licence',
+  [OnboardingDocument.VOTER_ID]: 'Voter ID',
+  [OnboardingDocument.PASSPORT]: 'Passport',
 };
 
 /** Case, spacing and punctuation are noise. Fold them before matching anything. */

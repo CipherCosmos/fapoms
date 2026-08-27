@@ -3,7 +3,6 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity';
 import { WorkforceAttributeEntity } from './workforce-attribute.entity';
-import { AssayerGovernmentDocumentEntity } from './assayer-government-document.entity';
 import { AssayerDocumentEntity } from './assayer-document.entity';
 import { AssayerRemarkEntity } from './assayer-remark.entity';
 import { AssayerActivityEntity } from './assayer-activity.entity';
@@ -11,7 +10,6 @@ import { AssayerLocationPingEntity } from './assayer-location-ping.entity';
 import { AssayerReferenceEntity } from './assayer-reference.entity';
 import { AssayerClientEmpanelmentEntity } from './assayer-client-empanelment.entity';
 import { AssayerBackgroundCheckEntity } from './assayer-background-check.entity';
-import { AssayerOnboardingDocumentEntity } from './assayer-onboarding-document.entity';
 import { AssayerImportIssueEntity } from './assayer-import-issue.entity';
 import { ClientEntity } from '../client/client.entity';
 import { RosterImportService } from './roster-import.service';
@@ -31,7 +29,6 @@ import { NotificationsModule } from '../notifications/notifications.module';
       AssayerEntity,
       AssayerCommercialProfileEntity,
       WorkforceAttributeEntity,
-      AssayerGovernmentDocumentEntity,
       AssayerDocumentEntity,
       AssayerRemarkEntity,
       AssayerActivityEntity,
@@ -39,7 +36,6 @@ import { NotificationsModule } from '../notifications/notifications.module';
       AssayerReferenceEntity,
       AssayerClientEmpanelmentEntity,
       AssayerBackgroundCheckEntity,
-      AssayerOnboardingDocumentEntity,
       AssayerImportIssueEntity,
       ClientEntity,
     ]),

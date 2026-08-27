@@ -7,8 +7,6 @@ import { randomInt } from 'crypto';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity';
 import { WorkforceAttributeEntity } from './workforce-attribute.entity';
-import { AssayerGovernmentDocumentEntity } from './assayer-government-document.entity';
-import { AssayerDocumentEntity } from './assayer-document.entity';
 import { AssayerRemarkEntity } from './assayer-remark.entity';
 import { AssayerActivityEntity } from './assayer-activity.entity';
 import { AuditService } from '../../core/audit/audit.service';
@@ -252,42 +250,6 @@ export interface UpdateAssayerDto {
   eligibleClients?: string[];
 }
 
-export interface CreateGovernmentDocumentDto {
-  documentType: string;
-  documentNumber: string;
-  expiryDate?: string;
-  filePaths?: string[];
-  remarks?: string;
-}
-
-export interface UpdateGovernmentDocumentDto {
-  documentNumber?: string;
-  expiryDate?: string | null;
-  verificationStatus?: string;
-  verifiedBy?: string;
-  filePaths?: string[];
-  remarks?: string;
-}
-
-export interface CreateAssayerDocumentDto {
-  documentType: string;
-  fileName: string;
-  filePath: string;
-  fileSize: number;
-  mimeType?: string;
-  parentDocumentId?: string;
-  remarks?: string;
-}
-
-export interface UpdateAssayerDocumentDto {
-  documentType?: string;
-  fileName?: string;
-  filePath?: string;
-  fileSize?: number;
-  mimeType?: string;
-  remarks?: string;
-}
-
 @Injectable()
 export class AssayerService implements OnModuleInit {
   private readonly logger = new Logger(AssayerService.name);
@@ -298,10 +260,6 @@ export class AssayerService implements OnModuleInit {
     private readonly commercialRepository: Repository<AssayerCommercialProfileEntity>,
     @InjectRepository(WorkforceAttributeEntity)
     private readonly workforceAttributeRepository: Repository<WorkforceAttributeEntity>,
-    @InjectRepository(AssayerGovernmentDocumentEntity)
-    private readonly govDocRepository: Repository<AssayerGovernmentDocumentEntity>,
-    @InjectRepository(AssayerDocumentEntity)
-    private readonly assayerDocRepository: Repository<AssayerDocumentEntity>,
     @InjectRepository(AssayerRemarkEntity)
     private readonly remarkRepository: Repository<AssayerRemarkEntity>,
     @InjectRepository(AssayerActivityEntity)
@@ -1161,162 +1119,6 @@ export class AssayerService implements OnModuleInit {
     const { saved, event } = await this.doTransitionLifecycle(id, AssayerLifecycleStatus.ARCHIVED, userId, reason);
     if (event) this.eventPublisher.publish(event.constructor.name, event);
     return saved;
-  }
-
-  // ---- Government Documents ----
-
-  async addGovernmentDocument(assayerId: string, dto: CreateGovernmentDocumentDto, userId: string): Promise<AssayerGovernmentDocumentEntity> {
-    await this.findOne(assayerId);
-    const existing = await this.govDocRepository.findOne({ where: { assayerId, documentType: dto.documentType, isActive: true } });
-    if (existing) throw new ConflictException(`Active ${dto.documentType} document already exists for this assayer. Remove the existing document before adding a new one.`);
-    const doc = this.govDocRepository.create({
-      assayerId,
-      ...dto,
-      expiryDate: dto.expiryDate ? new Date(dto.expiryDate) : null,
-      filePaths: dto.filePaths || [],
-      verificationStatus: 'PENDING',
-      createdBy: userId,
-      updatedBy: userId,
-    });
-    const saved = await this.govDocRepository.save(doc);
-    await this.auditService.recordEvent({
-      category: EventCategory.OPERATIONAL,
-      eventType: 'GOVERNMENT_DOCUMENT_ADDED',
-      entityType: 'ASSAYER_GOVERNMENT_DOCUMENT',
-      entityId: saved.id,
-      userId,
-      remarks: `Added ${dto.documentType} document for assayer ${assayerId}`,
-    });
-    await this.recordActivity(assayerId, 'GOVERNMENT_DOCUMENT_ADDED', null, null, userId, `Added ${dto.documentType} document`);
-    return saved;
-  }
-
-  async updateGovernmentDocument(docId: string, dto: UpdateGovernmentDocumentDto, userId: string): Promise<AssayerGovernmentDocumentEntity> {
-    const doc = await this.govDocRepository.findOne({ where: { id: docId, isActive: true } });
-    if (!doc) throw new NotFoundException(`Government document ${docId} not found.`);
-    if (dto.documentNumber !== undefined) doc.documentNumber = dto.documentNumber;
-    if (dto.expiryDate !== undefined) doc.expiryDate = dto.expiryDate ? new Date(dto.expiryDate) : null;
-    if (dto.verificationStatus !== undefined) {
-      doc.verificationStatus = dto.verificationStatus;
-      if (dto.verificationStatus === 'VERIFIED' || dto.verificationStatus === 'REJECTED') {
-        doc.verifiedAt = new Date();
-        doc.verifiedBy = dto.verifiedBy || userId;
-      }
-    }
-    if (dto.filePaths !== undefined) doc.filePaths = dto.filePaths;
-    if (dto.remarks !== undefined) doc.remarks = dto.remarks;
-    doc.updatedBy = userId;
-    const saved = await this.govDocRepository.save(doc);
-    await this.auditService.recordEvent({
-      category: EventCategory.OPERATIONAL,
-      eventType: 'GOVERNMENT_DOCUMENT_UPDATED',
-      entityType: 'ASSAYER_GOVERNMENT_DOCUMENT',
-      entityId: saved.id,
-      userId,
-      remarks: `Updated ${doc.documentType} document status: ${doc.verificationStatus}`,
-    });
-    await this.recordActivity(doc.assayerId, 'GOVERNMENT_DOCUMENT_UPDATED', null, null, userId, `Updated ${doc.documentType} document`);
-    return saved;
-  }
-
-  async getGovernmentDocuments(assayerId: string): Promise<AssayerGovernmentDocumentEntity[]> {
-    return this.govDocRepository.find({
-      where: { assayerId, isActive: true },
-      order: { documentType: 'ASC' },
-    });
-  }
-
-  async removeGovernmentDocument(docId: string, userId: string): Promise<void> {
-    const doc = await this.govDocRepository.findOne({ where: { id: docId, isActive: true } });
-    if (!doc) throw new NotFoundException(`Government document ${docId} not found.`);
-    doc.isActive = false;
-    doc.updatedBy = userId;
-    await this.govDocRepository.save(doc);
-    await this.auditService.recordEvent({
-      category: EventCategory.OPERATIONAL,
-      eventType: 'GOVERNMENT_DOCUMENT_REMOVED',
-      entityType: 'ASSAYER_GOVERNMENT_DOCUMENT',
-      entityId: docId,
-      userId,
-      remarks: `Removed ${doc.documentType} document`,
-    });
-    await this.recordActivity(doc.assayerId, 'GOVERNMENT_DOCUMENT_REMOVED', null, null, userId, `Removed ${doc.documentType} document`);
-  }
-
-  // ---- Assayer Documents ----
-
-  async addAssayerDocument(assayerId: string, dto: CreateAssayerDocumentDto, userId: string): Promise<AssayerDocumentEntity> {
-    await this.findOne(assayerId);
-    let docVersion = 1;
-    if (dto.parentDocumentId) {
-      const parent = await this.assayerDocRepository.findOne({ where: { id: dto.parentDocumentId } });
-      if (parent) docVersion = parent.docVersion + 1;
-    }
-    const doc = this.assayerDocRepository.create({
-      assayerId,
-      ...dto,
-      docVersion,
-      createdBy: userId,
-      updatedBy: userId,
-    });
-    const saved = await this.assayerDocRepository.save(doc);
-    await this.auditService.recordEvent({
-      category: EventCategory.OPERATIONAL,
-      eventType: 'ASSAYER_DOCUMENT_ADDED',
-      entityType: 'ASSAYER_DOCUMENT',
-      entityId: saved.id,
-      userId,
-      remarks: `Added ${dto.documentType} (v${docVersion}) for assayer ${assayerId}`,
-    });
-    await this.recordActivity(assayerId, 'ASSAYER_DOCUMENT_ADDED', null, null, userId, `Added ${dto.documentType} (v${docVersion})`);
-    return saved;
-  }
-
-  async getAssayerDocuments(assayerId: string): Promise<AssayerDocumentEntity[]> {
-    return this.assayerDocRepository.find({
-      where: { assayerId, isActive: true },
-      order: { documentType: 'ASC', docVersion: 'DESC' },
-    });
-  }
-
-  async updateAssayerDocument(docId: string, dto: UpdateAssayerDocumentDto, userId: string): Promise<AssayerDocumentEntity> {
-    const doc = await this.assayerDocRepository.findOne({ where: { id: docId, isActive: true } });
-    if (!doc) throw new NotFoundException(`Assayer document ${docId} not found.`);
-    if (dto.documentType !== undefined) doc.documentType = dto.documentType;
-    if (dto.fileName !== undefined) doc.fileName = dto.fileName;
-    if (dto.filePath !== undefined) doc.filePath = dto.filePath;
-    if (dto.fileSize !== undefined) doc.fileSize = dto.fileSize;
-    if (dto.mimeType !== undefined) doc.mimeType = dto.mimeType;
-    if (dto.remarks !== undefined) doc.remarks = dto.remarks;
-    doc.updatedBy = userId;
-    const saved = await this.assayerDocRepository.save(doc);
-    await this.auditService.recordEvent({
-      category: EventCategory.OPERATIONAL,
-      eventType: 'ASSAYER_DOCUMENT_UPDATED',
-      entityType: 'ASSAYER_DOCUMENT',
-      entityId: docId,
-      userId,
-      remarks: `Updated ${doc.documentType} document (v${doc.docVersion})`,
-    });
-    await this.recordActivity(doc.assayerId, 'ASSAYER_DOCUMENT_UPDATED', null, null, userId, `Updated ${doc.documentType} document`);
-    return saved;
-  }
-
-  async removeAssayerDocument(docId: string, userId: string): Promise<void> {
-    const doc = await this.assayerDocRepository.findOne({ where: { id: docId, isActive: true } });
-    if (!doc) throw new NotFoundException(`Assayer document ${docId} not found.`);
-    doc.isActive = false;
-    doc.updatedBy = userId;
-    await this.assayerDocRepository.save(doc);
-    await this.auditService.recordEvent({
-      category: EventCategory.OPERATIONAL,
-      eventType: 'ASSAYER_DOCUMENT_REMOVED',
-      entityType: 'ASSAYER_DOCUMENT',
-      entityId: docId,
-      userId,
-      remarks: `Removed ${doc.documentType} document (v${doc.docVersion})`,
-    });
-    await this.recordActivity(doc.assayerId, 'ASSAYER_DOCUMENT_REMOVED', null, null, userId, `Removed ${doc.documentType} document`);
   }
 
   // ---- Stats & Profile ----
