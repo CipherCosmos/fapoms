@@ -13,6 +13,8 @@ import { AssayerClientEmpanelmentEntity } from './assayer-client-empanelment.ent
 import { AssayerBackgroundCheckEntity } from './assayer-background-check.entity';
 import { AssayerOnboardingDocumentEntity } from './assayer-onboarding-document.entity';
 import { AssayerImportIssueEntity } from './assayer-import-issue.entity';
+import { ClientEntity } from '../client/client.entity';
+import { RosterImportService } from './roster-import.service';
 import { HrController } from './hr.controller';
 import { HrWorkforceService } from './hr-workforce.service';
 import { AssayerService } from './assayer.service';
@@ -38,10 +40,11 @@ import { NotificationsModule } from '../notifications/notifications.module';
       AssayerBackgroundCheckEntity,
       AssayerOnboardingDocumentEntity,
       AssayerImportIssueEntity,
+      ClientEntity,
     ]),
   ],
   controllers: [AssayerController, HrController],
-  providers: [AssayerService, HrWorkforceService, LocationTrailService],
-  exports: [AssayerService, HrWorkforceService, LocationTrailService, TypeOrmModule],
+  providers: [AssayerService, HrWorkforceService, LocationTrailService, RosterImportService],
+  exports: [AssayerService, HrWorkforceService, LocationTrailService, RosterImportService, TypeOrmModule],
 })
 export class AssayerModule {}

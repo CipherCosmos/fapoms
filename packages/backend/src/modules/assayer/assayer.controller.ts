@@ -60,6 +60,7 @@ import { SystemRole, AssayerLifecycleStatus } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { scopeAssayerForRoles, scopeAssayerListForRoles, rolesOf, assertSelfOrPrivileged } from './assayer-visibility';
+import { RosterImportService } from './roster-import.service';
 import { STAFF_ROLES } from '../auth/staff-roles';
 
 /** Roles that may edit any assayer's record; everyone else is limited to their own. */
@@ -655,6 +656,7 @@ class ResetAssayerPasswordRequestDto {
 export class AssayerController {
   constructor(
     private readonly assayerService: AssayerService,
+    private readonly rosterImport: RosterImportService,
     private readonly regionGuard: RegionGuardService,
     private readonly locationTrail: LocationTrailService,
   ) {}
@@ -1217,6 +1219,41 @@ export class AssayerController {
       'Content-Disposition': `attachment; filename="${filename}"; filename*=UTF-8''${filename}`,
     });
     res.send(buffer);
+  }
+
+  /**
+   * Bring in the full appraiser roster spreadsheet.
+   *
+   * Separate from `/upload`, which takes the template this system publishes. This one reads the
+   * roster as it is actually kept — 71 columns of HR, KYC, banking and compliance detail, one
+   * of which holds three facts in a single cell — and spreads it across the tables that now
+   * hold those things. See `RosterImportService` for the rules it follows.
+   *
+   * `dryRun` is the point of the endpoint as much as the import is: it does the entire read and
+   * reports exactly what would happen without writing a row, because nobody should discover
+   * what an import of 1,155 people does by running it.
+   */
+  @Post('/roster/import')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:create:organization')
+  @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
+  @ApiOperation({ summary: 'Import the appraiser roster workbook, or rehearse it with dryRun' })
+  async importRoster(
+    @UploadedFile() file: any,
+    @Body() body: any,
+    @Req() req: any,
+  ) {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('No file was uploaded. Choose the roster workbook and try again.');
+    }
+    // Multipart carries everything as text, so "false" arrives as a non-empty string and would
+    // be truthy — the one mistake here would silently turn a rehearsal into a real import.
+    const dryRun = String(body?.dryRun ?? '').toLowerCase() === 'true';
+    const summary = await this.rosterImport.importAssayerSheet(file.buffer, req.user.id, {
+      dryRun,
+      sheetName: body?.sheetName || undefined,
+    });
+    return { success: true, data: summary };
   }
 
   @Post('/upload')
