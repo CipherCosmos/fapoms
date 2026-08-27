@@ -61,14 +61,29 @@ const OverviewTabBody = ({ d, onJump }: { d: HrWorkforceOverview; onJump: (to: s
     </section>
 
     <section style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-      <Stat value={d.headcount.total} caption="Total on roster" />
+      {/*
+        Two populations sit side by side on this row and nothing said so.
+        
+        "Total on roster" is everybody, including people who have left — 1,163 on the imported
+        roster. Every compliance figure counts only those still workable (`ON_ROSTER`: active,
+        not exited, not terminated), which is 717 of them, because chasing a bank account for
+        somebody who resigned last year is not a task. Both numbers are right; reading "709 of
+        717" under a tile saying 1,163 is what made them look wrong.
+      */}
+      <Stat
+        value={d.headcount.total}
+        caption="Total on roster"
+        hint={d.headcount.total !== d.compliance.roster
+          ? `Everyone on the books. The record and paperwork figures below count the ${d.compliance.roster} who can still be given work — people who have left are not chased for missing details.`
+          : 'Everyone on the books'}
+      />
       <Stat value={d.headcount.active} caption="Active" tone="var(--success)" />
       <Stat value={d.pipeline.inProgress} caption="In onboarding" tone={d.pipeline.inProgress ? 'var(--warning)' : undefined} />
       <Stat
         value={`${d.compliance.roster - d.compliance.incompleteCount}/${d.compliance.roster}`}
         caption="Records complete"
         tone={d.compliance.incompleteCount ? 'var(--warning)' : 'var(--success)'}
-        hint="Assayers with every payroll- and duty-of-care-critical field filled in"
+        hint={`Of the ${d.compliance.roster} people who can still be given work, how many have every critical field filled in — payroll, duty-of-care and the map location the planner needs to judge distance. People who have left are not counted.`}
       />
       {/* "Idle > 30d" said the team had stopped working. With no assignments in the system at all,
           every one of those people is simply waiting for a first job, and the amber accused them of

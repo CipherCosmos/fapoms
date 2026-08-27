@@ -33,9 +33,25 @@ describe('the workforce record, across screens', () => {
   it('flags a record with no phone, which the two lists used to disagree about', () => {
     const noPhone = {
       phone: '', panNumber: 'ABCDE1234F', bankAccountNumber: '123', ifscCode: 'HDFC0000123',
-      joiningDate: '2024-01-01', emergencyContactPhone: '+919000000000',
+      joiningDate: '2024-01-01', emergencyContactPhone: '+919000000000', latitude: 19.076,
     };
     expect(missingCriticalFields(noPhone as any).map((f) => f.key)).toEqual(['phone']);
+  });
+
+  /**
+   * The gap that was invisible on every screen.
+   *
+   * Coordinates were never in the record-fields list, so nothing counted them and nothing
+   * flagged them — while the planner's distance check quietly passes any candidate whose
+   * coordinates are missing, rather than excluding them. 1,155 of 1,163 imported records had
+   * none. It is a critical field on both sides now, and this is the screen's half of that.
+   */
+  it('flags a record with no map location', () => {
+    const noCoordinates = {
+      phone: '+919000000000', panNumber: 'ABCDE1234F', bankAccountNumber: '123',
+      ifscCode: 'HDFC0000123', joiningDate: '2024-01-01', emergencyContactPhone: '+919000000001',
+    };
+    expect(missingCriticalFields(noCoordinates as any).map((f) => f.key)).toEqual(['latitude']);
   });
 
   it('gives each field a reason a person can read', () => {

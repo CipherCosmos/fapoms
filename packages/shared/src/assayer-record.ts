@@ -36,6 +36,31 @@ export const ASSAYER_RECORD_FIELDS: AssayerRecordField[] = [
   { column: 'manager_id', key: 'managerId', critical: false, label: 'Reporting manager', blocks: 'Escalation path' },
   { column: 'photograph', key: 'photograph', critical: false, label: 'Photograph', blocks: 'Field ID verification' },
   { column: 'address', key: 'address', critical: false, label: 'Address', blocks: 'Travel planning' },
+
+  /**
+   * Fields the record has always held and this list never mentioned, so nothing counted them
+   * and no screen flagged them. Measured against the imported roster of 1,163 people: 1,155
+   * with no coordinates, 1,155 with no pincode, 456 with no Aadhaar, 450 with no city.
+   *
+   * `latitude` stands for the pair — coordinates are written together or not at all, and two
+   * entries would report one gap twice. It is the only critical one here, and it is critical
+   * because of what happens silently without it: `recommendation.engine.ts` returns `true` from
+   * its distance check when either side has no coordinates, so a candidate who lives four
+   * states away passes the "near enough" filter rather than being excluded by it. Nothing on
+   * any screen said those records were being planned blind.
+   *
+   * They are blank because the bulk importer writes entities straight through the transaction
+   * manager, which skips the geocoding `create()` and `update()` do. Fixing the data is a
+   * geocoding run; this is the part that makes the gap visible in the meantime.
+   */
+  { column: 'latitude', key: 'latitude', critical: true, label: 'Map location', blocks: 'Distance filtering, travel costs and day planning' },
+  { column: 'pincode', key: 'pincode', critical: false, label: 'Pincode', blocks: 'Geocoding and travel estimates' },
+  { column: 'city', key: 'city', critical: false, label: 'City or town', blocks: 'Local dispatch and travel planning' },
+  { column: 'region', key: 'region', critical: false, label: 'Region', blocks: 'Regional scoping and work allocation' },
+  { column: 'aadhaar_number', key: 'aadhaarNumber', critical: false, label: 'Aadhaar', blocks: 'Identity verification for branch access' },
+  { column: 'bank_name', key: 'bankName', critical: false, label: 'Bank name', blocks: 'Payment reconciliation' },
+  { column: 'date_of_birth', key: 'dateOfBirth', critical: false, label: 'Date of birth', blocks: 'Statutory records' },
+  { column: 'qualification', key: 'qualification', critical: false, label: 'Qualification', blocks: 'Evidence of competence' },
 ];
 
 export const CRITICAL_ASSAYER_RECORD_FIELDS = ASSAYER_RECORD_FIELDS.filter((f) => f.critical);

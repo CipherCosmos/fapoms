@@ -75,14 +75,27 @@ const ONBOARDING_STAGES: string[] = [
  *  already there, null if unreachable. Mirrors the backend state machine so the
  *  roster can offer the same destinations the API will accept. */
 
+/**
+ * Still on the books and still workable — the same population the server's compliance figures
+ * count (`ON_ROSTER` in hr-workforce.service.ts).
+ *
+ * The gap chips used to match anybody with a blank field, so 444 people who had resigned or been
+ * terminated sat in "Incomplete record" and "Cannot be paid" as though somebody ought to chase
+ * their bank details. It also meant the chip and the Overview described different populations
+ * from the same data — the Overview said 717, the chip counted from 1,163 — with nothing on
+ * either screen to say why.
+ */
+const stillWorkable = (a: Assayer): boolean =>
+  !EXITED_STAGES.includes(a.lifecycleStatus) && !a.exitDate && !a.terminationDate;
+
 /** One-click views onto the questions HR ask most. */
 const SEGMENTS: { key: string; label: string; match: (a: Assayer) => boolean }[] = [
   { key: 'all', label: 'Everyone', match: () => true },
   { key: 'active', label: 'Active', match: (a) => a.lifecycleStatus === AssayerLifecycleStatus.ACTIVE },
   { key: 'onboarding', label: 'Onboarding', match: (a) => ONBOARDING_STAGES.includes(a.lifecycleStatus) },
-  { key: 'incomplete', label: 'Incomplete record', match: (a) => missingFields(a).length > 0 },
-  { key: 'unpayable', label: 'Cannot be paid', match: (a) => payoutBlockers(a).length > 0 },
-  { key: 'unprofiled', label: 'No skills', match: (a) => !a.skills || a.skills.length === 0 },
+  { key: 'incomplete', label: 'Incomplete record', match: (a) => stillWorkable(a) && missingFields(a).length > 0 },
+  { key: 'unpayable', label: 'Cannot be paid', match: (a) => stillWorkable(a) && payoutBlockers(a).length > 0 },
+  { key: 'unprofiled', label: 'No skills', match: (a) => stillWorkable(a) && (!a.skills || a.skills.length === 0) },
   // Lifecycle status first, dates second — matching the server's headcount. Someone shown as
   // RESIGNED on the row itself has to appear under "Exited", whether or not a date was captured.
   {
@@ -97,7 +110,7 @@ const SEGMENTS: { key: string; label: string; match: (a: Assayer) => boolean }[]
   {
     key: 'someone-else',
     label: 'Work done by somebody else',
-    match: (a) => a.workDoneBySomeoneElse === true,
+    match: (a) => stillWorkable(a) && a.workDoneBySomeoneElse === true,
   },
   // An expired certificate is refused by the eligibility gate, so the person is quietly
   // unassignable. This was the one question the retired compliance page answered that nothing
@@ -105,7 +118,7 @@ const SEGMENTS: { key: string; label: string; match: (a: Assayer) => boolean }[]
   {
     key: 'lapsed',
     label: 'Certificate lapsed',
-    match: (a) => (a.certifications ?? []).some(
+    match: (a) => stillWorkable(a) && (a.certifications ?? []).some(
       (c) => c.expiryDate && (daysUntilExpiry(c.expiryDate) ?? 1) < 0,
     ),
   },
@@ -985,7 +998,23 @@ export const AssayerRoster: React.FC<{
                       </span>
                     </td>
                     <td style={cell}>
-                      {missing.length === 0 ? (
+                      {/*
+                        A record belonging to somebody who has left is stated, not demanded.
+
+                        The gap chips count only people who can still be given work, and this
+                        column shouted "Cannot be paid" in red at the same terminated records the
+                        chips had just excluded — so the list and its own filters disagreed on
+                        screen. The gaps are still shown, because a past payment may yet need
+                        settling; they are simply not an outstanding task.
+                      */}
+                      {missing.length > 0 && !stillWorkable(a) ? (
+                        <span
+                          title={`Missing: ${missing.join(', ')}`}
+                          style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11.5px', color: 'var(--text-muted)' }}
+                        >
+                          {counted(missing.length, 'gap')} · left
+                        </span>
+                      ) : missing.length === 0 ? (
                         <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--success)', fontSize: '11.5px' }}>
                           <CheckCircle2 size={12} /> Complete
                         </span>

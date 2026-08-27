@@ -42,8 +42,31 @@ describe('the assayer record fields', () => {
     const missing = missingAssayerRecordFields({
       phone: '   ', panNumber: '', bankAccountNumber: null,
       ifscCode: 'HDFC0000123', joiningDate: '2024-01-01', emergencyContactPhone: '+919000000000',
+      latitude: 19.076,
     });
     expect(missing.map((f) => f.key).sort()).toEqual(['bankAccountNumber', 'panNumber', 'phone']);
+  });
+
+  /**
+   * Coordinates are a critical field, and the reason is not tidiness.
+   *
+   * `recommendation.engine.ts` returns `true` from its distance check when either side has no
+   * coordinates, so a candidate four states from the branch passes the "near enough" filter
+   * instead of being excluded by it. 1,155 of the 1,163 imported records had none — the bulk
+   * importer writes entities straight through the transaction manager, skipping the geocoding
+   * that create() and update() perform — and nothing on any screen said so.
+   */
+  it('flags a record with no coordinates, because the planner cannot filter on distance without them', () => {
+    const withoutCoordinates = {
+      phone: '+919000000000', panNumber: 'ABCDE1234F', bankAccountNumber: '123',
+      ifscCode: 'HDFC0000123', joiningDate: '2024-01-01', emergencyContactPhone: '+919000000001',
+    };
+    expect(missingAssayerRecordFields(withoutCoordinates).map((f) => f.key)).toEqual(['latitude']);
+  });
+
+  it('counts a latitude of zero as present, not blank', () => {
+    // `0` is falsy and `''` is blank; only one of them means "nobody recorded this".
+    expect(missingAssayerRecordFields({ latitude: 0 }).map((f) => f.key)).not.toContain('latitude');
   });
 
   it('reports nothing missing for a complete record, and everything for an empty one', () => {
