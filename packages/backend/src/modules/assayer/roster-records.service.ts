@@ -312,7 +312,20 @@ export class RosterRecordsService {
     if (row.softCopyReceived !== true) row.softCopyReceived = true;
     row.isActive = true;
     row.updatedBy = actorId;
-    return this.onboarding.save(row);
+    const saved = await this.onboarding.save(row);
+
+    /**
+     * A photograph is also a fact about the person, not only a document in their file.
+     *
+     * `assayers.photograph` is what a header or a list can show without loading the whole
+     * dossier, so the most recent one is copied there — the same arrangement as a PAN number,
+     * which lives on the person while the card that evidences it lives here. Copied rather than
+     * duplicated: this is the only writer, and the document record stays the history.
+     */
+    if (requirement === OnboardingDocument.PHOTOGRAPH) {
+      await this.assayers.update({ id: assayerId }, { photograph: key, updatedBy: actorId });
+    }
+    return saved;
   }
 
   /** The stored key at one position, or null — the caller decides what a miss means. */
@@ -338,6 +351,15 @@ export class RosterRecordsService {
     row.filePaths = row.filePaths.filter((_, i) => i !== index);
     row.updatedBy = actorId;
     await this.onboarding.save(row);
+
+    // The header must not go on pointing at a file that is gone. Falls back to whatever else is
+    // still attached rather than blanking a record that still has a photograph in it.
+    if (row.requirement === OnboardingDocument.PHOTOGRAPH) {
+      await this.assayers.update(
+        { id: row.assayerId },
+        { photograph: row.filePaths[row.filePaths.length - 1] ?? null, updatedBy: actorId },
+      );
+    }
     return key;
   }
 

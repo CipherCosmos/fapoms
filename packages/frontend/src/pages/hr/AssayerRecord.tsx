@@ -126,6 +126,51 @@ export const HARD_TO_REVERSE_STAGES: string[] = [
   AssayerLifecycleStatus.ARCHIVED,
 ];
 
+/**
+ * Their face, where a name alone used to be.
+ *
+ * Field staff are dispatched to bank branches by people who have never met them, and every
+ * record already had somewhere to keep a photograph — it just had no way to put one there and
+ * nowhere to show it. Uploaded on the Documents tab, under Photograph.
+ *
+ * Fetched as a blob because the route needs an Authorization header, and a 404 is the ordinary
+ * case rather than an error: most records have no photograph, and initials are a better answer
+ * than a broken image.
+ */
+const Photograph: React.FC<{ assayerId: string; name: string }> = ({ assayerId, name }) => {
+  const [url, setUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    let made: string | null = null;
+    api.request<Blob>(`/assayers/${assayerId}/photo`, { raw: true })
+      .then((b) => { if (!live) return; made = URL.createObjectURL(b); setUrl(made); })
+      .catch(() => { if (live) setUrl(null); });
+    return () => { live = false; if (made) URL.revokeObjectURL(made); };
+  }, [assayerId]);
+
+  const initials = name.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+  const box: React.CSSProperties = {
+    width: '46px', height: '46px', borderRadius: '50%', flexShrink: 0,
+    border: '1px solid var(--border-color)', objectFit: 'cover',
+  };
+
+  if (!url) {
+    return (
+      <div
+        style={{
+          ...box, background: 'var(--bg-surface-2)', display: 'flex', alignItems: 'center',
+          justifyContent: 'center', fontSize: '15px', fontWeight: 700, color: 'var(--text-muted)',
+        }}
+        aria-hidden
+      >
+        {initials || '—'}
+      </div>
+    );
+  }
+  return <img src={url} alt={`Photograph of ${name}`} style={box} />;
+};
+
 export const AssayerRecord: React.FC<{
   assayerId: string;
   canManage: boolean;
@@ -325,6 +370,8 @@ export const AssayerRecord: React.FC<{
           <>
             <header style={{ padding: '16px 18px', borderBottom: '1px solid var(--border-color)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: '12px' }}>
+                <div style={{ display: 'flex', gap: '12px', minWidth: 0, alignItems: 'center' }}>
+                  <Photograph assayerId={assayerId} name={a.displayName} />
                 <div style={{ minWidth: 0 }}>
                   <h2 style={{ fontSize: '17px', fontWeight: 700, margin: 0 }}>{a.displayName}</h2>
                   <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '5px', fontSize: '11.5px', color: 'var(--text-muted)' }}>
@@ -332,6 +379,7 @@ export const AssayerRecord: React.FC<{
                     <span style={{ color: tone, fontWeight: 700 }}>{assayerLifecycleLabel(a.lifecycleStatus)}</span>
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><MapPin size={10} /> {[a.city, a.state].filter(Boolean).join(', ') || '—'}</span>
                   </div>
+                </div>
                 </div>
               </div>
 

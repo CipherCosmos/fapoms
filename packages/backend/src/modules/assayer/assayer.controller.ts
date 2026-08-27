@@ -1403,6 +1403,32 @@ export class AssayerController {
     stream.pipe(res);
   }
 
+  /**
+   * The person's photograph, for a header or a list that has only their id.
+   *
+   * A convenience over the document route above rather than a second store: the key comes from
+   * `assayers.photograph`, which the PHOTOGRAPH document keeps in step. Without it every caller
+   * that wants a face has to fetch the whole dossier first, work out which row is the
+   * photograph, and index into its files.
+   *
+   * Open to the roles that plan and dispatch: knowing who is turning up at a branch is the whole
+   * point of a photograph on a personnel record.
+   */
+  @Get(':assayerId/photo')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+  @ApiOperation({ summary: "Fetch the person's photograph" })
+  async getPhoto(@Param('assayerId', ParseUUIDPipe) assayerId: string, @Res() res: any): Promise<void> {
+    const assayer = await this.assayerService.findOne(assayerId);
+    if (!assayer?.photograph) throw new NotFoundException('No photograph on this record.');
+    const stream = await this.storage.getFileStream(assayer.photograph);
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'private, max-age=300');
+    stream.on('error', () => { if (!res.headersSent) res.status(500).end(); else res.destroy(); });
+    res.on('close', () => stream.destroy());
+    stream.pipe(res);
+  }
+
   @Delete('document/:id/file/:index')
   @HttpCode(204)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
