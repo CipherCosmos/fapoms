@@ -34,3 +34,6 @@ export * from './rule-bypass';
 
 // Upload size limits shared by the API and every client that offers a file picker
 export * from './upload-limits';
+
+// The roster spreadsheet's own words, and the vocabularies they are read into
+export * from './assayer-roster-vocabulary';
