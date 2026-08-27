@@ -98,6 +98,19 @@ const Section: React.FC<{
   </div>
 );
 
+const inputStyle: React.CSSProperties = {
+  width: '100%', padding: '7px 9px', fontSize: '12.5px',
+  background: 'var(--bg-surface)', color: 'var(--text-primary)',
+  border: '1px solid var(--border-color)', borderRadius: '7px', fontFamily: 'inherit',
+};
+
+const Field: React.FC<{ title: string; children: React.ReactNode; wide?: boolean }> = ({ title, children, wide }) => (
+  <div style={{ flex: wide ? '1 1 100%' : '1 1 150px', minWidth: 0 }}>
+    <div style={{ ...label, marginBottom: '5px' }}>{title}</div>
+    {children}
+  </div>
+);
+
 const linkButton: React.CSSProperties = {
   background: 'none', border: 'none', padding: 0, cursor: 'pointer',
   color: 'var(--primary)', fontSize: '12px', fontWeight: 600,
@@ -111,6 +124,10 @@ export const AssayerVettingTab: React.FC<{ assayerId: string; canManage: boolean
   const [clients, setClients] = useState<{ id: string; name: string }[]>([]);
   const [busy, setBusy] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const [checkDraft, setCheckDraft] = useState<
+    { verdict: string; riskGrade: string; cibilScore: string; cibilBand: string; checkedOn: string; findings: string } | null
+  >(null);
+  const [refDraft, setRefDraft] = useState<{ fullName: string; relationship: string; phone: string } | null>(null);
   const [standing, setStandingModal] = useState<
     { clientId: string; clientName: string; status: string; statusReason: string } | null
   >(null);
@@ -169,6 +186,50 @@ export const AssayerVettingTab: React.FC<{ assayerId: string; canManage: boolean
         message: `${standing.clientName} — ${STANDING_LABELS[standing.status] ?? standing.status}.`,
       });
       setStandingModal(null);
+      reload();
+    } catch (e) { toast({ type: 'error', message: userMessage(e) }); } finally { setBusy(false); }
+  };
+
+  const saveCheck = async () => {
+    if (!checkDraft) return;
+    setBusy(true);
+    try {
+      const score = Number(checkDraft.cibilScore.replace(/[^\d]/g, ''));
+      await api.request(`/assayers/${assayerId}/background-check`, {
+        method: 'POST',
+        body: JSON.stringify({
+          verdict: checkDraft.verdict,
+          riskGrade: checkDraft.riskGrade || undefined,
+          cibilBand: checkDraft.cibilBand || undefined,
+          cibilScore: Number.isFinite(score) && score > 0 ? score : undefined,
+          checkedOn: checkDraft.checkedOn || undefined,
+          findings: checkDraft.findings || undefined,
+        }),
+      });
+      toast({ type: 'success', title: 'Check recorded', message: 'It is now the operative one; the previous check is kept below it.' });
+      setCheckDraft(null);
+      reload();
+    } catch (e) { toast({ type: 'error', message: userMessage(e) }); } finally { setBusy(false); }
+  };
+
+  const saveReference = async () => {
+    if (!refDraft) return;
+    if (!refDraft.fullName.trim()) {
+      toast({ type: 'error', message: 'A reference needs a name.' });
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.request(`/assayers/${assayerId}/reference`, {
+        method: 'POST',
+        body: JSON.stringify({
+          fullName: refDraft.fullName.trim(),
+          relationship: refDraft.relationship || undefined,
+          phone: refDraft.phone || undefined,
+        }),
+      });
+      toast({ type: 'success', title: 'Reference added', message: `${refDraft.fullName.trim()} is on file. Nobody has rung them yet.` });
+      setRefDraft(null);
       reload();
     } catch (e) { toast({ type: 'error', message: userMessage(e) }); } finally { setBusy(false); }
   };
@@ -289,7 +350,63 @@ export const AssayerVettingTab: React.FC<{ assayerId: string; canManage: boolean
         title="Vetting"
         icon={check && verdictTone(check.verdict) === 'var(--danger)' ? ShieldAlert : ShieldCheck}
         hint="The most recent check is the operative one. Earlier checks are kept below it, because a picture that changed is the reason to look at a second one."
+        action={canManage && !checkDraft ? (
+          <button style={linkButton} onClick={() => setCheckDraft({
+            verdict: BackgroundCheckVerdict.CLEAR, riskGrade: '', cibilScore: '',
+            cibilBand: '', checkedOn: '', findings: '',
+          })}>
+            <Plus size={11} style={{ verticalAlign: '-1px' }} /> Record a check
+          </button>
+        ) : undefined}
       >
+        {checkDraft && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginBottom: '14px', paddingBottom: '14px', borderBottom: '1px solid var(--border-hair)' }}>
+            <Field title="Verdict">
+              <Select
+                value={checkDraft.verdict}
+                onChange={(v) => setCheckDraft({ ...checkDraft, verdict: String(v) })}
+                options={Object.values(BackgroundCheckVerdict).map((v) => ({ value: v, label: VERDICT_LABELS[v] ?? v }))}
+              />
+            </Field>
+            <Field title="Risk">
+              <Select
+                value={checkDraft.riskGrade}
+                onChange={(v) => setCheckDraft({ ...checkDraft, riskGrade: String(v) })}
+                options={[{ value: '', label: 'Not graded' }, ...Object.values(RiskGrade).map((v) => ({ value: v, label: RISK_LABELS[v] ?? v }))]}
+              />
+            </Field>
+            <Field title="Credit band">
+              <Select
+                value={checkDraft.cibilBand}
+                onChange={(v) => setCheckDraft({ ...checkDraft, cibilBand: String(v) })}
+                options={[{ value: '', label: 'Not recorded' }, ...Object.values(CibilBand).map((v) => ({ value: v, label: CIBIL_LABELS[v] ?? v }))]}
+              />
+            </Field>
+            <Field title="Credit score">
+              <input style={inputStyle} inputMode="numeric" placeholder="e.g. 747"
+                value={checkDraft.cibilScore}
+                onChange={(e) => setCheckDraft({ ...checkDraft, cibilScore: e.target.value })} />
+            </Field>
+            <Field title="Checked on">
+              <input style={inputStyle} type="date"
+                value={checkDraft.checkedOn}
+                onChange={(e) => setCheckDraft({ ...checkDraft, checkedOn: e.target.value })} />
+            </Field>
+            <Field title="Findings" wide>
+              <input style={inputStyle}
+                placeholder="What the check actually turned up. Leave empty if it turned up nothing."
+                value={checkDraft.findings}
+                onChange={(e) => setCheckDraft({ ...checkDraft, findings: e.target.value })} />
+            </Field>
+            <div style={{ flexBasis: '100%', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button style={{ ...linkButton, color: 'var(--text-muted)' }} onClick={() => setCheckDraft(null)}>Cancel</button>
+              <button onClick={saveCheck} disabled={busy} style={{
+                background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '7px',
+                padding: '7px 14px', fontSize: '12.5px', fontWeight: 600, cursor: busy ? 'default' : 'pointer',
+              }}>Record check</button>
+            </div>
+          </div>
+        )}
         {!check ? (
           <Empty>No background check has been recorded.</Empty>
         ) : (
@@ -385,7 +502,35 @@ export const AssayerVettingTab: React.FC<{ assayerId: string; canManage: boolean
         title="References"
         icon={Phone}
         hint="Who vouched for them, and whether anybody actually rang."
+        action={canManage && !refDraft ? (
+          <button style={linkButton} onClick={() => setRefDraft({ fullName: '', relationship: '', phone: '' })}>
+            <Plus size={11} style={{ verticalAlign: '-1px' }} /> Add reference
+          </button>
+        ) : undefined}
       >
+        {refDraft && (
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginBottom: '14px', paddingBottom: '14px', borderBottom: '1px solid var(--border-hair)' }}>
+            <Field title="Name">
+              <input style={inputStyle} autoFocus value={refDraft.fullName}
+                onChange={(e) => setRefDraft({ ...refDraft, fullName: e.target.value })} />
+            </Field>
+            <Field title="Relationship">
+              <input style={inputStyle} placeholder="e.g. former manager" value={refDraft.relationship}
+                onChange={(e) => setRefDraft({ ...refDraft, relationship: e.target.value })} />
+            </Field>
+            <Field title="Phone">
+              <input style={inputStyle} inputMode="tel" value={refDraft.phone}
+                onChange={(e) => setRefDraft({ ...refDraft, phone: e.target.value })} />
+            </Field>
+            <div style={{ flexBasis: '100%', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <button style={{ ...linkButton, color: 'var(--text-muted)' }} onClick={() => setRefDraft(null)}>Cancel</button>
+              <button onClick={saveReference} disabled={busy} style={{
+                background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '7px',
+                padding: '7px 14px', fontSize: '12.5px', fontWeight: 600, cursor: busy ? 'default' : 'pointer',
+              }}>Add reference</button>
+            </div>
+          </div>
+        )}
         {data.references.length === 0 ? (
           <Empty>No references are on file.</Empty>
         ) : (
