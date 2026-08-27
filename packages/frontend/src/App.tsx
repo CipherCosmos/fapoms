@@ -47,6 +47,8 @@ const PlatformSettings = React.lazy(() => import('./pages/admin/PlatformSettings
 const Zones = React.lazy(() => import('./pages/Zones'));
 const Settings = React.lazy(() => import('./pages/Settings'));
 const RuleBypassPanel = React.lazy(() => import('./pages/admin/RuleBypassPanel').then((m) => ({ default: m.RuleBypassPanel })));
+import { LEGACY_PATHS as HR_LEGACY_PATHS } from './pages/hr/hr-destinations';
+
 const HrLayout = React.lazy(() => import('./pages/hr/HrLayout').then((m) => ({ default: m.HrLayout })));
 const HrOverviewPage = React.lazy(() => import('./pages/hr/HrOverviewPage').then((m) => ({ default: m.HrOverviewPage })));
 const HrRosterPage = React.lazy(() => import('./pages/hr/HrRosterPage').then((m) => ({ default: m.HrRosterPage })));
@@ -354,19 +356,13 @@ export const App: React.FC = () => {
             <Route path="pay" element={<HrPayPage />} />
             <Route path="where" element={<HrWherePeopleArePage />} />
 
-            {/* Retired URLs — kept resolving, each landing on the chip that answers the same
-                question. These duplicate LEGACY_PATHS in HrLayout.tsx on purpose: importing it
-                here as a value would drag HrLayout out of its lazy chunk. Keep the two in step. */}
-            <Route path="onboarding" element={<Navigate to="/hr/roster?segment=onboarding" replace />} />
-            <Route path="paperwork" element={<Navigate to="/hr/roster?segment=incomplete" replace />} />
-            <Route path="records" element={<Navigate to="/hr/roster?segment=incomplete" replace />} />
-            <Route path="compliance" element={<Navigate to="/hr/roster?segment=lapsed" replace />} />
-            <Route path="documents" element={<Navigate to="/hr/roster?segment=incomplete" replace />} />
-            <Route path="skills" element={<Navigate to="/hr/roster?segment=lapsed" replace />} />
-            <Route path="capability" element={<Navigate to="/hr/roster?segment=lapsed" replace />} />
-            <Route path="deployment" element={<Navigate to="/hr/where?view=coverage" replace />} />
-            <Route path="utilisation" element={<Navigate to="/hr/where?view=workload" replace />} />
-            <Route path="activity" element={<Navigate to="/hr/where?view=changes" replace />} />
+            {/* Retired URLs, from one list — see hr-destinations.ts. This used to be a
+                hand-maintained copy with a comment asking the next person to keep the two in
+                step, because importing HrLayout as a value would drag it out of its lazy chunk;
+                the list now lives in a module small enough to import from both. */}
+            {Object.entries(HR_LEGACY_PATHS).map(([from, to]) => (
+              <Route key={from} path={from} element={<Navigate to={to} replace />} />
+            ))}
           </Route>
           <Route path="/clients" element={<Clients />} />
           <Route path="/billing" element={<Billing />} />

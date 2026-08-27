@@ -932,7 +932,7 @@ export class HrWorkforceService {
         area: 'Record',
         title: `${gap.missing} of ${parts.compliance.roster} missing ${gap.label}`,
         detail: `Blocks ${gap.blocks.toLowerCase()}.`,
-        link: '/hr/records',
+        link: '/hr/roster?segment=incomplete',
       });
     }
 
@@ -942,7 +942,7 @@ export class HrWorkforceService {
         area: 'Onboarding',
         title: `${parts.pipeline.stalled.length} candidate(s) stalled over ${STALLED_AFTER_DAYS} days`,
         detail: 'Onboarding has not advanced; they cannot be assigned work until active.',
-        link: '/hr/onboarding',
+        link: '/hr/roster?segment=onboarding',
       });
     }
 
@@ -953,7 +953,7 @@ export class HrWorkforceService {
         area: 'Compliance',
         title: `${expired} credential(s) already expired`,
         detail: 'Assayers holding expired credentials should not be deployed.',
-        link: '/hr/compliance',
+        link: '/hr/roster?segment=lapsed',
       });
     }
     const soon = (parts.expiries?.certifications?.within30 ?? 0) + (parts.expiries?.documents?.within30 ?? 0);
@@ -963,7 +963,7 @@ export class HrWorkforceService {
         area: 'Compliance',
         title: `${soon} credential(s) expire within 30 days`,
         detail: 'Start renewals now to avoid losing deployable capacity.',
-        link: '/hr/compliance',
+        link: '/hr/roster?segment=lapsed',
       });
     }
 
@@ -976,7 +976,7 @@ export class HrWorkforceService {
             ? `${t.state}: ${t.branches} branches, no active assayer`
             : `${t.state}: ${t.branchesPerAssayer} branches per assayer`,
         detail: t.posture === 'NO_COVERAGE' ? 'Work here cannot be staffed at all.' : 'Team is stretched; consider hiring.',
-        link: '/hr/deployment',
+        link: '/hr/where?view=coverage',
       });
     }
 
@@ -986,7 +986,7 @@ export class HrWorkforceService {
         area: 'Utilisation',
         title: `${parts.utilisation.neverAssigned} active assayer(s) have never been assigned`,
         detail: 'Onboarded but never deployed — a retention risk and a wasted hire.',
-        link: '/hr/utilisation',
+        link: '/hr/where?view=workload',
       });
     }
 

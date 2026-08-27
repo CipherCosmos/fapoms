@@ -8,7 +8,11 @@ import { useHrWorkforce } from '../../hooks/useHrWorkforce';
 import type { HrWorkforceOverview } from '../../hooks/useHrWorkforce';
 import { useCurrentRoles, canManageAssayers } from '../../hooks/useCurrentRoles';
 import { HrHeader } from './hr-ui';
+import { LEGACY_TABS, LEGACY_PATHS, resolveHrDestination } from './hr-destinations';
 import { userMessage } from '../../services/errors';
+
+// Re-exported so existing importers keep working; the list itself lives in hr-destinations.ts.
+export { LEGACY_PATHS, resolveHrDestination };
 
 /**
  * The shell every HR page sits in.
@@ -97,67 +101,7 @@ const PAGES: readonly {
  * used to be already selected, so an old link still shows the same content, not just the same
  * neighbourhood.
  */
-/**
- * Every screen this section has ever had, pointed at what answers the same question now.
- *
- * These are not decoration: the backend worklist hands the Overview `link: '/hr/records'` and
- * friends, notification payloads carry `?tab=` values, and people bookmark. A retired page must
- * land on the thing that replaced it, not on the section's front door — arriving somewhere
- * plausible with no idea which of four tabs held the answer is how a redirect wastes more time
- * than a dead link.
- *
- * The concern pages now resolve to the roster chip that lists the same people.
- */
-const LEGACY_TABS: Record<string, string> = {
-  overview: '/hr',
-  roster: '/hr/roster',
-  people: '/hr/roster',
-  pay: '/hr/pay',
 
-  // Retired: each was a list of people needing something, which is a chip, plus an editor for
-  // one person, which is the record.
-  onboarding: '/hr/roster?segment=onboarding',
-  paperwork: '/hr/roster?segment=incomplete',
-  records: '/hr/roster?segment=incomplete',
-  compliance: '/hr/roster?segment=lapsed',
-  documents: '/hr/roster?segment=incomplete',
-  skills: '/hr/roster?segment=lapsed',
-  capability: '/hr/roster?segment=lapsed',
-
-  // Merged into "Where people are" and still reachable by their own chips.
-  deployment: '/hr/where?view=coverage',
-  utilisation: '/hr/where?view=workload',
-  activity: '/hr/where?view=changes',
-};
-
-/** The retired paths, keyed without the `/hr/` prefix — same destinations as the tab keys. */
-export const LEGACY_PATHS: Record<string, string> = {
-  onboarding: LEGACY_TABS.onboarding,
-  paperwork: LEGACY_TABS.paperwork,
-  records: LEGACY_TABS.records,
-  compliance: LEGACY_TABS.compliance,
-  documents: LEGACY_TABS.documents,
-  skills: LEGACY_TABS.skills,
-  capability: LEGACY_TABS.capability,
-  deployment: LEGACY_TABS.deployment,
-  utilisation: LEGACY_TABS.utilisation,
-  activity: LEGACY_TABS.activity,
-};
-
-/**
- * Resolves anything that used to identify an HR screen — a bare tab key (`compliance`), a path
- * (`/hr/compliance`), or a full legacy link with a query string — to a live destination.
- *
- * The Overview worklist needs this: the backend hands it `link: '/hr/records'` and friends, and
- * those paths no longer exist as pages.
- */
-export function resolveHrDestination(raw: string): string {
-  if (!raw) return '/hr';
-  const path = raw.split('?')[0].replace(/\/+$/, '');
-  const key = path.startsWith('/hr/') ? path.slice(4) : path.replace(/^\//, '');
-  if (!key || key === 'hr' || key === 'overview') return '/hr';
-  return LEGACY_PATHS[key] ?? LEGACY_TABS[key] ?? (path.startsWith('/hr/') ? path : `/hr/${key}`);
-}
 
 export const HrLayout: React.FC = () => {
   const { data, isLoading, error, refetch } = useHrWorkforce();
