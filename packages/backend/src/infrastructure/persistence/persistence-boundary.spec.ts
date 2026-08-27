@@ -80,6 +80,12 @@ const IMPORTS_TYPEORM = [
   'infrastructure/scope/region-guard.service.ts',
   'modules/assayer/assayer.service.ts',
   'modules/assayer/hr-workforce.service.ts',
+  // The roster's repeating records — references, client standing, vetting, joining paperwork.
+  // A plain repository service: it injects five repositories and needs `Repository` for their
+  // types and `IsNull` for "still open". Its sibling `roster-import.service.ts` is deliberately
+  // absent from both lists — that one takes `UnitOfWork` and reaches every table through the
+  // transaction manager, which is the shape this list is asking for.
+  'modules/assayer/roster-records.service.ts',
   'modules/assignment/assignment.service.ts',
   // Read-only cross-aggregate queue aggregator (Operations Inbox); queries only, no writes.
   'modules/assignment/operations-inbox.service.ts',

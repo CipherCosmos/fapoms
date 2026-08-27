@@ -1,6 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, DataSource } from 'typeorm';
+import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import * as xlsx from 'xlsx';
 import {
   AssayerLifecycleStatus, Region, resolveRegion,
@@ -59,19 +58,17 @@ export interface RosterImportSummary {
  * imports: refusing it would lose a real appraiser over one bad cell, and inventing a value
  * would write a fact nobody asserted into a record that decides who enters a bank vault.
  *
- * **A rehearsal is possible.** `dryRun` does the whole read and reports exactly what would
- * happen without writing, because the first thing anybody sensibly wants to know about an
- * import of 1,155 people is what it is going to do.
+ * **A rehearsal is possible.** `dryRun` performs the entire import inside a transaction it then
+ * rolls back, because the first thing anybody sensibly wants to know about an import of 1,155
+ * people is what it is going to do. It writes what a real run writes — an earlier version
+ * counted instead of writing and reported a clean rehearsal for an import that then failed on
+ * its first insert, which is a rehearsal of the reader rather than of the import.
  */
 @Injectable()
 export class RosterImportService {
   private readonly logger = new Logger(RosterImportService.name);
 
-  constructor(
-    @InjectRepository(AssayerEntity) private readonly assayers: Repository<AssayerEntity>,
-    @InjectRepository(ClientEntity) private readonly clients: Repository<ClientEntity>,
-    private readonly dataSource: DataSource,
-  ) {}
+  constructor(private readonly uow: UnitOfWork) {}
 
   async importAssayerSheet(
     file: Buffer,
@@ -97,11 +94,10 @@ export class RosterImportService {
     /** Clients the roster refers to that this system does not have. Counted, reported once. */
     const missingClients = new Map<string, number>();
 
-    // Resolved once: the client sheets name banks the empanelment columns refer to, and a
-    // lookup per row over 1,155 rows would be 1,155 queries for two answers.
-    const clientsByName = await this.clientsByLooseName();
-
-    await this.dataSource.transaction(async (manager) => {
+    await this.uow.run(async (manager) => {
+      // Resolved once, inside the transaction so it reads the same snapshot the import writes
+      // against: a lookup per row over 1,155 rows would be 1,155 queries for two answers.
+      const clientsByName = await this.clientsByLooseName(manager);
       for (const [index, row] of rows.entries()) {
         // +2: one for the header, one because a spreadsheet's first data row is row 2 to the
         // person who will go and look at it.
@@ -118,7 +114,7 @@ export class RosterImportService {
           });
           summary.skipped++;
           summary.issues += issues.length;
-          if (!dryRun) await this.saveIssues(manager, issues, null, null);
+          await this.saveIssues(manager, issues, null, null);
           continue;
         }
 
@@ -130,29 +126,29 @@ export class RosterImportService {
         this.applyContact(assayer, read, sourceRow, sheetName, code, issues);
         this.applyEmployment(assayer, read, sourceRow, sheetName, code, issues);
 
-        if (dryRun) {
-          isNew ? summary.created++ : summary.updated++;
-        } else {
-          assayer.updatedBy = actorId;
-          if (isNew) assayer.createdBy = actorId;
-          await manager.save(AssayerEntity, assayer);
-          isNew ? summary.created++ : summary.updated++;
-        }
+        this.fillRequiredBlanks(assayer);
 
-        // The child rows only make sense once the assayer has an id, so a rehearsal counts
-        // them without writing.
-        const assayerId = assayer.id ?? null;
-        summary.references += await this.applyReferences(manager, assayerId, read, dryRun);
-        summary.onboardingDocuments += await this.applyOnboardingDocuments(manager, assayerId, read, dryRun);
+        // A rehearsal writes exactly what a real run writes; the rollback at the end is the only
+        // difference. The first version skipped the writes and counted instead, and reported a
+        // clean 1,155-row rehearsal for an import that then failed on the first insert — the
+        // rehearsal was checking the reader, not the import.
+        assayer.updatedBy = actorId;
+        if (isNew) assayer.createdBy = actorId;
+        await manager.save(AssayerEntity, assayer);
+        isNew ? summary.created++ : summary.updated++;
+
+        const assayerId = assayer.id;
+        summary.references += await this.applyReferences(manager, assayerId, read);
+        summary.onboardingDocuments += await this.applyOnboardingDocuments(manager, assayerId, read);
         summary.backgroundChecks += await this.applyBackgroundCheck(
-          manager, assayerId, read, sourceRow, sheetName, code, issues, dryRun,
+          manager, assayerId, read, sourceRow, sheetName, code, issues,
         );
         summary.empanelments += await this.applyEmpanelments(
-          manager, assayerId, read, clientsByName, missingClients, sourceRow, sheetName, code, issues, dryRun,
+          manager, assayerId, read, clientsByName, missingClients, sourceRow, sheetName, code, issues,
         );
 
         summary.issues += issues.length;
-        if (!dryRun && issues.length) await this.saveIssues(manager, issues, assayerId, code);
+        if (issues.length) await this.saveIssues(manager, issues, assayerId, code);
       }
 
       for (const [name, count] of missingClients) {
@@ -180,6 +176,25 @@ export class RosterImportService {
   }
 
   // ── The person ───────────────────────────────────────────────────────────
+
+  /**
+   * The columns the assayers table refuses to be null, for rows the sheet leaves blank.
+   *
+   * These are NOT NULL because the create-an-assayer form asks for them, and a roster row
+   * missing an address is a real appraiser with an incomplete record rather than a bad row.
+   * Blank is the honest value: `missingAssayerRecordFields` counts whitespace as missing, so the
+   * record lands in the same incomplete-file list HR already works through. Refusing the row
+   * would lose the person; inventing an address would put a fiction on a KYC record.
+   */
+  private fillRequiredBlanks(a: AssayerEntity): void {
+    a.displayName = a.displayName || a.assayerCode;
+    a.firstName = a.firstName || '';
+    a.lastName = a.lastName || '';
+    a.address = a.address || '';
+    a.city = a.city || '';
+    a.district = a.district || '';
+    a.state = a.state || '';
+  }
 
   private applyIdentity(a: AssayerEntity, read: ReturnType<typeof rowReader>): void {
     const fullName = blankToNull(read('Appraiser Name', 'Assayer Name', 'Name'));
@@ -294,7 +309,7 @@ export class RosterImportService {
   // ── The related rows ─────────────────────────────────────────────────────
 
   private async applyReferences(
-    manager: any, assayerId: string | null, read: ReturnType<typeof rowReader>, dryRun: boolean,
+    manager: any, assayerId: string, read: ReturnType<typeof rowReader>,
   ): Promise<number> {
     // `xlsx` suffixes repeated headers, which is what makes the two "Contact" columns
     // addressable at all.
@@ -308,7 +323,6 @@ export class RosterImportService {
       const fullName = blankToNull(pair.name);
       if (!fullName) continue;
       written++;
-      if (dryRun || !assayerId) continue;
 
       const phone = readPhoneNumbers(pair.phone)[0] ?? null;
       // Matched on the name so a re-run updates the same reference rather than adding a third.
@@ -321,7 +335,7 @@ export class RosterImportService {
   }
 
   private async applyOnboardingDocuments(
-    manager: any, assayerId: string | null, read: ReturnType<typeof rowReader>, dryRun: boolean,
+    manager: any, assayerId: string, read: ReturnType<typeof rowReader>,
   ): Promise<number> {
     let written = 0;
     for (const [requirement, column] of Object.entries(ONBOARDING_DOCUMENT_COLUMNS)) {
@@ -329,7 +343,6 @@ export class RosterImportService {
       const received = readYesNo(raw);
       if (received === null) continue;
       written++;
-      if (dryRun || !assayerId) continue;
 
       const existing = await manager.findOne(AssayerOnboardingDocumentEntity, {
         where: { assayerId, requirement: requirement as OnboardingDocument },
@@ -345,7 +358,7 @@ export class RosterImportService {
     // The NDA is the one document whose hard copy the roster tracks separately, because the
     // signed original is what an audit asks for and it is usually still in the post.
     const ndaHard = blankToNull(read('NDA Hard copy status'));
-    if (ndaHard && !dryRun && assayerId) {
+    if (ndaHard) {
       const existing = await manager.findOne(AssayerOnboardingDocumentEntity, {
         where: { assayerId, requirement: OnboardingDocument.NDA },
       });
@@ -362,9 +375,9 @@ export class RosterImportService {
   }
 
   private async applyBackgroundCheck(
-    manager: any, assayerId: string | null, read: ReturnType<typeof rowReader>,
+    manager: any, assayerId: string, read: ReturnType<typeof rowReader>,
     sourceRow: number, sheet: string, code: string,
-    issues: Partial<AssayerImportIssueEntity>[], dryRun: boolean,
+    issues: Partial<AssayerImportIssueEntity>[],
   ): Promise<number> {
     const rawVerdict = blankToNull(read('Background Verification Done'));
     const rawCibil = blankToNull(read('CIBIL Status'));
@@ -386,9 +399,14 @@ export class RosterImportService {
         reason: 'Not a credit band this system recognises.',
       });
     }
-    if (dryRun || !assayerId) return 1;
 
     const score = Number(String(rawScore ?? '').replace(/[^\d]/g, ''));
+    const hasScore = Number.isFinite(score) && score > 0;
+
+    // Nothing in any of the three columns could be read, so there is nothing to record. Writing
+    // the row anyway would assert "we checked and found nothing" on the strength of a cell that
+    // holds the availability vocabulary by mistake — the issue above already keeps that cell.
+    if (!verdict && !band && !hasScore) return 0;
     // One check per assayer from this import; a later check adds a row rather than replacing.
     const existing = await manager.findOne(AssayerBackgroundCheckEntity, { where: { assayerId } });
     await manager.save(AssayerBackgroundCheckEntity, {
@@ -396,19 +414,23 @@ export class RosterImportService {
       assayerId,
       verdict: verdict ?? BackgroundCheckVerdict.NOT_CHECKED,
       riskGrade: risk,
-      cibilScore: Number.isFinite(score) && score > 0 ? score : null,
+      cibilScore: hasScore ? score : null,
       cibilBand: band ?? CibilBand.NOT_CHECKED,
       checkedOn: this.readDate(read('CIBIL  date', 'CIBIL date')),
-      findings: rawVerdict,
+      // Findings only where a check actually happened. 170 rows say "Inactive" or "work not
+      // asigned" in this column, which explains why no check was run — so NOT_CHECKED is the
+      // right verdict, but copying that text into findings printed "Findings: Inactive" on the
+      // record and read as something a background check had turned up.
+      findings: verdict && verdict !== BackgroundCheckVerdict.NOT_CHECKED ? rawVerdict : null,
     });
     return 1;
   }
 
   private async applyEmpanelments(
-    manager: any, assayerId: string | null, read: ReturnType<typeof rowReader>,
+    manager: any, assayerId: string, read: ReturnType<typeof rowReader>,
     clientsByName: Map<string, string>, missingClients: Map<string, number>,
     sourceRow: number, sheet: string, code: string,
-    issues: Partial<AssayerImportIssueEntity>[], dryRun: boolean,
+    issues: Partial<AssayerImportIssueEntity>[],
   ): Promise<number> {
     // The roster carries one client's standing as columns. Others live only in free text, and
     // are not guessed at here — this reads what is actually structured.
@@ -431,7 +453,6 @@ export class RosterImportService {
       });
       return 0;
     }
-    if (dryRun || !assayerId) return 1;
 
     const existing = await manager.findOne(AssayerClientEmpanelmentEntity, { where: { assayerId, clientId } });
     await manager.save(AssayerClientEmpanelmentEntity, {
@@ -446,18 +467,47 @@ export class RosterImportService {
 
   // ── Plumbing ─────────────────────────────────────────────────────────────
 
+  /**
+   * One entry per unreadable cell, however many times the file is imported.
+   *
+   * A cell is identified by where it is — sheet, row, column — because that is what "the same
+   * problem" means here. Without this, re-importing the corrected file doubled the review queue:
+   * 24 entries became 48, and the second pass of a fix appeared as new work.
+   *
+   * A resolved entry stays resolved. Somebody looked at that cell and decided; re-reading the
+   * same unreadable text is not new information, and reopening it would mean the queue could
+   * never be finished while the file still needs importing.
+   */
   private async saveIssues(
     manager: any, issues: Partial<AssayerImportIssueEntity>[],
     assayerId: string | null, code: string | null,
   ): Promise<void> {
     for (const issue of issues) {
+      const existing = await manager.findOne(AssayerImportIssueEntity, {
+        where: {
+          sourceSheet: issue.sourceSheet,
+          sourceRow: issue.sourceRow,
+          sourceColumn: issue.sourceColumn,
+        },
+      });
+      if (existing) {
+        if (existing.resolvedAt) continue;
+        existing.rawValue = issue.rawValue!;
+        existing.reason = issue.reason!;
+        existing.assayerId = assayerId;
+        existing.sourceAssayerCode = code;
+        await manager.save(AssayerImportIssueEntity, existing);
+        continue;
+      }
       await manager.save(AssayerImportIssueEntity, { ...issue, assayerId, sourceAssayerCode: code });
     }
   }
 
   /** Clients by a loosened name, so "ICICI Bank Ltd" answers to "ICICI". */
-  private async clientsByLooseName(): Promise<Map<string, string>> {
-    const rows = await this.clients.find({ select: { id: true, name: true, displayName: true } as any });
+  private async clientsByLooseName(manager: any): Promise<Map<string, string>> {
+    const rows: ClientEntity[] = await manager.find(ClientEntity, {
+      select: { id: true, name: true, displayName: true } as any,
+    });
     const map = new Map<string, string>();
     for (const c of rows) {
       for (const label of [c.name, (c as any).displayName].filter(Boolean)) {

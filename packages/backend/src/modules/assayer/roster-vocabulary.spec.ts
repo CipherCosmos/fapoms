@@ -149,6 +149,15 @@ describe('reading the assayer roster', () => {
       expect(readBackgroundCheck('Discrepancy').verdict).toBe(BackgroundCheckVerdict.ADVERSE_FINDING);
     });
 
+    it('reads "no check was run, and here is why" as exactly that', () => {
+      // 145 rows say "Inactive" in this column and 25 say "work not asigned". Neither is a
+      // finding — each explains why no check happened, which is what NOT_CHECKED means. The
+      // importer must not carry the text into `findings`, or the record reads
+      // "Findings: Inactive" as though a check had turned that up.
+      expect(readBackgroundCheck('Inactive').verdict).toBe(BackgroundCheckVerdict.NOT_CHECKED);
+      expect(readBackgroundCheck('work not asigned').verdict).toBe(BackgroundCheckVerdict.NOT_CHECKED);
+    });
+
     it('does not read an availability note as a clean background check', () => {
       // "Staff doing audit" appears in this column too — the wrong column, and it must not be
       // rounded to CLEAR just because nothing adverse was named.

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   X, Edit2, ArrowRightLeft, AlertTriangle, CheckCircle2,
-  User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, MapPin, KeyRound,
+  User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, MapPin, KeyRound, ShieldCheck,
 } from 'lucide-react';
 import { nextAssayerLifecycleStates, AssayerLifecycleStatus, assayerLifecycleLabel, activityEventLabel, employmentTypeLabel, daysUntilExpiry } from '@fapoms/shared';
 
@@ -17,6 +17,7 @@ import { fmtDate, fmtWhen } from '../../utils/dates';
 import { userMessage } from '../../services/errors';
 import { CommercialProfileModal, type CommercialProfile } from './CommercialProfileModal';
 import { AssayerRemarks } from '../../components/AssayerRemarks';
+import { AssayerVettingTab } from './AssayerVettingTab';
 // The capability page owns the wording for a workforce attribute's type; this tab reads it from
 // there rather than keeping a second map that would drift. Both modules are lazy-loaded under /hr.
 import { attributeTypeLabel } from './HrCapabilityPage';
@@ -46,6 +47,9 @@ const TABS = [
   { key: 'summary', label: 'Summary', icon: User },
   { key: 'commercial', label: 'Pay', icon: CreditCard },
   { key: 'skills', label: 'Skills', icon: Award },
+  // Vetting, standing, references and paperwork share a tab because they answer one question
+  // together — may we send this person out, and to whom. See AssayerVettingTab.
+  { key: 'vetting', label: 'Vetting', icon: ShieldCheck },
   { key: 'remarks', label: 'Remarks', icon: MessageSquare },
   { key: 'history', label: 'History', icon: Clock },
 ] as const;
@@ -613,6 +617,8 @@ export const AssayerDetailDrawer: React.FC<{
                 from. Who may write is decided by role inside the component (the operations desk
                 can, not only HR), so it is deliberately not gated on `canManage`.
               */}
+              {tab === 'vetting' && <AssayerVettingTab assayerId={assayerId} canManage={canManage} />}
+
               {tab === 'remarks' && <AssayerRemarks assayerId={assayerId} />}
 
               {tab === 'history' && (
