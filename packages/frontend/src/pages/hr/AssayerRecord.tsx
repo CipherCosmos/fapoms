@@ -3,7 +3,7 @@ import {
   Edit2, ArrowRightLeft, AlertTriangle, CheckCircle2,
   User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, MapPin, KeyRound, ShieldCheck, FileCheck,
 } from 'lucide-react';
-import { nextAssayerLifecycleStates, AssayerLifecycleStatus, assayerLifecycleLabel, activityEventLabel, employmentTypeLabel, AssayerEngagementType, AssayerUnavailableReason } from '@fapoms/shared';
+import { nextAssayerLifecycleStates, AssayerLifecycleStatus, assayerLifecycleLabel, activityEventLabel, employmentTypeLabel, AssayerEngagementType, AssayerUnavailableReason, ASSAYER_RECORD_FIELDS } from '@fapoms/shared';
 
 import { api } from '../../services/api';
 import { Select, useConfirm } from '../../components/ui';
@@ -127,6 +127,18 @@ export const HARD_TO_REVERSE_STAGES: string[] = [
 ];
 
 /**
+ * Where the record says they are, on the map.
+ *
+ * Shown to four decimal places — about eleven metres, which is the precision this is used at
+ * (distance filtering and travel cost), and printing fourteen digits of float noise implies an
+ * accuracy the geocoder never claimed.
+ */
+const coordinates = (a: { latitude?: number | null; longitude?: number | null }): string | null => {
+  if (a.latitude == null || a.longitude == null) return null;
+  return `${Number(a.latitude).toFixed(4)}, ${Number(a.longitude).toFixed(4)}`;
+};
+
+/**
  * Their face, where a name alone used to be.
  *
  * Field staff are dispatched to bank branches by people who have never met them, and every
@@ -235,6 +247,21 @@ export const AssayerRecord: React.FC<{
   }, [tab, assayerId, loaded]);
 
   const missing = useMemo(() => missingCriticalFields(a), [a]);
+
+  /**
+   * Tracked fields that are empty but block nothing.
+   *
+   * The banner counted the blocking ones only, so a record showing six "Not recorded" markers
+   * announced "2 required fields missing" and read as though it were hiding the rest.
+   */
+  const alsoIncomplete = useMemo(
+    () => ASSAYER_RECORD_FIELDS.filter((f) => {
+      if (f.critical) return false;
+      const v = (a as any)?.[f.key];
+      return v == null || String(v).trim() === '';
+    }),
+    [a],
+  );
 
   /**
    * The pay structure that is actually being quoted today, and whether a later one is queued.
@@ -461,6 +488,20 @@ export const AssayerRecord: React.FC<{
                       <ul style={{ margin: '7px 0 0', paddingLeft: '20px', fontSize: '12px', color: 'var(--text-secondary)' }}>
                         {missing.map((f) => <li key={String(f.key)}>{f.label} — blocks {f.why.toLowerCase()}</li>)}
                       </ul>
+                      {/*
+                        The banner counted only the blocking fields while six others read "Not
+                        recorded" further down the page, so it looked like the record was hiding
+                        most of what was wrong with it. Both counts are on screen now, and the
+                        difference between them — blocks something, versus merely incomplete —
+                        is the whole reason there are two.
+                      */}
+                      {alsoIncomplete.length > 0 && (
+                        <div style={{ marginTop: '7px', fontSize: '11.5px', color: 'var(--text-muted)' }}>
+                          {counted(alsoIncomplete.length, 'other field is', 'other fields are')} also
+                          empty — {alsoIncomplete.map((f) => f.label.toLowerCase()).join(', ')}. Nothing is
+                          blocked by them; each is marked where it belongs on this record.
+                        </div>
+                      )}
                       {canManage && (
                         <button onClick={() => onEdit(a)} className="btn btn-secondary" style={{ fontSize: '11.5px', padding: '5px 10px', marginTop: '9px' }}>
                           Fill them in
@@ -470,7 +511,10 @@ export const AssayerRecord: React.FC<{
                   )}
                   {missing.length === 0 && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '7px', color: 'var(--success)', fontSize: '12.5px' }}>
-                      <CheckCircle2 size={14} /> Record complete — payroll and duty-of-care fields are all present.
+                      <CheckCircle2 size={14} />
+                      {alsoIncomplete.length === 0
+                        ? 'Record complete — every tracked field is filled in.'
+                        : `Nothing is blocked — but ${counted(alsoIncomplete.length, 'field is', 'fields are')} still empty, marked below.`}
                     </div>
                   )}
 
@@ -538,29 +582,66 @@ export const AssayerRecord: React.FC<{
                     reads "INTERNAL", a word that appears nowhere in the edit form's own list of
                     employment types, so there was no way to find out what it meant.
                   */}
+                  {/*
+                    Laid out as panels that wrap, rather than five headings stacked in one column.
+                    Forty fields down a full-width page read as one undifferentiated list, and the
+                    headings stopped separating anything.
+                  */}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
                   <FactGroup title="How to reach them" rows={[
-                    ['Phone', a.phone], ['Alternate phone', a.alternatePhone], ['Email', a.email],
-                    ['Emergency contact', a.emergencyContactName], ['Emergency phone', a.emergencyContactPhone],
+                    ['Phone', a.phone, 'phone'],
+                    ['Alternate phone', a.alternatePhone],
+                    ['Email', a.email, 'email'],
+                    ['Emergency contact', a.emergencyContactName],
+                    ['Emergency phone', a.emergencyContactPhone, 'emergencyContactPhone'],
                   ]} />
                   <FactGroup title="Where they are" rows={[
-                    ['Address', a.address], ['District', a.district], ['Pincode', a.pincode],
-                    ['Region', a.region],
+                    ['Address', a.address, 'address'],
+                    ['City or town', a.city, 'city'],
+                    ['District', a.district],
+                    ['Pincode', a.pincode, 'pincode'],
+                    ['Region', a.region, 'region'],
+                    /*
+                      The banner said "Map location — blocks distance filtering" and no field on
+                      this screen showed one, so the reader was told something was missing and
+                      sent to look for it among forty facts that never mentioned it.
+                    */
+                    ['Map location', coordinates(a), 'latitude'],
                   ]} />
                   <FactGroup title="Their job" rows={[
-                    ['Employment', employmentTypeLabel(a.employmentType)], ['Employee ID', a.employeeId],
+                    ['Employment', employmentTypeLabel(a.employmentType), 'employmentType'],
+                    ['Employee ID', a.employeeId],
                     ['Department', a.department],
-                    ['Joined', fmtDate(a.joiningDate)], ['Experience', `${a.experienceYears ?? 0} years`],
+                    ['Joined', fmtDate(a.joiningDate), 'joiningDate'],
+                    ['Experience', `${a.experienceYears ?? 0} years`],
                     ['Engaged as', a.engagementType ? (ENGAGEMENT_LABELS[a.engagementType] ?? a.engagementType) : null],
-                    ['Not available because', a.unavailableReason ? (UNAVAILABLE_LABELS[a.unavailableReason] ?? a.unavailableReason) : null],
+                    /*
+                      Said "Not available because —" when the person was perfectly available, in
+                      the same grey as every real gap. It is the one blank on this screen that is
+                      good news, so it says so.
+                    */
+                    ['Availability', a.unavailableReason
+                      ? (UNAVAILABLE_LABELS[a.unavailableReason] ?? a.unavailableReason)
+                      : 'Available for work'],
+                    ['Reporting manager', a.managerId, 'managerId'],
                     ['HR owner', a.hrOwnerName],
                   ]} />
                   <FactGroup title="Who they are" rows={[
-                    ['Date of birth', fmtDate(a.dateOfBirth)], ['Qualification', a.qualification],
-                    ['Aadhaar', maskAadhaar(a.aadhaarNumber)], ['VSTS code', a.vstsCode],
+                    ['Date of birth', fmtDate(a.dateOfBirth), 'dateOfBirth'],
+                    ['Qualification', a.qualification, 'qualification'],
+                    ['Aadhaar', maskAadhaar(a.aadhaarNumber), 'aadhaarNumber'],
+                    ['PAN', a.panNumber, 'panNumber'],
+                    ['VSTS code', a.vstsCode],
+                  ]} />
+                  <FactGroup title="How they are paid" rows={[
+                    ['Bank', a.bankName, 'bankName'],
+                    ['Account', a.bankAccountNumber, 'bankAccountNumber'],
+                    ['IFSC', a.ifscCode, 'ifscCode'],
                   ]} />
                   <FactGroup title="How much work they can take" rows={[
                     ['Most jobs in a day', a.maxDailyWorkload], ['Most jobs in a week', a.maxWeeklyWorkload],
                   ]} />
+                  </div>
                 </div>
               )}
 
@@ -700,23 +781,69 @@ export const AssayerRecord: React.FC<{
 };
 
 /** One titled block of facts, so the summary reads as answers to questions rather than a dump. */
-const FactGroup: React.FC<{ title: string; rows: [string, any][] }> = ({ title, rows }) => (
-  <section>
-    <div style={{ ...label, marginBottom: '8px' }}>{title}</div>
+/**
+ * One fact. The third element names the record field it comes from, where there is one.
+ *
+ * That name is what lets a blank say which kind of blank it is — see `Facts`.
+ */
+type Fact = [label: string, value: any, recordKey?: string];
+
+/**
+ * A group of facts, in a box of its own.
+ *
+ * These were five headings stacked in one column with nothing but a small caption between them,
+ * so on a full-width page they read as one long list of forty fields and the headings stopped
+ * doing any work. Each is a panel now, and they sit side by side where there is room.
+ */
+const FactGroup: React.FC<{ title: string; rows: Fact[] }> = ({ title, rows }) => (
+  <section
+    style={{
+      background: 'var(--bg-card)', border: '1px solid var(--border-color)',
+      borderRadius: '10px', padding: '14px 16px', flex: '1 1 340px', minWidth: 0,
+    }}
+  >
+    <div style={{ ...label, marginBottom: '10px' }}>{title}</div>
     <Facts rows={rows} />
   </section>
 );
 
-const Facts: React.FC<{ rows: [string, any][] }> = ({ rows }) => (
-  <dl style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '11px', margin: 0 }}>
-    {rows.map(([k, v]) => (
-      <div key={k}>
-        <dt style={label}>{k}</dt>
-        <dd style={{ margin: '2px 0 0', fontSize: '12.5px' }}>
-          {v === null || v === undefined || v === '' ? <span style={{ color: 'var(--text-muted)' }}>—</span> : String(v)}
-        </dd>
-      </div>
-    ))}
+const Facts: React.FC<{ rows: Fact[] }> = ({ rows }) => (
+  <dl style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '11px', margin: 0 }}>
+    {rows.map(([k, v, recordKey]) => {
+      const blank = v === null || v === undefined || v === '';
+      /**
+       * An em-dash meant three different things on this screen.
+       *
+       * "Aadhaar —" was a gap somebody should close. "VSTS code —" was a field this person
+       * simply has none of. And "Not available because —" was the *good* state — it meant they
+       * are available — printed in the same grey as the other two. Somebody reading the record
+       * could not tell which of the forty dashes were work.
+       *
+       * A field the record-fields list tracks says it is not recorded, and what that costs.
+       * Everything else keeps the dash, which now means only "nothing here".
+       */
+      const gap = blank && recordKey
+        ? ASSAYER_RECORD_FIELDS.find((f) => f.key === recordKey)
+        : undefined;
+
+      return (
+        <div key={k}>
+          <dt style={label}>{k}</dt>
+          <dd style={{ margin: '2px 0 0', fontSize: '12.5px' }}>
+            {gap ? (
+              <span
+                title={`Blocks ${gap.blocks.toLowerCase()}`}
+                style={{ color: gap.critical ? 'var(--danger)' : 'var(--warning)', fontWeight: 600 }}
+              >
+                Not recorded
+              </span>
+            ) : blank ? (
+              <span style={{ color: 'var(--text-muted)' }}>—</span>
+            ) : String(v)}
+          </dd>
+        </div>
+      );
+    })}
   </dl>
 );
 
