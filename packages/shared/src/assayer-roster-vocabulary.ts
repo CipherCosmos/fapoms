@@ -147,6 +147,13 @@ export enum OnboardingDocument {
 }
 
 /** Which spreadsheet column carries each requirement, so the importer needs no second list. */
+/**
+ * The spreadsheet's own column headings, spelling included.
+ *
+ * "Buisness", "Paasbook" and "Refference" are how the file writes them, and this map exists to
+ * *find* those columns — correcting them here would mean finding nothing. What a person reads on
+ * screen comes from `ONBOARDING_DOCUMENT_LABELS` instead.
+ */
 export const ONBOARDING_DOCUMENT_COLUMNS: Record<OnboardingDocument, string> = {
   [OnboardingDocument.JOINING_FORM]: 'Sumeru Joining Form',
   [OnboardingDocument.NDA]: 'NDA',
@@ -166,6 +173,28 @@ export const ONBOARDING_DOCUMENT_COLUMNS: Record<OnboardingDocument, string> = {
   [OnboardingDocument.ID_PROOF]: 'ID Proof',
   [OnboardingDocument.ADDRESS_PROOF]: 'Address Proof',
   [OnboardingDocument.OFFICE_ADDRESS_PROOF]: 'Office Address Proof',
+};
+
+/** What the paperwork is called on screen — the same list, spelled properly. */
+export const ONBOARDING_DOCUMENT_LABELS: Record<OnboardingDocument, string> = {
+  [OnboardingDocument.JOINING_FORM]: 'Joining form',
+  [OnboardingDocument.NDA]: 'Non-disclosure agreement',
+  [OnboardingDocument.CODE_OF_CONDUCT]: 'Code of conduct',
+  [OnboardingDocument.APPOINTMENT_LETTER]: 'Appointment letter',
+  [OnboardingDocument.ID_CARD]: 'Company ID card',
+  [OnboardingDocument.PHOTOGRAPH]: 'Photograph',
+  [OnboardingDocument.AADHAAR_FRONT]: 'Aadhaar — front',
+  [OnboardingDocument.AADHAAR_BACK]: 'Aadhaar — back',
+  [OnboardingDocument.PAN_CARD]: 'PAN card',
+  [OnboardingDocument.BANK_PASSBOOK]: 'Bank passbook',
+  [OnboardingDocument.REFERENCE_CHECK]: 'Reference check',
+  [OnboardingDocument.PENALTY_FORM]: 'Penalty form',
+  [OnboardingDocument.COMPANY_STAMP]: 'Company stamp',
+  [OnboardingDocument.GOVERNANCE_AUDIT]: 'Governance audit',
+  [OnboardingDocument.ETHICAL_CONDUCT_LETTER]: 'Ethical conduct commitment',
+  [OnboardingDocument.ID_PROOF]: 'Identity proof',
+  [OnboardingDocument.ADDRESS_PROOF]: 'Address proof',
+  [OnboardingDocument.OFFICE_ADDRESS_PROOF]: 'Office address proof',
 };
 
 /** Case, spacing and punctuation are noise. Fold them before matching anything. */

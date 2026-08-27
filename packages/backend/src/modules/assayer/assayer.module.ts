@@ -15,6 +15,7 @@ import { AssayerOnboardingDocumentEntity } from './assayer-onboarding-document.e
 import { AssayerImportIssueEntity } from './assayer-import-issue.entity';
 import { ClientEntity } from '../client/client.entity';
 import { RosterImportService } from './roster-import.service';
+import { RosterRecordsService } from './roster-records.service';
 import { HrController } from './hr.controller';
 import { HrWorkforceService } from './hr-workforce.service';
 import { AssayerService } from './assayer.service';
@@ -44,7 +45,7 @@ import { NotificationsModule } from '../notifications/notifications.module';
     ]),
   ],
   controllers: [AssayerController, HrController],
-  providers: [AssayerService, HrWorkforceService, LocationTrailService, RosterImportService],
-  exports: [AssayerService, HrWorkforceService, LocationTrailService, RosterImportService, TypeOrmModule],
+  providers: [AssayerService, HrWorkforceService, LocationTrailService, RosterImportService, RosterRecordsService],
+  exports: [AssayerService, HrWorkforceService, LocationTrailService, RosterImportService, RosterRecordsService, TypeOrmModule],
 })
 export class AssayerModule {}

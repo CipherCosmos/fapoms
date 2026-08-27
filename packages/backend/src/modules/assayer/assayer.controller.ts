@@ -61,6 +61,7 @@ import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/globa
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { scopeAssayerForRoles, scopeAssayerListForRoles, rolesOf, assertSelfOrPrivileged } from './assayer-visibility';
 import { RosterImportService } from './roster-import.service';
+import { RosterRecordsService } from './roster-records.service';
 import { STAFF_ROLES } from '../auth/staff-roles';
 
 /** Roles that may edit any assayer's record; everyone else is limited to their own. */
@@ -657,6 +658,7 @@ export class AssayerController {
   constructor(
     private readonly assayerService: AssayerService,
     private readonly rosterImport: RosterImportService,
+    private readonly rosterRecords: RosterRecordsService,
     private readonly regionGuard: RegionGuardService,
     private readonly locationTrail: LocationTrailService,
   ) {}
@@ -719,6 +721,39 @@ export class AssayerController {
         },
       },
     };
+  }
+
+  /**
+   * The cells the roster import could not read.
+   *
+   * Declared above `@Get(':id')` deliberately: Nest matches in declaration order and that route's
+   * `ParseUUIDPipe` would reject "roster" with a 400 rather than falling through to here.
+   */
+  @Get('roster/import-issues')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @ApiOperation({ summary: 'List cells the roster import could not read' })
+  async listImportIssues(
+    @Query('includeResolved') includeResolved?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const data = await this.rosterRecords.listIssues({
+      includeResolved: String(includeResolved ?? '').toLowerCase() === 'true',
+      limit: limit ? Number(limit) : undefined,
+    });
+    return { success: true, data };
+  }
+
+  @Post('roster/import-issues/:id/resolve')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: 'Close an import issue with an account of what was decided' })
+  async resolveImportIssue(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { resolution: string },
+    @Req() req: any,
+  ) {
+    const data = await this.rosterRecords.resolveIssue(id, body?.resolution, req.user.id);
+    return { success: true, data };
   }
 
   /**
@@ -1131,6 +1166,128 @@ export class AssayerController {
   @ApiOperation({ summary: 'Soft delete a government document' })
   async removeGovernmentDocument(@Param('id', ParseUUIDPipe) id: string, @Req() req: any): Promise<void> {
     await this.assayerService.removeGovernmentDocument(id, req.user.id);
+  }
+
+  // ── Roster records: references, client standing, vetting, paperwork ───
+  //
+  // These were columns in the spreadsheet before they were tables. They are grouped here rather
+  // than spread across the controller because they answer one question together — may we send
+  // this person out, and to whom — and `dossier` is how the workspace asks it.
+
+  @Get(':assayerId/dossier')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR)
+  @ApiOperation({ summary: 'Everything the roster holds about one person beyond their own row' })
+  async getDossier(@Param('assayerId', ParseUUIDPipe) assayerId: string) {
+    const data = await this.rosterRecords.dossier(assayerId);
+    return { success: true, data };
+  }
+
+  @Post(':assayerId/reference')
+  @HttpCode(201)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: 'Add a reference for an assayer' })
+  async addReference(
+    @Param('assayerId', ParseUUIDPipe) assayerId: string,
+    @Body() body: any,
+    @Req() req: any,
+  ) {
+    const data = await this.rosterRecords.saveReference(assayerId, body, req.user.id);
+    return { success: true, data };
+  }
+
+  @Put(':assayerId/reference/:id')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: 'Update a reference' })
+  async updateReference(
+    @Param('assayerId', ParseUUIDPipe) assayerId: string,
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: any,
+    @Req() req: any,
+  ) {
+    const data = await this.rosterRecords.saveReference(assayerId, body, req.user.id, id);
+    return { success: true, data };
+  }
+
+  @Post('reference/:id/checked')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: 'Record that a reference was actually spoken to' })
+  async markReferenceChecked(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { remarks?: string },
+    @Req() req: any,
+  ) {
+    const data = await this.rosterRecords.markReferenceChecked(id, req.user.id, body?.remarks);
+    return { success: true, data };
+  }
+
+  @Delete('reference/:id')
+  @HttpCode(204)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: 'Remove a reference' })
+  async removeReference(@Param('id', ParseUUIDPipe) id: string, @Req() req: any): Promise<void> {
+    await this.rosterRecords.removeReference(id, req.user.id);
+  }
+
+  @Put(':assayerId/empanelment/:clientId')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: "Set this person's standing with one client" })
+  async setEmpanelment(
+    @Param('assayerId', ParseUUIDPipe) assayerId: string,
+    @Param('clientId', ParseUUIDPipe) clientId: string,
+    @Body() body: any,
+    @Req() req: any,
+  ) {
+    const data = await this.rosterRecords.setEmpanelment(assayerId, clientId, body, req.user.id);
+    return { success: true, data };
+  }
+
+  @Delete('empanelment/:id')
+  @HttpCode(204)
+  @Roles(SystemRole.ADMIN)
+  @RequirePermissions('assayer:delete:organization')
+  @ApiOperation({ summary: 'Withdraw a client standing' })
+  async removeEmpanelment(@Param('id', ParseUUIDPipe) id: string, @Req() req: any): Promise<void> {
+    await this.rosterRecords.removeEmpanelment(id, req.user.id);
+  }
+
+  /**
+   * A check is added, never edited: the row is the grounds on which somebody was admitted to a
+   * vault on a given date, and a later, different finding is a second fact rather than a
+   * correction of the first.
+   */
+  @Post(':assayerId/background-check')
+  @HttpCode(201)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: 'Record a background or credit check' })
+  async recordBackgroundCheck(
+    @Param('assayerId', ParseUUIDPipe) assayerId: string,
+    @Body() body: any,
+    @Req() req: any,
+  ) {
+    const data = await this.rosterRecords.recordBackgroundCheck(assayerId, body, req.user.id);
+    return { success: true, data };
+  }
+
+  @Put(':assayerId/onboarding-document/:requirement')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: 'Record progress on one piece of joining paperwork' })
+  async setOnboardingDocument(
+    @Param('assayerId', ParseUUIDPipe) assayerId: string,
+    @Param('requirement') requirement: string,
+    @Body() body: any,
+    @Req() req: any,
+  ) {
+    const data = await this.rosterRecords.setOnboardingDocument(
+      assayerId, requirement as any, body, req.user.id,
+    );
+    return { success: true, data };
   }
 
   // Assayer Documents
