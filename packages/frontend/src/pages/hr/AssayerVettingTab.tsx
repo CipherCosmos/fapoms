@@ -137,9 +137,19 @@ const linkButton: React.CSSProperties = {
   color: 'var(--primary)', fontSize: '12px', fontWeight: 600,
 };
 
-export const AssayerVettingTab: React.FC<{ assayerId: string; canManage: boolean }> = ({
-  assayerId, canManage,
-}) => {
+export const AssayerVettingTab: React.FC<{
+  assayerId: string;
+  canManage: boolean;
+  /**
+   * Which half to render.
+   *
+   * Both halves read the same dossier — one request answering "may we send this person out, and
+   * to whom" — but they are looked for by different names. Somebody chasing a missing NDA goes
+   * looking for "Documents"; nobody goes looking for it under "Vetting". They are two tabs over
+   * one fetch rather than two fetches or one buried tab.
+   */
+  section: 'checks' | 'documents';
+}> = ({ assayerId, canManage, section }) => {
   const [data, setData] = useState<Dossier | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [clients, setClients] = useState<{ id: string; name: string }[]>([]);
@@ -409,6 +419,8 @@ export const AssayerVettingTab: React.FC<{ assayerId: string; canManage: boolean
         </div>
       )}
 
+      {section === 'checks' && (
+        <>
       <Section
         title="Vetting"
         icon={check && verdictTone(check.verdict) === 'var(--danger)' ? ShieldAlert : ShieldCheck}
@@ -620,7 +632,10 @@ export const AssayerVettingTab: React.FC<{ assayerId: string; canManage: boolean
           />
         )}
       </Section>
+        </>
+      )}
 
+      {section === 'documents' && (
       <Section
         title="Documents"
         icon={FileCheck}
@@ -718,6 +733,7 @@ export const AssayerVettingTab: React.FC<{ assayerId: string; canManage: boolean
           })}
         />
       </Section>
+      )}
     </div>
   );
 };

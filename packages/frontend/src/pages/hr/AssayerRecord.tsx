@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Edit2, ArrowRightLeft, AlertTriangle, CheckCircle2,
-  User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, MapPin, KeyRound, ShieldCheck,
+  User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, MapPin, KeyRound, ShieldCheck, FileCheck,
 } from 'lucide-react';
 import { nextAssayerLifecycleStates, AssayerLifecycleStatus, assayerLifecycleLabel, activityEventLabel, employmentTypeLabel, AssayerEngagementType, AssayerUnavailableReason } from '@fapoms/shared';
 
@@ -76,9 +76,11 @@ const TABS = [
   { key: 'summary', label: 'Summary', icon: User },
   { key: 'commercial', label: 'Pay', icon: CreditCard },
   { key: 'skills', label: 'Skills', icon: Award },
-  // Vetting, standing, references and paperwork share a tab because they answer one question
-  // together — may we send this person out, and to whom. See AssayerVettingTab.
+  // Two tabs over one fetch. They answer one question together — may we send this person out,
+  // and to whom — but they are looked for by different names: somebody chasing a missing NDA
+  // goes looking for "Documents", and nobody goes looking for it under "Vetting".
   { key: 'vetting', label: 'Vetting', icon: ShieldCheck },
+  { key: 'documents', label: 'Documents', icon: FileCheck },
   { key: 'remarks', label: 'Remarks', icon: MessageSquare },
   { key: 'history', label: 'History', icon: Clock },
 ] as const;
@@ -600,7 +602,9 @@ export const AssayerRecord: React.FC<{
                 from. Who may write is decided by role inside the component (the operations desk
                 can, not only HR), so it is deliberately not gated on `canManage`.
               */}
-              {tab === 'vetting' && <AssayerVettingTab assayerId={assayerId} canManage={canManage} />}
+              {tab === 'vetting' && <AssayerVettingTab assayerId={assayerId} canManage={canManage} section="checks" />}
+
+              {tab === 'documents' && <AssayerVettingTab assayerId={assayerId} canManage={canManage} section="documents" />}
 
               {tab === 'remarks' && <AssayerRemarks assayerId={assayerId} />}
 
