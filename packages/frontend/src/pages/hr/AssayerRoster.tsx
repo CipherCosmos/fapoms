@@ -24,6 +24,22 @@ import { fmtDate } from '../../utils/dates';
 import { queryKeys } from '../../hooks/queryKeys';
 import { counted } from '../../utils/plural';
 
+/** What `/assayers/roster/import` returns (also for its dryRun rehearsal). */
+interface RosterImportSummary {
+  rowsRead: number;
+  created: number;
+  updated: number;
+  skipped: number;
+  references: number;
+  onboardingDocuments: number;
+  backgroundChecks: number;
+  empanelments: number;
+  issues: number;
+  notes?: string[];
+  dryRun: boolean;
+  sheetName?: string | null;
+}
+
 /**
  * The workforce roster.
  *
@@ -533,73 +549,96 @@ export const AssayerRoster: React.FC<{
    * discover the failure was the browser's network tab, which is not a place operators look.
    * The result is now read and shown: what landed, what did not, and why.
    */
-  const handleUpload = async (file: File) => {
+  /**
+   * Import the FULL appraiser roster workbook via `/assayers/roster/import`.
+   *
+   * This used to POST `/assayers/upload`, the simple ~40-field template importer. Fed a real
+   * client roster — several sheets, "Appraiser code"/"Appraiser Name" headers, 70-odd columns of
+   * HR/KYC/banking/compliance — that importer scored the branch-audit sheet higher than the
+   * roster sheet, read the wrong sheet entirely (an assayer code repeats per branch there), and
+   * called distinct people "duplicates", so most of the file never landed. The full importer
+   * reads the Assayers sheet, recognises the Appraiser headers, and spreads every column across
+   * the tables that hold them (references, background checks, documents, empanelments).
+   *
+   * It always rehearses first (dryRun) and shows exactly what would happen, because nobody should
+   * discover what importing a thousand people does by running it.
+   */
+  const postRoster = (file: File, dryRun: boolean): Promise<RosterImportSummary> => {
     const fd = new FormData();
     fd.append('file', file);
+    fd.append('dryRun', dryRun ? 'true' : 'false');
+    return api.request<RosterImportSummary>('/assayers/roster/import', { method: 'POST', body: fd });
+  };
+
+  const handleUpload = async (file: File) => {
     setUploading(true);
     try {
-      const result = await api.request<{
-        importedCount: number;
-        created?: number;
-        updated?: number;
-        totalRows?: number;
-        sheetName?: string;
-        needingPhone?: string[];
-        errors?: string[];
-      }>('/assayers/upload', { method: 'POST', body: fd });
-      const imported = result?.importedCount ?? 0;
-      const errors = result?.errors ?? [];
-      const created = result?.created ?? 0;
-      const updated = result?.updated ?? 0;
-      const needingPhone = result?.needingPhone ?? [];
+      // Rehearse — writes nothing, tells us what the file holds.
+      const dry = await postRoster(file, true);
+      const extras = [
+        dry.references ? `${dry.references.toLocaleString('en-IN')} references` : '',
+        dry.backgroundChecks ? `${dry.backgroundChecks.toLocaleString('en-IN')} background checks` : '',
+        dry.empanelments ? `${dry.empanelments.toLocaleString('en-IN')} bank empanelments` : '',
+        dry.onboardingDocuments ? `${dry.onboardingDocuments.toLocaleString('en-IN')} document records` : '',
+      ].filter(Boolean);
 
-      /**
-       * "Imported 25" hid the two things an operator most needs to know: whether those were new
-       * people or an overwrite of the existing roster, and whether any of them can actually be
-       * reached. A re-imported roster reports 25 either way.
-       */
-      const breakdown = created && updated
-        ? `${created} new, ${updated} updated`
-        : created
-          ? `${created} new`
-          : updated
-            ? `${updated} updated`
-            : `${imported}`;
-      const sheetNote = result?.sheetName ? ` from sheet "${result.sheetName}"` : '';
-      const phoneNote = needingPhone.length
-        ? ` ${needingPhone.length} ha${needingPhone.length === 1 ? 's' : 've'} no phone number — they can be planned, but not called until one is added.`
-        : '';
+      const proceed = await confirm({
+        title: `Import ${dry.rowsRead.toLocaleString('en-IN')} appraisers from this workbook?`,
+        message: (
+          <>
+            This will <strong>add {dry.created.toLocaleString('en-IN')}</strong> and{' '}
+            <strong>update {dry.updated.toLocaleString('en-IN')}</strong> appraisers
+            {extras.length > 0 && <>, and bring in {extras.join(', ')}</>}.
+            {dry.skipped > 0 && (
+              <div style={{ marginTop: '8px', fontSize: '12px' }}>
+                {counted(dry.skipped, 'row')} will be skipped (no appraiser code).
+              </div>
+            )}
+            {dry.issues > 0 && (
+              <div style={{ marginTop: '8px', fontSize: '12px' }}>
+                {counted(dry.issues, 'cell')} couldn't be read and will be listed for review — those
+                rows still import, just with that one detail left blank.
+              </div>
+            )}
+            {(dry.notes ?? []).slice(0, 4).map((n, i) => (
+              <div key={i} style={{ marginTop: '8px', fontSize: '12px', color: 'var(--text-muted)' }}>{n}</div>
+            ))}
+            <div style={{ marginTop: '10px', fontSize: '12px', color: 'var(--text-muted)' }}>
+              Re-importing the same appraiser code updates that person — it never creates a duplicate.
+            </div>
+          </>
+        ),
+        confirmLabel: `Import ${dry.rowsRead.toLocaleString('en-IN')} appraisers`,
+      });
+      if (!proceed) { setUploading(false); return; }
 
-      if (errors.length === 0) {
-        setNotice({
-          tone: needingPhone.length ? 'warn' : 'ok',
-          text: `Roster imported${sheetNote} — ${breakdown}.${phoneNote}`,
-          details: needingPhone.length
-            ? [`No phone number: ${needingPhone.join(', ')}`]
-            : undefined,
-        });
-      } else {
-        // Nothing imported means the file itself was wrong (wrong template, missing column), and
-        // that message is one actionable sentence — show it whole. A partial import is a
-        // per-row problem, so lead with the counts and list the first few rows.
-        setNotice({
-          tone: imported > 0 ? 'warn' : 'err',
-          text: imported === 0 && errors.length === 1
-            ? errors[0]
-            : imported > 0
-            // `breakdown` is phrased to follow "Roster imported — …", so dropping it straight
-            // into "Imported … of 6" produced "Imported 4 updated of 6". Keep the count and the
-            // make-up of it apart.
-            ? `Imported ${imported} of ${imported + errors.length} rows${sheetNote} (${breakdown}). ${counted(errors.length, 'row')} could not be imported.${phoneNote}`
-            : `Imported ${imported} of ${imported + errors.length}. ${counted(errors.length, 'row')} could not be imported.`,
-          details: errors,
-        });
-      }
+      // The real thing.
+      const real = await postRoster(file, false);
+      const extrasReal = [
+        real.references ? `${real.references.toLocaleString('en-IN')} references` : '',
+        real.backgroundChecks ? `${real.backgroundChecks.toLocaleString('en-IN')} background checks` : '',
+        real.empanelments ? `${real.empanelments.toLocaleString('en-IN')} empanelments` : '',
+        real.onboardingDocuments ? `${real.onboardingDocuments.toLocaleString('en-IN')} document records` : '',
+      ].filter(Boolean);
+
+      const details = [
+        ...(real.notes ?? []),
+        real.issues > 0 ? `${counted(real.issues, 'cell')} couldn't be read — open "Import issues" to review them.` : '',
+        real.skipped > 0 ? `${counted(real.skipped, 'row')} skipped (no appraiser code).` : '',
+      ].filter(Boolean);
+
+      setNotice({
+        tone: real.issues > 0 || real.skipped > 0 ? 'warn' : 'ok',
+        text: `Roster imported — ${real.created.toLocaleString('en-IN')} new, `
+          + `${real.updated.toLocaleString('en-IN')} updated`
+          + (extrasReal.length ? ` (plus ${extrasReal.join(', ')})` : '') + '.',
+        details: details.length ? details : undefined,
+      });
       refresh();
     } catch (e) {
       setNotice({ tone: 'err', text: userMessage(e) });
     } finally {
-      // Cleared even on failure, so a rejected sheet can be corrected and re-uploaded.
+      // Cleared even on failure, so a rejected workbook can be corrected and re-uploaded.
       setUploading(false);
     }
   };
