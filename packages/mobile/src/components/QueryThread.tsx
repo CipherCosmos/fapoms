@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, ScrollView, TextInput, Image, Linking, Platform, ActivityIndicator, Modal } from 'react-native';
+import { View, ScrollView, TextInput, Image, Linking, Platform, ActivityIndicator } from 'react-native';
 import { MobileApiService } from '../services/api.service';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Badge, Button, Card, Icon, IconButton, Tappable } from './ui/primitives';
@@ -56,9 +56,6 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
   const feedback = useFeedback();
   const scrollRef = useRef<ScrollView>(null);
 
-  /** The crop currently opened full-screen, or null. Lets the assayer enlarge the marked cell. */
-  const [zoomedCrop, setZoomedCrop] = useState<string | null>(null);
-
   const [messages, setMessages] = useState<QueryMessage[]>([]);
   const [loading, setLoading] = useState(true);
   // Distinct from "no messages": the fetch itself failed. See `getQueryMessages` for why the two
@@ -106,14 +103,12 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
     setMessages(list);
     setLoading(false);
 
-    // Both the message attachments and the desk's region-snapshot crop are stored behind a
-    // signed-token route — resolve every key in one batch so nothing on the render path fetches.
+    // Message attachments are stored behind a signed-token route — resolve every key in one
+    // batch so nothing on the render path fetches. (The desk's mark is no longer a stored crop;
+    // it opens as the real packet page in the browser, so there is nothing to sign for it here.)
     const keys = [
       ...new Set(
-        [
-          ...list.flatMap((m) => m.attachments.map((a) => a.s3Key)),
-          ...list.map((m) => m.regionImageS3Key),
-        ].filter(Boolean),
+        list.flatMap((m) => m.attachments.map((a) => a.s3Key)).filter(Boolean),
       ),
     ] as string[];
     if (keys.length === 0) return;
@@ -262,7 +257,7 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
                   message={m}
                   signed={signed}
                   onOpenAttachment={open}
-                  onZoomCrop={setZoomedCrop}
+                  onOpenMarkUrl={open}
                   onOpenPacketPage={onOpenPacketPage}
                 />
               ))}
@@ -366,36 +361,7 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
           </View>
         </View>
       )}
-
-      {/* Full-screen view of the marked cell, so the assayer can read the exact figures the desk
-          is asking about. Tap anywhere to close. */}
-      <CropLightbox uri={zoomedCrop} onClose={() => setZoomedCrop(null)} />
     </View>
-  );
-};
-
-/** A tap-to-close full-screen view of one crop. In-app, so a weak connection is not re-hit. */
-const CropLightbox: React.FC<{ uri: string | null; onClose: () => void }> = ({ uri, onClose }) => {
-  const t = useTheme();
-  return (
-    <Modal visible={!!uri} transparent animationType="fade" onRequestClose={onClose}>
-      <Tappable
-        onPress={onClose}
-        accessibilityRole="button"
-        accessibilityLabel="Close the enlarged image"
-        style={{ flex: 1 }}
-      >
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.92)', alignItems: 'center', justifyContent: 'center', padding: t.space.lg }}>
-          {uri ? (
-            <Image source={{ uri }} style={{ width: '100%', height: '80%' }} resizeMode="contain" />
-          ) : null}
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm, marginTop: t.space.lg }}>
-            <Icon name="close-circle" size={18} color="#fff" />
-            <AppText variant="small" style={{ color: '#fff' }}>Tap anywhere to close</AppText>
-          </View>
-        </View>
-      </Tappable>
-    </Modal>
   );
 };
 
@@ -403,15 +369,21 @@ const Bubble: React.FC<{
   message: QueryMessage;
   signed: Record<string, string>;
   onOpenAttachment: (url: string) => void;
-  /** Open a crop full-screen. */
-  onZoomCrop: (uri: string) => void;
+  /** Open the desk's mark on the real packet page, in the phone's browser. */
+  onOpenMarkUrl: (url: string) => void;
   onOpenPacketPage?: (page: number) => void;
-}> = ({ message, signed, onOpenAttachment, onZoomCrop, onOpenPacketPage }) => {
+}> = ({ message, signed, onOpenAttachment, onOpenMarkUrl, onOpenPacketPage }) => {
   const t = useTheme();
   const mine = message.authorType === 'ASSAYER';
 
-  // The desk's marked-cell crop: a ready signed URL, or an object key resolved into `signed`.
-  const cropUri = message.regionImageUrl || (message.regionImageS3Key ? signed[message.regionImageS3Key] : '') || '';
+  // The desk's mark opens the actual page of the actual packet with the questioned rectangle
+  // highlighted (markUrl). On older backends without markUrl we can still open the packet at the
+  // page number; with neither there is nothing to point at and the bubble is a plain message.
+  const canOpenMark = Boolean(message.markUrl) || (message.pageNumber != null && Boolean(onOpenPacketPage));
+  const openMark = () => {
+    if (message.markUrl) onOpenMarkUrl(message.markUrl);
+    else if (message.pageNumber != null && onOpenPacketPage) onOpenPacketPage(message.pageNumber);
+  };
 
   return (
     <View style={{ alignItems: mine ? 'flex-end' : 'flex-start' }}>
@@ -468,64 +440,45 @@ const Bubble: React.FC<{
           );
         })}
 
-        {/* The desk can anchor a question to a marked rectangle on a page of the audit PDF. When
-            a cropped snapshot of that spot is available, show it inline — tap to enlarge — so the
-            assayer sees the exact cell being questioned, not just a page number. Falls back to the
-            plain "page N" line whenever the crop image is missing or still resolving. */}
-        {message.pageNumber != null ? (
+        {/* The desk can anchor a question to a rectangle on a page of the audit PDF. Rather than a
+            cropped screenshot — which loses the surrounding rows and columns — a tap opens the
+            REAL page of the assayer's OWN packet, in the phone's browser, with that rectangle
+            highlighted (markUrl). Older backends without markUrl fall back to opening the packet
+            at the page number; with neither, the bubble stays a plain message. */}
+        {(message.markUrl || message.pageNumber != null) ? (
           <View style={{ gap: 6, marginTop: 2 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
-              <Icon name="crop-outline" size={13} color={t.colors.textFaint} />
-              <AppText variant="caption" tone="faint">
-                The desk marked this on page {message.pageNumber}
-              </AppText>
-            </View>
-            {cropUri ? (
+            {message.pageNumber != null ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+                <Icon name="crop-outline" size={13} color={t.colors.textFaint} />
+                <AppText variant="caption" tone="faint">
+                  The desk marked this on page {message.pageNumber}
+                </AppText>
+              </View>
+            ) : null}
+            {canOpenMark ? (
               <Tappable
-                onPress={() => onZoomCrop(cropUri)}
+                onPress={openMark}
                 accessibilityRole="button"
-                accessibilityLabel={`Enlarge the marked cell on page ${message.pageNumber}`}
+                accessibilityLabel="See where on your document the desk marked"
+                hitSlop={6}
               >
                 <View
                   style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 6,
+                    paddingVertical: 9,
+                    paddingHorizontal: t.space.md,
                     borderRadius: t.radius.md,
                     borderWidth: 1,
                     borderColor: t.colors.warning,
-                    overflow: 'hidden',
-                    backgroundColor: t.colors.bg,
+                    backgroundColor: t.colors.warningSoft,
                   }}
                 >
-                  <Image
-                    source={{ uri: cropUri }}
-                    style={{ width: 220, height: 150 }}
-                    resizeMode="contain"
-                  />
-                  <View
-                    style={{
-                      flexDirection: 'row',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      gap: 5,
-                      paddingVertical: 5,
-                      backgroundColor: t.colors.warningSoft,
-                    }}
-                  >
-                    <Icon name="expand-outline" size={12} color={t.colors.warning} />
-                    <AppText variant="caption" tone="warning">Tap to enlarge</AppText>
-                  </View>
-                </View>
-              </Tappable>
-            ) : null}
-            {onOpenPacketPage ? (
-              <Tappable
-                onPress={() => onOpenPacketPage(message.pageNumber as number)}
-                accessibilityRole="button"
-                accessibilityLabel={`Open page ${message.pageNumber} of your packet`}
-                hitSlop={6}
-              >
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 2 }}>
-                  <Icon name="document-text-outline" size={13} color={t.colors.primary} />
-                  <AppText variant="caption" tone="primary">Open page {message.pageNumber} of your packet</AppText>
+                  <Icon name="document-text-outline" size={15} color={t.colors.warning} />
+                  <AppText variant="small" tone="warning" style={{ flex: 1 }}>
+                    See where on your document →
+                  </AppText>
                 </View>
               </Tappable>
             ) : null}

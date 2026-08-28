@@ -15,13 +15,18 @@ pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl;
  *
  * The data entry desk's questions are almost always about a specific place on a
  * specific page — "this gross weight, third row". Describing that in prose is slow
- * and error-prone, so this lets them drag a box over the page, which is cropped
- * straight off the render canvas and handed to the chat as an image plus a
- * durable anchor.
+ * and error-prone, so this lets them drag a box over the page and reports that
+ * rectangle as a durable, page-anchored mark.
  *
- * Regions are reported normalised (0..1) against the page box rather than in
- * pixels, so a mark made at one zoom still points at the right place at another,
- * and still resolves months later on a different screen.
+ * No screenshot is taken: the mark is just the page number and the rectangle, so
+ * the assayer opens the SAME PDF with the SAME rectangle drawn on it rather than
+ * receiving a cropped image. Regions are reported normalised (0..1) against the
+ * page box rather than in pixels, so a mark made at one zoom still points at the
+ * right place at another, and still resolves months later on a different screen.
+ *
+ * Pass `viewOnly` to render the packet read-only — no marking tool, the incoming
+ * `focus` rectangle stays drawn over the page — which is how the shared `/view-mark`
+ * viewer shows an assayer exactly what the desk marked.
  */
 
 export interface Region { x: number; y: number; w: number; h: number }
@@ -29,20 +34,20 @@ export interface Region { x: number; y: number; w: number; h: number }
 export interface RegionCapture {
   pageNumber: number;
   region: Region;
-  /** PNG crop of the marked area, ready to upload. */
-  blob: Blob;
-  dataUrl: string;
 }
 
 interface Props {
   /** Signed, short-lived URL for the PDF bytes. */
   fileUrl: string;
-  /** Jump here when the user clicks an anchored message. */
+  /** Jump here when the user clicks an anchored message; in `viewOnly` it stays highlighted. */
   focus?: { pageNumber: number; region: Region | null } | null;
-  onCapture: (c: RegionCapture) => void;
+  /** Read-only: no marking tool, no capture — just render the page and draw `focus`. */
+  viewOnly?: boolean;
+  /** Called with the page + region when the desk marks an area. Omit in `viewOnly`. */
+  onCapture?: (c: RegionCapture) => void;
 }
 
-export const PdfRegionViewer: React.FC<Props> = ({ fileUrl, focus, onCapture }) => {
+export const PdfRegionViewer: React.FC<Props> = ({ fileUrl, focus, viewOnly = false, onCapture }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const docRef = useRef<any>(null);
@@ -69,7 +74,9 @@ export const PdfRegionViewer: React.FC<Props> = ({ fileUrl, focus, onCapture }) 
         if (cancelled) return;
         docRef.current = doc;
         setPages(doc.numPages);
-        setPage(1);
+        // In viewOnly the page is owned by `focus` (the mark's page); resetting to 1 here would
+        // race the focus effect and land the viewer on the wrong page.
+        if (!viewOnly) setPage(1);
         setLoading(false);
       })
       .catch((e) => {
@@ -123,11 +130,12 @@ export const PdfRegionViewer: React.FC<Props> = ({ fileUrl, focus, onCapture }) 
     if (!focus) return;
     setPage(focus.pageNumber);
     setHighlight(focus.region);
-    // Leave the highlight up long enough to be seen, then clear it so it does not
-    // sit permanently over the page.
+    // On the desk, the highlight is a transient "here it is" flash that clears so it does not sit
+    // permanently over the page. On the read-only viewer the mark IS the point, so it stays put.
+    if (viewOnly) return;
     const t = setTimeout(() => setHighlight(null), 4000);
     return () => clearTimeout(t);
-  }, [focus]);
+  }, [focus, viewOnly]);
 
   // ── Marking ─────────────────────────────────────────────────────────────
   const localPoint = (e: React.MouseEvent) => {
@@ -150,7 +158,7 @@ export const PdfRegionViewer: React.FC<Props> = ({ fileUrl, focus, onCapture }) 
     setDrag({ ...drag, x1: p.x, y1: p.y });
   };
 
-  const onMouseUp = async () => {
+  const onMouseUp = () => {
     if (!marking || !drag) return;
     const canvas = canvasRef.current!;
     const rect = canvas.getBoundingClientRect();
@@ -160,21 +168,11 @@ export const PdfRegionViewer: React.FC<Props> = ({ fileUrl, focus, onCapture }) 
     const h = Math.abs(drag.y1 - drag.y0);
     setDrag(null);
 
-    // A click rather than a drag — nothing to capture.
+    // A click rather than a drag — nothing to mark.
     if (w < 8 || h < 8) return;
 
-    const dpr = window.devicePixelRatio || 1;
-    const crop = document.createElement('canvas');
-    crop.width = Math.round(w * dpr);
-    crop.height = Math.round(h * dpr);
-    const ctx = crop.getContext('2d');
-    if (!ctx) return;
-    ctx.drawImage(
-      canvas,
-      Math.round(x * dpr), Math.round(y * dpr), Math.round(w * dpr), Math.round(h * dpr),
-      0, 0, crop.width, crop.height,
-    );
-
+    // Report the rectangle only, normalised to the page box — no screenshot is taken. The assayer
+    // opens the same PDF and this same rectangle is drawn over it.
     const region: Region = {
       x: +(x / rect.width).toFixed(4),
       y: +(y / rect.height).toFixed(4),
@@ -182,11 +180,8 @@ export const PdfRegionViewer: React.FC<Props> = ({ fileUrl, focus, onCapture }) 
       h: +(h / rect.height).toFixed(4),
     };
 
-    crop.toBlob((blob) => {
-      if (!blob) return;
-      onCapture({ pageNumber: page, region, blob, dataUrl: crop.toDataURL('image/png') });
-      setMarking(false);
-    }, 'image/png');
+    onCapture?.({ pageNumber: page, region });
+    setMarking(false);
   };
 
   const overlay = (() => {
@@ -243,18 +238,20 @@ export const PdfRegionViewer: React.FC<Props> = ({ fileUrl, focus, onCapture }) 
         <span style={{ fontSize: '11.5px', minWidth: '38px', textAlign: 'center' }}>{Math.round(scale * 100)}%</span>
         <button onClick={() => setScale((s) => Math.min(3, +(s + 0.2).toFixed(2)))} className="btn btn-secondary" style={btn}><ZoomIn size={14} /></button>
 
-        <button
-          onClick={() => { setMarking((m) => !m); setDrag(null); }}
-          className={marking ? 'btn btn-primary' : 'btn btn-secondary'}
-          style={{ ...btn, marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11.5px' }}
-        >
-          {marking ? <><X size={13} /> Cancel</> : <><Crop size={13} /> Mark an area</>}
-        </button>
+        {!viewOnly && (
+          <button
+            onClick={() => { setMarking((m) => !m); setDrag(null); }}
+            className={marking ? 'btn btn-primary' : 'btn btn-secondary'}
+            style={{ ...btn, marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11.5px' }}
+          >
+            {marking ? <><X size={13} /> Cancel</> : <><Crop size={13} /> Mark an area</>}
+          </button>
+        )}
       </div>
 
-      {marking && (
+      {!viewOnly && marking && (
         <div style={{ padding: '6px 10px', fontSize: '11.5px', background: 'var(--status-active-bg)', color: 'var(--accent)' }}>
-          Drag a box around the detail you want to ask about — it is captured and attached to your message.
+          Drag a box around the detail you want to ask about — the assayer sees this same spot marked on the PDF.
         </div>
       )}
 

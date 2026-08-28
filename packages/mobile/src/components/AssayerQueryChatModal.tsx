@@ -7,7 +7,6 @@ import {
   ScrollView,
   TextInput,
   StyleSheet,
-  Image,
   KeyboardAvoidingView,
   Platform,
   Linking,
@@ -190,17 +189,18 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
   /**
    * Open the assayer's own packet at the page the desk marked.
    *
-   * Best-effort, and layered on top of the crop the bubble already shows: the crop is the
-   * guaranteed way to see the cell, this is the convenience of opening the whole page. It reuses
-   * the same dispatch-gated packet download the schedule screen uses, and appends `#page=N` —
-   * which the device's PDF viewer may honour or may ignore, so it lands on the right document
-   * regardless and on the right page where the viewer supports it. Says so plainly when the
-   * packet is not available to open rather than failing silently.
+   * The fallback path for older messages that carry a page number but no `markUrl`: the preferred
+   * "See where on your document" button opens the desk's highlighted mark directly, and only when
+   * that link is absent does the bubble fall back to this whole-packet open. It reuses the same
+   * dispatch-gated packet download the schedule screen uses, and appends `#page=N` — which the
+   * device's PDF viewer may honour or may ignore, so it lands on the right document regardless and
+   * on the right page where the viewer supports it. Says so plainly when the packet cannot be
+   * opened rather than failing silently.
    */
   const handleOpenPacketPage = useCallback(
     async (page: number) => {
       if (!assignment?.projectBranchId) {
-        feedback.info('Packet not open here', 'The marked cell is shown in the message above.');
+        feedback.info('Packet not open here', 'Ask the desk to resend the mark from a newer message.');
         return;
       }
       try {
@@ -212,17 +212,17 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
           docs.find((d: any) => d.type === 'PRE_FIELD_AUDIT_PDF') ||
           docs[0];
         if (!doc?.id) {
-          feedback.info('Packet not available yet', 'The marked cell is shown in the message above.');
+          feedback.info('Packet not available yet', 'The packet for this branch has not been sent yet.');
           return;
         }
         const res = await MobileApiService.getDocumentDownloadUrl(doc.id);
         if (!res.ok) {
-          feedback.info('Cannot open the packet', res.message || 'The marked cell is shown in the message above.');
+          feedback.info('Cannot open the packet', res.message || 'This document is not available to open right now.');
           return;
         }
         await Linking.openURL(`${res.url}#page=${page}`);
       } catch (err: any) {
-        feedback.info('Cannot open the packet', 'The marked cell is shown in the message above.');
+        feedback.info('Cannot open the packet', 'This document could not be opened just now — please try again.');
       }
     },
     [assignment, feedback],

@@ -83,45 +83,58 @@ describe('QueryThreadService.postMessage', () => {
   });
 
   /**
-   * The desk's marked crop, and where it has to be for the assayer to see it.
+   * The desk's mark is a page + region anchor, not a cropped screenshot.
    *
-   * A validator circles a figure on the returned packet and asks "what is this?". The crop was
-   * saved as `snapshot_path` on the message — which the web renders — and mirrored onto the
-   * *query* row's attachment list. The phone reads attachments off each message and nothing
-   * else, so it saw neither: the assayer got the question with no picture, which is the one
-   * thing that made it answerable. The crop travels with its own message now.
+   * A validator circles a figure on the returned packet and asks "what is this?". The mark used to
+   * be cropped off the render canvas, uploaded, and minted here as an image attachment so the
+   * assayer's app — which reads attachments and nothing else — could show it. The assayer now
+   * opens the ACTUAL PDF with the same rectangle drawn on it (the read payload carries a
+   * `markUrl`), so nothing is cropped and nothing is minted: the message stores only page + region.
    */
-  describe("the desk's marked crop", () => {
+  describe("the desk's page + region mark", () => {
     const CROP = '/api/v1/validation-queries/attachment/chat%2Fregion-p3.png';
 
-    it("rides on the message the assayer's app actually reads", async () => {
+    it('stores the page + region anchor and mints no crop attachment', async () => {
       await service.postMessage('q-1', QueryMessageAuthor.STAFF, 'user-9', 'Priya', {
-        body: 'What is this figure?', snapshotPath: CROP, pageNumber: 3,
+        body: 'What is this figure?', pageNumber: 3, region: { x: 0.1, y: 0.2, w: 0.3, h: 0.4 },
       });
 
       const created = messageRepo.create.mock.calls.at(-1)![0];
-      expect(created.attachments).toEqual([
-        expect.objectContaining({ url: CROP, fileType: 'image/png', fileName: 'Marked area on page 3' }),
-      ]);
+      expect(created.pageNumber).toBe(3);
+      expect(created.region).toEqual({ x: 0.1, y: 0.2, w: 0.3, h: 0.4 });
+      // No screenshot is uploaded any more, so there is no crop to mint.
+      expect(created.attachments).toBeNull();
     });
 
-    it('carries the storage key, which is what the phone signs before it can load an image', async () => {
+    it('accepts a mark with no typed text as a real message', async () => {
+      await service.postMessage('q-1', QueryMessageAuthor.STAFF, 'user-9', 'Priya', {
+        pageNumber: 2, region: { x: 0, y: 0, w: 0.5, h: 0.5 },
+      });
+
+      // The mark alone is enough content — the guard no longer demands text or a crop.
+      const created = messageRepo.create.mock.calls.at(-1)![0];
+      expect(created.pageNumber).toBe(2);
+      expect(created.body).toBeNull();
+    });
+
+    it('stores a legacy snapshotPath but does not mint it into attachments', async () => {
       await service.postMessage('q-1', QueryMessageAuthor.STAFF, 'user-9', 'Priya', {
         snapshotPath: CROP, pageNumber: 3,
       });
 
-      // The crop arrives wrapped in its download URL; the key inside is what gets signed.
-      expect(messageRepo.create.mock.calls.at(-1)![0].attachments[0].s3Key).toBe('chat/region-p3.png');
+      const created = messageRepo.create.mock.calls.at(-1)![0];
+      expect(created.snapshotPath).toBe(CROP);
+      expect(created.attachments).toBeNull();
     });
 
-    it('keeps the files the sender attached alongside it', async () => {
+    it('keeps only the files the sender genuinely attached', async () => {
       await service.postMessage('q-1', QueryMessageAuthor.STAFF, 'user-9', 'Priya', {
-        body: 'see both', snapshotPath: CROP, pageNumber: 1,
+        body: 'see this', pageNumber: 1, region: { x: 0.2, y: 0.2, w: 0.1, h: 0.1 },
         attachments: [{ url: '/a.pdf', fileName: 'a.pdf', fileType: 'application/pdf' }],
       });
 
       const attachments = messageRepo.create.mock.calls.at(-1)![0].attachments;
-      expect(attachments.map((a: any) => a.fileName)).toEqual(['a.pdf', 'Marked area on page 1']);
+      expect(attachments.map((a: any) => a.fileName)).toEqual(['a.pdf']);
     });
 
     it('is not copied back onto the query row, which no client reads', async () => {
@@ -129,11 +142,10 @@ describe('QueryThreadService.postMessage', () => {
       queryRepo.save.mockImplementation(async (q: any) => { savedQuery = q; return q; });
 
       await service.postMessage('q-1', QueryMessageAuthor.STAFF, 'user-9', 'Priya', {
-        snapshotPath: CROP, pageNumber: 2,
+        pageNumber: 2, region: { x: 0, y: 0, w: 0.4, h: 0.4 },
       });
 
-      // The fixture starts with `attachments: null` and must still be null: the crop is not
-      // copied here, so this column has nothing to accumulate.
+      // The fixture starts with `attachments: null` and must still be null.
       expect(savedQuery.attachments).toBeNull();
     });
 

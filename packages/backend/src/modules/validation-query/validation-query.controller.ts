@@ -385,19 +385,23 @@ export class ValidationQueryController {
   @ApiOperation({ summary: 'Full clarification thread' })
   async listMessages(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     const messages = await this.threadService.listMessages(id);
+    // The packet this clarification is about — the same file for every message — resolved once so
+    // an anchored message can carry an absolute link to it.
+    const documentId = await this.threadService.getQueryDocumentId(id);
     /**
-     * Hand the mobile app a picture it can actually load.
+     * Point each anchored message at the actual packet PDF, and keep old crops loadable.
      *
      * A message can be pinned to a rectangle on the returned PDF — `pageNumber` + `region` say
-     * where, and `snapshotPath` is the desk's cropped image of it. Those two fields already ride
-     * along on the entity, but `snapshotPath` is a storage key no image tag can fetch on its own.
-     * We wrap it in the same short-lived HMAC link `attachment-token` issues for every other chat
-     * attachment, so the phone renders the crop without a session token ever touching the URL.
-     * No new route and no widening of access: the link is signed against this one key and expires.
+     * where. New messages carry no cropped image at all: `markUrl` is an absolute link to the
+     * read-only `/view-mark` page that renders the real document with that rectangle drawn on it,
+     * so the desk and the assayer see the SAME mark on the SAME PDF. OLD messages predate this and
+     * still hold a `snapshotPath` crop; we keep signing it into `snapshotUrl` — a short-lived HMAC
+     * link, no session token in the URL — so their image goes on rendering unchanged.
      */
     const data = messages.map((m) => ({
       ...m,
       snapshotUrl: m.snapshotPath ? this.signedAttachmentUrl(m.snapshotPath) : null,
+      markUrl: this.buildMarkUrl(documentId, m.pageNumber, m.region),
     }));
     return { success: true, data };
   }
@@ -407,6 +411,28 @@ export class ValidationQueryController {
     const key = QueryThreadService.storageKeyFromUrl(snapshotPathOrKey);
     const { token } = this.documentAccessTokenService.issue(key);
     return `/api/v1/validation-queries/attachment/${encodeURIComponent(key)}?token=${token}`;
+  }
+
+  /**
+   * An absolute link to the read-only `/view-mark` page for one anchored message: the packet PDF,
+   * opened to the message's page with its normalised rectangle highlighted. The viewer fetches the
+   * PDF via the document download route using the freshly-issued, document-scoped token below
+   * (`DocumentAccessTokenService` — an HMAC over this one document id, expiring in minutes).
+   *
+   * Null unless the message is genuinely anchored: it needs a resolvable packet `documentId`, a
+   * `region`, and its `pageNumber`. Base is `APP_PUBLIC_URL`, then `FRONTEND_URL`, then relative.
+   */
+  private buildMarkUrl(
+    documentId: string | null,
+    pageNumber: number | null,
+    region: { x: number; y: number; w: number; h: number } | null,
+  ): string | null {
+    if (!documentId || !region || !pageNumber) return null;
+    const base = process.env.APP_PUBLIC_URL || process.env.FRONTEND_URL || '';
+    const { token } = this.documentAccessTokenService.issue(documentId);
+    const regionParam = `${region.x},${region.y},${region.w},${region.h}`;
+    return `${base}/view-mark?documentId=${encodeURIComponent(documentId)}` +
+      `&token=${encodeURIComponent(token)}&page=${pageNumber}&region=${regionParam}`;
   }
 
   @Post(':id/messages')

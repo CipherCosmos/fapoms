@@ -63,6 +63,13 @@ const DataEntryLayout = React.lazy(() => import('./pages/dataentry/DataEntryLayo
 const ClarificationsPage = React.lazy(() => import('./pages/dataentry/ClarificationsPage').then((m) => ({ default: m.ClarificationsPage })));
 
 /**
+ * Public, link-authorised: the desk's mark on the assayer's own packet, opened from the phone's OS
+ * browser with no web session (see the early return in App). Code-split like every other page so
+ * it — and the heavy pdf.js viewer it pulls in — stays out of the sign-in critical path.
+ */
+const ViewMark = React.lazy(() => import('./pages/ViewMark').then((m) => ({ default: m.ViewMark })));
+
+/**
  * Where an unauthenticated visitor was trying to go, held until they have signed in.
  *
  * sessionStorage rather than localStorage: it belongs to this tab and this attempt, and must not
@@ -181,6 +188,7 @@ export const App: React.FC = () => {
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(getCachedUser);
   const [isLoadingUser, setIsLoadingUser] = useState<boolean>(Boolean(token) && !currentUser);
   const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
     if (token) {
@@ -203,6 +211,27 @@ export const App: React.FC = () => {
       setIsLoadingUser(false);
     }
   }, [token]);
+
+  /**
+   * Public, token-authorised page — rendered before the whole auth tree.
+   *
+   * The field assayer opens `/view-mark?...&token=<signed>` in their phone's OS browser, where
+   * there is no web session at all. So this route must resolve REGARDLESS of `token` state:
+   * returning here — above the `if (!token)` sign-in gate and outside every ProtectedRoute —
+   * is what keeps it out of the authenticated tree. The signed token in the URL is the only
+   * authorisation the page needs; the page verifies it by fetching the packet with it.
+   *
+   * Placed after every hook above so the Rules of Hooks hold whichever branch renders.
+   */
+  if (location.pathname === '/view-mark') {
+    return (
+      <ErrorBoundary area="Marked document">
+        <Suspense fallback={<RouteFallback />}>
+          <ViewMark />
+        </Suspense>
+      </ErrorBoundary>
+    );
+  }
 
   const userRoles = currentUser?.roles?.map((r) => r.name) ?? [];
 

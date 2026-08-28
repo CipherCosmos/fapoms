@@ -214,6 +214,14 @@ export interface QueryMessage {
   pageNumber: number | null;
   region: { x: number; y: number; w: number; h: number } | null;
   /**
+   * Absolute link to the read-only web viewer that shows the desk's mark ON the assayer's own
+   * packet — the real page with the questioned rectangle highlighted, opened in the phone's
+   * browser. Preferred over the old cropped snapshot: a crop loses all the surrounding context.
+   * Absent on older backends and on messages the desk did not pin to a region — the bubble then
+   * degrades to opening the packet at the page number, or to the plain page line.
+   */
+  markUrl?: string | null;
+  /**
    * A cropped snapshot of the exact cell the desk marked, so the assayer SEES the spot in
    * question rather than a bare "Refers to page N". Two shapes, whichever the server sends:
    * `regionImageUrl` is a ready-to-load signed URL, and `regionImageS3Key` is an object key

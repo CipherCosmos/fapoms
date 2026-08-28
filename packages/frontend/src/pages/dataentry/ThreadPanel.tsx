@@ -127,20 +127,15 @@ export const ThreadPanel: React.FC<Props> = ({
     setBusy(true);
     setErr(null);
     try {
-      let snapshotPath: string | undefined;
-      if (pending) {
-        const fd = new FormData();
-        fd.append('file', pending.blob, `region-p${pending.pageNumber}.png`);
-        const up = await api.request<any>('/validation-queries/upload-single', { method: 'POST', body: fd });
-        snapshotPath = up?.url ?? up?.data?.url;
-      }
+      // The mark is a page + region anchor now — no screenshot is cropped or uploaded. The assayer
+      // opens the real packet PDF with this same rectangle drawn on it (the thread read payload
+      // carries a markUrl to the read-only viewer), so we send only where the mark is.
       await api.request(`/validation-queries/${queryId}/messages`, {
         method: 'POST',
         body: JSON.stringify({
           body: draft.trim() || undefined,
           pageNumber: pending?.pageNumber,
           region: pending?.region,
-          snapshotPath,
         }),
       });
       setDraft('');
@@ -352,10 +347,15 @@ export const ThreadPanel: React.FC<Props> = ({
               display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px', padding: '7px',
               borderRadius: '8px', background: 'var(--status-active-bg)', border: '1px solid var(--status-active-bg)',
             }}>
-              <img src={pending.dataUrl} alt="Marked area" style={{ height: '42px', borderRadius: '4px' }} />
+              {/* A glyph for the marked rectangle — no screenshot is taken; the assayer opens the
+                  real PDF at this spot. */}
+              <div style={{
+                width: '42px', height: '42px', borderRadius: '4px', flexShrink: 0,
+                border: '2px solid var(--warning)', background: 'var(--status-pending-bg)',
+              }} />
               <div style={{ fontSize: '11px', flex: 1 }}>
                 Marked area on page {pending.pageNumber}
-                <div style={{ color: 'var(--text-muted)' }}>attached to this message</div>
+                <div style={{ color: 'var(--text-muted)' }}>the assayer sees this spot on the PDF</div>
               </div>
               <button onClick={onClearPending} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}>
                 <X size={14} />

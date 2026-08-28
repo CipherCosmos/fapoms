@@ -86,6 +86,16 @@ export class QueryThreadService {
   }
 
   /**
+   * The packet PDF this clarification is about — the same file for every message on the thread.
+   * The read payload uses it to build a `markUrl` for any message anchored to a page + region, so
+   * the assayer opens the real document with the mark on it rather than a cropped screenshot.
+   */
+  async getQueryDocumentId(queryId: string): Promise<string | null> {
+    const query = await this.mustExist(queryId);
+    return query.documentId ?? null;
+  }
+
+  /**
    * Appends a message and moves the query's status to match who spoke: an assayer
    * reply marks it RESPONDED, a desk follow-up re-opens it. A resolved thread is
    * closed — reopening is a deliberate act, not a side effect of typing.
@@ -105,8 +115,12 @@ export class QueryThreadService {
     if (authorType === QueryMessageAuthor.ASSAYER && query.assayerId !== authorId) {
       throw new ForbiddenException('You may only reply to your own clarifications.');
     }
-    if (!dto.body?.trim() && !dto.snapshotPath && !(dto.attachments ?? []).length && !dto.voiceNote) {
-      throw new ForbiddenException('A message needs text, a snapshot, an attachment, or a voice note.');
+    // A mark is a page + region anchor now, not an uploaded crop, so a marked question with no
+    // typed text is still a real message and must be accepted. `snapshotPath` stays in this guard
+    // only for legacy clients that still send one.
+    const hasMark = dto.pageNumber != null && dto.region != null;
+    if (!dto.body?.trim() && !dto.snapshotPath && !(dto.attachments ?? []).length && !dto.voiceNote && !hasMark) {
+      throw new ForbiddenException('A message needs text, a marked area, an attachment, or a voice note.');
     }
 
     let replyToSummary: { authorName: string; body: string } | null = null;
@@ -121,29 +135,17 @@ export class QueryThreadService {
     }
 
     /**
-     * The desk's marked crop, carried where both clients look for files.
+     * The desk's mark is a page + region anchor now, not an uploaded screenshot.
      *
-     * When a validator anchors a question to a region of the returned packet, the crop is
-     * saved as `snapshotPath` — and the web renders it from there, but the assayer's phone
-     * never did: it reads `attachments` off each message, and the crop was not in it. The
-     * server mirrored the crop onto the *query* row instead, a column no client reads at all.
-     * So the desk would circle a figure, ask "what is this?", and the assayer got the question
-     * with no picture — the one thing that made it answerable.
-     *
-     * It travels with its message now. The existing app renders it without needing an update.
+     * The desk used to crop the marked rectangle off the render canvas, upload it, and this block
+     * minted that crop as an image attachment so the assayer's app — which reads `attachments` and
+     * nothing else — could show it. The assayer now opens the ACTUAL packet PDF with the same
+     * rectangle drawn on it (the read payload carries a `markUrl` to a read-only viewer), so there
+     * is no image to mint: only the files the sender genuinely attached ride along. Old messages
+     * keep whatever crop attachment was stored on them, and `snapshotPath` below is still written
+     * for any legacy client that supplies one.
      */
-    const cropAttachment = authorType === QueryMessageAuthor.STAFF && dto.snapshotPath
-      ? [{
-          url: dto.snapshotPath,
-          // Both clients sign a storage key before they can load the image, and the crop
-          // arrives as the download URL that key is wrapped in. Unwrap it here so the phone
-          // has the same handle on it that every other attachment carries.
-          s3Key: QueryThreadService.storageKeyFromUrl(dto.snapshotPath),
-          fileName: dto.pageNumber ? `Marked area on page ${dto.pageNumber}` : 'Marked area',
-          fileType: 'image/png',
-        }]
-      : [];
-    const messageAttachments = [...(dto.attachments ?? []), ...cropAttachment];
+    const messageAttachments = [...(dto.attachments ?? [])];
 
     const message = this.messageRepository.create({
       validationQueryId: queryId,
