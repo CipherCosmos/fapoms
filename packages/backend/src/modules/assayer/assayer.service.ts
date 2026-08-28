@@ -14,7 +14,7 @@ import { AssayerStateMachine } from './assayer.state-machine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
-import { EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason } from '@fapoms/shared';
+import { EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS } from '@fapoms/shared';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { geocodeIndia, pincodeAuthority } from '../geo/india-geocoder';
 import { parseSheet, rowReader, describeMissingColumn } from '../../core/excel/sheet-reader';
@@ -1630,81 +1630,98 @@ export class AssayerService implements OnModuleInit {
    * required. Everything else is optional and can be filled in later — a long
    * mandatory list is what pushes people back to editing the database by hand.
    */
+  /**
+   * The download-and-fill template for the FULL roster importer.
+   *
+   * Its columns are exactly the fields `RosterImportService.importAssayerSheet` reads, spelled
+   * cleanly — the client's own roster carries typos ("Total Expierence", "Refference 1 Name",
+   * "A/c Number", "Aadhar Card Number") that we do not want to teach people to reproduce. The
+   * importer matches headers case/space/punctuation-insensitively and carries the clean spelling
+   * as an alias for every one of these, so a file filled from this template imports with nothing
+   * lost. `roster-template-truth.spec.ts` and `roster-import.spec.ts` are the guards that keep
+   * the two in step: a column here the importer does not read would be silent data loss.
+   *
+   * Only `Appraiser code` is required — it is the single field the importer skips a row for.
+   * `State`, `Appraiser Name` and `Zone` change nothing about whether a row imports but shape
+   * almost everything useful about the record, so they are called out as strongly recommended.
+   */
   async generateTemplate(): Promise<Buffer> {
-    const headers = [
-      // Identity. A row needs a code and a name; the rest of this group is what makes the
-      // assayer reachable and costable, and is reported as incomplete rather than refused.
-      'Assayer code', 'Assayer Name', 'Phone', 'Residence Address', 'Initial Password',
-      // Location / coverage. `State` is required — it decides the region, the zone and the
-      // holiday calendar the assayer is planned against, and a row without it is rejected.
-      'Location', 'District', 'State', 'Zone', 'Pincode', 'Preferred Regions',
-      // Contact
-      'Email', 'Alternate Phone',
-      // Employment
-      'Employment Type', 'Employee ID', 'Department', 'Joining Date',
-      // Capability — drives which assayer the engine can match to which branch
-      'Skills', 'Certifications', 'Specializations', 'Languages',
-      'Experience (Years)', 'Performance Rating',
-      'Max Daily Workload', 'Max Weekly Workload',
-      'Working Hours Start', 'Working Hours End',
-      // Commercial — drives what we owe them and the cost side of every audit
-      'Base Fee', 'Daily Rate', 'Hourly Rate',
-      'Travel Reimbursement', 'Accommodation Allowance', 'Meal Allowance',
-      // Payment
-      'PAN Number', 'Bank Account Number', 'IFSC Code',
-      // Emergency
-      'Emergency Contact Name', 'Emergency Contact Phone', 'Emergency Contact Relation',
+    const DOCUMENT_NOTE =
+      'Onboarding paperwork. Enter "Yes" if the soft copy has been received, "No" if it is still ' +
+      'awaited, or leave blank if not known.';
+
+    // Generated from the shared maps, not hand-typed, so the document columns can never drift from
+    // the columns the importer actually reads. Only requirements that have a real column in the
+    // roster are shipped — driving licence, voter ID and passport have none.
+    const documentColumns = (Object.keys(ONBOARDING_DOCUMENT_COLUMNS) as OnboardingDocument[])
+      .filter((doc) => ONBOARDING_DOCUMENT_COLUMNS[doc])
+      .map((doc) => ({
+        field: ONBOARDING_DOCUMENT_LABELS[doc],
+        required: 'No' as const,
+        description: DOCUMENT_NOTE,
+      }));
+
+    // Field / Required / Description for every column, in the order they appear on the sheet.
+    // `headers` and the Instructions sheet are both derived from this one list, so they cannot
+    // disagree about which columns exist.
+    const columns: Array<{ field: string; required: 'Yes' | 'No'; description: string }> = [
+      // ── Identity ──
+      { field: 'Appraiser code', required: 'Yes', description: 'Unique code for this appraiser, e.g. AS0643. This is the ONLY must-fill column — a row with no code is skipped. Re-importing the same code updates that appraiser instead of adding a duplicate.' },
+      { field: 'Appraiser Name', required: 'No', description: 'Full name in one cell, e.g. Shinil T. Strongly recommended — without it the record shows only the code. The last word is taken as the surname.' },
+      { field: 'PAN Number', required: 'No', description: 'PAN, e.g. ABCDE1234F. Needed before any payment is released.' },
+      { field: 'Aadhaar Card Number', required: 'No', description: '12-digit Aadhaar number.' },
+      { field: 'Date of Birth', required: 'No', description: 'Date of birth. Day-first is fine — 03-01-1974 means 3 January 1974.' },
+      { field: 'Qualification', required: 'No', description: 'Highest qualification, e.g. B.Com, Diploma in Gold Assaying.' },
+      { field: 'VSTS Code', required: 'No', description: 'VSTS identifier, where the appraiser has one.' },
+      // ── Contact & location ──
+      { field: 'Phone Number 1', required: 'No', description: 'Ten-digit mobile number; more than one may be written in the cell, separated by a slash. The row is still accepted without a number, but the appraiser cannot be called or dispatched to until one is filled in.' },
+      { field: 'Phone Number 2', required: 'No', description: 'A second contact number, if any.' },
+      { field: 'Email ID', required: 'No', description: 'Email address, used for notifications where available.' },
+      { field: 'Residence Address', required: 'No', description: 'Full home address. Used to work out travel distance to branches. A 6-digit pincode written inside this text is picked up automatically.' },
+      { field: 'Location', required: 'No', description: 'Town or locality, e.g. Kunnamangalam. Stored as the city.' },
+      { field: 'District', required: 'No', description: 'District. Used for travel distance and coverage planning.' },
+      { field: 'State', required: 'No', description: 'Home state, e.g. Kerala. Strongly recommended — it sets the appraiser’s region, zone and public-holiday calendar; without it they drop out of every region-scoped view.' },
+      { field: 'Zone', required: 'No', description: 'Operating zone: North, South, East, West, Central or North East. Strongly recommended — it decides the desk that can see and plan this appraiser. Casing is ignored, so "north" and "North" are one zone.' },
+      // ── Banking ──
+      { field: 'Bank Name', required: 'No', description: 'Bank the fees are paid into.' },
+      { field: 'Account Number', required: 'No', description: 'Bank account number, needed to pay fees.' },
+      { field: 'IFSC Code', required: 'No', description: 'Branch IFSC code, needed to pay fees.' },
+      // ── Employment ──
+      { field: 'Joining Date', required: 'No', description: 'Date the appraiser joined. Day-first dates are read correctly.' },
+      { field: 'Exit Date', required: 'No', description: 'Date the appraiser left, if they have.' },
+      { field: 'HR Name', required: 'No', description: 'HR person who owns this appraiser’s file.' },
+      { field: 'Total Experience', required: 'No', description: 'Years of experience, e.g. 20 Years. The number feeds the match score.' },
+      { field: 'Active / Inactive', required: 'No', description: 'Availability and how they are engaged, as written in the roster, e.g. "Active / Regular", "Inactive / Not Interested", "Active / Back up". Read into availability, reason and engagement type.' },
+      { field: 'Status', required: 'No', description: 'Employment outcome where there is one, e.g. Resigned, Terminated, Expired. Takes precedence over the availability column when deciding the final status.' },
+      { field: 'Remarks', required: 'No', description: 'Any free-text note about this appraiser.' },
+      // ── References ──
+      { field: 'Reference 1 Name', required: 'No', description: 'Name of the first reference.' },
+      { field: 'Reference 1 Contact', required: 'No', description: 'Contact number of the first reference.' },
+      { field: 'Reference 2 Name', required: 'No', description: 'Name of the second reference.' },
+      { field: 'Reference 2 Contact', required: 'No', description: 'Contact number of the second reference.' },
+      // ── Onboarding documents (soft copy Yes/No) ──
+      ...documentColumns,
+      { field: 'NDA Hard Copy Status', required: 'No', description: 'The signed NDA original: whether the hard copy has been received and, where noted, which office holds it (e.g. Bangalore office).' },
+      // ── Background & credit check ──
+      { field: 'Background Verification Done', required: 'No', description: 'Outcome of the background check, e.g. Clear, Criminal Case, Civil Case. Only recognised outcomes are recorded; anything else is kept for a person to review.' },
+      { field: 'CIBIL Status', required: 'No', description: 'Credit band from the CIBIL check: Good, Average, Poor, Bad, or No Credit History.' },
+      { field: 'CIBIL Score', required: 'No', description: 'The numeric CIBIL score, e.g. 750.' },
+      { field: 'CIBIL Date', required: 'No', description: 'Date the CIBIL check was done.' },
+      // ── Client empanelment ──
+      { field: 'ICICI Status', required: 'No', description: 'Where this appraiser stands with ICICI, e.g. Recommended, Not Recommended, Active, Rejected. Recorded against the ICICI client.' },
+      { field: 'ICICI Documents Required', required: 'No', description: 'Which documents ICICI still needs before empanelment, if any.' },
     ];
 
+    const headers = columns.map((c) => c.field);
     const ws = xlsx.utils.json_to_sheet([], { header: headers });
     ws['!cols'] = headers.map((h) => ({ wch: h === 'Residence Address' ? 50 : Math.max(16, h.length + 4) }));
 
     const wb = xlsx.utils.book_new();
     xlsx.utils.book_append_sheet(wb, ws, 'Assayers');
 
-    const instructions = [
-      { Field: 'Assayer code', Required: 'Yes', Description: 'Unique code, e.g. AS0643. Re-importing the same code updates that assayer instead of creating a duplicate.' },
-      { Field: 'Assayer Name', Required: 'Yes', Description: 'Full name in one cell, e.g. "Shinil T". Split automatically — the last word is taken as the surname.' },
-      { Field: 'Phone', Required: 'No', Description: "The assayer's login identifier AND how dispatch notifications reach them. The row is accepted without one and flagged incomplete — the assayer cannot be called or dispatched to until it is filled in." },
-      { Field: 'Residence Address', Required: 'No', Description: 'Full address. Used to compute travel distance to branches; a 6-digit pincode inside this text is picked up automatically. Without it the assayer has no start point, so travel cannot be costed.' },
-      { Field: 'Initial Password', Required: 'No', Description: "Password the assayer signs in with. Defaults to 'assayer123' when blank. Only applied when the assayer is first created — re-importing a roster never resets an existing password." },
-      { Field: 'Location', Required: 'No', Description: 'Town or locality, e.g. Kunnamangalam. Stored as the city.' },
-      { Field: 'District', Required: 'No', Description: 'Used for travel distance and coverage planning.' },
-      { Field: 'State', Required: 'Yes', Description: 'Sets the region, the zone and the public-holiday calendar this assayer is planned against. A row without it is rejected.' },
-      { Field: 'Zone', Required: 'No', Description: 'Operating zone, e.g. South. Casing is normalised, so "north" and "North" are one zone.' },
-      { Field: 'Pincode', Required: 'No', Description: 'Leave blank if already present in the address.' },
-      { Field: 'Preferred Regions', Required: 'No', Description: 'Comma-separated. Regions this assayer prefers; improves their match score for branches there.' },
-      { Field: 'Email', Required: 'No', Description: 'Used for notifications where available.' },
-      { Field: 'Alternate Phone', Required: 'No', Description: 'Secondary contact number.' },
-      { Field: 'Employment Type', Required: 'No', Description: 'INTERNAL / EXTERNAL / CONTRACT.' },
-      { Field: 'Employee ID', Required: 'No', Description: 'HR identifier, for internal staff.' },
-      { Field: 'Department', Required: 'No', Description: 'Department name.' },
-      { Field: 'Joining Date', Required: 'No', Description: 'YYYY-MM-DD.' },
-      { Field: 'Skills', Required: 'No', Description: 'Comma-separated, e.g. Gold Assaying, Hallmarking. A branch or client that requires a skill will only be matched to assayers who have it — blank means this assayer is excluded from any such work.' },
-      { Field: 'Certifications', Required: 'No', Description: 'Semicolon-separated as Name|YYYY-MM-DD, e.g. Certified Gold Assayer|2027-06-01. Expiry is enforced: an expired certification blocks assignment to work requiring it.' },
-      { Field: 'Specializations', Required: 'No', Description: 'Comma-separated areas of speciality.' },
-      { Field: 'Languages', Required: 'No', Description: 'Comma-separated, e.g. English, Malayalam, Tamil. Used to match assayers to branches where the language matters.' },
-      { Field: 'Experience (Years)', Required: 'No', Description: 'Whole number. Feeds the match score.' },
-      { Field: 'Performance Rating', Required: 'No', Description: '1.00 – 10.00. Feeds the match score; leave blank to let the system derive it from completed work.' },
-      { Field: 'Max Daily Workload', Required: 'No', Description: 'Branches per day. Defaults to 3. The day planner will not exceed this.' },
-      { Field: 'Max Weekly Workload', Required: 'No', Description: 'Branches per week. Defaults to 15. Enforced when scheduling.' },
-      { Field: 'Working Hours Start', Required: 'No', Description: 'e.g. 09:00. Used to fit branches into a realistic working day.' },
-      { Field: 'Working Hours End', Required: 'No', Description: 'e.g. 18:00.' },
-      { Field: 'Base Fee', Required: 'No', Description: 'Standard fee per audit for this assayer. Used as the opening offer during negotiation and as the cost side of every audit they perform.' },
-      { Field: 'Daily Rate', Required: 'No', Description: 'Day rate where the engagement is priced per day rather than per audit.' },
-      { Field: 'Hourly Rate', Required: 'No', Description: 'Hourly rate, where applicable.' },
-      { Field: 'Travel Reimbursement', Required: 'No', Description: 'Travel paid per assignment. This is recharged to the client where their contract allows, so leaving it blank understates both cost and recoverable revenue.' },
-      { Field: 'Accommodation Allowance', Required: 'No', Description: 'Paid for overnight assignments.' },
-      { Field: 'Meal Allowance', Required: 'No', Description: 'Paid per assignment day.' },
-      { Field: 'PAN Number', Required: 'No', Description: 'Needed before payment; TDS is withheld against it.' },
-      { Field: 'Bank Account Number', Required: 'No', Description: 'Needed to disburse fees.' },
-      { Field: 'IFSC Code', Required: 'No', Description: 'Needed to disburse fees.' },
-      { Field: 'Emergency Contact Name', Required: 'No', Description: 'Emergency contact person.' },
-      { Field: 'Emergency Contact Phone', Required: 'No', Description: 'Emergency contact number.' },
-      { Field: 'Emergency Contact Relation', Required: 'No', Description: 'Relationship to the assayer.' },
-    ];
+    const instructions = columns.map((c) => ({ Field: c.field, Required: c.required, Description: c.description }));
     const instrWs = xlsx.utils.json_to_sheet(instructions, { header: ['Field', 'Required', 'Description'] });
-    instrWs['!cols'] = [{ wch: 26 }, { wch: 10 }, { wch: 95 }];
+    instrWs['!cols'] = [{ wch: 28 }, { wch: 10 }, { wch: 100 }];
     xlsx.utils.book_append_sheet(wb, instrWs, 'Instructions');
 
     return Buffer.from(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' }));

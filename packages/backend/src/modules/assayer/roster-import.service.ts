@@ -5,7 +5,7 @@ import {
   AssayerLifecycleStatus, Region, resolveRegion,
   readAvailability, readYesNo, readCibilBand, readBackgroundCheck, readEmpanelment,
   readPhoneNumbers, blankToNull, vocabularyKey, readHardCopyLocation, pincodeFromAddress,
-  OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, EmpanelmentStatus,
+  OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, EmpanelmentStatus,
   AssayerUnavailableReason, BackgroundCheckVerdict, CibilBand,
 } from '@fapoms/shared';
 import { rowReader } from '../../core/excel/sheet-reader';
@@ -332,9 +332,12 @@ export class RosterImportService {
   ): Promise<number> {
     // `xlsx` suffixes repeated headers, which is what makes the two "Contact" columns
     // addressable at all.
+    // `Contact` / `Contact_1` are how xlsx suffixes the client file's two identically-headed
+    // "Contact" columns; `Reference 1/2 Contact` are the clean, unambiguous headers the published
+    // template ships in their place. Both are read so either file imports.
     const pairs = [
-      { name: read('Refference 1 Name', 'Reference 1 Name'), phone: read('Contact') },
-      { name: read('Refference 2 Name', 'Reference 2 Name'), phone: read('Contact_1') },
+      { name: read('Refference 1 Name', 'Reference 1 Name'), phone: read('Contact', 'Reference 1 Contact') },
+      { name: read('Refference 2 Name', 'Reference 2 Name'), phone: read('Contact_1', 'Reference 2 Contact') },
     ];
 
     let written = 0;
@@ -362,7 +365,10 @@ export class RosterImportService {
       // alias would normalise to the same key as the sheet's 28 blank-headed columns and read
       // whichever one landed there first, so it is refused here rather than left to the lookup.
       if (!column) continue;
-      const raw = read(column);
+      // The client file uses the (mis)spelled column heading; the published template uses the
+      // clean document label. Read both so either file's cell is found — an added alias never
+      // shadows the original, which is tried first.
+      const raw = read(column, ONBOARDING_DOCUMENT_LABELS[requirement as OnboardingDocument]);
       const received = readYesNo(raw);
       if (received === null) continue;
       written++;
