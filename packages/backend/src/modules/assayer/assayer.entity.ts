@@ -1,8 +1,9 @@
-import { Entity, Column, Index, ManyToOne, JoinColumn } from 'typeorm';
+import { Entity, Column, Index, ManyToOne, JoinColumn, BeforeInsert, BeforeUpdate } from 'typeorm';
 import { BaseEntity } from '../../core/entities/base.entity';
 import {
   AssayerStatus, AssayerLifecycleStatus,
   AssayerEngagementType, AssayerUnavailableReason,
+  operationalStatusFor,
 } from '@fapoms/shared';
 import { encryptedColumn } from '../../infrastructure/security/field-encryption';
 
@@ -379,6 +380,34 @@ export class AssayerEntity extends BaseEntity {
   @Column({ name: 'average_rating', type: 'decimal', precision: 3, scale: 2, default: 0 })
   averageRating: number;
 
+  /**
+   * `status` is derived from `lifecycleStatus`, always, whoever is writing.
+   *
+   * It is the projection every planner filters on — the recommendation engine, the day planner,
+   * the command centre's capacity, the operations snapshot — and it exists so those queries can
+   * use one indexed column rather than reasoning about the HR lifecycle. It is not a second
+   * opinion, and the two disagreeing is not a state the system has any meaning for.
+   *
+   * The state machine derived it correctly. The roster importer wrote `lifecycleStatus` straight
+   * onto the entity, so `status` kept its column default of ACTIVE: 536 people who had resigned,
+   * been terminated, suspended or gone inactive were operationally active and offered as audit
+   * candidates. Nothing failed; the two columns simply said different things and only one of
+   * them was read.
+   *
+   * Deriving it here rather than asking every writer to remember is the difference between a
+   * rule and a convention. Entity listeners fire on `save()` — which is how the importer, the
+   * service and the state machine all write — so the projection cannot be left behind by a
+   * caller that did not know it existed.
+   *
+   * It does NOT fire on `QueryBuilder.update()` or `repository.update()`, which bypass the
+   * entity entirely. Nothing writes `lifecycle_status` that way today, and
+   * `derived-status.spec.ts` fails the build if something starts.
+   */
+  @BeforeInsert()
+  @BeforeUpdate()
+  deriveOperationalStatus(): void {
+    this.status = operationalStatusFor(this.lifecycleStatus) as AssayerStatus;
+  }
 }
 
 /**

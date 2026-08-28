@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { AssayerEntity } from './assayer.entity';
-import { AssayerLifecycleStatus, AssayerStatus, ASSAYER_LIFECYCLE_TRANSITIONS, assayerLifecyclePath } from '@fapoms/shared';
+import { AssayerLifecycleStatus, AssayerStatus, ASSAYER_LIFECYCLE_TRANSITIONS, assayerLifecyclePath, operationalStatusFor } from '@fapoms/shared';
 import {
   AssayerDocumentVerificationStartedEvent,
   AssayerBackgroundCheckInitiatedEvent,
@@ -18,24 +18,6 @@ import {
  * this machine will refuse. See packages/shared/src/assayer-lifecycle.ts. */
 const LIFECYCLE_TRANSITIONS = ASSAYER_LIFECYCLE_TRANSITIONS;
 
-/**
- * The operational status planning reads, derived from the HR lifecycle.
- *
- * `ON_LEAVE` used to fold into ACTIVE. Every planner filters on this projection — the
- * recommendation engine, the day planner, the command centre's daily capacity, the operations
- * snapshot — so marking someone on leave in HR left them in the candidate pool and still
- * counted them as available capacity, while the roster showed them as not active. Two ways to
- * say "away", one of which the planner ignored.
- *
- * Leave now means not available. The dated rows in `leaves` remain the per-date check
- * (`ConstraintEvaluator.checkLeaves`) — they answer "is this person away on the 14th", which is
- * a different question from "is this person away at all".
- */
-function mapLifecycleToOperationalStatus(lifecycle: string): AssayerStatus {
-  if (lifecycle === AssayerLifecycleStatus.ACTIVE) return AssayerStatus.ACTIVE;
-  if (lifecycle === AssayerLifecycleStatus.SUSPENDED) return AssayerStatus.SUSPENDED;
-  return AssayerStatus.INACTIVE;
-}
 
 export class AssayerStateMachine {
   /**
@@ -61,7 +43,10 @@ export class AssayerStateMachine {
 
   private static applyTransition(assayer: AssayerEntity, targetStatus: AssayerLifecycleStatus, userId: string) {
     assayer.lifecycleStatus = targetStatus;
-    assayer.status = mapLifecycleToOperationalStatus(targetStatus);
+    // Derived, not decided. `AssayerEntity.deriveOperationalStatus` applies the same rule on
+    // every save, so this is belt-and-braces for a caller that inspects the entity before it is
+    // persisted — the two must never be able to disagree.
+    assayer.status = operationalStatusFor(targetStatus) as AssayerStatus;
     assayer.updatedBy = userId;
     if (targetStatus === AssayerLifecycleStatus.ARCHIVED) assayer.isActive = false;
 

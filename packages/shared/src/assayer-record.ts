@@ -78,3 +78,30 @@ export function missingAssayerRecordFields(
     return value == null || String(value).trim() === '';
   });
 }
+
+/**
+ * The operational status planning reads, derived from the HR lifecycle.
+ *
+ * Two columns describe whether somebody can be sent to work: `lifecycle_status` is what HR
+ * decided, and `status` is the projection every planner filters on — the recommendation engine,
+ * the day planner, the command centre's capacity figures, the operations snapshot.
+ *
+ * The projection is not a second opinion. It exists so those queries can filter on one indexed
+ * column, and it is only ever correct if every writer of the lifecycle derives it. The state
+ * machine did; the roster importer wrote `lifecycleStatus` straight onto the entity and left
+ * `status` at its column default of ACTIVE, so 536 people who had resigned, been terminated,
+ * suspended or gone inactive were operationally active and offered as audit candidates.
+ *
+ * Lives here, in shared, so the entity can apply it in a lifecycle hook without importing the
+ * state machine that imports the entity.
+ *
+ * `ON_LEAVE` deliberately maps to INACTIVE rather than ACTIVE: leave means not available, and
+ * folding it into ACTIVE left somebody marked away in HR sitting in the candidate pool and
+ * counted as capacity. The dated rows in `leaves` remain the per-date check — "is this person
+ * away on the 14th" is a different question from "is this person away at all".
+ */
+export function operationalStatusFor(lifecycle: string | null | undefined): 'ACTIVE' | 'SUSPENDED' | 'INACTIVE' {
+  if (lifecycle === 'ACTIVE') return 'ACTIVE';
+  if (lifecycle === 'SUSPENDED') return 'SUSPENDED';
+  return 'INACTIVE';
+}
