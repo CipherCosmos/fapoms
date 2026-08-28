@@ -567,7 +567,12 @@ export const AssayerRoster: React.FC<{
     const fd = new FormData();
     fd.append('file', file);
     fd.append('dryRun', dryRun ? 'true' : 'false');
-    return api.request<RosterImportSummary>('/assayers/roster/import', { method: 'POST', body: fd });
+    // A real import writes the person plus their references, checks and documents — thousands of
+    // rows for a full roster. Give it far longer than the default upload timeout so a big first
+    // import on a slower server is never cut off mid-write (which looked like "nothing happened").
+    return api.request<RosterImportSummary>('/assayers/roster/import', {
+      method: 'POST', body: fd, timeoutMs: dryRun ? undefined : 15 * 60 * 1000,
+    });
   };
 
   const handleUpload = async (file: File) => {
@@ -611,6 +616,13 @@ export const AssayerRoster: React.FC<{
         confirmLabel: `Import ${dry.rowsRead.toLocaleString('en-IN')} appraisers`,
       });
       if (!proceed) { setUploading(false); return; }
+
+      // Say so immediately, so the wait while thousands of rows are written never reads as
+      // "nothing happened" after the confirm — the success message below replaces this.
+      setNotice({
+        tone: 'warn',
+        text: `Importing ${dry.rowsRead.toLocaleString('en-IN')} appraisers and their references, checks and documents… this can take up to a minute for a full roster — please stay on this page.`,
+      });
 
       // The real thing.
       const real = await postRoster(file, false);
