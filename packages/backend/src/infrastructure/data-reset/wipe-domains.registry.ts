@@ -71,7 +71,7 @@ export const WIPE_DOMAINS: WipeDomain[] = [
     description: 'Assayer profiles, commercial terms, documents and activity history.',
     tables: [
       'assayer_location_pings', 'assayer_activities', 'assayer_remarks', 'workforce_attributes',
-      'assayer_commercial_profiles', 'assayer_government_documents', 'assayer_documents', 'assayers',
+      'assayer_commercial_profiles', 'assayer_documents', 'assayers',
     ],
   },
   {

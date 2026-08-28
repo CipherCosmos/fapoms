@@ -271,8 +271,20 @@ export class DataResetService {
    *  count committed state on a pooled connection. */
   private async countTables(tables: string[], manager?: EntityManager): Promise<Record<string, number>> {
     const runner = manager ?? this.dataSource;
+    // A registry entry for a table that has since been renamed or dropped must NOT throw and take
+    // the whole Danger Zone down with it: this ran every count in one Promise.all, so a single
+    // missing relation (`assayer_government_documents`, gone once its data moved into
+    // `assayer_documents`) rejected the lot — the domains endpoint 500'd and the screen showed a
+    // silent empty list with no way to clear anything. Count only tables that actually exist; a
+    // missing one reads as 0 here, and the registry is the place to correct the name.
+    const present: Array<{ table_name: string }> = await runner.query(
+      `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = ANY($1)`,
+      [tables],
+    );
+    const existing = new Set(present.map((r) => r.table_name));
     const entries = await Promise.all(
       tables.map(async (table) => {
+        if (!existing.has(table)) return [table, 0] as const;
         const rows = await runner.query(`SELECT COUNT(*)::int AS count FROM "${table}"`);
         return [table, rows[0]?.count ?? 0] as const;
       }),

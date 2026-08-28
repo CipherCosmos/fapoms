@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { AlertTriangle, Trash2 } from 'lucide-react';
 import { api } from '../../../services/api';
+import { userMessage } from '../../../services/errors';
 import { SectionCard, Pill } from '../../../components/ui/settings';
 import { DataResetModal } from './DataResetModal';
 
@@ -29,7 +30,7 @@ export const DangerZoneSection: React.FC = () => {
   const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
   const [modalOpen, setModalOpen] = useState(false);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error, refetch } = useQuery({
     queryKey: ['data-reset', 'domains'],
     queryFn: () => api.request<{ domains: WipeDomain[] }>('/admin/data-reset/domains'),
     /**
@@ -77,6 +78,11 @@ export const DangerZoneSection: React.FC = () => {
       >
         {isLoading ? (
           <div style={{ padding: '30px', textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>Loading…</div>
+        ) : isError ? (
+          <div style={{ padding: '20px', display: 'flex', flexDirection: 'column', gap: '10px', alignItems: 'flex-start', color: 'var(--danger)', fontSize: '13px' }}>
+            <div>Couldn't load what can be cleared. {userMessage(error)}</div>
+            <button className="btn btn-secondary" style={{ padding: '6px 14px', fontSize: '12px' }} onClick={() => refetch()}>Try again</button>
+          </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             {domains.map((d, i) => {
