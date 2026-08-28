@@ -147,19 +147,69 @@ describe('FeePolicyService', () => {
     });
   });
 
+  /**
+   * The legacy per-km travel figure, stated as the rule rather than as a number.
+   *
+   * These expectations were literals worked out from a 10 km free allowance — `(60 - 10) * 8`.
+   * Raising the allowance to 50 km broke six of them, all reporting the formula wrong when the
+   * formula had not changed. A test of "travel is charged beyond the free allowance" should say
+   * exactly that, and keep passing when somebody moves the allowance.
+   */
+  const legacyTravel = (km: number): number =>
+    Math.round(
+      Math.max(0, km - PLATFORM_DEFAULT_FREE_TRAVEL_ALLOWANCE_KM) * PLATFORM_DEFAULT_TRAVEL_FEE_PER_KM,
+    );
+
   describe('quote', () => {
     it('prices a single-branch assignment as base + allowance-adjusted travel', async () => {
       qb.getOne.mockResolvedValue({ baseFee: 1200 });
       const q = await service.quote({ assayerId: 'a1', clientId: null, distanceKm: 25 });
-      expect(q).toMatchObject({ baseFee: 1200, branchCount: 1, travelFee: 120, total: 1320 });
+      expect(q).toMatchObject({
+        baseFee: 1200, branchCount: 1,
+        travelFee: legacyTravel(25), total: 1200 + legacyTravel(25),
+      });
+    });
+
+    /**
+     * A branch inside the assayer's own city is their commute, not a journey the company sends
+     * them on. At the previous 10 km allowance almost every audit carried a travel line — most of
+     * them for a few rupees — and each still had to be quoted, agreed, carved out of the payable
+     * and reconciled against a claim.
+     */
+    it('pays nothing for travel inside the free commute allowance', async () => {
+      qb.getOne.mockResolvedValue({ baseFee: 1200 });
+
+      const nearby = await service.quote({
+        assayerId: 'a1', clientId: null,
+        distanceKm: PLATFORM_DEFAULT_FREE_TRAVEL_ALLOWANCE_KM - 1,
+      });
+      expect(nearby.travelFee).toBe(0);
+      expect(nearby.total).toBe(1200);
+
+      // And exactly at the boundary: the allowance is inclusive.
+      const atTheEdge = await service.quote({
+        assayerId: 'a1', clientId: null, distanceKm: PLATFORM_DEFAULT_FREE_TRAVEL_ALLOWANCE_KM,
+      });
+      expect(atTheEdge.travelFee).toBe(0);
+    });
+
+    it('charges only the distance beyond the allowance, not the whole journey', async () => {
+      qb.getOne.mockResolvedValue({ baseFee: 1200 });
+      const km = PLATFORM_DEFAULT_FREE_TRAVEL_ALLOWANCE_KM + 10;
+
+      const q = await service.quote({ assayerId: 'a1', clientId: null, distanceKm: km });
+
+      expect(q.travelFee).toBe(10 * PLATFORM_DEFAULT_TRAVEL_FEE_PER_KM);
+      expect(q.travelFee).toBeLessThan(km * PLATFORM_DEFAULT_TRAVEL_FEE_PER_KM);
     });
 
     it('charges base fee per branch but travel once for a multi-branch day plan', async () => {
       qb.getOne.mockResolvedValue({ baseFee: 1200 });
       const q = await service.quote({ assayerId: 'a1', clientId: null, distanceKm: 60, branchCount: 3 });
       expect(q.baseComponent).toBe(3600);
-      expect(q.travelFee).toBe(400); // (60 - 10) * 8, charged once for the route
-      expect(q.total).toBe(4000);
+      // Charged once for the route, however many branches it covers.
+      expect(q.travelFee).toBe(legacyTravel(60));
+      expect(q.total).toBe(3600 + legacyTravel(60));
     });
 
     it('produces the same figure regardless of which caller asks — the divergence regression', async () => {
@@ -232,7 +282,7 @@ describe('FeePolicyService', () => {
         assayerId: 'a1', clientId: null, distanceKm: 25, place: { state: 'Kerala' },
       });
 
-      expect(q.travelFee).toBe(120); // (25 - 10) * 8
+      expect(q.travelFee).toBe(legacyTravel(25)); // (25 - 10) * 8
       expect(q.travelSource).toBe('PLATFORM_DEFAULT');
       expect(q.transport).toBeNull();
       expect(q.travelMode).toBeNull();
@@ -255,7 +305,7 @@ describe('FeePolicyService', () => {
         assayerId: 'a1', clientId: null, distanceKm: 60, place: { state: 'Kerala' },
       });
 
-      expect(q.travelFee).toBe(400); // (60 - 10) * 8, not ₹1,490 by auto
+      expect(q.travelFee).toBe(legacyTravel(60)); // the legacy formula, not ₹1,490 by auto
       expect(q.travelSource).toBe('PLATFORM_DEFAULT');
       expect(q.travelMode).toBeNull();
       expect(q.transport?.options[0]).toMatchObject({ mode: 'AUTO_RICKSHAW', viable: false });
@@ -265,7 +315,7 @@ describe('FeePolicyService', () => {
     it('keeps the legacy formula when the caller cannot say where the work is', async () => {
       qb.getOne.mockResolvedValue({ baseFee: 1200 });
       const q = await service.quote({ assayerId: 'a1', clientId: null, distanceKm: 25 });
-      expect(q.travelFee).toBe(120);
+      expect(q.travelFee).toBe(legacyTravel(25));
       expect(transportRates.estimate).not.toHaveBeenCalled();
     });
 
@@ -279,7 +329,7 @@ describe('FeePolicyService', () => {
         assayerId: 'a1', clientId: null, distanceKm: 25, place: { state: 'Kerala' },
       });
 
-      expect(q.travelFee).toBe(120);
+      expect(q.travelFee).toBe(legacyTravel(25));
       expect(q.travelSource).toBe('PLATFORM_DEFAULT');
     });
   });

@@ -280,10 +280,21 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
   {
     key: 'fees.platformFreeTravelKm',
     label: 'Free commute allowance',
-    description: 'Kilometres not charged before travel starts counting. Zero means charge from the first kilometre.',
+    description: 'Kilometres an assayer travels without being paid for the journey. Travel is '
+      + 'charged only beyond this. Zero means charge from the first kilometre.',
     group: 'fees',
     type: 'number',
-    default: 10,
+    /**
+     * 50 km, because a branch inside an assayer's own city is their commute, not a journey the
+     * company sends them on. At 10 km almost every audit carried a travel line — most of them
+     * for a few rupees — and each one had to be quoted, agreed, carved out of the payable and
+     * reconciled against a claim.
+     *
+     * A client's rate card still overrides this, so a contract that pays travel from the first
+     * kilometre keeps doing so. Quotes already agreed are frozen and are not recalculated: an
+     * assignment somebody accepted at a stated fee keeps that fee.
+     */
+    default: 50,
     min: 0,
     max: 1000,
     unit: 'km',
