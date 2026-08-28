@@ -1082,7 +1082,23 @@ export class AssignmentService {
     return { saved, event };
   }
 
-  async proposeCounterFee(id: string, userId: string, counterFee: number, remarks?: string): Promise<AssignmentEntity> {
+  /**
+   * A counter-offer is about the journey, not the audit fee.
+   *
+   * The fee is what the work is worth and comes from the rate card; neither the assayer nor the
+   * desk sets it. What varies is the travel — how far, by what, and at whose cost — so
+   * `counterTravelFee` is what moves, and the total follows it.
+   *
+   * This used to take the whole fee. `assignmentMoney` then carved travel back out at the frozen
+   * quoted figure, so every rupee negotiated landed in the *base* — silently repricing the audit
+   * instead of the journey, and leaving the payable's base disagreeing with the rate card that
+   * produced it.
+   *
+   * The total is kept in step here rather than derived at read time, because `proposedFee` is
+   * what the mobile app shows the assayer and what the payable is built from: those must agree
+   * with each other and with the travel figure beside them.
+   */
+  async proposeCounterFee(id: string, userId: string, counterTravelFee: number, remarks?: string): Promise<AssignmentEntity> {
     const assignment = await this.findOne(id);
     // A counter-offer only makes sense while the offer is still open. Without this guard it could
     // mutate proposedFee on a COMPLETED assignment (diverging from what was already billed) or
@@ -1137,12 +1153,28 @@ export class AssignmentService {
 
       return autoDeclined;
     }
-    // Captured before the overwrite: a fee negotiation's audit value is the movement.
+    // Captured before the overwrite: a negotiation's audit value is the movement.
     const previousFee = assignment.proposedFee;
+    const previousTravel = assignment.counterTravelFee ?? assignment.quotedTravelFee;
+
+    /**
+     * The audit fee the rate card set, which a counter-offer does not touch.
+     *
+     * Taken from the quote where there is one. An offer made before the quote columns existed
+     * has none, and for those the previous total less its travel is the best available reading of
+     * what the base was — the same arithmetic `assignmentMoney` has always applied.
+     */
+    const quotedTravel = Number(assignment.quotedTravelFee ?? 0);
+    const baseFee = assignment.quotedBaseFee !== null && assignment.quotedBaseFee !== undefined
+      ? Number(assignment.quotedBaseFee)
+      : Math.max(0, Number(previousFee ?? 0) - quotedTravel);
 
     assignment.negotiationCount = currentCount + 1;
-    assignment.proposedFee = counterFee;
-    assignment.remarks = remarks ?? `Counter offer #${assignment.negotiationCount} proposed: ₹${counterFee}`;
+    assignment.counterTravelFee = counterTravelFee;
+    assignment.proposedFee = Math.round((baseFee + counterTravelFee) * 100) / 100;
+    assignment.remarks = remarks
+      ?? `Counter offer #${assignment.negotiationCount}: travel ₹${counterTravelFee} `
+         + `(audit fee ₹${baseFee} unchanged)`;
     assignment.updatedBy = userId;
     if (assignment.projectBranch) {
       assignment.projectBranch.status = ProjectBranchStatus.NEGOTIATION;
@@ -1166,10 +1198,15 @@ export class AssignmentService {
       entityType: 'ASSIGNMENT',
       entityId: saved.id,
       userId,
-      remarks: `Counter offer #${saved.negotiationCount}: ₹${previousFee ?? 'unset'} → ₹${counterFee}.`,
+      // The movement that matters is the travel figure. The total is recorded beside it because
+      // that is what the payable is built from, but it moved only because travel did.
+      remarks: `Counter offer #${saved.negotiationCount}: travel ₹${previousTravel ?? 'unset'} → `
+        + `₹${counterTravelFee} (total ₹${previousFee ?? 'unset'} → ₹${saved.proposedFee}).`,
       metadata: {
+        previousTravelFee: previousTravel ?? null,
+        counterTravelFee,
         previousFee: previousFee ?? null,
-        counterFee,
+        proposedFee: saved.proposedFee,
         negotiationRound: saved.negotiationCount,
         assayerId: saved.assayerId,
       },
@@ -1191,7 +1228,8 @@ export class AssignmentService {
         assayerName: assignment.assayer
           ? `${assignment.assayer.firstName} ${assignment.assayer.lastName}`.trim()
           : 'The assayer',
-        proposedFee: counterFee,
+        proposedFee: saved.proposedFee,
+        counterTravelFee,
         branchName: assignment.projectBranch?.branch?.name ?? saved.assignmentNumber,
         reason: remarks ?? 'No reason given',
       },
@@ -1203,7 +1241,8 @@ export class AssignmentService {
         assignmentId: saved.id,
         assignmentNumber: saved.assignmentNumber,
         assayerId: saved.assayerId,
-        proposedFee: counterFee,
+        proposedFee: saved.proposedFee,
+        counterTravelFee,
         previousFee: previousFee ?? null,
         negotiationRound: saved.negotiationCount,
         // The phone receives this event and has to say something useful about it. Without a

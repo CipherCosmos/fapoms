@@ -525,7 +525,7 @@ export const OperationsInbox: React.FC = () => {
             })
           ))}
 
-          {lane('Negotiations', <IndianRupee size={14} />, data0.negotiations.length, 'var(--accent)', (
+          {lane('Travel fee', <IndianRupee size={14} />, data0.negotiations.length, 'var(--accent)', (
             data0.negotiations.map((item) => {
               const busy = busyId === item.id;
               return (

@@ -98,6 +98,20 @@ export class AssignmentEntity extends BaseEntity {
   @Column({ name: 'quoted_transport_mode', type: 'varchar', length: 30, nullable: true })
   quotedTransportMode: string | null;
 
+  /**
+   * The travel figure a counter-offer settled on, when one was made.
+   *
+   * A counter-offer is about the journey, not the audit fee: the fee is what the work is worth
+   * and comes from the rate card, while what varies is how far the assayer travels and at whose
+   * cost. `quotedTravelFee` above stays frozen at what the calculator said, so quoted-versus-
+   * agreed remains readable; this is what was agreed instead.
+   *
+   * Null means nothing was countered — the offer stands at the quote — which is also how every
+   * offer made before this column existed reads.
+   */
+  @Column({ name: 'counter_travel_fee', type: 'decimal', precision: 12, scale: 2, nullable: true })
+  counterTravelFee: number | null;
+
   // ── Check-in evidence ───────────────────────────────────────────────────
   /**
    * Where the assayer actually was when they checked in.

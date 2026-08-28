@@ -423,12 +423,42 @@ export class AssignmentController {
     }
 
     let assignment: any;
-    if (targetStatus === 'COUNTER_OFFER' || targetStatus === 'NEGOTIATION' || (targetStatus === 'PENDING' && (body.counterFee !== undefined || body.fee !== undefined || body.proposedFee !== undefined))) {
-      const feeVal = body.counterFee ?? body.fee ?? body.proposedFee;
-      if (!feeVal || isNaN(Number(feeVal))) {
-        throw new BadRequestException('Valid counter fee amount is required for negotiation.');
+    if (
+      targetStatus === 'COUNTER_OFFER' || targetStatus === 'NEGOTIATION'
+      || (targetStatus === 'PENDING'
+        && (body.counterTravelFee !== undefined || body.counterFee !== undefined
+          || body.fee !== undefined || body.proposedFee !== undefined))
+    ) {
+      /**
+       * What is countered is the travel, not the audit fee — the fee comes from the rate card.
+       *
+       * `counterTravelFee` is what current clients send. An older mobile build sends the whole
+       * fee as `counterFee`/`fee`/`proposedFee`, and those are still read: the travel share of
+       * such an offer is the total less the audit fee that was quoted, which is exactly what the
+       * old money formula derived anyway. Refusing them would strand every phone that has not
+       * updated, mid-negotiation.
+       */
+      const travelVal = body.counterTravelFee;
+      const wholeFeeVal = body.counterFee ?? body.fee ?? body.proposedFee;
+
+      let counterTravel: number;
+      if (travelVal !== undefined && travelVal !== null && !isNaN(Number(travelVal))) {
+        counterTravel = Number(travelVal);
+      } else if (wholeFeeVal !== undefined && wholeFeeVal !== null && !isNaN(Number(wholeFeeVal))) {
+        const current = await this.assignmentService.findOne(id);
+        const base = Number(current?.quotedBaseFee ?? 0);
+        counterTravel = Math.max(0, Number(wholeFeeVal) - base);
+      } else {
+        throw new BadRequestException(
+          'A travel amount is required to counter an offer. The audit fee itself is set by the '
+          + 'rate card and is not negotiated.',
+        );
       }
-      assignment = await this.assignmentService.proposeCounterFee(id, userId, Number(feeVal), body.reason ?? body.remarks);
+
+      if (counterTravel < 0) {
+        throw new BadRequestException('A travel amount cannot be negative.');
+      }
+      assignment = await this.assignmentService.proposeCounterFee(id, userId, counterTravel, body.reason ?? body.remarks);
     } else if (targetStatus === 'ACCEPTED') {
       // `fee` lets the desk accept on an assayer's behalf at a verbally-agreed number — the
       // phone-channel flow, where the negotiation happened inside the call, not in the app.

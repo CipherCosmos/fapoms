@@ -1625,9 +1625,17 @@ export const PlanningWorkspace: React.FC = () => {
   const handleSubmitCounterOffer = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!counterOfferAssignmentId) return;
-    const fee = Number(negotiatingFee);
-    if (!fee || Number.isNaN(fee)) {
-      setMessage({ type: 'error', text: 'Enter a valid counter fee.' });
+    /*
+      What is countered is the travel. The audit fee comes from the rate card and neither side
+      moves it, so a counter that used to send the whole fee had every rupee of it land in the
+      base — repricing the work rather than the journey.
+
+      Zero is a legitimate answer here (a branch inside the free commute allowance), so this
+      checks for a number rather than for truthiness.
+    */
+    const travelFee = Number(negotiatingFee);
+    if (negotiatingFee.trim() === '' || Number.isNaN(travelFee) || travelFee < 0) {
+      setMessage({ type: 'error', text: 'Enter the travel amount you are countering with.' });
       return;
     }
     setMessage(null);
@@ -1635,9 +1643,9 @@ export const PlanningWorkspace: React.FC = () => {
     try {
       await api.request(`/assignments/${counterOfferAssignmentId}/transition`, {
         method: 'POST',
-        body: JSON.stringify({ targetStatus: 'NEGOTIATION', counterFee: fee, remarks: counterRemarks || undefined }),
+        body: JSON.stringify({ targetStatus: 'NEGOTIATION', counterTravelFee: travelFee, remarks: counterRemarks || undefined }),
       });
-      setMessage({ type: 'success', text: `Countered at ₹${fee.toLocaleString()}. The assayer will see your counter on their app.` });
+      setMessage({ type: 'success', text: `Countered at ₹${travelFee.toLocaleString()} travel. The assayer will see it on their app.` });
       refreshBranches();
     } catch (err: any) {
       setMessage({ type: 'error', text: userMessage(err) });
@@ -2936,8 +2944,18 @@ export const PlanningWorkspace: React.FC = () => {
                 </div>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                {/*
+                  One input, two meanings, so it says which.
+
+                  Making the first offer, this is the whole fee — base plus travel — because that
+                  is what the assayer is shown and accepts. Countering, it is the travel alone:
+                  the audit fee comes from the rate card (read-only beside this) and is not what
+                  either side is arguing about. The old label said "Negotiation Fee" in both, and
+                  a desk countering at 650 had no way to know whether that was the journey or the
+                  whole job.
+                */}
                 <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <TrendingUp size={11} /> Negotiation Fee
+                  <TrendingUp size={11} /> {counterOfferAssignmentId ? 'Travel fee' : 'Total fee (base + travel)'}
                 </label>
                 <div style={{ position: 'relative' }}>
                   <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: '13px' }}>₹</span>

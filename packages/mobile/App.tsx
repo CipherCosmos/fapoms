@@ -1039,21 +1039,24 @@ function AppMain() {
           quotedTransportMode={negotiate.assignment.quotedTransportMode}
           quotedDistanceKm={negotiate.assignment.quotedDistanceKm}
           onCancel={overlay.close}
-          onSubmit={async (counterFee, remarks) => {
+          onSubmit={async (counterTravelFee, remarks) => {
             const res = await updateAssignmentStatus(
               negotiate.assignment.id,
               'PENDING',
               remarks,
-              { proposedFee: counterFee }
+              { counterTravelFee }
             );
             if (res.success) {
+              // Says travel, because that is what moved. The audit fee comes from the rate card
+              // and is not the assayer's to change — telling them "your fee of ₹650" when 650 is
+              // the travel would have them expecting a fee they never asked for.
               feedback.success(
-                'Counter-Offer Submitted',
-                `Your proposed fee of ${formatRupees(counterFee)} has been sent to Operations.`
+                'Travel request sent',
+                `You asked for ${formatRupees(counterTravelFee)} of travel. Operations will reply.`
               );
               overlay.close();
             } else {
-              feedback.error('Offer not sent', res.error || 'The counter-offer could not be submitted.');
+              feedback.error('Not sent', res.error || 'Your travel request could not be submitted.');
             }
           }}
         />

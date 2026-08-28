@@ -1286,16 +1286,19 @@ export class MobileApiService {
     assignmentId: string,
     status: AssayerAssignment['status'],
     reason?: string,
-    counterFee?: number,
+    /**
+     * What the assayer is asking for the journey.
+     *
+     * A counter-offer is about travel, not the audit fee — the fee comes from the rate card and
+     * is not the assayer's to move. This used to send the whole fee, and the server carved
+     * travel back out at the quoted figure, so everything asked for landed in the base.
+     */
+    counterTravelFee?: number,
   ): Promise<boolean> {
-    const backendStatus = counterFee !== undefined ? 'COUNTER_OFFER' : status;
+    const backendStatus = counterTravelFee !== undefined ? 'COUNTER_OFFER' : status;
     const body: any = { targetStatus: backendStatus };
     if (reason) body.reason = reason;
-    if (counterFee !== undefined) {
-      body.fee = counterFee;
-      body.counterFee = counterFee;
-      body.proposedFee = counterFee;
-    }
+    if (counterTravelFee !== undefined) body.counterTravelFee = counterTravelFee;
     const response = await this.fetchWithAuth(`${API_BASE_URL}/assignments/${assignmentId}/transition`, {
       method: 'POST',
       body: JSON.stringify(body),

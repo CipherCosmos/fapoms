@@ -15,7 +15,7 @@ interface NegotiateModalProps {
   quotedTravelFee?: number | null;
   quotedTransportMode?: string | null;
   quotedDistanceKm?: number | null;
-  onSubmit: (counterFee: number, remarks: string) => void | Promise<void>;
+  onSubmit: (counterTravelFee: number, remarks: string) => void | Promise<void>;
   onCancel: () => void;
 }
 
@@ -74,14 +74,14 @@ export const NegotiateModal: React.FC<NegotiateModalProps> = ({
      */
     const parsedFee = parseRupeeInput(feeText);
     if (parsedFee === null) {
-      setErrorMsg('Please enter a valid counter-offer fee amount.');
+      setErrorMsg('Enter the travel amount you are asking for.');
       return;
     }
     setLoading(true);
     try {
       await onSubmit(parsedFee, remarks);
     } catch (e: any) {
-      setErrorMsg(e?.message || 'Failed to submit counter-offer.');
+      setErrorMsg(e?.message || 'Could not send your travel request.');
     } finally {
       setLoading(false);
     }
@@ -110,7 +110,7 @@ export const NegotiateModal: React.FC<NegotiateModalProps> = ({
           padding: t.space.xl,
         }}>
         <Card level={2} style={{ gap: t.space.lg, padding: t.space.xl }}>
-          <AppText variant="h2">Negotiate Audit Fee</AppText>
+          <AppText variant="h2">Ask for a different travel amount</AppText>
           <AppText variant="caption" tone="muted">
             Current Offered Fee: {formatRupees(currentFee || 0)}
           </AppText>
@@ -123,7 +123,7 @@ export const NegotiateModal: React.FC<NegotiateModalProps> = ({
           )}
 
           <View style={{ gap: t.space.xs }}>
-            <AppText variant="overline" tone="faint">PROPOSED COUNTER FEE (₹)</AppText>
+            <AppText variant="overline" tone="faint">TRAVEL YOU ARE ASKING FOR (₹)</AppText>
             <TextInput
               style={inputStyle}
               keyboardType="number-pad"

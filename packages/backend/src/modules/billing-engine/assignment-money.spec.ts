@@ -191,4 +191,73 @@ describe('assignment money', () => {
       expect(r.totalAmount).toBe(round2(1333.33 + 240 - 133.33));
     });
   });
+
+  /**
+   * A counter-offer moves the journey, not the price of the work.
+   *
+   * The audit fee comes from the rate card — neither the assayer nor the desk sets it. Before
+   * this, a counter moved the *total* and the carve took travel back out at the frozen quoted
+   * figure, so every rupee negotiated landed in the base: the payable's base fee silently
+   * disagreed with the rate card that produced it, and "we agreed 2,300" told you nothing about
+   * whether the work or the journey had been repriced.
+   */
+  describe('when travel was countered', () => {
+    it('pays the agreed travel, not the quoted travel', () => {
+      const m = assignmentMoney(
+        { agreedFee: 2350, quotedTravelFee: 300, counterTravelFee: 650 },
+        rateCard,
+      );
+      expect(m.assayer.travel).toBe(650);
+    });
+
+    it('leaves the audit fee exactly where the rate card put it', () => {
+      // Quote was base 1,700 + travel 300 = 2,000. Travel countered to 650, so the total is
+      // 2,350 — and the base must still be 1,700, not 2,050.
+      const m = assignmentMoney(
+        { agreedFee: 2350, quotedTravelFee: 300, counterTravelFee: 650 },
+        rateCard,
+      );
+      expect(m.assayer.base).toBe(1700);
+      expect(m.assayer.gross).toBe(2350);
+    });
+
+    it('falls back to the quoted travel when nothing was countered', () => {
+      const m = assignmentMoney({ agreedFee: 2000, quotedTravelFee: 300 }, rateCard);
+      expect(m.assayer.travel).toBe(300);
+      expect(m.assayer.base).toBe(1700);
+    });
+
+    it('treats a countered travel of zero as a real answer, not as absent', () => {
+      // Inside the free commute allowance the agreed travel is nothing, and that is a decision —
+      // it must not fall through to the quoted figure.
+      const m = assignmentMoney(
+        { agreedFee: 1700, quotedTravelFee: 300, counterTravelFee: 0 },
+        rateCard,
+      );
+      expect(m.assayer.travel).toBe(0);
+      expect(m.assayer.base).toBe(1700);
+    });
+
+    it('never produces a negative base, however the total and travel disagree', () => {
+      // The clamp that has always guarded this: a total below the travel figure would otherwise
+      // carve out more than there is.
+      const m = assignmentMoney(
+        { agreedFee: 400, quotedTravelFee: 300, counterTravelFee: 900 },
+        rateCard,
+      );
+      expect(m.assayer.base).toBeGreaterThanOrEqual(0);
+      expect(m.assayer.gross).toBe(400);
+    });
+
+    it('keeps gross equal to the fee exactly, which the whole carve exists to do', () => {
+      for (const counterTravelFee of [0, 125, 650, 2350]) {
+        const m = assignmentMoney(
+          { agreedFee: 2350, quotedTravelFee: 300, counterTravelFee },
+          rateCard,
+        );
+        expect(m.assayer.base + m.assayer.travel).toBe(m.assayer.gross);
+        expect(m.assayer.gross).toBe(2350);
+      }
+    });
+  });
 });

@@ -20,7 +20,8 @@ interface AssignmentContextType {
     assignmentId: string,
     status: AssayerAssignment['status'],
     notes?: string,
-    reportData?: { pdfName?: string; data?: any; proposedFee?: number }
+    /** `counterTravelFee` is what a counter-offer moves — the audit fee comes from the rate card. */
+    reportData?: { pdfName?: string; data?: any; counterTravelFee?: number }
   ) => Promise<{ success: boolean; error?: string }>;
   rejectAssignment: (assignmentId: string, reason: string) => Promise<{ success: boolean; error?: string }>;
   submitExpense: (
@@ -228,14 +229,14 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     assignmentId: string,
     status: AssayerAssignment['status'],
     notes?: string,
-    reportData?: { pdfName?: string; data?: any; proposedFee?: number }
+    reportData?: { pdfName?: string; data?: any; counterTravelFee?: number }
   ) => {
     try {
       const success = await MobileApiService.updateAssignmentStatus(
         assignmentId,
         status,
         notes,
-        reportData?.proposedFee
+        reportData?.counterTravelFee
       );
       if (success) {
         await loadAssignments();

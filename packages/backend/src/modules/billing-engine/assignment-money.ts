@@ -108,6 +108,17 @@ export interface AssignmentMoneyInput extends AssignmentFeeLike {
    * (`FeePolicyService.quote`). Billing never re-prices travel; it only reads this.
    */
   quotedTravelFee?: unknown;
+  /**
+   * What a counter-offer settled the travel at, when one was made.
+   *
+   * A counter-offer is about the journey rather than the audit fee — the fee is what the work is
+   * worth and comes from the rate card. So this, not `quotedTravelFee`, is the travel actually
+   * owed once it is set. The quoted figure stays readable beside it, which is what makes
+   * "asked 400, agreed 650" a fact the audit trail can state.
+   *
+   * Null or absent means nothing was countered and the quote stands.
+   */
+  counterTravelFee?: unknown;
 }
 
 export interface MoneyContext {
@@ -180,8 +191,23 @@ export function assignmentMoney(a: AssignmentMoneyInput, ctx: MoneyContext): Ass
   const fee = assignmentFee(a);
   const amount = fee.amount;
 
+  /**
+   * The travel actually owed: what a counter-offer settled on, else what was quoted.
+   *
+   * The carve below is unchanged and does not need to be: `proposeCounterFee` keeps the total in
+   * step by writing `base + counterTravel` into `proposedFee`, so `amount - travel` still lands
+   * exactly on the base the rate card set. The difference is which travel figure is authoritative
+   * — before, every rupee negotiated moved the *base*, silently changing the price of the work
+   * rather than the price of getting there.
+   */
+  const counteredTravel =
+    a.counterTravelFee !== null && a.counterTravelFee !== undefined ? num(a.counterTravelFee) : null;
   const quotedTravel =
-    a.quotedTravelFee !== null && a.quotedTravelFee !== undefined ? num(a.quotedTravelFee) : null;
+    counteredTravel !== null
+      ? counteredTravel
+      : a.quotedTravelFee !== null && a.quotedTravelFee !== undefined
+        ? num(a.quotedTravelFee)
+        : null;
 
   let assayerBase: number;
   let assayerTravel: number;
