@@ -53,6 +53,18 @@ import * as path from 'path';
 import { calculateHaversineDistance } from '@fapoms/shared';
 import { JsonFileCache } from './geo-cache-store';
 
+/**
+ * Nominatim endpoint, configurable so a deployment can point at a SELF-HOSTED instance instead of
+ * the public server. Set `NOMINATIM_URL` (e.g. http://nominatim:8080) to your own instance — it
+ * has no 1-request-per-second usage policy, so the politeness delay is dropped for it and the
+ * whole roster geocodes at full speed. Left unset, it uses the public server at the public rate.
+ */
+const NOMINATIM_BASE_URL = (process.env.NOMINATIM_URL || 'https://nominatim.openstreetmap.org').replace(/\/+$/, '');
+const NOMINATIM_IS_SELF_HOSTED = !!process.env.NOMINATIM_URL && !/nominatim\.openstreetmap\.org/i.test(process.env.NOMINATIM_URL);
+// Public Nominatim's policy is an absolute max of 1 request/second, per IP. A self-hosted one has
+// no such limit, so we only queue behind it a token amount to avoid hammering a single connection.
+const NOMINATIM_MIN_INTERVAL_MS = NOMINATIM_IS_SELF_HOSTED ? 0 : 1100;
+
 export interface Coord {
   lat: number;
   lng: number;
@@ -597,8 +609,8 @@ async function nominatimSearch(
   if (parts.pincode && /^\d{6}$/.test(parts.pincode)) params.set('postalcode', parts.pincode);
 
   // Nominatim's usage policy: absolute maximum 1 request per second, per IP.
-  const data = await politely('nominatim', 1100, () =>
-    getJson(`https://nominatim.openstreetmap.org/search?${params.toString()}`),
+  const data = await politely('nominatim', NOMINATIM_MIN_INTERVAL_MS, () =>
+    getJson(`${NOMINATIM_BASE_URL}/search?${params.toString()}`),
   );
 
   const entries: any[] = Array.isArray(data) ? data : [];
@@ -662,8 +674,8 @@ export async function pincodeCentroid(
     limit: '1',
     addressdetails: '1',
   });
-  const data = await politely('nominatim', 1100, () =>
-    getJson(`https://nominatim.openstreetmap.org/search?${params.toString()}`),
+  const data = await politely('nominatim', NOMINATIM_MIN_INTERVAL_MS, () =>
+    getJson(`${NOMINATIM_BASE_URL}/search?${params.toString()}`),
   );
 
   const entry = Array.isArray(data) ? data[0] : null;
@@ -765,8 +777,8 @@ export async function reverseFreely(coord: Coord): Promise<{ state?: string; dis
     zoom: '12',
     addressdetails: '1',
   });
-  const data = await politely('nominatim', 1100, () =>
-    getJson(`https://nominatim.openstreetmap.org/reverse?${params.toString()}`),
+  const data = await politely('nominatim', NOMINATIM_MIN_INTERVAL_MS, () =>
+    getJson(`${NOMINATIM_BASE_URL}/reverse?${params.toString()}`),
   );
   if (!data?.address) return null;
   return {
