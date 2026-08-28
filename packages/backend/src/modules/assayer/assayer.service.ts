@@ -511,12 +511,47 @@ export class AssayerService implements OnModuleInit {
     return `AS-${String(highest + 1).padStart(2, '0')}`;
   }
 
+  /**
+   * A code the caller chose is honoured; one the system allocates is retried on collision.
+   *
+   * This read the highest code, checked it was free, then inserted — three statements with no
+   * lock between them, so two people adding an assayer at the same moment both saw the same
+   * gap and both aimed at it. The unique constraint on `assayer_code` meant the database
+   * refused the loser rather than storing two, which is the important half; but the loser was
+   * shown "Assayer code AS-09 already exists" about a code they never typed and could not
+   * change, having filled in the whole form.
+   *
+   * Now it simply takes the next one, the same way `ProjectService.create` does. A code the
+   * user typed themselves is never retried — saving somebody under a different code than the
+   * one on screen would be worse than the error.
+   */
   async create(dto: CreateAssayerDto, userId: string, organizationId?: string | null): Promise<AssayerEntity> {
-    const assayerCode = dto.assayerCode?.trim() || (await this.allocateAssayerCode());
-    dto = { ...dto, assayerCode };
+    const supplied = dto.assayerCode?.trim();
+    if (supplied) {
+      const existing = await this.assayerRepository.findOne({ where: { assayerCode: supplied } });
+      if (existing) throw new ConflictException(`Assayer code ${supplied} already exists.`);
+      return this.persistNewAssayer(dto, supplied, userId, organizationId);
+    }
 
-    const existing = await this.assayerRepository.findOne({ where: { assayerCode } });
-    if (existing) throw new ConflictException(`Assayer code ${assayerCode} already exists.`);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const candidate = await this.allocateAssayerCode();
+      try {
+        return await this.persistNewAssayer(dto, candidate, userId, organizationId);
+      } catch (err: any) {
+        // 23505 = unique_violation. Anything else is a real failure and must surface.
+        if (err?.code !== '23505' && err?.driverError?.code !== '23505') throw err;
+      }
+    }
+    throw new ConflictException('Could not allocate an assayer code just now. Please try again.');
+  }
+
+  private async persistNewAssayer(
+    dto: CreateAssayerDto,
+    assayerCode: string,
+    userId: string,
+    organizationId?: string | null,
+  ): Promise<AssayerEntity> {
+    dto = { ...dto, assayerCode };
 
     await assertAddressConsistent(dto);
 
