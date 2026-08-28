@@ -76,7 +76,6 @@ interface BranchUploadMeta {
 
 interface FormData {
   name: string;
-  projectNumber: string;
   clientId: string;
   priority: Priority;
   startDate: string;
@@ -212,7 +211,6 @@ const getInitialProjectForm = (clientId = ''): FormData => {
      * whole form had been filled in, and the user was rejected over a field they never chose.
      * Only the server can see every number, including those held by deleted projects.
      */
-    projectNumber: '',
     clientId,
     priority: Priority.MEDIUM,
     startDate: formatDate(today),
@@ -499,8 +497,8 @@ export const Projects: React.FC = () => {
         method: 'POST',
         body: JSON.stringify({
           name: form.name,
-          // Omitted when blank so the server allocates it; sent verbatim when the user typed one.
-          projectNumber: form.projectNumber.trim() || undefined,
+          // No number: the server assigns it. The request DTO refuses one, rather than ignoring
+          // it, so a client that still sends one is told rather than left believing it stuck.
           clientId: form.clientId,
           priority: form.priority,
           startDate: form.startDate || undefined,
@@ -527,7 +525,6 @@ export const Projects: React.FC = () => {
     if (!detail) return;
     setForm({
       name: detail.name,
-      projectNumber: detail.projectNumber,
       clientId: detail.clientId,
       priority: detail.priority,
       startDate: detail.startDate ? detail.startDate.substring(0, 10) : '',
@@ -551,7 +548,8 @@ export const Projects: React.FC = () => {
         method: 'PUT',
         body: JSON.stringify({
           name: form.name,
-          projectNumber: form.projectNumber,
+          // Not sent: the number is assigned once and never changes. It identifies the project in
+          // everything already handed out, so renaming it here would rename it nowhere else.
           clientId: form.clientId,
           priority: form.priority,
           startDate: form.startDate || undefined,
@@ -736,10 +734,15 @@ export const Projects: React.FC = () => {
             <input type="text" value={form.name} onChange={(e) => setForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. SBI Quarter 3 Audit" required style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }} />
           </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-            <label htmlFor="project-number" style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Project Number</label>
-            <input id="project-number" type="text" value={form.projectNumber} onChange={(e) => setForm(f => ({ ...f, projectNumber: e.target.value }))} placeholder="Left blank, one is assigned for you" style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }} />
-          </div>
+          {/*
+            NO PROJECT NUMBER FIELD. The server assigns it — see `allocateProjectNumber`.
+
+            It was an optional box saying "Left blank, one is assigned for you", which invited
+            somebody to fill it in. A hand-typed number sits outside the `PRJ-<year>-###`
+            sequence, so the next allocation cannot see it and the series stops being one; and
+            the number is how a project is named in audit entries, document filenames, billing
+            lines and every export. The confirmation after saving says which number it got.
+          */}
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Client *</label>

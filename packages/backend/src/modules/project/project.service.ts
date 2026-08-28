@@ -162,12 +162,6 @@ export type UpdateProjectDto = Partial<CreateProjectDto>;
 
 export interface CreateProjectDto {
   name: string;
-  /**
-   * Optional. Blank means "allocate the next free `PRJ-<year>-###`" — see
-   * `allocateProjectNumber()`. A supplied number is always honoured, so every existing caller
-   * (the mobile app, imports, scripts) behaves exactly as before.
-   */
-  projectNumber?: string;
   description?: string;
   clientId: string;
   priority: string;
@@ -306,32 +300,36 @@ export class ProjectService implements OnModuleInit {
     return `${prefix}${String(highest + 1).padStart(3, '0')}`;
   }
 
+  /**
+   * The number is the system's to give, and nobody else's.
+   *
+   * It used to be an optional field on the form: blank meant "allocate one", and anything typed
+   * was honoured. Two things came of that. A hand-typed number sits outside the `PRJ-<year>-###`
+   * sequence, so the next allocation cannot see it and the series stops being a series. And the
+   * number is how a project is named in audit entries, document filenames, billing lines and
+   * every export — a value somebody invents once, under pressure, at the bottom of a form they
+   * are trying to submit, is a poor thing to hang all of that on.
+   *
+   * Retried on the unique-constraint violation two simultaneous creates produce: `project_number`
+   * is UNIQUE in the database, so the loser of the race is told by Postgres rather than by a
+   * guess, and takes the next number.
+   */
   async create(dto: CreateProjectDto, userId: string, organizationId?: string | null): Promise<ProjectEntity> {
-    /**
-     * Allocated here when the caller left it blank, and retried on the unique-constraint
-     * violation that two simultaneous creates produce: `project_number` is UNIQUE in the
-     * database, so the loser of the race is told so by Postgres rather than by a guess, and
-     * simply takes the next number. A number the user typed themselves is never retried —
-     * saving it under a different number than the one on screen would be worse than the error.
-     */
-    if (!dto.projectNumber?.trim()) {
-      for (let attempt = 0; attempt < 5; attempt++) {
-        const candidate = await this.allocateProjectNumber();
-        try {
-          return await this.persistNewProject({ ...dto, projectNumber: candidate }, userId, organizationId);
-        } catch (err: any) {
-          // 23505 = unique_violation. Anything else is a real failure and must surface.
-          if (err?.code !== '23505' && err?.driverError?.code !== '23505') throw err;
-        }
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const candidate = await this.allocateProjectNumber();
+      try {
+        return await this.persistNewProject(dto, candidate, userId, organizationId);
+      } catch (err: any) {
+        // 23505 = unique_violation. Anything else is a real failure and must surface.
+        if (err?.code !== '23505' && err?.driverError?.code !== '23505') throw err;
       }
-      throw new BadRequestException('Could not allocate a project number just now. Please try again.');
     }
-    return this.persistNewProject({ ...dto, projectNumber: dto.projectNumber.trim() }, userId, organizationId);
+    throw new BadRequestException('Could not allocate a project number just now. Please try again.');
   }
 
-  private async persistNewProject(dto: CreateProjectDto, userId: string, organizationId?: string | null): Promise<ProjectEntity> {
+  private async persistNewProject(dto: CreateProjectDto, projectNumber: string, userId: string, organizationId?: string | null): Promise<ProjectEntity> {
     const project = this.projectRepository.create({
-      projectNumber: dto.projectNumber!,
+      projectNumber,
       name: dto.name,
       description: dto.description ?? null,
       clientId: dto.clientId,
@@ -434,7 +432,13 @@ export class ProjectService implements OnModuleInit {
     // omitted field was silently wiped — `description` in particular went null on
     // every edit that did not resend it.
     if (dto.name !== undefined) project.name = dto.name;
-    if (dto.projectNumber !== undefined) project.projectNumber = dto.projectNumber;
+    /*
+      `projectNumber` is deliberately not updatable. It is the project's identity in audit
+      entries, document filenames, billing lines and every export already handed out; changing it
+      renames the project everywhere it has been referenced and nowhere it has been printed.
+      The field is gone from the request DTO too, so a client sending one is refused rather than
+      silently ignored — an edit that reports success and changes nothing is the worse failure.
+    */
     if (dto.description !== undefined) project.description = dto.description ?? null;
     if (dto.clientId !== undefined) project.clientId = dto.clientId;
     if (dto.priority !== undefined) project.priority = dto.priority as any;

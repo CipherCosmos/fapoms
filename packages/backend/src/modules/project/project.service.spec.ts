@@ -46,6 +46,8 @@ describe('ProjectService', () => {
     save: jest.fn(),
     findOne: jest.fn(),
     findAndCount: jest.fn(),
+    // Read by allocateProjectNumber to find the highest number in this year's series.
+    find: jest.fn().mockResolvedValue([]),
   };
 
   const mockLiveAssignmentRepo = { findOne: jest.fn().mockResolvedValue(null) };
@@ -206,18 +208,37 @@ describe('ProjectService', () => {
       mockProjectRepo.save.mockResolvedValue(mockCreated);
 
       const result = await service.create(
-        {
-          name: 'Project 1',
-          projectNumber: 'PROJ-1',
-          clientId: 'c-1',
-          priority: 'MEDIUM',
-        },
+        { name: 'Project 1', clientId: 'c-1', priority: 'MEDIUM' },
         'user-1',
       );
 
       expect(result.status).toBe(ProjectStatus.DRAFT);
       expect(mockProjectRepo.save).toHaveBeenCalled();
       expect(mockAuditService.recordEvent).toHaveBeenCalled();
+    });
+
+    /**
+     * The number is the system's to give.
+     *
+     * It was an optional field on the form — blank meant "allocate one", anything typed was
+     * honoured. A hand-typed number sits outside the `PRJ-<year>-###` sequence, so the next
+     * allocation cannot see it and the series stops being one; and the number is how a project
+     * is named in audit entries, document filenames, billing lines and every export.
+     */
+    it('allocates the number itself, whatever the caller sends', async () => {
+      mockProjectRepo.find.mockResolvedValue([{ projectNumber: `PRJ-${new Date().getFullYear()}-007` }]);
+      mockProjectRepo.create.mockImplementation((v: any) => v);
+      mockProjectRepo.save.mockImplementation(async (v: any) => ({ ...v, id: 'p-2' }));
+
+      // `projectNumber` is not on CreateProjectDto any more; a caller that sends one anyway is
+      // refused by the request DTO before this point, and ignored here if it gets through.
+      await service.create(
+        { name: 'Project 2', clientId: 'c-1', priority: 'MEDIUM', projectNumber: 'HAND-TYPED' } as any,
+        'user-1',
+      );
+
+      const saved = mockProjectRepo.save.mock.calls.at(-1)![0];
+      expect(saved.projectNumber).toBe(`PRJ-${new Date().getFullYear()}-008`);
     });
   });
 

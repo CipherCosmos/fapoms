@@ -73,7 +73,6 @@ export class CreateProjectRequestDto implements CreateProjectDto {
    * Optional: left blank, the service allocates the next `PRJ-<year>-###`. Backward-compatible —
    * a number that is sent is still used verbatim; only its absence is newly accepted.
    */
-  @IsOptional() @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(50) projectNumber?: string;
   @IsOptional() @IsString() @MaxLength(2000) description?: string;
   @IsUUID() clientId: string;
   @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(50) priority: string;
@@ -96,7 +95,6 @@ export class CreateProjectRequestDto implements CreateProjectDto {
  */
 class UpdateProjectRequestDto {
   @IsOptional() @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(255) name?: string;
-  @IsOptional() @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(50) projectNumber?: string;
   @IsOptional() @IsString() @MaxLength(2000) description?: string;
   @IsOptional() @IsUUID() clientId?: string;
   @IsOptional() @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(50) priority?: string;
