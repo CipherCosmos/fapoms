@@ -504,17 +504,37 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
       tileLayerRef.current.remove();
     }
 
-    const tileUrl = effectiveMapStyle === 'satellite'
-      ? 'https://{s}.google.com/vt/lyrs=y&x={x}&y={y}&z={z}' // Google Hybrid Satellite
-      : effectiveMapStyle === 'dark'
-      ? 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png' // CartoDB Dark Matter
-      : 'https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png'; // CartoDB Voyager
-
+    /**
+     * Fully free, no-key basemaps — nothing to sign up for, no account, no API key.
+     *
+     * The old street tiles came from CARTO, which started returning "API KEY REQUIRED" tiles,
+     * and satellite came from an unofficial Google endpoint (keyless but against Google's terms
+     * and liable to break). Both are replaced with sources that ask for nothing: OpenStreetMap
+     * for the street map and Esri's public World Imagery for satellite.
+     */
     const isSatellite = effectiveMapStyle === 'satellite';
+    const tileUrl = isSatellite
+      ? 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+      : 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+
     tileLayerRef.current = L.tileLayer(tileUrl, {
-      subdomains: isSatellite ? ['mt0', 'mt1', 'mt2', 'mt3'] : ['a', 'b', 'c', 'd'],
-      attribution: isSatellite ? '&copy; Google Maps' : '&copy; OpenStreetMap &copy; CARTO',
+      subdomains: ['a', 'b', 'c'], // ignored by the Esri URL (it has no {s})
+      maxZoom: 19,
+      attribution: isSatellite
+        ? '&copy; Esri, Maxar, Earthstar Geographics'
+        : '&copy; OpenStreetMap contributors',
     }).addTo(map);
+
+    /**
+     * No keyless DARK raster provider survives, so the dark style is OpenStreetMap inverted at the
+     * tile-pane level. Markers and shapes live in their own panes, so only the basemap darkens.
+     */
+    const tilePane = map.getPane('tilePane');
+    if (tilePane) {
+      tilePane.style.filter = effectiveMapStyle === 'dark'
+        ? 'invert(1) hue-rotate(180deg) brightness(0.95) contrast(0.9)'
+        : '';
+    }
   }, [effectiveMapStyle, ensureMap]);
 
   useEffect(() => {
