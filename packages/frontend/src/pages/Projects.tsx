@@ -15,7 +15,7 @@ const useIsNarrow = (max = 900): boolean => {
   }, [max]);
   return narrow;
 };
-import { FileSpreadsheet, Eye, X, Edit2, Trash2, Building2, FolderKanban, ChevronRight, Clock, ExternalLink, Compass, AlertTriangle, RefreshCw, ChevronDown } from 'lucide-react';
+import { FileSpreadsheet, Eye, X, Edit2, Trash2, Building2, FolderKanban, ChevronRight, Clock, ExternalLink, Compass, AlertTriangle, RefreshCw, ChevronDown, Zap } from 'lucide-react';
 import { ProjectStatus, Priority, projectStatusLabel, branchStatusLabel } from '@fapoms/shared';
 import { api } from '../services/api';
 import { useScope, withScope } from '../context/ScopeContext';
@@ -268,6 +268,10 @@ export const Projects: React.FC = () => {
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const [showCreateModal, setShowCreateModal] = useState(false);
+  // Fast path — the three fields the server actually requires; everything else defaults and
+  // can be filled in later on the project. Less typing for the common "just start one" case.
+  const [showQuickModal, setShowQuickModal] = useState(false);
+  const [quickForm, setQuickForm] = useState<{ name: string; clientId: string; priority: Priority }>({ name: '', clientId: '', priority: Priority.MEDIUM });
   const [showEditModal, setShowEditModal] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [confirmText, setConfirmText] = useState('');
@@ -516,6 +520,32 @@ export const Projects: React.FC = () => {
       loadProjects();
     } catch (err: any) {
       setMessage({ type: 'error', text: `Failed to create project. ${userMessage(err)}` });
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleQuickCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setMessage(null);
+    if (!quickForm.name.trim() || !quickForm.clientId) {
+      setMessage({ type: 'error', text: 'A project needs a name and a client.' });
+      return;
+    }
+    setIsSaving(true);
+    try {
+      // Only the essentials. The server allocates the PRJ-<year>-### number and the rest of the
+      // record takes its defaults — dates, scope, skills and so on are added later if needed.
+      const response = await api.request<ProjectItem>('/projects', {
+        method: 'POST',
+        body: JSON.stringify({ name: quickForm.name.trim(), clientId: quickForm.clientId, priority: quickForm.priority }),
+      });
+      setMessage({ type: 'success', text: `Project "${response.name}" (${response.projectNumber}) created. Add branches and details whenever you're ready.` });
+      setShowQuickModal(false);
+      setQuickForm({ name: '', clientId: clients[0]?.id || '', priority: Priority.MEDIUM });
+      loadProjects();
+    } catch (err: any) {
+      setMessage({ type: 'error', text: `Could not create the project. ${userMessage(err)}` });
     } finally {
       setIsSaving(false);
     }
@@ -886,6 +916,15 @@ export const Projects: React.FC = () => {
           }} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}>
             <FileSpreadsheet size={15} /> Export
           </button>
+          {canManage && (
+            <button
+              onClick={() => { setMessage(null); setQuickForm({ name: '', clientId: clients[0]?.id || '', priority: Priority.MEDIUM }); setShowQuickModal(true); }}
+              className="btn btn-secondary"
+              title="Create a project with just a name and client — add the rest later"
+              style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}>
+              <Zap size={15} /> Quick create
+            </button>
+          )}
           {canManage && (
             <PrimaryButton onClick={() => { setMessage(null); setForm(getInitialProjectForm(clients[0]?.id || '')); setShowCreateModal(true); }}>
               Create Project
@@ -1432,6 +1471,40 @@ export const Projects: React.FC = () => {
 
       {/* Create Modal */}
       {showCreateModal && renderForm(handleCreate, () => setShowCreateModal(false), 'Create Audit Project')}
+
+      {showQuickModal && (
+        <Modal open asForm onSubmit={handleQuickCreate} onClose={() => setShowQuickModal(false)} title="Quick create a project" width="460px" closeIcon={<X size={18} />}
+          footer={
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+              <button type="button" onClick={() => setShowQuickModal(false)} className="btn btn-secondary" disabled={isSaving}>Cancel</button>
+              <button type="submit" className="btn btn-primary" disabled={isSaving}>{isSaving ? 'Creating…' : 'Create project'}</button>
+            </div>
+          }
+        >
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <p style={{ margin: 0, fontSize: '12.5px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+              Just a name and a client to get started — a project number is assigned automatically, and you can add branches, dates, scope and required skills later.
+            </p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Project name *</label>
+              <input autoFocus type="text" value={quickForm.name} onChange={(e) => setQuickForm(f => ({ ...f, name: e.target.value }))}
+                placeholder="e.g. Gold Audit — Q3"
+                style={{ padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none' }} />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Client *</label>
+              <Select value={quickForm.clientId} onChange={(v) => setQuickForm(f => ({ ...f, clientId: v }))}
+                options={clients.map(c => ({ value: c.id, label: `${c.name} (${c.clientCode})` }))}
+                placeholder="Select client..." style={{ width: '100%' }} />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+              <label style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>Priority</label>
+              <Select value={quickForm.priority} onChange={(v) => setQuickForm(f => ({ ...f, priority: v as Priority }))}
+                options={Object.values(Priority).map(pr => ({ value: pr, label: pr }))} style={{ width: '100%' }} />
+            </div>
+          </div>
+        </Modal>
+      )}
 
       {/* Edit Modal */}
       {showEditModal && renderForm(handleEdit, () => setShowEditModal(false), 'Edit Project')}
