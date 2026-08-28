@@ -121,7 +121,7 @@ async function uploadDocumentSmart(assessmentId: string, type: string, file: Fil
 
 export const Documents: React.FC = () => {
   const [overview, setOverview] = useState<OverviewData | null>(null);
-  const { confirm, confirmDialog } = useConfirm();
+  const { confirm, confirmWithReason, confirmDialog } = useConfirm();
   const [overviewLoading, setOverviewLoading] = useState(false);
   // Grouped-by-branch is the default: it's what answers "where is this branch's
   // paperwork" without a branch's name appearing once per file. The flat view is
@@ -234,23 +234,36 @@ export const Documents: React.FC = () => {
   const handleDispatchMany = async (ids: string[]) => {
     // "Updates the paperwork workflow" was true but told the user nothing they could act
     // on. Say what dispatch actually means to them: the files leave the desk.
-    const ok = await confirm({
+    /**
+     * Two routes out of the desk, and the address decides which.
+     *
+     * Left empty, this behaves as it always has: the assayer is told to open the app and
+     * download. Filled in, the paperwork is emailed to the bank branch and the assayer is told
+     * to collect it there — which is how several clients actually work, and had no expression
+     * here at all. The desk marked the document sent and then sent it by some other means.
+     */
+    const { confirmed, reason: branchEmail } = await confirmWithReason({
       title: ids.length === 1 ? 'Send this document out?' : `Send ${ids.length} documents out?`,
       message:
         ids.length === 1
-          ? 'The document will be marked as sent and moves to the next stage of the paperwork.'
-          : `${ids.length} documents will be marked as sent and move to the next stage of the paperwork.`,
+          ? 'The document moves to the next stage of the paperwork.'
+          : `${ids.length} documents move to the next stage of the paperwork.`,
       confirmLabel: ids.length === 1 ? 'Send document' : `Send ${ids.length} documents`,
       reversibleNote: 'You can still mark them received later.',
+      reasonPrompt: {
+        label: 'Branch email — leave empty to send to the assayer',
+        placeholder: 'branch.manager@bank.example',
+        optional: true,
+      },
     });
-    if (!ok) return;
+    if (!confirmed) return;
     setBusyKey('batch-dispatch');
     setError(null);
     setSuccessMsg(null);
     try {
       const result = await api.request<any>('/documents/dispatch-batch', {
         method: 'POST',
-        body: JSON.stringify({ documentIds: ids }),
+        body: JSON.stringify({ documentIds: ids, branchEmail: branchEmail || undefined }),
       });
       setSuccessMsg(result?.message || 'Documents dispatched.');
       await loadOverview();

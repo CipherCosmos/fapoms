@@ -88,6 +88,18 @@ export interface ConfirmOptions {
   reasonPrompt?: {
     label: string;
     placeholder?: string;
+    /**
+     * Blank is an answer.
+     *
+     * The default is that a prompt asked for must be filled in — completing an assignment with
+     * no check-in has to say why, and an empty box there is somebody clicking past the question.
+     * But some prompts offer a route rather than demand an account: leaving the branch address
+     * empty when dispatching means "send it to the assayer as usual", which is a choice, not a
+     * blank.
+     */
+    optional?: boolean;
+    /** Pre-filled, e.g. an address already on the branch's record. */
+    initialValue?: string;
   };
 }
 
@@ -123,7 +135,11 @@ export const useConfirm = (): {
     (options: ConfirmOptions) =>
       new Promise<{ confirmed: boolean; reason: string }>((resolve) => {
         setTyped('');
-        setReason('');
+        // Pre-filled where the caller has an answer already — an address on the branch's record,
+        // say. `reasonRef` is set with it so confirming without touching the box returns it.
+        const initial = options.reasonPrompt?.initialValue ?? '';
+        setReason(initial);
+        reasonRef.current = initial;
         setPending({
           ...options,
           resolve: (ok) => resolve({ confirmed: ok, reason: ok ? reasonRef.current.trim() : '' }),
@@ -148,7 +164,8 @@ export const useConfirm = (): {
   const phrase = pending?.confirmPhrase?.trim() ?? '';
   const phraseSatisfied = !phrase || typed.trim() === phrase;
   // A reason that was asked for has to be given. Blank does not count.
-  const reasonSatisfied = !pending?.reasonPrompt || reason.trim().length > 0;
+  const reasonSatisfied =
+    !pending?.reasonPrompt || pending.reasonPrompt.optional === true || reason.trim().length > 0;
   const canConfirm = phraseSatisfied && reasonSatisfied;
   const danger = pending?.tone === 'danger';
 

@@ -12,6 +12,7 @@ import { DocumentEntity } from './document.entity';
 import { AssessmentEntity } from '../project/assessment.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
+import { BranchEntity } from '../branch/branch.entity';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { StorageModule } from '../../infrastructure/storage/storage.module';
 import { OcrModule } from '../../infrastructure/ocr/ocr.module';
@@ -21,7 +22,8 @@ import { AssignmentModule } from '../assignment/assignment.module';
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([DocumentEntity, AssessmentEntity, ProjectBranchEntity, AssignmentEntity]),
+    // BranchEntity: dispatching to a branch writes the address back so the desk types it once.
+    TypeOrmModule.forFeature([DocumentEntity, AssessmentEntity, ProjectBranchEntity, AssignmentEntity, BranchEntity]),
     BullModule.registerQueue({ name: 'document-dispatch' }),
     NotificationsModule,
     StorageModule,

@@ -26,6 +26,12 @@ import { PlatformSettingsService } from '../settings/platform-settings.service';
  * notification still reaches the bell, and its row records that the email was suppressed.
  */
 
+export interface EmailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType?: string;
+}
+
 export interface EmailPayload {
   to: string;
   subject: string;
@@ -33,6 +39,19 @@ export interface EmailPayload {
   text: string;
   /** Optional HTML alternative rendered by the caller. */
   html?: string;
+  /**
+   * Files carried by the message itself.
+   *
+   * Deliberately an attachment rather than a download link. The one thing this is used for is
+   * sending an audit packet to a bank branch, and a link to bank customer paperwork that keeps
+   * working after the mail is forwarded is a bearer credential for it — which is the reason
+   * `DocumentAccessTokenService` makes its own tokens die in five minutes. A branch officer
+   * expects the file, not a login.
+   *
+   * The caller is responsible for the size: most mail providers reject above ~25 MB, and the
+   * refusal comes back as a permanent SMTP failure rather than anything this can retry.
+   */
+  attachments?: EmailAttachment[];
 }
 
 export interface EmailResult {
@@ -212,6 +231,11 @@ export class EmailProvider implements OnModuleInit {
         subject: payload.subject,
         text: payload.text,
         html: payload.html,
+        attachments: payload.attachments?.map((a) => ({
+          filename: a.filename,
+          content: a.content,
+          contentType: a.contentType,
+        })),
       });
       return { success: true, messageId: info?.messageId };
     } catch (err: any) {

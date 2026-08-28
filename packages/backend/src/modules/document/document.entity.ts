@@ -71,6 +71,16 @@ export class DocumentEntity extends BaseEntity {
   @Column({ name: 'dispatch_method', type: 'varchar', length: 20, nullable: true })
   dispatchMethod: DispatchMethod | null;
 
+  /**
+   * The address a dispatched document was emailed to, when it went to one.
+   *
+   * Several clients take the packet at the branch and have the assayer collect it there, rather
+   * than the assayer downloading it. Null means the old route: the assayer was notified and
+   * fetches it from the app.
+   */
+  @Column({ name: 'dispatched_to_email', type: 'varchar', length: 320, nullable: true })
+  dispatchedToEmail: string | null;
+
   /** User who dispatched, or null when the scheduled auto-dispatch job did it. */
   @Column({ name: 'dispatched_by', type: 'uuid', nullable: true })
   dispatchedBy: string | null;

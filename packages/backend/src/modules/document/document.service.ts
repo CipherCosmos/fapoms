@@ -1,7 +1,7 @@
-import { Injectable, NotFoundException, Logger, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger, BadRequestException, Inject } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ValidationService } from '../validation/validation.service';
-import { Repository, In } from 'typeorm';
+import { Repository, In, IsNull } from 'typeorm';
 import { DocumentEntity } from './document.entity';
 import { AssessmentEntity } from '../project/assessment.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
@@ -11,6 +11,9 @@ import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { NotificationService } from '../notifications/notification.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { PushNotificationService } from '../notifications/push-notification.service';
+import { EmailProvider } from '../../infrastructure/notifications/email-provider';
+import type { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
+import { BranchEntity } from '../branch/branch.entity';
 import {
   EventCategory, DocumentStatus, DocumentType, DispatchMethod, businessTodayDateKey,
   DOCUMENT_TRANSITIONS, canTransitionDocument,
@@ -346,6 +349,11 @@ export class DocumentService {
     private readonly notificationDispatch: NotificationDispatchService,
     private readonly pushNotificationService: PushNotificationService,
     private readonly validationService: ValidationService,
+    // Reading the file back to attach it, and the branch's address to send it to.
+    @Inject('StorageEngine') private readonly storage: StorageEngine,
+    private readonly emailProvider: EmailProvider,
+    @InjectRepository(BranchEntity)
+    private readonly branchRepository: Repository<BranchEntity>,
   ) {}
 
   async create(dto: CreateDocumentDto, userId: string): Promise<DocumentEntity> {
@@ -1030,7 +1038,7 @@ export class DocumentService {
    * The console previously offered only one-at-a-time dispatch, which does not
    * match how a day's paperwork is actually released.
    */
-  async dispatchMany(documentIds: string[], userId: string): Promise<{
+  async dispatchMany(documentIds: string[], userId: string, branchEmail?: string): Promise<{
     dispatched: string[];
     failed: Array<{ documentId: string; reason: string }>;
   }> {
@@ -1038,7 +1046,7 @@ export class DocumentService {
     const failed: Array<{ documentId: string; reason: string }> = [];
     for (const id of documentIds) {
       try {
-        await this.dispatchDocument(id, userId, DispatchMethod.MANUAL);
+        await this.dispatchDocument(id, userId, DispatchMethod.MANUAL, { branchEmail });
         dispatched.push(id);
       } catch (err) {
         failed.push({ documentId: id, reason: (err as Error).message });
@@ -1268,10 +1276,31 @@ export class DocumentService {
    * date) from an operator pushing it early (MANUAL, §8.3). Both record who and when, so the
    * transport trail can be reconstructed.
    */
+  /**
+   * Send a document out, to whoever the client's process says receives it.
+   *
+   * Two routes, and the difference is real work on the ground.
+   *
+   * **To the assayer** (no `branchEmail`) is what this always did: mark it dispatched and tell
+   * the assayer to open the app and download it.
+   *
+   * **To the branch** is how several clients actually operate — the packet goes to the bank
+   * branch and the assayer collects it there. Before this the desk had no way to say so, so it
+   * marked the document dispatched and then sent it by some other means, leaving the system
+   * claiming a delivery it had not made and unable to say where the file went.
+   *
+   * The file is attached rather than linked. A link to bank customer paperwork that keeps
+   * working after the mail is forwarded is a bearer credential for it — which is exactly why
+   * `DocumentAccessTokenService` makes its own tokens die in five minutes — and a branch officer
+   * expects the document, not a login.
+   *
+   * The assayer is still told either way. What changes is what they are told to do.
+   */
   async dispatchDocument(
     id: string,
     userId: string,
     method: DispatchMethod = DispatchMethod.MANUAL,
+    options: { branchEmail?: string | null } = {},
   ): Promise<DocumentEntity> {
     const doc = await this.findOne(id);
     if (doc.status !== DocumentStatus.UPLOADED) {
@@ -1280,10 +1309,27 @@ export class DocumentService {
       );
     }
 
+    const branchEmail = (options.branchEmail ?? '').trim() || null;
+    if (branchEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(branchEmail)) {
+      throw new BadRequestException(`"${branchEmail}" is not an email address.`);
+    }
+
+    /**
+     * Sent before the status moves.
+     *
+     * A document marked DISPATCHED that never left is the failure this route exists to remove;
+     * recording the delivery first and discovering the mail bounced second would recreate it in
+     * a new place. If the send throws, nothing has been claimed.
+     */
+    if (branchEmail) {
+      await this.emailDocumentToBranch(doc, branchEmail);
+    }
+
     const saved = await this.updateStatus(id, DocumentStatus.DISPATCHED, userId);
     saved.dispatchedAt = new Date();
     saved.dispatchMethod = method;
     saved.dispatchedBy = userId === 'SYSTEM' ? null : userId;
+    saved.dispatchedToEmail = branchEmail;
     await this.documentRepository.save(saved);
 
     if (!doc.assessmentId) {
@@ -1317,8 +1363,13 @@ export class DocumentService {
           assignment.assayerId,
           assignment.assayer.email,
           {
-            title: 'New Audit PDF',
-            message: `Audit PDF "${doc.fileName}" has been dispatched to you. Open your schedule to view and download.`,
+            title: branchEmail ? 'Audit paperwork sent to the branch' : 'New Audit PDF',
+            // What the assayer is told to *do* is the point. Telling somebody to download a file
+            // that was posted to a branch sends them looking for something that is not there.
+            message: branchEmail
+              ? `The audit paperwork for "${doc.fileName}" has been sent to the branch at `
+                + `${branchEmail}. Collect it from them when you arrive.`
+              : `Audit PDF "${doc.fileName}" has been dispatched to you. Open your schedule to view and download.`,
             // Kept as a hand-rolled notifyAssayer rather than migrated to a catalog emit: no
             // catalog entry covers "pre-field PDF dispatched to the assayer" (DOCUMENT_UPLOADED
             // targets the office desk, DOCUMENT_REJECTED is the re-upload path), and inventing
@@ -1342,6 +1393,77 @@ export class DocumentService {
     }
 
     return saved;
+  }
+
+  /**
+   * Email the packet to a branch, and remember the address it went to.
+   *
+   * Throws rather than logging on failure. Everything else in this file that sends a
+   * notification swallows its errors, because a dispatch that reached the assayer's app but not
+   * their email is still a dispatch. Here the email *is* the delivery: if it did not go, the
+   * document has not been sent, and marking it DISPATCHED would be a lie the desk acts on.
+   */
+  private async emailDocumentToBranch(doc: DocumentEntity, branchEmail: string): Promise<void> {
+    if (!this.emailProvider.isEnabled()) {
+      throw new BadRequestException(
+        'Email is not set up on this system, so the paperwork cannot be sent to a branch. '
+        + 'Configure it under Platform Settings, or dispatch to the assayer instead.',
+      );
+    }
+
+    let content: Buffer;
+    try {
+      const stream = await this.storage.getFileStream(doc.filePath);
+      const chunks: Buffer[] = [];
+      for await (const chunk of stream) chunks.push(Buffer.from(chunk));
+      content = Buffer.concat(chunks);
+    } catch (err) {
+      throw new BadRequestException(
+        `The file for "${doc.fileName}" could not be read from storage, so nothing was sent.`,
+      );
+    }
+
+    const branchName = doc.assessment?.branch?.name ?? null;
+    const result = await this.emailProvider.send({
+      to: branchEmail,
+      subject: branchName
+        ? `Audit paperwork for ${branchName}`
+        : `Audit paperwork — ${doc.fileName}`,
+      text: [
+        branchName ? `Audit paperwork for ${branchName} is attached.` : 'Audit paperwork is attached.',
+        '',
+        'Our appraiser will collect it from your branch when they arrive for the audit.',
+        '',
+        'This message was sent automatically. Please do not reply.',
+      ].join('\n'),
+      attachments: [{
+        filename: doc.fileName,
+        content,
+        contentType: doc.mimeType ?? 'application/pdf',
+      }],
+    });
+
+    if (!result.success) {
+      throw new BadRequestException(
+        `The paperwork could not be emailed to ${branchEmail}: ${result.error ?? 'the mail server refused it'}. `
+        + 'The document has not been marked as sent.',
+      );
+    }
+
+    /**
+     * Written back to the branch so the desk types it once.
+     *
+     * Only 10 of 166 branches have an address on file, which is why the dispatch screen asks for
+     * one — and why an address that works is kept. An address already recorded is left alone: the
+     * desk may be sending this one packet somewhere else, and a one-off must not quietly become
+     * the branch's permanent address.
+     */
+    const branchId = doc.assessment?.branchId ?? null;
+    if (branchId) {
+      await this.branchRepository
+        .update({ id: branchId, email: IsNull() }, { email: branchEmail })
+        .catch(() => undefined);
+    }
   }
 
   async receiveDocument(id: string, userId: string): Promise<DocumentEntity> {

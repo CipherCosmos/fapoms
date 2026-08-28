@@ -11,15 +11,22 @@ import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { NotificationService } from '../notifications/notification.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { PushNotificationService } from '../notifications/push-notification.service';
-import { DocumentType, DocumentStatus } from '@fapoms/shared';
+import { DocumentType, DocumentStatus, DispatchMethod } from '@fapoms/shared';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { LocalStorageService } from '../../infrastructure/storage/local-storage.service';
 import { ValidationService } from '../validation/validation.service';
+import { EmailProvider } from '../../infrastructure/notifications/email-provider';
+import { BranchEntity } from '../branch/branch.entity';
 
 describe('DocumentService', () => {
   let service: DocumentService;
 
   const mockManagerQuery = jest.fn();
+  const mockStorage = { getFileStream: jest.fn(), saveFile: jest.fn(), deleteFile: jest.fn(), statFile: jest.fn() };
+  const mockEmailProvider = { isEnabled: jest.fn().mockReturnValue(false), send: jest.fn() };
+  // Returns a promise: the write-back is fire-and-forget with a .catch() on it.
+  const mockBranchRepo = { update: jest.fn().mockResolvedValue({ affected: 1 }) };
+
   const mockDocumentRepo = {
     create: jest.fn(),
     save: jest.fn(),
@@ -73,6 +80,11 @@ describe('DocumentService', () => {
         { provide: PushNotificationService, useValue: mockPushNotificationService },
         { provide: LocalStorageService, useValue: { saveFile: jest.fn(), getFilePath: jest.fn() } },
         { provide: ValidationService, useValue: { getOrAdvanceForHandBack: jest.fn() } },
+        // Dispatch to a branch reads the file back and emails it; nothing in this file exercises
+        // that path, so these stand in rather than being modelled.
+        { provide: 'StorageEngine', useValue: mockStorage },
+        { provide: EmailProvider, useValue: mockEmailProvider },
+        { provide: getRepositoryToken(BranchEntity), useValue: mockBranchRepo },
       ],
     }).compile();
 
@@ -635,6 +647,97 @@ describe('DocumentService', () => {
       await expect(service.findByProject('empty-project')).resolves.toEqual([]);
       // Must not fall through to an unfiltered query.
       expect(mockDocumentRepo.find).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * Sending the packet to the branch instead of the assayer.
+   *
+   * Several clients take the paperwork at the bank branch and have the appraiser collect it
+   * there. Before this the desk had no way to say so: it marked the document dispatched and sent
+   * it by some other means, leaving the system claiming a delivery it had not made.
+   *
+   * The rule these hold is that DISPATCHED must mean it went. A document marked sent that never
+   * left is the exact failure this route exists to remove, so nothing is recorded until the mail
+   * provider has accepted it.
+   */
+  describe('dispatching to a branch', () => {
+    const uploadedDoc = {
+      id: 'doc-1', status: DocumentStatus.UPLOADED, isActive: true,
+      fileName: 'packet.pdf', filePath: 'uploads/packet.pdf', mimeType: 'application/pdf',
+      assessmentId: 'asm-1',
+      assessment: { branchId: 'br-1', branch: { name: 'Kolhapur Main' } },
+    };
+
+    beforeEach(() => {
+      mockDocumentRepo.findOne.mockResolvedValue({ ...uploadedDoc });
+      mockDocumentRepo.save.mockImplementation(async (v: any) => v);
+      mockAssignmentRepo.findOne.mockResolvedValue(null);
+      mockEmailProvider.isEnabled.mockReturnValue(true);
+      mockEmailProvider.send.mockResolvedValue({ success: true, messageId: 'm-1' });
+      mockStorage.getFileStream.mockResolvedValue(
+        (async function* () { yield Buffer.from('%PDF-1.4 fake'); })(),
+      );
+    });
+
+    it('attaches the file rather than linking to it', async () => {
+      await service.dispatchDocument('doc-1', 'user-1', DispatchMethod.MANUAL, {
+        branchEmail: 'manager@bank.example',
+      });
+
+      const sent = mockEmailProvider.send.mock.calls.at(-1)![0];
+      expect(sent.to).toBe('manager@bank.example');
+      expect(sent.attachments).toHaveLength(1);
+      expect(sent.attachments[0].filename).toBe('packet.pdf');
+      // A link to bank customer paperwork survives being forwarded; the file does not need to.
+      expect(sent.text).not.toMatch(/https?:\/\//);
+    });
+
+    it('names the branch, so the recipient knows what arrived', async () => {
+      await service.dispatchDocument('doc-1', 'user-1', DispatchMethod.MANUAL, {
+        branchEmail: 'manager@bank.example',
+      });
+      expect(mockEmailProvider.send.mock.calls.at(-1)![0].subject).toContain('Kolhapur Main');
+    });
+
+    it('records where it went', async () => {
+      const saved = await service.dispatchDocument('doc-1', 'user-1', DispatchMethod.MANUAL, {
+        branchEmail: 'manager@bank.example',
+      });
+      expect(saved.dispatchedToEmail).toBe('manager@bank.example');
+    });
+
+    it('leaves the document unsent when the mail is refused', async () => {
+      mockEmailProvider.send.mockResolvedValue({ success: false, error: 'Mailbox unavailable' });
+
+      await expect(
+        service.dispatchDocument('doc-1', 'user-1', DispatchMethod.MANUAL, { branchEmail: 'bad@bank.example' }),
+      ).rejects.toThrow(/could not be emailed/i);
+
+      // The status must not have moved. "Dispatched" has to mean it went.
+      expect(mockDocumentRepo.save).not.toHaveBeenCalledWith(
+        expect.objectContaining({ status: DocumentStatus.DISPATCHED }),
+      );
+    });
+
+    it('refuses when email is not set up, rather than silently keeping the file', async () => {
+      mockEmailProvider.isEnabled.mockReturnValue(false);
+      await expect(
+        service.dispatchDocument('doc-1', 'user-1', DispatchMethod.MANUAL, { branchEmail: 'a@b.example' }),
+      ).rejects.toThrow(/Email is not set up/i);
+    });
+
+    it('refuses an address that is not one', async () => {
+      await expect(
+        service.dispatchDocument('doc-1', 'user-1', DispatchMethod.MANUAL, { branchEmail: 'not-an-address' }),
+      ).rejects.toThrow(/is not an email address/i);
+      expect(mockEmailProvider.send).not.toHaveBeenCalled();
+    });
+
+    it('still dispatches to the assayer when no address is given', async () => {
+      const saved = await service.dispatchDocument('doc-1', 'user-1');
+      expect(mockEmailProvider.send).not.toHaveBeenCalled();
+      expect(saved.dispatchedToEmail).toBeNull();
     });
   });
 });

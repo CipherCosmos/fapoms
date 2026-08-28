@@ -1,6 +1,6 @@
 import { Controller, Logger, Get, Post, Put, Param, Query, UseGuards, ParseUUIDPipe, Req, Patch, UseInterceptors, UploadedFile, UploadedFiles, Res, Body, BadRequestException, NotImplementedException, NotFoundException, ForbiddenException, Inject } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiQuery } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsOptional, IsInt, IsUUID, IsEnum, IsArray, ArrayNotEmpty, Min, MaxLength } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsInt, IsUUID, IsEnum, IsArray, ArrayNotEmpty, Min, MaxLength, IsEmail } from 'class-validator';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
 import { FileScanService } from '../../infrastructure/security/file-scan.service';
@@ -16,7 +16,7 @@ import { AssessmentEntity } from '../project/assessment.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
-import { SystemRole, DocumentStatus, DocumentType, AssignmentStatus } from '@fapoms/shared';
+import { SystemRole, DocumentStatus, DocumentType, AssignmentStatus , DispatchMethod } from '@fapoms/shared';
 
 import { ValidationService } from '../validation/validation.service';
 import { DocumentAccessTokenService } from './document-access-token.service';
@@ -62,6 +62,15 @@ class UpdateDocumentStatusRequestDto {
 class DispatchBatchRequestDto {
   @IsArray() @ArrayNotEmpty() @IsUUID('4', { each: true })
   documentIds: string[];
+
+  /**
+   * Send the packets to a bank branch rather than telling the assayer to download them.
+   *
+   * One address for the whole batch, because the desk dispatches a branch's paperwork together
+   * and typing it per document is how a batch of twelve acquires a typo in one of them.
+   */
+  @IsOptional() @IsEmail()
+  branchEmail?: string;
 }
 
 class AssignDataEntryRequestDto {
@@ -924,13 +933,30 @@ export class DocumentController {
     return { success: true, data: doc };
   }
 
+  /**
+   * `branchEmail` sends the packet to the bank branch instead of telling the assayer to download
+   * it — how several clients work, with the assayer collecting it there. Absent, this behaves
+   * exactly as it always has.
+   */
   @Post(':id/dispatch')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
-  @ApiOperation({ summary: 'Dispatch a document to the assigned assessor' })
-  async dispatchDocument(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+  @ApiOperation({ summary: 'Dispatch a document to the assayer, or email it to a branch' })
+  async dispatchDocument(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { branchEmail?: string } | undefined,
+    @Req() req: any,
+  ) {
     const userId = req?.user?.id || id;
-    const doc = await this.documentService.dispatchDocument(id, userId);
-    return { success: true, data: doc, message: 'Document dispatched to assessor.' };
+    const doc = await this.documentService.dispatchDocument(id, userId, DispatchMethod.MANUAL, {
+      branchEmail: body?.branchEmail,
+    });
+    return {
+      success: true,
+      data: doc,
+      message: doc.dispatchedToEmail
+        ? `Sent to ${doc.dispatchedToEmail}. The assayer has been told to collect it there.`
+        : 'Document dispatched to assessor.',
+    };
   }
 
   @Post(':id/receive')
@@ -1078,7 +1104,7 @@ export class DocumentController {
     if (!body?.documentIds?.length) {
       throw new BadRequestException('documentIds is required.');
     }
-    const result = await this.documentService.dispatchMany(body.documentIds, req.user.id);
+    const result = await this.documentService.dispatchMany(body.documentIds, req.user.id, body.branchEmail);
     return {
       success: true,
       data: result,
