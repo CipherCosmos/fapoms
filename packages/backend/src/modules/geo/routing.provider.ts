@@ -166,6 +166,13 @@ function coordKey(lat: number, lng: number): string {
   return `${Number(lat).toFixed(4)},${Number(lng).toFixed(4)}`;
 }
 
+/**
+ * The furthest an OSRM snap may move a coordinate before the answer is distrusted, in metres.
+ * A rural home genuinely sits a few km from the nearest routable road; 5 km covers that. The
+ * demo server's /table mis-snaps measured 18–139 km — far past any honest snap.
+ */
+const SNAP_SANITY_M = 5000;
+
 /** The same rounding, as an OSRM URL fragment (`lng,lat`). */
 function coordUrl(lat: number, lng: number): string {
   return `${Number(lng).toFixed(4)},${Number(lat).toFixed(4)}`;
@@ -486,10 +493,18 @@ export class OSRMRoutingProvider implements RoutingProvider {
         const straightKm = calculateHaversineDistance(
           origin.latitude, origin.longitude, destination.latitude, destination.longitude,
         );
-        if (result.distanceKm < straightKm * 0.99) {
+        // Same two trust checks as the /table path: physics, and OSRM's own confessed snap
+        // distance per waypoint. A single-pair /route snaps honestly in every measurement so
+        // far, but if it ever doesn't, the estimate is the honest answer — never the mis-snap.
+        const worstSnapM = Math.max(
+          Number(data?.waypoints?.[0]?.distance ?? 0),
+          Number(data?.waypoints?.[1]?.distance ?? 0),
+        );
+        if (result.distanceKm < straightKm * 0.99 || worstSnapM > SNAP_SANITY_M) {
           this.logger.warn(
-            `routing[${profile}] /route answer for ${originKey}>${destKey} is impossible ` +
-              `(road ${result.distanceKm} km < straight ${straightKm.toFixed(1)} km) — using the estimate`,
+            `routing[${profile}] /route answer for ${originKey}>${destKey} is untrustworthy ` +
+              `(road ${result.distanceKm} km vs straight ${straightKm.toFixed(1)} km, ` +
+              `worst snap ${(worstSnapM / 1000).toFixed(1)} km) — using the estimate`,
           );
           return fallback();
         }
@@ -581,6 +596,16 @@ export class OSRMRoutingProvider implements RoutingProvider {
           const distances: Array<number | null> | undefined = data?.code === 'Ok' ? data.distances?.[0] : undefined;
           const durations: Array<number | null> | undefined = data?.code === 'Ok' ? data.durations?.[0] : undefined;
           if (!distances || !durations) return fallback();
+          /**
+           * OSRM confesses its own snapping: `destinations[i].distance` is how far the input
+           * coordinate was moved to reach the road it was routed from. The demo server mis-snaps
+           * points in larger /table requests — measured up to 139 km — and a point moved 15 km
+           * closer along the same road produces a wrong-but-plausible figure the road≥straight
+           * check below cannot see (the "two assayers 10 km apart both at 82/83 km" report).
+           * Any cell whose snap moved the point more than SNAP_SANITY_M is routed as its own
+           * single-pair request instead, which snaps honestly.
+           */
+          const snapWaypoints: Array<{ distance?: number }> | undefined = data?.destinations;
           await Promise.all(
             chunk.map(async (key, i) => {
               const distance = distances[i + 1];
@@ -601,10 +626,12 @@ export class OSRMRoutingProvider implements RoutingProvider {
                 const straightKm = calculateHaversineDistance(
                   origin.latitude, origin.longitude, points[i].latitude, points[i].longitude,
                 );
-                if (result.distanceKm < straightKm * 0.99) {
+                const snapM = Number(snapWaypoints?.[i + 1]?.distance ?? 0);
+                if (result.distanceKm < straightKm * 0.99 || snapM > SNAP_SANITY_M) {
                   this.logger.warn(
-                    `routing[${profile}] /table cell for ${key} is impossible ` +
-                      `(road ${result.distanceKm} km < straight ${straightKm.toFixed(1)} km) — re-routing the pair individually`,
+                    `routing[${profile}] /table cell for ${key} is untrustworthy ` +
+                      `(road ${result.distanceKm} km vs straight ${straightKm.toFixed(1)} km, ` +
+                      `snapped ${(snapM / 1000).toFixed(1)} km from the input) — re-routing the pair individually`,
                   );
                   const single = await this.calculateRoute(
                     origin, { latitude: points[i].latitude, longitude: points[i].longitude }, mode,
