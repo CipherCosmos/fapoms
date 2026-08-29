@@ -462,11 +462,18 @@ export class AssignmentController {
     } else if (targetStatus === 'ACCEPTED') {
       // `fee` lets the desk accept on an assayer's behalf at a verbally-agreed number — the
       // phone-channel flow, where the negotiation happened inside the call, not in the app.
-      const acceptFee = body.fee ?? body.agreedFee;
+      //
+      // SECURITY — when the caller is the assayer, any supplied fee is IGNORED and the offer is
+      // accepted at the standing proposedFee (which already holds the negotiated number).
+      // Otherwise an assayer could accept their own assignment at any amount, and because
+      // ACCEPTED→ACCEPTED is a valid self-loop, re-accept to bump it upward before completion,
+      // then be paid that figure. This guard shipped in 85aa82bf and was accidentally reverted
+      // by 89fd422e ten minutes later; the spec beside this controller now pins it.
+      const deskSuppliedFee = callerIsAssayer ? undefined : (body.fee ?? body.agreedFee);
       assignment = await this.assignmentService.acceptOffer(
         id,
         userId,
-        acceptFee != null && !isNaN(Number(acceptFee)) ? Number(acceptFee) : undefined,
+        deskSuppliedFee != null && !isNaN(Number(deskSuppliedFee)) ? Number(deskSuppliedFee) : undefined,
         body.reason ?? body.remarks,
       );
     } else if (targetStatus === 'REJECTED') {
