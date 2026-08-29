@@ -17,7 +17,7 @@ import { ConstraintEvaluator } from './constraint.evaluator';
 import { RoutingService } from '../geo/routing.provider';
 import { generateExplanation, ExplanationReason } from './explainability.mapper';
 import { AuditService } from '../../core/audit/audit.service';
-import { EventCategory } from '@fapoms/shared';
+import { EventCategory, calculateHaversineDistance } from '@fapoms/shared';
 import { FeePolicyService } from '../pricing/fee-policy.service';
 import type { RemarkSummary } from '../assayer-remarks/assayer-remark.contract';
 
@@ -33,6 +33,14 @@ export interface AssayerRecommendation {
   district: string;
   city: string;
   distanceKm: number | null;
+  /**
+   * Straight-line km from the branch to the candidate's HOME — the same metric the map's radius
+   * circle and the engine's `ST_DWithin` pre-filter measure. The "Nearby" cut in the UI filters
+   * on this, never on `distanceKm`: road distance runs ~1.28× the straight line here, so cutting
+   * the list by road while drawing the circle by air dropped people whose pins sat inside it.
+   * `distanceKm` (road) stays what it is good at — display, travel cost, ETA.
+   */
+  straightDistanceKm?: number | null;
   /** One-way travel time in minutes, from the same source as `distanceKm`. */
   durationMinutes?: number | null;
   /** 'OSRM' when measured by road, 'ESTIMATE' when straight-line fell back in — never silent. */
@@ -209,6 +217,18 @@ export class PlanningService {
       }
       const distanceKm: number | null = route?.distanceKm ?? null;
 
+      // The same straight-line-from-home figure the map circle and the engine's radius
+      // pre-filter use — see the interface comment on `straightDistanceKm`.
+      const straightDistanceKm: number | null =
+        branch.latitude && branch.longitude && r.assayer.homeLatitude != null && r.assayer.homeLongitude != null
+          ? Math.round(
+              calculateHaversineDistance(
+                Number(branch.latitude), Number(branch.longitude),
+                Number(r.assayer.homeLatitude), Number(r.assayer.homeLongitude),
+              ) * 10,
+            ) / 10
+          : null;
+
       // Quoted through the one calculator that prices the assignment itself. This used to read
       // the profile active *today* and fall back to a literal 1500, while assignment creation
       // fell back to 1200 and FeePolicyService falls back to the client's contracted rate — so
@@ -238,6 +258,7 @@ export class PlanningService {
         district: r.assayer.district,
         city: r.assayer.city,
         distanceKm,
+        straightDistanceKm,
         // One-way, minutes. Real road time when `distanceSource` is OSRM; the historical
         // straight-line-at-40-km/h figure when it is ESTIMATE — the card must label the two
         // differently, so both travel together.

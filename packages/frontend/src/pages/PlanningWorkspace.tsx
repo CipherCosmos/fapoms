@@ -110,6 +110,14 @@ interface Candidate {
   district: string;
   city: string;
   distanceKm: number | null;
+  /**
+   * Straight-line km from branch to HOME — the metric the map circle draws and the engine's
+   * radius pre-filter measures. Radius comparisons use this (falling back to `distanceKm` for
+   * payloads predating it); `distanceKm` (road) is for display, cost and ETA. Road runs ~1.28×
+   * the straight line, so mixing the two made "inside the circle" and "within the radius"
+   * disagree about the same person.
+   */
+  straightDistanceKm?: number | null;
   /** One-way minutes, same provenance as distanceKm. */
   durationMinutes?: number | null;
   /** 'OSRM' = measured by road; 'ESTIMATE' = straight line at an assumed speed (routing was down). */
@@ -563,10 +571,17 @@ export const PlanningWorkspace: React.FC = () => {
     const saved = Number(localStorage.getItem('map_radiusKm'));
     return Number.isFinite(saved) && saved > 0 ? saved : 300;
   });
-  // Max-radius ("show assayers WITHIN X km") — the intuitive service-radius filter, independent of
-  // the min-radius independence floor. Replaces the old fixed 700km cap + "Show Distant" toggle.
-  const [maxRadiusEnabled, setMaxRadiusEnabled] = useState(false);
-  const [maxRadius, setMaxRadius] = useState(200);
+  // Unified radius: the panel's "Nearby (within X km)" IS the map's search radius. One number now
+  // governs both the circle the map draws and which candidates the list keeps, so the two can no
+  // longer disagree about who is "nearby". This was a separate `maxRadius` filter (default 200 km)
+  // that diverged from the map's `searchRadiusKm` (default 300) — the map drew pins the list hid,
+  // and vice versa. It is now DERIVED, not its own state: the radius always applies unless "Any
+  // distance" (`showAllCandidates`) lifts the list bound, and the panel's Nearby control writes
+  // straight to `searchRadiusKm`. The min-distance independence floor (`slaRadius`) is untouched.
+  const maxRadius = searchRadiusKm;
+  const setMaxRadius = setSearchRadiusKm;
+  const maxRadiusEnabled = !showAllCandidates;
+  const setMaxRadiusEnabled = (_on: boolean) => { /* radius always applies; "Any distance" is the escape hatch */ };
   // The excluded candidate whose "assign anyway" override is currently being persisted.
   const [assigningExcludedId, setAssigningExcludedId] = useState<string | null>(null);
   // Whole-project coverage-plan (generate → approve → deploy) modal.
@@ -827,12 +842,18 @@ export const PlanningWorkspace: React.FC = () => {
   const displayCandidates = useMemo(() => {
     // Compose the two radius bounds instead of short-circuiting. Min-radius is the audit-independence
     // floor (hide too-close assayers); max-radius is the service radius (show only within X km).
-    // Both can apply at once: min <= distanceKm <= max. Unknown distance is always shown.
+    // Both can apply at once. Unknown distance is always shown.
     // `showAllCandidates` lifts the max bound entirely for a full sweep.
+    //
+    // BOTH cuts measure straight-line from home (`straightDistanceKm`), the same metric the map
+    // circle draws and the server's own distance-policy floor uses (haversine on home coords —
+    // recommendation.engine DistancePolicyFilter). Cutting by road distance here disagreed with
+    // both: road runs ~1.28× straight, so the max cut dropped people whose pins sat inside the
+    // circle, and the min cut showed people the server's independence floor would refuse.
     return candidates.filter(c => {
-      if (c.distanceKm == null) return true;
-      if (slaEnabled && c.distanceKm < slaRadius) return false;
-      if (!showAllCandidates && maxRadiusEnabled && c.distanceKm > maxRadius) return false;
+      const radial = c.straightDistanceKm ?? c.distanceKm;
+      if (slaEnabled && radial != null && radial < slaRadius) return false;
+      if (!showAllCandidates && maxRadiusEnabled && radial != null && radial > maxRadius) return false;
       return true;
     });
   }, [candidates, slaEnabled, slaRadius, maxRadiusEnabled, maxRadius, showAllCandidates]);
@@ -859,9 +880,16 @@ export const PlanningWorkspace: React.FC = () => {
     return { count: skills.length, considered: skills.length + displayCandidates.length, detail };
   }, [excludedCandidates, displayCandidates]);
 
-  /** Listed candidates the map will not draw, because they fall outside its search radius. */
+  /**
+   * Listed candidates the map will not draw, because they fall outside its search radius.
+   * Measured the way the map measures — straight-line — so this count names exactly the pins
+   * that are missing, not people whose road distance merely exceeds the number.
+   */
   const offMapCount = useMemo(
-    () => displayCandidates.filter(c => c.distanceKm != null && c.distanceKm > searchRadiusKm).length,
+    () => displayCandidates.filter(c => {
+      const radial = c.straightDistanceKm ?? c.distanceKm;
+      return radial != null && radial > searchRadiusKm;
+    }).length,
     [displayCandidates, searchRadiusKm],
   );
 
@@ -1752,10 +1780,14 @@ export const PlanningWorkspace: React.FC = () => {
        * seeing assayer pins on the map beside an empty list, reasonably concludes the engine is
        * broken rather than that one number needs changing.
        */
-      const withDistance = candidates.filter(c => c.distanceKm != null) as (Candidate & { distanceKm: number })[];
-      const tooClose = slaEnabled ? withDistance.filter(c => c.distanceKm < slaRadius) : [];
-      const tooFar = !showAllCandidates && maxRadiusEnabled ? withDistance.filter(c => c.distanceKm > maxRadius) : [];
-      const nearest = withDistance.length ? Math.min(...withDistance.map(c => c.distanceKm)) : null;
+      // Same metric as the list filter: straight-line from home, road as fallback.
+      const radialOf = (c: Candidate) => c.straightDistanceKm ?? c.distanceKm;
+      const withDistance = candidates.filter(c => radialOf(c) != null);
+      const tooClose = slaEnabled ? withDistance.filter(c => radialOf(c)! < slaRadius) : [];
+      const tooFar = !showAllCandidates && maxRadiusEnabled
+        ? withDistance.filter(c => radialOf(c)! > maxRadius)
+        : [];
+      const nearest = withDistance.length ? Math.min(...withDistance.map(c => radialOf(c)!)) : null;
 
       const filterMsg = (() => {
         if (candidates.length === 0) return null;
@@ -1858,20 +1890,18 @@ export const PlanningWorkspace: React.FC = () => {
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '8px', padding: '5px 9px', fontSize: '10.5px', fontWeight: 600, color: 'var(--warning)', background: 'var(--status-pending-bg)', borderRadius: '6px' }}>
             <span>{offMapCount} of these {offMapCount === 1 ? 'is' : 'are'} beyond {searchRadiusKm} km — listed, but not shown on the map</span>
             <button
-              onClick={() => setMaxRadiusEnabled(true)}
+              onClick={() => setShowAllCandidates(false)}
               className="btn btn-secondary"
               style={{ padding: '2px 8px', fontSize: '10px' }}
               /*
-                This button and the sentence beside it were quoting two different numbers.
-                The banner counts everyone past `searchRadiusKm` (the map's radius, 300 km by
-                default); the button switches on the max-radius filter, which cuts at `maxRadius`
-                (200 km by default) — so "1 is beyond 300 km · Hide distant" could remove four
-                people, three of whom were inside the 300 the sentence had just named. The
-                filter is unchanged; the button now states the cut it actually makes.
+                These off-map names appear only under "Any distance", which lifts the list bound
+                while the map still draws its circle — so the list carries candidates past
+                `searchRadiusKm`. Re-applying that same radius to the list hides exactly the ones
+                that are off the map. Banner and button now name ONE number, because there is one.
               */
-              title={`Removes every candidate further than ${maxRadius} km from this branch. This is the service-radius filter in Advanced — a different, tighter number than the ${searchRadiusKm} km the map draws.`}
+              title={`Re-applies the ${searchRadiusKm} km search radius to the list, hiding the candidates beyond it — the same ones not drawn on the map.`}
             >
-              Hide over {maxRadius} km
+              Hide over {searchRadiusKm} km
             </button>
           </div>
         )}
@@ -1992,7 +2022,7 @@ export const PlanningWorkspace: React.FC = () => {
                       behaviours are defensible; the pair of them silently disagreeing is not,
                       and it is why someone can be recommended here and absent from the map.
                     */}
-                    {c.distanceKm !== null && c.distanceKm > searchRadiusKm && (
+                    {(c.straightDistanceKm ?? c.distanceKm) !== null && (c.straightDistanceKm ?? c.distanceKm)! > searchRadiusKm && (
                       <span title={`Beyond the ${searchRadiusKm} km search radius, so this assayer is not drawn on the map. Still listed because no one closer may be available — ranked accordingly.`} style={{ display: 'inline-flex', alignItems: 'center', gap: '3px', fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: 'var(--status-pending-bg)', color: 'var(--warning)' }}>
                         <AlertTriangle size={9} /> outside {searchRadiusKm}km · not on map
                       </span>
@@ -2859,6 +2889,10 @@ export const PlanningWorkspace: React.FC = () => {
             selectedAssayerFromParent={selectedCandidateForMap}
             slaEnabled={slaEnabled}
             slaRadius={slaRadius}
+            rankedCandidates={displayCandidates}
+            excludedCandidates={excludedCandidates}
+            searchRadiusKm={searchRadiusKm}
+            onSearchRadiusChange={setSearchRadiusKm}
             travelRates={travelRates}
           />
         </div>

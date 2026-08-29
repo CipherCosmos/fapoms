@@ -354,7 +354,11 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
    */
   const { data: realAssayers = NO_ASSAYERS } = useQuery({
     queryKey: queryKeys.assayers.mapRoster,
-    queryFn: ({ signal }) => api.request<any[]>('/assayers?limit=100', { signal }),
+    // The map plots the WHOLE roster, so it must fetch the whole roster. `limit=100` silently
+    // capped it at the first 100 — with 1,000+ appraisers most never appeared on the map. This
+    // asks for all of them (one fetch, cached 5 min). If the roster ever dwarfs this, switch to a
+    // lightweight `/assayers/map` endpoint that returns only id/code/name/lat/lng.
+    queryFn: ({ signal }) => api.request<any[]>('/assayers?limit=5000', { signal }),
     staleTime: 5 * 60_000,
   });
 
