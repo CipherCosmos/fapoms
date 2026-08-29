@@ -197,9 +197,12 @@ describe('Geo Routing & Optimization', () => {
       // destinations → 3 requests (2 + 2 + 1), never one request with all six coordinates.
       const module = await buildModule({ OSRM_URL: 'http://osrm.test', OSRM_TABLE_MAX_COORDS: '3' });
       const osrm = module.get(OSRMRoutingProvider);
+      // 200 km cells: the destinations sit ~100 km straight-line from Pune Camp, and the
+      // physics guard re-routes any cell shorter than the straight line — a mock that answers
+      // 10 km would (correctly) be rejected as impossible.
       fetchMock.mockImplementation(async (url: string) => {
         const n = url.split('/table/v1/driving/')[1].split('?')[0].split(';').length - 1;
-        return tableResponse(Array(n).fill(10000), Array(n).fill(600));
+        return tableResponse(Array(n).fill(200000), Array(n).fill(600));
       });
 
       const dests = [1, 2, 3, 4, 5].map((i) => ({ id: `d${i}`, latitude: 18 + i * 0.01, longitude: 73 + i * 0.01 }));
@@ -211,7 +214,7 @@ describe('Geo Routing & Optimization', () => {
         expect(coords.length).toBeLessThanOrEqual(3);
       }
       expect(Object.keys(results)).toHaveLength(5);
-      expect(Object.values(results).every((r) => r.source === 'OSRM' && r.distanceKm === 10)).toBe(true);
+      expect(Object.values(results).every((r) => r.source === 'OSRM' && r.distanceKm === 200)).toBe(true);
     });
 
     it('estimates only the pair OSRM could not reach, and does not trip the breaker for it', async () => {
@@ -232,7 +235,8 @@ describe('Geo Routing & Optimization', () => {
     it('uses the foot and bike profiles for walking and cycling', async () => {
       const module = await buildModule({ OSRM_URL: 'http://osrm.test' });
       const osrm = module.get(OSRMRoutingProvider);
-      fetchMock.mockResolvedValue(tableResponse([1000], [600]));
+      // 10 km — plausibly above DEEPAK's ~6 km straight line, so the physics guard passes it.
+      fetchMock.mockResolvedValue(tableResponse([10000], [600]));
 
       await osrm.calculateDistances(PUNE_CAMP, [DEEPAK], 'walking');
       await osrm.calculateDistances(PUNE_CAMP, [DEEPAK], 'cycling');

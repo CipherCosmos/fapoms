@@ -480,6 +480,19 @@ export class OSRMRoutingProvider implements RoutingProvider {
       const route = data?.code === 'Ok' ? data.routes?.[0] : null;
       if (route && Number.isFinite(route.distance) && Number.isFinite(route.duration)) {
         const result = OSRMRoutingProvider.fromOsrm(route.distance, route.duration);
+        // Physics check — same reasoning as the /table guard: a "road" shorter than the
+        // straight line means the router snapped one end somewhere else entirely. Never trust
+        // it, never cache it; the estimate is honest about being an estimate.
+        const straightKm = calculateHaversineDistance(
+          origin.latitude, origin.longitude, destination.latitude, destination.longitude,
+        );
+        if (result.distanceKm < straightKm * 0.99) {
+          this.logger.warn(
+            `routing[${profile}] /route answer for ${originKey}>${destKey} is impossible ` +
+              `(road ${result.distanceKm} km < straight ${straightKm.toFixed(1)} km) — using the estimate`,
+          );
+          return fallback();
+        }
         await this.writeCached(profile, originKey, destKey, result);
         return result;
       }
@@ -574,8 +587,34 @@ export class OSRMRoutingProvider implements RoutingProvider {
               const duration = durations[i + 1];
               if (typeof distance === 'number' && typeof duration === 'number') {
                 const result = OSRMRoutingProvider.fromOsrm(distance, duration);
-                resolved.set(key, result);
-                await this.writeCached(profile, originKey, key, result);
+                /**
+                 * Physics check: a road can never be shorter than the straight line.
+                 *
+                 * The public demo server mis-snaps coordinates in larger `/table` requests —
+                 * measured 29 Aug 2026: the same point that snaps 19 m in a 2-coordinate table
+                 * snapped 139 km away in a 14-coordinate one, deterministically, returning
+                 * `code: Ok` — so a candidate 182 km away was shown (and nearly paid) as
+                 * 155 km. An impossible cell is re-routed as its own single-pair request,
+                 * which snaps correctly; the pair path has the same guard, so a second bad
+                 * answer degrades to the labelled estimate rather than being trusted.
+                 */
+                const straightKm = calculateHaversineDistance(
+                  origin.latitude, origin.longitude, points[i].latitude, points[i].longitude,
+                );
+                if (result.distanceKm < straightKm * 0.99) {
+                  this.logger.warn(
+                    `routing[${profile}] /table cell for ${key} is impossible ` +
+                      `(road ${result.distanceKm} km < straight ${straightKm.toFixed(1)} km) — re-routing the pair individually`,
+                  );
+                  const single = await this.calculateRoute(
+                    origin, { latitude: points[i].latitude, longitude: points[i].longitude }, mode,
+                  ).catch(() => null);
+                  resolved.set(key, single ?? this.estimate(origin, points[i], mode));
+                  if (!single) estimated += 1;
+                } else {
+                  resolved.set(key, result);
+                  await this.writeCached(profile, originKey, key, result);
+                }
               } else {
                 resolved.set(key, this.estimate(origin, points[i], mode));
                 estimated += 1;
