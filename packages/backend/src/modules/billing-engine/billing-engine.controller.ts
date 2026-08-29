@@ -186,8 +186,8 @@ export class BillingEngineController {
   @RequirePermissions('billing:approve:organization')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Bank details (beneficiary, account, IFSC, net amount) for the selected approved-unpaid payouts, for the NEFT bank file' })
-  async payoutBankFile(@Body() dto: PayoutIdsDto) {
-    return { success: true, data: await this.service.payoutBankDetails(dto.payableIds) };
+  async payoutBankFile(@Body() dto: PayoutIdsDto, @Req() req: any) {
+    return { success: true, data: await this.service.payoutBankDetails(dto.payableIds, this.userId(req)) };
   }
 
   @Get('tds-report')

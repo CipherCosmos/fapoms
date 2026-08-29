@@ -417,10 +417,14 @@ export class BillingEngineService implements OnModuleInit {
     adjustmentAmount = 0,
   ): Promise<MoneyContext & { paymentTerms: string | null }> {
     const needsLegacyTravel = quotedTravelFee === null || quotedTravelFee === undefined;
-    const [cfgRows, clientRows, billingRows, assayerTds, gstDefault, tdsDefault, profileRows] = await Promise.all([
+    const [cfgRows, clientRows, billingRows, assayerTds, gstDefault, tdsDefault, profileRows, panRows, tdsNoPan] = await Promise.all([
       m.query(
         `SELECT default_base_fee FROM client_configurations
           WHERE client_id = $1 AND is_active = true
+            -- only a rate in force now may price the booking; an expired or future-dated
+            -- contract row must not (see FeePolicyService.ratesFor for the same rule)
+            AND (effective_from IS NULL OR effective_from <= NOW())
+            AND (effective_to IS NULL OR effective_to >= NOW())
           ORDER BY effective_from DESC NULLS LAST LIMIT 1`,
         [clientId],
       ).catch(() => []),
@@ -438,16 +442,32 @@ export class BillingEngineService implements OnModuleInit {
             [assayerId],
           ).catch(() => [])
         : Promise.resolve([]),
+      // Only presence is read, never the value — the column is encrypted at rest and a
+      // ciphertext is as non-null as a PAN.
+      m.query(
+        `SELECT (pan_number IS NOT NULL AND pan_number <> '') AS has_pan FROM assayers WHERE id = $1 LIMIT 1`,
+        [assayerId],
+      ).catch(() => []),
+      this.settings.getNumber('billing.tdsRateNoPan', 20).catch(() => 20),
     ]);
     const rate = cfgRows?.[0]?.default_base_fee;
     const prefs = clientRows?.[0]?.planning_preferences ?? {};
     const billing = billingRows?.[0];
+    /**
+     * s.206AA: a deductee who has not furnished a PAN is withheld at the higher rate (20%), not
+     * the normal professional-fee rate. Booked-rate discipline is unchanged — existing payables
+     * keep whatever they were booked at; this decides new bookings only. `has_pan` defaulting to
+     * true on a query failure is deliberate: a transient read error must not spike someone's
+     * withholding.
+     */
+    const hasPan = panRows?.length ? panRows[0].has_pan === true : true;
+    const effectiveAssayerTds = hasPan ? assayerTds : Math.max(Number(assayerTds) || 0, Number(tdsNoPan) || 20);
     return {
       clientRate: rate != null && Number(rate) > 0 ? Number(rate) : null,
       rechargeTravel: prefs?.rechargeTravel !== false,
       gstRate: billing ? Number(billing.gst_rate) : gstDefault,
       clientTdsRate: billing ? Number(billing.tds_rate) : tdsDefault,
-      assayerTdsRate: assayerTds,
+      assayerTdsRate: effectiveAssayerTds,
       legacyTravelReimbursement: needsLegacyTravel && profileRows?.[0]
         ? Number(profileRows[0].travel_reimbursement ?? 0)
         : null,
@@ -668,6 +688,15 @@ export class BillingEngineService implements OnModuleInit {
         if (!Number.isFinite(amount)) throw new BadRequestException('Adjustment must be a number.');
         if (amount !== 0 && !patch.adjustmentReason?.trim()) {
           throw new BadRequestException('Say why the line is being adjusted.');
+        }
+        // A credit may zero the line, never push it below zero: a negative taxable amount stores
+        // negative GST and TDS and corrupts the payment allocator's proportional split. A larger
+        // credit than the line belongs on the next invoice as its own line, not as a negative one.
+        const adjustmentFloor = -round2(Number(entry.baseAmount) + Number(entry.travelAmount));
+        if (amount < adjustmentFloor) {
+          throw new BadRequestException(
+            `This credit exceeds the line. The most this line can be reduced by is ₹${Math.abs(adjustmentFloor).toFixed(2)} (to zero).`,
+          );
         }
         entry.adjustmentAmount = amount;
         entry.adjustmentReason = amount === 0 ? null : patch.adjustmentReason!.trim();
@@ -1235,7 +1264,11 @@ export class BillingEngineService implements OnModuleInit {
       const share = i === entries.length - 1
         ? round2(paid - allocated)
         : (total > 0 ? round2((lineTotal / total) * paid) : 0);
-      const linePaid = Math.min(Math.max(0, share), lineTotal);
+      // Clamp between 0 and the line's own total, with the cap floored at 0 for a credit
+      // (negative) line: `Math.min(Math.max(0, share), -590)` is -590, which recorded a negative
+      // payment against the credit, shrank `allocated`, and inflated the last line's share — the
+      // difference then vanished from the allocation entirely.
+      const linePaid = Math.min(Math.max(0, share), Math.max(0, lineTotal));
       allocated = round2(allocated + linePaid);
       e.paidAmount = linePaid;
       e.outstandingAmount = round2(lineTotal - linePaid);
@@ -1618,7 +1651,7 @@ export class BillingEngineService implements OnModuleInit {
    * PAN and account number are decrypted here (loaded through the repository); the endpoint that
    * exposes this is gated to the disbursement roles.
    */
-  async payoutBankDetails(payableIds: string[]): Promise<{
+  async payoutBankDetails(payableIds: string[], userId?: string): Promise<{
     rows: Array<{
       payableId: string; payableNumber: string; assignmentNumber: string | null;
       assayerName: string | null; assayerCode: string | null;
@@ -1674,6 +1707,27 @@ export class BillingEngineService implements OnModuleInit {
     for (let i = 0; i < rows.length; i++) {
       rows[i].assignmentNumber = names.assignments.get(payable[i].assignmentId) ?? null;
     }
+
+    /**
+     * The export leaves a trace. This is money leaving the company on an operator's upload, and
+     * it was the ONE money movement in this service with no history row — a file exported twice
+     * and uploaded twice was invisible until the bank statement arrived, and "who exported which
+     * payables, when" had no answer. One row per payable, best-effort: a history failure must
+     * not block a legitimate payment run, and `recordDisbursement` remains the authoritative
+     * settlement step.
+     */
+    if (userId && payable.length) {
+      const batchRef = `NEFT-${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, '')}`;
+      await Promise.all(payable.map((p) =>
+        this.history(userId, {
+          clientId: p.clientId, projectId: p.projectId, assignmentId: p.assignmentId, assayerId: p.assayerId,
+          entityType: BillingEntityType.PAYABLE, entityId: p.id, action: 'PAYABLE_BANK_FILE_EXPORTED',
+          newValue: { batchRef, payableNumber: p.payableNumber, netAmount: round2(Number(p.totalAmount) - Number(p.paidAmount)) },
+          reason: `Included in NEFT bank file ${batchRef}`,
+        }).catch(() => null),
+      ));
+    }
+
     return { rows, skipped };
   }
 
@@ -1704,8 +1758,12 @@ export class BillingEngineService implements OnModuleInit {
             -- Fee payables only: TDS is withheld on the professional fee, not on expense
             -- reimbursements (which carry no TDS and would inflate the gross on a TDS report).
             AND expense_id IS NULL
-            AND ($1::date IS NULL OR created_at::date >= $1::date)
-            AND ($2::date IS NULL OR created_at::date <= $2::date)
+            -- Bucketed by the IST calendar day, like every other date-window in this file
+            -- (BUSINESS_TODAY_SQL): created_at is timestamptz on a UTC server, so a bare ::date
+            -- files a payable booked 1 April 04:00 IST under 31 March — the previous financial
+            -- year and quarter. A 26Q built from that misfiles every row between 00:00-05:30 IST.
+            AND ($1::date IS NULL OR (created_at AT TIME ZONE 'Asia/Kolkata')::date >= $1::date)
+            AND ($2::date IS NULL OR (created_at AT TIME ZONE 'Asia/Kolkata')::date <= $2::date)
           GROUP BY assayer_id
          HAVING SUM(tds_amount) > 0
           ORDER BY SUM(tds_amount) DESC`,
@@ -1815,6 +1873,8 @@ export class BillingEngineService implements OnModuleInit {
         SELECT c.id AS client_id, c.name AS client_name,
                (SELECT cc.default_base_fee FROM client_configurations cc
                  WHERE cc.client_id = c.id AND cc.is_active = true
+                   AND (cc.effective_from IS NULL OR cc.effective_from <= NOW())
+                   AND (cc.effective_to IS NULL OR cc.effective_to >= NOW())
                  ORDER BY cc.effective_from DESC NULLS LAST LIMIT 1) AS client_rate,
                COALESCE(e.unbilled, 0) AS unbilled, COALESCE(e.revenue, 0) AS revenue, COALESCE(e.assignment_count, 0) AS assignment_count,
                COALESCE(i.invoiced, 0) AS invoiced, COALESCE(i.outstanding, 0) AS outstanding,

@@ -561,6 +561,11 @@ export class AssignmentService {
       assignment.checkInDistanceMeters = null;
       assignment.checkedInAt = null;
       assignment.negotiationCount = 0;
+      // The previous assayer's countered travel must die with their offer: assignmentMoney
+      // prefers counterTravelFee over the frozen quote, so a stale one re-carves the NEW
+      // assayer's payable (their base shrinks by a journey they never negotiated) and, with
+      // rechargeTravel on, bills the client for it too.
+      assignment.counterTravelFee = null;
       assignment.priority = projectBranch.priority;
       // The quote behind THIS offer, for this assayer. The previous assayer's breakdown must
       // not survive the reuse — their home, their distance, their rate card.
@@ -869,6 +874,19 @@ export class AssignmentService {
     if (targetStatus === AssignmentStatus.ACCEPTED) {
       if (prevStatus !== targetStatus) {
         event = AssignmentStateMachine.acceptOffer(assignment, userId);
+        /**
+         * Acceptance answers the RESPONSE clock, so the SLA is re-armed to measure the next
+         * thing that can actually be late: attending the visit. Left alone, `slaDueDate` kept
+         * its created+24h value forever — every assignment accepted more than a day ago was
+         * flagged BREACHED by the scanner (permanently: nothing resets slaStatus), and the
+         * falling-behind board ranked a healthy assignment accepted 30 days ago for next month
+         * above a genuine no-show from yesterday. The new deadline is the end of the scheduled
+         * day, IST; unscheduled work has no deadline until the desk gives it a date.
+         */
+        assignment.slaDueDate = assignment.scheduledDate
+          ? new Date(`${businessDateKey(assignment.scheduledDate)}T23:59:59+05:30`)
+          : null;
+        assignment.slaStatus = 'COMPLIANT';
       }
       if (fee !== undefined && fee !== null) {
         assignment.proposedFee = fee;
@@ -931,6 +949,30 @@ export class AssignmentService {
 
 
     const saved = await this.uow.run(async (manager, emit) => {
+      /**
+       * The compare-and-swap that makes concurrent transitions safe.
+       *
+       * The row was read and mutated OUTSIDE this transaction with no lock, so two callers —
+       * ops cancelling while the assayer accepts — could both read PENDING and both commit,
+       * last write winning: an "accepted" assignment whose schedule was already retired and
+       * whose cancellation was already announced, or a completion racing a cancellation after
+       * billing has booked the payable (and billing has no reversal path). Locking the row here
+       * and re-asserting the state we transitioned FROM turns the blind overwrite into an
+       * explicit conflict for the loser. Bare row, no relations — FOR UPDATE cannot span an
+       * outer join.
+       */
+      const lockedRows: Array<{ status: string }> = await manager.query(
+        'SELECT status FROM assignments WHERE id = $1 FOR UPDATE',
+        [id],
+      );
+      const lockedStatus = lockedRows?.[0]?.status;
+      if (!lockedStatus) throw new NotFoundException(`Assignment ${id} not found`);
+      if (lockedStatus !== prevStatus && lockedStatus !== targetStatus) {
+        throw new ConflictException(
+          `This assignment changed while you were acting on it — it is now '${lockedStatus}'. Refresh and try again.`,
+        );
+      }
+
       if (assignment.projectBranch) {
         await manager.save(assignment.projectBranch);
       }
@@ -1071,6 +1113,15 @@ export class AssignmentService {
      */
     if (targetStatus === AssignmentStatus.ACCEPTED) {
       await this.assayerService.enableLiveTrackingForActiveWork(saved.assayerId, userId);
+    } else if (
+      saved.assayerId
+      && (targetStatus === AssignmentStatus.COMPLETED
+        || targetStatus === AssignmentStatus.CANCELLED
+        || targetStatus === AssignmentStatus.REJECTED)
+    ) {
+      // The other half of the promise above: when the job ends and no other committed work
+      // remains, sharing stops. Best-effort for the same reason the enable is.
+      await this.assayerService.disableLiveTrackingWhenWorkEnds(saved.assayerId, userId);
     }
 
     // Off the critical path. These are cached counters for roster listings and reports — nothing
@@ -1113,45 +1164,19 @@ export class AssignmentService {
       .getNumber('field.maxNegotiationRounds', DEFAULT_MAX_NEGOTIATION_ROUNDS)
       .catch(() => DEFAULT_MAX_NEGOTIATION_ROUNDS);
     if (currentCount >= maxRounds) {
-      AssignmentStateMachine.rejectOffer(
-        assignment, userId,
+      /**
+       * Routed through the SAME transition pipeline a manual decline takes — this used to be a
+       * bespoke save that flipped the status and told the notification bus, but skipped
+       * everything else the pipeline does: no ASSIGNMENT_REJECTED audit event (the timeline
+       * showed counter-offers 1..N and then silence), no `assignment:status-changed` realtime
+       * emit (neither the ops board nor the assayer's phone updated live), no schedule
+       * retirement, no stats refresh. One decline path, whoever triggers it.
+       */
+      return this.rejectOffer(
+        id,
+        userId,
         `Negotiation limit reached (${maxRounds} counter-offers max). Offer auto-declined.`,
       );
-      assignment.remarks = `Negotiation limit reached. Auto-declined.`;
-      assignment.updatedBy = userId;
-      if (assignment.projectBranch) {
-        assignment.projectBranch.status = ProjectBranchStatus.CANDIDATE_SEARCH;
-      }
-      const autoDeclined = await this.dataSource.transaction(async (manager) => {
-        if (assignment.projectBranch) {
-          await manager.save(assignment.projectBranch);
-        }
-        return manager.save(assignment);
-      });
-
-      // This path put the branch back into CANDIDATE_SEARCH and told nobody, so the desk only
-      // discovered the offer had died by noticing the branch was unstaffed. Same rejection
-      // notification a manual decline produces, since ops has to act identically on both.
-      this.notificationDispatch.emitSafe({
-        type: 'ASSIGNMENT_REJECTED',
-        entityType: 'ASSIGNMENT',
-        entityId: autoDeclined.id,
-        actorUserId: userId,
-        assayerId: autoDeclined.assayerId,
-        ownerUserId: autoDeclined.createdBy,
-        dedupeKey: `ASSIGNMENT_REJECTED:${autoDeclined.id}:NEGOTIATION_LIMIT`,
-        payload: {
-          assignmentId: autoDeclined.id,
-          assignmentNumber: autoDeclined.assignmentNumber,
-          assayerName: assignment.assayer
-            ? `${assignment.assayer.firstName} ${assignment.assayer.lastName}`.trim()
-            : 'The assayer',
-          branchName: assignment.projectBranch?.branch?.name ?? autoDeclined.assignmentNumber,
-          reason: autoDeclined.rejectReason ?? 'Negotiation limit reached',
-        },
-      });
-
-      return autoDeclined;
     }
     // Captured before the overwrite: a negotiation's audit value is the movement.
     const previousFee = assignment.proposedFee;
@@ -2771,7 +2796,16 @@ export class AssignmentService {
           0,
           Number(assignment.projectBranch?.branch?.geoAccuracyMeters ?? 0) || 0,
         );
-        const allowance = GEOFENCE_METERS + Math.max(0, accuracyMeters ?? 0) + branchAccuracyMeters;
+        /**
+         * The device's reported accuracy is CLIENT-SUPPLIED and must not widen the fence without
+         * limit — `{"accuracy": 5000000}` would otherwise check in from anywhere in India, and the
+         * stored value would read as a bad GPS fix rather than a bypass. Real handsets in poor
+         * conditions report tens to a few hundred metres; 1 km is generous. The raw figure is
+         * still stored on the row (`checkInAccuracyMeters`) as evidence, unclamped.
+         */
+        const MAX_DEVICE_ACCURACY_ALLOWANCE_M = 1000;
+        const deviceAllowance = Math.min(Math.max(0, accuracyMeters ?? 0), MAX_DEVICE_ACCURACY_ALLOWANCE_M);
+        const allowance = GEOFENCE_METERS + deviceAllowance + branchAccuracyMeters;
         if (distanceMeters > allowance && await this.ruleBypass.isBypassed(BypassableRule.CHECK_IN_GEOFENCE)) {
           /**
            * Let it through, and make sure the record says so.

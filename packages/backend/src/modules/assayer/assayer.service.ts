@@ -876,6 +876,30 @@ export class AssayerService implements OnModuleInit {
     }
   }
 
+  /**
+   * Turn sharing back off because the assayer's last open job has ended.
+   *
+   * The promise made at acceptance — "both ends stop at completion, so nothing follows anyone
+   * into their own time" — was only half-implemented: acceptance enabled sharing and nothing
+   * ever disabled it, so the flag (and the last GPS fix) survived indefinitely. That is both a
+   * privacy failure and a ranking one: `effectiveLatitude` honours the live fix while the flag
+   * is on, so someone whose last ping was a completed job 1,000 km away kept being scored from
+   * there for weeks. Best-effort like its enable twin; skipped while any other committed
+   * assignment keeps the obligation alive.
+   */
+  async disableLiveTrackingWhenWorkEnds(assayerId: string, userId?: string): Promise<void> {
+    try {
+      const assayer = await this.assayerRepository.findOne({ where: { id: assayerId } });
+      if (!assayer || !assayer.isLiveEnabled) return;
+      if (await this.hasActiveAssignment(assayerId)) return;
+      await this.setLiveTracking(assayerId, false, userId, { actorIsStaff: true });
+    } catch (err) {
+      this.logger.warn(
+        `Could not disable location sharing for assayer ${assayerId} after work ended: ${(err as Error)?.message}`,
+      );
+    }
+  }
+
   async remove(id: string, userId: string): Promise<void> {
     const assayer = await this.findOne(id);
     assayer.isActive = false;
@@ -1338,11 +1362,13 @@ export class AssayerService implements OnModuleInit {
 
     const mgr = this.assayerRepository.manager;
 
-    // 1. Query Count raised against this assayer
+    // 1. Query Count raised against this assayer.
+    // Counted on vq.assayer_id directly — the previous version joined `a.id = vq.assignment_id`,
+    // a column validation_queries does not have, so Postgres errored on every call and the
+    // `.catch(() => 0)` below reported zero clarifications for every assayer, forever, silently.
     const queryRes = await mgr.query(
       `SELECT COUNT(*) as cnt FROM validation_queries vq
-       JOIN assignments a ON a.id = vq.assignment_id
-       WHERE a.assayer_id = $1 AND vq.is_active = true`,
+       WHERE vq.assayer_id = $1 AND vq.is_active = true`,
       [target.id],
     ).catch(() => [{ cnt: 0 }]);
     (target as any).queryCount = Number(queryRes[0]?.cnt ?? 0);

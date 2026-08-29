@@ -194,8 +194,19 @@ export class FeePolicyService implements OnModuleInit {
     }
 
     return this.cache.wrap(`ref:rates:client:${clientId}`, RATES_CACHE_TTL_SECONDS, async () => {
+      // Only a rate row in force TODAY may price a quote: the entity carries an effective
+      // window (`effectiveFrom`/`effectiveTo`) precisely so an expired contract stops pricing
+      // and a future-dated one waits its turn — but every reader ignored the window, so an
+      // `effectiveTo` set last March kept pricing forever. Nothing in force falls through to
+      // the platform fallbacks, same as having no configuration at all.
       const config = await this.clientConfigRepository
-        .findOne({ where: { clientId }, order: { effectiveFrom: 'DESC' } })
+        .createQueryBuilder('cc')
+        .where('cc.clientId = :clientId', { clientId })
+        .andWhere('cc.isActive = true')
+        .andWhere('(cc.effectiveFrom IS NULL OR cc.effectiveFrom <= :at)', { at: new Date() })
+        .andWhere('(cc.effectiveTo IS NULL OR cc.effectiveTo >= :at)', { at: new Date() })
+        .orderBy('cc.effectiveFrom', 'DESC', 'NULLS LAST')
+        .getOne()
         .catch(() => null);
 
       return this.ratesFromConfiguration(config, fallbacks);

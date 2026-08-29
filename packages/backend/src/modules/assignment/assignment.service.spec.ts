@@ -182,10 +182,26 @@ const mockNotificationService = {
       work(
         {
           save: jest.fn((arg: any) => Promise.resolve(arg)),
-          // The assignment-number sequence. Returns a fixed value so the number is deterministic.
-          query: jest.fn(async (sql: string) =>
-            /nextval\('assignment_number_seq'\)/.test(sql) ? [{ n: '42' }] : [],
-          ),
+          // The assignment-number sequence returns a fixed value so the number is deterministic.
+          // The transition path's `SELECT … FOR UPDATE` compare-and-swap re-reads the row inside
+          // the transaction; here it is served from whatever the repository's findOne last
+          // resolved for that id — the same object the service holds, whose status has already
+          // been advanced to the target, which the guard accepts as "the same transition".
+          query: jest.fn(async (sql: string, params?: any[]) => {
+            if (/nextval\('assignment_number_seq'\)/.test(sql)) return [{ n: '42' }];
+            if (/FOR UPDATE/.test(sql)) {
+              const results = mockAssignmentRepo.findOne.mock.results;
+              let fallback: any = null;
+              for (let i = results.length - 1; i >= 0; i--) {
+                const v = await Promise.resolve(results[i]?.value).catch(() => null);
+                if (!v) continue;
+                if (params?.[0] != null && v.id === params[0]) return [{ status: v.status }];
+                fallback = fallback ?? v;
+              }
+              return fallback ? [{ status: fallback.status }] : [];
+            }
+            return [];
+          }),
           getRepository: jest.fn((target: any) =>
             target === ScheduleEntity
               ? mockScheduleRepoInTx

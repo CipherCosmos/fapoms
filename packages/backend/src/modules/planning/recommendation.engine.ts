@@ -720,7 +720,10 @@ export class PerformanceScoreCalculator implements ScoreCalculator {
   name = 'performance';
 
   async calculate(assayer: AssayerEntity): Promise<number> {
-    const rating = Number(assayer.performanceRating) || 5.0;
+    // `== null ? 5 : Number(...)` and never `|| 5`: the column is numeric(3,2), so TypeORM hands
+    // back a string, and `Number("0.00") || 5.0` silently turns a genuine zero rating into a
+    // perfect one. Absent means "no data, assume fine"; zero means zero.
+    const rating = assayer.performanceRating == null ? 5.0 : Number(assayer.performanceRating);
     return (rating / 5.0) * 100;
   }
 }
@@ -946,9 +949,13 @@ export class ClientPreferenceScoreCalculator implements ScoreCalculator {
     }
 
     // 2. Skills / Competencies Preferences
-    const assayerSkills = assayer.skills || [];
-    const requiredSkills = preferences.requiredSkills || [];
-    const preferredSkills = preferences.preferredSkills || [];
+    // asArray, not `|| []`: these come from client jsonb the API does not type-check, and a
+    // string stored where a list belongs would throw inside `.every()` and 500 the whole
+    // recommendations endpoint for that client.
+    const asArray = (v: unknown): string[] => (Array.isArray(v) ? v : []);
+    const assayerSkills = asArray(assayer.skills);
+    const requiredSkills = asArray(preferences.requiredSkills);
+    const preferredSkills = asArray(preferences.preferredSkills);
 
     if (requiredSkills.length > 0) {
       const hasAllRequired = requiredSkills.every((s: string) => 
@@ -970,9 +977,9 @@ export class ClientPreferenceScoreCalculator implements ScoreCalculator {
     }
 
     // 3. Certifications / Courses Preferences
-    const assayerCertifications = (assayer.certifications || []).map(c => c.name);
-    const requiredCerts = preferences.requiredCertifications || [];
-    const preferredCerts = preferences.preferredCertifications || [];
+    const assayerCertifications = asArray(assayer.certifications as unknown).map((c: any) => c?.name).filter(Boolean);
+    const requiredCerts = asArray(preferences.requiredCertifications);
+    const preferredCerts = asArray(preferences.preferredCertifications);
 
     if (requiredCerts.length > 0) {
       const hasAllRequired = requiredCerts.every((c: string) => 
@@ -1128,7 +1135,9 @@ export class SLAComplianceScoreCalculator implements ScoreCalculator {
 
     // 3. Branch Risk Score & Assayer Seniority / SLA Track Record
     const branchRisk = Number(context.branch.riskScore) || 0;
-    const rating = Number(assayer.performanceRating) || 5.0;
+    // See PerformanceScoreCalculator: numeric(3,2) arrives as a string, and `|| 5` would read a
+    // real 0.00 as 5.0. Null-check first, coerce second.
+    const rating = assayer.performanceRating == null ? 5.0 : Number(assayer.performanceRating);
     const exp = Number(assayer.experienceYears) || 0;
 
     if (branchRisk >= 7) {
@@ -1228,9 +1237,12 @@ export class RiskScoreCalculator implements ScoreCalculator {
     const risk = Number(context.branch.riskScore) || 0;
     if (risk < 7) return 100; // Not a high-risk branch: anyone qualified may take it.
 
-    // High risk branch requires senior experience (years >= 5) & high rating (>= 4.5)
-    const exp = assayer.experienceYears || 0;
-    const rating = assayer.performanceRating || 5.0;
+    // High risk branch requires senior experience (years >= 5) & high rating (>= 4.5).
+    // Same coercion rule as the other two rating readers: null → 5, everything else Number()ed —
+    // this site previously compared the raw numeric-as-string, which happened to get 0.00 right
+    // while the scorers got it wrong; now all three read the same value.
+    const exp = Number(assayer.experienceYears) || 0;
+    const rating = assayer.performanceRating == null ? 5.0 : Number(assayer.performanceRating);
 
     if (exp >= 5 && rating >= 4.5) {
       return 100;
@@ -1797,11 +1809,15 @@ export class RecommendationEngine {
     // the scorers only read these, so sharing one list across branches is safe.
     let assayers = preloaded?.assayers;
     if (assayers) {
-      // Batch path: the preloaded pool is already loaded and hydrated. Narrow it in memory to the
-      // branch's neighbourhood; if the narrowing would empty it, keep the full pool (safe fallback).
+      // Batch path: the preloaded pool is already loaded and hydrated. Narrow it in memory to
+      // the branch's neighbourhood — and when nobody is in range, the honest answer is an EMPTY
+      // list, not the whole national pool. The old "safe fallback" quietly scored all 500+
+      // active assayers for that one branch, and a coverage plan could then deploy someone
+      // 1,500 km away with no distance exclusion recorded anywhere (everyone was "kept", so the
+      // pruned list was empty). An uncovered branch is a result the planner already knows how
+      // to surface; a silently nationwide search is not.
       if (nearbyIds) {
-        const narrowed = assayers.filter((a) => nearbyIds.has(a.id));
-        if (narrowed.length > 0) assayers = narrowed;
+        assayers = assayers.filter((a) => nearbyIds.has(a.id));
       }
     } else {
       // Non-batch path: load only the in-range assayers when we have a pre-filter, otherwise the
@@ -1828,6 +1844,11 @@ export class RecommendationEngine {
      * With a national workforce the per-candidate versions made the cost of a single
      * recommendation grow with total headcount rather than with anything about the branch.
      */
+    // Monday of the week being planned, for the weekly workload window below.
+    const workloadWeekAnchor = scheduledDate ?? new Date();
+    const workloadWeekStart = new Date(workloadWeekAnchor);
+    workloadWeekStart.setDate(workloadWeekAnchor.getDate() - ((workloadWeekAnchor.getDay() + 6) % 7));
+
     const [lastAssignment, workloadRows, projectBranchRow] = await Promise.all([
       this.assignmentRepository.findOne({
         where: { projectBranch: { branchId: branch.id }, isActive: true },
@@ -1842,6 +1863,15 @@ export class RecommendationEngine {
         .andWhere('a.status IN (:...statuses)', {
           statuses: COMMITTED_ASSIGNMENT_STATUSES,
         })
+        // Windowed to the week being planned: this count is divided by a WEEKLY cap (and feeds
+        // the CAPACITY rule, whose action is BLOCK), so an unwindowed count of every open
+        // commitment ever — including rows stuck in ACCEPTED from months past — permanently
+        // zeroed someone's workload score and could bar them from the list with an empty diary.
+        // Scheduled-date-less rows still count: undated work is presumed to be in play now.
+        .andWhere(
+          "(a.scheduledDate IS NULL OR (a.scheduledDate >= :weekStart AND a.scheduledDate < CAST(:weekStart AS date) + INTERVAL '7 days'))",
+          { weekStart: businessDateKey(workloadWeekStart) },
+        )
         .andWhere('a.assayerId IN (:...ids)', { ids: assayers.map((a) => a.id) })
         .groupBy('a.assayerId')
         .getRawMany()
@@ -2272,7 +2302,11 @@ export class RecommendationEngine {
         const score = await calculator.calculate(assayer, context);
         scoreBreakdown[calculator.name] = score;
 
-        const weight = context.weights[calculator.name] ?? 0;
+        // Coerced: client planningPreferences arrive from jsonb, and one string-typed weight
+        // ("0.14" instead of 0.14) written via the API turns `totalWeight +=` into string
+        // concatenation → NaN → every candidate scores exactly 0.00. Number() keeps a bad
+        // write from zeroing the whole list.
+        const weight = Number(context.weights[calculator.name]) || 0;
         weightUsed[calculator.name] = weight;
         weightedSum += score * weight;
         totalWeight += weight;
@@ -2351,7 +2385,11 @@ export class RecommendationEngine {
       });
     }
 
-    const ranked = candidates.sort((a, b) => b.score - a.score);
+    // Tied scores break by assayer id, not by whatever order Postgres returned — with most of
+    // the roster geocoded to shared centroids, full ties are common, and an unordered tiebreak
+    // makes the top pick (and therefore who coverage planning OFFERS the work to) flip between
+    // runs. An audit must be able to reproduce why a person was chosen.
+    const ranked = candidates.sort((a, b) => b.score - a.score || a.assayer.id.localeCompare(b.assayer.id));
     // Attached to the array so existing callers that just iterate results keep working
     // unchanged, while callers that want the audit trail can read it.
     (ranked as any).excluded = excluded;

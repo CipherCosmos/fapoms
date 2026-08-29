@@ -157,11 +157,17 @@ export class ConstraintEvaluator {
    */
   checkLeaves(assayer: AssayerEntity, scheduledDate: Date): ConstraintResult {
     if (assayer.leaves && assayer.leaves.length > 0) {
-      const targetTime = scheduledDate.getTime();
+      // Compared as YYYY-MM-DD business-day keys, both ends INCLUSIVE. Leave dates are stored as
+      // date strings, so `new Date(endDate)` is midnight of the last day — a timestamp-carrying
+      // scheduledDate (any coverage-plan run, `new Date()`) then reads 09:30 > 00:00 and the whole
+      // final day of every leave passes the check; a single-day leave never blocked at all. The
+      // engine's own conflict describer already compares the string form — now the filter agrees
+      // with its explanation.
+      const targetKey = businessDateKey(scheduledDate);
       const onLeave = assayer.leaves.some((leave) => {
-        const start = new Date(leave.startDate).getTime();
-        const end = new Date(leave.endDate).getTime();
-        return targetTime >= start && targetTime <= end;
+        const startKey = String(leave.startDate).slice(0, 10);
+        const endKey = String(leave.endDate).slice(0, 10);
+        return targetKey >= startKey && targetKey <= endKey;
       });
       if (onLeave) {
         if (this.ruleBypass.isBypassedSync(BypassableRule.ASSAYER_LEAVE)) {

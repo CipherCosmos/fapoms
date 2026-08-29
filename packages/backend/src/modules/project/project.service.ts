@@ -4,7 +4,7 @@
  * Handles CRUD and lifecycle state transitions for projects and project branches (Part 3 Module 2, Part 5 §3).
  */
 
-import { Injectable, NotFoundException, BadRequestException, OnModuleInit } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { Repository, In, DataSource } from 'typeorm';
 
@@ -1803,6 +1803,35 @@ export class ProjectService implements OnModuleInit {
     const pb = await repo.findOne({ where: { id: projectBranchId, isActive: true } });
     if (!pb) {
       throw new NotFoundException(`Project branch link ${projectBranchId} not found.`);
+    }
+    /**
+     * A branch cannot be declared unstaffable while somebody still holds work on it. The old
+     * behaviour left a live PENDING offer (or an ACCEPTED job) running underneath the
+     * declaration; the assayer could then accept an hour later and flip the branch straight to
+     * ASSIGNMENT_CONFIRMED — silently undoing a coverage failure that was already reported
+     * against the client SLA, with no event saying so. Cancel or resolve the open assignment
+     * first, with the same stated reason, and the record stays coherent.
+     */
+    const assignmentRepo = manager
+      ? manager.getRepository(AssignmentEntity)
+      : this.projectBranchRepository.manager.getRepository(AssignmentEntity);
+    const openAssignment = await assignmentRepo.findOne({
+      where: {
+        projectBranchId: pb.id,
+        isActive: true,
+        status: In([
+          AssignmentStatus.PENDING,
+          AssignmentStatus.ACCEPTED,
+          AssignmentStatus.CHECKED_IN,
+          AssignmentStatus.IN_PROGRESS,
+        ]),
+      },
+    }).catch(() => null);
+    if (openAssignment) {
+      throw new ConflictException(
+        `${openAssignment.assignmentNumber} is still ${openAssignment.status.toLowerCase()} on this branch. `
+        + `Cancel or complete it first — a branch with someone holding its work is not uncoverable.`,
+      );
     }
     const previousStatus = pb.status;
     const event = ProjectBranchStateMachine.markUnableToCover(pb, userId, reason);

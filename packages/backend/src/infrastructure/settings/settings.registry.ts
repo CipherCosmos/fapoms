@@ -484,6 +484,18 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     applies: 'immediately',
   },
   {
+    key: 'billing.tdsRateNoPan',
+    label: 'TDS when the assayer has no PAN on file',
+    description: 'Section 206AA: payments to a deductee who has not furnished a PAN must be withheld at a higher rate (20%) instead of the normal one. Applied automatically whenever a payable is booked for an assayer whose PAN is missing; add their PAN on the roster to return them to the normal rate.',
+    group: 'billing',
+    type: 'number',
+    default: 20,
+    min: 0,
+    max: 100,
+    unit: '%',
+    applies: 'immediately',
+  },
+  {
     key: 'billing.tdsSection',
     label: 'TDS section quoted on statements',
     description: 'The Income-tax Act section the TDS you withhold from field workers is deducted under, printed on the PAN-wise TDS report. Payments to auditors for professional/technical work are usually 194J (10%); use 194C for payments to contractors. This is a label only — it does not change the amount withheld.',
