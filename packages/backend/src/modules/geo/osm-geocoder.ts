@@ -708,6 +708,54 @@ export async function pincodeCentroid(
 }
 
 /**
+ * The centroid of a district, from OSM (a self-hosted Nominatim carries every Indian district).
+ *
+ * The precise tiers key off `street`/`city`. When those are hyper-local names OSM cannot match —
+ * a neighbourhood, a shop-front street, a village too small to be tagged — and the pincode is
+ * also unknown, the record used to fall straight past the incomplete static district set to its
+ * *state* centroid, collapsing whole states onto a single shared point. A "<district>, <state>"
+ * lookup instead places it in its own district: ~15 km coarse, so graded `locality`, but honestly
+ * distinct. One lookup serves every record in that district, so it is cached like the pincode one.
+ */
+export async function districtCentroidOsm(
+  district?: string | null,
+  state?: string | null,
+): Promise<OsmGeocodeResult | null> {
+  const dist = (district || '').trim();
+  if (!dist) return null;
+  const key = `dist|${normalisePlace(dist)}|${normalisePlace(state)}`;
+  const cached = cache.get(key);
+  if (cached) return cached;
+
+  const params = new URLSearchParams({
+    format: 'jsonv2',
+    countrycodes: 'in',
+    q: [dist, state, 'India'].filter(Boolean).join(', '),
+    limit: '1',
+    addressdetails: '1',
+  });
+  const data = await politely('nominatim', NOMINATIM_MIN_INTERVAL_MS, () =>
+    getJson(`${NOMINATIM_BASE_URL}/search?${params.toString()}`),
+  );
+
+  const entry = Array.isArray(data) ? data[0] : null;
+  if (!entry) return null;
+  const coord: Coord = { lat: Number(entry.lat), lng: Number(entry.lon) };
+  // This IS the anchor for these records, so only the state check guards it against a same-named
+  // district in the wrong state (Hamirpur is in both HP and UP; the state in the query settles it).
+  if (!verifyCandidate({ coord, state: entry?.address?.state }, state, null)) return null;
+
+  const result: OsmGeocodeResult = {
+    ...coord,
+    precision: 'locality',
+    accuracyMeters: PRECISION_METERS.locality,
+    matchedName: entry.display_name?.split(',').slice(0, 2).join(',').trim(),
+  };
+  rememberResult(key, result);
+  return result;
+}
+
+/**
  * Resolve an Indian address to the most precise free coordinate available, or null.
  *
  * Null means "none of the free sources could place this confidently" — the caller falls through

@@ -97,6 +97,11 @@ describe('the roster template round-trips through the importer', () => {
     return { run: (work: (m: any, emit: any) => Promise<any>) => work(manager, () => {}) };
   }
 
+  /** The precision hand-off is fire-and-forget; the import must not depend on it resolving. */
+  function mockGeoPrecision() {
+    return { enqueueBackfill: jest.fn().mockResolvedValue(undefined) };
+  }
+
   it('reads and maps every column the template ships', async () => {
     // The real template, generated the same way the download button does.
     const templateBuffer = await (AssayerService.prototype.generateTemplate as any).call({});
@@ -112,7 +117,7 @@ describe('the roster template round-trips through the importer', () => {
     xlsx.utils.book_append_sheet(filled, xlsx.utils.json_to_sheet([row], { header: headers }), 'Assayers');
     const filledBuffer = Buffer.from(xlsx.write(filled, { type: 'buffer', bookType: 'xlsx' }));
 
-    const service = new RosterImportService(mockUow() as any);
+    const service = new RosterImportService(mockUow() as any, mockGeoPrecision() as any);
     const summary = await service.importAssayerSheet(filledBuffer, 'test-user', { dryRun: true });
 
     // The row was read, placed, and nothing was refused or left unreadable.
@@ -143,7 +148,7 @@ describe('the roster template round-trips through the importer', () => {
     xlsx.utils.book_append_sheet(filled, xlsx.utils.json_to_sheet([row], { header: headers }), 'Assayers');
     const filledBuffer = Buffer.from(xlsx.write(filled, { type: 'buffer', bookType: 'xlsx' }));
 
-    const service = new RosterImportService(mockUow() as any);
+    const service = new RosterImportService(mockUow() as any, mockGeoPrecision() as any);
     const summary = await service.importAssayerSheet(filledBuffer, 'test-user', { dryRun: true });
 
     expect(summary.rowsRead).toBe(1);

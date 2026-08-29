@@ -21,12 +21,17 @@ import { AssayerService } from './assayer.service';
 import { LocationTrailService } from './location-trail.service';
 import { AssayerController } from './assayer.controller';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { GeoModule } from '../geo/geo.module';
 
 @Module({
   imports: [
     // HR and ops learn when someone becomes assignable, and when credentials fall due.
     NotificationsModule,
     StorageModule,
+    // For `GeoPrecisionService.enqueueBackfill` — the roster importer hands freshly imported
+    // appraisers to the precision worker instead of leaving them for the nightly sweep.
+    // Same hand-off the branch importer uses; GeoModule is a leaf, no cycle.
+    GeoModule,
     TypeOrmModule.forFeature([
       AssayerEntity,
       AssayerCommercialProfileEntity,

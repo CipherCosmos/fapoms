@@ -1,6 +1,6 @@
 import * as path from 'path';
 import { calculateHaversineDistance } from '@fapoms/shared';
-import { resolveFreely, pincodeCentroid, VerificationAnchor, GeoPrecision, networkAllowed } from './osm-geocoder';
+import { resolveFreely, pincodeCentroid, districtCentroidOsm, VerificationAnchor, GeoPrecision, networkAllowed } from './osm-geocoder';
 import { JsonFileCache } from './geo-cache-store';
 
 /**
@@ -409,6 +409,53 @@ const STATE_CENTROIDS: Record<string, { lat: number; lng: number }> = {
   sikkim: { lat: 27.5330, lng: 88.5122 },
 };
 
+/**
+ * Real appraiser rosters record states as "A.P", "M.P", "U.P", "J&K", "west Bengal" — abbreviated,
+ * cased and punctuated however the branch clerk typed them. OSM knows only the full canonical name,
+ * so an un-normalised state silently sinks every tier: the pincode/POI candidates get rejected for
+ * a state mismatch, and the district lookup finds nothing, dropping ~150 records onto their shared
+ * state centroid. Canonicalising once, up front, lifts them all. Keys are `norm()` output.
+ */
+const STATE_ALIASES: Record<string, string> = {
+  ap: 'Andhra Pradesh', andhra: 'Andhra Pradesh', andhrapradesh: 'Andhra Pradesh',
+  mp: 'Madhya Pradesh', madhyapradesh: 'Madhya Pradesh',
+  up: 'Uttar Pradesh', uttarpradesh: 'Uttar Pradesh',
+  tn: 'Tamil Nadu', tamilnadu: 'Tamil Nadu',
+  wb: 'West Bengal', westbengal: 'West Bengal',
+  hp: 'Himachal Pradesh', himachalpradesh: 'Himachal Pradesh',
+  jk: 'Jammu and Kashmir', jammukashmir: 'Jammu and Kashmir', jammuandkashmir: 'Jammu and Kashmir',
+  uk: 'Uttarakhand', uttarakhand: 'Uttarakhand', uttaranchal: 'Uttarakhand',
+  ka: 'Karnataka', karnataka: 'Karnataka',
+  kl: 'Kerala', kerala: 'Kerala',
+  mh: 'Maharashtra', maharashtra: 'Maharashtra',
+  gj: 'Gujarat', gujarat: 'Gujarat',
+  rj: 'Rajasthan', rajasthan: 'Rajasthan',
+  od: 'Odisha', or: 'Odisha', odisha: 'Odisha', orissa: 'Odisha',
+  br: 'Bihar', bihar: 'Bihar',
+  jh: 'Jharkhand', jharkhand: 'Jharkhand',
+  pb: 'Punjab', punjab: 'Punjab',
+  hr: 'Haryana', haryana: 'Haryana',
+  as: 'Assam', assam: 'Assam',
+  cg: 'Chhattisgarh', chhattisgarh: 'Chhattisgarh',
+  ts: 'Telangana', tg: 'Telangana', telangana: 'Telangana',
+  ga: 'Goa', goa: 'Goa',
+  dl: 'Delhi', delhi: 'Delhi', newdelhi: 'Delhi',
+  tr: 'Tripura', tripura: 'Tripura',
+  ml: 'Meghalaya', meghalaya: 'Meghalaya',
+  mn: 'Manipur', manipur: 'Manipur',
+  nl: 'Nagaland', nagaland: 'Nagaland',
+  mz: 'Mizoram', mizoram: 'Mizoram',
+  ar: 'Arunachal Pradesh', arunachalpradesh: 'Arunachal Pradesh',
+  sk: 'Sikkim', sikkim: 'Sikkim',
+  py: 'Puducherry', puducherry: 'Puducherry', pondicherry: 'Puducherry',
+};
+
+/** Canonical full state name OSM will recognise, or the trimmed original if it is not a state we map. */
+function canonicalState(state?: string | null): string {
+  if (!state) return '';
+  return STATE_ALIASES[norm(state)] ?? state.trim();
+}
+
 /** Look up a district centroid from the static database.
  *  Matches against normalised district name. */
 function districtCentroidFallback(district: string, state: string): GeocodeResult | null {
@@ -494,6 +541,9 @@ export async function geocodeIndiaRobust(
   },
 ): Promise<GeocodeResult> {
   const pin = pincode || (address || '').match(/\b\d{6}\b/)?.[0] || null;
+  // Normalise "A.P" → "Andhra Pradesh" once, up front, so every tier below queries and verifies
+  // against a state name OSM actually recognises (see STATE_ALIASES).
+  state = canonicalState(state) || state;
 
   // Tier 1: Google Maps (precise)
   const googleResult = await geocodeIndia(address, city, district, state, pin);
@@ -554,6 +604,23 @@ export async function geocodeIndiaRobust(
 
   // Tier 3: Pincode centroid (India Post, else OSM)
   if (pinCoord) return pinCoord;
+
+  // Tier 3.5: District centroid from OSM. The self-hosted Nominatim carries every Indian district,
+  // so when the pincode is unknown and the specific address did not resolve, this places the record
+  // in its own district (~15 km) instead of collapsing it onto the shared state centroid below. It
+  // beats the static district set (Tier 4), which is incomplete, so it is tried first.
+  if (options?.precise !== false && district && state) {
+    const osmDistrict = await districtCentroidOsm(district, state).catch(() => null);
+    if (osmDistrict) {
+      return {
+        lat: osmDistrict.lat,
+        lng: osmDistrict.lng,
+        accuracyMeters: osmDistrict.accuracyMeters,
+        source: osmDistrict.precision,
+        matchedName: osmDistrict.matchedName,
+      };
+    }
+  }
 
   // Tier 4: Static district HQ centroid
   if (districtResult) return districtResult;

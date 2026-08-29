@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
+import { GeoPrecisionService } from '../geo/geo-precision.service';
 import * as xlsx from 'xlsx';
 import {
   AssayerLifecycleStatus, Region, resolveRegion,
@@ -68,7 +69,10 @@ export interface RosterImportSummary {
 export class RosterImportService {
   private readonly logger = new Logger(RosterImportService.name);
 
-  constructor(private readonly uow: UnitOfWork) {}
+  constructor(
+    private readonly uow: UnitOfWork,
+    private readonly geoPrecision: GeoPrecisionService,
+  ) {}
 
   async importAssayerSheet(
     file: Buffer,
@@ -93,6 +97,9 @@ export class RosterImportService {
 
     /** Clients the roster refers to that this system does not have. Counted, reported once. */
     const missingClients = new Map<string, number>();
+
+    /** Everyone a real run saved — handed to the geo precision queue after the commit. */
+    const importedIds: string[] = [];
 
     await this.uow.run(async (manager) => {
       // Resolved once, inside the transaction so it reads the same snapshot the import writes
@@ -138,6 +145,7 @@ export class RosterImportService {
         isNew ? summary.created++ : summary.updated++;
 
         const assayerId = assayer.id;
+        importedIds.push(assayerId);
         summary.references += await this.applyReferences(manager, assayerId, read);
         summary.onboardingDocuments += await this.applyOnboardingDocuments(manager, assayerId, read);
         summary.backgroundChecks += await this.applyBackgroundCheck(
@@ -166,6 +174,15 @@ export class RosterImportService {
     }).catch((err) => {
       if (!(err instanceof DryRunComplete)) throw err;
     });
+
+    // Freshly imported people get coordinates now, not at the 03:30 nightly sweep — the same
+    // hand-off the branch importer makes. The worker's own query skips rows already precise and
+    // never touches manual pins, so enqueueing everyone saved is safe. Fire-and-forget: if the
+    // queue is down the nightly sweep still catches them. A rehearsal rolled its rows back, so
+    // it hands off nothing.
+    if (!dryRun && importedIds.length > 0) {
+      void this.geoPrecision.enqueueBackfill('assayer', importedIds, 'roster import');
+    }
 
     this.logger.log(
       `Roster import${dryRun ? ' (rehearsal)' : ''}: ${summary.rowsRead} rows, `
