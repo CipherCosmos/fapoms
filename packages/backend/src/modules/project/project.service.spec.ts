@@ -376,6 +376,49 @@ describe('ProjectService', () => {
       );
     });
 
+    /**
+     * The two branch importers — this one and the Branches page — must key identity the same way,
+     * or a file uploaded through both doors inserts a second copy of every branch. This path used
+     * to default a missing SOL id to the branch code (minting a fake one), while the other stored
+     * null; the mismatched ids then never matched. It now stores what the file carries and nothing
+     * more, so the two paths land on one record.
+     */
+    it('stores the SOL id only when the file carries one — never the branch code as a stand-in', async () => {
+      await service.uploadBranchesFromExcel('p-1', sheetBuffer([templateRow()]), 'user-1');
+
+      expect(mockBranchService.registerImportedBranch).toHaveBeenCalledWith(
+        expect.objectContaining({ branchCode: 'BR-1', solId: null }),
+        'user-1',
+      );
+    });
+
+    it('carries the SOL id through when the file provides one', async () => {
+      await service.uploadBranchesFromExcel('p-1', sheetBuffer([templateRow({ 'SOL ID': 'S-77' })]), 'user-1');
+
+      expect(mockBranchService.registerImportedBranch).toHaveBeenCalledWith(
+        expect.objectContaining({ branchCode: 'BR-1', solId: 'S-77' }),
+        'user-1',
+      );
+    });
+
+    it('matches an existing branch by its SOL id and updates it instead of creating a duplicate', async () => {
+      const existing = {
+        id: 'b-existing', branchCode: 'OLD-CODE', solId: 'S-77', name: 'Old name',
+        clientId: 'c-1', latitude: 10.7867, longitude: 76.6548, region: 'SOUTH',
+      };
+      // The importer queries the master twice — by branch code and by SOL id. This branch shares
+      // only the SOL id with the sheet (its code differs), so only the SOL query returns it.
+      mockBranchRepo.find.mockImplementation(async (opts: any) => (opts?.where?.solId ? [existing] : []));
+      mockBranchService.update.mockImplementation(async (id: string, patch: any) => ({ ...existing, id, ...patch }));
+
+      const report = await service.uploadBranchesFromExcel(
+        'p-1', sheetBuffer([templateRow({ BRANCH: 'NEW-CODE', 'SOL ID': 'S-77' })]), 'user-1',
+      );
+
+      expect(mockBranchService.registerImportedBranch).not.toHaveBeenCalled();
+      expect(report.created).toBe(0);
+    });
+
     it('reports the rows it could not use, with their spreadsheet row numbers', async () => {
       const buffer = sheetBuffer([
         templateRow(),

@@ -931,6 +931,7 @@ export class ProjectService implements OnModuleInit {
       get: RowReader;
       branchName: string;
       branchCode: string;
+      solId: string;
       district: string;
       state: string;
       address: string;
@@ -952,6 +953,11 @@ export class ProjectService implements OnModuleInit {
       // client's own export, our template, and a hand-edited copy of either all import.
       const branchName = get('BRANCH_NAME', 'Branch Name', 'BranchName', 'Name');
       const branchCode = get('BRANCH', 'Branch Code', 'BranchCode', 'BrCode', 'Code', 'SOL ID', 'SolId');
+      // The SOL id is read as its own field, not folded into branchCode, so this importer keys a
+      // branch's identity exactly as the Branches-page importer does — SOL id first, branch code
+      // second. Storing it identically is what lets a file uploaded through both doors match the
+      // same record instead of inserting a second copy. Left blank when the file has no SOL column.
+      const solId = get('SOL ID', 'SolId', 'SOL_ID', 'Sol', 'SOL', 'SOL NO', 'SolNo');
       if (!branchName && !branchCode) {
         // A wholly blank row — the trailing rows Excel leaves behind. Not worth reporting.
         continue;
@@ -1048,7 +1054,7 @@ export class ProjectService implements OnModuleInit {
         const region = resolveRegion(state);
 
         prepared.push({
-          rowNumber, get, branchName, branchCode, district, state, address, pincodeStr,
+          rowNumber, get, branchName, branchCode, solId, district, state, address, pincodeStr,
           packetCount, calculatedHours, suppliedCoords, region,
         });
       } catch (err: any) {
@@ -1082,16 +1088,25 @@ export class ProjectService implements OnModuleInit {
      * clothes.
      */
     const codes = prepared.map((p) => p.branchCode);
+    const sols = prepared.map((p) => p.solId).filter(Boolean);
+    const clientScope = project.clientId ? { clientId: project.clientId } : {};
+    // Existing branches this file might already know, found by EITHER key — a branch created
+    // through the Branches page may carry a SOL id this file matches even when the codes differ,
+    // and vice versa. One query per key over the whole file, not one per row.
     const existingBranches = codes.length
       ? await this.branchRepository.find({
-          where: {
-            branchCode: In(codes),
-            isActive: true,
-            ...(project.clientId ? { clientId: project.clientId } : {}),
-          },
+          where: { branchCode: In(codes), isActive: true, ...clientScope },
+        })
+      : [];
+    const existingBySol = sols.length
+      ? await this.branchRepository.find({
+          where: { solId: In(sols), isActive: true, ...clientScope },
         })
       : [];
     const branchByCode = new Map(existingBranches.map((b) => [b.branchCode, b]));
+    const branchBySol = new Map(
+      existingBySol.filter((b) => b.solId).map((b) => [b.solId as string, b]),
+    );
 
     // Which branches this project already carries, and which already have an assessment. Both
     // were per-row `findOne`s whose answer is a single query over one project.
@@ -1156,7 +1171,7 @@ export class ProjectService implements OnModuleInit {
     // ---- Pass 2: the writes, and the geocoding that makes this slow ------------------------
     for (let position = 0; position < prepared.length; position++) {
       const {
-        rowNumber, get, branchName, branchCode, district, state, address, pincodeStr,
+        rowNumber, get, branchName, branchCode, solId, district, state, address, pincodeStr,
         packetCount, calculatedHours, suppliedCoords, region,
       } = prepared[position];
 
@@ -1169,7 +1184,9 @@ export class ProjectService implements OnModuleInit {
        * with no way to tell how far it got. Each row now either lands or is reported by number.
        */
       try {
-        let branch = branchByCode.get(branchCode) ?? null;
+        // SOL id first, branch code second — the same precedence the Branches-page importer uses,
+        // so a branch already on file is found by whichever id this sheet shares with it.
+        let branch = (solId ? branchBySol.get(solId) : null) ?? branchByCode.get(branchCode) ?? null;
         if (!branch) {
           const coords = suppliedCoords ?? await getRealCoordinates(address, branchName, district, state);
 
@@ -1216,7 +1233,10 @@ export class ProjectService implements OnModuleInit {
 
           branch = await this.branchService.registerImportedBranch({
             branchCode,
-            solId: get('SOL ID', 'SolId') || branchCode,
+            // Only what the file actually carries — no longer defaulted to the branch code, which
+            // minted a fake SOL id and split this branch's identity from the same branch imported
+            // through the Branches page (that path stores null). Aligned, the two paths match.
+            solId: solId || null,
             name: branchName,
             address,
             state,
