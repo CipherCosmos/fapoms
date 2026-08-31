@@ -89,7 +89,9 @@ const STATE_TO_REGION: Record<string, Region> = {
   'odisha': Region.EAST,
   'orissa': Region.EAST,
   'andaman and nicobar islands': Region.EAST,
+  'andaman and nicobar': Region.EAST,
   'andaman nicobar': Region.EAST,
+  'andaman': Region.EAST,
 
   // Central
   'madhya pradesh': Region.CENTRAL,
@@ -117,13 +119,6 @@ const STATE_TO_REGION: Record<string, Region> = {
   'puducherry': Region.SOUTH,
   'pondicherry': Region.SOUTH,
   'lakshadweep': Region.SOUTH,
-  // The islands are administered from the south (their high court is at Kolkata, but their
-  // operational hub for a gold-audit roster is the southern mainland). Scoped SOUTH so a branch
-  // there is not left region-less and invisible to every region-scoped desk.
-  'andaman and nicobar islands': Region.SOUTH,
-  'andaman and nicobar': Region.SOUTH,
-  'andaman nicobar': Region.SOUTH,
-  'andaman': Region.SOUTH,
 };
 
 /**
