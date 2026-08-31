@@ -241,6 +241,15 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
   const activeRoutePolylineRef = useRef<L.Polyline | null>(null);
   const tileLayerRef = useRef<L.TileLayer | null>(null);
   /**
+   * The last set of inputs the view was auto-framed for. The draw effect re-runs on every pan and
+   * zoom now (to cull pins to the viewport), and it used to call `fitBounds` unconditionally at the
+   * end — which fired `moveend`, updated `renderBounds`, re-ran the draw effect, and fit again, in a
+   * tight infinite loop that pinned the main thread. Auto-framing must happen only when the reason
+   * to frame actually changes (a branch selected, a route drawn, the radius adjusted), never on a
+   * redraw the user's own pan/zoom triggered — otherwise the map fights the person moving it.
+   */
+  const lastFrameKeyRef = useRef<string | null>(null);
+  /**
    * The parent's click handler, read through a ref.
    *
    * Pins now outlive the effect run that drew them, and `onSelectBranch` is deliberately not in
@@ -266,9 +275,26 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
     if (mapInstanceRef.current) return mapInstanceRef.current;
     if (!mapContainerRef.current) return null;
     // Centred on India.
-    mapInstanceRef.current = L.map(mapContainerRef.current).setView([20.5937, 78.9629], 5);
+    mapInstanceRef.current = L.map(mapContainerRef.current, { preferCanvas: true }).setView([20.5937, 78.9629], 5);
     return mapInstanceRef.current;
   }, []);
+
+  /**
+   * Only what is on screen is drawn. A national roster is thousands of branches and assayers,
+   * and building a DOM pin for every one — most of them far outside the current view — is what
+   * froze the map: 7,000 markers is 7,000 nodes rebuilt on every pan. `renderBounds` is the map's
+   * current view, updated when it settles after a pan or zoom; the draw effect below culls to it
+   * (with a margin) so the pin count tracks what a person can actually see, not the whole country.
+   */
+  const [renderBounds, setRenderBounds] = useState<L.LatLngBounds | null>(null);
+  useEffect(() => {
+    const map = ensureMap();
+    if (!map) return;
+    const update = () => setRenderBounds(map.getBounds());
+    update();
+    map.on('moveend zoomend', update);
+    return () => { map.off('moveend zoomend', update); };
+  }, [ensureMap]);
 
   // GIP Layer state configuration (persisted in localStorage)
   const [showBranches, setShowBranches] = useState(() => localStorage.getItem('map_showBranches') !== 'false');
@@ -710,6 +736,17 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
      */
     const desiredMarkers = new Map<string, MarkerSpec>();
 
+    /**
+     * The current view, padded so a pin just off the edge is ready before it scrolls in, is the
+     * only region drawn. `inView` culls each layer to it; `MAX_PER_LAYER` is a backstop for the
+     * fully-zoomed-out case, where the whole country is "in view" and thousands of pins would
+     * pile onto a few pixels anyway — past the cap they are indistinguishable, so drawing them is
+     * pure cost. Zooming in reveals the rest.
+     */
+    const viewBounds = (renderBounds ?? map.getBounds()).pad(0.35);
+    const inView = (lat: number, lng: number) => viewBounds.contains([lat, lng]);
+    const MAX_PER_LAYER = 1500;
+
     // Clear old circles
     circlesRef.current.forEach((circle) => circle.remove());
     circlesRef.current = [];
@@ -735,10 +772,16 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
 
     // Layer 1: Branches
     if (showBranches) {
+      let branchesDrawn = 0;
       filteredBranches.forEach((b) => {
         if (b.latitude !== null && b.longitude !== null) {
           const lat = Number(b.latitude);
           const lng = Number(b.longitude);
+
+          // Off screen, or past the zoomed-out cap? Skip — the selected branch is always kept so
+          // its detail panel and route never blank out when it scrolls to the edge.
+          if (b.id !== selectedBranchId && (!inView(lat, lng) || branchesDrawn >= MAX_PER_LAYER)) return;
+          branchesDrawn++;
 
           const isSelected = b.id === selectedBranchId;
           // Bank mode paints ownership; status mode is untouched. Selection always wins.
@@ -842,6 +885,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
       const blockedById = new Map<string, { reason: string; detail?: string }>();
       (excludedCandidates || []).forEach((e) => blockedById.set(e.assayerId, { reason: e.reason, detail: e.detail }));
 
+      let assayersDrawn = 0;
       filteredAssayers.forEach((assayer) => {
       if (assayer.latitude !== null && assayer.longitude !== null) {
         const aLat = Number(assayer.latitude);
@@ -856,9 +900,18 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             shouldRender = true;
           }
         } else {
-          // National coverage: show all assayers!
+          // National coverage: everyone — but only the ones actually on screen, so a 1,000-person
+          // roster does not build 1,000 pins for a view showing one city's worth of them.
           shouldRender = true;
         }
+
+        // Cull to the current view and cap the zoomed-out flood. An engine-ranked candidate is
+        // always kept: a recommendation must never vanish because it sits off the map edge.
+        if (shouldRender && !rankById.has(assayer.id)
+          && (!inView(aLat, aLng) || assayersDrawn >= MAX_PER_LAYER)) {
+          shouldRender = false;
+        }
+        if (shouldRender) assayersDrawn++;
 
         if (shouldRender) {
           // Uses the same *effective* radius/enabled the "Restricted Zone" circle above is
@@ -1160,8 +1213,19 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
       }
     }
 
-    // Zoom map to cover bounds automatically, or zoom to show the full radius circle
-    if (bounds.length > 0 && !selectedAssayerForRouting) {
+    // Auto-frame the view — but only when the *reason* to frame has changed, never on a redraw the
+    // user's own pan or zoom triggered. Framing on every draw fought the person moving the map and,
+    // now that a viewport change re-runs this effect, looped (fitBounds -> moveend -> renderBounds ->
+    // draw -> fitBounds ...). The frame key captures every input the framing below reads.
+    const frameKey = [
+      selectedBranchId ?? '',
+      selectedAssayerForRouting ? 'routing' : '',
+      routePoints?.length ?? 0,
+      radiusKm,
+      effectiveSlaEnabled ? effectiveSlaRadius : '',
+    ].join('|');
+    if (bounds.length > 0 && !selectedAssayerForRouting && frameKey !== lastFrameKeyRef.current) {
+      lastFrameKeyRef.current = frameKey;
       if (selectedBranchId && selectedBranchLatLng) {
         const zoomRadius = effectiveSlaEnabled ? effectiveSlaRadius : radiusKm;
         const radiusMeters = zoomRadius * 1000;
@@ -1173,7 +1237,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
     }
     // `mapStyle`/`appTheme` are deliberately absent: the basemap moved to its own effect above,
     // and a theme change is no longer a reason to walk every pin on the map.
-  }, [ensureMap, branches, selectedBranchId, routePoints, showBranches, showAssayers, showRoutes, showSlaRisk, slaRadiusKm, showWorkforceDensity, showRevenueDensity, realAssayers, filteredBranches, filteredAssayers, radiusKm, selectedAssayerForRouting, roadGeometry, travelMode, searchQuery, cityFilter, branchStatusFilter, slaEnabledProp, slaRadiusProp, rankedCandidates, excludedCandidates, colorMode, clientColorOf, assayerClientFilter, spotlightClientId]);
+  }, [ensureMap, branches, selectedBranchId, routePoints, showBranches, showAssayers, showRoutes, showSlaRisk, slaRadiusKm, showWorkforceDensity, showRevenueDensity, realAssayers, filteredBranches, filteredAssayers, radiusKm, selectedAssayerForRouting, roadGeometry, travelMode, searchQuery, cityFilter, branchStatusFilter, slaEnabledProp, slaRadiusProp, rankedCandidates, excludedCandidates, colorMode, clientColorOf, assayerClientFilter, spotlightClientId, renderBounds]);
 
   // Travel math calculations based on mode-aware estimates
   const modeSpeeds: Record<string, number> = { driving: 40, 'two-wheeler': 30, walking: 5 };
