@@ -38,7 +38,7 @@ const EXCLUSION_REASONS: Record<string, string> = {
   availability: 'Unavailable on this date (already booked or on leave)',
   consecutiveBranchAudit: 'Audited this branch most recently — rotation rule prevents repeat auditor',
   clientRestriction: 'Restricted by this client',
-  clientEligibility: 'Not approved to work for this client',
+  clientEligibility: 'Not approved to work for this client — not on its approved list, or their empanelment with it is rejected, terminated or not recommended',
   ruleEngineEligibility: 'Blocked by a business rule',
   requiredSkills: 'Missing a skill or certification this project requires',
   distancePolicy: "Outside the client's permitted distance band for this branch",
@@ -173,6 +173,13 @@ export interface PlanningContext {
     rules: BusinessRuleEntity[];
     /** Times each assayer has already audited THIS branch (accepted or completed). */
     priorVisitsByAssayer: Record<string, number>;
+    /**
+     * Empanelment standing with THIS branch's client, per assayer — only rows that exist.
+     * Consulted by ClientEligibilityFilter: an explicitly negative standing (REJECTED,
+     * TERMINATED, NOT_RECOMMENDED) excludes; every other status, and no row at all, changes
+     * nothing. Absent-by-default keeps today's behaviour for the untracked majority.
+     */
+    empanelmentStatusByAssayer?: Record<string, string>;
     /**
      * How many assignments each assayer has already ACCEPTED for the scheduled day, and where
      * those branches are. Both were per-candidate queries that compared a `date` column against
@@ -442,6 +449,23 @@ export class ClientEligibilityFilter implements CandidateFilter {
 
   async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
     if (!context.client) return true;
+
+    // An explicitly negative empanelment is the client's own recorded "no" — REJECTED,
+    // TERMINATED or NOT_RECOMMENDED excludes, with the usual bypass escape hatch. Any other
+    // standing, and no row at all, decides nothing: the legacy eligibleClients check below
+    // proceeds untouched, so nobody currently eligible loses work except the explicitly barred.
+    const standing = context.branchFacts?.empanelmentStatusByAssayer?.[assayer.id];
+    if (standing === 'REJECTED' || standing === 'TERMINATED' || standing === 'NOT_RECOMMENDED') {
+      if (this.ruleBypass.isBypassedSync(BypassableRule.CLIENT_ELIGIBILITY)) {
+        this.ruleBypass.noteBypass(BypassableRule.CLIENT_ELIGIBILITY, {
+          entityType: 'ASSAYER', entityId: assayer.id,
+          detail: `empanelment ${standing} by ${context.client.clientCode ?? context.client.name}`,
+        });
+      } else {
+        return false;
+      }
+    }
+
     const eligible = assayer.eligibleClients || [];
     if (eligible.length === 0 || eligible.includes('*') || eligible.includes('ANY') || eligible.includes('ALL')) {
       return true;
@@ -2189,6 +2213,23 @@ export class RecommendationEngine {
       recentOffersByAssayer,
       fairnessOfferCap: Number(fairnessOfferCap) || DEFAULT_FAIRNESS_OFFER_CAP,
     };
+
+    // Empanelment standing with this client, one grouped query for the pool. Vetting records
+    // a partner's explicit "no" (see the qualification profile); until this map existed that
+    // decision fed planning nothing and a REJECTED assayer kept being offered to that client.
+    if (context.client && assayerIds.length) {
+      const empanelmentRows: Array<{ assayer_id: string; status: string }> = await this.assignmentRepository.manager
+        .query(
+          `SELECT assayer_id, status FROM assayer_client_empanelments
+            WHERE client_id = $1 AND is_active = true AND assayer_id = ANY($2)`,
+          [context.client.id, assayerIds],
+        )
+        .catch(() => []);
+      context.branchFacts.empanelmentStatusByAssayer = empanelmentRows.reduce<Record<string, string>>((acc, r) => {
+        acc[r.assayer_id] = r.status;
+        return acc;
+      }, {});
+    }
 
     // Identify the assayer (if any) currently holding an unconfirmed PENDING offer on this
     // branch, so they can still be surfaced as a candidate (e.g. as their own backup reference,
