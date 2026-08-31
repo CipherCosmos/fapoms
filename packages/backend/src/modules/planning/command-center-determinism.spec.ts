@@ -83,13 +83,15 @@ describe('CommandCenterService — determinism against row order', () => {
     const branches = reversed ? [...BRANCHES].reverse() : [...BRANCHES];
     const assayers = reversed ? [...ASSAYERS].reverse() : [...ASSAYERS];
 
-    // The three statements this service issues, told apart by a fragment unique to each.
+    // The statements this service issues, told apart by a fragment unique to each.
     const query = jest.fn(async (sql: string) => {
       if (sql.includes('catchment_counts')) {
         const counts = branches.map((b) => ({ project_branch_id: b.project_branch_id, assayers_in_range: '2' }));
         return reversed ? counts.reverse() : counts;
       }
       if (sql.includes('WITH roster AS')) return assayers;
+      // The project-less master branches appended to the live map — none in this fixture.
+      if (sql.includes('NOT EXISTS') && sql.includes('project_branches')) return [];
       return branches;
     });
 
@@ -129,6 +131,60 @@ describe('CommandCenterService — determinism against row order', () => {
       if (previous === undefined) delete process.env.COMMAND_CENTER_MAX_POINTS;
       else process.env.COMMAND_CENTER_MAX_POINTS = previous;
     }
+  });
+
+  it('appends project-less branches to the live map without disturbing the work aggregates', async () => {
+    // A branch that exists in the master but sits in no project — imported through the Branches
+    // page. The live map must still show it; the packets/coverage totals must not count it.
+    const orphan = {
+      id: 'orphan-1', name: 'Orphan Branch', branch_code: 'OB-1', district: 'THANE',
+      state: 'Maharashtra', latitude: '19.2', longitude: '72.97', client_id: 'client-1',
+      client_name: 'Client 1',
+    };
+    const query = jest.fn(async (sql: string) => {
+      if (sql.includes('catchment_counts')) return BRANCHES.map((b) => ({ project_branch_id: b.project_branch_id, assayers_in_range: '2' }));
+      if (sql.includes('WITH roster AS')) return ASSAYERS;
+      if (sql.includes('NOT EXISTS') && sql.includes('project_branches')) return [orphan];
+      return BRANCHES;
+    });
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        CommandCenterService,
+        { provide: getDataSourceToken(), useValue: { query } as Partial<DataSource> },
+        { provide: CacheService, useValue: { wrap: (_k: string, _ttl: number, fn: () => any) => fn() } },
+      ],
+    }).compile();
+
+    const result = await module.get(CommandCenterService).overview({});
+
+    // The orphan is on the map…
+    const pin = result.branchPoints.find((b: any) => b.id === 'orphan-1');
+    expect(pin).toBeDefined();
+    expect(pin.packets).toBe(0);
+    expect(pin.projectBranchId).toBeNull();
+    // …counted in what the map shows…
+    expect(result.meta.branchPoints.total).toBe(BRANCHES.length + 1);
+    // …but invisible to the work aggregates (6 project branches only).
+    expect(result.totals.branches).toBe(BRANCHES.length);
+    expect(result.totals.packets).toBe(BRANCHES.reduce((s, b) => s + b.packet_count, 0));
+  });
+
+  it('does not append the master list when a projectId scopes the view (planning map)', async () => {
+    const query = jest.fn(async (sql: string) => {
+      if (sql.includes('catchment_counts')) return [];
+      if (sql.includes('WITH roster AS')) return [];
+      if (sql.includes('NOT EXISTS') && sql.includes('project_branches')) throw new Error('extras query must not run when projectId is set');
+      return [];
+    });
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        CommandCenterService,
+        { provide: getDataSourceToken(), useValue: { query } as Partial<DataSource> },
+        { provide: CacheService, useValue: { wrap: (_k: string, _ttl: number, fn: () => any) => fn() } },
+      ],
+    }).compile();
+
+    await expect(module.get(CommandCenterService).overview({ projectId: 'proj-1' })).resolves.toBeDefined();
   });
 
   it('keeps the unrounded distance accumulators off the response', async () => {

@@ -589,6 +589,78 @@ export class CommandCenterService {
       params,
     );
 
+    /**
+     * The live map shows the whole branch master, not only branches that already sit in a project.
+     *
+     * The query above inner-joins through `project_branches`, so a branch imported through the
+     * Branches page — which creates a master branch but attaches it to no project — never appeared
+     * on the executive map at all. Those branches are appended here as plain pins: no packets, no
+     * coverage math, no revenue, because there is no scheduled work to measure. The aggregates
+     * above therefore stay a picture of *work*, while the map shows *every branch*.
+     *
+     * Skipped when a `projectId` scopes the view: the planning workspace map is deliberately that
+     * one project's branches, so it must not gain the unrelated rest of the master list.
+     */
+    // Kept in their own array, never pushed into `branchPoints`/`visibleBranchPoints` — under the
+    // cap those two are the SAME reference, so a push would silently add these to the work
+    // aggregates (totals.branches, packets) this is meant to leave alone. Concatenated only into
+    // the response's map array below.
+    const extraBranchPoints: any[] = [];
+    if (!filters.projectId) {
+      const extraParams: any[] = [];
+      const extraWhere: string[] = [
+        'b.is_active = true',
+        'NOT EXISTS (SELECT 1 FROM project_branches pb WHERE pb.branch_id = b.id AND pb.is_active = true)',
+      ];
+      // Scoped by the branch's own columns, so a branch with no project is still filtered the same
+      // way the joined rows were — `b.client_id` stands in for the project's client.
+      if (filters.clientId) { extraParams.push(filters.clientId); extraWhere.push(`b.client_id = $${extraParams.length}`); }
+      if (filters.state) { extraParams.push(filters.state); extraWhere.push(`UPPER(b.state) = UPPER($${extraParams.length})`); }
+      if (filters.zoneId) { extraParams.push(filters.zoneId); extraWhere.push(`b.zone_id = $${extraParams.length}`); }
+      if (filters.regions?.length) { extraParams.push(filters.regions); extraWhere.push(`b.region = ANY($${extraParams.length})`); }
+
+      const remaining = Math.max(0, maxPoints - visibleBranchPoints.length);
+      if (remaining > 0) {
+        const extras = await this.dataSource.query(
+          `SELECT b.id, b.name, b.branch_code, b.district, b.state, b.latitude, b.longitude,
+                  b.client_id, c.name AS client_name
+             FROM branches b
+             LEFT JOIN clients c ON c.id = b.client_id
+            WHERE ${extraWhere.join(' AND ')}
+            ORDER BY b.id
+            LIMIT ${remaining}`,
+          extraParams,
+        );
+        for (const b of extras) {
+          extraBranchPoints.push({
+            id: b.id,
+            projectBranchId: null,
+            name: b.name,
+            branchCode: b.branch_code,
+            district: b.district,
+            state: canonicalState(b.state),
+            rawState: b.state,
+            latitude: b.latitude === null ? null : Number(b.latitude),
+            longitude: b.longitude === null ? null : Number(b.longitude),
+            status: null,
+            clientId: b.client_id,
+            clientName: b.client_name,
+            projectId: null,
+            packets: 0,
+            auditHours: 0,
+            scheduledDate: null,
+            assigned: false,
+            nearestAssayerKm: null,
+            nearestAssayerName: null,
+            assayersInRange: 0,
+            serviceableRadiusKm: DEFAULT_SERVICEABLE_RADIUS_KM,
+            realisedRevenue: 0,
+            isolated: false,
+          });
+        }
+      }
+    }
+
     return {
       generatedAt: new Date().toISOString(),
       // Reported as the default; each branch was measured against its own client's ceiling.
@@ -612,13 +684,16 @@ export class CommandCenterService {
       idleAssayers: assayerPoints
         .filter((a: any) => a.openAssignments === 0)
         .map((a: any) => ({ ...a, territoryPosture: territoryList.find((t: any) => t.state === a.state)?.posture ?? 'UNKNOWN' })),
-      // Bounded — see DEFAULT_MAX_POINTS. The aggregates above cover everything.
-      branchPoints: visibleBranchPoints,
+      // Bounded — see DEFAULT_MAX_POINTS. The aggregates above cover everything. The project-less
+      // master branches are concatenated here (live map only), never folded into the aggregates.
+      branchPoints: [...visibleBranchPoints, ...extraBranchPoints],
       assayerPoints: visibleAssayerPoints,
       meta: {
         branchPoints: {
-          returned: visibleBranchPoints.length,
-          total: branchPoints.length,
+          returned: visibleBranchPoints.length + extraBranchPoints.length,
+          // Every branch the map can show — the scheduled-work rows plus the project-less master
+          // branches appended above — so "showing X of Y" counts what a person actually sees.
+          total: branchPoints.length + extraBranchPoints.length,
           truncated: visibleBranchPoints.length < branchPoints.length,
         },
         assayerPoints: {
