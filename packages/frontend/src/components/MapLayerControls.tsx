@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Layers, ChevronDown, ChevronUp } from 'lucide-react';
 import { branchStatusLabel } from '../utils/statusLabels';
-import { ASSAYER_LIFECYCLE_BUCKETS, LIFECYCLE_RING_COLORS as LIFECYCLE_RING, buildClientColorScale } from '../utils/clientColors';
+import { ASSAYER_LIFECYCLE_BUCKETS, LIFECYCLE_RING_COLORS as LIFECYCLE_RING, buildSpotlightColorScale } from '../utils/clientColors';
 
 interface MapLayerControlsProps {
   showBranches: boolean;
@@ -93,7 +93,9 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
     setAssayerClientFilter([]); setAssayerLifecycleFilter([]); setAssayerAvailability('ALL'); setSearchQuery('');
   };
   const num = (n: number | undefined) => (n == null ? '' : ` (${n})`);
-  const clientColorOf = buildClientColorScale(clientOptions.map((c) => c.id));
+  // Match the map: ICICI is spotlit, every other bank shares one colour. Detected by name so
+  // the filter chip dots agree with the pins.
+  const clientColorOf = buildSpotlightColorScale(clientOptions.find((c) => /icici/i.test(c.name))?.id ?? null);
 
   /**
    * One-click views for the questions an operator actually opens this map to answer, so the

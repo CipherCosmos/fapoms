@@ -59,6 +59,24 @@ export function buildClientColorScale(clientIds: Iterable<string>): (clientId?: 
   return (clientId) => (clientId && byId.get(clientId)) || NO_CLIENT_COLOR;
 }
 
+/** The spotlight colour — the ONE bank singled out on the map — and the muted colour every other bank shares. */
+export const SPOTLIGHT_COLOR = '#e11d48';   // rose — the highlighted bank
+export const OTHER_BANK_COLOR = '#2563eb';  // one blue for every other bank
+
+/**
+ * Colour ONE bank apart from the rest.
+ *
+ * The full per-bank palette answers "which of twenty lenders is this?"; this answers a sharper
+ * question — "is this the bank I care about right now, or not?" The spotlit client takes the
+ * rose; every other bank shares one blue; no active bank stays grey. `spotlightId` is resolved
+ * from the data (by name — see the map), so nothing about a specific bank is baked in here.
+ */
+export function buildSpotlightColorScale(spotlightId: string | null): (clientId?: string | null) => string {
+  // The spotlit bank is apart; EVERYONE else — other banks and no bank alike — shares the one
+  // colour, so the map reads as "ICICI, or not". No-bank is not singled out with its own grey.
+  return (clientId) => (spotlightId && clientId === spotlightId) ? SPOTLIGHT_COLOR : OTHER_BANK_COLOR;
+}
+
 export interface MapEmpanelment {
   clientId: string;
   clientName: string;

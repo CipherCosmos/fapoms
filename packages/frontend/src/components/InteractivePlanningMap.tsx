@@ -9,7 +9,8 @@ import { useScope, withScope } from '../context/ScopeContext';
 import { MapLayerControls } from './MapLayerControls';
 import { branchStatusColor, BRANCH_STATUS_LEGEND } from '../utils/statusLabels';
 import {
-  buildClientColorScale, bestEmpanelment, isQualifyingStanding, lifecycleBucketOf, LIFECYCLE_BUCKET_TINT,
+  buildSpotlightColorScale, SPOTLIGHT_COLOR, OTHER_BANK_COLOR,
+  bestEmpanelment, isQualifyingStanding, lifecycleBucketOf, LIFECYCLE_BUCKET_TINT,
   ASSAYER_LIFECYCLE_BUCKETS, LIFECYCLE_RING_COLORS, MapEmpanelment,
 } from '../utils/clientColors';
 
@@ -490,7 +491,14 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
     }
     return [...names.entries()].map(([id, name]) => ({ id, name })).sort((x, y) => x.name.localeCompare(y.name));
   }, [realAssayers, branches]);
-  const clientColorOf = useMemo(() => buildClientColorScale(clientOptions.map((c) => c.id)), [clientOptions]);
+  // The map spotlights ONE bank — ICICI — colouring its pins rose while every other bank shares
+  // one blue, so the eye goes straight to ICICI. ICICI is found by name (so it tracks whichever
+  // client is "ICICI" / "ICICI Bank Ltd", not a fixed id); change the test to spotlight another.
+  const spotlightClientId = useMemo(
+    () => clientOptions.find((c) => /icici/i.test(c.name))?.id ?? null,
+    [clientOptions],
+  );
+  const clientColorOf = useMemo(() => buildSpotlightColorScale(spotlightClientId), [spotlightClientId]);
 
   /**
    * Live counts for the control panel, so every filter says what it will yield BEFORE it is
@@ -905,13 +913,20 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
            * not one the map should hide. In status/planning mode the engine verdict still owns
            * the fill; the lifecycle ring rides along on top of it.
            */
-          const NO_BANK_FILL = '#cbd5e1';
+          /**
+           * Bank (client) mode is deliberately FLAT: one bank — ICICI — is spotlit, and every
+           * other pin is identical, whatever bank they hold, whatever their lifecycle. No grey
+           * for no-bank, no lifecycle ring, no dimming: the only question this view answers is
+           * "ICICI, or not". Status/planning mode keeps the two-channel scheme below (engine
+           * verdict in the fill, lifecycle in the ring), which is a different question.
+           */
+          const clientMode = colorMode === 'client';
           const markerColor = blocked
             ? '#64748b'
             : inBreach
             ? '#ef4444'
-            : colorMode === 'client'
-            ? (bestEmp ? clientColorOf(bestEmp.clientId) : ranking ? clientColorOf(null) : NO_BANK_FILL)
+            : clientMode
+            ? clientColorOf(bestEmp?.clientId)
             : ranking?.rank === 1
             ? '#f59e0b'
             : ranking
@@ -920,23 +935,19 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             ? '#a855f7'
             : '#10b981';
 
-          // The neutral no-bank disc is light, so its person glyph must be dark to read; every
-          // saturated bank/verdict fill takes the white glyph.
-          const lightFill = colorMode === 'client' && !bestEmp && !ranking && !blocked && !inBreach;
-          const glyphFill = lightFill ? '#334155' : '#ffffff';
+          // Every fill is saturated now (the light no-bank disc is gone), so the glyph is white.
+          const glyphFill = '#ffffff';
 
-          // RING = lifecycle, on its own channel so it is legible over any fill. Blocked and
-          // in-breach are branch-specific verdicts that own the whole pin, so they keep a plain
-          // ring; everyone else is ringed by where they stand in the workforce.
-          const ringColor = (blocked || inBreach)
+          // RING = lifecycle — but ONLY in status/planning mode. In the flat bank view every pin
+          // wears the same hairline ring, so paused/exited/onboarding no longer read apart.
+          const ringColor = clientMode
+            ? 'rgba(255,255,255,0.9)'
+            : (blocked || inBreach)
             ? 'rgba(255,255,255,0.85)'
             : (LIFECYCLE_RING_COLORS[lifecycleKey] ?? 'rgba(255,255,255,0.9)');
-          // Out-of-workforce and paused rings are drawn thicker so the status reads at a glance
-          // even on the smallest zoomed-out dot.
-          const ringWidth = lifecycleKey === 'exited' || lifecycleKey === 'paused' ? 2.6 : 1.5;
-          // Exited people fade so the live workforce carries the picture — but only lightly, and
-          // the bold red ring stays fully opaque, because "who has left" is a thing to SEE.
-          const dimExited = colorMode === 'client' && lifecycleKey === 'exited' && !ranking && !blocked;
+          const ringWidth = !clientMode && (lifecycleKey === 'exited' || lifecycleKey === 'paused') ? 2.6 : 1.5;
+          // No dimming in the flat bank view — every assayer is drawn at full presence.
+          const dimExited = false;
 
           const assayerSvg = `
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18px" height="18px" style="filter: drop-shadow(0 1px 3px rgba(0,0,0,0.5));">
@@ -1281,34 +1292,15 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             </div>
             {colorMode === 'client' ? (
               <>
-                {/* FILL = bank. One row per bank actually on this map, in the exact colours painting it. */}
-                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.4px', marginTop: '2px' }}>Fill · bank</div>
-                {clientOptions.slice(0, 16).map((c) => (
-                  <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: clientColorOf(c.id) }} />
-                    <span>{c.name}</span>
-                  </div>
-                ))}
-                {clientOptions.length > 16 && (
-                  <div style={{ color: 'var(--text-muted)' }}>+{clientOptions.length - 16} more banks</div>
-                )}
+                {/* The flat bank view: ICICI apart, everyone else identical. */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#cbd5e1', border: '1px solid rgba(51,65,85,0.5)' }} />
-                  <span>No active bank</span>
+                  <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: SPOTLIGHT_COLOR }} />
+                  <span>{clientOptions.find((c) => /icici/i.test(c.name))?.name ?? 'ICICI'}</span>
                 </div>
-                {/* RING = lifecycle. Independent of fill, so a terminated ICICI person reads as both. */}
-                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.4px', marginTop: '6px', borderTop: '1px solid var(--border-hair)', paddingTop: '6px' }}>Ring · status</div>
-                {[
-                  { c: 'rgba(255,255,255,0.9)', w: '1.5px', label: 'Active' },
-                  { c: '#38bdf8', w: '2px', label: 'Onboarding' },
-                  { c: '#f59e0b', w: '2.5px', label: 'Paused (suspended / leave / dormant)' },
-                  { c: '#ef4444', w: '2.5px', label: 'Out of workforce (terminated / resigned)' },
-                ].map((r) => (
-                  <div key={r.label} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span style={{ display: 'inline-block', width: '9px', height: '9px', borderRadius: '50%', background: '#64748b', boxSizing: 'border-box', border: `${r.w} solid ${r.c}` }} />
-                    <span>{r.label}</span>
-                  </div>
-                ))}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: OTHER_BANK_COLOR }} />
+                  <span>Every other assayer</span>
+                </div>
               </>
             ) : (
               <>
