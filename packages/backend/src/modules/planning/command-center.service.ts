@@ -51,8 +51,16 @@ const DEFAULT_SERVICEABLE_RADIUS_KM = 150;
  *
  * Ordered so a truncated map keeps what the page exists to show: unreachable branches first,
  * then unassigned, then the heaviest workloads.
+ *
+ * The bound sat at 4,000 when the map drew a DOM marker for every pin it received, so the cap was
+ * really protecting the browser from rendering thousands of nodes. The map now culls to the
+ * viewport and draws only what is on screen, so a whole national roster (~6,000 branches) can be
+ * sent and only the visible slice is ever built — zooming in reveals the rest, which it could not
+ * do when the missing branches never left the server. The bound now guards only the wire payload
+ * on the pathological 40,000-branch book (that 25 MB body), so it is raised to cover a real
+ * roster with headroom while still catching the extreme case; `COMMAND_CENTER_MAX_POINTS` tunes it.
  */
-const DEFAULT_MAX_POINTS = 4000;
+const DEFAULT_MAX_POINTS = 20000;
 
 /** The contracted ceiling for the joined client, in SQL. Falls back to the platform default. */
 const CLIENT_RADIUS_SQL = `COALESCE(NULLIF(c.planning_preferences->>'maxDistanceKm','')::numeric, ${DEFAULT_SERVICEABLE_RADIUS_KM})`;

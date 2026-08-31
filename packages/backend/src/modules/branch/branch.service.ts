@@ -11,7 +11,7 @@ import { GeoStateEntity, GeoDistrictEntity, GeoCityEntity } from '../geo/geo.ent
 import { AuditService } from '../../core/audit/audit.service';
 import { BranchQueryService } from './branch-query.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { EventCategory, resolveRegion, canonicalStateName } from '@fapoms/shared';
+import { EventCategory, resolveRegion, canonicalStateName, stateFromCity } from '@fapoms/shared';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { autocompleteIndia, isPlaceLookupConfigured } from '../geo/india-autocomplete.helper';
 import { geocodeIndia } from '../geo/india-geocoder';
@@ -756,9 +756,19 @@ export class BranchService {
         if (!branchCode && solId) branchCode = solId;
         const name = cell(row, 'name');
         const address = cell(row, 'address');
-        const state = cell(row, 'state');
+        let state = cell(row, 'state');
         const district = cell(row, 'district');
         const city = cell(row, 'city');
+
+        // Bank files often put a city in the State column ("Chennai", "Bangalore"). The state drives
+        // this branch's region, zone and holiday calendar, so rather than reject the row, recover the
+        // real state from the city — from the state cell itself, or, failing that, from the City
+        // column — before the geography check runs. A city we don't know still falls through to the
+        // normal state validation below, so a genuine typo is still caught.
+        if (state && !canonicalStateName(state)) {
+          const recovered = stateFromCity(state) ?? (city ? stateFromCity(city) : null);
+          if (recovered) state = recovered;
+        }
         const pincode = cell(row, 'pincode');
         const latitude = parseFloat(cell(row, 'latitude'));
         const longitude = parseFloat(cell(row, 'longitude'));

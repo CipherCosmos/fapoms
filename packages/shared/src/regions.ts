@@ -304,6 +304,90 @@ export function canonicalStateName(value: string | null | undefined): string | n
   return null;
 }
 
+/**
+ * Major Indian cities mapped to the state that contains them, keyed the same tolerant way as the
+ * state map (lower-cased, punctuation stripped, despaced fallback).
+ *
+ * Bank branch files routinely put a city in the "State" column — "Chennai", "Bangalore", "Pune" —
+ * and a strict state check rejects the row, which loses a real branch over a data-entry habit. The
+ * state is what sets a branch's region, zone and holiday calendar, so recovering it from a
+ * well-known city is far better than dropping the branch. This is a curated list of the cities that
+ * actually turn up this way, not a gazetteer; an unknown city still falls through to `null` so a
+ * genuine typo is caught rather than guessed. Where a city name is shared across states (there are
+ * none among these metros today) it would be left out rather than resolved to the wrong state.
+ */
+const CITY_TO_STATE: Record<string, string> = {
+  // Tamil Nadu
+  'chennai': 'Tamil Nadu', 'madras': 'Tamil Nadu', 'coimbatore': 'Tamil Nadu',
+  'madurai': 'Tamil Nadu', 'tiruchirappalli': 'Tamil Nadu', 'trichy': 'Tamil Nadu',
+  'salem': 'Tamil Nadu', 'tirunelveli': 'Tamil Nadu', 'erode': 'Tamil Nadu', 'vellore': 'Tamil Nadu',
+  // Karnataka
+  'bangalore': 'Karnataka', 'bengaluru': 'Karnataka', 'mysore': 'Karnataka', 'mysuru': 'Karnataka',
+  'mangalore': 'Karnataka', 'mangaluru': 'Karnataka', 'hubli': 'Karnataka', 'belgaum': 'Karnataka',
+  'gulbarga': 'Karnataka', 'davanagere': 'Karnataka',
+  // Maharashtra
+  'mumbai': 'Maharashtra', 'bombay': 'Maharashtra', 'pune': 'Maharashtra', 'nagpur': 'Maharashtra',
+  'nashik': 'Maharashtra', 'nasik': 'Maharashtra', 'thane': 'Maharashtra', 'aurangabad': 'Maharashtra',
+  'solapur': 'Maharashtra', 'kolhapur': 'Maharashtra', 'navi mumbai': 'Maharashtra',
+  // Telangana / Andhra
+  'hyderabad': 'Telangana', 'secunderabad': 'Telangana', 'warangal': 'Telangana',
+  'visakhapatnam': 'Andhra Pradesh', 'vizag': 'Andhra Pradesh', 'vijayawada': 'Andhra Pradesh',
+  'guntur': 'Andhra Pradesh', 'tirupati': 'Andhra Pradesh', 'nellore': 'Andhra Pradesh',
+  // Kerala
+  'kochi': 'Kerala', 'cochin': 'Kerala', 'thiruvananthapuram': 'Kerala', 'trivandrum': 'Kerala',
+  'kozhikode': 'Kerala', 'calicut': 'Kerala', 'thrissur': 'Kerala', 'kollam': 'Kerala', 'kannur': 'Kerala',
+  // Delhi NCR
+  'delhi': 'Delhi', 'new delhi': 'Delhi', 'gurgaon': 'Haryana', 'gurugram': 'Haryana',
+  'faridabad': 'Haryana', 'noida': 'Uttar Pradesh', 'ghaziabad': 'Uttar Pradesh',
+  // West Bengal
+  'kolkata': 'West Bengal', 'calcutta': 'West Bengal', 'howrah': 'West Bengal',
+  'siliguri': 'West Bengal', 'durgapur': 'West Bengal', 'asansol': 'West Bengal',
+  // Gujarat
+  'ahmedabad': 'Gujarat', 'surat': 'Gujarat', 'vadodara': 'Gujarat', 'baroda': 'Gujarat',
+  'rajkot': 'Gujarat', 'bhavnagar': 'Gujarat', 'jamnagar': 'Gujarat', 'gandhinagar': 'Gujarat',
+  // Rajasthan
+  'jaipur': 'Rajasthan', 'jodhpur': 'Rajasthan', 'udaipur': 'Rajasthan', 'kota': 'Rajasthan',
+  'ajmer': 'Rajasthan', 'bikaner': 'Rajasthan',
+  // Uttar Pradesh
+  'lucknow': 'Uttar Pradesh', 'kanpur': 'Uttar Pradesh', 'agra': 'Uttar Pradesh', 'varanasi': 'Uttar Pradesh',
+  'meerut': 'Uttar Pradesh', 'allahabad': 'Uttar Pradesh', 'prayagraj': 'Uttar Pradesh', 'bareilly': 'Uttar Pradesh',
+  'aligarh': 'Uttar Pradesh', 'moradabad': 'Uttar Pradesh', 'gorakhpur': 'Uttar Pradesh',
+  // Madhya Pradesh
+  'indore': 'Madhya Pradesh', 'bhopal': 'Madhya Pradesh', 'jabalpur': 'Madhya Pradesh',
+  'gwalior': 'Madhya Pradesh', 'ujjain': 'Madhya Pradesh',
+  // Punjab / Chandigarh
+  'ludhiana': 'Punjab', 'amritsar': 'Punjab', 'jalandhar': 'Punjab', 'patiala': 'Punjab', 'chandigarh': 'Chandigarh',
+  // Bihar / Jharkhand
+  'patna': 'Bihar', 'gaya': 'Bihar', 'muzaffarpur': 'Bihar',
+  'ranchi': 'Jharkhand', 'jamshedpur': 'Jharkhand', 'dhanbad': 'Jharkhand', 'bokaro': 'Jharkhand',
+  // Odisha
+  'bhubaneswar': 'Odisha', 'cuttack': 'Odisha', 'rourkela': 'Odisha',
+  // Others
+  'raipur': 'Chhattisgarh', 'bhilai': 'Chhattisgarh', 'dehradun': 'Uttarakhand', 'haridwar': 'Uttarakhand',
+  'guwahati': 'Assam', 'jammu': 'Jammu & Kashmir', 'srinagar': 'Jammu & Kashmir', 'shimla': 'Himachal Pradesh',
+  'panaji': 'Goa', 'panjim': 'Goa', 'imphal': 'Manipur', 'shillong': 'Meghalaya', 'agartala': 'Tripura',
+  'aizawl': 'Mizoram', 'kohima': 'Nagaland', 'itanagar': 'Arunachal Pradesh', 'gangtok': 'Sikkim',
+};
+
+/**
+ * Recover a canonical state name from a city that is standing in for it — the "Chennai in the State
+ * column" case from bank branch files. Returns `null` when the value is not a city we know, so the
+ * caller can still reject a genuine typo. Only consulted as a fallback, after the value has failed
+ * to resolve as a state.
+ */
+export function stateFromCity(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const key = normalizeStateKey(value);
+  if (!key) return null;
+  const exact = CITY_TO_STATE[key];
+  if (exact) return exact;
+  const despaced = key.replace(/\s/g, '');
+  for (const [candidate, state] of Object.entries(CITY_TO_STATE)) {
+    if (candidate.replace(/\s/g, '') === despaced) return state;
+  }
+  return null;
+}
+
 /** Every canonical state name once, sorted — the dropdown source for state-scoped config. */
 export const CANONICAL_STATE_NAMES: readonly string[] = [
   ...new Set(Object.values(STATE_CANONICAL_NAMES)),
