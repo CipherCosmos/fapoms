@@ -76,7 +76,15 @@ const CASCADES: { service: string; removes: string; mustDeactivate: string[] }[]
     mustDeactivate: [
       'assayer_commercial_profiles',
       'assayer_documents',
-      'assayer_government_documents',
+      'workforce_attributes',
+      // The vetting record. `assayer_government_documents` used to be listed here — a table
+      // dropped by 1792500000000-OneDocumentRecord, so this list was requiring a statement that
+      // raised 42P01 and killed the cascade before it reached assignments and schedules.
+      'assayer_references',
+      'assayer_background_checks',
+      'assayer_client_empanelments',
+      'assayer_remarks',
+      'assayer_score_overrides',
       'assignments',
       // The scheduled visits those assignments carry. Missing this is the AS-02 bug.
       'schedules',

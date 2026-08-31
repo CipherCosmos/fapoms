@@ -192,7 +192,9 @@ export interface CreateAssayerDto {
   emergencyContactName?: string;
   emergencyContactPhone?: string;
   emergencyContactRelation?: string;
-  photograph?: string;
+  // `photograph` is not accepted here. RosterRecordsService is the column's single writer — it
+  // keeps the storage key in step with the PHOTOGRAPH document row, so the picture a branch is
+  // shown is one that exists on file. See the note on the request DTOs in assayer.controller.ts.
   skills?: string[];
   certifications?: { name: string; expiryDate: string }[];
   languages?: string[];
@@ -264,7 +266,9 @@ export interface UpdateAssayerDto {
   emergencyContactName?: string;
   emergencyContactPhone?: string;
   emergencyContactRelation?: string;
-  photograph?: string;
+  // `photograph` is not accepted here. RosterRecordsService is the column's single writer — it
+  // keeps the storage key in step with the PHOTOGRAPH document row, so the picture a branch is
+  // shown is one that exists on file. See the note on the request DTOs in assayer.controller.ts.
   skills?: string[];
   certifications?: { name: string; expiryDate: string }[];
   languages?: string[];
@@ -918,7 +922,6 @@ export class AssayerService implements OnModuleInit {
       [userId, id],
     );
 
-    // Deactivate assayer government documents
     // Skills, languages and certifications. Missing from this cascade, these outlived the person:
     // the HR compliance queries join `assayers` and read `w.is_active`, so a deleted assayer's
     // certifications kept appearing under "falling due" and their skills kept counting toward
@@ -928,8 +931,41 @@ export class AssayerService implements OnModuleInit {
       [userId, id],
     );
 
+    /**
+     * The vetting record: references, background checks, client standings, staff remarks and
+     * score overrides.
+     *
+     * These were never in the cascade, and the statement that used to sit here targeted
+     * `assayer_government_documents` — a table `1792500000000-OneDocumentRecord` dropped. That
+     * UPDATE raised 42P01 on every delete, and because it sat BEFORE the assignments and
+     * schedules statements, the cascade died halfway: the person vanished from every list while
+     * still holding live assignments and dated slots. Ops saw a 500, retried, and deepened the
+     * partial state each time.
+     *
+     * Every table here is keyed by `assayer_id` and read by something that assumes the person
+     * exists — the empanelment gate in planning, the qualification score, the vetting dossier.
+     *
+     * Written out one statement per table rather than looped: `soft-delete-cascade.spec.ts`
+     * reads this method as text and checks each table by name, and a loop hides them from it.
+     */
     await this.dataSource.query(
-      `UPDATE assayer_government_documents SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
+      `UPDATE assayer_references SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
+      [userId, id],
+    );
+    await this.dataSource.query(
+      `UPDATE assayer_background_checks SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
+      [userId, id],
+    );
+    await this.dataSource.query(
+      `UPDATE assayer_client_empanelments SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
+      [userId, id],
+    );
+    await this.dataSource.query(
+      `UPDATE assayer_remarks SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
+      [userId, id],
+    );
+    await this.dataSource.query(
+      `UPDATE assayer_score_overrides SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
       [userId, id],
     );
 

@@ -135,6 +135,50 @@ describe('the roster template round-trips through the importer', () => {
     expect(summary.empanelments).toBe(1);
   });
 
+
+  /**
+   * A blank Zone must not make somebody invisible.
+   *
+   * `region` is what `findAll` scopes every roster read by, so a null one removes the person
+   * from a region-scoped desk's roster, map and capacity tile while their own record looks
+   * complete. The state already says where they are; the importer now falls back to it, the
+   * way `create()` always has.
+   */
+  it('derives the region from the state when the Zone column is blank', async () => {
+    const templateBuffer = await (AssayerService.prototype.generateTemplate as any).call({});
+    const templateWb = xlsx.read(templateBuffer, { type: 'buffer' });
+    const headers = (xlsx.utils.sheet_to_json(templateWb.Sheets.Assayers, { header: 1 })[0] ?? []) as string[];
+
+    const row: Record<string, string> = {};
+    for (const header of headers) row[header] = sampleFor(header);
+    row['Zone'] = '';
+    row['State'] = 'Kerala';
+
+    const saved: any[] = [];
+    const uow = mockUow();
+    const inner = uow.run;
+    uow.run = (work: any) => inner(async (m: any, emit: any) => {
+      const origSave = m.save;
+      m.save = async (entity: any, obj: any) => {
+        const out = await origSave(entity, obj);
+        if (obj?.assayerCode) saved.push(out);
+        return out;
+      };
+      return work(m, emit);
+    });
+
+    const wb = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet([row], { header: headers }), 'Assayers');
+    const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    const service = new RosterImportService(uow as any, mockGeoPrecision() as any);
+    await service.importAssayerSheet(buffer, 'test-user', { dryRun: true });
+
+    expect(saved.length).toBeGreaterThan(0);
+    // Kerala sits in the South region — the point is that it is not null.
+    expect(saved[0].region).toBeTruthy();
+  });
+
   it('skips a row with no appraiser code, and only for that reason', async () => {
     const templateBuffer = await (AssayerService.prototype.generateTemplate as any).call({});
     const templateWb = xlsx.read(templateBuffer, { type: 'buffer' });

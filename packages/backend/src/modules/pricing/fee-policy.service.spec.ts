@@ -135,6 +135,18 @@ describe('FeePolicyService', () => {
       await expect(service.resolveBaseFee('a1', rates)).resolves.toEqual({ baseFee: 1650, usedFallback: false });
     });
 
+    /**
+     * The distinction this test exists to keep: "no profile" and "could not read the profile"
+     * must not produce the same answer. Both used to return the platform default, because the
+     * query carried a `.catch(() => null)` — so a database blip paid somebody the wrong rate
+     * and said nothing. A read failure now fails the booking, which the caller's transaction
+     * rolls back and can retry.
+     */
+    it('lets a failed read throw instead of quietly paying the default rate', async () => {
+      qb.getOne.mockRejectedValue(new Error('connection terminated'));
+      await expect(service.resolveBaseFee('a1', rates)).rejects.toThrow('connection terminated');
+    });
+
     it('falls back to the client default when the assayer has no active profile', async () => {
       qb.getOne.mockResolvedValue(null);
       await expect(service.resolveBaseFee('a1', rates)).resolves.toEqual({ baseFee: 1200, usedFallback: true });

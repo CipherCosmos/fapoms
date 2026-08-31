@@ -2587,7 +2587,11 @@ export class AssignmentService {
     const todayMs = new Date(`${todayKey}T00:00:00`).getTime();
 
     const items: FallingBehindItem[] = rows.map((a) => {
-      const dateKey = a.scheduledDate ? String(a.scheduledDate).slice(0, 10) : null;
+      // `businessDateKey`, not `String(...).slice(0, 10)`: the driver hands `scheduledDate` back
+      // as a string for a `date` column but as a Date once anything hydrates it as an entity,
+      // and `String(aDate).slice(0, 10)` is "Sat Aug 31" — which compares greater than every
+      // ISO key, so the overdue test below silently never fired.
+      const dateKey = a.scheduledDate ? businessDateKey(a.scheduledDate as any) : null;
       const dueMs = a.slaDueDate ? now.getTime() - new Date(a.slaDueDate).getTime() : 0;
       const dueDays = dueMs > 0 ? Math.floor(dueMs / 86_400_000) : 0;
       const schedOverdue =

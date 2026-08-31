@@ -289,6 +289,16 @@ export class RosterImportService {
       }
     }
 
+    /**
+     * No usable Zone: fall back to the region the state implies, the way `create()` does.
+     *
+     * `region` is what `findAll` scopes every roster read by, so a null one makes the person
+     * invisible to a region-scoped desk — absent from the roster, the map and the capacity
+     * tile — while their own record looks complete. A blank spreadsheet column should not
+     * decide that; the state already says where they are.
+     */
+    a.region ??= (resolveRegion(a.state ?? '') as Region) ?? null;
+
     a.bankName = blankToNull(read('Bank Name')) ?? a.bankName ?? null;
     a.bankAccountNumber = blankToNull(read('A/c Number', 'Account Number')) ?? a.bankAccountNumber ?? null;
     a.ifscCode = blankToNull(read('IFSC Code')) ?? a.ifscCode ?? null;
@@ -455,8 +465,30 @@ export class RosterImportService {
     // the row anyway would assert "we checked and found nothing" on the strength of a cell that
     // holds the availability vocabulary by mistake — the issue above already keeps that cell.
     if (!verdict && !band && !hasScore) return 0;
-    // One check per assayer from this import; a later check adds a row rather than replacing.
-    const existing = await manager.findOne(AssayerBackgroundCheckEntity, { where: { assayerId } });
+
+    /**
+     * One check per assayer from this import; a later check adds a row rather than replacing.
+     *
+     * The row this updates must be the NEWEST one, and the sheet must never overwrite a check
+     * recorded after it. Without the ordering this took an arbitrary row, and without the
+     * freshness guard a re-import could replace an adverse finding entered in the vetting
+     * screen last week with the spreadsheet's older "Clear" — silently rewriting the grounds
+     * on which somebody is admitted to a bank vault. A stale sheet now files an issue instead.
+     */
+    const sheetCheckedOn = this.readDate(read('CIBIL  date', 'CIBIL date'));
+    const existing = await manager.findOne(AssayerBackgroundCheckEntity, {
+      where: { assayerId },
+      order: { checkedOn: 'DESC', createdAt: 'DESC' },
+    });
+    if (existing?.checkedOn && sheetCheckedOn && new Date(existing.checkedOn) > new Date(sheetCheckedOn)) {
+      issues.push({
+        sourceSheet: sheet, sourceRow, sourceColumn: 'CIBIL  date', rawValue: String(sheetCheckedOn),
+        reason: `A background check dated ${new Date(existing.checkedOn).toISOString().slice(0, 10)} is already on file — `
+          + 'this older row from the sheet was not applied. Record a new check in the vetting screen instead.',
+      });
+      return 0;
+    }
+
     await manager.save(AssayerBackgroundCheckEntity, {
       ...(existing ?? {}),
       assayerId,
@@ -464,7 +496,7 @@ export class RosterImportService {
       riskGrade: risk,
       cibilScore: hasScore ? score : null,
       cibilBand: band ?? CibilBand.NOT_CHECKED,
-      checkedOn: this.readDate(read('CIBIL  date', 'CIBIL date')),
+      checkedOn: sheetCheckedOn,
       // Findings only where a check actually happened. 170 rows say "Inactive" or "work not
       // asigned" in this column, which explains why no check was run — so NOT_CHECKED is the
       // right verdict, but copying that text into findings printed "Findings: Inactive" on the

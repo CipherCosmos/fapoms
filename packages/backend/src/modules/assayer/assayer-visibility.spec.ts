@@ -14,6 +14,9 @@ const record = {
   bankAccountNumber: '123456789',
   ifscCode: 'HDFC0000123',
   passwordHash: '$2b$10$hash',
+  // The roster's free-text Remarks column, as the importer files it. Real values in this
+  // column include "Husband doing audit" and termination reasons.
+  notes: 'Husband doing the audit at this branch — do not plan together.',
 };
 
 describe('assayer field visibility', () => {
@@ -53,6 +56,27 @@ describe('assayer field visibility', () => {
       expect(out).not.toHaveProperty('bankAccountNumber');
       expect(out).not.toHaveProperty('emergencyContactPhone');
     }
+  });
+
+  it.each([SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR])(
+    '%s never sees HR\u2019s private notes about a person',
+    (role) => {
+      const out = scopeAssayerForRoles(record, [role]) as any;
+      expect(out).not.toHaveProperty('notes');
+    },
+  );
+
+  it('an assayer does NOT see the notes written about them, even on their own record', () => {
+    // The one category `isSelf` does not open: staff-private text is not the subject's to read.
+    const out = scopeAssayerForRoles(record, [SystemRole.ASSAYER], true) as any;
+    expect(out).not.toHaveProperty('notes');
+    // ...while their own identity and banking still come through.
+    expect(out.panNumber).toBe('ABCDE1234F');
+  });
+
+  it.each([SystemRole.ADMIN, SystemRole.OPERATIONS])('%s does see the notes \u2014 they manage the person', (role) => {
+    const out = scopeAssayerForRoles(record, [role]) as any;
+    expect(out.notes).toContain('Husband doing the audit');
   });
 
   it('an assayer sees their own banking and identity', () => {

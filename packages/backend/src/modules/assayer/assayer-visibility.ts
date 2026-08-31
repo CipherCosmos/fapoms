@@ -30,6 +30,22 @@ const IDENTITY_FIELDS = [
 /** Banking details. Read to pay someone, and for no other reason. */
 const BANKING_FIELDS = ['bankAccountNumber', 'ifscCode', 'bankName', 'accountHolderName'];
 
+/**
+ * Staff-private text about a person — visible to the roles that manage them, and to NOBODY
+ * else, the subject included.
+ *
+ * This is the one category `isSelf` does not open. `notes` is filled by the roster importer
+ * from the spreadsheet's free-text Remarks column, which carries exactly the material nobody
+ * would write in front of its subject: "husband doing the audit at this branch", termination
+ * reasons, background-check commentary. Until this list existed the column was in no category
+ * at all, so it went to DESK, DESK_OPERATOR and AUDITOR — and, through the self path, to the
+ * appraiser it was written about.
+ *
+ * (The column itself is on its way out: Slice 4 moves this text into `assayer_remarks`, which
+ * has categories, visibility and an author. This keeps it from leaking in the meantime.)
+ */
+const STAFF_PRIVATE_FIELDS = ['notes'];
+
 /** Never returned to anyone through the API, whatever the role. */
 const NEVER_EXPOSED = ['passwordHash'];
 
@@ -66,6 +82,8 @@ export function scopeAssayerForRoles<T extends Record<string, any>>(
 
   if (!canSeeBanking) for (const f of BANKING_FIELDS) delete out[f];
   if (!canSeeIdentity) for (const f of IDENTITY_FIELDS) delete out[f];
+  // Note the missing `|| isSelf`: staff-private text is not the subject's to read.
+  if (!hasFull) for (const f of STAFF_PRIVATE_FIELDS) delete out[f];
 
   return out as Partial<T>;
 }

@@ -214,8 +214,16 @@ class CreateAssayerRequestDto implements CreateAssayerDto {
   @IsOptional() @IsString()
   employeeCode?: string;
 
-  @IsOptional() @IsString()
-  photograph?: string;
+  /**
+   * `photograph` is deliberately NOT accepted here.
+   *
+   * The column holds a storage key, and `RosterRecordsService` is its single writer — it keeps
+   * the key in step with the PHOTOGRAPH document row, so the picture shown to a branch is one
+   * that exists on file. Accepting it on the request body let any ADMIN/OPERATIONS caller write
+   * an arbitrary key with no document behind it, and `GET /assayers/:id/photo` then streamed
+   * whatever that key pointed at — an object-store read primitive by way of a profile field.
+   * Upload the document; the key follows.
+   */
 
   @IsOptional() @IsArray()
   skills?: string[];
@@ -371,8 +379,16 @@ class UpdateAssayerRequestDto implements UpdateAssayerDto {
   @IsOptional() @IsString()
   employeeCode?: string;
 
-  @IsOptional() @IsString()
-  photograph?: string;
+  /**
+   * `photograph` is deliberately NOT accepted here.
+   *
+   * The column holds a storage key, and `RosterRecordsService` is its single writer — it keeps
+   * the key in step with the PHOTOGRAPH document row, so the picture shown to a branch is one
+   * that exists on file. Accepting it on the request body let any ADMIN/OPERATIONS caller write
+   * an arbitrary key with no document behind it, and `GET /assayers/:id/photo` then streamed
+   * whatever that key pointed at — an object-store read primitive by way of a profile field.
+   * Upload the document; the key follows.
+   */
 
   @IsOptional() @IsArray()
   skills?: string[];

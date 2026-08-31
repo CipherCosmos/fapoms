@@ -8,7 +8,7 @@ import { AssignmentService } from '../assignment/assignment.service';
 import { ProjectQueryService } from '../project/project-query.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { PlanningService } from './planning.service';
-import { EventCategory, businessTodayDateKey } from '@fapoms/shared';
+import { EventCategory, businessTodayDateKey, localDateKey } from '@fapoms/shared';
 
 export interface PlanOverrideDto {
   branchId: string;
@@ -51,16 +51,17 @@ export interface PlanDeploymentResult {
   dateRange: { start: string; end: string } | null;
 }
 
-/** Local calendar date key — never `toISOString()`, which rolls an IST evening back a day. */
-const dateKey = (d: Date): string =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-
 const parseKey = (key: string): Date => new Date(`${key.slice(0, 10)}T00:00:00`);
 
+/**
+ * Pure calendar arithmetic on a `YYYY-MM-DD` key. Parse and format both work in the same local
+ * frame, so the answer is the calendar's regardless of the server's timezone; `localDateKey` is
+ * the shared formatter (this file used to carry a byte-identical private copy).
+ */
 const addDays = (key: string, days: number): string => {
   const d = parseKey(key);
   d.setDate(d.getDate() + days);
-  return dateKey(d);
+  return localDateKey(d);
 };
 
 @Injectable()

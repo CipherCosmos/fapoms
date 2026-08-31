@@ -340,6 +340,11 @@ export class QualificationScoreService {
    * which refresh lazily and can lag an assignment transition. "Completed" mirrors
    * updateAssayerStats exactly (assignment COMPLETED, or its branch settled past the audit),
    * so this dimension and the roster's own numbers can never disagree.
+   *
+   * No `.catch` returning zeros: zero assignments is a MEANING here — `trackRecordScore` reads
+   * it as "no work history yet" and returns null — so a failed read would publish a verdict
+   * about someone's record on the strength of a database hiccup. Let it throw; the caller
+   * renders the profile as unavailable rather than as unproven.
    */
   private async workHistoryFor(assayerId: string): Promise<{ total: number; accepted: number; completed: number; onTime: number }> {
     const [row] = await this.assayers.manager.query(
@@ -352,7 +357,7 @@ export class QualificationScoreService {
          LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
         WHERE a.assayer_id = $1 AND a.is_active = true`,
       [assayerId],
-    ).catch(() => [{ total: 0, accepted: 0, completed: 0, on_time: 0 }]);
+    );
     return {
       total: Number(row?.total) || 0,
       accepted: Number(row?.accepted) || 0,

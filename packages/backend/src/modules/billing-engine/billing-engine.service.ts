@@ -408,6 +408,16 @@ export class BillingEngineService implements OnModuleInit {
   /**
    * Everything `assignmentMoney` needs that is not on the assignment: the client's rate card and
    * travel policy, both sides' tax rates, and the legacy reimbursement for pre-quote offers.
+   *
+   * The four PRICING reads below deliberately carry no `.catch`. They used to fall back to `[]`,
+   * which is indistinguishable from "this client has no rate card": a transient database error
+   * therefore booked the audit at the PLATFORM DEFAULT fee, with default GST and TDS, and said
+   * nothing — a wrong invoice with no trace of why. A failed read must fail the booking, which
+   * the billing engine already survives (its idempotent guards let the retry re-enter cleanly).
+   *
+   * The reads that DO keep a fallback are the ones whose fallback is a documented default
+   * rather than a guess: the platform settings (the registry owns those defaults) and the
+   * PAN-presence probe (see s.206AA below — a read error must not spike someone's withholding).
    */
   private async moneyContextFor(
     clientId: string,
@@ -427,9 +437,9 @@ export class BillingEngineService implements OnModuleInit {
             AND (effective_to IS NULL OR effective_to >= NOW())
           ORDER BY effective_from DESC NULLS LAST LIMIT 1`,
         [clientId],
-      ).catch(() => []),
-      m.query(`SELECT planning_preferences FROM clients WHERE id = $1 LIMIT 1`, [clientId]).catch(() => []),
-      m.query(`SELECT gst_rate, tds_rate, payment_terms FROM client_billing WHERE client_id = $1 AND is_active = true LIMIT 1`, [clientId]).catch(() => []),
+      ),
+      m.query(`SELECT planning_preferences FROM clients WHERE id = $1 LIMIT 1`, [clientId]),
+      m.query(`SELECT gst_rate, tds_rate, payment_terms FROM client_billing WHERE client_id = $1 AND is_active = true LIMIT 1`, [clientId]),
       this.settings.getNumber('billing.tdsRate', 10).catch(() => 10),
       this.settings.getNumber('billing.defaultClientGstRate', 18).catch(() => 18),
       this.settings.getNumber('billing.defaultClientTdsRate', 10).catch(() => 10),
@@ -440,7 +450,7 @@ export class BillingEngineService implements OnModuleInit {
                 AND (effective_end_date IS NULL OR effective_end_date >= NOW())
               ORDER BY effective_start_date DESC LIMIT 1`,
             [assayerId],
-          ).catch(() => [])
+          )
         : Promise.resolve([]),
       // Only presence is read, never the value — the column is encrypted at rest and a
       // ciphertext is as non-null as a PAN.

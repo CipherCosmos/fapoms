@@ -241,7 +241,7 @@ export class RuleBypassService implements OnModuleDestroy {
    */
   noteBypass(rule: BypassableRule, context: { entityType?: string; entityId?: string; userId?: string; detail?: string }): void {
     this.pendingUsage.set(rule, (this.pendingUsage.get(rule) ?? 0) + 1);
-    void this.flushUsage().catch(() => undefined);
+    void this.flushUsage().catch((e) => this.logger.error(`Could not record bypass usage: ${e?.message ?? e}`));
 
     const info = BYPASSABLE_RULE_INFO[rule];
     if (!info?.evidential) return;
@@ -295,13 +295,13 @@ export class RuleBypassService implements OnModuleDestroy {
     }
 
     if (this.pendingSubjectCount >= RuleBypassService.MAX_PENDING_SUBJECTS) {
-      void this.flushEvidence().catch(() => undefined);
+      void this.flushEvidence().catch((e) => this.logger.error(`Could not record bypass evidence: ${e?.message ?? e}`));
       return;
     }
 
     if (!this.evidenceTimer) {
       this.evidenceTimer = setTimeout(
-        () => void this.flushEvidence().catch(() => undefined),
+        () => void this.flushEvidence().catch((e) => this.logger.error(`Could not record bypass evidence: ${e?.message ?? e}`)),
         RuleBypassService.EVIDENCE_FLUSH_MS,
       );
       // Never hold the process open for a buffered audit row — `revokeCurrent` and
@@ -321,6 +321,13 @@ export class RuleBypassService implements OnModuleDestroy {
    *
    * If there is no window to anchor to, the buffer is dropped rather than retried: a skip that
    * cannot name the window that allowed it has nothing left to say.
+   */
+  /**
+   * Callers deliberately do not await this on the request path — recording evidence must never
+   * be able to fail an operator's action. They do, however, all LOG a failure now: this row is
+   * what tells a bank auditor whether the controls being off actually mattered, and a silent
+   * `.catch(() => undefined)` meant a failed write closed the window reporting "no rules were
+   * skipped" — the compliance answer, quietly wrong, with nothing anywhere to say so.
    */
   async flushEvidence(): Promise<void> {
     if (this.evidenceTimer) {
@@ -381,8 +388,8 @@ export class RuleBypassService implements OnModuleDestroy {
 
   /** Flush anything buffered before the process goes away. */
   async onModuleDestroy(): Promise<void> {
-    await this.flushEvidence().catch(() => undefined);
-    await this.flushUsage().catch(() => undefined);
+    await this.flushEvidence().catch((e) => this.logger.error(`Could not record bypass evidence: ${e?.message ?? e}`));
+    await this.flushUsage().catch((e) => this.logger.error(`Could not record bypass usage: ${e?.message ?? e}`));
   }
 
   private flushingUsage = false;
@@ -576,8 +583,8 @@ export class RuleBypassService implements OnModuleDestroy {
   private async revokeCurrent(userId: string, _why: string): Promise<void> {
     // Both buffers, before the window they belong to stops being the current one. The evidence
     // flush first: it anchors to `this.cached.id`, which `invalidate()` is about to clear.
-    await this.flushEvidence().catch(() => undefined);
-    await this.flushUsage().catch(() => undefined);
+    await this.flushEvidence().catch((e) => this.logger.error(`Could not record bypass evidence: ${e?.message ?? e}`));
+    await this.flushUsage().catch((e) => this.logger.error(`Could not record bypass usage: ${e?.message ?? e}`));
     await this.repository.update(
       { revokedAt: IsNull(), isActive: true },
       { revokedAt: new Date(), revokedBy: userId, updatedBy: userId },

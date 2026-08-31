@@ -257,8 +257,11 @@ export class FeePolicyService implements OnModuleInit {
       .andWhere('p.effectiveStartDate <= :at', { at })
       .andWhere('(p.effectiveEndDate IS NULL OR p.effectiveEndDate >= :at)', { at })
       .orderBy('p.effectiveStartDate', 'DESC')
-      .getOne()
-      .catch(() => null);
+      // No `.catch`: a failed read here is indistinguishable from "this assayer has no
+      // commercial profile", and the fallback below is the platform default fee. Swallowing it
+      // means a database blip quietly pays somebody the wrong rate. Let it throw — the caller
+      // is inside a transaction that will roll back and can be retried.
+      .getOne();
 
     const fee = profile?.baseFee !== undefined && profile?.baseFee !== null ? Number(profile.baseFee) : NaN;
 
