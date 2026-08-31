@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { nextAssayerLifecycleStates, AssayerLifecycleStatus, assayerLifecycleLabel, activityEventLabel, employmentTypeLabel, AssayerEngagementType, AssayerUnavailableReason, ASSAYER_RECORD_FIELDS } from '@fapoms/shared';
 
+import { useSearchParams } from 'react-router-dom';
 import { api } from '../../services/api';
 import { Select, useConfirm } from '../../components/ui';
 import { useToast } from '../../components/ui/Toast';
@@ -237,6 +238,8 @@ export const AssayerRecord: React.FC<{
   const [payModal, setPayModal] = useState<{ open: boolean; profile: CommercialProfile | null }>({ open: false, profile: null });
   const { confirm, confirmDialog } = useConfirm();
   const { toast } = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const autoEditRef = React.useRef(false);
 
   /**
    * Editing the Summary in place. `editForm` is the boxes; `editInitial` is what they held when
@@ -298,6 +301,21 @@ export const AssayerRecord: React.FC<{
       .catch((e) => { if (!cancelled) setErr(userMessage(e)); });
     return () => { cancelled = true; };
   }, [assayerId, reloadKey]);
+
+  // Arriving with `?edit=1` (the roster's edit pencil links here) drops straight into editing,
+  // once, then strips the flag so a refresh does not re-trigger it.
+  useEffect(() => {
+    if (autoEditRef.current || !a || !canManage) return;
+    if (searchParams.get('edit') === '1') {
+      autoEditRef.current = true;
+      startEdit();
+      const next = new URLSearchParams(searchParams);
+      next.delete('edit');
+      setSearchParams(next, { replace: true });
+    }
+    // startEdit is stable enough for this one-shot; deps kept minimal on purpose.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [a, canManage]);
 
   // The per-tab panels are cached in `loaded`; a change to the record invalidates that cache
   // too, or the Pay and Skills tabs keep serving what they fetched before the edit.

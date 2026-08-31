@@ -16,7 +16,7 @@ import { visibleSelection, hiddenSelectionNote } from '../../utils/selection';
 import { useSearchParams } from 'react-router-dom';
 import { useCurrentRoles, canManageAssayers } from '../../hooks/useCurrentRoles';
 import { useExcelExport } from '../../hooks/useExcelExport';
-import { CreateAssayerModal, EditAssayerModal } from './AssayerForms';
+import { CreateAssayerModal } from './AssayerForms';
 import type { Assayer } from './assayer-shared';
 import { STATUS_COLORS, missingCriticalFields } from './assayer-shared';
 import { STAGE_CONSEQUENCE, HARD_TO_REVERSE_STAGES } from './AssayerRecord';
@@ -229,7 +229,6 @@ export const AssayerRoster: React.FC<{
     const wanted = searchParams.get('assayer');
     if (wanted) navigate(`/hr/roster/${wanted}`, { replace: true });
   }, [searchParams, navigate]);
-  const [editing, setEditing] = useState<Assayer | null>(null);
   const [creating, setCreating] = useState(false);
   const [bulkTarget, setBulkTarget] = useState('');
   const { download: downloadExcel, busy: exporting } = useExcelExport();
@@ -1093,7 +1092,7 @@ export const AssayerRoster: React.FC<{
                     </td>
                     <td style={cell}>{a.experienceYears ?? 0}y</td>
                     <td style={{ ...cell, textAlign: 'right', whiteSpace: 'nowrap' }} onClick={(e) => e.stopPropagation()}>
-                      {canManage && <IconBtn title="Edit" onClick={() => setEditing(a)}><Edit2 size={13} /></IconBtn>}
+                      {canManage && <IconBtn title="Edit" onClick={() => navigate(`/hr/roster/${a.id}?edit=1`)}><Edit2 size={13} /></IconBtn>}
                       {canManage && <IconBtn title="Delete" tone="var(--danger)" onClick={() => remove(a)}><Trash2 size={13} /></IconBtn>}
                     </td>
                   </tr>
@@ -1126,13 +1125,6 @@ export const AssayerRoster: React.FC<{
         <CreateAssayerModal
           onClose={() => setCreating(false)}
           onCreated={() => { setCreating(false); refresh(); }}
-        />
-      )}
-      {editing && (
-        <EditAssayerModal
-          assayer={editing}
-          onClose={() => setEditing(null)}
-          onUpdated={() => { setEditing(null); refresh(); }}
         />
       )}
     </div>
