@@ -23,6 +23,49 @@ async function geocodeAddress(address: string, city: string, district: string, s
   return res ? { lat: res.lat, lng: res.lng } : null;
 }
 
+/** A header reduced to letters and digits, lower-cased — so "STATE", "State" and "state" are one. */
+const normHeader = (s: unknown): string => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+/**
+ * What each branch field may be called in a real bank's file — matched loosely, not exactly.
+ *
+ * Every bank exports its own headings: "BRANCH" for the code, "BRANCH_NAME", "STATE",
+ * "Branch Address". Forcing the operator to rename columns (or fill in a mapping) before an
+ * import would run was ceremony; the alias below lets the file be uploaded as it arrived. A
+ * client's explicit `importMapping` still wins where it is set. Compared on `normHeader`, so
+ * casing, spaces and underscores never matter.
+ */
+const BRANCH_IMPORT_ALIASES: Record<string, string[]> = {
+  // Normalised (letters+digits, lower-cased), so "SOL ID", "Sol Id", "sol_id", "SOL-ID" all
+  // reduce to "solid"; "Branch Code", "BRANCH_NAME", "Branch Address" likewise.
+  branchCode: ['branchcode', 'branch', 'brcode', 'branchid', 'branchno', 'branchnumber', 'branchcd', 'bcode'],
+  solId: ['solid', 'sol', 'solno', 'solnumber', 'solcode', 'solmapid'],
+  name: ['branchname', 'name', 'branchnm', 'nameofbranch'],
+  address: ['address', 'branchaddress', 'addr', 'fulladdress', 'completeaddress', 'branchadd'],
+  state: ['state', 'statename'],
+  district: ['district', 'dist', 'districtname'],
+  city: ['city', 'town', 'citytown', 'cityname', 'place'],
+  pincode: ['pincode', 'pin', 'postalcode', 'zip', 'zipcode', 'pinno', 'pincodeno'],
+  latitude: ['latitude', 'lat'],
+  longitude: ['longitude', 'lng', 'long', 'lon', 'longtitude'],
+};
+
+/**
+ * Map each branch field to the actual header a file uses. The client's explicit `importMapping`
+ * wins where set; otherwise the first header whose normalised form is a known alias is taken.
+ * Exported so the tolerant matching can be pinned without a whole workbook.
+ */
+export function resolveBranchHeaders(headers: string[], mapping: Record<string, string> = {}): Record<string, string> {
+  const fieldHeader: Record<string, string> = {};
+  for (const [field, aliases] of Object.entries(BRANCH_IMPORT_ALIASES)) {
+    const explicit = mapping[field];
+    if (explicit && headers.includes(explicit)) { fieldHeader[field] = explicit; continue; }
+    const hit = headers.find((h) => aliases.includes(normHeader(h)));
+    if (hit) fieldHeader[field] = hit;
+  }
+  return fieldHeader;
+}
+
 export interface CreateBranchDto {
   /**
    * Optional. Blank means "allocate the next free one" — see `allocateBranchCode()`.
@@ -682,6 +725,17 @@ export class BranchService {
     const worksheet = workbook.Sheets[sheetName];
     const rows = XLSX.utils.sheet_to_json<Record<string, any>>(worksheet);
 
+    /**
+     * Resolve each field to the actual header this file uses, ONCE. The client's explicit
+     * mapping wins; otherwise the first header whose normalised form is a known alias is taken.
+     * So "BRANCH", "BRANCH_NAME", "STATE", "Branch Address" all land on the right field with no
+     * reshaping and no per-client setup.
+     */
+    const headers = rows.length ? Object.keys(rows[0] as object) : [];
+    const fieldHeader = resolveBranchHeaders(headers, mapping);
+    const cell = (row: Record<string, any>, field: string): string =>
+      fieldHeader[field] ? String(row[fieldHeader[field]] ?? '').trim() : '';
+
     const errors: string[] = [];
 
     // Rows that landed on a coarse tier, handed to the precision worker once the loop is done.
@@ -694,19 +748,28 @@ export class BranchService {
       const rowNum = index + 2;
 
       try {
-        const branchCode = String(row[mapping['branchCode'] || 'Branch Code'] || '').trim();
-        const solId = String(row[mapping['solId'] || 'SOL ID'] || '').trim();
-        const name = String(row[mapping['name'] || 'Branch Name'] || '').trim();
-        const address = String(row[mapping['address'] || 'Address'] || '').trim();
-        const state = String(row[mapping['state'] || 'State'] || '').trim();
-        const district = String(row[mapping['district'] || 'District'] || '').trim();
-        const city = String(row[mapping['city'] || 'City'] || '').trim();
-        const pincode = String(row[mapping['pincode'] || 'Pincode'] || '').trim();
-        const latitude = parseFloat(row[mapping['latitude'] || 'Latitude']);
-        const longitude = parseFloat(row[mapping['longitude'] || 'Longitude']);
+        let branchCode = cell(row, 'branchCode');
+        const solId = cell(row, 'solId');
+        // Some files identify a branch only by the bank's SOL id, with no separate code column.
+        // The SOL then serves as our code too — both stay unique per client, and they match on
+        // re-import.
+        if (!branchCode && solId) branchCode = solId;
+        const name = cell(row, 'name');
+        const address = cell(row, 'address');
+        const state = cell(row, 'state');
+        const district = cell(row, 'district');
+        const city = cell(row, 'city');
+        const pincode = cell(row, 'pincode');
+        const latitude = parseFloat(cell(row, 'latitude'));
+        const longitude = parseFloat(cell(row, 'longitude'));
 
-        if (!branchCode || !name || !address || !state || !district || !city) {
-          errors.push(`Row ${rowNum}: Missing required fields`);
+        // A branch needs an identity, a name and a state — the state sets its region, zone and
+        // holiday calendar. District, city and address are welcome but not required: a file that
+        // carries coordinates (this one does) places the branch exactly without them, and one
+        // that doesn't still resolves from state + pincode.
+        if (!branchCode || !name || !state) {
+          const missing = [!branchCode && 'branch code', !name && 'branch name', !state && 'state'].filter(Boolean).join(', ');
+          errors.push(`Row ${rowNum}: missing ${missing}.`);
           continue;
         }
 
