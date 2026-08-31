@@ -216,10 +216,14 @@ const getInitialProjectForm = (clientId = ''): FormData => {
     startDate: formatDate(today),
     endDate: formatDate(nextMonth),
     budget: '',
-    scope: 'Default Gold Asset Audit and Vault Verification.',
-    requiredSkills: 'Gold, Gold Valuation',
-    requiredCertifications: 'Gold Valuation Specialist',
-    description: 'Gold valuation and storage audit cycle.',
+    scope: '',
+    // Empty by default: a required skill or certification EXCLUDES from planning every assayer
+    // who does not hold it, so it must be a deliberate choice, never a form pre-fill. Pre-filling
+    // "Gold, Gold Valuation" here quietly attached that gate to every new project — and since the
+    // roster import records no skills, it excluded the whole eligible workforce.
+    requiredSkills: '',
+    requiredCertifications: '',
+    description: '',
   };
 };
 
