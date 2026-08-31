@@ -7,11 +7,14 @@ import { nextAssayerLifecycleStates, AssayerLifecycleStatus, assayerLifecycleLab
 
 import { api } from '../../services/api';
 import { Select, useConfirm } from '../../components/ui';
+import { useToast } from '../../components/ui/Toast';
 import type { Assayer } from './assayer-shared';
 import {
   STATUS_COLORS, money, missingCriticalFields,
   fieldLabelStyle as label,
+  buildAssayerEditBody, changedFormKeys,
 } from './assayer-shared';
+import { EDIT_FIELDS, useManagerOptions, type FieldDef } from './AssayerForms';
 import { fmtDate, fmtWhen } from '../../utils/dates';
 import { userMessage } from '../../services/errors';
 import { CommercialProfileModal, type CommercialProfile } from './CommercialProfileModal';
@@ -191,7 +194,8 @@ export const AssayerRecord: React.FC<{
   assayerId: string;
   canManage: boolean;
   onClose: () => void;
-  onEdit: (a: Assayer) => void;
+  /** @deprecated editing is now inline on the record; kept optional for callers not yet updated. */
+  onEdit?: (a: Assayer) => void;
   onChanged: () => void;
   /**
    * Bumped by the roster whenever this record has been changed anywhere — an edit saved, a
@@ -203,7 +207,7 @@ export const AssayerRecord: React.FC<{
    * from a save that silently did nothing.
    */
   reloadKey?: number;
-}> = ({ assayerId, canManage, onClose, onEdit, onChanged, reloadKey = 0 }) => {
+}> = ({ assayerId, canManage, onClose, onChanged, reloadKey = 0 }) => {
   const [a, setA] = useState<Assayer | null>(null);
   const [tab, setTab] = useState<TabKey>('summary');
 
@@ -232,6 +236,60 @@ export const AssayerRecord: React.FC<{
   const [err, setErr] = useState<string | null>(null);
   const [payModal, setPayModal] = useState<{ open: boolean; profile: CommercialProfile | null }>({ open: false, profile: null });
   const { confirm, confirmDialog } = useConfirm();
+  const { toast } = useToast();
+
+  /**
+   * Editing the Summary in place. `editForm` is the boxes; `editInitial` is what they held when
+   * editing began, so a save sends only what actually changed — see `changedFormKeys`. The
+   * reporting-manager picker needs the roster; loaded only while editing, and only for staff.
+   */
+  const [editing, setEditing] = useState(false);
+  const [editForm, setEditForm] = useState<Record<string, string>>({});
+  const [editInitial, setEditInitial] = useState<Record<string, string>>({});
+  const [savingEdit, setSavingEdit] = useState(false);
+  const managerOpts = useManagerOptions(editing && canManage, assayerId);
+
+  const snapshotEdit = (rec: Assayer): Record<string, string> => {
+    const f: Record<string, string> = {};
+    for (const key of SUMMARY_EDIT_KEYS) {
+      let val = (rec as any)[key];
+      if (key === 'dateOfBirth' || key === 'joiningDate') val = val ? new Date(val).toISOString().split('T')[0] : '';
+      else val = val !== null && val !== undefined ? String(val) : '';
+      f[key] = val;
+    }
+    return f;
+  };
+
+  const startEdit = () => {
+    if (!a) return;
+    const snap = snapshotEdit(a);
+    setEditForm(snap); setEditInitial(snap); setTab('summary'); setEditing(true);
+  };
+  const cancelEdit = () => { setEditing(false); };
+  const saveEdit = async () => {
+    if (!a) return;
+    setSavingEdit(true);
+    try {
+      const changed = changedFormKeys(editForm, editInitial);
+      if (changed.length === 0) { setEditing(false); return; }
+      const touched: Record<string, string | undefined> = {};
+      for (const key of changed) touched[key] = editForm[key];
+      const { body, problems } = buildAssayerEditBody(EDIT_FIELDS, touched, a);
+      if (problems.length) { toast({ type: 'error', title: 'Could not save', message: problems.join(' ') }); return; }
+      await api.request(`/assayers/${a.id}`, { method: 'PUT', body: JSON.stringify(body) });
+      toast({ type: 'success', title: 'Saved', message: `${counted(changed.length, 'change')} saved.` });
+      setEditing(false);
+      onChanged();
+    } catch (e) { toast({ type: 'error', title: 'Could not save', message: userMessage(e) }); }
+    finally { setSavingEdit(false); }
+  };
+  const editCtx: EditCtx | undefined = editing
+    ? {
+        form: editForm,
+        set: (key, val) => setEditForm((f) => ({ ...f, [key]: val })),
+        managers: managerOpts.people ? managerOpts.people.map((p) => ({ id: p.value, name: p.label })) : null,
+      }
+    : undefined;
 
   useEffect(() => {
     let cancelled = false;
@@ -434,11 +492,20 @@ export const AssayerRecord: React.FC<{
               </div>
 
               <div style={{ display: 'flex', gap: '6px', marginTop: '12px', flexWrap: 'wrap' }}>
-                {canManage && (
-                  <button onClick={() => onEdit(a)} className="btn btn-secondary" style={{ fontSize: '11.5px', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                {canManage && (editing ? (
+                  <>
+                    <button onClick={saveEdit} disabled={savingEdit} className="btn btn-primary" style={{ fontSize: '11.5px', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                      <CheckCircle2 size={12} /> {savingEdit ? 'Saving…' : 'Save changes'}
+                    </button>
+                    <button onClick={cancelEdit} disabled={savingEdit} className="btn btn-secondary" style={{ fontSize: '11.5px', padding: '6px 10px' }}>
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button onClick={startEdit} className="btn btn-secondary" style={{ fontSize: '11.5px', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px' }}>
                     <Edit2 size={12} /> Edit
                   </button>
-                )}
+                ))}
                 {a.phone && (
                   <a href={`tel:${a.phone}`} className="btn btn-secondary" style={{ fontSize: '11.5px', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px', textDecoration: 'none' }}>
                     <Phone size={12} /> Call
@@ -526,7 +593,7 @@ export const AssayerRecord: React.FC<{
                         </div>
                       )}
                       {canManage && (
-                        <button onClick={() => onEdit(a)} className="btn btn-secondary" style={{ fontSize: '11.5px', padding: '5px 10px', marginTop: '9px' }}>
+                        <button onClick={startEdit} className="btn btn-secondary" style={{ fontSize: '11.5px', padding: '5px 10px', marginTop: '9px' }}>
                           Fill them in
                         </button>
                       )}
@@ -655,64 +722,72 @@ export const AssayerRecord: React.FC<{
                     </section>
                   )}
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
-                  <FactGroup title="How to reach them" rows={[
+                  <FactGroup edit={editCtx} title="How to reach them" rows={[
                     ['Phone', a.phone, 'phone'],
-                    ['Alternate phone', a.alternatePhone],
+                    ['Alternate phone', a.alternatePhone, 'alternatePhone'],
                     ['Email', a.email, 'email'],
-                    ['Emergency contact', a.emergencyContactName],
+                    ['Emergency contact', a.emergencyContactName, 'emergencyContactName'],
                     ['Emergency phone', a.emergencyContactPhone, 'emergencyContactPhone'],
+                    ['Emergency relation', a.emergencyContactRelation, 'emergencyContactRelation'],
                   ]} />
-                  <FactGroup title="Where they are" rows={[
+                  <FactGroup edit={editCtx} title="Where they are" rows={[
                     ['Address', a.address, 'address'],
                     ['City or town', a.city, 'city'],
-                    ['District', a.district],
+                    ['District', a.district, 'district'],
+                    ['State', a.state, 'state'],
                     ['Pincode', a.pincode, 'pincode'],
-                    ['Region', a.region, 'region'],
+                    // Region is derived from the state — it follows automatically, so it stays a
+                    // read-only readout even while the rest of the group is being edited.
+                    ['Region', a.region],
                     /*
                       The banner said "Map location — blocks distance filtering" and no field on
                       this screen showed one, so the reader was told something was missing and
-                      sent to look for it among forty facts that never mentioned it.
+                      sent to look for it among forty facts that never mentioned it. It is not
+                      inline-editable — a raw lat/lng box is worse than the map/GPS that sets it.
                     */
-                    ['Map location', coordinates(a), 'latitude'],
+                    ['Map location', coordinates(a)],
                   ]} />
-                  <FactGroup title="Their job" rows={[
-                    ['Employment', employmentTypeLabel(a.employmentType), 'employmentType'],
-                    ['Employee ID', a.employeeId],
-                    ['Department', a.department],
-                    ['Joined', fmtDate(a.joiningDate), 'joiningDate'],
+                  <FactGroup edit={editCtx} title="Their job" rows={[
+                    ['Employment', editing ? a.employmentType : employmentTypeLabel(a.employmentType), 'employmentType'],
+                    ['Employee ID', a.employeeId, 'employeeId'],
+                    ['Department', a.department, 'department'],
+                    ['Joined', editing ? a.joiningDate : fmtDate(a.joiningDate), 'joiningDate'],
                     // Shown only when there IS one — a permanent "Left —" row on serving people
                     // would read as forty more dashes of noise.
                     ...(a.exitDate ? ([['Left', fmtDate(a.exitDate)]] as [string, any][]) : []),
-                    ['Experience', `${a.experienceYears ?? 0} years`],
-                    ['Engaged as', a.engagementType ? (ENGAGEMENT_LABELS[a.engagementType] ?? a.engagementType) : null],
+                    ['Experience', editing ? a.experienceYears : `${a.experienceYears ?? 0} years`, 'experienceYears'],
+                    ['Engaged as', editing ? a.engagementType : (a.engagementType ? (ENGAGEMENT_LABELS[a.engagementType] ?? a.engagementType) : null), 'engagementType'],
                     /*
                       Said "Not available because —" when the person was perfectly available, in
                       the same grey as every real gap. It is the one blank on this screen that is
                       good news, so it says so.
                     */
-                    ['Availability', a.unavailableReason
-                      ? (UNAVAILABLE_LABELS[a.unavailableReason] ?? a.unavailableReason)
-                      : 'Available for work'],
+                    ['Availability', editing
+                      ? a.unavailableReason
+                      : (a.unavailableReason ? (UNAVAILABLE_LABELS[a.unavailableReason] ?? a.unavailableReason) : 'Available for work'),
+                      'unavailableReason'],
                     ['Reporting manager', a.managerId, 'managerId'],
-                    ['HR owner', a.hrOwnerName],
+                    ['HR owner', a.hrOwnerName, 'hrOwnerName'],
                   ]} />
-                  <FactGroup title="Who they are" rows={[
-                    ['Date of birth', fmtDate(a.dateOfBirth), 'dateOfBirth'],
+                  <FactGroup edit={editCtx} title="Who they are" rows={[
+                    ['Date of birth', editing ? a.dateOfBirth : fmtDate(a.dateOfBirth), 'dateOfBirth'],
                     ['Qualification', a.qualification, 'qualification'],
-                    ['Aadhaar', maskAadhaar(a.aadhaarNumber), 'aadhaarNumber'],
+                    // In edit mode the full Aadhaar is shown for correcting; read mode masks to last 4.
+                    ['Aadhaar', editing ? a.aadhaarNumber : maskAadhaar(a.aadhaarNumber), 'aadhaarNumber'],
                     ['PAN', a.panNumber, 'panNumber'],
-                    ['VSTS code', a.vstsCode],
+                    ['VSTS code', a.vstsCode, 'vstsCode'],
                     ['Documents folder', a.documentsLink
                       ? <a href={a.documentsLink} target="_blank" rel="noreferrer" style={{ color: 'var(--accent-primary)' }}>Open folder</a>
                       : null],
                   ]} />
-                  <FactGroup title="How they are paid" rows={[
+                  <FactGroup edit={editCtx} title="How they are paid" rows={[
                     ['Bank', a.bankName, 'bankName'],
                     ['Account', a.bankAccountNumber, 'bankAccountNumber'],
                     ['IFSC', a.ifscCode, 'ifscCode'],
                   ]} />
-                  <FactGroup title="How much work they can take" rows={[
-                    ['Most jobs in a day', a.maxDailyWorkload], ['Most jobs in a week', a.maxWeeklyWorkload],
+                  <FactGroup edit={editCtx} title="How much work they can take" rows={[
+                    ['Most jobs in a day', a.maxDailyWorkload, 'maxDailyWorkload'],
+                    ['Most jobs in a week', a.maxWeeklyWorkload, 'maxWeeklyWorkload'],
                   ]} />
                   </div>
                 </div>
@@ -743,7 +818,7 @@ export const AssayerRecord: React.FC<{
                         : `Account ending ${String(a.bankAccountNumber).slice(-4)} · IFSC ${a.ifscCode}`}
                     </div>
                     {canManage && bankMissing && (
-                      <button onClick={() => onEdit(a)} className="btn btn-secondary" style={{ fontSize: '11.5px', padding: '5px 10px', marginTop: '9px' }}>
+                      <button onClick={startEdit} className="btn btn-secondary" style={{ fontSize: '11.5px', padding: '5px 10px', marginTop: '9px' }}>
                         Add bank details
                       </button>
                     )}
@@ -870,7 +945,83 @@ type Fact = [label: string, value: any, recordKey?: string];
  * so on a full-width page they read as one long list of forty fields and the headings stopped
  * doing any work. Each is a panel now, and they sit side by side where there is room.
  */
-const FactGroup: React.FC<{ title: string; rows: Fact[] }> = ({ title, rows }) => (
+/**
+ * Editing happens on the record, in place — not in a separate modal with its own set of tabs.
+ *
+ * The record used to open a second window to edit: eight sections in a vocabulary of their own
+ * (Personal / Money / Capacity …) laid over the eight tabs the record already had (Summary /
+ * Pay / Vetting …), so the same person was organised two different ways depending on whether
+ * you were reading or writing. Now the Summary's own facts become inputs where they sit — the
+ * label stays, the value turns editable — and a field is corrected exactly where it is read.
+ *
+ * A fact is editable when it carries a `recordKey` this form knows how to write; the field's
+ * type, options and validation all come from the one `EDIT_FIELDS` definition the modal used,
+ * so the two never disagree about what a valid PAN or a real employment type is. Facts with no
+ * such key — a map location, a derived "available for work" — stay read-only.
+ */
+const EDIT_FIELD_BY_KEY = new Map<string, FieldDef>(EDIT_FIELDS.map((f) => [f.key, f]));
+
+/** The fields the Summary lets you edit in place. Everything here has a definition in EDIT_FIELDS. */
+const SUMMARY_EDIT_KEYS = [
+  'phone', 'alternatePhone', 'email', 'emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation',
+  'address', 'city', 'district', 'state', 'pincode',
+  'employmentType', 'employeeId', 'department', 'joiningDate', 'managerId', 'engagementType', 'unavailableReason', 'hrOwnerName',
+  'dateOfBirth', 'qualification', 'aadhaarNumber', 'panNumber', 'vstsCode',
+  'bankName', 'bankAccountNumber', 'ifscCode',
+  'maxDailyWorkload', 'maxWeeklyWorkload', 'experienceYears',
+];
+
+interface EditCtx {
+  form: Record<string, string>;
+  set: (key: string, val: string) => void;
+  managers: { id: string; name: string }[] | null;
+}
+
+const inlineControl: React.CSSProperties = {
+  width: '100%', padding: '5px 8px', fontSize: '12.5px', boxSizing: 'border-box',
+  background: 'var(--bg-surface)', color: 'var(--text-primary)',
+  border: '1px solid var(--border-color)', borderRadius: '6px', outline: 'none',
+};
+
+/** One fact, turned into the right control for its field — select, date, number or text. */
+const InlineField: React.FC<{ fieldKey: string; ctx: EditCtx }> = ({ fieldKey, ctx }) => {
+  const def = EDIT_FIELD_BY_KEY.get(fieldKey);
+  if (!def) return null;
+  const val = ctx.form[fieldKey] ?? '';
+  const onChange = (v: string) => ctx.set(fieldKey, v);
+  if (def.people) {
+    return (
+      <select style={inlineControl} value={val} onChange={(e) => onChange(e.target.value)}>
+        <option value="">{ctx.managers === null ? 'Loading…' : '— none —'}</option>
+        {(ctx.managers ?? []).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+      </select>
+    );
+  }
+  if (def.options) {
+    return (
+      <select style={inlineControl} value={val} onChange={(e) => onChange(e.target.value)}>
+        <option value="">— choose —</option>
+        {def.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+      </select>
+    );
+  }
+  const type = def.type === 'date' ? 'date' : def.type === 'number' ? 'number' : 'text';
+  return (
+    <input
+      type={type}
+      style={{ ...inlineControl, fontFamily: FIELD_MONO_KEYS.has(fieldKey) ? 'monospace' : undefined,
+        textTransform: (fieldKey === 'panNumber' || fieldKey === 'ifscCode') ? 'uppercase' : undefined }}
+      value={val}
+      placeholder={def.placeholder}
+      inputMode={type === 'number' || fieldKey === 'pincode' || fieldKey.toLowerCase().includes('phone') ? 'numeric' : fieldKey === 'email' ? 'email' : undefined}
+      onChange={(e) => onChange(e.target.value)}
+    />
+  );
+};
+
+const FIELD_MONO_KEYS = new Set(['panNumber', 'aadhaarNumber', 'bankAccountNumber', 'ifscCode', 'employeeId']);
+
+const FactGroup: React.FC<{ title: string; rows: Fact[]; edit?: EditCtx }> = ({ title, rows, edit }) => (
   <section
     style={{
       background: 'var(--bg-card)', border: '1px solid var(--border-color)',
@@ -878,13 +1029,14 @@ const FactGroup: React.FC<{ title: string; rows: Fact[] }> = ({ title, rows }) =
     }}
   >
     <div style={{ ...label, marginBottom: '10px' }}>{title}</div>
-    <Facts rows={rows} />
+    <Facts rows={rows} edit={edit} />
   </section>
 );
 
-const Facts: React.FC<{ rows: Fact[] }> = ({ rows }) => (
+const Facts: React.FC<{ rows: Fact[]; edit?: EditCtx }> = ({ rows, edit }) => (
   <dl style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '11px', margin: 0 }}>
     {rows.map(([k, v, recordKey]) => {
+      const editable = !!(edit && recordKey && EDIT_FIELD_BY_KEY.has(recordKey));
       const blank = v === null || v === undefined || v === '';
       /**
        * An em-dash meant three different things on this screen.
@@ -905,7 +1057,9 @@ const Facts: React.FC<{ rows: Fact[] }> = ({ rows }) => (
         <div key={k}>
           <dt style={label}>{k}</dt>
           <dd style={{ margin: '2px 0 0', fontSize: '12.5px' }}>
-            {gap ? (
+            {editable ? (
+              <InlineField fieldKey={recordKey as string} ctx={edit as EditCtx} />
+            ) : gap ? (
               <span
                 title={`Blocks ${gap.blocks.toLowerCase()}`}
                 style={{ color: gap.critical ? 'var(--danger)' : 'var(--warning)', fontWeight: 600 }}

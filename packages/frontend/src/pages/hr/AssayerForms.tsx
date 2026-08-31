@@ -103,7 +103,7 @@ const PERFORMANCE_RATINGS: { value: string; label: string }[] = [
 const REGION_OPTIONS: { value: string; label: string }[] =
   REGION_ORDER.map((r) => ({ value: r, label: REGION_LABELS[r] }));
 
-interface FieldDef {
+export interface FieldDef {
   key: string;
   label: string;
   required?: boolean;
@@ -132,7 +132,7 @@ interface FieldDef {
  * Loaded only where the field is actually shown. `null` means "still loading", which the
  * picker renders as such rather than as "there is nobody to choose".
  */
-const useManagerOptions = (enabled: boolean, excludeId?: string) => {
+export const useManagerOptions = (enabled: boolean, excludeId?: string) => {
   const [people, setPeople] = useState<{ value: string; label: string }[] | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   useEffect(() => {
@@ -318,7 +318,7 @@ const CREATE_FIELD_GROUPS: FieldGroup[] = [
   { title: 'Other', icon: <Clock size={13} />, fields: ['notes'] },
 ];
 
-const EDIT_FIELDS: FieldDef[] = [
+export const EDIT_FIELDS: FieldDef[] = [
   { key: 'firstName', label: 'First Name', required: true },
   { key: 'lastName', label: 'Last Name', required: true },
   { key: 'email', label: 'Email', type: 'email' },

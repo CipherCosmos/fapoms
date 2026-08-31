@@ -3,9 +3,7 @@ import { useNavigate, useParams, Link } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 
 import { AssayerRecord } from './AssayerRecord';
-import { EditAssayerModal } from './AssayerForms';
 import { useCurrentRoles, canManageAssayers } from '../../hooks/useCurrentRoles';
-import type { Assayer } from './assayer-shared';
 
 /**
  * One person's whole record, at its own URL.
@@ -23,7 +21,6 @@ export const AssayerRecordPage: React.FC = () => {
   const navigate = useNavigate();
   const roles = useCurrentRoles();
   const canManage = canManageAssayers(roles);
-  const [editing, setEditing] = React.useState<Assayer | null>(null);
   // Bumped after an edit so the record re-reads itself; without it a save landed in the database
   // and the screen behind went on showing the old values, which is indistinguishable from a save
   // that silently did nothing.
@@ -45,18 +42,9 @@ export const AssayerRecordPage: React.FC = () => {
         assayerId={assayerId}
         canManage={canManage}
         onClose={() => navigate('/hr/roster')}
-        onEdit={(a) => setEditing(a)}
         onChanged={() => setVersion((v) => v + 1)}
         reloadKey={version}
       />
-
-      {editing && (
-        <EditAssayerModal
-          assayer={editing}
-          onClose={() => setEditing(null)}
-          onUpdated={() => { setEditing(null); setVersion((v) => v + 1); }}
-        />
-      )}
     </div>
   );
 };
