@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Edit2, ArrowRightLeft, AlertTriangle, CheckCircle2,
-  User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, MapPin, KeyRound, ShieldCheck, FileCheck,
+  User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, MapPin, KeyRound, ShieldCheck, FileCheck, Gauge,
 } from 'lucide-react';
 import { nextAssayerLifecycleStates, AssayerLifecycleStatus, assayerLifecycleLabel, activityEventLabel, employmentTypeLabel, AssayerEngagementType, AssayerUnavailableReason, ASSAYER_RECORD_FIELDS } from '@fapoms/shared';
 
@@ -17,6 +17,7 @@ import { userMessage } from '../../services/errors';
 import { CommercialProfileModal, type CommercialProfile } from './CommercialProfileModal';
 import { AssayerRemarks } from '../../components/AssayerRemarks';
 import { AssayerVettingTab } from './AssayerVettingTab';
+import { AssayerQualificationTab } from './AssayerQualificationTab';
 import { AssayerSkillsPanel } from './AssayerSkillsPanel';
 import { todayDateKey, localDateKey } from '../../utils/statusLabels';
 import { counted } from '../../utils/plural';
@@ -81,6 +82,9 @@ const TABS = [
   // goes looking for "Documents", and nobody goes looking for it under "Vetting".
   { key: 'vetting', label: 'Vetting', icon: ShieldCheck },
   { key: 'documents', label: 'Documents', icon: FileCheck },
+  // The roster's data synthesized into one judgment: 0–100 dimensions, per-partner scores,
+  // audited overrides, and the printable profile handed to partners during empanelment.
+  { key: 'qualification', label: 'Qualification', icon: Gauge },
   { key: 'remarks', label: 'Remarks', icon: MessageSquare },
   { key: 'history', label: 'History', icon: Clock },
 ] as const;
@@ -734,6 +738,8 @@ export const AssayerRecord: React.FC<{
               {tab === 'vetting' && <AssayerVettingTab assayerId={assayerId} canManage={canManage} section="checks" />}
 
               {tab === 'documents' && <AssayerVettingTab assayerId={assayerId} canManage={canManage} section="documents" />}
+
+              {tab === 'qualification' && <AssayerQualificationTab assayerId={assayerId} canManage={canManage} />}
 
               {tab === 'remarks' && <AssayerRemarks assayerId={assayerId} />}
 

@@ -68,6 +68,7 @@ import { RegionGuardService } from '../../infrastructure/scope/region-guard.serv
 import { scopeAssayerForRoles, scopeAssayerListForRoles, rolesOf, assertSelfOrPrivileged } from './assayer-visibility';
 import { RosterImportService } from './roster-import.service';
 import { RosterRecordsService } from './roster-records.service';
+import { QualificationScoreService } from './qualification-score.service';
 import { STAFF_ROLES } from '../auth/staff-roles';
 
 /** Roles that may edit any assayer's record; everyone else is limited to their own. */
@@ -729,6 +730,7 @@ export class AssayerController {
     @Inject('StorageEngine') private readonly storage: StorageEngine,
     private readonly regionGuard: RegionGuardService,
     private readonly locationTrail: LocationTrailService,
+    private readonly qualificationScores: QualificationScoreService,
   ) {}
 
   @Post()
@@ -1211,6 +1213,50 @@ export class AssayerController {
   async getDossier(@Param('assayerId', ParseUUIDPipe) assayerId: string) {
     const data = await this.rosterRecords.dossier(assayerId);
     return { success: true, data };
+  }
+
+  // ── Qualification scores ──────────────────────────────────────────────────
+  //
+  // Same access rule as the dossier, for the same reason: the basis lines name background-check
+  // verdicts and reference standing, which the redaction interceptor cannot reach inside
+  // sub-rows. Scores are computed on read from the vetting tables; only overrides are stored.
+
+  @Get(':assayerId/qualification')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @ApiOperation({ summary: 'The qualification profile: 0–100 dimensions, overall score, weights, print summary' })
+  async getQualification(@Param('assayerId', ParseUUIDPipe) assayerId: string) {
+    const data = await this.qualificationScores.qualification(assayerId);
+    return { success: true, data };
+  }
+
+  @Get(':assayerId/qualification/partners')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @ApiOperation({ summary: 'How qualified this person is for each partner, with standing and gaps' })
+  async getPartnerQualifications(@Param('assayerId', ParseUUIDPipe) assayerId: string) {
+    const data = await this.qualificationScores.partnerQualifications(assayerId);
+    return { success: true, data };
+  }
+
+  @Put(':assayerId/qualification/override')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: 'Override one computed score, with a stated reason (audited)' })
+  async setScoreOverride(
+    @Param('assayerId', ParseUUIDPipe) assayerId: string,
+    @Body() body: any,
+    @Req() req: any,
+  ) {
+    const data = await this.qualificationScores.setOverride(assayerId, body ?? {}, req.user.id);
+    return { success: true, data };
+  }
+
+  @Delete('qualification/override/:id')
+  @HttpCode(204)
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: 'Clear an override — the computed score comes back into force' })
+  async clearScoreOverride(@Param('id', ParseUUIDPipe) id: string, @Req() req: any): Promise<void> {
+    await this.qualificationScores.clearOverride(id, req.user.id);
   }
 
   @Post(':assayerId/reference')

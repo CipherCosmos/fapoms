@@ -86,6 +86,9 @@ const IMPORTS_TYPEORM = [
   // absent from both lists — that one takes `UnitOfWork` and reaches every table through the
   // transaction manager, which is the shape this list is asking for.
   'modules/assayer/roster-records.service.ts',
+  // Qualification scoring: compute-on-read over the five vetting tables the roster edits.
+  // Reads dominate; the only writes are the override rows (audited via recordActivity).
+  'modules/assayer/qualification-score.service.ts',
   'modules/assignment/assignment.service.ts',
   // Read-only cross-aggregate queue aggregator (Operations Inbox); queries only, no writes.
   'modules/assignment/operations-inbox.service.ts',

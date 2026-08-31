@@ -30,6 +30,7 @@ import { ClientService, CreateClientDto, UpdateClientDto, CreateContactDto, Upda
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole, ClientLifecycleStatus } from '@fapoms/shared';
+import { QualificationScoreService } from '../assayer/qualification-score.service';
 
 /**
  * Bounds, not just types.
@@ -207,7 +208,30 @@ class BulkLifecycleTransitionDto {
 @Roles(...STAFF_ROLES)
 @Controller('clients')
 export class ClientController {
-  constructor(private readonly clientService: ClientService) {}
+  constructor(
+    private readonly clientService: ClientService,
+    private readonly qualificationScores: QualificationScoreService,
+  ) {}
+
+  /**
+   * ADMIN/OPERATIONS only, like the assayer dossier: each row's gap text names background-check
+   * standing and unverified paperwork — exactly what the field-visibility rules keep from the
+   * planning-only roles.
+   */
+  @Get(':clientId/qualified-assayers')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @ApiOperation({ summary: 'Every plannable assayer scored for this partner, best first' })
+  async qualifiedAssayers(
+    @Param('clientId', ParseUUIDPipe) clientId: string,
+    @Query('minScore') minScore?: string,
+  ) {
+    const min = Number(minScore);
+    const data = await this.qualificationScores.qualifiedAssayersForClient(
+      clientId,
+      Number.isFinite(min) ? min : 0,
+    );
+    return { success: true, data };
+  }
 
   // -----------------------------------------------------------------------
   // Profile

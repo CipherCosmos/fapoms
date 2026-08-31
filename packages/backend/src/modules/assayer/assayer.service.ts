@@ -1404,7 +1404,10 @@ export class AssayerService implements OnModuleInit {
 
   // ---- Activity Timeline ----
 
-  private async recordActivity(assayerId: string, eventType: string, previousState: string | null, newState: string | null, userId: string, remarks: string | null): Promise<void> {
+  // Public because it is the ONE writer of assayer_activities — QualificationScoreService
+  // records score overrides through it rather than growing a second writer with its own idea
+  // of the row shape.
+  async recordActivity(assayerId: string, eventType: string, previousState: string | null, newState: string | null, userId: string, remarks: string | null): Promise<void> {
     const activity = this.activityRepository.create({
       assayerId,
       eventType,

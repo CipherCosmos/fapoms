@@ -38,3 +38,6 @@ export * from './upload-limits';
 
 // The roster spreadsheet's own words, and the vocabularies they are read into
 export * from './assayer-roster-vocabulary';
+
+// Qualification scoring: dimension vocabulary, view types, standing caps, PII masking
+export * from './assayer-qualification';

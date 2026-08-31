@@ -11,6 +11,8 @@ import { AssayerReferenceEntity } from './assayer-reference.entity';
 import { AssayerClientEmpanelmentEntity } from './assayer-client-empanelment.entity';
 import { AssayerBackgroundCheckEntity } from './assayer-background-check.entity';
 import { AssayerImportIssueEntity } from './assayer-import-issue.entity';
+import { AssayerScoreOverrideEntity } from './assayer-score-override.entity';
+import { QualificationScoreService } from './qualification-score.service';
 import { ClientEntity } from '../client/client.entity';
 import { RosterImportService } from './roster-import.service';
 import { RosterRecordsService } from './roster-records.service';
@@ -44,11 +46,12 @@ import { GeoModule } from '../geo/geo.module';
       AssayerClientEmpanelmentEntity,
       AssayerBackgroundCheckEntity,
       AssayerImportIssueEntity,
+      AssayerScoreOverrideEntity,
       ClientEntity,
     ]),
   ],
   controllers: [AssayerController, HrController],
-  providers: [AssayerService, HrWorkforceService, LocationTrailService, RosterImportService, RosterRecordsService],
-  exports: [AssayerService, HrWorkforceService, LocationTrailService, RosterImportService, RosterRecordsService, TypeOrmModule],
+  providers: [AssayerService, HrWorkforceService, LocationTrailService, RosterImportService, RosterRecordsService, QualificationScoreService],
+  exports: [AssayerService, HrWorkforceService, LocationTrailService, RosterImportService, RosterRecordsService, QualificationScoreService, TypeOrmModule],
 })
 export class AssayerModule {}

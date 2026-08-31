@@ -56,6 +56,7 @@ export const SETTINGS_GROUPS = [
   { key: 'feedback', label: 'Feedback SLA', description: 'How long the product team has to answer, and to resolve, before it escalates.' },
   { key: 'field', label: 'In the field', description: 'What the app enforces on an assayer while they are out on a job, and how far a negotiation may run.' },
   { key: 'planning', label: 'Planning', description: 'How the recommendation engine spreads work across the people who are eligible for it.' },
+  { key: 'qualification', label: 'Assayer qualification', description: 'How the qualification scores on an assayer\'s profile weigh their verification, background, credentials and track record. Weights are relative — they are normalized over whichever dimensions have data.' },
 ] as const;
 
 export const SETTINGS_REGISTRY: SettingDef[] = [
@@ -658,6 +659,86 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     envVar: 'PLANNING_FAIRNESS_OFFER_CAP',
     min: 1, max: 100, unit: 'offers / 30 days',
     applies: 'immediately',
+  },
+
+  // ── Assayer qualification ───────────────────────────────────────────────
+  //
+  // The relative weights of the profile-score dimensions (see packages/shared
+  // assayer-qualification.ts for what each measures, and qualification-score.contract.ts for
+  // the formulas). Relative, not percentages: the mean is normalized over whichever dimensions
+  // actually have data, so an unvetted person is scored on what is known rather than punished
+  // for what nobody has recorded yet.
+  {
+    key: 'qualification.weight.identityVerification',
+    label: 'Weight: identity verification',
+    description: 'How heavily the verified-identity-paperwork dimension counts in the overall qualification score.',
+    group: 'qualification', type: 'number', default: 20, min: 0, max: 100, applies: 'immediately',
+  },
+  {
+    key: 'qualification.weight.payability',
+    label: 'Weight: record completeness',
+    description: 'How heavily the critical-record-fields dimension (phone, PAN, bank, location) counts.',
+    group: 'qualification', type: 'number', default: 15, min: 0, max: 100, applies: 'immediately',
+  },
+  {
+    key: 'qualification.weight.backgroundCheck',
+    label: 'Weight: background check',
+    description: 'How heavily the background-check verdict and risk grade count.',
+    group: 'qualification', type: 'number', default: 25, min: 0, max: 100, applies: 'immediately',
+  },
+  {
+    key: 'qualification.weight.references',
+    label: 'Weight: references',
+    description: 'How heavily checked references count.',
+    group: 'qualification', type: 'number', default: 10, min: 0, max: 100, applies: 'immediately',
+  },
+  {
+    key: 'qualification.weight.credentials',
+    label: 'Weight: skills & certifications',
+    description: 'How heavily recorded skills and current certifications count.',
+    group: 'qualification', type: 'number', default: 15, min: 0, max: 100, applies: 'immediately',
+  },
+  {
+    key: 'qualification.weight.trackRecord',
+    label: 'Weight: track record',
+    description: 'How heavily completed work, punctuality, acceptance behaviour and staff remarks count.',
+    group: 'qualification', type: 'number', default: 15, min: 0, max: 100, applies: 'immediately',
+  },
+  {
+    key: 'qualification.weight.partnerRequirements',
+    label: 'Weight: partner requirements',
+    description: "On a per-partner score only: how heavily meeting that partner's own required skills and certifications counts.",
+    group: 'qualification', type: 'number', default: 25, min: 0, max: 100, applies: 'immediately',
+  },
+  {
+    key: 'qualification.referencesTarget',
+    label: 'References for full marks',
+    description: 'How many CHECKED referees earn the full references score. Referees recorded but never called count for nothing.',
+    group: 'qualification', type: 'number', default: 2, min: 1, max: 10, unit: 'checked referees', applies: 'immediately',
+  },
+  {
+    key: 'qualification.cap.negativeStanding',
+    label: 'Score ceiling: negative standing',
+    description: 'The most a partner score can show while that partner\'s empanelment is REJECTED, TERMINATED or NOT RECOMMENDED. A ceiling, never a floor.',
+    group: 'qualification', type: 'number', default: 25, min: 0, max: 100, applies: 'immediately',
+  },
+  {
+    key: 'qualification.cap.dormantStanding',
+    label: 'Score ceiling: dormant standing',
+    description: 'The ceiling while the empanelment is RESIGNED or INACTIVE — they were acceptable once, but are not currently placed there.',
+    group: 'qualification', type: 'number', default: 49, min: 0, max: 100, applies: 'immediately',
+  },
+  {
+    key: 'qualification.cap.documentsPending',
+    label: 'Score ceiling: documents pending',
+    description: 'The ceiling while the partner\'s document requirements are still outstanding.',
+    group: 'qualification', type: 'number', default: 69, min: 0, max: 100, applies: 'immediately',
+  },
+  {
+    key: 'qualification.backgroundCheckValidityMonths',
+    label: 'Background check validity',
+    description: 'How long a background check stays fully trusted. Past this age the dimension is halved and the profile says a re-check is due — an old CLEAR still says something, just not enough to lean on.',
+    group: 'qualification', type: 'number', default: 24, min: 1, max: 120, unit: 'months', applies: 'immediately',
   },
 
   // ── Document pipeline ───────────────────────────────────────────────────

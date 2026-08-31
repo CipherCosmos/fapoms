@@ -9,6 +9,7 @@ import { ClientService } from './client.service';
 import { ClientController } from './client.controller';
 
 import { PlatformModule } from '../platform/platform.module';
+import { AssayerModule } from '../assayer/assayer.module';
 
 @Module({
   imports: [
@@ -20,6 +21,9 @@ import { PlatformModule } from '../platform/platform.module';
       ClientBillingEntity,
     ]),
     PlatformModule,
+    // For QualificationScoreService — the "who is qualified for this partner" listing lives on
+    // the client's routes but is computed by the assayer module, which owns the vetting data.
+    AssayerModule,
   ],
   controllers: [ClientController],
   providers: [ClientService],
