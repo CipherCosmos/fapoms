@@ -5,7 +5,7 @@ import * as xlsx from 'xlsx';
 import {
   AssayerLifecycleStatus, Region, resolveRegion,
   readAvailability, readYesNo, readCibilBand, readBackgroundCheck, readEmpanelment,
-  readPhoneNumbers, blankToNull, vocabularyKey, readHardCopyLocation, pincodeFromAddress,
+  readPhoneNumbers, blankToNull, vocabularyKey, readHardCopyLocation, pincodeFromAddress, readWorkingBanks,
   OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, EmpanelmentStatus,
   AssayerUnavailableReason, BackgroundCheckVerdict, CibilBand,
 } from '@fapoms/shared';
@@ -112,6 +112,23 @@ export class RosterImportService {
         const read = rowReader(row);
         const issues: Partial<AssayerImportIssueEntity>[] = [];
 
+        /**
+         * Data in a column with no header is invisible to a reader that goes by header names —
+         * and the real file HAS such cells: a nameless column far to the right carries staff
+         * judgments like "He will not do audits properly". Silently losing those is worse than
+         * refusing them; each becomes a review issue naming the cell, so somebody titles the
+         * column and re-imports.
+         */
+        for (const [k, v] of Object.entries(row)) {
+          if (k.startsWith('__EMPTY') && blankToNull(v)) {
+            issues.push({
+              sourceSheet: sheetName, sourceRow, sourceColumn: `(unheadered column ${k.replace('__EMPTY', '').replace('_', '') || '1'})`,
+              rawValue: String(v).slice(0, 500),
+              reason: 'Data in a column with no header — give the column a title so this can be read in.',
+            });
+          }
+        }
+
         const code = blankToNull(read('Appraiser code', 'Assayer code', 'Appraiser Code'));
         if (!code) {
           issues.push({
@@ -153,6 +170,9 @@ export class RosterImportService {
         );
         summary.empanelments += await this.applyEmpanelments(
           manager, assayerId, read, clientsByName, missingClients, sourceRow, sheetName, code, issues,
+        );
+        summary.empanelments += await this.applyWorkingBanks(
+          manager, assayerId, read, clientsByName, missingClients,
         );
 
         summary.issues += issues.length;
@@ -458,8 +478,16 @@ export class RosterImportService {
       });
     }
 
-    const score = Number(String(rawScore ?? '').replace(/[^\d]/g, ''));
-    const hasScore = Number.isFinite(score) && score > 0;
+    /**
+     * The cell often holds TWO readings — "784 / 775", one per bureau pull. Stripping the
+     * non-digits fused them into 784775, which is how impossible six-digit CIBIL scores ended
+     * up on real profiles (a score lives in 300–900). Read each number separately and keep the
+     * first that is actually a CIBIL score; a cell with no plausible reading records none.
+     */
+    const score = (String(rawScore ?? '').match(/\d+/g) ?? [])
+      .map(Number)
+      .find((n) => n >= 300 && n <= 900) ?? NaN;
+    const hasScore = Number.isFinite(score);
 
     // Nothing in any of the three columns could be read, so there is nothing to record. Writing
     // the row anyway would assert "we checked and found nothing" on the strength of a cell that
@@ -543,6 +571,46 @@ export class RosterImportService {
       documentsOutstanding: blankToNull(read('ICICI Documents required')),
     });
     return 1;
+  }
+
+  /**
+   * The rest of the banks: the "Project Name" column.
+   *
+   * ICICI's standing arrives as its own structured columns (above); every OTHER institution
+   * the appraiser works for is recorded only here, as a slash-separated list — "AXIS / AU
+   * FINANCE / IDFC". On the real roster that is ~20 lenders across 706 people, and the
+   * importer used to drop every one of them, which is why the empanelment table knew about a
+   * single bank while planning was being asked to staff a dozen.
+   *
+   * A listed bank means "actively doing this lender's audits", so the row is written ACTIVE.
+   * Create-only: a standing ops has since set through the vetting screen is a decision, and a
+   * re-imported spreadsheet must not overwrite a decision (the ICICI path predates this rule
+   * and keeps its own semantics). A bank named in the sheet but absent from the clients list
+   * is counted once for the summary — the same "697 appraisers reference ICICI which isn't a
+   * client yet" mechanism — so ops adds the client and re-imports rather than losing the fact.
+   */
+  private async applyWorkingBanks(
+    manager: any, assayerId: string, read: ReturnType<typeof rowReader>,
+    clientsByName: Map<string, string>, missingClients: Map<string, number>,
+  ): Promise<number> {
+    const banks = readWorkingBanks(read('Project Name'));
+    let written = 0;
+    for (const bank of banks) {
+      const clientId = clientsByName.get(vocabularyKey(bank)) ?? clientsByName.get(vocabularyKey(bank).split(' ')[0]);
+      if (!clientId) {
+        missingClients.set(bank, (missingClients.get(bank) ?? 0) + 1);
+        continue;
+      }
+      const existing = await manager.findOne(AssayerClientEmpanelmentEntity, { where: { assayerId, clientId } });
+      if (existing) continue;
+      await manager.save(AssayerClientEmpanelmentEntity, {
+        assayerId, clientId,
+        status: EmpanelmentStatus.ACTIVE,
+        statusReason: `Working per roster (Project Name: ${bank})`,
+      });
+      written += 1;
+    }
+    return written;
   }
 
   // ── Plumbing ─────────────────────────────────────────────────────────────

@@ -507,12 +507,25 @@ export class AssayerService implements OnModuleInit {
    * `AS0688`, and reading that as 688 would jump the sequence into the hundreds on first use.
    */
   private async allocateAssayerCode(): Promise<string> {
+    /**
+     * The company's own pattern, continued — not a parallel one.
+     *
+     * Appraiser codes are issued by the company as `AS0844`-style: a series prefix and four
+     * digits, no dash. The roster carries three series (AS for assayers, AD and FO for other
+     * intake channels); someone created through this system joins the AS series at the next
+     * free number. This used to emit `AS-01`, `AS-02`… — a dash pattern the real roster has
+     * never used — so website-created people looked foreign next to everyone else and their
+     * numbering could never merge with the company's.
+     *
+     * Both shapes are read when finding the highest (the dash-era rows this bug already
+     * created must not be collided with), and the company shape is what gets issued.
+     */
     const rows = await this.assayerRepository.find({ select: ['assayerCode'], withDeleted: true } as any);
     const highest = rows.reduce((max, r) => {
-      const m = /^AS-(\d+)$/.exec(r.assayerCode ?? '');
+      const m = /^AS-?(\d+)$/.exec(r.assayerCode ?? '');
       return m ? Math.max(max, Number(m[1])) : max;
     }, 0);
-    return `AS-${String(highest + 1).padStart(2, '0')}`;
+    return `AS${String(highest + 1).padStart(4, '0')}`;
   }
 
   /**

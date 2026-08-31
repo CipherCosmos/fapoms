@@ -48,6 +48,12 @@ import {
   RemarkSummary,
 } from '../assayer-remarks/assayer-remark.contract';
 
+/** Blank-or-whitespace → null, for the couple of raw column reads in this file. */
+const blankToNullLocal = (v: unknown): string | null => {
+  const s = String(v ?? '').trim();
+  return s === '' ? null : s;
+};
+
 /**
  * Computes the qualification scores — always on read, never cached.
  *
@@ -219,6 +225,17 @@ export class QualificationScoreService {
       certifications: asList(prefs.requiredCertifications),
     };
     const held = this.heldCredentials(assayer as AssayerWithWorkforceAttributes);
+    /**
+     * Some banks (ICICI among them) issue their own registration — the VSTS code — and will
+     * not accept an appraiser without one. A client flags that with
+     * `planningPreferences.requiresVstsCode: true`, and it then counts as one more required
+     * credential here: present on the person, requirement met; absent, a named gap. Data-
+     * driven per partner — nothing about any specific bank is hardcoded.
+     */
+    if (prefs.requiresVstsCode === true) {
+      required.certifications = [...required.certifications, 'VSTS code (bank registration)'];
+      if (blankToNullLocal(assayer.vstsCode)) held.certifications = [...held.certifications, 'VSTS code (bank registration)'];
+    }
     const partnerDim = partnerRequirementsScore(required, held);
 
     const overrideViews = await this.overrideViews(clientOverrides);
@@ -268,6 +285,7 @@ export class QualificationScoreService {
   }
 
   private heldCredentials(a: AssayerWithWorkforceAttributes): { skills: string[]; certifications: string[] } {
+
     return {
       skills: Array.isArray(a.skills) ? a.skills : [],
       certifications: Array.isArray(a.certifications) ? a.certifications.map((c) => c.name) : [],
@@ -531,6 +549,9 @@ export class QualificationScoreService {
     const prefs = (client.planningPreferences ?? {}) as Record<string, unknown>;
     const asList = (v: unknown): string[] => (Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []);
     const required = { skills: asList(prefs.requiredSkills), certifications: asList(prefs.requiredCertifications) };
+    // Same VSTS rule as the single-assayer path — see partnerView.
+    const requiresVsts = prefs.requiresVstsCode === true;
+    if (requiresVsts) required.certifications = [...required.certifications, 'VSTS code (bank registration)'];
 
     const results = pool.map((assayer) => {
       const hydrated = assayer as AssayerWithWorkforceAttributes;
@@ -565,7 +586,11 @@ export class QualificationScoreService {
           acceptanceRate: hist && Number(hist.total) > 0 ? Math.round((100 * Number(hist.accepted)) / Number(hist.total)) : null,
           remarkSummary: summary,
         }),
-        partnerRequirementsScore(required, this.heldCredentials(hydrated)),
+        partnerRequirementsScore(required, (() => {
+          const held = this.heldCredentials(hydrated);
+          if (requiresVsts && blankToNullLocal(assayer.vstsCode)) held.certifications = [...held.certifications, 'VSTS code (bank registration)'];
+          return held;
+        })()),
       ];
 
       const liveOverrides = (allOverrides ?? []).filter(

@@ -425,6 +425,54 @@ export function readEmpanelment(raw: unknown): EmpanelmentStatus | null {
 }
 
 /**
+ * The banks an appraiser works for, from the sheet's "Project Name" cell.
+ *
+ * The column is the roster's per-bank applicability record — slash-separated institution
+ * names: "AXIS / AU FINANCE / IDFC". Measured on the real file (1,155 rows, 706 filled):
+ * ~20 distinct institutions, plus availability words mixed into the same cell ("INACITVE",
+ * "BACK UP", "HOLD") that describe the person, not a bank, and are skipped here — the
+ * lifecycle columns already carry that story.
+ *
+ * Splitting is on slash and comma only, never on `&` — "L&T" is one bank (41 people), not
+ * two letters. The alias map holds the sheet's own spellings: "EQITAS" appears four times,
+ * "VISTAAR FINANCE" and "VISTAAR" are the same lender, a bare "YES" in a project column is
+ * Yes Bank, and a handful of cells fuse two banks into one token ("ICICI IIFL").
+ *
+ * The caller matches the returned tokens against real clients; an unmatched token is a bank
+ * that exists in the roster and not yet in the system — reported, never guessed at.
+ */
+const PROJECT_TOKEN_SKIP = new Set([
+  'inactive', 'inacitve', 'back up', 'backup', 'hold', 'work not assigned', 'no location',
+  'agency audit', 'mystry audit', 'mystery audit', 'joined as sitting appraisor',
+]);
+
+const PROJECT_TOKEN_ALIASES: Record<string, string[]> = {
+  'yes': ['YES BANK'],
+  'eqitas': ['EQUITAS'],
+  'vistaar finance': ['VISTAAR'],
+  'au': ['AU FINANCE'],
+  'godrej': ['GODREJ CAPITAL'],
+  'icici iifl': ['ICICI', 'IIFL'],
+  'idfc iifl': ['IDFC', 'IIFL'],
+  'rbl indel': ['RBL', 'INDEL MONEY'],
+  'indel money muthooth': ['INDEL MONEY', 'MUTHOOT'],
+};
+
+export function readWorkingBanks(raw: unknown): string[] {
+  const cell = blankToNull(raw);
+  if (!cell) return [];
+  const out = new Set<string>();
+  for (const piece of String(cell).split(/[\/,]/)) {
+    const cleaned = piece.trim().replace(/\s+/g, ' ');
+    if (!cleaned) continue;
+    const key = cleaned.toLowerCase();
+    if (PROJECT_TOKEN_SKIP.has(key)) continue;
+    for (const bank of PROJECT_TOKEN_ALIASES[key] ?? [cleaned.toUpperCase()]) out.add(bank);
+  }
+  return [...out];
+}
+
+/**
  * The two phone columns hold up to three numbers between them, some in one cell separated by a
  * slash. Splitting them is the difference between a callable number and a string.
  */

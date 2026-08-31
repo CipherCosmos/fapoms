@@ -549,6 +549,26 @@ describe('AssayerService', () => {
   // Commercial Profiles
   // ---------------------------------------------------------------------------
 
+  describe('allocateAssayerCode', () => {
+    /**
+     * The company issues appraiser codes as `AS0844` — a series prefix and four digits, no
+     * dash. Website-created assayers must continue THAT series at the next free number, not
+     * run a parallel `AS-01` numbering that can never merge with the roster's.
+     */
+    it("continues the company's own series past the roster's highest code", async () => {
+      mockAssayerRepo.find.mockResolvedValue([
+        { assayerCode: 'AS0844' }, { assayerCode: 'AS0100' }, { assayerCode: 'AD0475' },
+        { assayerCode: 'AS-09' }, // a dash-era row the old bug created — read, never emitted
+      ]);
+      await expect((service as any).allocateAssayerCode()).resolves.toBe('AS0845');
+    });
+
+    it('starts the series at AS0001 on an empty roster', async () => {
+      mockAssayerRepo.find.mockResolvedValue([]);
+      await expect((service as any).allocateAssayerCode()).resolves.toBe('AS0001');
+    });
+  });
+
   describe('createCommercialProfile', () => {
     it('should create and audit', async () => {
       mockAssayerRepo.findOne.mockResolvedValue({ id: 'asr-1', isActive: true });
@@ -796,9 +816,10 @@ describe('AssayerService', () => {
    */
   describe('assayer code allocation', () => {
     it('skips codes held by deleted assayers rather than reusing them', async () => {
-      // AS-27 was deleted; only AS-26 is still active. The next code must be AS-28.
+      // AS0027 was deleted; only AS0026 is still active. The next code must be AS0028 — a
+      // deleted person's code stays theirs, on their documents and in the audit trail.
       mockAssayerRepo.find.mockResolvedValue([
-        { assayerCode: 'AS-26' }, { assayerCode: 'AS-27' },
+        { assayerCode: 'AS0026' }, { assayerCode: 'AS0027' },
       ]);
       mockAssayerRepo.findOne.mockResolvedValue(null);
       mockAssayerRepo.create.mockImplementation((v: any) => v);
@@ -809,12 +830,19 @@ describe('AssayerService', () => {
         'user-1',
       );
 
-      expect(mockAssayerRepo.save).toHaveBeenCalledWith(expect.objectContaining({ assayerCode: 'AS-28' }));
+      expect(mockAssayerRepo.save).toHaveBeenCalledWith(expect.objectContaining({ assayerCode: 'AS0028' }));
     });
 
-    /** The seeded roster uses `AS0688`; reading that as 688 would jump the sequence. */
-    it('ignores codes that do not follow the AS-nn shape', async () => {
-      mockAssayerRepo.find.mockResolvedValue([{ assayerCode: 'AS0688' }, { assayerCode: 'AS-03' }]);
+    /**
+     * The company's real series (`AS0688`) and the dash-era rows the old bug emitted (`AS-03`)
+     * are BOTH read when finding the highest, so neither can be collided with — and what gets
+     * issued is the company shape. Other series (AD, FO) belong to other intake channels and
+     * do not advance this one.
+     */
+    it("continues the company's series past both code shapes, ignoring other series", async () => {
+      mockAssayerRepo.find.mockResolvedValue([
+        { assayerCode: 'AS0688' }, { assayerCode: 'AS-03' }, { assayerCode: 'AD0475' },
+      ]);
       mockAssayerRepo.findOne.mockResolvedValue(null);
       mockAssayerRepo.create.mockImplementation((v: any) => v);
       mockAssayerRepo.save.mockImplementation(async (v: any) => ({ ...v, id: 'as-new' }));
@@ -824,7 +852,7 @@ describe('AssayerService', () => {
         'user-1',
       );
 
-      expect(mockAssayerRepo.save).toHaveBeenCalledWith(expect.objectContaining({ assayerCode: 'AS-04' }));
+      expect(mockAssayerRepo.save).toHaveBeenCalledWith(expect.objectContaining({ assayerCode: 'AS0689' }));
     });
 
     it('honours a code the caller supplied', async () => {
