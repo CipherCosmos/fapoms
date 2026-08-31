@@ -749,11 +749,15 @@ export class BranchService {
 
       try {
         let branchCode = cell(row, 'branchCode');
-        const solId = cell(row, 'solId');
-        // Some files identify a branch only by the bank's SOL id, with no separate code column.
-        // The SOL then serves as our code too — both stay unique per client, and they match on
+        let solId = cell(row, 'solId');
+        // A branch's SOL id and our code are two names for the same identifier when a file carries
+        // only one of them, which most bank files do — the "BRANCH" column of an ICICI list holds
+        // the SOL id, and there is no separate code column. So each fills in for the other: the SOL
+        // stands in as our code, and the code stands in as the SOL id, rather than leaving one blank
+        // and showing a branch with a code but no SOL id. Both stay unique per client and match on
         // re-import.
         if (!branchCode && solId) branchCode = solId;
+        if (!solId && branchCode) solId = branchCode;
         const name = cell(row, 'name');
         const address = cell(row, 'address');
         let state = cell(row, 'state');

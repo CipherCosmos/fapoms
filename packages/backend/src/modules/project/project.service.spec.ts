@@ -378,16 +378,15 @@ describe('ProjectService', () => {
 
     /**
      * The two branch importers — this one and the Branches page — must key identity the same way,
-     * or a file uploaded through both doors inserts a second copy of every branch. This path used
-     * to default a missing SOL id to the branch code (minting a fake one), while the other stored
-     * null; the mismatched ids then never matched. It now stores what the file carries and nothing
-     * more, so the two paths land on one record.
+     * or a file uploaded through both doors inserts a second copy of every branch. Both now treat
+     * the branch code as the SOL id when the file carries no separate SOL column (a bank list's
+     * "BRANCH" column holds the SOL id), so the two paths agree and a re-upload matches.
      */
-    it('stores the SOL id only when the file carries one — never the branch code as a stand-in', async () => {
+    it('uses the branch code as the SOL id when the file has no SOL column', async () => {
       await service.uploadBranchesFromExcel('p-1', sheetBuffer([templateRow()]), 'user-1');
 
       expect(mockBranchService.registerImportedBranch).toHaveBeenCalledWith(
-        expect.objectContaining({ branchCode: 'BR-1', solId: null }),
+        expect.objectContaining({ branchCode: 'BR-1', solId: 'BR-1' }),
         'user-1',
       );
     });

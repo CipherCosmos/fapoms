@@ -1233,10 +1233,11 @@ export class ProjectService implements OnModuleInit {
 
           branch = await this.branchService.registerImportedBranch({
             branchCode,
-            // Only what the file actually carries — no longer defaulted to the branch code, which
-            // minted a fake SOL id and split this branch's identity from the same branch imported
-            // through the Branches page (that path stores null). Aligned, the two paths match.
-            solId: solId || null,
+            // When a file has no separate SOL column the branch code IS the SOL id (an ICICI list's
+            // "BRANCH" column holds it), so the code stands in — the same rule the Branches-page
+            // importer uses, so the two paths agree on identity and a re-upload matches rather than
+            // duplicating. A file that carries a real SOL column uses that instead.
+            solId: solId || branchCode,
             name: branchName,
             address,
             state,
