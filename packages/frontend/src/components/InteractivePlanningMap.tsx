@@ -739,13 +739,21 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
     /**
      * The current view, padded so a pin just off the edge is ready before it scrolls in, is the
      * only region drawn. `inView` culls each layer to it; `MAX_PER_LAYER` is a backstop for the
-     * fully-zoomed-out case, where the whole country is "in view" and thousands of pins would
-     * pile onto a few pixels anyway — past the cap they are indistinguishable, so drawing them is
-     * pure cost. Zooming in reveals the rest.
+     * zoomed-out case, where the whole country is "in view" and thousands of pins would pile onto a
+     * few pixels anyway — past the cap they are indistinguishable, so drawing them is pure cost.
+     *
+     * The cap scales with zoom because building a DOM pin is not free: ~2,000 of them at once still
+     * blocked the main thread for roughly a second when a whole country landed in view. At country
+     * zoom the pins overlap into a single mass that conveys density, not individual sites, so a few
+     * hundred tell the same story with no stall; each zoom step in reveals proportionally more,
+     * and by street level `inView` alone already holds the count down. Ranked candidates and the
+     * selected branch bypass the cap entirely (below), so the thing an operator is working on is
+     * never the pin that gets dropped.
      */
     const viewBounds = (renderBounds ?? map.getBounds()).pad(0.35);
     const inView = (lat: number, lng: number) => viewBounds.contains([lat, lng]);
-    const MAX_PER_LAYER = 1500;
+    const zoom = map.getZoom();
+    const MAX_PER_LAYER = zoom <= 5 ? 300 : zoom <= 7 ? 700 : zoom <= 9 ? 1500 : 4000;
 
     // Clear old circles
     circlesRef.current.forEach((circle) => circle.remove());
