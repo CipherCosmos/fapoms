@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, ChevronDown, ChevronRight, Check } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { AlertTriangle, ChevronDown, ChevronRight, Check, ExternalLink } from 'lucide-react';
 
 import { api } from '../../services/api';
 import { useToast } from '../../components/ui';
@@ -31,7 +32,7 @@ interface Issue {
   rawValue: string;
   reason: string;
   sourceAssayerCode: string | null;
-  assayer?: { assayerCode?: string; firstName?: string; lastName?: string } | null;
+  assayer?: { id?: string; assayerCode?: string; firstName?: string; lastName?: string } | null;
 }
 
 interface Group {
@@ -52,6 +53,7 @@ export const ImportIssuesPanel: React.FC<{ canManage: boolean; onResolved?: () =
   const [busy, setBusy] = useState(false);
   const [show, setShow] = useState(false);
   const { toast } = useToast();
+  const navigate = useNavigate();
 
   const load = () => {
     api.request<{ rows: Issue[]; openCount: number }>('/assayers/roster/import-issues')
@@ -99,6 +101,12 @@ export const ImportIssuesPanel: React.FC<{ canManage: boolean; onResolved?: () =
     } catch (e) { toast({ type: 'error', message: userMessage(e) }); } finally { setBusy(false); }
   };
 
+  /** Open a person's record so the flagged field can be corrected, then mark the cell decided. */
+  const openRecord = (i: Issue) => {
+    const id = i.assayer?.id;
+    if (id) navigate(`/hr/roster/${id}`);
+  };
+
   if (issues === null || openCount === 0) return null;
 
   return (
@@ -129,6 +137,11 @@ export const ImportIssuesPanel: React.FC<{ canManage: boolean; onResolved?: () =
 
       {show && (
         <div style={{ borderTop: '1px solid var(--border-hair)' }}>
+          <div style={{ padding: '8px 14px', fontSize: '11.5px', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-hair)', background: 'var(--bg-surface)' }}>
+            Two ways to clear one: <strong style={{ color: 'var(--text-secondary)' }}>click a person</strong> to open their
+            record and correct the field, then close it — or, when the same cell is wrong for everyone
+            listed (a note that landed in the wrong column), <strong style={{ color: 'var(--text-secondary)' }}>decide the whole group at once</strong>.
+          </div>
           {groups.length === 0 ? (
             <Empty>Nothing outstanding.</Empty>
           ) : groups.map((g) => (
@@ -143,9 +156,39 @@ export const ImportIssuesPanel: React.FC<{ canManage: boolean; onResolved?: () =
                 </div>
               </div>
 
-              <div style={{ marginTop: '5px', fontSize: '11.5px', color: 'var(--text-muted)' }}>
-                {g.issues.slice(0, 12).map((i) => i.assayer?.assayerCode ?? i.sourceAssayerCode ?? `row ${i.sourceRow}`).join(', ')}
-                {g.issues.length > 12 && ` and ${g.issues.length - 12} more`}
+              {/*
+                Each affected person is a link to their record, so a cell that is wrong for THAT
+                person — a malformed PAN, an Aadhaar that is really a status note — gets corrected
+                on the record and then closed here. A cell with no person behind it (an unheadered
+                column, a skipped row) has nothing to open, so it stays plain text.
+              */}
+              <div style={{ marginTop: '6px', display: 'flex', flexWrap: 'wrap', gap: '5px' }}>
+                {g.issues.slice(0, 20).map((i) => {
+                  const who = i.assayer?.assayerCode ?? i.sourceAssayerCode ?? `Row ${i.sourceRow}`;
+                  const clickable = !!i.assayer?.id;
+                  return clickable ? (
+                    <button
+                      key={i.id}
+                      onClick={() => openRecord(i)}
+                      title={`Open ${who}'s record to correct it`}
+                      style={{
+                        display: 'inline-flex', alignItems: 'center', gap: '4px',
+                        padding: '2px 8px', fontSize: '11.5px', fontWeight: 600,
+                        background: 'var(--bg-surface)', color: 'var(--primary)',
+                        border: '1px solid var(--border-color)', borderRadius: '999px', cursor: 'pointer',
+                      }}
+                    >
+                      {who} <ExternalLink size={11} />
+                    </button>
+                  ) : (
+                    <span key={i.id} style={{ padding: '2px 8px', fontSize: '11.5px', color: 'var(--text-muted)' }}>{who}</span>
+                  );
+                })}
+                {g.issues.length > 20 && (
+                  <span style={{ padding: '2px 4px', fontSize: '11.5px', color: 'var(--text-muted)' }}>
+                    and {g.issues.length - 20} more
+                  </span>
+                )}
               </div>
 
               {canManage && (expanded === g.key ? (

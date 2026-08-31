@@ -25,7 +25,7 @@ const labelStyle = { display: 'block', fontSize: '11px', color: 'var(--text-mute
 const formFieldStyle = { padding: '10px 12px', background: 'var(--bg-page)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', width: '100%', boxSizing: 'border-box' as const, outline: 'none', fontSize: '13px' };
 
 const FIELD_TEXTAREA = new Set(['address', 'notes']);
-const FIELD_MONO = new Set(['assayerCode', 'employeeCode', 'employeeId', 'panNumber', 'bankAccountNumber', 'ifscCode']);
+const FIELD_MONO = new Set(['assayerCode', 'employeeCode', 'employeeId', 'panNumber', 'aadhaarNumber', 'bankAccountNumber', 'ifscCode']);
 const FIELD_TEL = new Set(['phone', 'alternatePhone', 'emergencyContactPhone']);
 const FIELD_NUM = new Set(['experienceYears', 'maxDailyWorkload', 'maxWeeklyWorkload']);
 const FIELD_TIME = new Set(['workingHoursStart', 'workingHoursEnd']);
@@ -205,11 +205,13 @@ const stringifyList = (list: string[]): string => (list.length > 0 ? JSON.string
  */
 const PAN_PATTERN = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
 const IFSC_PATTERN = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+const AADHAAR_PATTERN = /^[0-9]{12}$/;
 const formatHint = (key: string, value: string): string | null => {
   const v = (value || '').trim();
   if (!v) return null;
   if (key === 'panNumber' && !PAN_PATTERN.test(v)) return 'A PAN looks like ABCDE1234F — five letters, four digits, one letter.';
   if (key === 'ifscCode' && !IFSC_PATTERN.test(v)) return 'An IFSC code looks like HDFC0001234 — four letters, a zero, then six characters.';
+  if (key === 'aadhaarNumber' && !AADHAAR_PATTERN.test(v.replace(/\s/g, ''))) return 'An Aadhaar number is 12 digits.';
   if (key === 'pincode' && !/^\d{6}$/.test(v)) return 'A pincode is exactly 6 digits.';
   return null;
 };
@@ -276,6 +278,7 @@ const CREATE_FIELDS: FieldDef[] = [
   { key: 'department', label: 'Department', options: DEPARTMENTS },
   { key: 'joiningDate', label: 'Joining Date', type: 'date' },
   { key: 'panNumber', label: 'PAN Number' },
+  { key: 'aadhaarNumber', label: 'Aadhaar Number' },
   { key: 'bankAccountNumber', label: 'Bank Account' },
   { key: 'ifscCode', label: 'IFSC Code' },
   { key: 'experienceYears', label: 'Experience (years)', type: 'number' },
@@ -359,6 +362,7 @@ const EDIT_FIELDS: FieldDef[] = [
   // and an assayer who reports to nobody on the roster is a normal record, not an error.
   { key: 'managerId', label: 'Reporting Manager', people: true, full: true, hint: 'Optional. Who this person reports to.' },
   { key: 'panNumber', label: 'PAN Number' },
+  { key: 'aadhaarNumber', label: 'Aadhaar Number' },
   { key: 'bankAccountNumber', label: 'Bank Account' },
   { key: 'ifscCode', label: 'IFSC Code' },
   { key: 'experienceYears', label: 'Experience (years)', type: 'number' },
@@ -1218,20 +1222,23 @@ interface FieldGroup {
 }
 
 const EDIT_FIELD_GROUPS: FieldGroup[] = [
-  { title: 'Personal', icon: <User size={13} />, fields: ['firstName', 'lastName', 'email', 'phone', 'alternatePhone', 'dateOfBirth', 'qualification'] },
+  { title: 'Personal', icon: <User size={13} />, fields: ['firstName', 'lastName', 'email', 'phone', 'alternatePhone'] },
+  // Identity papers — the fields the roster import checks the shape of and flags when they are
+  // wrong (a PAN that is not a PAN, an Aadhaar cell holding a status word). They are editable
+  // here, in one place, so a flagged cell is corrected on the record it belongs to rather than
+  // hunted for across tabs.
+  { title: 'Identity', icon: <CreditCard size={13} />, fields: ['dateOfBirth', 'qualification', 'panNumber', 'aadhaarNumber', 'vstsCode'] },
   { title: 'Address', icon: <MapPin size={13} />, fields: ['address', 'city', 'district', 'state', 'pincode', 'region'] },
-  { title: 'Employment', icon: <Briefcase size={13} />, fields: ['employeeId', 'employeeCode', 'employmentType', 'department', 'joiningDate', 'exitDate', 'terminationDate', 'managerId', 'engagementType', 'unavailableReason', 'vstsCode', 'hrOwnerName'] },
+  { title: 'Employment', icon: <Briefcase size={13} />, fields: ['employeeId', 'employeeCode', 'employmentType', 'department', 'joiningDate', 'exitDate', 'terminationDate', 'managerId', 'engagementType', 'unavailableReason', 'hrOwnerName'] },
   // Named "Money" to match the create form, so the same thing is not called two different things
   // in the two places a clerk meets it. The old `?section=financial` links still land here.
   {
     title: 'Money', icon: <CreditCard size={13} />, aliases: ['financial', 'pay', 'bank'],
-    // PAN is not here. It is one value — payroll reads the column, and the same number is what
-    // the PAN card evidences — and it is entered and verified on the record's Vetting tab,
-    // beside the document it comes off. Two boxes for one number is how a record ends up
-    // disagreeing with itself about somebody's PAN.
+    // PAN lives on the Identity tab with the other identity papers; here it is only the account
+    // the money goes to. Rates are set on the record's Pay screen, not in this modal.
     fields: ['bankName', 'bankAccountNumber', 'ifscCode'],
     blocks: [
-      { title: 'How we pay them', note: 'Bank details. Needed before this person can be paid; PAN is recorded with their identity documents, and rates are set on the Pay screen.', fields: ['bankName', 'bankAccountNumber', 'ifscCode'] },
+      { title: 'How we pay them', note: 'The account fees are paid into. Needed before this person can be paid; PAN is on the Identity tab, and rates are set on the Pay screen.', fields: ['bankName', 'bankAccountNumber', 'ifscCode'] },
     ],
   },
   // `skills`, `languages` and `certifications` are deliberately NOT here. They are rows in
