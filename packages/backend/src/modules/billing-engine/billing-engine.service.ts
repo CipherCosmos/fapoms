@@ -445,8 +445,12 @@ export class BillingEngineService implements OnModuleInit {
       this.settings.getNumber('billing.defaultClientTdsRate', 10).catch(() => 10),
       needsLegacyTravel
         ? m.query(
+            // In force NOW — both bounds. This checked only the end date, so a rate card
+            // dated for next quarter already governed today's travel reimbursement. See
+            // pricing/profile-in-force.ts for the one definition every reader now shares.
             `SELECT travel_reimbursement FROM assayer_commercial_profiles
               WHERE assayer_id = $1 AND is_active = true
+                AND effective_start_date <= NOW()
                 AND (effective_end_date IS NULL OR effective_end_date >= NOW())
               ORDER BY effective_start_date DESC LIMIT 1`,
             [assayerId],

@@ -746,8 +746,13 @@ export class PerformanceScoreCalculator implements ScoreCalculator {
   async calculate(assayer: AssayerEntity): Promise<number> {
     // `== null ? 5 : Number(...)` and never `|| 5`: the column is numeric(3,2), so TypeORM hands
     // back a string, and `Number("0.00") || 5.0` silently turns a genuine zero rating into a
-    // perfect one. Absent means "no data, assume fine"; zero means zero.
-    const rating = assayer.performanceRating == null ? 5.0 : Number(assayer.performanceRating);
+    // perfect one. Zero means zero.
+    //
+    // NULL now means unrated, and unrated scores NEUTRAL — the same 50 every other dimension
+    // uses for "no signal". It used to mean 5.0, i.e. full marks: nobody had assessed these
+    // people, and the engine read that as the best possible assessment.
+    if (assayer.performanceRating == null) return 50;
+    const rating = Number(assayer.performanceRating);
     return (rating / 5.0) * 100;
   }
 }
@@ -1160,14 +1165,15 @@ export class SLAComplianceScoreCalculator implements ScoreCalculator {
     // 3. Branch Risk Score & Assayer Seniority / SLA Track Record
     const branchRisk = Number(context.branch.riskScore) || 0;
     // See PerformanceScoreCalculator: numeric(3,2) arrives as a string, and `|| 5` would read a
-    // real 0.00 as 5.0. Null-check first, coerce second.
-    const rating = assayer.performanceRating == null ? 5.0 : Number(assayer.performanceRating);
+    // real 0.00 as 5.0. Null means UNRATED — no bonus and no penalty; the branch-risk bonus
+    // below is for proven reliability, and an unassessed person has not proven anything.
+    const rating = assayer.performanceRating == null ? null : Number(assayer.performanceRating);
     const exp = Number(assayer.experienceYears) || 0;
 
     if (branchRisk >= 7) {
-      if (rating >= 4.5 && exp >= 4) {
+      if (rating !== null && rating >= 4.5 && exp >= 4) {
         score += 15; // High reliability assayer assigned to critical SLA branch
-      } else if (rating < 4.0 || exp < 2) {
+      } else if ((rating !== null && rating < 4.0) || exp < 2) {
         score -= 35; // Risk of SLA breach assigning novice assayer to critical branch
       }
     }
@@ -1262,13 +1268,13 @@ export class RiskScoreCalculator implements ScoreCalculator {
     if (risk < 7) return 100; // Not a high-risk branch: anyone qualified may take it.
 
     // High risk branch requires senior experience (years >= 5) & high rating (>= 4.5).
-    // Same coercion rule as the other two rating readers: null → 5, everything else Number()ed —
-    // this site previously compared the raw numeric-as-string, which happened to get 0.00 right
-    // while the scorers got it wrong; now all three read the same value.
+    // Same rule as the other two rating readers: null is UNRATED, not excellent. This gate
+    // decides who is trusted with a high-risk branch, and "nobody has assessed them" is not
+    // the same answer as "they were assessed and are excellent".
     const exp = Number(assayer.experienceYears) || 0;
-    const rating = assayer.performanceRating == null ? 5.0 : Number(assayer.performanceRating);
+    const rating = assayer.performanceRating == null ? null : Number(assayer.performanceRating);
 
-    if (exp >= 5 && rating >= 4.5) {
+    if (exp >= 5 && rating !== null && rating >= 4.5) {
       return 100;
     }
     // Ten points off per risk point: HIGH (7) costs a junior 70, CRITICAL (9) costs 90 — a steep

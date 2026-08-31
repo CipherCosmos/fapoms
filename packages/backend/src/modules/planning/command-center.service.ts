@@ -353,9 +353,15 @@ export class CommandCenterService {
               COALESCE(open_work.open_assignments, 0) AS open_assignments
          FROM roster r
          LEFT JOIN open_work ON open_work.assayer_id = r.id
+         -- The profile in force TODAY. This had no date filter, so the cost shown on the
+         -- command centre was the newest-starting row whether or not it had begun — a rate
+         -- card dated for next quarter priced today's screen. One definition, shared:
+         -- see pricing/profile-in-force.ts.
          LEFT JOIN LATERAL (
            SELECT base_fee FROM assayer_commercial_profiles
             WHERE assayer_id = r.id AND is_active = true
+              AND effective_start_date <= NOW()
+              AND (effective_end_date IS NULL OR effective_end_date >= NOW())
             ORDER BY effective_start_date DESC LIMIT 1
          ) cp ON true`,
       assayerParams,

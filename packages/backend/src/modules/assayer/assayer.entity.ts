@@ -344,8 +344,16 @@ export class AssayerEntity extends BaseEntity {
   @Column({ name: 'experience_years', type: 'int', default: 0 })
   experienceYears: number;
 
-  @Column({ name: 'performance_rating', type: 'decimal', precision: 3, scale: 2, default: 5.00 })
-  performanceRating: number;
+  /**
+   * HR's own assessment, 1-5. NULL means nobody has assessed them yet — which is the honest
+   * state for anyone who arrived through the roster import, since no importer writes it.
+   *
+   * It used to be NOT NULL DEFAULT 5.00, so every imported appraiser sat at full marks and the
+   * recommendation engine's high-risk-branch bonuses read that as proven reliability. Readers
+   * must treat null as "no signal", never as a score. See migration 1793500000000.
+   */
+  @Column({ name: 'performance_rating', type: 'decimal', precision: 3, scale: 2, nullable: true })
+  performanceRating: number | null;
 
   @Column({ type: 'jsonb', nullable: true })
   leaves: { startDate: string; endDate: string }[] | null;

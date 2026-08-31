@@ -16,6 +16,7 @@ import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
+import { ConfigurationResolver } from '../platform/configuration/configuration.resolver';
 import { EventCategory, ClientLifecycleStatus, CLIENT_LIFECYCLE_TRANSITIONS, toWorkflowTransitions } from '@fapoms/shared';
 
 export interface CreateClientDto {
@@ -268,9 +269,28 @@ export class ClientService implements OnModuleInit {
 
       const weights = planning.weights;
       if (weights && typeof weights === 'object') {
+        /**
+         * Weights are validated, NAMED, and stored as numbers.
+         *
+         * Two things used to slip through. A weight sent as the string `"0.14"` passed the
+         * range check (which coerces with `Number()` to test it) and was then stored verbatim
+         * in jsonb — and `totalWeight += "0.14"` is string concatenation, so the engine's
+         * weighted mean became NaN and every candidate scored exactly 0.00. And a misspelled
+         * key like `distence` was accepted, stored, and did nothing for ever, because no reader
+         * ever looks for it. Coerce on the way in, and refuse a key no calculator reads.
+         */
+        const known = new Set(ConfigurationResolver.knownWeightKeys());
+        const coerced: Record<string, number> = {};
         for (const [key, value] of Object.entries(weights as Record<string, unknown>)) {
+          if (!known.has(key)) {
+            throw new BadRequestException(
+              `"${key}" is not a ranking dimension. Known dimensions: ${[...known].sort().join(', ')}.`,
+            );
+          }
           this.assertNumberInRange(value, `The "${key}" ranking weight`, 0, 1);
+          if (value !== undefined && value !== null && value !== '') coerced[key] = Number(value);
         }
+        planning.weights = coerced;
       }
     }
   }

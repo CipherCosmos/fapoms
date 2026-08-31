@@ -552,17 +552,61 @@ describe('AssayerService', () => {
   describe('createCommercialProfile', () => {
     it('should create and audit', async () => {
       mockAssayerRepo.findOne.mockResolvedValue({ id: 'asr-1', isActive: true });
+      mockCommercialRepo.find.mockResolvedValue([]);
       const saved = { id: 'prof-1', assayerId: 'asr-1', baseFee: 1000 };
       mockCommercialRepo.create.mockReturnValue(saved);
       mockCommercialRepo.save.mockResolvedValue(saved);
 
-      const result = await service.createCommercialProfile('asr-1', {
+      await service.createCommercialProfile('asr-1', {
         baseFee: 1000, hourlyRate: 100, dailyRate: 500,
         travelReimbursement: 200, accommodationAllowance: 300, mealAllowance: 50,
         effectiveStartDate: '2026-01-01', currency: 'INR',
       }, 'user-1');
 
       expect(mockAuditService.recordEvent).toHaveBeenCalled();
+    });
+
+    /**
+     * A new rate card ends the one it replaces, so no day is ever covered by two.
+     *
+     * Without this, two open-ended profiles both matched "in force" and the winner was whatever
+     * each reader's ORDER BY returned — the fee quoted, booked and paid could differ for the
+     * same audit. The database now refuses the overlap too (EXCLUDE, migration 1793400000000);
+     * this is the half that keeps that constraint from firing in normal use.
+     */
+    it('closes the rate card it supersedes, the day before the new one starts', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'asr-1', isActive: true });
+      const open = { id: 'prof-old', assayerId: 'asr-1', baseFee: 900, effectiveStartDate: '2025-01-01', effectiveEndDate: null };
+      mockCommercialRepo.find.mockResolvedValue([open]);
+      mockCommercialRepo.create.mockReturnValue({ id: 'prof-new' });
+      mockCommercialRepo.save.mockImplementation(async (x: any) => x);
+
+      await service.createCommercialProfile('asr-1', {
+        baseFee: 1200, effectiveStartDate: '2026-03-01', currency: 'INR',
+      }, 'user-1');
+
+      const closed = mockCommercialRepo.save.mock.calls
+        .map((c: any[]) => c[0])
+        .find((x: any) => x?.id === 'prof-old');
+      expect(closed).toBeDefined();
+      expect(new Date(closed.effectiveEndDate).toISOString().slice(0, 10)).toBe('2026-02-28');
+    });
+
+    it('leaves a rate card that already ended before the new one starts alone', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'asr-1', isActive: true });
+      const ended = { id: 'prof-ended', assayerId: 'asr-1', effectiveStartDate: '2024-01-01', effectiveEndDate: '2024-12-31' };
+      mockCommercialRepo.find.mockResolvedValue([ended]);
+      mockCommercialRepo.create.mockReturnValue({ id: 'prof-new' });
+      mockCommercialRepo.save.mockImplementation(async (x: any) => x);
+
+      await service.createCommercialProfile('asr-1', {
+        baseFee: 1200, effectiveStartDate: '2026-03-01', currency: 'INR',
+      }, 'user-1');
+
+      const touched = mockCommercialRepo.save.mock.calls
+        .map((c: any[]) => c[0])
+        .find((x: any) => x?.id === 'prof-ended');
+      expect(touched).toBeUndefined();
     });
   });
 

@@ -1498,12 +1498,43 @@ export class AssayerService implements OnModuleInit {
 
   // ---- Commercial Profiles ----
 
+  /**
+   * A new rate card closes the one it replaces.
+   *
+   * Nothing used to end the previous row, so two open-ended profiles could both be "in force"
+   * and the winner was whichever the reader's ORDER BY happened to pick — the fee quoted, the
+   * fee booked and the fee paid could differ for the same audit. The new row's start is the old
+   * row's end: rates change on a date, and both sides of that date have exactly one answer.
+   *
+   * The database enforces this too (an EXCLUDE constraint over the active period, migration
+   * 1793400000000) — this is the half that keeps the constraint from ever firing in normal use.
+   */
   async createCommercialProfile(assayerId: string, dto: any, userId: string): Promise<AssayerCommercialProfileEntity> {
     await this.findOne(assayerId);
+    const startDate = new Date(dto.effectiveStartDate);
+
+    const open = await this.commercialRepository.find({
+      where: { assayerId, isActive: true },
+    });
+    // Everything already running on the day the new card starts — an open-ended row, or one
+    // whose end falls on or after that day.
+    const superseded = open.filter((p) => {
+      const s = new Date(p.effectiveStartDate).getTime();
+      const e = p.effectiveEndDate ? new Date(p.effectiveEndDate).getTime() : Infinity;
+      return s <= startDate.getTime() && e >= startDate.getTime();
+    });
+    for (const old of superseded) {
+      // Ends the day before the new one starts, so the two never both cover a day.
+      const endsAt = new Date(startDate.getTime() - 86_400_000);
+      old.effectiveEndDate = endsAt < old.effectiveStartDate ? old.effectiveStartDate : endsAt;
+      old.updatedBy = userId;
+      await this.commercialRepository.save(old);
+    }
+
     const profile = this.commercialRepository.create({
       ...dto,
       assayerId,
-      effectiveStartDate: new Date(dto.effectiveStartDate),
+      effectiveStartDate: startDate,
       effectiveEndDate: dto.effectiveEndDate ? new Date(dto.effectiveEndDate) : null,
       createdBy: userId,
       updatedBy: userId,
