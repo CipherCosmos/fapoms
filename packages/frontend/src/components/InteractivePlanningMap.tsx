@@ -10,7 +10,7 @@ import { MapLayerControls } from './MapLayerControls';
 import { branchStatusColor, BRANCH_STATUS_LEGEND } from '../utils/statusLabels';
 import {
   buildSpotlightColorScale, SPOTLIGHT_COLOR, OTHER_BANK_COLOR,
-  bestEmpanelment, isQualifyingStanding, lifecycleBucketOf, LIFECYCLE_BUCKET_TINT,
+  isQualifyingStanding, lifecycleBucketOf, LIFECYCLE_BUCKET_TINT,
   ASSAYER_LIFECYCLE_BUCKETS, LIFECYCLE_RING_COLORS, MapEmpanelment,
 } from '../utils/clientColors';
 
@@ -889,12 +889,17 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
           // engine-verdict chain untouched. When a bank filter is on, the colour comes from
           // the FILTERED bank's standing: "show me RBL's people" paints them RBL even when
           // they also hold three other banks.
-          const empsInFilter = assayerClientFilter.length
-            ? (assayer.empanelments ?? []).filter((e: MapEmpanelment) =>
-                assayerClientFilter.includes(e.clientId) && isQualifyingStanding(e.status))
-            : null;
-          const bestEmp = bestEmpanelment(empsInFilter?.length ? empsInFilter : assayer.empanelments);
           const lifecycleKey = lifecycleBucketOf(assayer.lifecycleStatus).key;
+
+          // Is this person ICICI? — i.e. do they hold a qualifying (Active/Recommended) standing
+          // with the spotlit bank, whatever OTHER banks they also work for. `bestEmpanelment`
+          // returns the first qualifying bank, so an ICICI appraiser who also works AXIS would
+          // otherwise be painted AXIS and lost from the spotlight; 29 of the 34 ICICI-capable
+          // hold a second bank, which is why nearly all of them were slipping through.
+          const isSpotlit = spotlightClientId != null
+            && (assayer.empanelments ?? []).some(
+              (e: MapEmpanelment) => e.clientId === spotlightClientId && isQualifyingStanding(e.status),
+            );
 
           /**
            * TWO independent facts, TWO independent channels. "Which bank" and "what lifecycle
@@ -926,7 +931,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             : inBreach
             ? '#ef4444'
             : clientMode
-            ? clientColorOf(bestEmp?.clientId)
+            ? (isSpotlit ? SPOTLIGHT_COLOR : OTHER_BANK_COLOR)
             : ranking?.rank === 1
             ? '#f59e0b'
             : ranking
@@ -1168,7 +1173,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
     }
     // `mapStyle`/`appTheme` are deliberately absent: the basemap moved to its own effect above,
     // and a theme change is no longer a reason to walk every pin on the map.
-  }, [ensureMap, branches, selectedBranchId, routePoints, showBranches, showAssayers, showRoutes, showSlaRisk, slaRadiusKm, showWorkforceDensity, showRevenueDensity, realAssayers, filteredBranches, filteredAssayers, radiusKm, selectedAssayerForRouting, roadGeometry, travelMode, searchQuery, cityFilter, branchStatusFilter, slaEnabledProp, slaRadiusProp, rankedCandidates, excludedCandidates, colorMode, clientColorOf, assayerClientFilter]);
+  }, [ensureMap, branches, selectedBranchId, routePoints, showBranches, showAssayers, showRoutes, showSlaRisk, slaRadiusKm, showWorkforceDensity, showRevenueDensity, realAssayers, filteredBranches, filteredAssayers, radiusKm, selectedAssayerForRouting, roadGeometry, travelMode, searchQuery, cityFilter, branchStatusFilter, slaEnabledProp, slaRadiusProp, rankedCandidates, excludedCandidates, colorMode, clientColorOf, assayerClientFilter, spotlightClientId]);
 
   // Travel math calculations based on mode-aware estimates
   const modeSpeeds: Record<string, number> = { driving: 40, 'two-wheeler': 30, walking: 5 };
