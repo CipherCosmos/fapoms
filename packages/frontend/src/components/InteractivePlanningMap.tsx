@@ -753,7 +753,12 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
     const viewBounds = (renderBounds ?? map.getBounds()).pad(0.35);
     const inView = (lat: number, lng: number) => viewBounds.contains([lat, lng]);
     const zoom = map.getZoom();
-    const MAX_PER_LAYER = zoom <= 5 ? 300 : zoom <= 7 ? 700 : zoom <= 9 ? 1500 : 4000;
+    // The cap only needs to bite at country view, where the whole roster is "in view" at once and
+    // the pins overlap into one mass anyway. The moment you zoom in, `inView` above already holds
+    // the count to what fits the screen, so the cap becomes a high backstop that real data never
+    // reaches — you see every branch in the area you zoomed to. A too-low cap here was hiding
+    // in-view branches at region/state zoom, which read as "the map is missing branches".
+    const MAX_PER_LAYER = zoom <= 5 ? 900 : zoom <= 6 ? 2500 : 15000;
 
     // Clear old circles
     circlesRef.current.forEach((circle) => circle.remove());
