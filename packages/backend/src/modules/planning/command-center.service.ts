@@ -430,6 +430,72 @@ export class CommandCenterService {
       };
     });
 
+    /**
+     * The branches that sit in no project — imported through the Branches page, which creates a
+     * master branch but attaches it to no project. The query above inner-joins through
+     * `project_branches`, so these never reached the map or the territory rollup, and a book that
+     * has thousands of branches but no projects yet read as entirely empty. They are fetched here,
+     * counted toward each territory's branch tally and the branch total, and drawn on the live map
+     * — but they add nothing to the *work* figures (packets, hours, coverage, revenue), because
+     * there is no scheduled work to measure.
+     *
+     * Skipped when a `projectId` scopes the view: the planning workspace map is deliberately that
+     * one project's branches, so it must not gain the unrelated rest of the master list.
+     */
+    const maxPoints = Number(process.env.COMMAND_CENTER_MAX_POINTS) || DEFAULT_MAX_POINTS;
+    const extraBranchPoints: any[] = [];
+    if (!filters.projectId) {
+      const extraParams: any[] = [];
+      const extraWhere: string[] = [
+        'b.is_active = true',
+        'NOT EXISTS (SELECT 1 FROM project_branches pb WHERE pb.branch_id = b.id AND pb.is_active = true)',
+      ];
+      // Scoped by the branch's own columns, so a branch with no project is still filtered the same
+      // way the joined rows were — `b.client_id` stands in for the project's client.
+      if (filters.clientId) { extraParams.push(filters.clientId); extraWhere.push(`b.client_id = $${extraParams.length}`); }
+      if (filters.state) { extraParams.push(filters.state); extraWhere.push(`UPPER(b.state) = UPPER($${extraParams.length})`); }
+      if (filters.zoneId) { extraParams.push(filters.zoneId); extraWhere.push(`b.zone_id = $${extraParams.length}`); }
+      if (filters.regions?.length) { extraParams.push(filters.regions); extraWhere.push(`b.region = ANY($${extraParams.length})`); }
+
+      const extras = await this.dataSource.query(
+        `SELECT b.id, b.name, b.branch_code, b.district, b.state, b.latitude, b.longitude,
+                b.client_id, c.name AS client_name
+           FROM branches b
+           LEFT JOIN clients c ON c.id = b.client_id
+          WHERE ${extraWhere.join(' AND ')}
+          ORDER BY b.id
+          LIMIT ${maxPoints}`,
+        extraParams,
+      );
+      for (const b of extras) {
+        extraBranchPoints.push({
+          id: b.id,
+          projectBranchId: null,
+          name: b.name,
+          branchCode: b.branch_code,
+          district: b.district,
+          state: canonicalState(b.state),
+          rawState: b.state,
+          latitude: b.latitude === null ? null : Number(b.latitude),
+          longitude: b.longitude === null ? null : Number(b.longitude),
+          status: null,
+          clientId: b.client_id,
+          clientName: b.client_name,
+          projectId: null,
+          packets: 0,
+          auditHours: 0,
+          scheduledDate: null,
+          assigned: false,
+          nearestAssayerKm: null,
+          nearestAssayerName: null,
+          assayersInRange: 0,
+          serviceableRadiusKm: DEFAULT_SERVICEABLE_RADIUS_KM,
+          realisedRevenue: 0,
+          isolated: false,
+        });
+      }
+    }
+
     const assayerPoints = orderedById(assayers, 'id').map((a: any) => ({
       id: a.id,
       name: a.display_name,
@@ -485,6 +551,21 @@ export class CommandCenterService {
       d.branches += 1; d.packets += b.packets; d.auditHours += b.auditHours;
       if (!b.assigned) d.unassigned += 1;
       if (b.isolated) d.isolated += 1;
+    }
+
+    // Project-less branches add to each territory's branch tally (and its districts) as unassigned,
+    // but nothing to the work figures — no packets, hours, coverage or revenue. Integer counts
+    // only, so this stays order-independent and the determinism guarantee holds.
+    for (const b of extraBranchPoints) {
+      const t = territory(b.state);
+      t.branches += 1;
+      t.unassignedBranches += 1;
+      const dKey = b.district || 'UNKNOWN';
+      if (!t.districts.has(dKey)) {
+        t.districts.set(dKey, { district: dKey, branches: 0, packets: 0, auditHours: 0, unassigned: 0, isolated: 0, assayers: 0 });
+      }
+      const d = t.districts.get(dKey);
+      d.branches += 1; d.unassigned += 1;
     }
 
     for (const a of assayerPoints) {
@@ -543,7 +624,6 @@ export class CommandCenterService {
      * unassigned ones, then the largest workloads — so a truncated view still shows every
      * decision the page is meant to drive.
      */
-    const maxPoints = Number(process.env.COMMAND_CENTER_MAX_POINTS) || DEFAULT_MAX_POINTS;
     const visibleBranchPoints =
       branchPoints.length <= maxPoints
         ? branchPoints
@@ -589,90 +669,22 @@ export class CommandCenterService {
       params,
     );
 
-    /**
-     * The live map shows the whole branch master, not only branches that already sit in a project.
-     *
-     * The query above inner-joins through `project_branches`, so a branch imported through the
-     * Branches page — which creates a master branch but attaches it to no project — never appeared
-     * on the executive map at all. Those branches are appended here as plain pins: no packets, no
-     * coverage math, no revenue, because there is no scheduled work to measure. The aggregates
-     * above therefore stay a picture of *work*, while the map shows *every branch*.
-     *
-     * Skipped when a `projectId` scopes the view: the planning workspace map is deliberately that
-     * one project's branches, so it must not gain the unrelated rest of the master list.
-     */
-    // Kept in their own array, never pushed into `branchPoints`/`visibleBranchPoints` — under the
-    // cap those two are the SAME reference, so a push would silently add these to the work
-    // aggregates (totals.branches, packets) this is meant to leave alone. Concatenated only into
-    // the response's map array below.
-    const extraBranchPoints: any[] = [];
-    if (!filters.projectId) {
-      const extraParams: any[] = [];
-      const extraWhere: string[] = [
-        'b.is_active = true',
-        'NOT EXISTS (SELECT 1 FROM project_branches pb WHERE pb.branch_id = b.id AND pb.is_active = true)',
-      ];
-      // Scoped by the branch's own columns, so a branch with no project is still filtered the same
-      // way the joined rows were — `b.client_id` stands in for the project's client.
-      if (filters.clientId) { extraParams.push(filters.clientId); extraWhere.push(`b.client_id = $${extraParams.length}`); }
-      if (filters.state) { extraParams.push(filters.state); extraWhere.push(`UPPER(b.state) = UPPER($${extraParams.length})`); }
-      if (filters.zoneId) { extraParams.push(filters.zoneId); extraWhere.push(`b.zone_id = $${extraParams.length}`); }
-      if (filters.regions?.length) { extraParams.push(filters.regions); extraWhere.push(`b.region = ANY($${extraParams.length})`); }
-
-      const remaining = Math.max(0, maxPoints - visibleBranchPoints.length);
-      if (remaining > 0) {
-        const extras = await this.dataSource.query(
-          `SELECT b.id, b.name, b.branch_code, b.district, b.state, b.latitude, b.longitude,
-                  b.client_id, c.name AS client_name
-             FROM branches b
-             LEFT JOIN clients c ON c.id = b.client_id
-            WHERE ${extraWhere.join(' AND ')}
-            ORDER BY b.id
-            LIMIT ${remaining}`,
-          extraParams,
-        );
-        for (const b of extras) {
-          extraBranchPoints.push({
-            id: b.id,
-            projectBranchId: null,
-            name: b.name,
-            branchCode: b.branch_code,
-            district: b.district,
-            state: canonicalState(b.state),
-            rawState: b.state,
-            latitude: b.latitude === null ? null : Number(b.latitude),
-            longitude: b.longitude === null ? null : Number(b.longitude),
-            status: null,
-            clientId: b.client_id,
-            clientName: b.client_name,
-            projectId: null,
-            packets: 0,
-            auditHours: 0,
-            scheduledDate: null,
-            assigned: false,
-            nearestAssayerKm: null,
-            nearestAssayerName: null,
-            assayersInRange: 0,
-            serviceableRadiusKm: DEFAULT_SERVICEABLE_RADIUS_KM,
-            realisedRevenue: 0,
-            isolated: false,
-          });
-        }
-      }
-    }
-
     return {
       generatedAt: new Date().toISOString(),
       // Reported as the default; each branch was measured against its own client's ceiling.
       serviceableRadiusKm: DEFAULT_SERVICEABLE_RADIUS_KM,
       totals: {
-        branches: branchPoints.length,
+        // The whole branch master — scheduled-work branches plus the project-less ones. Packets,
+        // hours, coverage and revenue below stay work-only (the extras carry none), but the headline
+        // branch count reflects every branch a person sees on the map.
+        branches: branchPoints.length + extraBranchPoints.length,
         assayers: assayerPoints.length,
         packets: totalPackets,
         auditHours: Math.round(totalHours * 10) / 10,
         demandAssayerDays: Math.round((totalHours / WORKING_HOURS_PER_DAY) * 10) / 10,
         dailyCapacity: totalCapacity,
-        unassignedBranches: branchPoints.filter((b: any) => !b.assigned).length,
+        // A project-less branch has no assignment, so it counts as unassigned here.
+        unassignedBranches: branchPoints.filter((b: any) => !b.assigned).length + extraBranchPoints.length,
         isolatedBranches: branchPoints.filter((b: any) => b.isolated).length,
         realisedRevenue: Math.round(branchPoints.reduce((sum: number, b: any) => sum + b.realisedRevenue, 0)),
         pipelineValue: Math.round(branchPoints.length * avgFee),
@@ -684,17 +696,18 @@ export class CommandCenterService {
       idleAssayers: assayerPoints
         .filter((a: any) => a.openAssignments === 0)
         .map((a: any) => ({ ...a, territoryPosture: territoryList.find((t: any) => t.state === a.state)?.posture ?? 'UNKNOWN' })),
-      // Bounded — see DEFAULT_MAX_POINTS. The aggregates above cover everything. The project-less
-      // master branches are concatenated here (live map only), never folded into the aggregates.
-      branchPoints: [...visibleBranchPoints, ...extraBranchPoints],
+      // Bounded — see DEFAULT_MAX_POINTS. The work aggregates above cover everything. The
+      // project-less master branches ride along here (live map only), capped with the work pins.
+      branchPoints: [...visibleBranchPoints, ...extraBranchPoints].slice(0, maxPoints),
       assayerPoints: visibleAssayerPoints,
       meta: {
         branchPoints: {
-          returned: visibleBranchPoints.length + extraBranchPoints.length,
+          returned: Math.min(visibleBranchPoints.length + extraBranchPoints.length, maxPoints),
           // Every branch the map can show — the scheduled-work rows plus the project-less master
-          // branches appended above — so "showing X of Y" counts what a person actually sees.
+          // branches — so "showing X of Y" counts what a person actually sees.
           total: branchPoints.length + extraBranchPoints.length,
-          truncated: visibleBranchPoints.length < branchPoints.length,
+          truncated: visibleBranchPoints.length + extraBranchPoints.length > maxPoints
+            || visibleBranchPoints.length < branchPoints.length,
         },
         assayerPoints: {
           returned: visibleAssayerPoints.length,

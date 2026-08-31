@@ -162,11 +162,21 @@ describe('CommandCenterService — determinism against row order', () => {
     expect(pin).toBeDefined();
     expect(pin.packets).toBe(0);
     expect(pin.projectBranchId).toBeNull();
-    // …counted in what the map shows…
+    // …counted in what the map shows and in the branch total (a book with branches but no
+    // projects must not read as empty)…
     expect(result.meta.branchPoints.total).toBe(BRANCHES.length + 1);
-    // …but invisible to the work aggregates (6 project branches only).
-    expect(result.totals.branches).toBe(BRANCHES.length);
+    expect(result.totals.branches).toBe(BRANCHES.length + 1);
+    // …it shows up in its territory's branch tally, in the THANE district…
+    const withThane = result.territories.find((t: any) => t.districts.some((d: any) => d.district === 'THANE'));
+    expect(withThane).toBeDefined();
+    expect(withThane.districts.find((d: any) => d.district === 'THANE').branches).toBe(1);
+    // Maharashtra's tally is its 3 project branches (PUNE) plus the 1 project-less (THANE).
+    expect(withThane.branches).toBe(4);
+    // …but adds nothing to the *work* figures.
     expect(result.totals.packets).toBe(BRANCHES.reduce((s, b) => s + b.packet_count, 0));
+    expect(result.totals.auditHours).toBe(
+      Math.round(BRANCHES.reduce((s, b) => s + (b.packet_count * 6) / 60, 0) * 10) / 10,
+    );
   });
 
   it('does not append the master list when a projectId scopes the view (planning map)', async () => {
