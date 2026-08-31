@@ -16,7 +16,7 @@ import { fmtDate, fmtWhen } from '../../utils/dates';
 import { userMessage } from '../../services/errors';
 import { CommercialProfileModal, type CommercialProfile } from './CommercialProfileModal';
 import { AssayerRemarks } from '../../components/AssayerRemarks';
-import { AssayerVettingTab } from './AssayerVettingTab';
+import { AssayerVettingTab, STANDING_LABELS, BLOCKING_STANDINGS } from './AssayerVettingTab';
 import { AssayerQualificationTab } from './AssayerQualificationTab';
 import { AssayerSkillsPanel } from './AssayerSkillsPanel';
 import { todayDateKey, localDateKey } from '../../utils/statusLabels';
@@ -206,6 +206,25 @@ export const AssayerRecord: React.FC<{
 }> = ({ assayerId, canManage, onClose, onEdit, onChanged, reloadKey = 0 }) => {
   const [a, setA] = useState<Assayer | null>(null);
   const [tab, setTab] = useState<TabKey>('summary');
+
+  /**
+   * The banks question, answered on the FIRST screen. Which lenders is this person empanelled
+   * with, and what does their credit check say — both lived only inside the Vetting tab, so
+   * "what banks can we send them to?" meant knowing which tab to open. One dossier read (the
+   * same endpoint the Vetting tab uses; the browser caches nothing here but the payload is
+   * small); a viewer whose role cannot read the dossier simply does not get the strip.
+   */
+  const [dossierGlance, setDossierGlance] = useState<{
+    empanelments: Array<{ id: string; status: string; statusReason?: string | null; client?: { id: string; name: string } | null }>;
+    currentCheck: { cibilScore?: number | null; cibilBand?: string | null; checkedOn?: string | null } | null;
+  } | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    api.request<any>(`/assayers/${assayerId}/dossier`)
+      .then((d) => { if (!cancelled) setDossierGlance({ empanelments: d?.empanelments ?? [], currentCheck: d?.currentCheck ?? null }); })
+      .catch(() => { /* not entitled to the dossier — the strip just does not render */ });
+    return () => { cancelled = true; };
+  }, [assayerId, reloadKey]);
   const [loaded, setLoaded] = useState<Record<string, any>>({});
   const [busy, setBusy] = useState(false);
   const [target, setTarget] = useState('');
@@ -591,6 +610,50 @@ export const AssayerRecord: React.FC<{
                     Forty fields down a full-width page read as one undifferentiated list, and the
                     headings stopped separating anything.
                   */}
+                  {dossierGlance && (
+                    <section style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '12px 16px', marginBottom: '12px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
+                        <span style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)' }}>Banks &amp; standing</span>
+                        <button type="button" onClick={() => setTab('vetting')} style={{ background: 'none', border: 'none', color: 'var(--accent-primary)', fontSize: '11px', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>
+                          Manage standings
+                        </button>
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', alignItems: 'center' }}>
+                        {dossierGlance.empanelments.length === 0 && (
+                          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                            No bank standings recorded yet — they will appear here after vetting or a roster import.
+                          </span>
+                        )}
+                        {dossierGlance.empanelments.map((e) => {
+                          const blocking = BLOCKING_STANDINGS.has(e.status);
+                          const positive = e.status === 'ACTIVE' || e.status === 'RECOMMENDED';
+                          return (
+                            <span key={e.id} title={e.statusReason ?? undefined} style={{
+                              display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '3px 9px',
+                              borderRadius: '999px', fontSize: '11.5px', fontWeight: 600,
+                              background: blocking ? 'var(--status-cancelled-bg)' : positive ? 'var(--status-active-bg)' : 'var(--status-pending-bg)',
+                              color: 'var(--text-primary)', border: '1px solid var(--border-color)',
+                            }}>
+                              <span style={{ fontWeight: 700 }}>{e.client?.name ?? 'Unknown client'}</span>
+                              <span style={{ color: blocking ? 'var(--danger)' : positive ? 'var(--success)' : 'var(--warning)' }}>
+                                {STANDING_LABELS[e.status] ?? e.status}
+                              </span>
+                            </span>
+                          );
+                        })}
+                        <span style={{ fontSize: '11.5px', color: 'var(--text-secondary)', marginLeft: 'auto', display: 'inline-flex', gap: '12px' }}>
+                          <span>VSTS: <b>{a.vstsCode || 'none'}</b></span>
+                          {dossierGlance.currentCheck && (dossierGlance.currentCheck.cibilScore != null || dossierGlance.currentCheck.cibilBand) && (
+                            <span>
+                              Credit: <b>{dossierGlance.currentCheck.cibilBand ?? '—'}</b>
+                              {dossierGlance.currentCheck.cibilScore != null ? ` (${dossierGlance.currentCheck.cibilScore})` : ''}
+                              {dossierGlance.currentCheck.checkedOn ? `, ${fmtDate(dossierGlance.currentCheck.checkedOn)}` : ''}
+                            </span>
+                          )}
+                        </span>
+                      </div>
+                    </section>
+                  )}
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
                   <FactGroup title="How to reach them" rows={[
                     ['Phone', a.phone, 'phone'],
@@ -617,6 +680,9 @@ export const AssayerRecord: React.FC<{
                     ['Employee ID', a.employeeId],
                     ['Department', a.department],
                     ['Joined', fmtDate(a.joiningDate), 'joiningDate'],
+                    // Shown only when there IS one — a permanent "Left —" row on serving people
+                    // would read as forty more dashes of noise.
+                    ...(a.exitDate ? ([['Left', fmtDate(a.exitDate)]] as [string, any][]) : []),
                     ['Experience', `${a.experienceYears ?? 0} years`],
                     ['Engaged as', a.engagementType ? (ENGAGEMENT_LABELS[a.engagementType] ?? a.engagementType) : null],
                     /*
@@ -636,6 +702,9 @@ export const AssayerRecord: React.FC<{
                     ['Aadhaar', maskAadhaar(a.aadhaarNumber), 'aadhaarNumber'],
                     ['PAN', a.panNumber, 'panNumber'],
                     ['VSTS code', a.vstsCode],
+                    ['Documents folder', a.documentsLink
+                      ? <a href={a.documentsLink} target="_blank" rel="noreferrer" style={{ color: 'var(--accent-primary)' }}>Open folder</a>
+                      : null],
                   ]} />
                   <FactGroup title="How they are paid" rows={[
                     ['Bank', a.bankName, 'bankName'],
@@ -845,6 +914,10 @@ const Facts: React.FC<{ rows: Fact[] }> = ({ rows }) => (
               </span>
             ) : blank ? (
               <span style={{ color: 'var(--text-muted)' }}>—</span>
+            ) : React.isValidElement(v) ? (
+              // A fact may be a link (the documents folder); String() would print
+              // "[object Object]" where the anchor should be.
+              v
             ) : String(v)}
           </dd>
         </div>

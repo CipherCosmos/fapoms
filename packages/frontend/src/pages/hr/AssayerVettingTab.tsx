@@ -57,7 +57,7 @@ const CIBIL_LABELS: Record<string, string> = {
   [CibilBand.NOT_CHECKED]: 'Not checked', [CibilBand.CHECK_FAILED]: 'Check failed',
 };
 
-const STANDING_LABELS: Record<string, string> = {
+export const STANDING_LABELS: Record<string, string> = {
   [EmpanelmentStatus.ACTIVE]: 'Active',
   [EmpanelmentStatus.RECOMMENDED]: 'Recommended',
   [EmpanelmentStatus.NOT_RECOMMENDED]: 'Not recommended',
@@ -68,7 +68,7 @@ const STANDING_LABELS: Record<string, string> = {
 };
 
 /** Which standings mean "do not plan them for this client". */
-const BLOCKING_STANDINGS = new Set<string>([
+export const BLOCKING_STANDINGS = new Set<string>([
   EmpanelmentStatus.NOT_RECOMMENDED, EmpanelmentStatus.REJECTED,
   EmpanelmentStatus.RESIGNED, EmpanelmentStatus.TERMINATED,
 ]);

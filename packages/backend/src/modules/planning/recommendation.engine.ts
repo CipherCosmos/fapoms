@@ -7,7 +7,7 @@ import { BranchEntity } from '../branch/branch.entity';
 import { RoutingService, RouteSource } from '../geo/routing.provider';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { BusinessRuleEntity } from '../platform/rules/business-rule.entity';
-import { AssignmentStatus, AssayerStatus, AssayerLifecycleStatus, calculateHaversineDistance, businessDateKey, BypassableRule } from '@fapoms/shared';
+import { AssignmentStatus, AssayerStatus, AssayerLifecycleStatus, EmpanelmentStatus, calculateHaversineDistance, businessDateKey, BypassableRule } from '@fapoms/shared';
 import { RuleBypassService } from '../platform/rule-bypass/rule-bypass.service';
 import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
 import { ClientEntity } from '../client/client.entity';
@@ -37,8 +37,7 @@ const EXCLUSION_REASONS: Record<string, string> = {
   deployable: 'Onboarding not finished — not yet assignable',
   availability: 'Unavailable on this date (already booked or on leave)',
   consecutiveBranchAudit: 'Audited this branch most recently — rotation rule prevents repeat auditor',
-  clientRestriction: 'Restricted by this client',
-  clientEligibility: 'Not approved to work for this client — not on its approved list, or their empanelment with it is rejected, terminated or not recommended',
+  clientEligibility: 'Not eligible for this client — planning requires an Active or Recommended empanelment standing',
   ruleEngineEligibility: 'Blocked by a business rule',
   requiredSkills: 'Missing a skill or certification this project requires',
   distancePolicy: "Outside the client's permitted distance band for this branch",
@@ -56,7 +55,6 @@ const EXCLUSION_KINDS: Record<string, 'DATE' | 'ROTATION' | 'DISTANCE' | 'POLICY
   availability: 'DATE',
   consecutiveBranchAudit: 'ROTATION',
   distancePolicy: 'DISTANCE',
-  clientRestriction: 'POLICY',
   clientEligibility: 'POLICY',
   ruleEngineEligibility: 'POLICY',
   requiredSkills: 'SKILLS',
@@ -175,11 +173,17 @@ export interface PlanningContext {
     priorVisitsByAssayer: Record<string, number>;
     /**
      * Empanelment standing with THIS branch's client, per assayer — only rows that exist.
-     * Consulted by ClientEligibilityFilter: an explicitly negative standing (REJECTED,
-     * TERMINATED, NOT_RECOMMENDED) excludes; every other status, and no row at all, changes
-     * nothing. Absent-by-default keeps today's behaviour for the untracked majority.
+     * Consulted by ClientEligibilityFilter, THE per-client gate: ACTIVE/RECOMMENDED qualify,
+     * every other standing excludes with the standing named, and an absent row is governed by
+     * `noEmpanelmentRowPolicy` below.
      */
     empanelmentStatusByAssayer?: Record<string, string>;
+    /**
+     * `planning.eligibility.noEmpanelmentRow`, resolved once per recommendation: what the gate
+     * does with a candidate who has no empanelment record for this client (BLOCK is the
+     * compliance-strict default; ALLOW exists for a client whose vetting is mid-backfill).
+     */
+    noEmpanelmentRowPolicy?: 'BLOCK' | 'ALLOW';
     /**
      * How many assignments each assayer has already ACCEPTED for the scheduled day, and where
      * those branches are. Both were per-candidate queries that compared a `date` column against
@@ -420,65 +424,93 @@ export class DistancePolicyFilter implements CandidateFilter {
   }
 }
 
-@Injectable()
-export class ClientRestrictionFilter implements CandidateFilter {
-  name = 'clientRestriction';
+/** The settings-registry key ClientEligibilityFilter reads. Kept next to the filter it steers. */
+export const NO_EMPANELMENT_ROW_SETTING = 'planning.eligibility.noEmpanelmentRow';
 
-  constructor(private readonly ruleBypass: RuleBypassService) {}
+/**
+ * The standings that qualify a person to be planned for a client. Everything else — including
+ * having no recorded standing at all, under the default policy — excludes. This set is
+ * deliberately NOT configurable: a bank's empanelment list is a compliance fact, and
+ * "recommended someone the bank never empanelled" is the failure this gate exists to prevent.
+ */
+const QUALIFYING_STANDINGS: ReadonlySet<string> = new Set([
+  EmpanelmentStatus.ACTIVE,
+  EmpanelmentStatus.RECOMMENDED,
+]);
+
+/** How each disqualifying standing reads on the excluded panel — the standing, named. */
+const STANDING_EXCLUSION_DETAIL: Record<string, (client: string) => string> = {
+  [EmpanelmentStatus.REJECTED]: (c) => `empanelment REJECTED by ${c}`,
+  [EmpanelmentStatus.TERMINATED]: (c) => `empanelment TERMINATED by ${c}`,
+  [EmpanelmentStatus.NOT_RECOMMENDED]: (c) => `standing NOT_RECOMMENDED for ${c}`,
+  [EmpanelmentStatus.RESIGNED]: (c) => `RESIGNED from ${c}`,
+  [EmpanelmentStatus.INACTIVE]: (c) => `empanelment with ${c} is INACTIVE (dormant) — reactivate it on the vetting screen to plan them`,
+  [EmpanelmentStatus.DOCUMENTS_PENDING]: (c) => `${c}'s document requirements are still outstanding (DOCUMENTS_PENDING)`,
+};
+
+/**
+ * THE per-client eligibility gate — the one place that answers "may this person work for this
+ * bank?". It used to be answered in four: a restricted-assayers filter, a negative-standing
+ * check, a legacy `eligibleClients` array nobody maintained (empty = eligible for everyone),
+ * and a duplicate restricted-assayers branch inside the business-rule engine. Four gates, four
+ * vocabularies, and the strictest data — the vetting team's per-bank standings — steered none
+ * of it until an explicit "no" was recorded.
+ *
+ * Now: the client's restricted list is checked first (their hardest no), then the empanelment
+ * standing decides — ACTIVE and RECOMMENDED qualify, every other standing excludes with the
+ * standing named. A person with NO standing recorded is governed by the
+ * `planning.eligibility.noEmpanelmentRow` setting: BLOCK (the default — compliance-strict)
+ * excludes them with a pointer to the vetting screen; ALLOW exists so a new client whose
+ * vetting is mid-backfill can be planned without a code change. The bypass escape hatch is
+ * kept for every path and always leaves a trail.
+ */
+@Injectable()
+export class ClientEligibilityFilter implements CandidateFilter {
+  name = 'clientEligibility';
+
+  constructor(
+    private readonly ruleBypass: RuleBypassService,
+    private readonly platformSettings: PlatformSettingsService,
+  ) {}
 
   async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
-    if (!context.client) return true;
-    const restricted = context.client.restrictedAssayers || [];
-    if (!restricted.includes(assayer.id)) return true;
+    const barred = await this.exclusionReason(assayer, context);
+    if (barred === null) return true;
     if (this.ruleBypass.isBypassedSync(BypassableRule.CLIENT_ELIGIBILITY)) {
       this.ruleBypass.noteBypass(BypassableRule.CLIENT_ELIGIBILITY, {
-        entityType: 'ASSAYER', entityId: assayer.id,
-        detail: `barred by ${context.client.clientCode ?? context.client.name}`,
+        entityType: 'ASSAYER', entityId: assayer.id, detail: barred,
       });
       return true;
     }
     return false;
   }
-}
 
-@Injectable()
-export class ClientEligibilityFilter implements CandidateFilter {
-  name = 'clientEligibility';
+  /**
+   * Null when the person qualifies; otherwise the specific reason, phrased for the excluded
+   * panel and the bypass trail. The engine calls this again for blocked candidates so the
+   * operator sees "RESIGNED from AXIS", not a generic sentence.
+   */
+  async exclusionReason(assayer: AssayerEntity, context: PlanningContext): Promise<string | null> {
+    if (!context.client) return null;
+    const clientName = context.client.clientCode ?? context.client.name;
 
-  constructor(private readonly ruleBypass: RuleBypassService) {}
+    if ((context.client.restrictedAssayers || []).includes(assayer.id)) {
+      return `on ${clientName}'s restricted list`;
+    }
 
-  async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
-    if (!context.client) return true;
-
-    // An explicitly negative empanelment is the client's own recorded "no" — REJECTED,
-    // TERMINATED or NOT_RECOMMENDED excludes, with the usual bypass escape hatch. Any other
-    // standing, and no row at all, decides nothing: the legacy eligibleClients check below
-    // proceeds untouched, so nobody currently eligible loses work except the explicitly barred.
     const standing = context.branchFacts?.empanelmentStatusByAssayer?.[assayer.id];
-    if (standing === 'REJECTED' || standing === 'TERMINATED' || standing === 'NOT_RECOMMENDED') {
-      if (this.ruleBypass.isBypassedSync(BypassableRule.CLIENT_ELIGIBILITY)) {
-        this.ruleBypass.noteBypass(BypassableRule.CLIENT_ELIGIBILITY, {
-          entityType: 'ASSAYER', entityId: assayer.id,
-          detail: `empanelment ${standing} by ${context.client.clientCode ?? context.client.name}`,
-        });
-      } else {
-        return false;
-      }
+    if (standing !== undefined) {
+      if (QUALIFYING_STANDINGS.has(standing)) return null;
+      return (STANDING_EXCLUSION_DETAIL[standing] ?? ((c: string) => `empanelment standing ${standing} with ${c}`))(clientName);
     }
 
-    const eligible = assayer.eligibleClients || [];
-    if (eligible.length === 0 || eligible.includes('*') || eligible.includes('ANY') || eligible.includes('ALL')) {
-      return true;
-    }
-    if (eligible.includes(context.client.clientCode) || eligible.includes(context.client.id)) return true;
-    if (this.ruleBypass.isBypassedSync(BypassableRule.CLIENT_ELIGIBILITY)) {
-      this.ruleBypass.noteBypass(BypassableRule.CLIENT_ELIGIBILITY, {
-        entityType: 'ASSAYER', entityId: assayer.id,
-        detail: `not on ${context.client.clientCode ?? context.client.name}'s approved list`,
-      });
-      return true;
-    }
-    return false;
+    // No standing recorded at all. Preloaded once per recommendation into branch facts; the
+    // direct settings read is the standalone fallback (the service caches, so it is cheap).
+    const policy =
+      context.branchFacts?.noEmpanelmentRowPolicy ??
+      (await this.platformSettings.get<string>(NO_EMPANELMENT_ROW_SETTING));
+    if (policy === 'ALLOW') return null;
+    return `no empanelment record with ${clientName} — record an Active or Recommended standing on the vetting screen to make them plannable`;
   }
 }
 
@@ -524,7 +556,6 @@ export class RuleEngineEligibilityFilter implements CandidateFilter {
       },
       scheduledDate: context.scheduledDate,
       activeWorkload,
-      restrictedAssayers: context.client?.restrictedAssayers,
     }, context.branchFacts?.rules);
     // If any active rule block action fails, return false
     const blocked = results.some((r) => !r.passed && r.actionType === 'BLOCK');
@@ -566,7 +597,6 @@ export class RuleEngineEligibilityFilter implements CandidateFilter {
       target: { id: context.branch.id, clientId: context.branch.clientId },
       scheduledDate: context.scheduledDate,
       activeWorkload,
-      restrictedAssayers: context.client?.restrictedAssayers,
     }, context.branchFacts?.rules);
     return results
       .filter((r) => !r.passed && r.actionType === 'BLOCK')
@@ -1483,7 +1513,6 @@ export class RecommendationEngine {
     private readonly deployabilityFilter: DeployabilityFilter,
     private readonly availabilityFilter: AvailabilityFilter,
     private readonly consecutiveBranchAuditFilter: ConsecutiveBranchAuditFilter,
-    private readonly clientRestrictionFilter: ClientRestrictionFilter,
     private readonly clientEligibilityFilter: ClientEligibilityFilter,
     private readonly ruleEngineEligibilityFilter: RuleEngineEligibilityFilter,
     private readonly requiredSkillsFilter: RequiredSkillsFilter,
@@ -1540,7 +1569,6 @@ export class RecommendationEngine {
       this.deployabilityFilter,
       this.availabilityFilter,
       this.consecutiveBranchAuditFilter,
-      this.clientRestrictionFilter,
       this.clientEligibilityFilter,
       this.ruleEngineEligibilityFilter,
       this.requiredSkillsFilter,
@@ -1992,6 +2020,7 @@ export class RecommendationEngine {
       remarksByAssayer,
       recentOfferRows,
       fairnessOfferCap,
+      noEmpanelmentRowPolicy,
     ] = await Promise.all([
       assayerIds.length
         ? this.commercialRepositoryForFacts.find({
@@ -2135,6 +2164,10 @@ export class RecommendationEngine {
       this.platformSettings
         .getNumber(FAIRNESS_OFFER_CAP_SETTING, DEFAULT_FAIRNESS_OFFER_CAP)
         .catch(() => DEFAULT_FAIRNESS_OFFER_CAP),
+      // The no-empanelment-record policy, once per recommendation. Falling back to the
+      // shipped default (BLOCK) on a settings outage errs strict — the safe direction for a
+      // compliance gate.
+      this.platformSettings.get<string>(NO_EMPANELMENT_ROW_SETTING).catch(() => 'BLOCK'),
     ]);
 
     const recentOffersByAssayer = (recentOfferRows as any[]).reduce<Record<string, number>>((acc, r) => {
@@ -2218,19 +2251,22 @@ export class RecommendationEngine {
       remarksByAssayer: remarksByAssayer as Record<string, RemarkForScoring[]>,
       recentOffersByAssayer,
       fairnessOfferCap: Number(fairnessOfferCap) || DEFAULT_FAIRNESS_OFFER_CAP,
+      noEmpanelmentRowPolicy: noEmpanelmentRowPolicy === 'ALLOW' ? 'ALLOW' : 'BLOCK',
     };
 
     // Empanelment standing with this client, one grouped query for the pool. Vetting records
     // a partner's explicit "no" (see the qualification profile); until this map existed that
     // decision fed planning nothing and a REJECTED assayer kept being offered to that client.
     if (context.client && assayerIds.length) {
+      // No .catch(()=>[]) here: under the strict gate an empty map means "nobody is
+      // empanelled", so a swallowed read error would silently exclude the entire roster.
+      // A failed read must fail the recommendation loudly instead.
       const empanelmentRows: Array<{ assayer_id: string; status: string }> = await this.assignmentRepository.manager
         .query(
           `SELECT assayer_id, status FROM assayer_client_empanelments
             WHERE client_id = $1 AND is_active = true AND assayer_id = ANY($2)`,
           [context.client.id, assayerIds],
-        )
-        .catch(() => []);
+        );
       context.branchFacts.empanelmentStatusByAssayer = empanelmentRows.reduce<Record<string, string>>((acc, r) => {
         acc[r.assayer_id] = r.status;
         return acc;
@@ -2286,6 +2322,10 @@ export class RecommendationEngine {
         } else if (blockedBy === this.deployabilityFilter.name) {
           // Which onboarding stage they are stuck at, and the click that unsticks them.
           detail = this.deployabilityFilter.explain(assayer);
+        } else if (blockedBy === this.clientEligibilityFilter.name) {
+          // The specific standing (or its absence), not the generic sentence — "RESIGNED from
+          // AXIS" tells the operator exactly which vetting row to change.
+          detail = (await this.clientEligibilityFilter.exclusionReason(assayer, context)) ?? undefined;
         } else if (blockedBy === this.requiredSkillsFilter.name) {
           /**
            * Which skill or certification, not merely that one is missing.

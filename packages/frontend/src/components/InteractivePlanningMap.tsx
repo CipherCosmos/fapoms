@@ -2,10 +2,16 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import L from 'leaflet';
 import { useQuery } from '@tanstack/react-query';
 import { calculateHaversineDistance } from '@fapoms/shared';
+import { Maximize2, Minimize2 } from 'lucide-react';
 import { api } from '../services/api';
 import { queryKeys } from '../hooks/queryKeys';
+import { useScope, withScope } from '../context/ScopeContext';
 import { MapLayerControls } from './MapLayerControls';
 import { branchStatusColor, BRANCH_STATUS_LEGEND } from '../utils/statusLabels';
+import {
+  buildClientColorScale, bestEmpanelment, isQualifyingStanding, lifecycleBucketOf, LIFECYCLE_BUCKET_TINT,
+  ASSAYER_LIFECYCLE_BUCKETS, LIFECYCLE_RING_COLORS, MapEmpanelment,
+} from '../utils/clientColors';
 
 /** Stable empty roster, so "not loaded yet" is not a new array on every render. */
 const NO_ASSAYERS: any[] = [];
@@ -18,6 +24,28 @@ interface MapBranch {
   status: string;
   city?: string;
   riskScore?: number;
+  /** Which bank this branch belongs to — what the colour-by-client mode paints with. */
+  clientId?: string | null;
+  clientName?: string | null;
+}
+
+/** One assayer as `/assayers/map-roster` serves them — pin facts only, never the full record. */
+interface MapRosterAssayer {
+  id: string;
+  assayerCode: string;
+  displayName: string;
+  phone?: string | null;
+  status?: string;
+  lifecycleStatus?: string;
+  latitude: number | null;
+  longitude: number | null;
+  /** True while the position is a district/state average awaiting the precision sweep. */
+  approxLocation?: boolean;
+  state?: string | null;
+  district?: string | null;
+  empanelments: MapEmpanelment[];
+  assignedToday: boolean;
+  openAssignments: number;
 }
 
 /**
@@ -323,6 +351,50 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
   useEffect(() => localStorage.setItem('map_branchStatusFilter', JSON.stringify(branchStatusFilter)), [branchStatusFilter]);
 
   /**
+   * The control-center additions: what the pins are coloured BY (workflow status, or one
+   * colour per bank so a mixed-lender map reads at a glance), and the assayer-layer filters —
+   * by bank, by lifecycle bucket, by whether they are already committed today. Persisted like
+   * every other map preference. Engine-ranked and engine-excluded candidates BYPASS these
+   * filters (see `filteredAssayers`): a "Free today" left on from the executive map must never
+   * silently hide the recommendation list's pins on the planning desk.
+   */
+  // Keyed 'map_colorMode2': the first build wrote its then-default ('status') into every
+  // visitor's storage, and a stored value beats any later default — so the bank-colour
+  // default never reached anyone who had opened the map once. Fresh key, fresh default;
+  // choosing Status from now on still persists.
+  const [colorMode, setColorMode] = useState<'status' | 'client'>(() =>
+    localStorage.getItem('map_colorMode2') === 'status' ? 'status' : 'client');
+  const [assayerClientFilter, setAssayerClientFilter] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('map_assayerClientFilter') || '[]'); } catch { return []; }
+  });
+  const [assayerLifecycleFilter, setAssayerLifecycleFilter] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('map_assayerLifecycleFilter') || '[]'); } catch { return []; }
+  });
+  const [assayerAvailability, setAssayerAvailability] = useState<'ALL' | 'ASSIGNED' | 'FREE'>(() => {
+    const saved = localStorage.getItem('map_assayerAvailability');
+    return saved === 'ASSIGNED' || saved === 'FREE' ? saved : 'ALL';
+  });
+  useEffect(() => localStorage.setItem('map_colorMode2', colorMode), [colorMode]);
+  useEffect(() => localStorage.setItem('map_assayerClientFilter', JSON.stringify(assayerClientFilter)), [assayerClientFilter]);
+  useEffect(() => localStorage.setItem('map_assayerLifecycleFilter', JSON.stringify(assayerLifecycleFilter)), [assayerLifecycleFilter]);
+  useEffect(() => localStorage.setItem('map_assayerAvailability', assayerAvailability), [assayerAvailability]);
+
+  /**
+   * The bigger view. Not persisted — a reload comes back windowed. `position: fixed` lifts the
+   * whole card (legend, controls and routing panel are its absolute children, so they come
+   * along) above the sidebar (z 990-1000) at the modal layer; Leaflet needs an
+   * `invalidateSize` nudge after the container's size jumps, and Esc gets you out.
+   */
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => mapInstanceRef.current?.invalidateSize(), 100);
+    if (!isFullscreen) return () => clearTimeout(timer);
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setIsFullscreen(false); };
+    document.addEventListener('keydown', onKey);
+    return () => { clearTimeout(timer); document.removeEventListener('keydown', onKey); };
+  }, [isFullscreen]);
+
+  /**
    * Memoised, because this array is a dependency of the effect that draws the map.
    *
    * As a bare `.filter()` it produced a new array on every single render of this component — and
@@ -352,26 +424,100 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
    * whole roster every time. One key means one fetch, shared by every map on the page and reused
    * across mounts, and React Query's `signal` cancels it if the map goes away mid-flight.
    */
+  // The global scope, read here rather than plumbed through props: both pages that render this
+  // map are scope-governed routes, and the assayer layer ignoring the header's scope while the
+  // branch layer honoured it was the reported "map ignores my filters" bug.
+  const { scopeParams, scopeKey } = useScope();
   const { data: realAssayers = NO_ASSAYERS } = useQuery({
-    queryKey: queryKeys.assayers.mapRoster,
-    // The map plots the WHOLE roster, so it must fetch the whole roster. `limit=100` silently
-    // capped it at the first 100 — with 1,000+ appraisers most never appeared on the map. This
-    // asks for all of them (one fetch, cached 5 min). If the roster ever dwarfs this, switch to a
-    // lightweight `/assayers/map` endpoint that returns only id/code/name/lat/lng.
-    queryFn: ({ signal }) => api.request<any[]>('/assayers?limit=5000', { signal }),
+    queryKey: queryKeys.assayers.mapRoster(scopeKey),
+    // The whole (scoped) roster, as pin facts only — `/assayers/map-roster` serves eleven
+    // fields plus bank standings and committed-today, not the 78-column record the old
+    // `/assayers?limit=5000` fetch dragged along for a layer that renders dots.
+    queryFn: ({ signal }) => {
+      const qs = withScope(scopeParams);
+      return api.request<MapRosterAssayer[]>(`/assayers/map-roster${qs ? `?${qs}` : ''}`, { signal });
+    },
     staleTime: 5 * 60_000,
   });
 
+  /**
+   * Engine results are exempt from the assayer-layer filters below. These sets identify them;
+   * hiding a ranked candidate because of a leftover map preference would make the map disagree
+   * with the recommendation list beside it.
+   */
+  const rankedOrExcludedIds = useMemo(() => new Set([
+    ...(rankedCandidates ?? []).map((c) => c.id),
+    ...(excludedCandidates ?? []).map((e) => e.assayerId),
+  ]), [rankedCandidates, excludedCandidates]);
+
   /** Memoised for the same reason as `filteredBranches` above. */
-  const filteredAssayers = useMemo(() => realAssayers.filter((a: any) => {
+  const filteredAssayers = useMemo(() => realAssayers.filter((a: MapRosterAssayer) => {
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
-      const nameMatch = ((a.firstName || '') + ' ' + (a.lastName || '')).toLowerCase().includes(q);
+      const nameMatch = (a.displayName || '').toLowerCase().includes(q);
       const codeMatch = (a.assayerCode || '').toLowerCase().includes(q);
       if (!nameMatch && !codeMatch) return false;
     }
+    if (rankedOrExcludedIds.has(a.id)) return true;
+    // Capability, not history: "show me this bank's assayers" means the people it can be
+    // STAFFED with (Active/Recommended) — not everyone it ever rejected. The popup still
+    // lists the full history on each pin.
+    if (assayerClientFilter.length > 0
+      && !(a.empanelments ?? []).some((e) => assayerClientFilter.includes(e.clientId) && isQualifyingStanding(e.status))) return false;
+    if (assayerLifecycleFilter.length > 0) {
+      const allowed = ASSAYER_LIFECYCLE_BUCKETS
+        .filter((b) => assayerLifecycleFilter.includes(b.key))
+        .flatMap((b) => b.statuses);
+      if (!allowed.includes(a.lifecycleStatus ?? '')) return false;
+    }
+    if (assayerAvailability === 'ASSIGNED' && !a.assignedToday) return false;
+    if (assayerAvailability === 'FREE' && a.assignedToday) return false;
     return true;
-  }), [realAssayers, searchQuery]);
+  }), [realAssayers, searchQuery, rankedOrExcludedIds, assayerClientFilter, assayerLifecycleFilter, assayerAvailability]);
+
+  /**
+   * Every client visible to this map — from assayer empanelments and branch pins alike — with
+   * a stable colour each. One scale for both pin families is what makes "same bank, same
+   * colour" hold between a branch and the people empanelled with it.
+   */
+  const clientOptions = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const a of realAssayers as MapRosterAssayer[]) {
+      for (const e of a.empanelments ?? []) if (!names.has(e.clientId)) names.set(e.clientId, e.clientName);
+    }
+    for (const b of branches) {
+      if (b.clientId && !names.has(b.clientId)) names.set(b.clientId, b.clientName || b.clientId);
+    }
+    return [...names.entries()].map(([id, name]) => ({ id, name })).sort((x, y) => x.name.localeCompare(y.name));
+  }, [realAssayers, branches]);
+  const clientColorOf = useMemo(() => buildClientColorScale(clientOptions.map((c) => c.id)), [clientOptions]);
+
+  /**
+   * Live counts for the control panel, so every filter says what it will yield BEFORE it is
+   * clicked — "AXIS (176)", "Out of workforce (329)" — and the header can say how many of the
+   * roster the current filters actually show. A control centre that filters blind is guesswork;
+   * these turn it into a readout. Computed over the whole roster (bank counts are capability —
+   * Active/Recommended only, matching the filter semantics).
+   */
+  const assayerCounts = useMemo(() => {
+    const byClient: Record<string, number> = {};
+    const byLifecycle: Record<string, number> = {};
+    let assignedToday = 0;
+    let freeToday = 0;
+    for (const a of realAssayers as MapRosterAssayer[]) {
+      const bucket = lifecycleBucketOf(a.lifecycleStatus).key;
+      byLifecycle[bucket] = (byLifecycle[bucket] ?? 0) + 1;
+      if (a.assignedToday) assignedToday += 1; else freeToday += 1;
+      const seen = new Set<string>();
+      for (const e of a.empanelments ?? []) {
+        if (isQualifyingStanding(e.status) && !seen.has(e.clientId)) {
+          seen.add(e.clientId);
+          byClient[e.clientId] = (byClient[e.clientId] ?? 0) + 1;
+        }
+      }
+    }
+    return { total: realAssayers.length, byClient, byLifecycle, assignedToday, freeToday };
+  }, [realAssayers]);
 
   // Synchronize parent selected assayer to map routing state
   useEffect(() => {
@@ -587,7 +733,12 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
           const lng = Number(b.longitude);
 
           const isSelected = b.id === selectedBranchId;
-          const color = isSelected ? '#6366f1' : branchStatusColor(b.status);
+          // Bank mode paints ownership; status mode is untouched. Selection always wins.
+          const color = isSelected
+            ? '#6366f1'
+            : colorMode === 'client'
+            ? clientColorOf(b.clientId)
+            : branchStatusColor(b.status);
 
           const markerSvg = `
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="${color}" width="28px" height="28px" style="filter: drop-shadow(0 2px 5px rgba(0,0,0,0.4));">
@@ -724,10 +875,43 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
           // Ranking wins over raw distance: what matters operationally is who the engine
           // recommends, not merely who is nearest. Blocked assayers are greyed so they read as
           // "cannot be assigned" at a glance instead of looking like an ordinary option.
+          // In bank mode the pin takes its best empanelment's colour (ACTIVE beats
+          // RECOMMENDED beats the rest; no bank = grey) — but a blocked or in-breach verdict
+          // still overrides it: compliance reads louder than ownership. Status mode keeps the
+          // engine-verdict chain untouched. When a bank filter is on, the colour comes from
+          // the FILTERED bank's standing: "show me RBL's people" paints them RBL even when
+          // they also hold three other banks.
+          const empsInFilter = assayerClientFilter.length
+            ? (assayer.empanelments ?? []).filter((e: MapEmpanelment) =>
+                assayerClientFilter.includes(e.clientId) && isQualifyingStanding(e.status))
+            : null;
+          const bestEmp = bestEmpanelment(empsInFilter?.length ? empsInFilter : assayer.empanelments);
+          const lifecycleKey = lifecycleBucketOf(assayer.lifecycleStatus).key;
+
+          /**
+           * TWO independent facts, TWO independent channels. "Which bank" and "what lifecycle
+           * state" are orthogonal — a person can be ICICI + active, ICICI + terminated, no-bank
+           * + active, no-bank + terminated — so encoding both in one fill colour was doomed:
+           * a terminated ICICI appraiser looked identical to a working one, and an available
+           * unbanked appraiser looked identical to a resigned one.
+           *
+           *   FILL  = the bank (its colour when the person holds an Active/Recommended
+           *           standing; a neutral light disc when they hold none).
+           *   RING  = the lifecycle (white active · sky onboarding · amber paused ·
+           *           red out-of-workforce).
+           *
+           * So a red-ringed ICICI-blue disc now reads exactly as what it is: "empanelled with
+           * ICICI on paper, but this person has left" — a data mismatch ops should see and fix,
+           * not one the map should hide. In status/planning mode the engine verdict still owns
+           * the fill; the lifecycle ring rides along on top of it.
+           */
+          const NO_BANK_FILL = '#cbd5e1';
           const markerColor = blocked
             ? '#64748b'
             : inBreach
             ? '#ef4444'
+            : colorMode === 'client'
+            ? (bestEmp ? clientColorOf(bestEmp.clientId) : ranking ? clientColorOf(null) : NO_BANK_FILL)
             : ranking?.rank === 1
             ? '#f59e0b'
             : ranking
@@ -735,10 +919,29 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             : slaCompliant === null
             ? '#a855f7'
             : '#10b981';
+
+          // The neutral no-bank disc is light, so its person glyph must be dark to read; every
+          // saturated bank/verdict fill takes the white glyph.
+          const lightFill = colorMode === 'client' && !bestEmp && !ranking && !blocked && !inBreach;
+          const glyphFill = lightFill ? '#334155' : '#ffffff';
+
+          // RING = lifecycle, on its own channel so it is legible over any fill. Blocked and
+          // in-breach are branch-specific verdicts that own the whole pin, so they keep a plain
+          // ring; everyone else is ringed by where they stand in the workforce.
+          const ringColor = (blocked || inBreach)
+            ? 'rgba(255,255,255,0.85)'
+            : (LIFECYCLE_RING_COLORS[lifecycleKey] ?? 'rgba(255,255,255,0.9)');
+          // Out-of-workforce and paused rings are drawn thicker so the status reads at a glance
+          // even on the smallest zoomed-out dot.
+          const ringWidth = lifecycleKey === 'exited' || lifecycleKey === 'paused' ? 2.6 : 1.5;
+          // Exited people fade so the live workforce carries the picture — but only lightly, and
+          // the bold red ring stays fully opaque, because "who has left" is a thing to SEE.
+          const dimExited = colorMode === 'client' && lifecycleKey === 'exited' && !ranking && !blocked;
+
           const assayerSvg = `
-            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="${markerColor}" width="26px" height="26px" style="filter: drop-shadow(0 2px 4px rgba(0,0,0,0.4));">
-              <circle cx="12" cy="12" r="10" fill="none" stroke="${markerColor}" stroke-width="2"/>
-              <path d="M12 11c1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3 1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V18h14v-1.5c0-2.33-4.67-3.5-7-3.5z"/>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="18px" height="18px" style="filter: drop-shadow(0 1px 3px rgba(0,0,0,0.5));">
+              <circle cx="12" cy="12" r="${11 - (ringWidth - 1.5) / 2}" fill="${markerColor}" stroke="${ringColor}" stroke-width="${ringWidth}"/>
+              <path fill="${glyphFill}" d="M12 11c1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3 1.34 3 3 3zm0 2c-2.33 0-7 1.17-7 3.5V18h14v-1.5c0-2.33-4.67-3.5-7-3.5z"/>
             </svg>
           `;
 
@@ -747,13 +950,37 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
           // a marker that's simultaneously coloured red as a restricted-zone breach is a direct
           // visual contradiction.
           const rankBadge = ranking && ranking.rank <= 3 && !inBreach
-            ? `<div style="position:absolute;top:-6px;right:-6px;background:${markerColor};color:#0f172a;font-size:9px;font-weight:800;width:14px;height:14px;line-height:14px;border-radius:50%;text-align:center;border:1.5px solid #0f172a;">${ranking.rank}</div>`
+            ? `<div style="position:absolute;top:-5px;right:-5px;background:${markerColor};color:#fff;font-size:8px;font-weight:800;width:12px;height:12px;line-height:12px;border-radius:50%;text-align:center;border:1px solid rgba(255,255,255,0.9);">${ranking.rank}</div>`
             : '';
           const blockedMark = blocked
-            ? `<div style="position:absolute;top:-4px;right:-4px;color:#f87171;font-size:12px;font-weight:800;">✕</div>`
+            ? `<div style="position:absolute;top:-4px;right:-4px;color:#f87171;font-size:10px;font-weight:800;">✕</div>`
             : '';
 
-          const assayerIconHtml = `<div style="position:relative;width:26px;height:26px;opacity:${blocked ? 0.55 : 1};">${assayerSvg}${rankBadge}${blockedMark}</div>`;
+          const assayerIconHtml = `<div style="position:relative;width:18px;height:18px;opacity:${blocked ? 0.55 : dimExited ? 0.72 : 1};">${assayerSvg}${rankBadge}${blockedMark}</div>`;
+
+          // What every assayer popup now says regardless of branch selection: who they are in
+          // the lifecycle, whether they are already committed today, and which banks they hold
+          // a standing with — the control-center facts, on the pin itself.
+          const bucket = lifecycleBucketOf(assayer.lifecycleStatus);
+          const tint = LIFECYCLE_BUCKET_TINT[bucket.key] ?? { bg: '#e2e8f0', fg: '#334155' };
+          const lifecycleChip = `<span style="display:inline-block;padding:1px 6px;border-radius:8px;background:${tint.bg};color:${tint.fg};font-size:10px;font-weight:700;">${assayer.lifecycleStatus ?? '—'}</span>`;
+          const availabilityLine = assayer.assignedToday
+            ? `<div style="margin-top:3px;color:#b45309;font-weight:600;">📌 Assigned today${assayer.openAssignments > 1 ? ` · ${assayer.openAssignments} open` : ''}</div>`
+            : `<div style="margin-top:3px;color:#047857;font-weight:600;">✅ Free today${assayer.openAssignments > 0 ? ` · ${assayer.openAssignments} open elsewhere` : ''}</div>`;
+          const approxLine = assayer.approxLocation
+            ? `<div style="margin-top:3px;font-size:10px;color:#92400e;">📍 Approximate area — the exact address is still being located</div>`
+            : '';
+          const emps: MapEmpanelment[] = assayer.empanelments ?? [];
+          const bankRows = emps.slice(0, 4).map((e) =>
+            `<div style="display:flex;align-items:center;gap:5px;font-size:11px;">`
+            + `<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${clientColorOf(e.clientId)};"></span>`
+            + `<span>${e.clientName}</span><span style="color:#666;">— ${e.status}</span></div>`,
+          ).join('');
+          const banksBlock = emps.length
+            ? `<div style="margin-top:4px;border-top:1px solid #e2e8f0;padding-top:3px;">${bankRows}`
+              + (emps.length > 4 ? `<div style="font-size:10px;color:#666;">+${emps.length - 4} more</div>` : '')
+              + `</div>`
+            : `<div style="margin-top:4px;font-size:10px;color:#94a3b8;">No bank empanelments</div>`;
 
           // Filled in by whichever of the two branches below applies, then handed to the
           // reconciler together with the icon. Assayer pins away from a selected branch carry a
@@ -782,12 +1009,15 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
               ? `<div style="margin-top:3px;color:#047857;font-weight:600;">#${ranking.rank} recommended · score ${ranking.score ?? '—'}</div>`
               : '';
             assayerPopupHtml = `
-              <div style="color:#000;font-family:sans-serif;font-size:12px;min-width:170px;">
-                <b style="color:${markerColor};display:block;margin-bottom:2px;">${assayer.firstName} ${assayer.lastName}</b>
+              <div style="color:#000;font-family:sans-serif;font-size:12px;min-width:180px;">
+                <b style="color:${markerColor};display:block;margin-bottom:2px;">${assayer.displayName} ${lifecycleChip}</b>
                 <div>Code: <b>${assayer.assayerCode}</b></div>
                 <div>Distance: <b>~${straightDist.toFixed(1)} km</b> <span style="color:#666;">straight line</span></div>
                 ${verdict}
                 ${slaStatus}
+                ${availabilityLine}
+                ${approxLine}
+                ${banksBlock}
                 ${blocked || inBreach ? '' : '<div style="margin-top:4px;font-size:10px;color:#666;">Click to show route</div>'}
               </div>
             `;
@@ -804,11 +1034,12 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             };
           } else {
             assayerPopupHtml = `
-              <div style="color:#000; font-family:sans-serif; font-size:12px; min-width: 140px;">
-                <b style="color:#a855f7; display:block; margin-bottom: 4px;">${assayer.firstName} ${assayer.lastName}</b>
+              <div style="color:#000; font-family:sans-serif; font-size:12px; min-width: 170px;">
+                <b style="color:${markerColor}; display:block; margin-bottom: 4px;">${assayer.displayName} ${lifecycleChip}</b>
                 <div>Code: <b>${assayer.assayerCode}</b></div>
-                <div>Status: <span style="color:var(--status-active)">${assayer.status}</span></div>
-                <div>Skills: <i>${assayer.skills?.length ? assayer.skills.join(', ') : 'None recorded'}</i></div>
+                ${availabilityLine}
+                ${approxLine}
+                ${banksBlock}
               </div>
             `;
           }
@@ -818,8 +1049,9 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
             lng: aLng,
             iconHtml: assayerIconHtml,
             iconClassName: 'custom-assayer-marker',
-            iconSize: [24, 24],
-            iconAnchor: [12, 24],
+            iconSize: [18, 18],
+            // Centre anchor: a disc marks its point at its middle, unlike the branch pin's tip.
+            iconAnchor: [9, 9],
             popupHtml: assayerPopupHtml,
             onClick: assayerOnClick,
           });
@@ -925,7 +1157,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
     }
     // `mapStyle`/`appTheme` are deliberately absent: the basemap moved to its own effect above,
     // and a theme change is no longer a reason to walk every pin on the map.
-  }, [ensureMap, branches, selectedBranchId, routePoints, showBranches, showAssayers, showRoutes, showSlaRisk, slaRadiusKm, showWorkforceDensity, showRevenueDensity, realAssayers, filteredBranches, filteredAssayers, radiusKm, selectedAssayerForRouting, roadGeometry, travelMode, searchQuery, cityFilter, branchStatusFilter, slaEnabledProp, slaRadiusProp, rankedCandidates, excludedCandidates]);
+  }, [ensureMap, branches, selectedBranchId, routePoints, showBranches, showAssayers, showRoutes, showSlaRisk, slaRadiusKm, showWorkforceDensity, showRevenueDensity, realAssayers, filteredBranches, filteredAssayers, radiusKm, selectedAssayerForRouting, roadGeometry, travelMode, searchQuery, cityFilter, branchStatusFilter, slaEnabledProp, slaRadiusProp, rankedCandidates, excludedCandidates, colorMode, clientColorOf, assayerClientFilter]);
 
   // Travel math calculations based on mode-aware estimates
   const modeSpeeds: Record<string, number> = { driving: 40, 'two-wheeler': 30, walking: 5 };
@@ -962,24 +1194,48 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
       : perKmRate == null ? null : Math.round(chargeableKm * perKmRate);
 
   return (
-    <div className="glass-card" style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px', position: 'relative', flex: fillContainer ? '1' : undefined, minHeight: fillContainer ? 0 : '380px', boxSizing: 'border-box' }}>
+    <div className="glass-card" style={{
+      padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px', boxSizing: 'border-box',
+      // Fullscreen lifts the whole card to the modal layer (1100 — above the sidebar's 1000);
+      // windowed keeps the exact flex behaviour every existing layout depends on.
+      ...(isFullscreen
+        ? { position: 'fixed' as const, inset: 0, zIndex: 1100, borderRadius: 0, minHeight: 0 }
+        : { position: 'relative' as const, flex: fillContainer ? '1' : undefined, minHeight: fillContainer ? 0 : '380px' }),
+    }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '8px' }}>
         <h4 style={{ fontSize: '15px', fontWeight: 600 }}>Geographic Workspace Map</h4>
-        <MapLayerControls 
-          showBranches={showBranches} setShowBranches={setShowBranches}
-          showAssayers={showAssayers} setShowAssayers={setShowAssayers}
-          showRoutes={showRoutes} setShowRoutes={setShowRoutes}
-          showSlaRisk={showSlaRisk} setShowSlaRisk={setShowSlaRisk}
-          slaRadiusKm={slaRadiusKm} setSlaRadiusKm={setSlaRadiusKm}
-          showWorkforceDensity={showWorkforceDensity} setShowWorkforceDensity={setShowWorkforceDensity}
-          showRevenueDensity={showRevenueDensity} setShowRevenueDensity={setShowRevenueDensity}
-          mapStyle={mapStyle} setMapStyle={setMapStyle}
-          radiusKm={radiusKm} setRadiusKm={setRadiusKm}
-          searchQuery={searchQuery} setSearchQuery={setSearchQuery}
-          cityFilter={cityFilter} setCityFilter={setCityFilter}
-          branchStatusFilter={branchStatusFilter} setBranchStatusFilter={setBranchStatusFilter}
-          inline
-        />
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <button type="button" onClick={() => setIsFullscreen(f => !f)}
+            aria-label={isFullscreen ? 'Exit the bigger view' : 'Open the bigger view'}
+            title={isFullscreen ? 'Exit the bigger view (Esc)' : 'Bigger view'}
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, color: 'var(--text-primary)', cursor: 'pointer', padding: '6px 10px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', fontSize: '12px', font: 'inherit' }}>
+            {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            <span>{isFullscreen ? 'Exit' : 'Bigger view'}</span>
+          </button>
+          <MapLayerControls
+            showBranches={showBranches} setShowBranches={setShowBranches}
+            showAssayers={showAssayers} setShowAssayers={setShowAssayers}
+            showRoutes={showRoutes} setShowRoutes={setShowRoutes}
+            showSlaRisk={showSlaRisk} setShowSlaRisk={setShowSlaRisk}
+            slaRadiusKm={slaRadiusKm} setSlaRadiusKm={setSlaRadiusKm}
+            showWorkforceDensity={showWorkforceDensity} setShowWorkforceDensity={setShowWorkforceDensity}
+            showRevenueDensity={showRevenueDensity} setShowRevenueDensity={setShowRevenueDensity}
+            mapStyle={mapStyle} setMapStyle={setMapStyle}
+            radiusKm={radiusKm} setRadiusKm={setRadiusKm}
+            searchQuery={searchQuery} setSearchQuery={setSearchQuery}
+            cityFilter={cityFilter} setCityFilter={setCityFilter}
+            branchStatusFilter={branchStatusFilter} setBranchStatusFilter={setBranchStatusFilter}
+            colorMode={colorMode} setColorMode={setColorMode}
+            assayerClientFilter={assayerClientFilter} setAssayerClientFilter={setAssayerClientFilter}
+            assayerLifecycleFilter={assayerLifecycleFilter} setAssayerLifecycleFilter={setAssayerLifecycleFilter}
+            assayerAvailability={assayerAvailability} setAssayerAvailability={setAssayerAvailability}
+            clientOptions={clientOptions}
+            counts={assayerCounts}
+            visibleAssayerCount={filteredAssayers.length}
+            showAssayerLayer={showAssayers}
+            inline
+          />
+        </div>
       </div>
       
       <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
@@ -1023,17 +1279,52 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
               <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#6366f1' }} />
               <span>Selected Target</span>
             </div>
-            {/* Branch pin colours, generated from the same buckets that draw them. */}
-            {BRANCH_STATUS_LEGEND.map((entry) => (
-              <div key={entry.bucket} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: entry.hex }} />
-                <span>{entry.label}</span>
-              </div>
-            ))}
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#a855f7' }} />
-              <span>Assayer (Auditor)</span>
-            </div>
+            {colorMode === 'client' ? (
+              <>
+                {/* FILL = bank. One row per bank actually on this map, in the exact colours painting it. */}
+                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.4px', marginTop: '2px' }}>Fill · bank</div>
+                {clientOptions.slice(0, 16).map((c) => (
+                  <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: clientColorOf(c.id) }} />
+                    <span>{c.name}</span>
+                  </div>
+                ))}
+                {clientOptions.length > 16 && (
+                  <div style={{ color: 'var(--text-muted)' }}>+{clientOptions.length - 16} more banks</div>
+                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#cbd5e1', border: '1px solid rgba(51,65,85,0.5)' }} />
+                  <span>No active bank</span>
+                </div>
+                {/* RING = lifecycle. Independent of fill, so a terminated ICICI person reads as both. */}
+                <div style={{ fontSize: '9px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.4px', marginTop: '6px', borderTop: '1px solid var(--border-hair)', paddingTop: '6px' }}>Ring · status</div>
+                {[
+                  { c: 'rgba(255,255,255,0.9)', w: '1.5px', label: 'Active' },
+                  { c: '#38bdf8', w: '2px', label: 'Onboarding' },
+                  { c: '#f59e0b', w: '2.5px', label: 'Paused (suspended / leave / dormant)' },
+                  { c: '#ef4444', w: '2.5px', label: 'Out of workforce (terminated / resigned)' },
+                ].map((r) => (
+                  <div key={r.label} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ display: 'inline-block', width: '9px', height: '9px', borderRadius: '50%', background: '#64748b', boxSizing: 'border-box', border: `${r.w} solid ${r.c}` }} />
+                    <span>{r.label}</span>
+                  </div>
+                ))}
+              </>
+            ) : (
+              <>
+                {/* Branch pin colours, generated from the same buckets that draw them. */}
+                {BRANCH_STATUS_LEGEND.map((entry) => (
+                  <div key={entry.bucket} style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: entry.hex }} />
+                    <span>{entry.label}</span>
+                  </div>
+                ))}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span style={{ display: 'inline-block', width: '8px', height: '8px', borderRadius: '50%', background: '#a855f7' }} />
+                  <span>Assayer (Auditor)</span>
+                </div>
+              </>
+            )}
             <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
               <span style={{ display: 'inline-block', width: '10px', height: '10px', borderRadius: '50%', border: '1px dashed #ef4444', background: 'rgba(239,68,68,0.1)' }} />
               <span>🔥 High Audit Demand</span>
@@ -1089,7 +1380,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <div>
-              <b style={{ color: 'var(--accent)', fontSize: '13px' }}>{selectedAssayerForRouting.firstName} {selectedAssayerForRouting.lastName}</b>
+              <b style={{ color: 'var(--accent)', fontSize: '13px' }}>{selectedAssayerForRouting.displayName ?? [selectedAssayerForRouting.firstName, selectedAssayerForRouting.lastName].filter(Boolean).join(' ')}</b>
               <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Route to {selectedAssayerForRouting.branchName}</div>
             </div>
             <button type="button" aria-label="Close routing panel" onClick={() => setSelectedAssayerForRouting(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', fontSize: '14px' }}>&times;</button>

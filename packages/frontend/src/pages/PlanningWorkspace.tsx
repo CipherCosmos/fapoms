@@ -1508,8 +1508,11 @@ export const PlanningWorkspace: React.FC = () => {
       latitude: b.branch.latitude,
       longitude: b.branch.longitude,
       status: b.status,
+      // One project = one client, so every branch pin in this workspace shares the project
+      // client's colour in the map's colour-by-bank mode.
+      clientId: selectedProjectClientId ?? undefined,
     })),
-    [filteredBranches],
+    [filteredBranches, selectedProjectClientId],
   );
 
   const totalCount = branches.length;

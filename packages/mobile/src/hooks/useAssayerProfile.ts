@@ -165,6 +165,8 @@ export function useAssayerProfile(user: {
         latitude: p.latitude ?? prev.latitude,
         longitude: p.longitude ?? prev.longitude,
         preferredRegions: joinArr(p.preferredRegions, prev.preferredRegions),
+        // Server-computed each load — an unreliable map position the assayer is asked to fix.
+        locationNeedsConfirmation: !!p.locationNeedsConfirmation,
         };
         return merged;
       });

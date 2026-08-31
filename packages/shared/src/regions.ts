@@ -141,6 +141,23 @@ const LEGACY_REGION_ALIASES: Record<string, Region> = {
   'ne': Region.NORTH_EAST,
 };
 
+/**
+ * Despaced initials → the state they abbreviate (keys as they look AFTER normalisation and
+ * despacing, so "A.P", "A P" and "AP" are all one entry). Two-letter initials cannot collide
+ * with a real despaced state name, and each resolves through STATE_TO_REGION — never directly
+ * to a region — so there is exactly one place a state's region is declared.
+ */
+const STATE_ABBREVIATIONS: Record<string, string> = {
+  ap: 'andhra pradesh',
+  mp: 'madhya pradesh',
+  up: 'uttar pradesh',
+  cg: 'chhattisgarh',
+  hp: 'himachal pradesh',
+  wb: 'west bengal',
+  tn: 'tamil nadu',
+  jk: 'jammu and kashmir',
+};
+
 /** Lower-case, collapse whitespace, drop punctuation — so "J&K." and "j and k" agree. */
 function normalizeStateKey(value: string): string {
   return value
@@ -169,6 +186,13 @@ export function resolveRegion(value: string | null | undefined): Region | null {
 
   const exact = STATE_TO_REGION[key] ?? LEGACY_REGION_ALIASES[key];
   if (exact) return exact;
+
+  // The rosters write several states as dotted initials — "A.P", "M.P", "U.P" (135 people on
+  // the real file). Normalisation has already reduced those to bare letters; expand them to
+  // the state they mean and resolve through the same table, so the region mapping itself
+  // stays single-sourced.
+  const abbreviated = STATE_ABBREVIATIONS[key.replace(/\s/g, '')];
+  if (abbreviated) return STATE_TO_REGION[abbreviated] ?? null;
 
   // Branch imports routinely drop the space — "ANDRAPRADESH", "TAMILNADU", "WESTBENGAL".
   // Comparing with all spaces removed catches every such variant without needing an alias

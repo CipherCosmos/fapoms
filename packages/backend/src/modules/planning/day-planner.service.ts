@@ -858,7 +858,7 @@ export class DayPlannerService {
       if (!branchEntity) continue;
       /**
        * The branch's OWN client, not the plan's first one. `preloaded.client` becomes
-       * `PlanningContext.client`, which drives ClientRestrictionFilter (the assayers this bank
+       * `PlanningContext.client`, which drives ClientEligibilityFilter (the assayers this bank
        * has barred), ClientEligibilityFilter (its approved panel), DistancePolicyFilter and the
        * client-preference scorer. Sharing one client across a multi-client cluster silently
        * applied one bank's approvals — and one bank's exclusions — to another bank's branches.

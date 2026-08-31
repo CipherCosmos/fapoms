@@ -57,7 +57,9 @@ describe('the roster template round-trips through the importer', () => {
       'HR Name': 'Anita R',
       'Total Experience': '20 Years',
       'Active / Inactive': 'Active / Regular',
-      'Status': 'Active',
+      // An exit date beside "Active" is a contradiction the importer now flags; the sample row
+      // must be a coherent person, and this one has left.
+      'Status': 'Resigned',
       'Remarks': 'Reliable, prefers local work.',
       'Reference 1 Name': 'Ramesh K',
       'Reference 1 Contact': '9800000001',
@@ -70,6 +72,9 @@ describe('the roster template round-trips through the importer', () => {
       'CIBIL Date': '2025-01-15',
       'ICICI Status': 'Recommended',
       'ICICI Documents Required': 'PAN copy',
+      'Project Name': 'ICICI',
+      'Link for Document': 'https://drive.google.com/drive/folders/sample',
+      'Courier Date / Tracking number': '23-03-2026 / India Post / RX1234',
     };
     if (header in specific) return specific[header];
     if (documentLabels.has(header)) return 'Yes';
@@ -85,16 +90,33 @@ describe('the roster template round-trips through the importer', () => {
   function mockUow() {
     let idCounter = 1;
     const clients = [{ id: 'client-icici', name: 'ICICI Bank Ltd', displayName: 'ICICI' }];
+    // Empanelments are remembered so the create-only working-banks path sees what the ICICI
+    // path already wrote for the same (assayer, client) pair — as the real database would.
+    const empanelments = new Map<string, any>();
     const manager = {
       find: async () => clients,
-      findOne: async () => undefined,
+      findOne: async (entity: any, query: any) => {
+        if (entity?.name === 'AssayerClientEmpanelmentEntity') {
+          const w = query?.where ?? {};
+          return empanelments.get(`${w.assayerId}|${w.clientId}`);
+        }
+        return undefined;
+      },
       create: (_entity: unknown, obj: Record<string, any>) => ({ ...obj }),
-      save: async (_entity: unknown, obj: any) => {
+      save: async (entity: any, obj: any) => {
         if (obj && obj.id == null) obj.id = `id-${idCounter++}`;
+        if (entity?.name === 'AssayerClientEmpanelmentEntity') {
+          empanelments.set(`${obj.assayerId}|${obj.clientId}`, obj);
+        }
         return obj;
       },
     };
     return { run: (work: (m: any, emit: any) => Promise<any>) => work(manager, () => {}) };
+  }
+
+  /** Auto-create is a settings knob; the round-trip runs with it ON, as shipped. */
+  function mockSettings() {
+    return { get: jest.fn().mockResolvedValue(true) };
   }
 
   /** The precision hand-off is fire-and-forget; the import must not depend on it resolving. */
@@ -117,7 +139,7 @@ describe('the roster template round-trips through the importer', () => {
     xlsx.utils.book_append_sheet(filled, xlsx.utils.json_to_sheet([row], { header: headers }), 'Assayers');
     const filledBuffer = Buffer.from(xlsx.write(filled, { type: 'buffer', bookType: 'xlsx' }));
 
-    const service = new RosterImportService(mockUow() as any, mockGeoPrecision() as any);
+    const service = new RosterImportService(mockUow() as any, mockGeoPrecision() as any, mockSettings() as any);
     const summary = await service.importAssayerSheet(filledBuffer, 'test-user', { dryRun: true });
 
     // The row was read, placed, and nothing was refused or left unreadable.
@@ -130,7 +152,9 @@ describe('the roster template round-trips through the importer', () => {
 
     // The aux columns actually mapped — this is what a missing read-alias would break.
     expect(summary.references).toBe(2);
-    expect(summary.onboardingDocuments).toBe(expectedDocumentCount);
+    // +1: the courier reference for the ethical-conduct letter is a document-record write of
+    // its own (the letter's Yes/No cell is already counted among the columns).
+    expect(summary.onboardingDocuments).toBe(expectedDocumentCount + 1);
     expect(summary.backgroundChecks).toBe(1);
     expect(summary.empanelments).toBe(1);
   });
@@ -171,7 +195,7 @@ describe('the roster template round-trips through the importer', () => {
     xlsx.utils.book_append_sheet(wb, xlsx.utils.json_to_sheet([row], { header: headers }), 'Assayers');
     const buffer = xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' });
 
-    const service = new RosterImportService(uow as any, mockGeoPrecision() as any);
+    const service = new RosterImportService(uow as any, mockGeoPrecision() as any, mockSettings() as any);
     await service.importAssayerSheet(buffer, 'test-user', { dryRun: true });
 
     expect(saved.length).toBeGreaterThan(0);
@@ -192,7 +216,7 @@ describe('the roster template round-trips through the importer', () => {
     xlsx.utils.book_append_sheet(filled, xlsx.utils.json_to_sheet([row], { header: headers }), 'Assayers');
     const filledBuffer = Buffer.from(xlsx.write(filled, { type: 'buffer', bookType: 'xlsx' }));
 
-    const service = new RosterImportService(mockUow() as any, mockGeoPrecision() as any);
+    const service = new RosterImportService(mockUow() as any, mockGeoPrecision() as any, mockSettings() as any);
     const summary = await service.importAssayerSheet(filledBuffer, 'test-user', { dryRun: true });
 
     expect(summary.rowsRead).toBe(1);

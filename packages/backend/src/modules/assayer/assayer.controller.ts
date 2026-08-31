@@ -810,6 +810,23 @@ export class AssayerController {
   }
 
   /**
+   * The pool the live map draws. Eleven fields per person plus their bank empanelments and
+   * whether they are committed somewhere today — never the full record; the map renders pins,
+   * not dossiers. Region-scoped exactly like the list above, and passed through the same
+   * role-based redaction.
+   */
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+  @Get('/map-roster')
+  @ApiOperation({ summary: 'Every active assayer as the map needs them: pin facts, bank standings, committed-today' })
+  async mapRoster(@Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    const roster = await this.assayerService.mapRoster(scope);
+    return {
+      success: true,
+      data: scopeAssayerListForRoles(roster as any[], rolesOf(req.user), req.user?.id),
+    };
+  }
+
+  /**
    * The cells the roster import could not read.
    *
    * Declared above `@Get(':id')` deliberately: Nest matches in declaration order and that route's
@@ -948,6 +965,29 @@ export class AssayerController {
    * engine when live sharing is also enabled. Self-only — an assayer can only
    * update their own live position, never another assayer's.
    */
+  /**
+   * The assayer fixes their OWN base location on the map from the app. Distinct from
+   * live-location above: this is the home/base coordinate planning uses, saved as a manual pin
+   * (never re-geocoded). Self-only for an assayer; staff may set it for anyone.
+   */
+  @Put(':id/base-location')
+  @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @ApiOperation({ summary: 'Confirm the authenticated assayer\'s base location from their device GPS' })
+  async confirmBaseLocation(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateLiveLocationDto,
+    @Req() req: any,
+  ) {
+    const isStaff = rolesOf(req.user).some((r) => STAFF_ASSAYER_EDITORS.includes(r));
+    if (!isStaff && req.user?.id !== id) {
+      throw new ForbiddenException('You may only set your own location');
+    }
+    const assayer = await this.assayerService.confirmBaseLocation(
+      id, dto.latitude, dto.longitude, req.user?.id ?? id,
+    );
+    return { success: true, data: assayer };
+  }
+
   @Put(':id/live-location')
   @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Update the authenticated assayer\'s live location (opt-in)' })

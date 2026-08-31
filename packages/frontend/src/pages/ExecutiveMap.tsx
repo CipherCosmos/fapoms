@@ -123,6 +123,8 @@ export const ExecutiveMap: React.FC = () => {
       id: b.id, name: b.name, latitude: b.latitude, longitude: b.longitude,
       status: b.status, state: b.state, city: b.district ?? undefined,
       branchCode: b.branchCode ?? undefined,
+      // What the colour-by-bank mode paints branch pins with.
+      clientId: b.clientId, clientName: b.clientName,
     })),
     [visibleBranches],
   );

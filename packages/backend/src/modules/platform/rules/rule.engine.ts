@@ -20,7 +20,6 @@ export interface RuleEvaluationContext {
   target: RuleEvaluationTarget;
   scheduledDate: Date;
   activeWorkload?: number;
-  restrictedAssayers?: string[] | null;
 }
 
 export interface RuleResult {
@@ -77,7 +76,7 @@ export class RuleEngine {
   }
 
   private evaluateSingleRule(rule: BusinessRuleEntity, context: RuleEvaluationContext): RuleResult {
-    const { subject, target, scheduledDate, activeWorkload, restrictedAssayers } = context;
+    const { subject, target, scheduledDate, activeWorkload } = context;
     const cond = rule.conditions || {};
     const action = rule.actions || {};
     const actionType = (action.type as 'BLOCK' | 'SCORE_ADJUSTMENT' | 'ALERT') || 'BLOCK';
@@ -158,17 +157,8 @@ export class RuleEngine {
       }
     }
 
-    // 5. Client Restriction
-    if (rule.ruleType === 'PREFERENCE' && restrictedAssayers) {
-      if (restrictedAssayers.includes(subject.id)) {
-        return {
-          passed: false,
-          actionType,
-          scoreModifier,
-          message: `Assayer restricted by client preferences`,
-        };
-      }
-    }
+    // There is deliberately no PREFERENCE/restricted-assayers branch here: the client's
+    // restricted list is enforced by ClientEligibilityFilter, the one per-client gate.
 
     return { passed: true, actionType: 'ALERT' };
   }

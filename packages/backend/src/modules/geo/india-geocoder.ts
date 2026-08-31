@@ -605,6 +605,29 @@ export async function geocodeIndiaRobust(
   // Tier 3: Pincode centroid (India Post, else OSM)
   if (pinCoord) return pinCoord;
 
+  // Tier 3.4: Pincode centroid WITHOUT the district-name gate.
+  //
+  // `pincodeCentroid` above rejects a perfectly-located pincode area when the roster's district
+  // label does not textually match OSM's postcode-area district — a name disagreement, not a
+  // location one. That gate is right when a better candidate exists to fall back to; but the
+  // only things left below are the district centroid (~15 km) and the state centroid (~100 km),
+  // and a pincode area (~3 km) beats both even when the district label is off. On the real
+  // roster this is the difference between placing someone in their own town and dropping them
+  // 200 km away at the middle of the state. The state check inside still applies, so a typo'd
+  // pincode in the wrong state is still refused.
+  if (options?.precise !== false && pin) {
+    const loosePin = await pincodeCentroid(pin, state, null).catch(() => null);
+    if (loosePin) {
+      return {
+        lat: loosePin.lat,
+        lng: loosePin.lng,
+        accuracyMeters: loosePin.accuracyMeters,
+        source: loosePin.precision,
+        matchedName: loosePin.matchedName,
+      };
+    }
+  }
+
   // Tier 3.5: District centroid from OSM. The self-hosted Nominatim carries every Indian district,
   // so when the pincode is unknown and the specific address did not resolve, this places the record
   // in its own district (~15 km) instead of collapsing it onto the shared state centroid below. It

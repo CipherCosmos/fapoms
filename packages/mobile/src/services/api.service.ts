@@ -630,6 +630,37 @@ export class MobileApiService {
     }
   }
 
+  /**
+   * The assayer confirms their base location on the map from their device GPS.
+   *
+   * Distinct from `updateAssayerProfile` on purpose: this hits the base-location route, which
+   * stores the fix as a MANUAL pin the nightly geocoder never overwrites. Saving the same
+   * coordinate through the generic profile update would leave it re-geocodable — the next sweep
+   * would move the person back to the wrong place the roster had put them.
+   */
+  static async confirmBaseLocation(
+    assayerId: string,
+    latitude: number,
+    longitude: number,
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/${assayerId}/base-location`, {
+        method: 'PUT',
+        body: JSON.stringify({ latitude, longitude }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data?.success === false) {
+        return {
+          success: false,
+          error: Array.isArray(data?.message) ? data.message.join(', ') : (data?.message || 'Could not save your location.'),
+        };
+      }
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'Network error saving your location' };
+    }
+  }
+
   static async updateAssayerProfile(assayerId: string, profileData: any): Promise<{ success: boolean; error?: string }> {
     const toArray = (v: any): string[] =>
       Array.isArray(v) ? v : String(v ?? '').split(',').map((s) => s.trim()).filter(Boolean);

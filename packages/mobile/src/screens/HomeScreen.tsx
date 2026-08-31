@@ -9,6 +9,7 @@ import { StatsScreen } from './StatsScreen';
 import { countOpenQueries, countResolvedQueries } from '../utils/queries';
 import { assignmentFeeValue } from '../utils/fees';
 import type { AssayerAssignment, AssayerStatement, ExpenseSummary } from '../types/mobile-app';
+import { LocationConfirmBanner } from '../components/LocationConfirmBanner';
 
 export interface HomeScreenProps {
   assignments: AssayerAssignment[];
@@ -33,6 +34,10 @@ export interface HomeScreenProps {
   /** Set when the list came from cache because the last refresh failed. */
   stale?: boolean;
   lastSyncedAt?: string | null;
+  /** The signed-in assayer's id and whether the server flagged their map location as unreliable. */
+  assayerId?: string;
+  locationNeedsConfirmation?: boolean;
+  onLocationConfirmed?: () => void;
 }
 
 const isSameDay = (iso: string, day: Date): boolean => {
@@ -78,6 +83,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   busyActionId,
   stale,
   lastSyncedAt,
+  assayerId,
+  locationNeedsConfirmation,
+  onLocationConfirmed,
 }) => {
   const t = useTheme();
 
@@ -131,6 +139,14 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           })}
         </AppText>
       </View>
+
+      {/*
+        Placing themselves on the map: shown only to assayers the server flagged, so the ~75
+        with a coarse or missing position see it and the 1,080 already pinned never do.
+      */}
+      {locationNeedsConfirmation && assayerId && (
+        <LocationConfirmBanner assayerId={assayerId} onConfirmed={onLocationConfirmed} />
+      )}
 
       {/*
         Says plainly that the screen is not live. Without this an assayer in a vault cannot

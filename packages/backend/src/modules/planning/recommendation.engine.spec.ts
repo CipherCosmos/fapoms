@@ -6,7 +6,6 @@ import {
   DeployabilityFilter,
   AvailabilityFilter,
   ConsecutiveBranchAuditFilter,
-  ClientRestrictionFilter,
   ClientEligibilityFilter,
   RuleEngineEligibilityFilter,
   RequiredSkillsFilter,
@@ -172,9 +171,15 @@ describe('RecommendationEngine', () => {
     loadScoringWindow: jest.fn().mockResolvedValue({}),
   };
 
-  /** `planning.fairnessOfferCap`; 8 is the shipped default. */
+  /**
+   * `planning.fairnessOfferCap`; 8 is the shipped default. The no-empanelment-row policy is
+   * stubbed to ALLOW: these tests exercise the OTHER filters and scorers with fixtures that
+   * predate empanelment rows, and the strict gate has its own truth-table spec
+   * (empanelment-eligibility.spec.ts).
+   */
   const mockPlatformSettings = {
     getNumber: jest.fn().mockResolvedValue(8),
+    get: jest.fn().mockResolvedValue('ALLOW'),
   };
 
   const mockRuleEngine = {
@@ -208,8 +213,7 @@ describe('RecommendationEngine', () => {
         DeployabilityFilter,
         AvailabilityFilter,
         ConsecutiveBranchAuditFilter,
-        ClientRestrictionFilter,
-        ClientEligibilityFilter,
+              ClientEligibilityFilter,
         RuleEngineEligibilityFilter,
         RequiredSkillsFilter,
         DistancePolicyFilter,

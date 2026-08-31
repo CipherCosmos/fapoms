@@ -14,11 +14,13 @@ import { AssayerStateMachine } from './assayer.state-machine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
-import { EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS } from '@fapoms/shared';
+import { EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey } from '@fapoms/shared';
+import { COMMITTED_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { geocodeIndia, pincodeAuthority } from '../geo/india-geocoder';
 import { parseSheet, rowReader, describeMissingColumn } from '../../core/excel/sheet-reader';
-import { resolveCoordinates, needsBetterFix, GeoFields } from '../geo/coordinate-resolution';
+import { resolveCoordinates, needsBetterFix, isPlausibleIndianCoord, GeoFields } from '../geo/coordinate-resolution';
+import { reverseFreely } from '../geo/osm-geocoder';
 
 /**
  * Resolves an assayer's home coordinates using ONLY the shared Google geocoder.
@@ -489,6 +491,81 @@ export class AssayerService implements OnModuleInit {
     return { assayers, total };
   }
 
+  /**
+   * The pool the live map draws — every active assayer with exactly the facts a pin needs and
+   * nothing else. The map used to fetch the full entity list (78 columns of HR, banking and
+   * KYC detail for a layer that renders a dot), and it fetched it unscoped. This read selects
+   * eleven fields, honours the region scope the way findAll does, and answers the two
+   * questions the roster row cannot: which banks the person is empanelled with (one grouped
+   * query, client names joined) and whether they are already committed somewhere today.
+   */
+  async mapRoster(scope?: Partial<GlobalScope>): Promise<Array<Record<string, unknown>>> {
+    const where: Record<string, unknown> = { isActive: true };
+    if (scope?.regions?.length) where.region = In(scope.regions);
+
+    const assayers = await this.assayerRepository.find({
+      select: [
+        'id', 'assayerCode', 'displayName', 'phone', 'status', 'lifecycleStatus',
+        'latitude', 'longitude', 'state', 'district', 'geoSource', 'geoAccuracyMeters',
+      ],
+      where,
+      order: { displayName: 'ASC' },
+    });
+    if (!assayers.length) return [];
+    const ids = assayers.map((a) => a.id);
+
+    const empanelmentRows: Array<{ assayer_id: string; client_id: string; status: string; client_name: string }> =
+      await this.assayerRepository.manager.query(
+        `SELECT e.assayer_id, e.client_id, e.status, c.name AS client_name
+           FROM assayer_client_empanelments e
+           JOIN clients c ON c.id = e.client_id AND c.is_active = true
+          WHERE e.is_active = true AND e.assayer_id = ANY($1)
+          ORDER BY c.name`,
+        [ids],
+      );
+    const empanelmentsByAssayer = new Map<string, Array<{ clientId: string; clientName: string; status: string }>>();
+    for (const r of empanelmentRows) {
+      const list = empanelmentsByAssayer.get(r.assayer_id) ?? [];
+      list.push({ clientId: r.client_id, clientName: r.client_name, status: r.status });
+      empanelmentsByAssayer.set(r.assayer_id, list);
+    }
+
+    // Committed work only (accepted / checked in / in progress) — a PENDING offer is not
+    // "working today", it is a question they have not answered.
+    const workRows: Array<{ assayer_id: string; open: number; today: number }> =
+      await this.assayerRepository.manager.query(
+        `SELECT assayer_id,
+                COUNT(*)::int AS open,
+                COUNT(*) FILTER (WHERE scheduled_date = $2)::int AS today
+           FROM assignments
+          WHERE is_active = true AND status = ANY($3) AND assayer_id = ANY($1)
+          GROUP BY assayer_id`,
+        [ids, businessDateKey(new Date()), COMMITTED_ASSIGNMENT_STATUSES],
+      );
+    const workByAssayer = new Map(workRows.map((r) => [r.assayer_id, r]));
+
+    return assayers.map((a) => ({
+      id: a.id,
+      assayerCode: a.assayerCode,
+      displayName: a.displayName,
+      phone: a.phone,
+      status: a.status,
+      lifecycleStatus: a.lifecycleStatus,
+      latitude: a.latitude,
+      longitude: a.longitude,
+      // Approximate when there is no fix yet, OR the fix is coarser than a pincode (a district
+      // or state centroid — the record's own address didn't resolve, usually because its state
+      // and pincode disagree). Either way the pin is an area, not an address, and the popup
+      // says so rather than letting a 100 km-wide guess read as someone's doorstep.
+      approxLocation: a.latitude != null && (!a.geoSource || Number(a.geoAccuracyMeters ?? 0) > 3000),
+      state: a.state,
+      district: a.district,
+      empanelments: empanelmentsByAssayer.get(a.id) ?? [],
+      assignedToday: (workByAssayer.get(a.id)?.today ?? 0) > 0,
+      openAssignments: workByAssayer.get(a.id)?.open ?? 0,
+    }));
+  }
+
   async findOne(id: string): Promise<AssayerEntity> {
     const assayer = await this.assayerRepository.findOne({ where: { id, isActive: true } });
     if (!assayer) throw new NotFoundException(`Assayer ${id} not found.`);
@@ -789,6 +866,59 @@ export class AssayerService implements OnModuleInit {
       liveLocation: { type: 'Point', coordinates: [longitude, latitude] } as any,
       updatedBy: userId ?? id,
     });
+
+    return this.findOne(id);
+  }
+
+  /**
+   * The assayer fixes their OWN base location from the app — the home/base coordinate the map
+   * and planning use, not the transient live position above.
+   *
+   * The roster placed people by geocoding a hand-typed address, which for ~75 of them lands a
+   * town or a whole state away (a pincode that disagrees with the recorded state, or no address
+   * at all). The person standing at the spot is the one authority that beats every geocoder, so
+   * their own GPS fix is stored as a MANUAL pin — 5–10 m, and never overwritten by a later
+   * geocoding sweep, exactly like an ops-placed pin.
+   *
+   * Because the device fix is ground truth, it is trusted over the record's stale text: if a
+   * reverse lookup confidently reports a different state, the state, district and region are
+   * corrected to match where the person actually is — which is precisely the data error that
+   * put them on the wrong part of the map to begin with. `pinManually`'s reject-on-mismatch is
+   * deliberately NOT used here: that guard protects a typed coordinate from being transposed,
+   * but it would block the very people this flow exists to help.
+   */
+  async confirmBaseLocation(id: string, latitude: number, longitude: number, userId?: string): Promise<AssayerEntity> {
+    await this.findOne(id);
+    if (!isPlausibleIndianCoord(latitude, longitude)) {
+      throw new BadRequestException(
+        `${latitude}, ${longitude} is not a location in India. Check that location access is on and try again.`,
+      );
+    }
+
+    const update: Record<string, unknown> = {
+      latitude,
+      longitude,
+      location: { type: 'Point', coordinates: [longitude, latitude] } as any,
+      geoSource: 'manual',
+      geoAccuracyMeters: 10,
+      geoMatchedName: 'Confirmed by the assayer in the app',
+      geoResolvedAt: new Date(),
+      updatedBy: userId ?? id,
+    };
+
+    // Ground truth from the device fixes the address text too, when a reverse lookup is
+    // confident and disagrees — best-effort, so a lookup outage never blocks the pin.
+    const actual = await reverseFreely({ lat: latitude, lng: longitude }).catch(() => null);
+    if (actual?.state) {
+      const region = resolveRegion(actual.state);
+      if (region) update.region = region;
+      if (actual.district) update.district = actual.district;
+    }
+
+    await this.assayerRepository.update(id, update as any);
+    await this.recordActivity(id, 'ASSAYER_CONFIRMED_LOCATION', null, null, userId ?? id,
+      `Base location set by the assayer to ${latitude.toFixed(5)}, ${longitude.toFixed(5)} from the app.`)
+      .catch(() => undefined);
 
     return this.findOne(id);
   }
@@ -1448,6 +1578,16 @@ export class AssayerService implements OnModuleInit {
     const activeCommercial = await this.getActiveCommercialProfile(target.id, new Date()).catch(() => null);
     (target as any).activeCommercialProfile = activeCommercial;
 
+    // 5. Does this person need to fix where they are on the map? True when there is no fix, or
+    // the fix is coarser than a pincode (~3 km) — a district or state centroid, usually because
+    // their recorded state and pincode disagree. A manual pin (they confirmed it, or ops did)
+    // is never flagged. The app reads this to decide whether to prompt them on sign-in.
+    (target as any).locationNeedsConfirmation =
+      (target as any).geoSource !== 'manual'
+      && (target.latitude == null
+        || (target as any).geoSource == null
+        || Number((target as any).geoAccuracyMeters ?? 0) > 3000);
+
     return target;
   }
 
@@ -1819,6 +1959,10 @@ export class AssayerService implements OnModuleInit {
       // ── Client empanelment ──
       { field: 'ICICI Status', required: 'No', description: 'Where this appraiser stands with ICICI, e.g. Recommended, Not Recommended, Active, Rejected. Recorded against the ICICI client.' },
       { field: 'ICICI Documents Required', required: 'No', description: 'Which documents ICICI still needs before empanelment, if any.' },
+
+      { field: 'Project Name', required: 'No', description: 'Every bank this appraiser works for, separated by slashes, e.g. "AXIS / AU FINANCE / IDFC". Each named bank becomes an active standing with that client; a bank not yet in the system is created automatically with minimal details (the import summary lists what to complete).' },
+      { field: 'Link for Document', required: 'No', description: 'Link to the folder holding this appraiser\'s scanned documents (e.g. a Google Drive share). Shown on their profile.' },
+      { field: 'Courier Date / Tracking number', required: 'No', description: 'Courier reference for the signed ethical-conduct letter on its way in, as written, e.g. "23-03-2026 / India Post / RX1234".' },
     ];
 
     const headers = columns.map((c) => c.field);

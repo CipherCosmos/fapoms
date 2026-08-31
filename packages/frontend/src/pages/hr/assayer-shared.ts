@@ -66,6 +66,7 @@ export interface Assayer {
   dateOfBirth?: string | null;
   qualification?: string | null;
   vstsCode?: string | null;
+  documentsLink?: string | null;
   hrOwnerName?: string | null;
   engagementType?: string | null;
   unavailableReason?: string | null;

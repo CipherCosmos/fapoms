@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { GeoPrecisionService } from '../geo/geo-precision.service';
+import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import * as xlsx from 'xlsx';
 import {
   AssayerLifecycleStatus, Region, resolveRegion,
@@ -72,6 +73,7 @@ export class RosterImportService {
   constructor(
     private readonly uow: UnitOfWork,
     private readonly geoPrecision: GeoPrecisionService,
+    private readonly platformSettings: PlatformSettingsService,
   ) {}
 
   async importAssayerSheet(
@@ -89,22 +91,55 @@ export class RosterImportService {
     }
     const rows: Record<string, any>[] = xlsx.utils.sheet_to_json(sheet, { defval: null });
 
+    /**
+     * Hyperlink cells hold their URL in the cell's link attribute, not its text —
+     * `sheet_to_json` returns "Vijay Varma, Amravati - Google Drive" where the actual Drive
+     * URL lives in `.l.Target`. For the one column that IS a link, walk the sheet directly
+     * and put the target where the reader will find it; the display text is not the fact.
+     */
+    try {
+      const range = xlsx.utils.decode_range(sheet['!ref'] ?? 'A1');
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        const header = String(sheet[xlsx.utils.encode_cell({ c, r: range.s.r })]?.v ?? '').trim().toLowerCase();
+        if (header !== 'link for document' && header !== 'link for documents') continue;
+        for (let r = range.s.r + 1; r <= range.e.r; r++) {
+          const target = (sheet[xlsx.utils.encode_cell({ c, r })] as any)?.l?.Target;
+          const rowObj = rows[r - range.s.r - 1];
+          if (target && rowObj) rowObj['Link for Document'] = target;
+        }
+      }
+    } catch { /* a malformed range only costs the links, never the import */ }
+
     const summary: RosterImportSummary = {
       rowsRead: rows.length, created: 0, updated: 0, skipped: 0,
       references: 0, onboardingDocuments: 0, backgroundChecks: 0, empanelments: 0,
       issues: 0, notes: [], dryRun,
     };
 
-    /** Clients the roster refers to that this system does not have. Counted, reported once. */
-    const missingClients = new Map<string, number>();
-
     /** Everyone a real run saved — handed to the geo precision queue after the commit. */
     const importedIds: string[] = [];
+
+    // Whether a bank named in the roster but unknown to this system becomes a client stub on
+    // the spot. Default ON: "create the client yourself and re-import" turned out to mean the
+    // per-bank data was simply lost until someone did, and the roster names ~20 lenders.
+    const autoCreateClients =
+      (await this.platformSettings.get<boolean>('roster.autoCreateClients').catch(() => true)) !== false;
+
+    /**
+     * The same PAN, phone or email under two different appraiser codes is almost always one
+     * person who was registered twice (the file really has these: an AS-series and an AD-series
+     * code sharing all three). Noted for a human — never auto-merged: two brothers can share a
+     * phone, and a merge that guesses wrong destroys a real person's history.
+     */
+    const identitySeen: Record<string, Map<string, string>> = {
+      PAN: new Map(), phone: new Map(), email: new Map(),
+    };
+    const duplicatePairs = new Map<string, Set<string>>();
 
     await this.uow.run(async (manager) => {
       // Resolved once, inside the transaction so it reads the same snapshot the import writes
       // against: a lookup per row over 1,155 rows would be 1,155 queries for two answers.
-      const clientsByName = await this.clientsByLooseName(manager);
+      const clients = await this.buildClientResolver(manager, autoCreateClients, actorId);
       for (const [index, row] of rows.entries()) {
         // +2: one for the header, one because a spreadsheet's first data row is row 2 to the
         // person who will go and look at it.
@@ -146,7 +181,7 @@ export class RosterImportService {
         const assayer = existing ?? manager.create(AssayerEntity, { assayerCode: code });
         const isNew = !existing;
 
-        this.applyIdentity(assayer, read);
+        this.applyIdentity(assayer, read, sourceRow, sheetName, issues);
         this.applyContact(assayer, read, sourceRow, sheetName, code, issues);
         this.applyEmployment(assayer, read, sourceRow, sheetName, code, issues);
 
@@ -169,22 +204,36 @@ export class RosterImportService {
           manager, assayerId, read, sourceRow, sheetName, code, issues,
         );
         summary.empanelments += await this.applyEmpanelments(
-          manager, assayerId, read, clientsByName, missingClients, sourceRow, sheetName, code, issues,
+          manager, assayerId, read, clients, sourceRow, sheetName, code, issues,
         );
-        summary.empanelments += await this.applyWorkingBanks(
-          manager, assayerId, read, clientsByName, missingClients,
-        );
+        summary.empanelments += await this.applyWorkingBanks(manager, assayerId, read, clients);
+
+        for (const [kind, value] of [
+          ['PAN', assayer.panNumber], ['phone', assayer.phone], ['email', assayer.email],
+        ] as const) {
+          if (!value) continue;
+          const key = String(value).toLowerCase();
+          const holder = identitySeen[kind].get(key);
+          if (holder && holder !== code) {
+            const pair = [holder, code].sort().join(' and ');
+            (duplicatePairs.get(pair) ?? duplicatePairs.set(pair, new Set()).get(pair)!).add(kind);
+          } else if (!holder) {
+            identitySeen[kind].set(key, code);
+          }
+        }
 
         summary.issues += issues.length;
         if (issues.length) await this.saveIssues(manager, issues, assayerId, code);
       }
 
-      for (const [name, count] of missingClients) {
+      for (const [pair, kinds] of duplicatePairs) {
         summary.notes.push(
-          `${count} appraisers carry a standing with "${name}", which is not a client in this `
-          + `system yet. Create the client and run the import again to bring those in.`,
+          `${pair} share the same ${[...kinds].join(', ')} — likely one person registered under two codes. `
+          + `Review both records and retire one; nothing was merged automatically.`,
         );
       }
+
+      clients.flushNotes(summary, dryRun);
 
       if (dryRun) {
         // Everything above ran against the real tables; rolling back is what makes it a
@@ -233,7 +282,10 @@ export class RosterImportService {
     a.state = a.state || '';
   }
 
-  private applyIdentity(a: AssayerEntity, read: ReturnType<typeof rowReader>): void {
+  private applyIdentity(
+    a: AssayerEntity, read: ReturnType<typeof rowReader>,
+    sourceRow: number, sheet: string, issues: Partial<AssayerImportIssueEntity>[],
+  ): void {
     const fullName = blankToNull(read('Appraiser Name', 'Assayer Name', 'Name'));
     if (fullName) {
       a.displayName = fullName;
@@ -244,11 +296,49 @@ export class RosterImportService {
       a.firstName = a.firstName || (parts.length > 1 ? parts.slice(0, -1).join(' ') : parts[0]) || fullName;
       a.lastName = a.lastName || (parts.length > 1 ? parts[parts.length - 1] : parts[0]) || fullName;
     }
-    a.panNumber = blankToNull(read('PAN Number')) ?? a.panNumber ?? null;
-    a.aadhaarNumber = blankToNull(read('Aadhar Card Number', 'Aadhaar Card Number')) ?? a.aadhaarNumber ?? null;
-    a.dateOfBirth = this.readDate(read('D.O.B', 'DOB', 'Date of Birth')) ?? a.dateOfBirth ?? null;
+    /**
+     * Identity numbers are format-checked before they are stored. On the real roster the
+     * Aadhaar column doubles as a status note — 129 cells hold the word "Inactive" — and the
+     * first version of this importer stored those words verbatim, encrypted, as Aadhaar
+     * numbers. A wrong shape goes to review, never into an identity field.
+     */
+    a.panNumber = this.readShaped(read('PAN Number'), /^[A-Z]{5}\d{4}[A-Z]$/i,
+      'Not a PAN (expected five letters, four digits, one letter).',
+      { issues, sourceRow, sheet, column: 'PAN Number' }) ?? a.panNumber ?? null;
+    a.aadhaarNumber = this.readShaped(read('Aadhar Card Number', 'Aadhaar Card Number'), /^\d{12}$/,
+      'Not an Aadhaar number (expected 12 digits).',
+      { issues, sourceRow, sheet, column: 'Aadhar Card Number' }) ?? a.aadhaarNumber ?? null;
+    a.dateOfBirth = this.readDate(read('D.O.B', 'DOB', 'Date of Birth'),
+      { issues, sourceRow, sheet, column: 'D.O.B' }) ?? a.dateOfBirth ?? null;
     a.qualification = blankToNull(read('Qualification')) ?? a.qualification ?? null;
     a.vstsCode = blankToNull(read('VSTS CODE', 'VSTS ID')) ?? a.vstsCode ?? null;
+    {
+      // Only a real URL is a documents link. When the hyperlink target was stripped (a
+      // re-saved file, a pasted-as-text cell), the remaining display text is a caption, not
+      // an address — storing it would render a link that navigates nowhere.
+      const rawLink = blankToNull(read('Link for Document', 'Link for Documents'));
+      if (rawLink && /^https?:\/\//i.test(rawLink)) a.documentsLink = rawLink;
+      a.documentsLink = a.documentsLink ?? null;
+    }
+  }
+
+  /**
+   * A cell that must match a shape or go to review. "N.A" and its variants are simply blank —
+   * the roster's way of writing nothing — and raise no issue.
+   */
+  private readShaped(
+    raw: unknown, shape: RegExp, reason: string,
+    ctx: { issues: Partial<AssayerImportIssueEntity>[]; sourceRow: number; sheet: string; column: string },
+  ): string | null {
+    const s = blankToNull(raw);
+    if (!s || /^n\.?a\.?$/i.test(s) || s === '-') return null;
+    const compact = s.replace(/\s+/g, '');
+    if (shape.test(compact)) return compact.toUpperCase();
+    ctx.issues.push({
+      sourceSheet: ctx.sheet, sourceRow: ctx.sourceRow, sourceColumn: ctx.column, rawValue: s.slice(0, 100),
+      reason,
+    });
+    return null;
   }
 
   private applyContact(
@@ -270,7 +360,32 @@ export class RosterImportService {
       }
     }
 
-    a.email = blankToNull(read('Email ID', 'Email')) ?? a.email ?? null;
+    /**
+     * Email cells on the real file hold two addresses ("a@x / b@y") or typos ("!"; ","). The
+     * first valid address is kept — losing the second is the note-to-review's job to fix —
+     * and a cell with no readable address at all goes to review.
+     */
+    {
+      const rawEmail = blankToNull(read('Email ID', 'Email'));
+      if (rawEmail) {
+        const firstValid = rawEmail.split(/[\s\/,;]+/).find((t) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(t)) ?? null;
+        if (firstValid) {
+          a.email = firstValid.toLowerCase();
+          if (firstValid.length < rawEmail.replace(/\s+/g, '').length) {
+            issues.push({
+              sourceSheet: sheet, sourceRow, sourceColumn: 'Email ID', rawValue: rawEmail.slice(0, 150),
+              reason: `The cell holds more than one address; "${firstValid.toLowerCase()}" was kept.`,
+            });
+          }
+        } else {
+          issues.push({
+            sourceSheet: sheet, sourceRow, sourceColumn: 'Email ID', rawValue: rawEmail.slice(0, 150),
+            reason: 'Not a readable email address.',
+          });
+        }
+      }
+      a.email = a.email ?? null;
+    }
     a.address = blankToNull(read('Residence Address', 'Address')) ?? a.address ?? null;
     a.city = blankToNull(read('Location', 'City')) ?? a.city ?? null;
     a.district = blankToNull(read('District')) ?? a.district ?? null;
@@ -321,15 +436,19 @@ export class RosterImportService {
 
     a.bankName = blankToNull(read('Bank Name')) ?? a.bankName ?? null;
     a.bankAccountNumber = blankToNull(read('A/c Number', 'Account Number')) ?? a.bankAccountNumber ?? null;
-    a.ifscCode = blankToNull(read('IFSC Code')) ?? a.ifscCode ?? null;
+    a.ifscCode = this.readShaped(read('IFSC Code'), /^[A-Z]{4}0[A-Z0-9]{6}$/i,
+      'Not an IFSC code (expected 4 letters, a zero, then 6 characters) — payments to this account would fail.',
+      { issues, sourceRow, sheet, column: 'IFSC Code' }) ?? a.ifscCode ?? null;
   }
 
   private applyEmployment(
     a: AssayerEntity, read: ReturnType<typeof rowReader>,
     sourceRow: number, sheet: string, code: string, issues: Partial<AssayerImportIssueEntity>[],
   ): void {
-    a.joiningDate = this.readDate(read('Joining Date')) ?? a.joiningDate ?? null;
-    a.exitDate = this.readDate(read('Exit Date')) ?? a.exitDate ?? null;
+    a.joiningDate = this.readDate(read('Joining Date'), { issues, sourceRow, sheet, column: 'Joining Date' })
+      ?? a.joiningDate ?? null;
+    a.exitDate = this.readDate(read('Exit Date'), { issues, sourceRow, sheet, column: 'Exit Date' })
+      ?? a.exitDate ?? null;
     a.hrOwnerName = blankToNull(read('HR NAME', 'HR Name')) ?? a.hrOwnerName ?? null;
     a.notes = blankToNull(read('Remarks')) ?? a.notes ?? null;
 
@@ -370,6 +489,17 @@ export class RosterImportService {
     else if (availability.onHold) a.lifecycleStatus = AssayerLifecycleStatus.SUSPENDED;
     else if (availability.available === false) a.lifecycleStatus = AssayerLifecycleStatus.INACTIVE;
     // else: left as it was. An unknown availability is not a reason to change somebody's status.
+
+    // An exit date on someone the same sheet marks Active is a contradiction only a person can
+    // settle — either the exit is stale or the availability is (both occur on the real file).
+    // The availability wins for the stored status; the disagreement goes to review.
+    if (a.exitDate && a.lifecycleStatus === AssayerLifecycleStatus.ACTIVE) {
+      issues.push({
+        sourceSheet: sheet, sourceRow, sourceColumn: 'Exit Date',
+        rawValue: String(read('Exit Date') ?? ''),
+        reason: 'Has an exit date but the sheet marks them Active — settle which is true.',
+      });
+    }
   }
 
   // ── The related rows ─────────────────────────────────────────────────────
@@ -448,6 +578,25 @@ export class RosterImportService {
         // storing each of them is what made "which originals are in Bangalore?" unanswerable.
         hardCopyLocation: readHardCopyLocation(ndaHard),
       });
+    }
+
+    // The roster tracks one courier: the signed ethical-conduct letter on its way in — the
+    // column sits directly beside "Letter for Commitment on Ethical Conduct" and reads like
+    // "23-03-2026 / India Post / RX123…". Free text, stored verbatim as the courier reference
+    // on that document's row; the document entity had the field, the importer just never
+    // filled it.
+    const courier = blankToNull(read('Courier Date / Tracking number', 'Courier Date/Tracking number'));
+    if (courier) {
+      const existing = await manager.findOne(AssayerDocumentEntity, {
+        where: { assayerId, requirement: OnboardingDocument.ETHICAL_CONDUCT_LETTER },
+      });
+      await manager.save(AssayerDocumentEntity, {
+        ...(existing ?? {}),
+        assayerId,
+        requirement: OnboardingDocument.ETHICAL_CONDUCT_LETTER,
+        courierReference: courier.slice(0, 200),
+      });
+      written++;
     }
     return written;
   }
@@ -536,7 +685,7 @@ export class RosterImportService {
 
   private async applyEmpanelments(
     manager: any, assayerId: string, read: ReturnType<typeof rowReader>,
-    clientsByName: Map<string, string>, missingClients: Map<string, number>,
+    clients: Awaited<ReturnType<RosterImportService['buildClientResolver']>>,
     sourceRow: number, sheet: string, code: string,
     issues: Partial<AssayerImportIssueEntity>[],
   ): Promise<number> {
@@ -545,13 +694,8 @@ export class RosterImportService {
     const raw = blankToNull(read('ICICI Status'));
     if (!raw) return 0;
 
-    const clientId = clientsByName.get(vocabularyKey('ICICI'));
-    if (!clientId) {
-      // Counted for the summary, not written per row: one absent client is one fact, and the
-      // first version of this produced 697 identical review items out of 1,155 rows.
-      missingClients.set('ICICI', (missingClients.get('ICICI') ?? 0) + 1);
-      return 0;
-    }
+    const clientId = await clients.resolve('ICICI');
+    if (!clientId) return 0;
 
     const status = readEmpanelment(raw);
     if (!status) {
@@ -591,16 +735,13 @@ export class RosterImportService {
    */
   private async applyWorkingBanks(
     manager: any, assayerId: string, read: ReturnType<typeof rowReader>,
-    clientsByName: Map<string, string>, missingClients: Map<string, number>,
+    clients: Awaited<ReturnType<RosterImportService['buildClientResolver']>>,
   ): Promise<number> {
     const banks = readWorkingBanks(read('Project Name'));
     let written = 0;
     for (const bank of banks) {
-      const clientId = clientsByName.get(vocabularyKey(bank)) ?? clientsByName.get(vocabularyKey(bank).split(' ')[0]);
-      if (!clientId) {
-        missingClients.set(bank, (missingClients.get(bank) ?? 0) + 1);
-        continue;
-      }
+      const clientId = await clients.resolve(bank);
+      if (!clientId) continue;
       const existing = await manager.findOne(AssayerClientEmpanelmentEntity, { where: { assayerId, clientId } });
       if (existing) continue;
       await manager.save(AssayerClientEmpanelmentEntity, {
@@ -652,37 +793,183 @@ export class RosterImportService {
   }
 
   /** Clients by a loosened name, so "ICICI Bank Ltd" answers to "ICICI". */
-  private async clientsByLooseName(manager: any): Promise<Map<string, string>> {
+  /**
+   * The one place a roster bank name becomes a client id — matching in confidence tiers, and
+   * (policy-controlled) creating a minimal client stub when no tier matches.
+   *
+   * The tiers, strictest first:
+   *   1. exact key — vocabularyKey("ICICI BANK LTD") === vocabularyKey(cell);
+   *   2. first word — "icici bank ltd" answers to "icici" (the roster names banks casually);
+   *   3. word containment — every word of the shorter name appears in the longer ("AU FINANCE"
+   *      ↔ "AU Small Finance Bank"). One candidate = a match; TWO OR MORE candidate clients is
+   *      an ambiguity, and an ambiguity creates NOTHING — the summary names it and a person
+   *      decides. This roster is years of hand-typed data; guessing a merge here is how two
+   *      banks' empanelments end up under one client.
+   *
+   * A created stub carries only what the sheet knows — canonical name, an allocated CL-code,
+   * ACTIVE lifecycle, and a `rosterImportStub` marker in planningPreferences — and the summary
+   * tells the operator to complete it. Rates and planning preferences stay unset, and pricing
+   * fails loudly rather than silently defaulting, so a stub cannot quietly bill.
+   */
+  private async buildClientResolver(manager: any, autoCreate: boolean, actorId: string) {
     const rows: ClientEntity[] = await manager.find(ClientEntity, {
       select: { id: true, name: true, displayName: true } as any,
     });
-    const map = new Map<string, string>();
-    for (const c of rows) {
-      for (const label of [c.name, (c as any).displayName].filter(Boolean)) {
-        const key = vocabularyKey(label);
-        map.set(key, c.id);
-        // "icici bank ltd" also answers to "icici" — the roster names banks casually.
-        const first = key.split(' ')[0];
-        if (first && !map.has(first)) map.set(first, c.id);
+    const byKey = new Map<string, string>();
+    const entries: Array<{ id: string; key: string; label: string }> = [];
+    // A first word claimed by TWO different clients ("Godrej Housing" and "Godrej Capital")
+    // is no shortcut at all — it comes out of the direct map so the containment tier sees
+    // both candidates and reports the ambiguity, instead of silently picking whichever
+    // client happened to load first.
+    const contested = new Set<string>();
+    const register = (id: string, label: string) => {
+      const key = vocabularyKey(label);
+      if (!key) return;
+      entries.push({ id, key, label });
+      if (!byKey.has(key)) byKey.set(key, id);
+      const first = key.split(' ')[0];
+      if (!first || contested.has(first)) return;
+      const holder = byKey.get(first);
+      if (holder === undefined) byKey.set(first, id);
+      else if (holder !== id) {
+        byKey.delete(first);
+        contested.add(first);
       }
+    };
+    for (const c of rows) {
+      for (const label of [c.name, (c as any).displayName].filter(Boolean)) register(c.id, label);
     }
-    return map;
+
+    const created = new Map<string, { id: string; code: string; linked: number }>();
+    const ambiguous = new Map<string, { labels: string[]; count: number }>();
+    const missing = new Map<string, number>();
+
+    const nextClientCode = async (): Promise<string> => {
+      // Includes rows this very transaction created, so a run minting several stubs stays
+      // sequential; withDeleted so a removed client's code is never reissued.
+      const all: Array<{ clientCode?: string }> = await manager.find(ClientEntity, {
+        select: { clientCode: true } as any, withDeleted: true,
+      });
+      const highest = all.reduce((max, r) => {
+        const m = /^CL-(\d+)$/.exec(r.clientCode ?? '');
+        return m ? Math.max(max, Number(m[1])) : max;
+      }, 0);
+      return `CL-${String(highest + 1).padStart(4, '0')}`;
+    };
+
+    const resolve = async (bankRaw: string): Promise<string | null> => {
+      const key = vocabularyKey(bankRaw);
+      if (!key) return null;
+
+      const direct = byKey.get(key) ?? byKey.get(key.split(' ')[0]);
+      if (direct) {
+        const mine = created.get(bankRaw);
+        if (mine && mine.id === direct) mine.linked += 1;
+        return direct;
+      }
+
+      const words = key.split(' ');
+      const candidates = new Map<string, string>();
+      for (const e of entries) {
+        const ew = e.key.split(' ');
+        const [shorter, longer] = words.length <= ew.length ? [words, ew] : [ew, words];
+        // A one- or two-letter "name" ("L") would contain-match half the directory; the
+        // containment tier only speaks when the shorter name has some substance.
+        if (shorter.join('').length < 3) continue;
+        if (shorter.every((w) => longer.includes(w))) candidates.set(e.id, e.label);
+      }
+      if (candidates.size === 1) {
+        const id = [...candidates.keys()][0];
+        byKey.set(key, id); // later rows take the direct tier
+        return id;
+      }
+      if (candidates.size > 1) {
+        const cur = ambiguous.get(bankRaw) ?? { labels: [...new Set(candidates.values())], count: 0 };
+        cur.count += 1;
+        ambiguous.set(bankRaw, cur);
+        return null;
+      }
+
+      if (!autoCreate) {
+        missing.set(bankRaw, (missing.get(bankRaw) ?? 0) + 1);
+        return null;
+      }
+
+      const code = await nextClientCode();
+      const saved = await manager.save(ClientEntity, manager.create(ClientEntity, {
+        clientCode: code,
+        name: bankRaw,
+        displayName: bankRaw
+          .toLowerCase()
+          .replace(/(^|[^a-z])([a-z])/g, (_m: string, pre: string, ch: string) => pre + ch.toUpperCase()),
+        lifecycleStatus: 'ACTIVE',
+        planningPreferences: { rosterImportStub: true, createdBy: actorId },
+      }));
+      register(saved.id, bankRaw);
+      created.set(bankRaw, { id: saved.id, code, linked: 1 });
+      return saved.id;
+    };
+
+    const flushNotes = (summary: RosterImportSummary, dryRun: boolean) => {
+      for (const [name, c] of created) {
+        summary.notes.push(dryRun
+          ? `Would create client "${name}" with minimal details and link ${c.linked} appraisers (happens on the real run).`
+          : `Created client "${name}" (${c.code}) with minimal details — ${c.linked} appraisers linked from the roster. `
+            + `Open Clients → ${name} and complete its details (rates, planning preferences) before billing against it.`);
+      }
+      for (const [name, a] of ambiguous) {
+        summary.notes.push(
+          `"${name}" (named by ${a.count} appraisers) matches more than one existing client — ${a.labels.join(', ')}. `
+          + `Nothing was created or linked; rename one so they are distinct, or align the roster, and re-import.`,
+        );
+      }
+      for (const [name, count] of missing) {
+        summary.notes.push(
+          `${count} appraisers carry a standing with "${name}", which is not a client in this system yet `
+          + `(automatic creation is off). Create the client and run the import again to bring those in.`,
+        );
+      }
+    };
+
+    return { resolve, flushNotes };
   }
 
   /** The sheet mixes real dates with `dd-mm-yyyy` text and placeholders. */
-  private readDate(raw: unknown): Date | null {
+  private readDate(
+    raw: unknown,
+    ctx?: { issues: Partial<AssayerImportIssueEntity>[]; sourceRow: number; sheet: string; column: string },
+  ): Date | null {
     if (raw instanceof Date) return Number.isNaN(raw.getTime()) ? null : raw;
-    const s = blankToNull(raw);
+    // Excel marks a cell as text with a leading apostrophe; the roster has dates written that
+    // way ("'11-01-1997"), and trailing punctuation ("27-04-2026.").
+    const s = blankToNull(raw)?.replace(/^'/, '').replace(/[.\s]+$/, '') ?? null;
     if (!s) return null;
 
-    const dmy = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{4})$/.exec(s);
+    const dmy = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/.exec(s);
     if (dmy) {
-      // Day-first: an Indian roster writing 03-01-1974 means the 3rd of January.
-      const d = new Date(Number(dmy[3]), Number(dmy[2]) - 1, Number(dmy[1]));
+      // Day-first: an Indian roster writing 03-01-1974 means the 3rd of January. Two-digit
+      // years ("31-10-23") are this century — the company did not exist in 1923.
+      const yr = Number(dmy[3].length === 2 ? `20${dmy[3]}` : dmy[3]);
+      const d = new Date(yr, Number(dmy[2]) - 1, Number(dmy[1]));
       return Number.isNaN(d.getTime()) ? null : d;
     }
+    // "02-Nov-2022" / "02 Nov 22" — the month written as a word.
+    const dMonY = /^(\d{1,2})[-\s]([A-Za-z]{3,9})[-\s'](?:')?(\d{2,4})$/.exec(s);
+    if (dMonY) {
+      const yr = Number(dMonY[3].length === 2 ? `20${dMonY[3]}` : dMonY[3]);
+      const d = new Date(`${dMonY[2]} ${dMonY[1]}, ${yr}`);
+      if (!Number.isNaN(d.getTime())) return d;
+    }
     const parsed = new Date(s);
-    return Number.isNaN(parsed.getTime()) ? null : parsed;
+    if (!Number.isNaN(parsed.getTime())) return parsed;
+
+    // A silent null here loses a fact forever ("sanjayk" sits in a DOB cell on the real file);
+    // a cell that claims to be a date but is not one is a review item.
+    ctx?.issues.push({
+      sourceSheet: ctx.sheet, sourceRow: ctx.sourceRow, sourceColumn: ctx.column, rawValue: String(s).slice(0, 100),
+      reason: 'Could not be read as a date.',
+    });
+    return null;
   }
 }
 

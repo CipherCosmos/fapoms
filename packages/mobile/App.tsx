@@ -740,6 +740,9 @@ function AppMain() {
             busyActionId={busyActionId}
             stale={stale}
             lastSyncedAt={lastSyncedAt}
+            assayerId={user?.id}
+            locationNeedsConfirmation={profile.locationNeedsConfirmation}
+            onLocationConfirmed={loadAssayerProfile}
           />
         )}
 

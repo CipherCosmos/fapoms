@@ -263,6 +263,14 @@ export class AssayerEntity extends BaseEntity {
   hrOwnerName: string | null;
 
   /**
+   * Link to this person's document folder (a Drive share on the real roster — its "Link for
+   * Document" column, 472 rows). The folder predates this system and still holds the scans;
+   * losing the pointer would orphan them.
+   */
+  @Column({ name: 'documents_link', type: 'text', nullable: true })
+  documentsLink: string | null;
+
+  /**
    * How the business engages this person — regular rotation, local only, cover, agency or
    * mystery audits. Separate from whether they are currently available, which is
    * `lifecycleStatus`: the roster wrote both into one cell and the two answer different

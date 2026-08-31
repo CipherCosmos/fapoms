@@ -56,6 +56,7 @@ export const SETTINGS_GROUPS = [
   { key: 'feedback', label: 'Feedback SLA', description: 'How long the product team has to answer, and to resolve, before it escalates.' },
   { key: 'field', label: 'In the field', description: 'What the app enforces on an assayer while they are out on a job, and how far a negotiation may run.' },
   { key: 'planning', label: 'Planning', description: 'How the recommendation engine spreads work across the people who are eligible for it.' },
+  { key: 'roster', label: 'Roster import', description: 'How the appraiser roster spreadsheet is brought in.' },
   { key: 'qualification', label: 'Assayer qualification', description: 'How the qualification scores on an assayer\'s profile weigh their verification, background, credentials and track record. Weights are relative — they are normalized over whichever dimensions have data.' },
 ] as const;
 
@@ -658,6 +659,37 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     default: 8,
     envVar: 'PLANNING_FAIRNESS_OFFER_CAP',
     min: 1, max: 100, unit: 'offers / 30 days',
+    applies: 'immediately',
+  },
+  {
+    // Read by ClientEligibilityFilter (one settings read per recommendation, preloaded into
+    // branch facts). The empanelment gate itself is not configurable — ACTIVE and RECOMMENDED
+    // standings qualify, negative standings exclude, always. This knob decides only the
+    // in-between case: a person with NO empanelment record for the client at all.
+    key: 'planning.eligibility.noEmpanelmentRow',
+    label: 'Assayer with no empanelment record',
+    description: 'What planning does with an assayer who has no recorded standing with the client being staffed. "Block" is compliance-strict: only people vetted for that specific bank (standing Active or Recommended) are ever recommended, and everyone else appears in the excluded list with the reason. "Allow" treats an absent record as no objection — useful only while a new client\'s vetting is still being backfilled. People whose standing with the client is negative (rejected, terminated, resigned, dormant or not recommended) are excluded under either setting.',
+    group: 'planning',
+    type: 'select',
+    default: 'BLOCK',
+    envVar: 'PLANNING_NO_EMPANELMENT_ROW',
+    options: [
+      { value: 'BLOCK', label: 'Block — only vetted standings are planned (strict)' },
+      { value: 'ALLOW', label: 'Allow — an absent record does not exclude' },
+    ],
+    applies: 'immediately',
+  },
+
+  // ── Roster import ───────────────────────────────────────────────────────
+  {
+    // Read by RosterImportService once per import run.
+    key: 'roster.autoCreateClients',
+    label: 'Create missing clients automatically',
+    description: 'When the roster names a bank that is not a client in this system yet ("Project Name" lists ~20 lenders), create the client on the spot with minimal details and link the appraisers to it, instead of dropping the fact and asking you to create the client and re-import. Created clients are named in the import summary so you can complete their details. Matching is careful — known misspellings are corrected first, and a name that could mean two existing clients creates nothing and asks instead. Turn off to restore the old behavior: unknown banks are only counted in the summary.',
+    group: 'roster',
+    type: 'boolean',
+    default: true,
+    envVar: 'ROSTER_AUTO_CREATE_CLIENTS',
     applies: 'immediately',
   },
 

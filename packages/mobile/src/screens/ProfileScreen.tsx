@@ -63,6 +63,8 @@ export interface ProfileDataState {
   completedAssignments: number;
   onTimeCompletions: number;
   assayerCode: string;
+  /** Server flag: this assayer's map position is missing or coarse and should be confirmed. */
+  locationNeedsConfirmation?: boolean;
 }
 
 interface ProfileScreenProps {

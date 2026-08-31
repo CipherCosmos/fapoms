@@ -124,7 +124,9 @@ export const queryKeys = {
    */
   assayers: {
     all: ['assayers'] as const,
-    mapRoster: ['assayers', 'map-roster'] as const,
+    // Keyed by the global scope, so changing the header's region/client re-fetches the layer —
+    // the scope-less key was exactly why the map ignored the active filters.
+    mapRoster: (scopeKey: string) => ['assayers', 'map-roster', scopeKey] as const,
   },
   /**
    * The workforce roster. `useHrWorkforce.ts` and `AssayerRoster.tsx` used to each type the
