@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import * as XLSX from 'xlsx';
@@ -164,10 +164,11 @@ export class BranchService {
    * it in every report that reads deleted rows.
    *
    * Concurrency: the scan-and-increment is racy on its own (two simultaneous creates read the
-   * same highest), so the caller retries — see `create`. There is no unique index on
-   * `branch_code` to lean on (branch codes repeat across clients by design: two banks each have
-   * their own "BR-0001"), so uniqueness is asserted by an explicit re-check inside the retry
-   * rather than by the database.
+   * same highest), so the caller retries — see `create`. Branch codes repeat across clients by
+   * design (two banks each have their own "BR-0001"), so the uniqueness that backs this is
+   * per-client — `UQ_branches_client_branch_code`, added in 1792900000000 — and the create path
+   * also re-checks by hand to turn a collision into a readable message rather than a raw index
+   * error.
    */
   private async allocateBranchCode(): Promise<string> {
     const rows = await this.branchRepository.find({ select: ['branchCode'], withDeleted: true } as any);
@@ -205,6 +206,27 @@ export class BranchService {
     }
 
     await this.validateGeography(dto.state, dto.district, dto.city);
+
+    // A branch is identified by its ids per client, never its name — two banks share a branch
+    // name at one address, and one bank reuses a name across towns. Refuse a Branch Code or a
+    // SOL ID this client already uses, with a message that names the conflict, rather than
+    // letting the database reject it with one nobody in the office can read.
+    if (dto.clientId) {
+      const codeTaken = await this.branchRepository.findOne({
+        where: { branchCode: dto.branchCode, clientId: dto.clientId, isActive: true },
+      });
+      if (codeTaken) {
+        throw new ConflictException(`Branch Code '${dto.branchCode}' is already used by another branch for this client.`);
+      }
+      if (dto.solId) {
+        const solTaken = await this.branchRepository.findOne({
+          where: { solId: dto.solId, clientId: dto.clientId, isActive: true },
+        });
+        if (solTaken) {
+          throw new ConflictException(`SOL ID '${dto.solId}' is already used by another branch for this client.`);
+        }
+      }
+    }
 
     if (dto.zoneId) {
       const zone = await this.zoneRepository.findOne({ where: { id: dto.zoneId } });
@@ -695,9 +717,23 @@ export class BranchService {
           continue;
         }
 
-        const existing = await this.branchRepository.findOne({
-          where: { branchCode, clientId, isActive: true },
-        });
+        /**
+         * A branch is identified by the bank's own SOL ID and our Branch Code — per client, and
+         * never by name, because two different banks run a branch of the same name at the same
+         * address ("MG Road") and one bank reuses a name across towns. So the match is on the
+         * ids, SOL ID first (the lender's authoritative one). If the file's SOL ID and Branch
+         * Code point at two *different* existing branches, the row disagrees with itself and is
+         * refused rather than silently merged into the wrong record.
+         */
+        const bySol = solId
+          ? await this.branchRepository.findOne({ where: { solId, clientId, isActive: true } })
+          : null;
+        const byCode = await this.branchRepository.findOne({ where: { branchCode, clientId, isActive: true } });
+        if (bySol && byCode && bySol.id !== byCode.id) {
+          errors.push(`Row ${rowNum}: SOL ID '${solId}' and Branch Code '${branchCode}' already belong to two different branches for this client — fix whichever is wrong before re-importing.`);
+          continue;
+        }
+        const existing = bySol ?? byCode;
 
         /**
          * Located through the same chain as every other branch write.
@@ -728,6 +764,11 @@ export class BranchService {
 
         let saved: BranchEntity;
         if (existing) {
+          // Matched by one id, so keep BOTH in step: a row found by SOL ID may carry a corrected
+          // Branch Code, and a row found by Branch Code may be gaining its SOL ID for the first
+          // time. A blank SOL ID in the file never erases one already on the record.
+          existing.branchCode = branchCode;
+          if (solId) existing.solId = solId;
           existing.name = name;
           existing.address = address;
           existing.state = state;

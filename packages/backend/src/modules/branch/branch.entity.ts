@@ -11,6 +11,10 @@ import type { BranchDocumentEntity } from './branch-document.entity';
 @Index(['clientId'])
 @Index(['region'])
 @Index(['zoneId'])
+// A branch's identity is its ids, per client — never its name, which two different banks share
+// for a branch at the same address and one bank reuses across towns. Both ids are unique within
+// a client (SOL ID only where the bank supplied one) — enforced by UQ_branches_client_branch_code
+// and UQ_branches_client_sol_id (migration 1792900000000-BranchAndLinkUniqueness).
 export class BranchEntity extends BaseEntity {
   @Column({ name: 'branch_code', length: 50 })
   branchCode: string;

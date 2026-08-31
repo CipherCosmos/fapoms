@@ -176,6 +176,45 @@ describe('BranchService', () => {
     });
   });
 
+  /**
+   * A branch is identified by its ids, per client — never its name, which two banks share for a
+   * branch at one address. Uniqueness is enforced per (client, id); a different bank keeps its
+   * own numbering.
+   */
+  describe('branch identity — Branch Code and SOL ID are unique per client', () => {
+    const realState = { state: 'MAHARASHTRA', district: 'MUMBAI', city: 'MUMBAI' };
+
+    it('refuses a Branch Code already used by the same client', async () => {
+      mockBranchRepo.findOne.mockResolvedValue({ id: 'existing', branchCode: 'BR-1' });
+      await expect(
+        service.create({ branchCode: 'BR-1', name: 'MG Road', ...realState, clientId: 'axis' }, 'user-1'),
+      ).rejects.toThrow(/Branch Code 'BR-1' is already used/);
+    });
+
+    it('refuses a SOL ID already used by the same client', async () => {
+      // First lookup (branch code) is free; second (SOL ID) hits the conflict.
+      mockBranchRepo.findOne
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 'existing', solId: '0001' });
+      await expect(
+        service.create({ branchCode: 'BR-2', solId: '0001', name: 'MG Road', ...realState, clientId: 'axis' }, 'user-1'),
+      ).rejects.toThrow(/SOL ID '0001' is already used/);
+    });
+
+    it('allows the same code for a DIFFERENT client — banks keep their own numbering', async () => {
+      // No existing branch for THIS client with that code/sol.
+      mockBranchRepo.findOne.mockResolvedValue(null);
+      mockClientService.findOne.mockResolvedValue({ id: 'icici', name: 'ICICI' });
+      mockBranchRepo.create.mockReturnValue({ id: 'b-new', branchCode: 'BR-1' });
+      mockBranchRepo.save.mockResolvedValue({ id: 'b-new', branchCode: 'BR-1' });
+      const result = await service.create(
+        { branchCode: 'BR-1', solId: '0001', name: 'MG Road', ...realState, clientId: 'icici' },
+        'user-1',
+      );
+      expect(result.branchCode).toBe('BR-1');
+    });
+  });
+
   describe('findOne', () => {
     it('should throw NotFoundException if branch does not exist', async () => {
       mockBranchQueryService.findOne.mockRejectedValueOnce(new NotFoundException('Branch non-existent-id not found.'));
