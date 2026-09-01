@@ -74,6 +74,42 @@ function allowedHostsFromEnv(): string[] {
   return [...hosts].filter((host) => host !== 'localhost' && host !== '127.0.0.1');
 }
 
+/**
+ * Where the browser should open the hot-reload socket back to.
+ *
+ * This was a flat `clientPort: 5173`, which is only true when the browser talks to the dev
+ * server directly. Behind a reverse proxy terminating TLS on 443, the page loads fine and then
+ * the HMR client dials `wss://<host>:5173` — a port that is not published publicly — so every
+ * load ends in "WebSocket closed without opened" in the console and edits stop hot-reloading.
+ *
+ * Derived from the same public URL as the allowed hosts, so there is one place to say where this
+ * deployment lives. Direct/localhost access keeps the port it is actually served on.
+ */
+function hmrFromEnv() {
+  const publicUrl = process.env.APP_PUBLIC_URL || process.env.FRONTEND_URL;
+  if (!publicUrl) return { clientPort: 5173 };
+
+  try {
+    const url = new URL(publicUrl.includes('://') ? publicUrl : `http://${publicUrl}`);
+
+    // Docker on a laptop: the browser reaches the published port directly, no proxy in between.
+    if (url.hostname === 'localhost' || url.hostname === '127.0.0.1') {
+      return { clientPort: Number(url.port) || 5173 };
+    }
+
+    const secure = url.protocol === 'https:';
+    return {
+      // A page served over https cannot open a plain ws:// socket — the browser blocks it as
+      // mixed content, which looks identical to the proxy refusing the connection.
+      protocol: secure ? ('wss' as const) : ('ws' as const),
+      host: url.hostname,
+      clientPort: url.port ? Number(url.port) : secure ? 443 : 80,
+    };
+  } catch {
+    return { clientPort: 5173 };
+  }
+}
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [sharedTsSource, react()],
@@ -142,11 +178,9 @@ export default defineConfig({
     // Public domains this deployment answers to, from the environment. Never `true`: that turns
     // the DNS-rebinding protection off entirely for anyone who can point a name at this host.
     allowedHosts: allowedHostsFromEnv(),
-    hmr: {
-      // When running in Docker, the client connects from the host browser
-      // on localhost:5173, so we need clientPort to match the exposed port
-      clientPort: 5173,
-    },
+    // Where the browser dials back for hot reload: the published port when it reaches this
+    // server directly, or the public host/443 when a proxy sits in front. See hmrFromEnv().
+    hmr: hmrFromEnv(),
     proxy: {
       '/api': {
         target: API_TARGET,
