@@ -16,7 +16,7 @@ Every step below was executed against a genuinely empty stack — new containers
 
 ```bash
 cp .env.production.example .env.docker   # then edit — see "Before production" below
-docker compose up -d
+docker compose --env-file .env.docker up -d
 ```
 
 That is the whole thing. On first boot the backend:

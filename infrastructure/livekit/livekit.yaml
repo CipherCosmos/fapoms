@@ -1,8 +1,13 @@
 # LiveKit dev configuration for FAPOMS voice calls.
 #
-# Keys here MUST match LIVEKIT_API_KEY / LIVEKIT_API_SECRET in .env.docker — the backend
-# signs room-scoped access tokens with them. Development values; rotate both for production
-# and turn on use_external_ip / TLS there.
+# NO `keys:` BLOCK HERE — deliberately. The API keypair arrives as the LIVEKIT_KEYS environment
+# variable, which compose builds from LIVEKIT_API_KEY / LIVEKIT_API_SECRET in .env.docker. The
+# backend signs room-scoped access tokens with the same two values from the same file, so there is
+# one place to change them and no way for the two halves to drift apart.
+#
+# This file used to carry `keys: devkey: secret`, which meant the credential lived both here and in
+# the environment and had to be kept in step by hand — and, because this file is committed, the
+# secret was published in the repository.
 port: 7880
 rtc:
   port_range_start: 50100
@@ -10,14 +15,14 @@ rtc:
   tcp_port: 7881
   # Dev runs on localhost/LAN; in production behind a public IP this must be true.
   use_external_ip: false
-  # Advertise the HOST machine's LAN address as the media candidate. Without this,
-  # LiveKit advertises its docker-internal IP, which phones on the Wi-Fi cannot route
-  # to — signaling connects (proxied via the backend) but ICE "negotiation times out".
-  # NOTE: this is the dev Mac's DHCP address — if the network reassigns it, update it
-  # here (same drift issue as the APK's baked-in API host).
-  node_ip: 10.135.43.233
-keys:
-  devkey: secret
+  # node_ip — the HOST machine's LAN address, advertised to clients as the media candidate.
+  # Without it LiveKit advertises its docker-internal IP, which phones on the Wi-Fi cannot route
+  # to: signaling connects (proxied via the backend) but ICE "negotiation times out".
+  #
+  # NOT set here. It is a DHCP address that changes, and it was written in this file twice and in
+  # docker-compose.yml once — three copies that had drifted to three different values, none of
+  # them the machine's actual address. It now comes from LAN_HOST_IP in .env.docker, injected as
+  # $NODE_IP and $LIVEKIT_TURN_DOMAIN by compose.
 # Embedded TURN relay. LiveKit-in-docker advertises its container IP in ICE candidates,
 # which LAN phones cannot route to — direct UDP fails and calls die with "negotiation
 # timed out". TURN gives clients one fixed, published UDP port (3478) to send media to;
@@ -25,8 +30,7 @@ keys:
 turn:
   enabled: true
   udp_port: 3478
-  # The hostname clients are told to send TURN traffic to — must be the HOST machine's
-  # LAN address (same DHCP-drift caveat as rtc.node_ip above).
-  domain: 10.135.43.233
+  # `domain` — the host clients send TURN traffic to. Same LAN address as rtc.node_ip, and for the
+  # same reason it is not written here: it arrives as $LIVEKIT_TURN_DOMAIN from LAN_HOST_IP.
 logging:
   level: info

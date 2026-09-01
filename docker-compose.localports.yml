@@ -2,7 +2,7 @@
 #
 # Use when another project on this machine already owns the ports FAPOMS wants:
 #
-#   docker compose -f docker-compose.yml -f docker-compose.localports.yml up -d
+#   docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.localports.yml up -d
 #
 # On this machine the conflicts are a Next.js dev server on :3000 and an `adops` project
 # holding :5432 and :9000. Rather than stopping anyone else's work, this moves or withdraws

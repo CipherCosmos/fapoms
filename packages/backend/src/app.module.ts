@@ -5,6 +5,7 @@
  * Modules are organized per the 13 business modules defined in Part 3.
  */
 
+import * as path from 'path';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
@@ -74,9 +75,27 @@ import { DataResetModule } from './infrastructure/data-reset/data-reset.module';
     PlatformSettingsModule,
     SecurityModule,
     // Environment configuration
+    /**
+     * One environment file for the whole repository: `.env.docker` at the root.
+     *
+     * This used to be `['.env.local', '.env']`, resolved against `process.cwd()`. Neither file is
+     * the one the containers read — compose injects the root `.env.docker` through `env_file` —
+     * so a backend started on the host and the same backend in Docker read DIFFERENT
+     * configuration. That is not hypothetical: `.env.local` (written automatically by
+     * `neon env pull`) pointed the host run at Neon Postgres and Neon object storage while the
+     * container used the local Postgres and MinIO, with three overlapping AWS_* keys holding
+     * different values. Which bucket an upload landed in depended on how the process was started,
+     * and nothing on any screen said so.
+     *
+     * Resolved from `__dirname` rather than `cwd` because the two differ: nest is started from
+     * `packages/backend`, while compose runs from the repository root. `src/` and `dist/` sit at
+     * the same depth, so one path serves both. A missing file is not an error — inside the
+     * container this path does not exist and the values arrive as real environment variables,
+     * which dotenv leaves alone.
+     */
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: ['.env.local', '.env'],
+      envFilePath: [path.resolve(__dirname, '../../../.env.docker')],
     }),
 
     /**

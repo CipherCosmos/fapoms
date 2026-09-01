@@ -3,11 +3,17 @@
 # =============================================================================
 #
 # Usage:
-#   docker compose up --build        # Build & start all services
-#   docker compose up -d             # Start in background
-#   docker compose logs -f backend   # Follow logs for a specific service
-#   docker compose down              # Stop all services
-#   docker compose down -v           # Stop & remove volumes (reset DB)
+#   docker compose --env-file .env.docker up -d      # Start in background
+#   docker compose --env-file .env.docker up --build # Build & start
+#   docker compose logs -f backend                   # Follow logs for a service
+#   docker compose down                              # Stop all services
+#   docker compose down -v                           # Stop & remove volumes (reset DB)
+#
+# `--env-file .env.docker` is what deploy/auto-deploy.sh already passes in production, so dev and
+# prod are configured the same way. It matters because compose resolves `${VAR}` from the shell
+# or --env-file — NOT from a service's own `env_file:` entry. Every `${VAR}` below carries the
+# previous hardcoded value as its default, so plain `docker compose up` still works unchanged;
+# passing the file is what makes .env.docker authoritative for the credentials too.
 #
 # Hot Reload:
 #   Source directories are bind-mounted into containers.
@@ -23,10 +29,14 @@ services:
     image: postgis/postgis:16-3.4
     container_name: fapoms-postgres
     restart: unless-stopped
+    # From .env.docker (the one env file) when it is passed with --env-file; the defaults are the
+    # dev values this block used to hardcode, so nothing changes without it. These must agree with
+    # DB_USERNAME/DB_PASSWORD/DB_DATABASE in that file — they are the credentials the role is
+    # CREATED with here and the ones the backend then signs in with.
     environment:
-      POSTGRES_DB: fapoms
-      POSTGRES_USER: fapoms
-      POSTGRES_PASSWORD: fapoms_dev
+      POSTGRES_DB: ${DB_DATABASE:-fapoms}
+      POSTGRES_USER: ${DB_USERNAME:-fapoms}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-fapoms_dev}
     ports:
       - "5432:5432"
     volumes:
@@ -113,9 +123,11 @@ services:
     container_name: fapoms-minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
+    # Same rule as postgres: these create the MinIO root credentials, and AWS_ACCESS_KEY_ID /
+    # AWS_SECRET_ACCESS_KEY in .env.docker are what the backend presents to sign in with them.
     environment:
-      MINIO_ROOT_USER: fapoms_minio
-      MINIO_ROOT_PASSWORD: fapoms_minio_secret
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-fapoms_minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-fapoms_minio_secret}
     ports:
       - "9000:9000"   # S3 API
       - "9001:9001"   # MinIO Console UI (http://localhost:9001)
@@ -145,6 +157,23 @@ services:
     container_name: fapoms-livekit
     restart: unless-stopped
     command: --config /etc/livekit.yaml --bind 0.0.0.0
+    # Everything variable about this service comes from .env.docker. livekit.yaml keeps only the
+    # settings that never change per machine (ports, ICE ranges, log level).
+    #
+    #   LIVEKIT_KEYS        the API keypair — the same two values the backend signs tokens with.
+    #                       livekit.yaml deliberately has no `keys:` block: the credential lived in
+    #                       two files that had to be edited together, and that YAML is committed,
+    #                       so the secret was published with it.
+    #   NODE_IP / TURN_DOMAIN  the host's LAN address, advertised to phones as the media candidate.
+    #                       This was written into livekit.yaml twice, and a third time as the mobile
+    #                       packager host below — three copies of one DHCP address that had already
+    #                       drifted to three DIFFERENT values. One key now, LAN_HOST_IP.
+    #
+    # All four names are livekit-server's own env bindings (`livekit-server help-verbose`).
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY:-devkey}: ${LIVEKIT_API_SECRET:-secret}"
+      NODE_IP: ${LAN_HOST_IP:-127.0.0.1}
+      LIVEKIT_TURN_DOMAIN: ${LAN_HOST_IP:-127.0.0.1}
     ports:
       # 7880 (signaling ws/http) is deliberately NOT published: clients reach signaling
       # only through the backend's /livekit proxy. Media below is WebRTC (encrypted SRTP)
@@ -248,8 +277,11 @@ services:
       - "8081:8081"
     environment:
       - EXPO_DEVTOOLS_LISTEN_ADDRESS=0.0.0.0
-      - REACT_NATIVE_PACKAGER_HOSTNAME=${REACT_NATIVE_PACKAGER_HOSTNAME:-10.23.68.233}
-      - EXPO_PUBLIC_API_URL=http://${REACT_NATIVE_PACKAGER_HOSTNAME:-10.23.68.233}:3000/api/v1
+      # LAN_HOST_IP from .env.docker — the same address LiveKit advertises. The fallback chain
+      # keeps an explicitly-set REACT_NATIVE_PACKAGER_HOSTNAME winning, then LAN_HOST_IP; the
+      # literal that used to sit here was a stale DHCP address that disagreed with livekit.yaml's.
+      - REACT_NATIVE_PACKAGER_HOSTNAME=${REACT_NATIVE_PACKAGER_HOSTNAME:-${LAN_HOST_IP:-127.0.0.1}}
+      - EXPO_PUBLIC_API_URL=http://${REACT_NATIVE_PACKAGER_HOSTNAME:-${LAN_HOST_IP:-127.0.0.1}}:3000/api/v1
       # Development only: a simulated device position as "lat,lng", for emulators that cannot
       # be given a real fix. Stripped from release bundles by the __DEV__ guard in
       # LocationContext; unset means no simulation.

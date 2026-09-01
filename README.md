@@ -37,7 +37,7 @@ Everything comes up in Docker. You need Docker with Compose; nothing else is ins
 
 ```bash
 cp .env.production.example .env.docker   # then fill in — see "Configuration" below
-docker compose up -d
+docker compose --env-file .env.docker up -d
 ```
 
 Postgres must be **PostGIS** — the compose file pins `postgis/postgis:16-3.4`. Three columns are
@@ -66,7 +66,7 @@ means migrations ran.
 bindings without disturbing whatever else is on your machine:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.localports.yml up -d
+docker compose --env-file .env.docker -f docker-compose.yml -f docker-compose.localports.yml up -d
 ```
 
 ### Working outside Docker
@@ -80,19 +80,36 @@ npm run dev:mobile      # Expo
 ```
 
 You still need Postgres+PostGIS and Redis reachable; bring just those up with
-`docker compose up -d postgres redis minio`.
+`docker compose --env-file .env.docker up -d postgres redis minio`. The backend reads the same
+`.env.docker` on the host as it does in the container, so set `DB_HOST=localhost` there (inside
+Docker it is the service name `postgres`) — that is the one value the two paths cannot share.
 
 ---
 
 ## Configuration
 
-**One file: `.env.docker`, at the repository root.** There is no second env file anywhere, and a
-`.env` beside the compose file is not read.
+**One file: `.env.docker`, at the repository root.** Not one per package, not a `.env.local`
+beside it, not a `.env` next to the compose file. Everything reads that single file:
 
-`.env.production.example` is the template — every key the stack reads, documented, with the
-required ones marked. It does double duty: `deploy/docker-compose.prod.yml` injects it into the
-backend container, and `deploy/auto-deploy.sh` passes the same file as `--env-file` so it also
-supplies the `${VAR}` interpolations compose performs itself.
+| Reader | How |
+|---|---|
+| Backend in Docker (dev + prod) | `env_file: .env.docker` on the service |
+| Backend run on the host | `app.module.ts` loads it **by absolute path**, so a host run and a container run cannot disagree |
+| Compose itself (`${VAR}` for the Postgres / MinIO / LiveKit credentials) | `--env-file .env.docker` |
+| The LiveKit container | compose builds `LIVEKIT_KEYS` from the same two keys |
+| Mobile packager host | same `LAN_HOST_IP` |
+
+`.env.production.example` is the template — every key documented, required ones marked.
+
+> **Run compose with the file:** `docker compose --env-file .env.docker up -d`. Compose resolves
+> `${VAR}` from the shell or `--env-file`, *not* from a service's own `env_file:` entry — this is
+> what `deploy/auto-deploy.sh` already does in production. Every `${VAR}` keeps its previous
+> hardcoded value as a default, so plain `docker compose up` still works; passing the file is what
+> makes `.env.docker` authoritative for the credentials too.
+
+**If a second env file appears, it is not being read** — fold its values in and delete it. The one
+that shows up on its own is `.env.local`: `neon env pull` (and `neon link` / `checkout` / `deploy`)
+writes there by default. Use `neon env pull --file .env.docker` instead.
 
 The API **refuses to start** in production if `JWT_SECRET`, `DB_PASSWORD` or `CORS_ORIGINS` is
 missing or left at a development default, or if `DB_SYNCHRONIZE` is true — see
