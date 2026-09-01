@@ -391,6 +391,61 @@ describe('Geo Routing & Optimization', () => {
     });
   });
 
+  describe('OSRM provider — OSRM_URL unset never defaults to the public demo server', () => {
+    it('calculateRoute uses the estimate and never touches the network when OSRM_URL is unset', async () => {
+      const module = await buildModule({});
+      const osrm = module.get(OSRMRoutingProvider);
+
+      const r = await osrm.calculateRoute(PUNE_CAMP, DEEPAK);
+
+      expect(r.source).toBe('ESTIMATE');
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(osrm.stats).toEqual({ requests: 0, cacheHits: 0, cacheMisses: 1, estimates: 1 });
+    });
+
+    it('calculateDistances uses the estimate for the whole pool and never touches the network when OSRM_URL is unset', async () => {
+      const module = await buildModule({});
+      const osrm = module.get(OSRMRoutingProvider);
+
+      const results = await osrm.calculateDistances(PUNE_CAMP, [DEEPAK, BHARAMU, BELEKAR]);
+
+      expect(Object.keys(results)).toHaveLength(3);
+      for (const r of Object.values(results)) expect(r.source).toBe('ESTIMATE');
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(osrm.stats.requests).toBe(0);
+      expect(osrm.stats.estimates).toBe(3);
+    });
+
+    it('optimizeRoute uses the estimate for the whole matrix and never touches the network when OSRM_URL is unset', async () => {
+      const module = await buildModule({});
+      const osrm = module.get(OSRMRoutingProvider);
+
+      const plan = await osrm.optimizeRoute(
+        PUNE_CAMP,
+        [
+          { id: 'B', latitude: 18.6, longitude: 73.9 },
+          { id: 'A', latitude: 18.55, longitude: 73.86 },
+        ],
+        true,
+      );
+
+      expect(plan.source).toBe('ESTIMATE');
+      expect(plan.steps.every((s) => s.source === 'ESTIMATE')).toBe(true);
+      expect(fetchMock).not.toHaveBeenCalled();
+    });
+
+    it('still calls OSRM as before once OSRM_URL is explicitly set', async () => {
+      const module = await buildModule({ OSRM_URL: 'http://osrm.test' });
+      const osrm = module.get(OSRMRoutingProvider);
+      fetchMock.mockResolvedValueOnce(tableResponse([7684.5], [500.4]));
+
+      const results = await osrm.calculateDistances(PUNE_CAMP, [DEEPAK]);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(results[DEEPAK.id]).toEqual({ distanceKm: 7.68, durationMinutes: 8.34, source: 'OSRM' });
+    });
+  });
+
   describe('OSRM provider — optimizeRoute', () => {
     it('builds the matrix from one all-pairs /table and labels the plan', async () => {
       const cache = new FakeCache();
@@ -461,6 +516,16 @@ describe('Geo Routing & Optimization', () => {
       const module = await buildModule({});
       const service = module.get(RoutingService);
       expect(service.providerName).toBe('OSRM');
+    });
+
+    it('providerName stays OSRM when OSRM_URL is unset, but never calls the public demo server', async () => {
+      const module = await buildModule({});
+      const service = module.get(RoutingService);
+      expect(service.providerName).toBe('OSRM');
+
+      const r = await service.calculateRoute(PUNE_CAMP, DEEPAK);
+      expect(r.source).toBe('ESTIMATE');
+      expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it('still honours ROUTING_PROVIDER=POSTGIS', async () => {

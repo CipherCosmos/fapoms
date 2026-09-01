@@ -31,11 +31,18 @@ import { calculateHaversineDistance, TravelMode } from '@fapoms/shared';
  * terrain between the two points — which is exactly what a road router knows and a formula does
  * not. So the primary path asks OSRM, and the formula survives only as a labelled fallback.
  *
- * ## The four things that make relying on a public router acceptable
+ * ## The four things that make relying on a public router acceptable — and why `OSRM_URL` has no default
  *
- * The default `OSRM_URL` is the OSRM project's demo server, https://router.project-osrm.org.
- * It has **no SLA**: the project describes it as a demo, it may rate-limit or vanish, and it
- * serves a car-only graph (see `osrmProfile`). Depending on it would be reckless without:
+ * `OSRM_URL` points at the OSRM project's demo server, https://router.project-osrm.org, only if
+ * an operator sets it there deliberately. It is NOT the default: leaving `OSRM_URL` unset means
+ * OSRM is treated as unavailable (see `configured` on `OSRMRoutingProvider`) and every call
+ * degrades straight to the great-circle ESTIMATE below, exactly as it would on a live timeout.
+ * The alternative — quietly defaulting to the public server — would mean every route request's
+ * coordinates (an assayer's home or live location, paired with a branch's) leave the deployment
+ * to an unconfigured third party over the public internet by default, with no operator action
+ * required. The demo server has **no SLA** in any case: the project describes it as a demo, it
+ * may rate-limit or vanish, and it serves a car-only graph (see `osrmProfile`). Depending on it
+ * at all, even opted into deliberately, would be reckless without:
  *
  *   1. **Batching** — one `/table` request routes a branch against the whole candidate pool
  *      (measured: 100 coordinates across India in ~1 s), instead of one `/route` per candidate.
@@ -300,6 +307,17 @@ export class OSRMRoutingProvider implements RoutingProvider {
   private readonly baseUrl: string;
   private readonly cacheTtlSeconds: number;
   private readonly maxTableCoords: number;
+  /**
+   * SECURITY: OSRM_URL unset -> never silently call the public OSRM demo server. Whether
+   * `OSRM_URL` was actually set in the environment. When it is not, this provider must not fall
+   * back to the public demo server (router.project-osrm.org, Germany, no SLA) — that would send
+   * every route request's coordinates (an assayer's home or live location, paired with a
+   * branch's) to an unconfigured third party over the public internet by default. Unset is
+   * treated exactly like a live OSRM failure: every call path below goes straight to the same
+   * great-circle ESTIMATE used when the router times out or errors, without ever reaching the
+   * network. Explicitly setting `OSRM_URL` (self-hosted or otherwise) is unaffected.
+   */
+  private readonly configured: boolean;
 
   readonly stats: OsrmRoutingStats = { requests: 0, cacheHits: 0, cacheMisses: 0, estimates: 0 };
 
@@ -322,9 +340,11 @@ export class OSRMRoutingProvider implements RoutingProvider {
      */
     @Optional() private readonly cache?: CacheService,
   ) {
-    this.baseUrl = String(
-      this.configService.get<string>('OSRM_URL') || 'https://router.project-osrm.org',
-    ).replace(/\/+$/, '');
+    const configuredUrl = this.configService.get<string>('OSRM_URL');
+    this.configured = !!configuredUrl;
+    // The fallback literal here only sizes `baseUrl` for the (never-reached, see `configured`)
+    // code path below when OSRM_URL is unset; it is never used to make a request.
+    this.baseUrl = String(configuredUrl || 'https://router.project-osrm.org').replace(/\/+$/, '');
     /**
      * 30 days. Roads between two fixed points do not move; a new bypass or a closed bridge
      * changes a figure by a few percent, and thirty days bounds how long that can go unseen.
@@ -478,6 +498,9 @@ export class OSRMRoutingProvider implements RoutingProvider {
     this.stats.cacheMisses += 1;
 
     const fallback = async () => this.estimate(origin, destination, mode);
+    // SECURITY: OSRM_URL unset -> never silently call the public OSRM demo server. See
+    // `configured` above — go straight to the honest estimate instead of reaching the network.
+    if (!this.configured) return fallback();
     return this.breaker.run(async () => {
       const url =
         `${this.baseUrl}/route/v1/${profile}/` +
@@ -584,6 +607,9 @@ export class OSRMRoutingProvider implements RoutingProvider {
             estimated += 1;
           }
         };
+        // SECURITY: OSRM_URL unset -> never silently call the public OSRM demo server. Same
+        // guard as calculateRoute — estimate this whole chunk without ever reaching the network.
+        if (!this.configured) return fallback();
         return this.breaker.run(async () => {
           const coords = [
             coordUrl(origin.latitude, origin.longitude),
@@ -712,28 +738,34 @@ export class OSRMRoutingProvider implements RoutingProvider {
           }
         }
       };
-      await this.breaker.run(async () => {
-        const coords = allNodes.map((n) => coordUrl(n.latitude, n.longitude)).join(';');
-        const url = `${this.baseUrl}/table/v1/${profile}/${coords}?annotations=distance,duration`;
-        const data = await this.fetchJson(url);
-        if (data?.code !== 'Ok' || !data.distances || !data.durations) return fallback();
-        await Promise.all(
-          allNodes.flatMap((from, i) =>
-            allNodes.map(async (to, j) => {
-              if (from.id === to.id) return;
-              const distance = data.distances[i]?.[j];
-              const duration = data.durations[i]?.[j];
-              if (typeof distance === 'number' && typeof duration === 'number') {
-                const result = OSRMRoutingProvider.fromOsrm(distance, duration);
-                matrix[from.id][to.id] = result;
-                await this.writeCached(profile, keyOf.get(from.id)!, keyOf.get(to.id)!, result);
-              } else {
-                matrix[from.id][to.id] = this.estimate(from, to, mode);
-              }
-            }),
-          ),
-        );
-      }, fallback);
+      // SECURITY: OSRM_URL unset -> never silently call the public OSRM demo server. Same guard
+      // as calculateRoute/calculateDistances — estimate the whole matrix, no network reached.
+      if (!this.configured) {
+        await fallback();
+      } else {
+        await this.breaker.run(async () => {
+          const coords = allNodes.map((n) => coordUrl(n.latitude, n.longitude)).join(';');
+          const url = `${this.baseUrl}/table/v1/${profile}/${coords}?annotations=distance,duration`;
+          const data = await this.fetchJson(url);
+          if (data?.code !== 'Ok' || !data.distances || !data.durations) return fallback();
+          await Promise.all(
+            allNodes.flatMap((from, i) =>
+              allNodes.map(async (to, j) => {
+                if (from.id === to.id) return;
+                const distance = data.distances[i]?.[j];
+                const duration = data.durations[i]?.[j];
+                if (typeof distance === 'number' && typeof duration === 'number') {
+                  const result = OSRMRoutingProvider.fromOsrm(distance, duration);
+                  matrix[from.id][to.id] = result;
+                  await this.writeCached(profile, keyOf.get(from.id)!, keyOf.get(to.id)!, result);
+                } else {
+                  matrix[from.id][to.id] = this.estimate(from, to, mode);
+                }
+              }),
+            ),
+          );
+        }, fallback);
+      }
     } else if (missing > 0) {
       for (const from of allNodes) {
         const others = allNodes.filter((to) => to.id !== from.id && !matrix[from.id][to.id]);
@@ -774,9 +806,13 @@ export class RoutingService {
     }
     this.providerName = configured === 'POSTGIS' ? 'POSTGIS' : 'OSRM';
     this.activeProvider = this.providerName === 'OSRM' ? this.osrmProvider : this.postGISProvider;
+    const osrmUrl = this.configService.get<string>('OSRM_URL');
     this.logger.log(
       this.providerName === 'OSRM'
-        ? `routing provider: OSRM (${this.configService.get<string>('OSRM_URL', 'https://router.project-osrm.org')}), great-circle estimate on failure`
+        ? osrmUrl
+          ? `routing provider: OSRM (${osrmUrl}), great-circle estimate on failure`
+          : 'routing provider: OSRM_URL is unset — never defaulting to the public demo server; ' +
+            'every request uses the great-circle ESTIMATE'
         : 'routing provider: POSTGIS — every distance is a great-circle ESTIMATE',
     );
   }

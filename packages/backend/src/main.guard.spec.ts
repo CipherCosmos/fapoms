@@ -19,7 +19,16 @@ describe('assertProductionSafeConfig', () => {
   };
 
   beforeEach(() => {
-    process.env = { ...original };
+    // Not `{ ...original }` alone: the real process running this suite may itself have
+    // S3_ENDPOINT / MINIO_ROOT_PASSWORD set (e.g. a loaded .env.docker), and a test that never
+    // mentions either key would then silently inherit whichever value happens to be on this
+    // machine — passing or failing depending on who runs it, not on what the test asserts. Every
+    // env key a check in this file reads must be named here so a test's outcome depends only on
+    // what that test itself sets.
+    const env = { ...original };
+    delete env.S3_ENDPOINT;
+    delete env.MINIO_ROOT_PASSWORD;
+    process.env = env;
   });
 
   afterAll(() => {
@@ -79,6 +88,44 @@ describe('assertProductionSafeConfig', () => {
 
   it('accepts a 32-byte base64 PII key as well as 64 hex chars', () => {
     process.env = { ...process.env, ...safeProduction, PII_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64') };
+    expect(() => assertProductionSafeConfig()).not.toThrow();
+  });
+
+  it('refuses a self-hosted MinIO deployment with no root password set', () => {
+    const env: any = { ...process.env, ...safeProduction, S3_ENDPOINT: 'http://minio:9000' };
+    delete env.MINIO_ROOT_PASSWORD;
+    process.env = env;
+    expect(() => assertProductionSafeConfig()).toThrow(/MINIO_ROOT_PASSWORD/);
+  });
+
+  it('refuses the burned MinIO dev default even when a value is present', () => {
+    process.env = {
+      ...process.env,
+      ...safeProduction,
+      S3_ENDPOINT: 'http://minio:9000',
+      MINIO_ROOT_PASSWORD: 'fapoms_minio_secret',
+    };
+    expect(() => assertProductionSafeConfig()).toThrow(/MINIO_ROOT_PASSWORD/);
+  });
+
+  it('accepts a self-hosted MinIO deployment with a real root password', () => {
+    process.env = {
+      ...process.env,
+      ...safeProduction,
+      S3_ENDPOINT: 'http://minio:9000',
+      MINIO_ROOT_PASSWORD: 'a-genuinely-random-minio-password',
+    };
+    expect(() => assertProductionSafeConfig()).not.toThrow();
+  });
+
+  it('does not require MINIO_ROOT_PASSWORD when pointed at real AWS S3', () => {
+    const env: any = {
+      ...process.env,
+      ...safeProduction,
+      S3_ENDPOINT: 'https://s3.ap-south-1.amazonaws.com',
+    };
+    delete env.MINIO_ROOT_PASSWORD;
+    process.env = env;
     expect(() => assertProductionSafeConfig()).not.toThrow();
   });
 

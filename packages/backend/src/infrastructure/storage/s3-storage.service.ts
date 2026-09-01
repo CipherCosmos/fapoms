@@ -117,7 +117,16 @@ export class S3StorageService implements StorageEngine, OnModuleInit {
    * numbers.
    *
    * `STORAGE_SSE` selects the algorithm (`AES256` default, or `aws:kms` with `STORAGE_SSE_KMS_KEY_ID`).
-   * Non-fatal: some MinIO deployments manage encryption at the volume level, so a failure only warns.
+   *
+   * NON-FATAL, and it has to stay that way: community-edition MinIO cannot satisfy SSE-S3 at all
+   * without a separate KMS deployment (Vault, or MinIO KES + an external KMS) — this is a MinIO
+   * limitation, not a misconfiguration on our side (github.com/minio/minio/issues/6329). Real AWS
+   * S3 does not have this restriction and this call should simply succeed there. Making this fatal
+   * in production would mean the API refuses to boot on any self-hosted MinIO deployment until
+   * someone stands up a KMS — which, checked directly against this deployment's host, is not there:
+   * no LUKS, no cloud-provider disk encryption (it isn't a cloud VM), nothing. So today this failing
+   * is not "encryption is handled elsewhere" — it genuinely is not handled anywhere, and the warning
+   * says so plainly rather than reassuring past the point of being true.
    */
   private async ensureBucketEncryption(): Promise<void> {
     const algo = this.config.get<string>('STORAGE_SSE', 'AES256');
@@ -141,10 +150,22 @@ export class S3StorageService implements StorageEngine, OnModuleInit {
       );
       this.logger.log(`Applied default encryption (${algo}) to bucket "${this.bucket}".`);
     } catch (err: any) {
-      this.logger.warn(
-        `Could not set default encryption on bucket "${this.bucket}" — confirm encryption is handled at ` +
-          `the storage layer: ${err?.message}`,
-      );
+      const looksLikeMissingKms = /KMS is not configured/i.test(String(err?.message ?? ''));
+      if (looksLikeMissingKms) {
+        this.logger.warn(
+          `Bucket "${this.bucket}" has NO server-side encryption, and this storage backend cannot ` +
+            `provide it without a KMS (community MinIO requires Vault or MinIO KES for SSE-S3 — ` +
+            `see github.com/minio/minio/issues/6329). Documents in this bucket, including any ` +
+            `government-ID scans, are stored as plaintext unless the underlying disk is separately ` +
+            `encrypted. Confirm the host volume has full-disk encryption, or deploy a KMS so this ` +
+            `succeeds — do not assume one of these is already true without checking.`,
+        );
+      } else {
+        this.logger.warn(
+          `Could not set default encryption on bucket "${this.bucket}" — confirm encryption is handled ` +
+            `at the storage layer: ${err?.message}`,
+        );
+      }
     }
   }
 

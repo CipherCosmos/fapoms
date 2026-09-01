@@ -62,6 +62,11 @@ export class AuthController {
    * readable by anyone who could reach the API. This returns only what the login
    * screen needs to greet the user, for one exact identifier.
    */
+  // Unauthenticated and needs no credentials to call, so it is cheaper to hammer than login: an
+  // attacker enumerating assayer codes here to find live identifiers, then feeding them to a
+  // credential guess, never has to pay a single bcrypt compare along the way. Same per-IP budget
+  // as login for the same reason (shared office NAT, per-account lockout does the real work).
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @Post('verify-assayer')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Check an assayer identifier exists (pre-login, no credentials returned)' })

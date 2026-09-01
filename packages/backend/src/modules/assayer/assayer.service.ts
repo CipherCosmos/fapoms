@@ -9,6 +9,7 @@ import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.ent
 import { WorkforceAttributeEntity } from './workforce-attribute.entity';
 import { AssayerRemarkEntity } from './assayer-remark.entity';
 import { AssayerActivityEntity } from './assayer-activity.entity';
+import { TEMP_PASSWORD_WORDS } from './temp-password-words';
 import { AuditService } from '../../core/audit/audit.service';
 import { AssayerStateMachine } from './assayer.state-machine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
@@ -2410,19 +2411,21 @@ export class AssayerService implements OnModuleInit {
   }
 
   /**
-   * A short, sayable temporary password: two lowercase words joined by a digit and a symbol,
-   * e.g. "tiger4mango!". Long enough to clear the length rule, memorable enough to read aloud
-   * once, and never a shared default. Not meant to be kept — mustChangePassword forces a change
-   * at first sign-in.
+   * A short, sayable temporary password: four distinct lowercase words from the 2048-word
+   * BIP-39 English wordlist (see temp-password-words.ts), hyphen-joined with a trailing digit,
+   * e.g. "tiger-mango-river-stone4". Drawing 4 of 2048 without repeats gives roughly
+   * 2048 x 2047 x 2046 x 2045 ~= 1.75e13 (~2^44) possible passwords — far beyond any
+   * brute-force budget the account lockout allows — while staying readable aloud once and
+   * typeable with one thumb. Not meant to be kept — mustChangePassword forces a change at
+   * first sign-in.
    */
   private generateTemporaryPassword(): string {
-    const words = ['tiger', 'mango', 'river', 'stone', 'cloud', 'ember', 'ivory', 'coral', 'delta', 'flint', 'grove', 'larch'];
     // randomInt is a CSPRNG; Math.random must never mint a credential.
-    const pick = () => words[randomInt(words.length)];
-    const a = pick();
-    let b = pick();
-    while (b === a) b = pick();
-    return `${a}${randomInt(10)}${b}!`;
+    const chosen = new Set<string>();
+    while (chosen.size < 4) {
+      chosen.add(TEMP_PASSWORD_WORDS[randomInt(TEMP_PASSWORD_WORDS.length)]);
+    }
+    return `${[...chosen].join('-')}${randomInt(10)}`;
   }
 
   /**

@@ -9,6 +9,7 @@ import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.ent
 import { WorkforceAttributeEntity } from './workforce-attribute.entity';
 import { AssayerRemarkEntity } from './assayer-remark.entity';
 import { AssayerActivityEntity } from './assayer-activity.entity';
+import { TEMP_PASSWORD_WORDS } from './temp-password-words';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
@@ -293,6 +294,51 @@ describe('AssayerService', () => {
       expect(mockAuditService.recordEventSafe).toHaveBeenCalledWith(
         expect.objectContaining({ eventType: 'ASSAYER_PASSWORD_RESET', entityId: 'asr-1', userId: 'hr-1' }),
       );
+    });
+  });
+
+  /**
+   * The generator used to draw two words from a hardcoded 12-word list (1,320 possible
+   * passwords — guessable within the account-lockout budget). It now draws 4 distinct words
+   * from the 2048-word BIP-39 list, which is what these tests exist to protect: they would have
+   * caught the original keyspace bug via the "distinct across 10,000 draws" assertion below.
+   */
+  describe('generateTemporaryPassword', () => {
+    const generate = (): string => (service as any).generateTemporaryPassword();
+
+    it('joins 4 distinct words from TEMP_PASSWORD_WORDS, plus a trailing digit', () => {
+      const password = generate();
+      const match = password.match(/^([a-z]+)-([a-z]+)-([a-z]+)-([a-z]+)(\d)$/);
+      expect(match).not.toBeNull();
+
+      const [, w1, w2, w3, w4] = match!;
+      const drawnWords = [w1, w2, w3, w4];
+
+      for (const word of drawnWords) {
+        expect(TEMP_PASSWORD_WORDS).toContain(word);
+      }
+      expect(new Set(drawnWords).size).toBe(4);
+    });
+
+    it('never repeats a word within a single password, across many draws', () => {
+      for (let i = 0; i < 500; i++) {
+        const words = generate().replace(/\d$/, '').split('-');
+        expect(new Set(words).size).toBe(words.length);
+      }
+    });
+
+    /**
+     * The regression test for the original bug: the 12-word, two-word format only had
+     * 12 x 11 = 132 orderings (1,320 counting the digit/symbol slots) — generating 10,000
+     * passwords would collide constantly. The new 2048-word, 4-word format has ~1.75e13
+     * possibilities, so collisions across 10,000 draws should be effectively unseen.
+     */
+    it('produces overwhelmingly distinct passwords across 10,000 draws', () => {
+      const passwords = new Set<string>();
+      for (let i = 0; i < 10_000; i++) {
+        passwords.add(generate());
+      }
+      expect(passwords.size).toBeGreaterThan(9990);
     });
   });
 

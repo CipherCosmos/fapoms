@@ -116,6 +116,28 @@ export function assertProductionSafeConfig(): void {
     fatal.push('STORAGE_DRIVER must be "s3" in production. Local-disk storage loses audit evidence on every container replacement and 404s across replicas.');
   }
 
+  /**
+   * MinIO's root credential creates the account the backend then signs every S3 request with —
+   * a compose-level default here is not a placeholder waiting to be overridden, it is the actual
+   * password on the actual account holding every audit document, KYC scan and government ID in
+   * the system. `docker-compose.yml` falls back to `fapoms_minio_secret` (the same literal that
+   * lives in git history) when the env var is unset, so "unset in production" and "using the
+   * burned dev password" are the same failure.
+   *
+   * Deliberately does NOT check LIVEKIT_API_SECRET or FILE_SCAN_REQUIRED here even though both
+   * are known-weak in the current deployment: LiveKit is not in deploy/docker-compose.prod.yml
+   * at all today, and no ClamAV sidecar is deployed either, so making either fatal would not
+   * catch a misconfiguration — it would simply stop the API from booting until that
+   * infrastructure exists. A fatal check here has to name a config value the operator can fix in
+   * one line without standing up a new service first; those two currently can't.
+   */
+  const minioPassword = process.env.MINIO_ROOT_PASSWORD;
+  if (process.env.STORAGE_DRIVER === 's3' && process.env.S3_ENDPOINT && !/amazonaws\.com/.test(process.env.S3_ENDPOINT)) {
+    if (!minioPassword || minioPassword === 'fapoms_minio_secret') {
+      fatal.push('MINIO_ROOT_PASSWORD is unset or the burned dev default. This is the actual root credential on the bucket holding every audit document and KYC scan.');
+    }
+  }
+
   if (fatal.length > 0) {
     throw new Error(
       `Refusing to start in production with unsafe configuration:\n  - ${fatal.join('\n  - ')}`,

@@ -130,6 +130,22 @@ describe('security controls are still wired', () => {
         + 'across many usernames; this is the half that can.',
     },
     {
+      id: 'minio-root-password-production-check',
+      file: `${B}/main.ts`,
+      marker: 'MINIO_ROOT_PASSWORD is unset or the burned dev default',
+      why: 'Self-hosted MinIO in production must not boot on the dev-compose fallback password — '
+        + 'that is the actual root credential on the bucket holding every audit document and KYC '
+        + 'scan, and the literal is committed to git history.',
+    },
+    {
+      id: 'verify-assayer-is-throttled',
+      file: `${B}/modules/auth/auth.controller.ts`,
+      marker: 'cheaper to hammer than login',
+      why: 'verify-assayer needs no credentials to call at all, so it is a cheaper enumeration '
+        + 'oracle than login itself — an unthrottled version lets an attacker harvest live '
+        + 'assayer identifiers for free before ever spending a bcrypt compare.',
+    },
+    {
       id: 'account-lockout-on-failed-logins',
       file: `${B}/modules/auth/auth.service.ts`,
       marker: 'failedLoginAttempts',
@@ -268,6 +284,17 @@ describe('security controls are still wired', () => {
       why: 'The field-encryption layer degrades to plaintext passthrough when this key is unset. '
         + 'A production boot without it would silently store PAN, bank account and government-ID '
         + 'numbers as cleartext, with no failure signal until someone reads the table.',
+    },
+    {
+      id: 'osrm-does-not-silently-default-to-public-demo-server',
+      file: `${B}/modules/geo/routing.provider.ts`,
+      marker: 'SECURITY: OSRM_URL unset -> never silently call the public OSRM demo server',
+      why: 'Every route request sends an assayer\'s home/live coordinates and a branch\'s '
+        + 'coordinates to whatever OSRM_URL points at. This provider used to default an unset '
+        + 'OSRM_URL to https://router.project-osrm.org — the OSRM project\'s public demo server '
+        + 'in Germany, no SLA — so a fresh deployment leaked those coordinates to a third party '
+        + 'by default with no operator action required. Unset now degrades to the same '
+        + 'great-circle ESTIMATE used on a live OSRM failure instead of ever reaching the network.',
     },
   ];
 
