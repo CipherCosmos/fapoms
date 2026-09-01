@@ -9,17 +9,25 @@
 # has not marked green. That is the half that makes this more than a status badge.
 name: CI
 
+# `test` is here because it is where the work happens now. It used to be main-only, and the
+# consequence was not theoretical: development moved to `test` and every commit from that point
+# got zero typecheck, zero tests and zero build verification — the safety net was still hanging,
+# just no longer under anybody.
+#
+# Only `main` gates a deploy. Running here buys the verdict early, on the branch where a mistake is
+# still cheap to fix, instead of discovering it in the pull request that ships it.
 on:
   push:
-    branches: [main]
+    branches: [main, test]
   pull_request:
-    branches: [main]
+    branches: [main, test]
 
 # A newer push makes an in-flight run pointless — except on main, where every commit needs its own
-# verdict because the deploy gate reads the result per commit.
+# verdict because the deploy gate reads the result per commit. `test` may cancel freely: nothing
+# reads its result per commit, so only the latest answer matters.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   verify:

@@ -1,0 +1,46 @@
+# Files where a change is a security decision, not a refactor.
+#
+# On 2026-08-20 a roles-rename cleanup (`7c9ee664`, 39 files, 720 deletions) merged over a security
+# batch shipped hours earlier and removed seven controls — the forced-password-change guard,
+# refresh-token reuse detection, login timing equalisation, socket-room entitlement, and more.
+# Every one of them lived under a path listed below. Requiring a named reviewer here would have put
+# a human in front of that diff.
+#
+# GitHub only enforces this when branch protection has "Require review from Code Owners" enabled on
+# the branch. Without that setting this file is documentation, not a gate — turn it on for `main`
+# and `test` in Settings → Branches.
+#
+# Replace @DeepStacker with a team handle once there is more than one reviewer; a CODEOWNERS entry
+# naming only the author of most commits cannot function as a second pair of eyes.
+
+# ── Authentication, authorization, and the guard stack ──────────────────────────
+/packages/backend/src/modules/auth/                    @DeepStacker
+
+# ── Encryption, file scanning, signed download tokens ───────────────────────────
+/packages/backend/src/infrastructure/security/         @DeepStacker
+/packages/backend/src/modules/document/document-access-token.service.ts  @DeepStacker
+
+# ── Region scoping: the tenant boundary ─────────────────────────────────────────
+/packages/backend/src/infrastructure/scope/            @DeepStacker
+
+# ── Field-level visibility and redaction: who may see PAN, Aadhaar, bank details ─
+/packages/backend/src/modules/assayer/assayer-visibility.ts               @DeepStacker
+/packages/backend/src/infrastructure/http/assayer-redaction.interceptor.ts @DeepStacker
+
+# ── The audit trail, and what may never be wiped ────────────────────────────────
+/packages/backend/src/core/audit/                      @DeepStacker
+/packages/backend/src/infrastructure/data-reset/       @DeepStacker
+
+# ── Boot-time production safety assertions ──────────────────────────────────────
+/packages/backend/src/main.ts                          @DeepStacker
+
+# ── Who may release money ───────────────────────────────────────────────────────
+/packages/backend/src/modules/billing-engine/billing-roles.ts  @DeepStacker
+
+# ── The tripwire itself: removing an entry here must be deliberate and reviewed ──
+/packages/backend/src/security-controls.spec.ts        @DeepStacker
+/docs/SECURITY-CONTROLS.md                             @DeepStacker
+
+# ── CI and deploy: the gate, and the thing the gate protects ────────────────────
+/.github/                                              @DeepStacker
+/deploy/                                               @DeepStacker
