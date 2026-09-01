@@ -136,5 +136,101 @@ describe('UserService — password change cache invalidation & session revocatio
 
       expect(mockEvents.publish).toHaveBeenCalledWith('user:password-changed', { userId: 'u-2' });
     });
+
+    it('sets mustChangePassword so the forced-rotation guard has something to act on', async () => {
+      mockUserRepo.findOne.mockResolvedValue({
+        id: 'u-2', username: 'staff2', status: 'ACTIVE', failedLoginAttempts: 0, lockedUntil: null,
+        mustChangePassword: false,
+      });
+
+      await service.resetPassword('u-2', 'a-brand-new-password', 'admin-1');
+
+      expect(mockUserRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ mustChangePassword: true }),
+      );
+    });
+  });
+
+  describe('banned/weak password rejection', () => {
+    const queryBuilder = (user: any) => ({
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue(user),
+    });
+
+    it('rejects a known-weak default on admin reset', async () => {
+      mockUserRepo.findOne.mockResolvedValue({
+        id: 'u-3', username: 'staff3', email: 'staff3@example.com', status: 'ACTIVE',
+        failedLoginAttempts: 0, lockedUntil: null,
+      });
+
+      await expect(
+        service.resetPassword('u-3', 'password123', 'admin-1'),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockUserRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('rejects a known-weak default case-insensitively', async () => {
+      mockUserRepo.findOne.mockResolvedValue({
+        id: 'u-3', username: 'staff3', email: 'staff3@example.com', status: 'ACTIVE',
+        failedLoginAttempts: 0, lockedUntil: null,
+      });
+
+      await expect(
+        service.resetPassword('u-3', 'PaSSword123', 'admin-1'),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects a password equal to the user\'s own username', async () => {
+      mockUserRepo.findOne.mockResolvedValue({
+        id: 'u-3', username: 'jdoe', email: 'jdoe@example.com', status: 'ACTIVE',
+        failedLoginAttempts: 0, lockedUntil: null,
+      });
+
+      await expect(
+        service.resetPassword('u-3', 'JDoe', 'admin-1'),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects a password equal to the user\'s own email local-part', async () => {
+      mockUserRepo.findOne.mockResolvedValue({
+        id: 'u-3', username: 'jdoe', email: 'j.doe99@example.com', status: 'ACTIVE',
+        failedLoginAttempts: 0, lockedUntil: null,
+      });
+
+      await expect(
+        service.resetPassword('u-3', 'J.Doe99', 'admin-1'),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('rejects a banned password on self-service change', async () => {
+      const hash = await bcrypt.hash('old-password', 4);
+      mockUserRepo.createQueryBuilder.mockReturnValue(
+        queryBuilder({
+          id: 'u-1', username: 'staff1', email: 'staff1@example.com', passwordHash: hash,
+          mustChangePassword: true,
+        }),
+      );
+
+      await expect(
+        service.changePassword('u-1', 'old-password', 'changeme'),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockUserRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('still accepts a genuinely different strong password', async () => {
+      const hash = await bcrypt.hash('old-password', 4);
+      mockUserRepo.createQueryBuilder.mockReturnValue(
+        queryBuilder({
+          id: 'u-1', username: 'staff1', email: 'staff1@example.com', passwordHash: hash,
+          mustChangePassword: true,
+        }),
+      );
+
+      await expect(
+        service.changePassword('u-1', 'old-password', 'Tr0ub4dor&Zebra!Quilt'),
+      ).resolves.toBeUndefined();
+      expect(mockUserRepo.save).toHaveBeenCalled();
+    });
   });
 });

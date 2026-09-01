@@ -395,6 +395,7 @@ export class UserService {
 
   async resetPassword(id: string, newPassword: string, actorId: string): Promise<void> {
     const user = await this.findById(id);
+    this.assertStaffPasswordAcceptable(newPassword, user);
     user.passwordHash = await bcrypt.hash(newPassword, 12);
     // An admin resetting a password is, in practice, always trying to get someone
     // back in — including someone the login flow auto-locked after 5 failed
@@ -405,6 +406,11 @@ export class UserService {
     if (user.status === UserStatus.LOCKED) {
       user.status = UserStatus.ACTIVE;
     }
+    // The credential an admin just set is temporary by construction — the holder did not
+    // choose it. Forced-password-change enforcement (JwtAuthGuard, PASSWORD_CHANGE_EXEMPT_KEY)
+    // only has something to act on if this flag is actually set here; without it an admin-set
+    // password behaves as a normal, indefinitely-valid one.
+    user.mustChangePassword = true;
     user.updatedBy = actorId;
     await this.userRepository.save(user);
 
@@ -457,6 +463,7 @@ export class UserService {
     if (newPassword === currentPassword) {
       throw new BadRequestException('Your new password must be different from your current one.');
     }
+    this.assertStaffPasswordAcceptable(newPassword, user);
 
     user.passwordHash = await bcrypt.hash(newPassword, 12);
     // The holder has now chosen their own credential, so forced rotation is satisfied.
@@ -483,6 +490,41 @@ export class UserService {
       userId: id,
       remarks: `Self-service password update for ${user.username}`,
     });
+  }
+
+  /**
+   * Staff password floor beyond the DTOs' `@MinLength(8)`: rejects a small set of known-weak
+   * defaults, and — the more common real-world failure mode — a password that is just the
+   * account's own username or email local-part. Deliberately does NOT enforce character-class
+   * complexity or expiry/reuse history; those remain a separate business-policy decision.
+   */
+  private assertStaffPasswordAcceptable(password: string, user: Pick<UserEntity, 'username' | 'email'>): void {
+    const pw = (password ?? '').trim();
+    const lower = pw.toLowerCase();
+
+    const BANNED = [
+      'admin123',
+      'password',
+      'password123',
+      '12345678',
+      'qwerty123',
+      'changeme',
+      'letmein',
+      'welcome1',
+      'fapoms123',
+    ];
+    if (BANNED.includes(lower)) {
+      throw new BadRequestException('That password is a commonly used default. Please choose a different one.');
+    }
+
+    if (user.username && lower === user.username.toLowerCase()) {
+      throw new BadRequestException('Your password cannot be the same as your username.');
+    }
+
+    const emailLocalPart = user.email ? user.email.split('@')[0]?.toLowerCase() : undefined;
+    if (emailLocalPart && lower === emailLocalPart) {
+      throw new BadRequestException('Your password cannot be the same as your email address.');
+    }
   }
 
   async assignRoles(
