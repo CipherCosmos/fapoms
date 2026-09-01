@@ -13,6 +13,7 @@
 
 import {
   Injectable,
+  Logger,
   OnModuleInit,
   UnauthorizedException,
   ForbiddenException,
@@ -70,14 +71,16 @@ export class AuthService implements OnModuleInit {
     private readonly events: DomainEventPublisher,
     private readonly notificationDispatch: NotificationDispatchService,
   ) {
-    this.accessExpiration = Number(this.configService.get<any>(
-      'JWT_ACCESS_EXPIRATION',
+    this.accessExpiration = AuthService.expirationSeconds(
+      this.configService.get<any>('JWT_ACCESS_EXPIRATION'),
       900, // 15 minutes
-    ));
-    this.refreshExpiration = Number(this.configService.get<any>(
-      'JWT_REFRESH_EXPIRATION',
+      'JWT_ACCESS_EXPIRATION',
+    );
+    this.refreshExpiration = AuthService.expirationSeconds(
+      this.configService.get<any>('JWT_REFRESH_EXPIRATION'),
       604800, // 7 days
-    ));
+      'JWT_REFRESH_EXPIRATION',
+    );
     // Short by design: this cache removes the per-request 5-join RBAC load, but a
     // suspension or role change must take effect quickly. Explicit invalidation
     // (below + on logout) makes changes near-instant; the TTL only bounds the worst
@@ -643,6 +646,48 @@ export class AuthService implements OnModuleInit {
       refreshToken,
       expiresIn: this.accessExpiration,
     };
+  }
+
+  /**
+   * Token lifetime in SECONDS, from either a plain number of seconds or a `15m`/`7d` timespan.
+   *
+   * This used to be a bare `Number(...)`, and `Number('15m')` is NaN. Nothing checked, so the NaN
+   * travelled all the way to `jwtService.sign({ expiresIn: NaN })` and surfaced as a 500 on every
+   * single login: `"expiresIn" should be a number of seconds or string representing a timespan`.
+   * The refresh side failed even more quietly — `NaN * 1000` made every `expiresAt` an Invalid Date.
+   *
+   * What made it costly is that `.env.production.example` shipped `JWT_ACCESS_EXPIRATION=15m` and
+   * `JWT_REFRESH_EXPIRATION=7d`. A deployment configured exactly as documented could authenticate
+   * nobody, while a developer machine using the raw seconds worked perfectly — so it could only
+   * ever be found on a real deploy, and it looked like a code bug rather than a config one.
+   *
+   * Both spellings are accepted now, and the value can no longer be NaN: anything unusable falls
+   * back to the default and says so at boot, instead of being discovered one failed login later.
+   */
+  private static expirationSeconds(raw: unknown, fallback: number, name: string): number {
+    if (raw === undefined || raw === null || raw === '') return fallback;
+
+    const text = String(raw).trim();
+
+    // Plain seconds: "900". Also the shape ConfigService returns for a numeric default.
+    if (/^\d+$/.test(text)) {
+      const seconds = Number(text);
+      if (seconds > 0) return seconds;
+    }
+
+    // Timespan: "30s", "15m", "2h", "7d", "1w" — the format the env template documents.
+    const units: Record<string, number> = { s: 1, m: 60, h: 3600, d: 86400, w: 604800 };
+    const match = /^(\d+)\s*([smhdw])$/i.exec(text);
+    if (match) {
+      const value = Number(match[1]) * units[match[2].toLowerCase()];
+      if (value > 0) return value;
+    }
+
+    new Logger(AuthService.name).warn(
+      `${name}="${text}" is not a number of seconds or a timespan like 15m / 7d. ` +
+        `Falling back to ${fallback}s. Fix it in .env.docker.`,
+    );
+    return fallback;
   }
 
   private hashToken(token: string): string {
