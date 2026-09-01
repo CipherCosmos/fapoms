@@ -160,6 +160,97 @@ const STATE_ABBREVIATIONS: Record<string, string> = {
   jk: 'jammu and kashmir',
 };
 
+/**
+ * Levenshtein edit distance, bounded so a hopeless pair costs almost nothing to reject.
+ *
+ * Two rolling rows rather than a full matrix: this runs against ~40 candidates per lookup and a
+ * branch import calls it once per unmatched row, so the allocation is worth avoiding.
+ */
+function editDistance(a: string, b: string, ceiling: number): number {
+  if (a === b) return 0;
+  if (Math.abs(a.length - b.length) > ceiling) return ceiling + 1;
+
+  let prev = new Array<number>(b.length + 1);
+  let curr = new Array<number>(b.length + 1);
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
+
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i;
+    let rowBest = curr[0];
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+      if (curr[j] < rowBest) rowBest = curr[j];
+    }
+    // Every future row is >= this row's minimum, so we can stop once the whole row is hopeless.
+    if (rowBest > ceiling) return ceiling + 1;
+    const swap = prev;
+    prev = curr;
+    curr = swap;
+  }
+  return prev[b.length];
+}
+
+/**
+ * How many letters may differ before a spelling stops being a typo and starts being a different
+ * word. Measured against the longer of the two strings, compared despaced.
+ *
+ * A budget, not a similarity ratio, because a ratio does not describe typing. One dropped letter
+ * in "Kerala" is 17% of the word and one in "Chhattisgarh" is 8%, yet both are the same single
+ * mistake — any ratio strict enough to protect the short names rejects the short names too.
+ *
+ * Under five characters nothing is guessed at all: at that length a single edit reaches genuinely
+ * different words, and "Goa" has no safe neighbourhood.
+ */
+function editBudget(length: number): number {
+  if (length < 5) return 0;
+  if (length <= 9) return 1;
+  return 2;
+}
+
+/**
+ * The canonical state a misspelling identifies, or `null` when nothing is close enough — or when
+ * two different states are equally close.
+ *
+ * This exists so the alias tables do not have to enumerate misspellings. There is no finite list
+ * to write: branch files arrive with whatever an operator typed, and every hardcoded variant is
+ * one that had to fail in production first to be discovered.
+ *
+ * Spelling is guessed here; meaning never is. A tie between two states means the input does not
+ * identify one of them, so it is refused rather than decided by whichever entry happens to sort
+ * first — filing a branch under the wrong state sets its region, zone and holiday calendar wrong,
+ * which is worse than asking a human.
+ */
+function fuzzyStateMatch(key: string): string | null {
+  const input = key.replace(/\s/g, '');
+  if (input.length < 5) return null;
+
+  let best: string | null = null;
+  let bestDistance = Infinity;
+  let tied = false;
+
+  for (const [candidate, canonical] of Object.entries(STATE_CANONICAL_NAMES)) {
+    // Compared despaced so a missing space does not spend the budget meant for letters.
+    const target = candidate.replace(/\s/g, '');
+    const budget = editBudget(Math.max(input.length, target.length));
+    if (budget === 0) continue;
+
+    const distance = editDistance(input, target, budget);
+    if (distance > budget) continue;
+
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      best = canonical;
+      tied = false;
+    } else if (distance === bestDistance && canonical !== best) {
+      // Another alias of the same state is not a rival; another state is.
+      tied = true;
+    }
+  }
+
+  return best !== null && !tied ? best : null;
+}
+
 /** Lower-case, collapse whitespace, drop punctuation — so "J&K." and "j and k" agree. */
 function normalizeStateKey(value: string): string {
   return value
@@ -207,7 +298,11 @@ export function resolveRegion(value: string | null | undefined): Region | null {
     if (candidate.replace(/\s/g, '') === despaced) return region;
   }
 
-  return null;
+  // A misspelling that still identifies one state resolves to that state's region, so the two
+  // functions agree: anything canonicalStateName accepts must place somewhere, or a branch would
+  // be created with a valid state and no region.
+  const fuzzy = fuzzyStateMatch(key);
+  return fuzzy ? STATE_TO_REGION[normalizeStateKey(fuzzy)] ?? null : null;
 }
 
 /** True when `value` is one of the six canonical regions. */
@@ -301,7 +396,10 @@ export function canonicalStateName(value: string | null | undefined): string | n
   for (const [candidate, canonical] of Object.entries(STATE_CANONICAL_NAMES)) {
     if (candidate.replace(/\s/g, '') === despaced) return canonical;
   }
-  return null;
+
+  // Last tier: a misspelling close enough to identify exactly one state. Everything above is
+  // exact, so this only ever sees input no table could match.
+  return fuzzyStateMatch(key);
 }
 
 /**

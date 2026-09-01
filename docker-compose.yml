@@ -272,6 +272,17 @@ services:
       - "5173:5173"
     environment:
       - VITE_API_URL=http://backend:3000
+      # The public address this deployment is reached at. Vite blocks any Host header it does not
+      # recognise ("Blocked request. This host is not allowed"), so serving the app on a real
+      # domain needs that domain declared. Taken from the same .env.docker the backend reads —
+      # see allowedHostsFromEnv() in packages/frontend/vite.config.ts. Empty on a laptop, where
+      # localhost is allowed by default and none of this applies.
+      - APP_PUBLIC_URL=${APP_PUBLIC_URL:-}
+      - FRONTEND_URL=${FRONTEND_URL:-}
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
+      # Explicit override for anything the three above do not cover (a staging name, a bare host,
+      # or '.example.com' to allow every subdomain). Comma-separated.
+      - VITE_ALLOWED_HOSTS=${VITE_ALLOWED_HOSTS:-}
     volumes:
       # Bind-mount source code for hot reload
       - ./packages/frontend/src:/app/packages/frontend/src

@@ -28,6 +28,52 @@ const sharedTsSource = {
 // Locally, it's http://localhost:3000
 const API_TARGET = process.env.VITE_API_URL || 'http://localhost:3000';
 
+/**
+ * Host names this dev server will answer to, beyond the localhost set Vite always permits.
+ *
+ * Vite refuses any request whose Host header it does not recognise — a DNS-rebinding defence —
+ * and says so with "Blocked request. This host is not allowed", which reads like a bug in the app
+ * rather than a setting. Serving the stack behind a real domain therefore fails with a blank page
+ * until that domain is listed.
+ *
+ * Read from the environment rather than written here, because the deployment already states its
+ * own address: APP_PUBLIC_URL and FRONTEND_URL are what the app builds its links from, and
+ * CORS_ORIGINS is the same list from the API's side. Deriving from those keeps one source of
+ * truth in .env.docker, and means a new domain, a staging host or a second deployment needs no
+ * code change. VITE_ALLOWED_HOSTS is the explicit override for anything those three miss.
+ *
+ * A bare hostname is accepted as well as a URL, and a leading dot ('.example.com') covers every
+ * subdomain — Vite's own wildcard form. Ports are dropped: the check is on host only.
+ */
+function allowedHostsFromEnv(): string[] {
+  const hosts = new Set<string>();
+
+  const add = (raw?: string | null) => {
+    const value = raw?.trim();
+    if (!value) return;
+    // Wildcard entries pass through untouched; URL parsing would reject them.
+    if (value.startsWith('.')) {
+      hosts.add(value);
+      return;
+    }
+    try {
+      hosts.add(new URL(value.includes('://') ? value : `http://${value}`).hostname);
+    } catch {
+      // Not parseable as a host — ignore it rather than crash the dev server on a typo.
+    }
+  };
+
+  const addList = (raw?: string) => (raw ?? '').split(',').forEach(add);
+
+  addList(process.env.VITE_ALLOWED_HOSTS);
+  add(process.env.APP_PUBLIC_URL);
+  add(process.env.FRONTEND_URL);
+  addList(process.env.CORS_ORIGINS);
+
+  // Localhost and bare IPs are allowed by Vite already; listing them again only adds noise.
+  return [...hosts].filter((host) => host !== 'localhost' && host !== '127.0.0.1');
+}
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [sharedTsSource, react()],
@@ -93,6 +139,9 @@ export default defineConfig({
   server: {
     port: 5173,
     host: '0.0.0.0', // Allow access from outside (Docker)
+    // Public domains this deployment answers to, from the environment. Never `true`: that turns
+    // the DNS-rebinding protection off entirely for anyone who can point a name at this host.
+    allowedHosts: allowedHostsFromEnv(),
     hmr: {
       // When running in Docker, the client connects from the host browser
       // on localhost:5173, so we need clientPort to match the exposed port
