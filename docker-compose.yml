@@ -209,9 +209,20 @@ services:
       # Operational scripts (password rotation, backfills) run inside the container so they
       # use the same network and credentials as the app.
       - ./packages/backend/scripts:/app/packages/backend/scripts
-      # Bind-mount shared source & compiled dist
+      # Shared SOURCE is mounted; the compiled dist deliberately is NOT.
+      #
+      # `./packages/shared/dist:/app/packages/shared/dist` used to be here, and it broke every
+      # fresh clone. `dist/` is gitignored, so a new checkout has no such directory — Docker then
+      # creates an EMPTY one on the host and mounts it over the output the image built in
+      # `RUN npm run build:shared`. Every `@fapoms/shared` import fails to resolve, the backend
+      # never compiles, and the container still reports "Up" the whole time, so the stack looks
+      # healthy while the API is dead. It worked on machines that happened to have a stale
+      # `dist/` lying around from a host-side build, which is exactly why it survived this long.
+      #
+      # The image builds `shared` already, so nothing needs to be mounted for it to run. After
+      # editing `packages/shared/src`, rebuild it inside the container:
+      #     docker compose exec backend npm run build:shared
       - ./packages/shared/src:/app/packages/shared/src
-      - ./packages/shared/dist:/app/packages/shared/dist
       # Firebase service account (for FCM push notifications)
       - ./fapoms-gss-firebase-adminsdk-fbsvc-848e0d4888.json:/app/packages/backend/fapoms-gss-firebase-adminsdk-fbsvc-848e0d4888.json
       # NOTE: No uploads bind-mount — all files are stored in MinIO (fapoms-minio)
@@ -254,9 +265,8 @@ services:
       - ./packages/frontend/index.html:/app/packages/frontend/index.html
       - ./packages/frontend/vite.config.ts:/app/packages/frontend/vite.config.ts
       - ./packages/frontend/tsconfig.json:/app/packages/frontend/tsconfig.json
-      # Bind-mount shared source & compiled dist
+      # Source only — see the note on the backend service for why dist/ must not be mounted.
       - ./packages/shared/src:/app/packages/shared/src
-      - ./packages/shared/dist:/app/packages/shared/dist
       # Anonymous volume: keep container's node_modules
       - /app/node_modules
       - /app/packages/frontend/node_modules
@@ -297,9 +307,8 @@ services:
       # container then fails with "Cannot resolve entry file" until it is recreated.
       # A directory mount survives atomic writes and picks up newly added files.
       - ./packages/mobile:/app/packages/mobile
-      # Bind-mount shared source & compiled dist
+      # Source only — see the note on the backend service for why dist/ must not be mounted.
       - ./packages/shared/src:/app/packages/shared/src
-      - ./packages/shared/dist:/app/packages/shared/dist
       # Anonymous volumes: keep the container's own installs and build output so the
       # host's copies never shadow them.
       - /app/node_modules
