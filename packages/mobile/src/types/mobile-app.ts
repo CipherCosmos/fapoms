@@ -149,6 +149,8 @@ export interface AssayerAssignment {
   /** One-way routed km the quote priced, as recorded at offer time. */
   quotedDistanceKm?: number | null;
   checkedInAt?: string;
+  /** When they left the branch. Present only once checked out; closes the on-site window. */
+  checkedOutAt?: string;
   checkInGeoLat?: number;
   checkInGeoLng?: number;
   customerPdfUrl?: string;

@@ -15,6 +15,8 @@ import { AssayerStateMachine } from './assayer.state-machine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { CacheService } from '../../infrastructure/cache/cache.service';
+import { rbacPrincipalCacheKey } from '../auth/auth.service';
 import { EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey } from '@fapoms/shared';
 import { COMMITTED_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
@@ -319,6 +321,9 @@ export class AssayerService implements OnModuleInit {
     private readonly notificationDispatch: NotificationDispatchService,
     @InjectDataSource()
     private readonly dataSource: DataSource,
+    // CacheModule is @Global(), so this needs no module wiring. Used only to invalidate the RBAC
+    // principal cache synchronously on a password change — see changeOwnPassword/resetPasswordByStaff.
+    private readonly cache: CacheService,
   ) {}
 
   onModuleInit() {
@@ -921,7 +926,26 @@ export class AssayerService implements OnModuleInit {
       `Base location set by the assayer to ${latitude.toFixed(5)}, ${longitude.toFixed(5)} from the app.`)
       .catch(() => undefined);
 
-    return this.findOne(id);
+    /**
+     * Announce it, like every other write to this record does.
+     *
+     * This path published nothing, so confirming a map pin on the phone reached neither the
+     * cached HR overview nor the websocket the open roster listens on. `latitude` is one of the
+     * seven critical record fields, which made this the one gap an assayer could close where the
+     * web was guaranteed not to notice until someone reloaded the page.
+     */
+    const saved = await this.findOne(id);
+    this.eventPublisher.publish('assayer:updated', {
+      eventType: 'assayer:updated',
+      aggregateId: id,
+      userId: userId ?? id,
+      // Carried so the gateway can scope the broadcast to this organisation's rooms — without it
+      // `emitOperational` falls back to the whole `staff` room.
+      organizationId: (saved as any)?.organizationId,
+      payload: { id, displayName: (saved as any)?.displayName },
+    });
+
+    return saved;
   }
 
   /**
@@ -2346,6 +2370,13 @@ export class AssayerService implements OnModuleInit {
       updatedBy: assayerId,
     });
 
+    // Deterministic, awaited invalidation of the cached RBAC principal, and revocation of every
+    // other session — the assayer-mobile-principal equivalent of UserService.changePassword. See
+    // the comments there: without this, a stolen/lingering refresh token would keep rotating for
+    // the full refresh TTL after the password that was supposed to kill it changed.
+    await this.cache.del(rbacPrincipalCacheKey(assayerId));
+    this.eventPublisher.publish('user:password-changed', { userId: assayerId });
+
     /**
      * Credential changes are audited.
      *
@@ -2394,6 +2425,12 @@ export class AssayerService implements OnModuleInit {
       mustChangePassword: true,
       updatedBy: actorId,
     });
+
+    // Same reasoning as changeOwnPassword: an HR-initiated reset is, in practice, always a
+    // response to "this assayer is locked out or their credential may be compromised" — ending
+    // every existing session is the point of it, not a side effect.
+    await this.cache.del(rbacPrincipalCacheKey(assayerId));
+    this.eventPublisher.publish('user:password-changed', { userId: assayerId });
 
     // Who reset whose credential, and when — see the note in changeOwnPassword.
     await this.auditService.recordEventSafe({

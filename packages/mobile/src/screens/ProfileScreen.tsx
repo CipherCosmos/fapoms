@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, TextInput, TextStyle, Modal, Alert, Dimensions, ScrollView, ActivityIndicator } from 'react-native';
 import * as Location from 'expo-location';
 import { useTheme, ThemePreference } from '../theme/ThemeProvider';
@@ -12,7 +12,13 @@ import { useLocation } from '../context/LocationContext';
 // INDIAN_STATES and canonicalStateName are the SAME canonical list the backend validates a saved
 // address against (assayer.service.ts → assertAddressConsistent rejects anything else outright), so
 // the state field is a picker over that list rather than a free-text box that can only fail.
-import { formatRupees as money, INDIAN_STATES, canonicalStateName } from '@fapoms/shared';
+import {
+  formatRupees as money,
+  INDIAN_STATES,
+  canonicalStateName,
+  splitMissingByOwnership,
+  HR_MAINTAINED_ASSAYER_FIELDS,
+} from '@fapoms/shared';
 import { MapPicker, isPlausibleIndianCoord, INDIA_CENTRE } from '../components/ui/MapPicker';
 import { getPreference, setPreference as setDevicePreference } from '../services/preferences';
 import { MobileApiService, NotificationPreference, getApiBaseUrl } from '../services/api.service';
@@ -32,9 +38,76 @@ import { versionLine } from '../utils/appVersion';
  * theme, PIN) have been removed. They were never persisted and never read — see
  * services/preferences.ts, which now owns them and is consulted where each one matters.
  */
+/**
+ * This screen's state, restated under the API's own field names.
+ *
+ * The completeness list in @fapoms/shared is keyed the way the API is (`emergencyContactPhone`,
+ * `latitude`), while this screen has always used shorter local names (`emergencyPhone`). Rather
+ * than rename state used by a dozen render sites, translate once, here, so exactly one function
+ * decides what "incomplete" means for both the phone and the web.
+ *
+ * `latitude` is reported as blank when it is 0: `emptyProfile` seeds the pair with 0/0 when the
+ * device has no fix, and 0,0 is the Atlantic — a placeholder, not a home address, and precisely
+ * the value the record-completeness check exists to flag.
+ */
+export function assayerRecordFromProfile(p: {
+  phone?: string; panNumber?: string; bankAccountNumber?: string; ifscCode?: string;
+  joiningDate?: string; emergencyPhone?: string; latitude?: number;
+}): Record<string, unknown> {
+  return {
+    phone: p.phone,
+    panNumber: p.panNumber,
+    bankAccountNumber: p.bankAccountNumber,
+    ifscCode: p.ifscCode,
+    joiningDate: p.joiningDate,
+    emergencyContactPhone: p.emergencyPhone,
+    latitude: p.latitude ? String(p.latitude) : '',
+  };
+}
+
+/**
+ * Why a field is locked, decided by the shared policy rather than by this file.
+ *
+ * The lock reasons were hardcoded strings on each input, so the phone held its own opinion about
+ * what the API would accept. `GET /assayers/profile/editable-fields` was built specifically so a
+ * client would not do that, and nothing ever called it. Reading the same list the API enforces
+ * from `@fapoms/shared` is better still: no round-trip, no loading state, no failure mode, and a
+ * field that moves between the two lists changes the phone with it.
+ *
+ * Returns `undefined` for anything the assayer may edit, which is what `FieldInput` wants.
+ */
+export function lockReasonFor(key: string): string | undefined {
+  if (!HR_MAINTAINED_ASSAYER_FIELDS.includes(key)) return undefined;
+  return HR_LOCK_REASONS[key] ?? 'Held by the back office — ask HR to change it.';
+}
+
+/** The wording per field. Only the sentence lives here; whether it locks does not. */
+const HR_LOCK_REASONS: Record<string, string> = {
+  maxDailyWorkload: 'Set by operations — it decides how much work you can be offered.',
+  maxWeeklyWorkload: 'Set by operations, alongside your daily limit.',
+  panNumber: 'Held by HR. Contact your HR coordinator to correct this.',
+  bankAccountNumber: 'Payment details are changed by HR only, so a payout cannot be redirected from a handset.',
+  ifscCode: 'Changed by HR alongside your bank account.',
+  joiningDate: 'Set by HR — it drives tenure, leave and settlement.',
+  employmentType: 'Set by HR as part of your contract terms.',
+  performanceRating: 'Recorded by operations from completed work.',
+};
+
+/** Which sub-screen fixes a given gap, so "Complete it" lands somewhere useful. */
+export const PROFILE_SECTION_FOR_FIELD: Record<string, string> = {
+  phone: 'contact',
+  emergencyContactPhone: 'emergency',
+  latitude: 'address',
+  panNumber: 'payment',
+  bankAccountNumber: 'payment',
+  ifscCode: 'payment',
+};
+
 export interface ProfileDataState {
   phone: string;
   alternatePhone: string;
+  /** Self-editable, and what system notification emails go to. */
+  email: string;
   address: string;
   city: string;
   state: string;
@@ -54,6 +127,8 @@ export interface ProfileDataState {
   panNumber: string;
   bankAccountNumber: string;
   ifscCode: string;
+  /** HR-maintained, read-only here. Present so the completeness banner can count it. */
+  joiningDate: string;
   maxDailyWorkload: number;
   maxWeeklyWorkload: number;
   employmentType: string;
@@ -190,7 +265,9 @@ const FieldInput: React.FC<{
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;
-  keyboardType?: 'default' | 'numeric' | 'phone-pad';
+  // 'email-address' included so the email field gets the @ key rather than a general keyboard —
+  // a field typed once and mistyped once is a notification address nobody notices is wrong.
+  keyboardType?: 'default' | 'numeric' | 'phone-pad' | 'email-address';
   autoCapitalize?: 'none' | 'characters' | 'words';
   /**
    * Maintained by HR and refused by the server on a self-edit. Rendered read-only with the
@@ -790,18 +867,39 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   /**
    * The details the back office needs before this assayer can be paid or dispatched.
    *
-   * Ordered by consequence: without a bank account and PAN the billing run cannot pay them at
-   * all, and without a phone number the desk cannot reach them at a branch.
+   * Counted from `ASSAYER_RECORD_FIELDS` in @fapoms/shared — the same list the web roster and the
+   * HR overview count from. This screen used to keep its own five-field version, which left out
+   * `joiningDate` and `latitude`, so the phone could say "Your record is complete" while the web
+   * still listed the person under "Incomplete record". Two lists, two answers, and the person
+   * being told they were done was the one who could not see the other screen.
+   *
+   * The canonical list is keyed the way the API is (`emergencyContactPhone`), and this screen's
+   * state uses its own shorter names, so the adapter below restates the phone's values under the
+   * canonical keys. It is a shape translation, not a second opinion about what is required —
+   * `profile-record-fields.spec` fails if a critical key ever stops being mapped here.
    */
-  const missingFields = ([
-    { value: profile.bankAccountNumber, label: 'Bank account number', target: 'payment' as const },
-    { value: profile.ifscCode, label: 'IFSC code', target: 'payment' as const },
-    { value: profile.panNumber, label: 'PAN number', target: 'payment' as const },
-    { value: profile.phone, label: 'Phone number', target: 'contact' as const },
-    { value: profile.emergencyPhone, label: 'Emergency contact', target: 'emergency' as const },
-  ]).filter((f) => !String(f.value ?? '').trim());
+  const canonicalRecord = useMemo(
+    () => assayerRecordFromProfile(profile),
+    [profile],
+  );
 
-  const recordComplete = missingFields.length === 0;
+  /**
+   * Split by who can close the gap. The old banner listed PAN and bank account as things to fix,
+   * and both are HR-maintained — the assayer could open the field, find it locked, and have no
+   * idea what to do next. "Waiting on HR" is the difference between a task and a grievance.
+   */
+  const { yours: missingYours, hr: missingHr } = useMemo(
+    () => splitMissingByOwnership(canonicalRecord),
+    [canonicalRecord],
+  );
+
+  const missingFields = missingYours.map((f) => ({
+    value: null,
+    label: f.label,
+    target: PROFILE_SECTION_FOR_FIELD[f.key] ?? ('contact' as const),
+  }));
+
+  const recordComplete = missingYours.length === 0 && missingHr.length === 0;
 
   const THEME_OPTIONS: { key: ThemePreference; label: string; icon: 'contrast-outline' | 'sunny-outline' | 'moon-outline' }[] = [
     { key: 'system', label: 'System', icon: 'contrast-outline' },
@@ -870,7 +968,31 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
               <Icon name="chevron-forward" size={16} color={t.colors.warning} />
             </View>
           </Tappable>
-        ) : (
+        ) : null}
+
+        {/*
+          Gaps only HR can close, stated separately and NOT as a task.
+
+          These are the payment and employment fields — self-editing them is the payroll-diversion
+          route, so the API refuses. The old banner listed them alongside the assayer's own fields
+          under "details missing", which sent people to a screen where the input was greyed out
+          with no explanation. Telling someone their record is held up by something they cannot
+          touch is only fair if you also say who can.
+        */}
+        {missingHr.length > 0 ? (
+          <View style={{
+            flexDirection: 'row', alignItems: 'center', gap: t.space.sm,
+            padding: t.space.md, borderRadius: t.radius.md, backgroundColor: t.colors.surfaceAlt,
+          }}>
+            <Icon name="time-outline" size={18} color={t.colors.textMuted} />
+            <AppText variant="small" tone="muted" style={{ flex: 1 }}>
+              {`Waiting on HR: ${missingHr.map((f) => f.label.toLowerCase()).join(', ')}.`}
+              {' '}They are held by the back office, so you cannot change them here.
+            </AppText>
+          </View>
+        ) : null}
+
+        {recordComplete ? (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm }}>
             {/* Outline weight, not filled — this is a static "complete" indicator, not an
                 active/selected control. The app's convention (see TabDock icon/iconActive)
@@ -879,7 +1001,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             <Icon name="checkmark-circle-outline" size={18} color={t.colors.success} />
             <AppText variant="small" tone="muted">Your record is complete.</AppText>
           </View>
-        )}
+        ) : null}
       </Card>
 
       {/*
@@ -1108,6 +1230,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           <Card level={1} style={{ gap: t.space.lg }}>
             <FieldInput label="Phone" value={profile.phone} onChange={(v) => onUpdateProfileField('phone', v)} keyboardType="phone-pad" placeholder="+91…" readOnly={!editing} />
             <FieldInput label="Alternate phone" value={profile.alternatePhone} onChange={(v) => onUpdateProfileField('alternatePhone', v)} keyboardType="phone-pad" readOnly={!editing} />
+            <FieldInput label="Email" value={profile.email} onChange={(v) => onUpdateProfileField('email', v)} keyboardType="email-address" autoCapitalize="none" placeholder="you@example.com" readOnly={!editing} />
           </Card>
         </View>
       </SubScreen>
@@ -1159,13 +1282,23 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           <Card level={1} style={{ gap: t.space.lg }}>
             <View style={{ flexDirection: 'row', gap: t.space.md }}>
               <View style={{ flex: 1 }}>
-                <FieldInput label="Max per day" value={String(profile.maxDailyWorkload ?? '')} onChange={() => {}} lockedReason="Set by operations — it decides how much work you can be offered." />
+                <FieldInput label="Max per day" value={String(profile.maxDailyWorkload ?? '')} onChange={() => {}} lockedReason={lockReasonFor('maxDailyWorkload')} />
               </View>
               <View style={{ flex: 1 }}>
-                <FieldInput label="Max per week" value={String(profile.maxWeeklyWorkload ?? '')} onChange={() => {}} lockedReason="Set by operations, alongside your daily limit." />
+                <FieldInput label="Max per week" value={String(profile.maxWeeklyWorkload ?? '')} onChange={() => {}} lockedReason={lockReasonFor('maxWeeklyWorkload')} />
               </View>
             </View>
-            <FieldInput label="Preferred travel radius (km)" value={String(profile.preferredRadius ?? '')} onChange={(v) => onUpdateProfileField('preferredRadius', Number(v) || 0)} keyboardType="numeric" readOnly={!editing} />
+            {/*
+              "Preferred travel radius (km)" used to be an editable input here. It was a lie: no
+              such column exists on the assayer record, `updateAssayerProfile` never sent it, and
+              nothing in planning has ever read it. Typing in it marked the profile dirty, the
+              save reported success, and the next load reset it to the hardcoded default — so the
+              assayer believed they had limited how far they would travel, and the planner kept
+              offering work at any distance.
+
+              Removed rather than locked, because there is nothing behind it to explain. Making it
+              real means a column, a DTO field, and a distance check in the recommendation engine.
+            */}
             <FieldInput label="Preferred regions" value={profile.preferredRegions} onChange={(v) => onUpdateProfileField('preferredRegions', v)} autoCapitalize="words" readOnly={!editing} />
           </Card>
         </View>
@@ -1177,9 +1310,9 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             <AppText variant="caption" tone="faint">
               Held by HR for payouts and statutory filing. Changes are reviewed before they take effect.
             </AppText>
-            <FieldInput label="PAN" value={profile.panNumber} onChange={() => {}} lockedReason="Held by HR. Contact your HR coordinator to correct this." />
-            <FieldInput label="Bank account" value={profile.bankAccountNumber} onChange={() => {}} lockedReason="Payment details are changed by HR only, so a payout cannot be redirected from a handset." />
-            <FieldInput label="IFSC" value={profile.ifscCode} onChange={() => {}} lockedReason="Changed by HR alongside your bank account." />
+            <FieldInput label="PAN" value={profile.panNumber} onChange={() => {}} lockedReason={lockReasonFor('panNumber')} />
+            <FieldInput label="Bank account" value={profile.bankAccountNumber} onChange={() => {}} lockedReason={lockReasonFor('bankAccountNumber')} />
+            <FieldInput label="IFSC" value={profile.ifscCode} onChange={() => {}} lockedReason={lockReasonFor('ifscCode')} />
           </Card>
         </View>
       </SubScreen>

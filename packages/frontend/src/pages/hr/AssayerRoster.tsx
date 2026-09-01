@@ -318,6 +318,16 @@ export const AssayerRoster: React.FC<{
       'AssayerActivatedEvent', 'AssayerSuspendedEvent', 'AssayerDeactivatedEvent', 'AssayerOnLeaveEvent',
       'AssayerResignedEvent', 'AssayerTerminatedEvent', 'AssayerArchivedEvent',
       'AssayerDocumentVerificationStartedEvent', 'AssayerBackgroundCheckInitiatedEvent', 'AssayerTrainingStartedEvent',
+      /**
+       * Ordinary edits, which is what actually moves the "Incomplete record" column.
+       *
+       * The list above is lifecycle-only, so a detail corrected on the phone — a phone number, an
+       * emergency contact, a confirmed map pin — changed nothing on an open roster until someone
+       * reloaded. That is the same symptom as a stale cache and was routinely mistaken for one.
+       * Emitted verbatim (not `…Event`) because the gateway forwards this one under its own
+       * domain-event name; see events.gateway.ts.
+       */
+      'assayer:updated', 'assayer:created', 'assayer:deleted',
     ];
     events.forEach((e) => socket?.on(e, load));
     return () => { events.forEach((e) => socket?.off(e, load)); };

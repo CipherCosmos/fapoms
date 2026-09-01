@@ -66,6 +66,70 @@ export const ASSAYER_RECORD_FIELDS: AssayerRecordField[] = [
 export const CRITICAL_ASSAYER_RECORD_FIELDS = ASSAYER_RECORD_FIELDS.filter((f) => f.critical);
 
 /**
+ * What an assayer may change about their own record from the phone.
+ *
+ * Personal facts are the worker's own to correct — nobody in HR learns their new phone number
+ * sooner than they do. What stays out is chosen by what a self-edit could be used to *do*:
+ *
+ *  - Payment details (PAN, bank account, IFSC) are the classic payroll-diversion route. A payee
+ *    who can silently repoint their own payments is the whole attack, and these are audited
+ *    changes on a system producing legally significant evidence.
+ *  - Capacity limits and employment terms drive scheduling and eligibility, so an assayer could
+ *    otherwise remove themselves from the planning pool by setting a limit to zero.
+ *  - Joining date sets tenure, leave accrual and exit settlement.
+ *
+ * This list lives here, not in the controller, because three places need the same answer: the
+ * API enforces it, and the phone and the web both have to render the difference between "you can
+ * fix this" and "HR maintains this". It was previously known only to the backend, so the mobile
+ * app decided on its own which inputs to lock — and the two drifted.
+ */
+export const SELF_EDITABLE_ASSAYER_FIELDS: string[] = [
+  'phone', 'alternatePhone', 'email',
+  'address', 'city', 'district', 'state', 'pincode',
+  'latitude', 'longitude',
+  'emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation',
+  'languages', 'skills', 'experienceYears',
+  'preferredRegions',
+  // Availability is the assayer's own to declare: when they are off and the hours they work. The
+  // scheduler already honours both, so this is what stops the desk offering work on a day they
+  // are away, without an HR round-trip.
+  'leaves', 'workingHours',
+];
+
+/**
+ * Fields only HR may set. Named separately from "not self-editable" so an app can grey the input
+ * out with a reason rather than presenting a box that silently refuses to save.
+ */
+export const HR_MAINTAINED_ASSAYER_FIELDS: string[] = [
+  'panNumber', 'bankAccountNumber', 'ifscCode',
+  'joiningDate',
+  'maxDailyWorkload', 'maxWeeklyWorkload',
+  'employmentType', 'performanceRating',
+];
+
+/** True when the assayer can fill this gap themselves, rather than waiting on HR. */
+export function isSelfEditableAssayerField(key: string): boolean {
+  return SELF_EDITABLE_ASSAYER_FIELDS.includes(key);
+}
+
+/**
+ * The critical gaps split by who can actually close them.
+ *
+ * The phone used to show one undifferentiated list, built from its own hardcoded five fields, so
+ * it both under-reported (no joining date, no map location) and told people to fix things only HR
+ * can change. Saying "waiting on HR" is the difference between a task and a grievance.
+ */
+export function splitMissingByOwnership(
+  record: Record<string, unknown> | null | undefined,
+): { yours: AssayerRecordField[]; hr: AssayerRecordField[] } {
+  const missing = missingAssayerRecordFields(record);
+  return {
+    yours: missing.filter((f) => isSelfEditableAssayerField(f.key)),
+    hr: missing.filter((f) => !isSelfEditableAssayerField(f.key)),
+  };
+}
+
+/**
  * The critical fields a record is still missing. Blank means null, absent, or whitespace only —
  * the same test the SQL side applies with `IS NULL OR ::text = ''`.
  */

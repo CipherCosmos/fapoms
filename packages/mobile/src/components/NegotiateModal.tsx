@@ -31,14 +31,23 @@ export const NegotiateModal: React.FC<NegotiateModalProps> = ({
   const t = useTheme();
 
   /**
-   * Seeded from the assignment's own fee, never from an invented figure.
+   * Seeded from the TRAVEL component, because travel is what this box asks for.
    *
-   * This defaulted to `currentFee || 1800`. An assignment whose fee had not been resolved yet
-   * pre-filled the counter-offer box with ₹1800 — a number that appears nowhere in the fee
-   * policy — and an assayer who tapped submit without editing sent that to Operations as
-   * their asking price. An empty box asks the question instead of answering it wrongly.
+   * It was seeded from `currentFee`, the whole offered fee — and the value is submitted as
+   * `counterTravelFee`, which the server adds to the base fee to compute the new proposal
+   * (`assignment.service.ts` proposeCounterFee). So an assayer who opened the sheet and tapped
+   * Submit without editing was not repeating the current offer, as the pre-filled number
+   * implied: they were asking for base + the entire previous fee again. It also spent a
+   * negotiation round to do it, and running out of rounds auto-declines the assignment.
+   *
+   * Two earlier fixes to this same line went the other way — it once defaulted to a hardcoded
+   * ₹1800 — so the rule is worth stating plainly: this input is travel only, and it may only
+   * ever be seeded from a travel figure. An empty box asks the question instead of answering it
+   * wrongly, which is what happens when the desk quoted no travel at all.
    */
-  const [feeText, setFeeText] = useState(currentFee > 0 ? String(currentFee) : '');
+  const [feeText, setFeeText] = useState(
+    quotedTravelFee && quotedTravelFee > 0 ? String(quotedTravelFee) : '',
+  );
   const [remarks, setRemarks] = useState('');
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -47,10 +56,10 @@ export const NegotiateModal: React.FC<NegotiateModalProps> = ({
   // over the previous one's figure — `useState` only reads its initial value on first mount.
   useEffect(() => {
     if (!visible) return;
-    setFeeText(currentFee > 0 ? String(currentFee) : '');
+    setFeeText(quotedTravelFee && quotedTravelFee > 0 ? String(quotedTravelFee) : '');
     setRemarks('');
     setErrorMsg(null);
-  }, [visible, currentFee]);
+  }, [visible, quotedTravelFee]);
 
   /**
    * Placed after the hooks, not before them.

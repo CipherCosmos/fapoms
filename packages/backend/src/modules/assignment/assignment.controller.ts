@@ -108,6 +108,47 @@ class UpdateAssignmentDetailsRequestDto implements UpdateAssignmentDetailsDto {
   remarks?: string;
 }
 
+/**
+ * A real device fix, or nothing.
+ *
+ * This lived inline in check-in and is shared with check-out, because both are attendance
+ * evidence in a bank-audit system and a rule that protects one and not the other protects
+ * neither. Its history is the reason it is this strict: check-in once read
+ * `body.lat ?? body.latitude ?? 0`, so a request carrying no coordinates at all produced a
+ * *successful* attendance record at (0, 0) — a point in the Gulf of Guinea, indistinguishable in
+ * the table from a genuine reading. A missing fix has to fail loudly so the app can ask for
+ * location, rather than quietly asserting that a field worker was somewhere they have never been.
+ *
+ * `action` only shapes the wording; the rules do not vary.
+ */
+function requireRealCoordinate(body: any, action: 'Check-in' | 'Check-out'): { lat: number; lng: number } {
+  const rawLat = body?.lat ?? body?.latitude;
+  const rawLng = body?.lng ?? body?.longitude;
+  const lat = Number(rawLat);
+  const lng = Number(rawLng);
+
+  if (
+    rawLat === undefined || rawLat === null || rawLng === undefined || rawLng === null
+    || !Number.isFinite(lat) || !Number.isFinite(lng)
+  ) {
+    throw new BadRequestException(
+      `${action} needs your location. Turn on location for the app and try again.`,
+    );
+  }
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+    throw new BadRequestException(
+      `The location reported for this ${action.toLowerCase()} is not a valid coordinate.`,
+    );
+  }
+  // Exactly (0,0) is never a real Indian branch and is the classic "unset value" signature.
+  if (lat === 0 && lng === 0) {
+    throw new BadRequestException(
+      'Your device did not report a real location. Step outside if you are indoors, then try again.',
+    );
+  }
+  return { lat, lng };
+}
+
 @ApiTags('Assignments')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
@@ -183,25 +224,7 @@ export class AssignmentController {
      * Since check-in is the evidence that an assayer physically attended a bank branch, a
      * missing fix must fail loudly so the app can prompt the worker to enable location.
      */
-    const rawLat = body.lat ?? body.latitude;
-    const rawLng = body.lng ?? body.longitude;
-    const lat = Number(rawLat);
-    const lng = Number(rawLng);
-
-    if (rawLat === undefined || rawLat === null || rawLng === undefined || rawLng === null || !Number.isFinite(lat) || !Number.isFinite(lng)) {
-      throw new BadRequestException(
-        'Check-in needs your location. Turn on location for the app and try again.',
-      );
-    }
-    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-      throw new BadRequestException('The location reported for this check-in is not a valid coordinate.');
-    }
-    // Exactly (0,0) is never a real Indian branch and is the classic "unset value" signature.
-    if (lat === 0 && lng === 0) {
-      throw new BadRequestException(
-        'Your device did not report a real location. Step outside if you are indoors, then try again.',
-      );
-    }
+    const { lat, lng } = requireRealCoordinate(body, 'Check-in');
 
     const accuracy = Number.isFinite(Number(body.accuracy)) ? Number(body.accuracy) : undefined;
     const userId = req.user.id;
@@ -213,6 +236,40 @@ export class AssignmentController {
         error: result.error,
         message: result.message,
       };
+    }
+
+    return {
+      success: true,
+      message: result.message,
+      syncToken: result.assignment.syncToken,
+      timestamp: body.timestamp || new Date().toISOString(),
+      data: result.assignment,
+    };
+  }
+
+  /**
+   * The assayer leaves the branch, closing the on-site window check-in opened.
+   *
+   * Coordinates are validated exactly as strictly as check-in's, through the same helper: a
+   * departure recorded at (0, 0) would be as false as an arrival there, and "how far from the
+   * branch were they when they left?" is only answerable if the fix is real.
+   *
+   * Does not complete the assignment — see `recordCheckOut` for why leaving and finishing are
+   * deliberately separate facts.
+   */
+  @Post(':id/check-out')
+  @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @ApiOperation({ summary: 'GPS check-out — records when and where the assayer left the branch' })
+  async checkOut(@Param('id') id: string, @Body() dto: any, @Req() req: any) {
+    const body = dto || {};
+    const { lat, lng } = requireRealCoordinate(body, 'Check-out');
+    const accuracy = Number.isFinite(Number(body.accuracy)) ? Number(body.accuracy) : undefined;
+
+    const result = await this.assignmentService.recordCheckOut(
+      id, lat, lng, body.syncToken, req.user.id, accuracy,
+    );
+    if (!result.success) {
+      return { success: false, error: result.error, message: result.message };
     }
 
     return {

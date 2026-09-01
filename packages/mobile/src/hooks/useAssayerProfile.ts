@@ -12,10 +12,71 @@ import type { LeavePeriod } from '../components/AvailabilityModal';
  * fed travel-distance and routing calculations — a confident, entirely fabricated answer is worse
  * here than an obviously missing one.
  */
+/**
+ * The fields the assayer actually edited this session, as a partial update.
+ *
+ * Everything the screen holds but did not change is left out entirely, so the server applies a
+ * genuine PATCH rather than re-asserting the whole record. Two details matter:
+ *
+ *  - Coordinates move as a PAIR. `latitude` and `longitude` describe one fact, and the API
+ *    ignores a lone one; sending half a pin would silently do nothing while the screen showed
+ *    the new position.
+ *  - Comparison is on the value, not the reference, and normalised to string for scalars, since
+ *    a numeric input round-trips `10` as `'10'` and would otherwise look edited on every save.
+ */
+/**
+ * The only profile keys this screen may ever send, under their local names.
+ *
+ * Everything else `ProfileDataState` holds is either the server's to state (earnings, ratings,
+ * assignment counts) or HR's (PAN, bank, joining date, workload caps). The API enforces that with
+ * an ALL-OR-NOTHING check — one non-self-editable field anywhere in the body and the whole
+ * request is refused with 403, so a single stray key would turn "I changed my phone number" into
+ * "nothing I do ever saves". Listing what may go keeps that impossible by construction rather
+ * than by everyone remembering.
+ *
+ * Local names, because that is what the screen's state uses; `updateAssayerProfile` translates
+ * them to the API's (`emergencyName` → `emergencyContactName`). Kept in step with
+ * SELF_EDITABLE_ASSAYER_FIELDS by `self-editable-fields.spec`.
+ */
+const SENDABLE_PROFILE_KEYS = [
+  'phone', 'alternatePhone', 'email',
+  'address', 'city', 'district', 'state', 'pincode',
+  'latitude', 'longitude',
+  'emergencyName', 'emergencyPhone', 'emergencyRelation',
+  'skills', 'languages', 'preferredRegions', 'experienceYears',
+] as const;
+
+export function changedFields(
+  next: Record<string, any>,
+  base: Record<string, any>,
+): Record<string, any> {
+  const out: Record<string, any> = {};
+  const same = (a: any, b: any) => {
+    if (a === b) return true;
+    if (a == null && b == null) return true;
+    if (Array.isArray(a) || Array.isArray(b)) return JSON.stringify(a) === JSON.stringify(b);
+    if (typeof a === 'object' || typeof b === 'object') return JSON.stringify(a) === JSON.stringify(b);
+    return String(a ?? '') === String(b ?? '');
+  };
+
+  for (const key of SENDABLE_PROFILE_KEYS) {
+    if (key === 'latitude' || key === 'longitude') continue;
+    if (!same(next[key], base[key])) out[key] = next[key];
+  }
+
+  if (!same(next.latitude, base.latitude) || !same(next.longitude, base.longitude)) {
+    out.latitude = next.latitude;
+    out.longitude = next.longitude;
+  }
+
+  return out;
+}
+
 function emptyProfile(seed: { assayerCode?: string; latitude?: number; longitude?: number }): ProfileDataState {
   return {
     phone: '',
     alternatePhone: '',
+    email: '',
     address: '',
     city: '',
     state: '',
@@ -35,6 +96,10 @@ function emptyProfile(seed: { assayerCode?: string; latitude?: number; longitude
     panNumber: '',
     bankAccountNumber: '',
     ifscCode: '',
+    // Read-only, and here only so the record-completeness banner can see it. It is one of the
+    // seven fields the back office counts as critical, and the phone had no idea it existed —
+    // so a record the web listed as incomplete could read "complete" here.
+    joiningDate: '',
     maxDailyWorkload: 3,
     maxWeeklyWorkload: 15,
     employmentType: 'INTERNAL',
@@ -131,6 +196,7 @@ export function useAssayerProfile(user: {
         city: p.city || prev.city,
         state: p.state || prev.state,
         district: p.district || prev.district,
+        email: p.email ?? prev.email,
         pincode: p.pincode || prev.pincode,
         skills: joinArr(p.skills, prev.skills),
         languages: joinArr(p.languages, prev.languages),
@@ -139,6 +205,7 @@ export function useAssayerProfile(user: {
         panNumber: p.panNumber || prev.panNumber,
         bankAccountNumber: p.bankAccountNumber || prev.bankAccountNumber,
         ifscCode: p.ifscCode || prev.ifscCode,
+        joiningDate: p.joiningDate || prev.joiningDate,
         assayerCode: p.assayerCode || prev.assayerCode,
         completedAssignments: p.completedAssignments ?? 0,
         totalAssignments: p.totalAssignments ?? 0,
@@ -199,10 +266,30 @@ export function useAssayerProfile(user: {
         feedback.error('Not signed in', 'Sign in again before saving your profile.');
         return false;
       }
+      /**
+       * Send only what actually changed, never the whole profile.
+       *
+       * Every save used to re-send every field, including the entire address, and the server
+       * validates address consistency on each update (`assertAddressConsistent`). For the ~1,155
+       * roster-imported records whose pincode and state disagree, that meant editing a PHONE
+       * NUMBER was rejected with "Pincode 411045 is in Maharashtra, but the entered state is …"
+       * — an error about a field the assayer had never touched, on a screen where they could not
+       * see it. The record was un-editable until someone fixed an address they were not being
+       * asked about.
+       *
+       * Diffing against the baseline also removes a whole class of silent damage: a value the
+       * server holds and this screen never loaded (or loaded stale) can no longer be written back
+       * over the top. If the assayer did not change it, it is not in the request at all.
+       */
+      const changed = changedFields(profile, baseline);
+      if (Object.keys(changed).length === 0) {
+        feedback.success('No changes to save');
+        return true;
+      }
       // `updateAssayerProfile` reports failure by return value, not by throwing, so a catch alone
       // never saw a rejected save. This claimed "Profile saved successfully" on a 404 — and the
       // endpoint it called did not exist, so that is what every save did.
-      const result = await MobileApiService.updateAssayerProfile(user.id, profile);
+      const result = await MobileApiService.updateAssayerProfile(user.id, changed);
       if (!result.success) {
         feedback.error('Not saved', result.error || 'Your profile could not be saved. Please try again.');
         return false;
@@ -218,7 +305,7 @@ export function useAssayerProfile(user: {
     } finally {
       setSaving(false);
     }
-  }, [user?.id, profile, feedback]);
+  }, [user?.id, profile, baseline, feedback]);
 
   return { profile, saving, dirty, leaves, setLeaves, load, updateField, save };
 }

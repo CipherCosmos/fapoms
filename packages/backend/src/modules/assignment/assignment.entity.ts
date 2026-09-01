@@ -138,6 +138,30 @@ export class AssignmentEntity extends BaseEntity {
   @Column({ name: 'checked_in_at', type: 'timestamptz', nullable: true })
   checkedInAt: Date | null;
 
+  /**
+   * The other end of the on-site window. Same shape as the check-in columns above, because it is
+   * the same evidence about the opposite moment.
+   *
+   * Distinct from COMPLETED: leaving the branch and finishing the audit are different facts, and
+   * conflating them would either mark work done because someone walked out, or leave the visit
+   * open until paperwork lands days later. Time on site is the span between these two.
+   */
+  @Column({ name: 'checked_out_at', type: 'timestamptz', nullable: true })
+  checkedOutAt: Date | null;
+
+  @Column({ name: 'check_out_latitude', type: 'decimal', precision: 10, scale: 7, nullable: true })
+  checkOutLatitude: number | null;
+
+  @Column({ name: 'check_out_longitude', type: 'decimal', precision: 10, scale: 7, nullable: true })
+  checkOutLongitude: number | null;
+
+  @Column({ name: 'check_out_accuracy_meters', type: 'integer', nullable: true })
+  checkOutAccuracyMeters: number | null;
+
+  /** Distance from the branch when they left, recorded as evidence — never used to refuse. */
+  @Column({ name: 'check_out_distance_meters', type: 'integer', nullable: true })
+  checkOutDistanceMeters: number | null;
+
   @Column({ name: 'scheduled_date', type: 'date', nullable: true })
   scheduledDate: Date | null;
 

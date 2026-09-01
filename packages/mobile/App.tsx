@@ -446,6 +446,66 @@ function AppMain() {
   };
 
   /**
+   * Leaving the branch. Closes the on-site window; does NOT finish the audit.
+   *
+   * Confirmed first, because it is one-way: the server keeps the first departure it is given, so
+   * a mis-tap at 11am cannot be undone from the phone and would leave the visit recorded as three
+   * hours long. Check-in needs no such prompt — arriving twice is harmless.
+   *
+   * A real device fix is required for the same reason check-in requires one: this is attendance
+   * evidence, and a departure recorded at a fabricated position is worse than no departure at all.
+   */
+  const handleCheckOut = async (assignment: AssayerAssignment) => {
+    if (busyActionId) return;
+
+    const confirmed = await new Promise<boolean>((resolve) => {
+      Alert.alert(
+        'Check out of this branch?',
+        `This records that you have left ${assignment.branchName}. It does not submit your audit — you can still upload paperwork afterwards. The time cannot be changed once recorded.`,
+        [
+          { text: 'Not yet', style: 'cancel', onPress: () => resolve(false) },
+          { text: 'Check out', style: 'destructive', onPress: () => resolve(true) },
+        ],
+        { cancelable: true, onDismiss: () => resolve(false) },
+      );
+    });
+    if (!confirmed) return;
+
+    let fix = location;
+    if (!fix) fix = await refreshLocation();
+    if (!fix) {
+      Alert.alert(
+        'Location needed to check out',
+        'We could not get your location. Turn on location for this app, step outside if you are indoors, then try again.',
+        [{ text: 'Try again', onPress: () => handleCheckOut(assignment) }, { text: 'Cancel', style: 'cancel' }],
+      );
+      return;
+    }
+
+    setBusyActionId(assignment.id);
+    try {
+      const res = await MobileApiService.checkOutBranch(assignment.id, fix.latitude, fix.longitude, fix.accuracy ?? undefined);
+      if (res.success) {
+        await loadAssignments();
+        feedback.success('Checked out', `You have left ${assignment.branchName}. Upload your paperwork when it is ready.`);
+      } else {
+        feedback.error('Could not check out', res.error || 'Check-out failed. Please try again.');
+      }
+    } catch (err) {
+      const transport = MobileApiService.isTransportError(err);
+      feedback.error(
+        'Could not reach the server',
+        transport
+          ? 'Your check-out was not confirmed — the connection dropped. Move to better signal and tap Check out again; if it already went through, it will show as checked out.'
+          : (err as Error)?.message || 'Check-out failed. Please try again.',
+      );
+      loadAssignments().catch(() => {});
+    } finally {
+      setBusyActionId(null);
+    }
+  };
+
+  /**
    * The assignment detail view replaces the whole tab body, so it needs a way out.
    *
    * It had none: no back control was rendered, and switching tabs did not clear it either —
@@ -731,6 +791,7 @@ function AppMain() {
             expenseSummary={expenseSummary}
             onOpenAssignment={paperwork.open}
             onCheckIn={handleCheckIn}
+            onCheckOut={handleCheckOut}
             onScan={(a) => overlay.open({ name: 'scanner', assignment: a })}
             onNavigate={(a) => overlay.open({ name: 'navigate', assignment: a })}
             onAcceptOffer={(a) => handleAcceptAssignment(a.id)}
@@ -753,6 +814,7 @@ function AppMain() {
             onAcceptAssignment={handleAcceptAssignment}
             onOpenRejectModal={(id) => overlay.open({ name: 'reject', assignmentId: id, reason: '' })}
             onCheckIn={handleCheckIn}
+            onCheckOut={handleCheckOut}
             onOpenPdfDocs={paperwork.open}
             onOpenScanner={(a) => overlay.open({ name: 'scanner', assignment: a })}
             onOpenQueryChat={(a) => overlay.open({ name: 'queryChat', assignment: a })}

@@ -23,6 +23,8 @@ export interface HomeScreenProps {
   expenseSummary: ExpenseSummary;
   onOpenAssignment: (a: AssayerAssignment) => void;
   onCheckIn: (a: AssayerAssignment) => void;
+  /** Records leaving the branch. Does not finish the audit. */
+  onCheckOut?: (a: AssayerAssignment) => void;
   onScan: (a: AssayerAssignment) => void;
   onNavigate: (a: AssayerAssignment) => void;
   onAcceptOffer: (a: AssayerAssignment) => void;
@@ -74,6 +76,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   expenseSummary,
   onOpenAssignment,
   onCheckIn,
+  onCheckOut,
   onScan,
   onNavigate,
   onAcceptOffer,
@@ -181,6 +184,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           busy={busyActionId === current.id}
           onOpen={() => onOpenAssignment(current)}
           onCheckIn={() => onCheckIn(current)}
+          onCheckOut={onCheckOut && !current.checkedOutAt ? () => onCheckOut(current) : undefined}
           onScan={() => onScan(current)}
           onNavigate={() => onNavigate(current)}
         />
@@ -393,9 +397,11 @@ const CurrentJobCard: React.FC<{
   busy?: boolean;
   onOpen: () => void;
   onCheckIn: () => void;
+  /** Absent when the assayer has already left, so the card stops offering it. */
+  onCheckOut?: () => void;
   onScan: () => void;
   onNavigate: () => void;
-}> = ({ assignment, busy, onOpen, onCheckIn, onScan, onNavigate }) => {
+}> = ({ assignment, busy, onOpen, onCheckIn, onCheckOut, onScan, onNavigate }) => {
   const t = useTheme();
   const checkedIn = assignment.status === 'CHECKED_IN' || assignment.status === 'IN_PROGRESS';
   const subtitle = [assignment.bankName, assignment.solId].filter(Boolean).join(' · ');
@@ -449,6 +455,14 @@ const CurrentJobCard: React.FC<{
         <View style={{ flexDirection: 'row', gap: t.space.sm }}>
           {!checkedIn && (
             <Button label="Navigate" icon="navigate" variant="neutral" onPress={onNavigate} style={{ flex: 1 }} />
+          )}
+          {/*
+            Check-out takes the slot Navigate vacates once the assayer is on site — the row is
+            otherwise empty at exactly that status. Secondary on purpose: the audited return is
+            still the primary action, because leaving the branch is not what finishes the job.
+          */}
+          {checkedIn && onCheckOut && (
+            <Button label="Check out" icon="log-out-outline" variant="neutral" onPress={onCheckOut} style={{ flex: 1 }} />
           )}
           <Button label="Details" icon="chevron-forward" variant="neutral" onPress={onOpen} style={{ flex: 1 }} />
         </View>

@@ -1,7 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { CacheService } from '../../infrastructure/cache/cache.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 
 import { canonicalState } from '../planning/command-center.service';
 import { IN_FLIGHT_ASSIGNMENT_STATUSES, sqlStatusList } from '../assignment/assignment-workload';
@@ -87,12 +88,39 @@ const IDLE_AFTER_DAYS = 30;
  */
 const RECORD_FIELDS = ASSAYER_RECORD_FIELDS;
 
+/**
+ * The one key the whole overview is cached under. Named once so the write path below and the
+ * read path in `overview()` cannot drift — a stale key here is invisible: the cache simply never
+ * clears and the figures sit still for the full TTL.
+ */
+const OVERVIEW_CACHE_KEY = 'hr:workforce:overview';
+
 @Injectable()
-export class HrWorkforceService {
+export class HrWorkforceService implements OnModuleInit {
   constructor(
     @InjectDataSource() private readonly dataSource: DataSource,
     private readonly cache: CacheService,
+    private readonly events: DomainEventPublisher,
   ) {}
+
+  /**
+   * Drop the cached overview the moment an assayer record changes.
+   *
+   * Nothing invalidated this key. It was written with a 30 s TTL and left to expire, so an edit
+   * made on the phone took up to `HR_OVERVIEW_CACHE_TTL_S` to show on the web — and that variable
+   * is settable per deployment, so "up to 30 seconds" was only true where nobody had raised it.
+   * Stacked on the web's own 60 s `staleTime`, an assayer could fix their details, watch the
+   * phone say so, and still be told the record was incomplete a minute and a half later.
+   *
+   * The cache lives in shared Redis, so deleting the key on whichever node handled the write
+   * clears it for every replica at once.
+   */
+  onModuleInit(): void {
+    const invalidate = () => { void this.cache.del(OVERVIEW_CACHE_KEY); };
+    this.events.subscribe('assayer:updated', invalidate);
+    this.events.subscribe('assayer:created', invalidate);
+    this.events.subscribe('assayer:deleted', invalidate);
+  }
 
   private static num(v: any): number {
     return Number(v ?? 0);

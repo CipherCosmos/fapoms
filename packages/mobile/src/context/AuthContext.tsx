@@ -331,6 +331,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = () => {
+    // Revoke server-side FIRST — it needs the token that clearSession is about to delete. Not
+    // awaited: sign-out must work with no network, and the local clear below is what actually
+    // ends the session on this device.
+    void MobileApiService.revokeServerSession();
     MobileApiService.clearSession();
     // The live socket is part of the session. Left open it stays joined to this assayer's room,
     // so on a shared handset the next person to sign in would keep receiving the previous

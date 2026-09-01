@@ -11,6 +11,12 @@ export enum LocationPingSource {
   APP_TRACKING = 'APP_TRACKING',
   /** The fix captured at the moment of a branch check-in. Always trustworthy in time and place. */
   CHECK_IN = 'CHECK_IN',
+  /**
+   * The fix captured when they left the branch. Trustworthy in time the same way CHECK_IN is —
+   * both are taken under a deliberate human action — and it is what gives the return journey a
+   * start point, so travel back from a branch can be assessed rather than assumed.
+   */
+  CHECK_OUT = 'CHECK_OUT',
   /** Staff recorded a position on the assayer's behalf (correction, phone-channel assayer). */
   STAFF_RECORDED = 'STAFF_RECORDED',
 }

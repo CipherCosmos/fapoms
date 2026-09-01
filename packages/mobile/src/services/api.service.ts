@@ -139,6 +139,38 @@ export class MobileApiService {
     return { token, userId: userId || undefined, userName: userName || undefined };
   }
 
+  /**
+   * Tell the server the session is over, then forget it locally.
+   *
+   * Signing out only cleared the keystore. The refresh token stayed valid for its full lifetime
+   * — seven days by default — so anything holding a copy could keep minting fresh access tokens
+   * for a week after the assayer thought they had signed out. On a shared or lost handset that
+   * is the whole point of signing out.
+   *
+   * Deliberately fire-and-forget and never awaited by the caller: a phone out of coverage must
+   * still be able to sign out of the device. The local clear below always runs. `POST
+   * /auth/logout` revokes every refresh token for the user, so the next successful connection
+   * cannot resurrect this one either.
+   */
+  static async revokeServerSession(): Promise<void> {
+    // Read the token NOW, not inside the request. The caller does not await this, and
+    // `clearSession()` runs immediately after — so by the time an awaited helper got around to
+    // reading `this.authToken` it would already be null and the revoke would silently no-op.
+    const token = this.authToken;
+    if (!token) return;
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 5000);
+      await fetch(`${API_BASE_URL}/auth/logout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        signal: controller.signal,
+      }).finally(() => clearTimeout(timer));
+    } catch {
+      // Offline, or the token is already dead. Either way the local clear is what matters here.
+    }
+  }
+
   static clearSession() {
     this.authToken = null;
     this.refreshToken = null;
@@ -666,8 +698,18 @@ export class MobileApiService {
       Array.isArray(v) ? v : String(v ?? '').split(',').map((s) => s.trim()).filter(Boolean);
 
     const payload: Record<string, any> = {};
+    /**
+     * Send the field unless it was never loaded.
+     *
+     * `''` used to be dropped along with undefined, which made clearing a field impossible: an
+     * assayer could delete a wrong alternate phone or a stale emergency contact, watch it save,
+     * and find the old value still there on the next load. The API already understands an empty
+     * string as "set this to null" (see `update()` in assayer.service.ts), so the one thing this
+     * had to do was let the empty string through. `undefined`/`null` still mean "not edited on
+     * this screen" and are correctly left out of a partial update.
+     */
     const put = (key: string, value: any) => {
-      if (value !== undefined && value !== null && value !== '') payload[key] = value;
+      if (value !== undefined && value !== null) payload[key] = value;
     };
 
     put('phone', profileData.phone);
@@ -686,9 +728,15 @@ export class MobileApiService {
     put('emergencyContactName', profileData.emergencyName);
     put('emergencyContactPhone', profileData.emergencyPhone);
     put('emergencyContactRelation', profileData.emergencyRelation);
-    if (profileData.skills) payload.skills = toArray(profileData.skills);
-    if (profileData.languages) payload.languages = toArray(profileData.languages);
-    if (profileData.preferredRegions) payload.preferredRegions = toArray(profileData.preferredRegions);
+    // Same rule as `put` above, and for the same reason: `''` is a deliberate clear, not an
+    // absent field. Guarding on truthiness meant deleting your last skill, language or preferred
+    // region saved successfully and changed nothing — the old array survived every time.
+    const putArray = (key: string, value: any) => {
+      if (value !== undefined && value !== null) payload[key] = toArray(value);
+    };
+    putArray('skills', profileData.skills);
+    putArray('languages', profileData.languages);
+    putArray('preferredRegions', profileData.preferredRegions);
     if (profileData.experienceYears != null) payload.experienceYears = Number(profileData.experienceYears) || 0;
 
     try {
@@ -1245,6 +1293,10 @@ export class MobileApiService {
             }
             return undefined;
           })(),
+          // Both ends of the on-site window. Without these the app cannot tell 'checked in'
+          // from 'already left' and would keep offering Check out after it was done.
+          checkedInAt: item.checkedInAt ?? undefined,
+          checkedOutAt: item.checkedOutAt ?? undefined,
           documentReadiness: item.documentReadiness ?? { state: 'NONE', dispatchedCount: 0, message: '' },
           negotiationCount: item.negotiationCount != null ? Number(item.negotiationCount) : 0,
           remarks: item.remarks || '',
@@ -1364,6 +1416,35 @@ export class MobileApiService {
   }
 
   /**
+   * Close the on-site window check-in opened.
+   *
+   * Same shape and the same evidence as `checkInBranch`, because it is the same fact about the
+   * opposite moment. It does NOT complete the assignment — the audit is finished by the paperwork
+   * that follows, sometimes days later — so the app must not present this as "done".
+   *
+   * The server refuses a check-out with no check-in (`NOT_CHECKED_IN`) and treats a second one as
+   * already-done rather than an error, so a retry after a lost response is safe.
+   */
+  static async checkOutBranch(
+    assignmentId: string,
+    lat: number,
+    lng: number,
+    accuracy?: number,
+    syncToken?: string,
+  ): Promise<{ success: boolean; error?: string }> {
+    const response = await this.fetchWithAuth(`${API_BASE_URL}/assignments/${assignmentId}/check-out`, {
+      method: 'POST',
+      body: JSON.stringify({ lat, lng, accuracy, syncToken, timestamp: new Date().toISOString() }),
+    });
+    const resData = await response.json().catch(() => ({}));
+    return {
+      success: response.ok && resData.success !== false,
+      // The sentence, not the code — same reasoning as check-in above.
+      error: resData.message || resData.error,
+    };
+  }
+
+  /**
    * Push "where are they now" to the server.
    *
    * Resolves `true` on success and **throws** on failure, rather than the older
@@ -1436,39 +1517,18 @@ export class MobileApiService {
     }
   }
 
-  /**
-   * Uploads an assayer government identity document (Aadhaar, PAN, Driving Licence)
-   * during self-onboarding.
+  /*
+   * `uploadGovernmentDocument` was removed here.
+   *
+   * It POSTed to `/assayers/:id/government-document`, which has never existed on the API — the
+   * real routes are `PUT /assayers/:assayerId/document/:requirement` and
+   * `POST /assayers/:assayerId/document/:requirement/file`. It also had no callers anywhere in
+   * the app, so it was dead code aimed at a 404: it could only ever have failed, and its
+   * presence suggested identity upload was implemented when nothing on any screen did it.
+   *
+   * Uploading identity documents from the phone is a real gap, not a solved one. Adding it means
+   * wiring the two routes above, not restoring this.
    */
-  static async uploadGovernmentDocument(
-    documentType: string,
-    documentNumber: string,
-    expiryDate?: string,
-    filePaths?: string[],
-    remarks?: string,
-  ): Promise<{ success: boolean; data?: any; error?: string }> {
-    const id = this.currentUserId;
-    if (!id) return { success: false, error: 'Not authenticated' };
-    try {
-      const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/${id}/government-document`, {
-        method: 'POST',
-        body: JSON.stringify({
-          documentType,
-          documentNumber,
-          expiryDate,
-          filePaths: filePaths || [],
-          remarks,
-        }),
-      });
-      const data = await response.json().catch(() => ({}));
-      if (response.ok && data.success !== false) {
-        return { success: true, data: data.data };
-      }
-      return { success: false, error: data.message || 'Upload failed' };
-    } catch (err: any) {
-      return { success: false, error: err.message || 'Network error' };
-    }
-  }
 
   /**
    * Uploads the assayer's completed audit PDF as raw binary.

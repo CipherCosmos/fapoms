@@ -2968,4 +2968,149 @@ export class AssignmentService {
       message: `Checked in at ${lat}, ${lng}`,
     };
   }
+
+  /**
+   * The assayer leaves the branch.
+   *
+   * Deliberately NOT a status change. Leaving the branch and finishing the audit are different
+   * facts: completion is evidenced by the paperwork that follows, sometimes days later, and
+   * making departure complete the assignment would mark work done because somebody walked out of
+   * a building. Conversely, holding the visit "open" until documents land would make time on site
+   * unmeasurable. So this records one thing — when they left, and from where — and leaves the
+   * state machine alone.
+   *
+   * What it buys: time on site becomes statable, an abandoned ten-minute visit stops looking
+   * identical to a full day's audit, and the return journey gets a start point that travel
+   * assessment can measure rather than assume.
+   *
+   * Three guards, and no more:
+   *
+   *  - Only the assigned assayer, or staff correcting the record on their behalf. Same rule and
+   *    the same reasoning as check-in: this is attendance evidence in a bank-audit system.
+   *  - You cannot leave somewhere you never arrived. Without a check-in there is no window to
+   *    close, and a lone departure would be a claim about attendance with nothing behind it.
+   *  - First one wins, like check-in. A second tap does not move the departure time, so a
+   *    retry after a failed response cannot quietly extend the recorded visit.
+   *
+   * Deliberately NOT guarded by the geofence, unlike check-in. Check-in must be at the branch or
+   * it is not evidence of arrival; departure is by definition the moment of leaving, and someone
+   * who has reached their vehicle is not lying. Blocking it has no upside — they have already
+   * gone — and a real downside: an assayer unable to close a visit at all. The distance is
+   * recorded either way, so a departure logged from thirty kilometres away is visible to anyone
+   * reviewing the record rather than silently prevented.
+   */
+  async recordCheckOut(
+    id: string,
+    lat: number,
+    lng: number,
+    syncToken?: string,
+    userId?: string,
+    accuracyMeters?: number,
+  ): Promise<{ success: boolean; assignment: AssignmentEntity; error?: string; message?: string }> {
+    const assignment = await this.findOne(id);
+    if (!assignment) {
+      return { success: false, assignment: null as any, error: 'ASSIGNMENT_NOT_FOUND', message: 'Assignment not found.' };
+    }
+
+    const actorIsAssignedAssayer = !!userId && userId === assignment.assayerId;
+    if (!actorIsAssignedAssayer) {
+      const actor = await this.dataSource
+        .getRepository(UserEntity)
+        .findOne({ where: { id: userId }, relations: ['roles'] })
+        .catch(() => null);
+      const actorRoles: string[] = (actor?.roles ?? []).map((r: any) => r?.name).filter(Boolean);
+      const staffOverride = actorRoles.some((r) =>
+        [SystemRole.ADMIN, SystemRole.OPERATIONS].includes(r as SystemRole),
+      );
+      if (!staffOverride) {
+        return {
+          success: false,
+          assignment,
+          error: 'NOT_YOUR_ASSIGNMENT',
+          message: 'You can only check out of an assignment that is assigned to you.',
+        };
+      }
+    }
+
+    if (!assignment.checkedInAt) {
+      return {
+        success: false,
+        assignment,
+        error: 'NOT_CHECKED_IN',
+        message: 'You have not checked in to this branch yet, so there is nothing to check out of.',
+      };
+    }
+
+    if (syncToken && assignment.syncToken && syncToken !== assignment.syncToken) {
+      return {
+        success: false,
+        assignment,
+        error: 'CONFLICT_ASSIGNMENT_MODIFIED',
+        message: 'Assignment state has changed on server. Please refresh schedule.',
+      };
+    }
+
+    // Already closed: report success rather than an error, and do not move the time. A retry
+    // after a response that never arrived must not be punished, and must not rewrite the record.
+    if (assignment.checkedOutAt) {
+      return {
+        success: true,
+        assignment,
+        message: `Already checked out at ${new Date(assignment.checkedOutAt).toISOString()}`,
+      };
+    }
+
+    const branchLat = Number(assignment.projectBranch?.branch?.latitude);
+    const branchLng = Number(assignment.projectBranch?.branch?.longitude);
+    const distanceMeters =
+      Number.isFinite(branchLat) && Number.isFinite(branchLng) && !(branchLat === 0 && branchLng === 0)
+        ? Math.round(calculateHaversineDistance(lat, lng, branchLat, branchLng) * 1000)
+        : null;
+
+    const now = new Date();
+    assignment.checkOutLatitude = lat;
+    assignment.checkOutLongitude = lng;
+    assignment.checkOutAccuracyMeters = accuracyMeters ?? null;
+    assignment.checkOutDistanceMeters = distanceMeters;
+    assignment.checkedOutAt = now;
+    assignment.updatedBy = userId || assignment.assayerId || id;
+    assignment.syncToken = `SYNC-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+
+    const saved = await this.assignmentRepository.save(assignment);
+
+    // The departure fix joins the movement trail for the same reason the arrival does: it is the
+    // start point of the journey home, and without it the return leg can only be assumed.
+    await this.locationTrail
+      .record(saved.assayerId, lat, lng, {
+        source: LocationPingSource.CHECK_OUT,
+        accuracyMeters: accuracyMeters ?? null,
+        assignmentId: saved.id,
+        recordedAt: now,
+        recordedBy: userId || saved.assayerId,
+      })
+      .catch((err) => console.error('Failed to record check-out position:', err));
+
+    try {
+      const minutesOnSite = Math.max(
+        0,
+        Math.round((now.getTime() - new Date(saved.checkedInAt as Date).getTime()) / 60000),
+      );
+      await this.auditService.recordEvent({
+        category: EventCategory.OPERATIONAL,
+        eventType: 'ASSIGNMENT_CHECKED_OUT',
+        entityType: 'ASSIGNMENT',
+        entityId: saved.id,
+        userId: userId || saved.assayerId,
+        remarks: `Assayer ${saved.assayer?.displayName || ''} checked out of branch ${saved.projectBranch?.branch?.name || ''} (${lat}, ${lng}) after ${minutesOnSite} minute(s) on site.`,
+      });
+    } catch (err) {
+      console.error('Failed to log check-out audit event:', err);
+    }
+
+    return {
+      success: true,
+      assignment: saved,
+      message: `Checked out at ${lat}, ${lng}`,
+    };
+  }
 }

@@ -19,6 +19,8 @@ interface ScheduleScreenProps {
   onAcceptAssignment: (id: string) => void;
   onOpenRejectModal: (id: string) => void;
   onCheckIn: (assignment: AssayerAssignment) => void;
+  /** Records that the assayer has left the branch. Does not finish the audit. */
+  onCheckOut?: (assignment: AssayerAssignment) => void;
   onOpenPdfDocs: (assignment: AssayerAssignment) => void;
   onOpenScanner?: (assignment: AssayerAssignment) => void;
   onCounterOffer?: (assignment: AssayerAssignment) => void;
@@ -52,6 +54,7 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
   onAcceptAssignment,
   onOpenRejectModal,
   onCheckIn,
+  onCheckOut,
   onOpenPdfDocs,
   onOpenScanner,
   onCounterOffer,
@@ -329,6 +332,33 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                       onPress={() => (onOpenScanner ? onOpenScanner(a) : onOpenPdfDocs(a))}
                       full
                     />
+
+                    {/*
+                      Leaving the branch — the other end of check-in.
+
+                      Secondary, and below the scan action, because it is not how work gets
+                      finished: the audited return is. Check-out records only that they have left,
+                      so the paperwork above stays available afterwards.
+
+                      Shown once, then replaced by the time it recorded. Offering "Check out"
+                      again to someone who has already left invites a second tap that the server
+                      correctly ignores, which reads to the assayer as the app not working.
+                    */}
+                    {onCheckOut && (a.checkedOutAt ? (
+                      <AppText variant="caption" tone="faint" style={{ textAlign: 'center' }}>
+                        {`Left the branch at ${new Date(a.checkedOutAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`}
+                      </AppText>
+                    ) : (
+                      <Button
+                        label="Check out"
+                        icon="log-out-outline"
+                        variant="neutral"
+                        loading={busyActionId === a.id}
+                        disabled={busyActionId != null}
+                        onPress={() => onCheckOut(a)}
+                        full
+                      />
+                    ))}
 
                     {/*
                       The packet download appears only once operations has actually dispatched

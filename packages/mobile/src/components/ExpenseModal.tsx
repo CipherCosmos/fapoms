@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Modal, View, TextInput, TextStyle, KeyboardAvoidingView, Platform } from 'react-native';
 import { travelModeLabel, parseRupeeInput } from '@fapoms/shared';
 import { useTheme } from '../theme/ThemeProvider';
+import { MobileApiService } from '../services/api.service';
 import { AppText, Button, Card, Tappable } from './ui/primitives';
 
 type ExpenseCategory = 'TRAVEL_KM' | 'TOLL' | 'FOOD' | 'OTHER';
@@ -99,10 +100,35 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
   // here, `Number` at the call site — and they disagreed on exactly the input an Indian user is
   // most likely to type: "1,000" validated as 1 and submitted as NaN. See `parseRupeeInput`.
   const amountValue = parseRupeeInput(amt);
-  const amountValid = amountValue !== null;
+
+  /**
+   * The platform's own ceiling on a single claim, checked here rather than only at the server.
+   *
+   * `getPlatformLimits` already fetched `maxSingleExpenseClaim` and nothing read it, so an
+   * over-limit claim was typed out in full, submitted, and refused on the round trip — in the
+   * field, on a phone, often on a slow connection. The number is configurable per deployment
+   * (Administration → Platform Settings), so it is asked for rather than hardcoded, and a failed
+   * lookup falls back to the same default the server registry ships.
+   *
+   * The server still enforces it; this only means the assayer finds out while they are looking
+   * at the form.
+   */
+  const [maxClaim, setMaxClaim] = useState<number | null>(null);
+  useEffect(() => {
+    if (!visible) return;
+    let live = true;
+    MobileApiService.getPlatformLimits()
+      .then((l) => { if (live) setMaxClaim(l.maxSingleExpenseClaim ?? null); })
+      .catch(() => undefined);
+    return () => { live = false; };
+  }, [visible]);
+
+  const overLimit = amountValue !== null && maxClaim !== null && amountValue > maxClaim;
+  const amountValid = amountValue !== null && !overLimit;
 
   const handleSubmit = async () => {
-    // Block empty/zero claims and double-taps; the parent only validated the assignment.
+    // Block empty/zero claims, over-limit claims, and double-taps; the parent only validated the
+    // assignment.
     if (!amountValid || busy) return;
     setBusy(true);
     try {
@@ -199,6 +225,21 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
               placeholder="e.g. 250"
               placeholderTextColor={t.colors.textFaint}
             />
+            {/*
+              Said before it is needed, and again when it is exceeded. A ceiling the assayer only
+              discovers by having a filled-in claim rejected is a ceiling they meet at the worst
+              possible moment.
+            */}
+            {overLimit ? (
+              <AppText variant="small" tone="danger">
+                Over the ₹{Number(maxClaim).toLocaleString('en-IN')} limit for a single claim.
+                Split it across claims, or ask operations to approve it separately.
+              </AppText>
+            ) : maxClaim !== null ? (
+              <AppText variant="small" tone="faint">
+                Up to ₹{Number(maxClaim).toLocaleString('en-IN')} per claim.
+              </AppText>
+            ) : null}
           </View>
 
           <View style={{ gap: t.space.xs }}>

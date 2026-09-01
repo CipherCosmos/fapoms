@@ -3,6 +3,7 @@ import { getDataSourceToken } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { HrWorkforceService } from './hr-workforce.service';
 import { CacheService } from '../../infrastructure/cache/cache.service';
+import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 
 /**
  * Every count on the HR console describes the workforce, not the page.
@@ -33,7 +34,10 @@ describe('HrWorkforceService counts', () => {
         HrWorkforceService,
         { provide: getDataSourceToken(), useValue: { query } as unknown as DataSource },
         // Straight through — the cache is not what these tests are about.
-        { provide: CacheService, useValue: { wrap: async (_k: string, _t: number, fn: any) => fn() } },
+        { provide: CacheService, useValue: { wrap: async (_k: string, _t: number, fn: any) => fn(), del: jest.fn() } },
+        // The service subscribes on init so an assayer edit drops the cached overview instead of
+        // leaving it to expire. Not what these tests are about either; it just has to exist.
+        { provide: DomainEventPublisher, useValue: { subscribe: jest.fn(), publish: jest.fn() } },
       ],
     }).compile();
     service = module.get(HrWorkforceService);

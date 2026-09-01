@@ -14,7 +14,10 @@ import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { CacheService } from '../../infrastructure/cache/cache.service';
+import { rbacPrincipalCacheKey } from '../auth/auth.service';
 import { EventCategory, AssayerLifecycleStatus } from '@fapoms/shared';
+import * as bcrypt from 'bcrypt';
 
 describe('AssayerService', () => {
   let service: AssayerService;
@@ -83,6 +86,18 @@ describe('AssayerService', () => {
   /** Raw-SQL seam. `hasActiveAssignment` reads through this, so tests drive it from here. */
   const mockDataSource = { query: jest.fn().mockResolvedValue([]) };
 
+  // Tracks whether the cache invalidation has actually COMPLETED (not merely been kicked off) —
+  // same seam as UserService's password tests. A macrotask delay means this only flips `true`
+  // after a full turn of the event loop, so a regression to a fire-and-forget
+  // (`void this.cache.del(...)`) implementation would not have completed it by the time the
+  // surrounding service method's promise resolves.
+  let cacheInvalidated = false;
+  const mockCache = {
+    del: jest.fn().mockImplementation(
+      (..._keys: string[]) => new Promise<void>((resolve) => setTimeout(() => { cacheInvalidated = true; resolve(); }, 10)),
+    ),
+  };
+
   const mockWorkflowEngine = {
     registerWorkflow: jest.fn(),
     executeCommand: jest.fn().mockImplementation(async (key, id, cmd, from, to, uid, role, roles, action) => action()),
@@ -102,6 +117,7 @@ describe('AssayerService', () => {
         { provide: WorkflowEngine, useValue: mockWorkflowEngine },
         { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn() } },
         { provide: getDataSourceToken(), useValue: mockDataSource },
+        { provide: CacheService, useValue: mockCache },
       ],
     }).compile();
   }
@@ -111,6 +127,7 @@ describe('AssayerService', () => {
     service = module.get<AssayerService>(AssayerService);
     jest.clearAllMocks();
     mockWorkforceRepo.find.mockResolvedValue([]);
+    cacheInvalidated = false;
   });
 
   // ---------------------------------------------------------------------------
@@ -295,6 +312,25 @@ describe('AssayerService', () => {
         expect.objectContaining({ eventType: 'ASSAYER_PASSWORD_RESET', entityId: 'asr-1', userId: 'hr-1' }),
       );
     });
+
+    /**
+     * The assayer-mobile-principal equivalent of UserService.resetPassword's cache/session
+     * invalidation (see user.service.password.spec.ts). Without this, an assayer reset by HR —
+     * the standard response to "this account is locked out or compromised" — would keep every
+     * existing session, including a stolen refresh token, alive for the full refresh TTL.
+     */
+    it("drops the target assayer's cached RBAC principal, fully awaited, before returning", async () => {
+      await service.resetPasswordByStaff('asr-1', 'a-brand-new-password', 'hr-1');
+
+      expect(cacheInvalidated).toBe(true);
+      expect(mockCache.del).toHaveBeenCalledWith(rbacPrincipalCacheKey('asr-1'));
+    });
+
+    it('publishes user:password-changed so a stolen session cannot survive the reset', async () => {
+      await service.resetPasswordByStaff('asr-1', 'a-brand-new-password', 'hr-1');
+
+      expect(mockDomainEventPublisher.publish).toHaveBeenCalledWith('user:password-changed', { userId: 'asr-1' });
+    });
   });
 
   /**
@@ -339,6 +375,45 @@ describe('AssayerService', () => {
         passwords.add(generate());
       }
       expect(passwords.size).toBeGreaterThan(9990);
+    });
+  });
+
+  describe('changeOwnPassword', () => {
+    const currentPassword = 'current-password-1';
+
+    beforeEach(async () => {
+      const hash = await bcrypt.hash(currentPassword, 4);
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'asr-1', passwordHash: hash });
+      mockAssayerRepo.update.mockResolvedValue({ affected: 1 });
+    });
+
+    /**
+     * Mirrors UserService.changePassword's cache/session invalidation (see
+     * user.service.password.spec.ts). Without it, an assayer who just changed their own
+     * password — the standard response to "I think someone else has my credential" — would
+     * keep every other session, including a stolen refresh token, alive for the full refresh
+     * TTL: exactly the bug this closes on the assayer-mobile-principal side.
+     */
+    it("drops the caller's cached RBAC principal, fully awaited, before returning", async () => {
+      await service.changeOwnPassword('asr-1', currentPassword, 'brand-new-password-1');
+
+      expect(cacheInvalidated).toBe(true);
+      expect(mockCache.del).toHaveBeenCalledWith(rbacPrincipalCacheKey('asr-1'));
+    });
+
+    it('publishes user:password-changed so every other session is revoked', async () => {
+      await service.changeOwnPassword('asr-1', currentPassword, 'brand-new-password-1');
+
+      expect(mockDomainEventPublisher.publish).toHaveBeenCalledWith('user:password-changed', { userId: 'asr-1' });
+    });
+
+    it('never invalidates the cache when the current password is wrong', async () => {
+      await expect(
+        service.changeOwnPassword('asr-1', 'totally-wrong', 'brand-new-password-1'),
+      ).rejects.toThrow();
+
+      expect(mockCache.del).not.toHaveBeenCalled();
+      expect(mockDomainEventPublisher.publish).not.toHaveBeenCalled();
     });
   });
 
