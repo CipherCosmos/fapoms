@@ -16,6 +16,7 @@ describe('PATCH /documents/:id/status', () => {
     { updateStatus } as any,
     null as any, null as any, null as any, null as any,
     null as any, null as any, null as any, null as any, null as any,
+    null as any,
   );
   const req = { user: { id: 'u-1' } };
 

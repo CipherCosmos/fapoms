@@ -297,7 +297,7 @@ describe('EventsGateway — room subscription entitlement', () => {
     gateway = new EventsGateway(
       {} as any,
       new DomainEventPublisher(),
-      new RegionGuardService(dataSource as any),
+      new RegionGuardService(dataSource as any, { get: jest.fn().mockResolvedValue('log') } as any),
     );
   });
 
@@ -536,7 +536,7 @@ describe('EventsGateway — subscribe rate budget', () => {
     const gateway = new EventsGateway(
       {} as any,
       new DomainEventPublisher(),
-      new RegionGuardService(dataSource as any),
+      new RegionGuardService(dataSource as any, { get: jest.fn().mockResolvedValue('log') } as any),
     );
     const client = makeClient({ id: 'assayer-1', roles: [{ name: 'ASSAYER' }] });
 
@@ -566,7 +566,7 @@ describe('EventsGateway — subscribe rate budget', () => {
     const gateway = new EventsGateway(
       {} as any,
       new DomainEventPublisher(),
-      new RegionGuardService(dataSource as any),
+      new RegionGuardService(dataSource as any, { get: jest.fn().mockResolvedValue('log') } as any),
     );
     const spent = makeClient({ id: 'assayer-1', roles: [{ name: 'ASSAYER' }] });
     for (let i = 0; i < 60; i++) {

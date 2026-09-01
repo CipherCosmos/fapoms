@@ -24,7 +24,15 @@ import {
 import { Response } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
+import { MAX_UPLOAD_BYTES } from '../document/upload-validation';
+
+/** Same shape as `documentUploadMulterOptions` in document.controller.ts — see that file. */
+const projectBranchUploadMulterOptions = {
+  storage: memoryStorage(),
+  limits: { fileSize: MAX_UPLOAD_BYTES },
+};
 
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
@@ -406,7 +414,7 @@ export class ProjectController {
   @Post(':id/branches/upload')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('project:create:organization')
-  @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
+  @UseInterceptors(FileInterceptor('file', projectBranchUploadMulterOptions), FileScanInterceptor)
   @ApiOperation({ summary: 'Upload branches from Excel spreadsheet; large files are queued and return 202 with a job id' })
   async uploadBranches(
     @Param('id', ParseUUIDPipe) id: string,

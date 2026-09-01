@@ -11,12 +11,15 @@ import { BillingHistoryEntity } from './history.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ProjectEntity } from '../project/project.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
+import { AuditService } from '../../core/audit/audit.service';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
+import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { TypeOrmUnitOfWork } from '../../infrastructure/persistence/typeorm-unit-of-work';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
-import { BillingState, AssayerPayableStatus, PaymentMethod, PaymentDirection, InvoiceStatus, AssignmentStatus } from '@fapoms/shared';
+import { BillingState, AssayerPayableStatus, PaymentMethod, PaymentDirection, InvoiceStatus, AssignmentStatus, EventCategory } from '@fapoms/shared';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 
 /**
@@ -61,8 +64,19 @@ describe('BillingEngineService', () => {
     where: jest.fn().mockReturnThis(),
     andWhere: jest.fn().mockReturnThis(),
     orderBy: jest.fn().mockReturnThis(),
+    addOrderBy: jest.fn().mockReturnThis(),
+    // The region-scoping additions (listPayouts/listClientLines/findInvoicesPage, restricted
+    // path): a join to the assignment→project_branch→branch chain, the extra selected column,
+    // and pagination — all no-ops here unless a test overrides getRawAndEntities/getCount.
+    leftJoin: jest.fn().mockReturnThis(),
+    addSelect: jest.fn().mockReturnThis(),
+    setParameter: jest.fn().mockReturnThis(),
+    skip: jest.fn().mockReturnThis(),
+    take: jest.fn().mockReturnThis(),
     getMany: jest.fn(async () => []),
     getOne: jest.fn(async () => null),
+    getCount: jest.fn(async () => 0),
+    getRawAndEntities: jest.fn(async () => ({ entities: [], raw: [] })),
   });
 
   const entryRepo: any = {
@@ -86,6 +100,7 @@ describe('BillingEngineService', () => {
     find: jest.fn(async () => []),
     findOne: jest.fn(async () => null),
     findAndCount: jest.fn(async () => [[], 0]),
+    createQueryBuilder: jest.fn(() => queryBuilderStub()),
     manager: { query: managerQuery },
   };
   const invoiceRepo: any = {
@@ -94,6 +109,7 @@ describe('BillingEngineService', () => {
     find: jest.fn(async () => []),
     findOne: jest.fn(async () => null),
     findAndCount: jest.fn(async () => [[], 0]),
+    createQueryBuilder: jest.fn(() => queryBuilderStub()),
     manager: { query: managerQuery },
   };
   const historyRepo: any = {
@@ -184,6 +200,16 @@ describe('BillingEngineService', () => {
 
   const publish = jest.fn();
   const emitSafe = jest.fn();
+  // The compliance trail. `recordEvent` throws (matching the expense module's convention for
+  // money-adjacent audit calls), so a real failure would roll back the transaction it joined —
+  // never Safe here, we do not want a payout to "succeed" with no audit trace.
+  const recordEvent = jest.fn(async () => ({ id: 'audit-1' }));
+  // The staged region ceiling. Defaults to 'log' (the rollout default) and never refuses, so
+  // every pre-existing test — none of which pass a `scope` — is unaffected; tests below override
+  // `stagedMode` and assert on `assertRegionAllowedStaged`'s calls directly.
+  const stagedMode = jest.fn(async () => 'log' as 'off' | 'log' | 'enforce');
+  const assertRegionAllowedStaged = jest.fn(async () => undefined);
+  const regionGuard = { stagedMode, assertRegionAllowedStaged };
   /** Let detached promise chains (the post-commit notifications) run to completion. */
   const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
   const outboxRepo: any = { update: jest.fn(async () => undefined) };
@@ -227,6 +253,8 @@ describe('BillingEngineService', () => {
       r.find.mockImplementation(async () => []);
     }
     entryRepo.createQueryBuilder.mockImplementation(() => queryBuilderStub());
+    payableRepo.createQueryBuilder.mockImplementation(() => queryBuilderStub());
+    invoiceRepo.createQueryBuilder.mockImplementation(() => queryBuilderStub());
     projectRepo.findOne.mockImplementation(async () => ({ id: 'project-1', clientId: 'client-1' }));
 
     const module: TestingModule = await Test.createTestingModule({
@@ -254,6 +282,8 @@ describe('BillingEngineService', () => {
         { provide: DataSource, useValue: dataSource },
         { provide: DomainEventPublisher, useValue: { publish, subscribe: jest.fn() } },
         { provide: NotificationDispatchService, useValue: { emit: jest.fn(), emitSafe } },
+        { provide: AuditService, useValue: { recordEvent, recordEventSafe: jest.fn(function (this: any, dto: any) { return this.recordEvent(dto); }) } },
+        { provide: RegionGuardService, useValue: regionGuard },
         // The real UnitOfWork over the DataSource double, so the transaction-boundary assertions
         // run the code that implements the boundary rather than a passthrough.
         {
@@ -448,6 +478,21 @@ describe('BillingEngineService', () => {
       expect(emitSafe).toHaveBeenCalledWith(expect.objectContaining({ type: 'PAYABLE_APPROVED', assayerId: 'assayer-1' }));
     });
 
+    it('writes the approval to the compliance audit trail — who approved how much, for whom', async () => {
+      payableRepo.findOne.mockImplementation(async () => payable());
+      await service.approvePayouts(['payable-1'], 'finance-1');
+      expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+        category: EventCategory.WORKFLOW,
+        eventType: 'PAYABLE_APPROVED',
+        entityType: 'PAYABLE',
+        entityId: 'payable-1',
+        previousState: AssayerPayableStatus.PENDING,
+        newState: AssayerPayableStatus.APPROVED,
+        userId: 'finance-1',
+        metadata: expect.objectContaining({ payableId: 'payable-1', assayerId: 'assayer-1', amount: 1800 }),
+      }), expect.objectContaining({ manager: expect.anything() }));
+    });
+
     it('refuses a held payout, naming the hold reason, and approves the rest', async () => {
       payableRepo.findOne.mockImplementation(async (opts: any) =>
         opts.where.id === 'held-1' ? payable({ id: 'held-1', payableNumber: 'PY-H', onHold: true, holdReason: 'Client dispute' }) : payable());
@@ -497,6 +542,26 @@ describe('BillingEngineService', () => {
       expect(payment).toMatchObject({ amount: 1800, paymentReference: 'UTR-1', payableId: 'payable-1', assayerId: 'assayer-1', receivedDate: '2026-08-12', runningBalance: 0 });
       await flush();
       expect(emitSafe).toHaveBeenCalledWith(expect.objectContaining({ type: 'PAYABLE_PAID' }));
+    });
+
+    it('writes the disbursement to the compliance audit trail — who released how much, to whom', async () => {
+      payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED }));
+      totalsRow = { ...totalsRow, outstanding: 0 };
+      await service.payPayouts(['payable-1'], { paymentReference: 'UTR-1', method: PaymentMethod.NEFT, paidDate: '2026-08-12' }, 'finance-1');
+      expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+        category: EventCategory.WORKFLOW,
+        eventType: 'PAYABLE_DISBURSED',
+        entityType: 'PAYMENT',
+        newState: AssayerPayableStatus.PAID,
+        userId: 'finance-1',
+        metadata: expect.objectContaining({
+          payableId: 'payable-1',
+          assayerId: 'assayer-1',
+          amount: 1800,
+          paymentReference: 'UTR-1',
+          method: PaymentMethod.NEFT,
+        }),
+      }), expect.objectContaining({ manager: expect.anything() }));
     });
 
     it('computes the running balance on the transaction’s own connection, after the write', async () => {
@@ -608,6 +673,21 @@ describe('BillingEngineService', () => {
       expect(committed.filter((row) => row.invoiceNumber)).toHaveLength(1);
     });
 
+    it('writes issuance to the compliance audit trail', async () => {
+      invoiceRepo.findOne.mockImplementation(async () => invoice({ status: InvoiceStatus.DRAFT }));
+      await service.sendInvoice('invoice-1', 'f');
+      expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+        category: EventCategory.WORKFLOW,
+        eventType: 'INVOICE_ISSUED',
+        entityType: 'INVOICE',
+        entityId: 'invoice-1',
+        previousState: InvoiceStatus.DRAFT,
+        newState: InvoiceStatus.ISSUED,
+        userId: 'f',
+        metadata: expect.objectContaining({ invoiceId: 'invoice-1', clientId: 'client-1', amount: 3564 }),
+      }), expect.objectContaining({ manager: expect.anything() }));
+    });
+
     it('cancels an unpaid invoice and returns its lines to UNBILLED', async () => {
       invoiceRepo.findOne.mockImplementation(async () => invoice());
       entryRepo.createQueryBuilder.mockImplementation(() => ({ ...queryBuilderStub(), getMany: jest.fn(async () => [line({ state: BillingState.INVOICED, invoiceId: 'invoice-1', outstandingAmount: '3564.00' })]) }));
@@ -615,6 +695,16 @@ describe('BillingEngineService', () => {
       expect(inv).toMatchObject({ status: InvoiceStatus.CANCELLED, outstandingAmount: 0 });
       const e = committed.find((row) => row.entryNumber);
       expect(e).toMatchObject({ state: BillingState.UNBILLED, invoiceId: null, outstandingAmount: 0 });
+      expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+        category: EventCategory.WORKFLOW,
+        eventType: 'INVOICE_CANCELLED',
+        entityType: 'INVOICE',
+        entityId: 'invoice-1',
+        newState: InvoiceStatus.CANCELLED,
+        userId: 'f',
+        remarks: 'Wrong client',
+        metadata: expect.objectContaining({ invoiceId: 'invoice-1', reason: 'Wrong client' }),
+      }), expect.objectContaining({ manager: expect.anything() }));
     });
 
     it('refuses to cancel an invoice with money collected against it', async () => {
@@ -671,6 +761,17 @@ describe('BillingEngineService', () => {
       expect(locks[0]).toMatchObject({ entity: 'BillingInvoiceEntity', mode: 'pessimistic_write' });
       expect(locks[1]).toMatchObject({ entity: 'BillingEntryEntity', orderBy: 'e.id ASC' });
     });
+
+    it('writes the collection to the compliance audit trail — who paid how much, against which invoice', async () => {
+      await service.recordPayment({ invoiceId: 'invoice-1', paymentReference: 'R1', method: PaymentMethod.NEFT, amount: 3564 }, 'f');
+      expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+        category: EventCategory.WORKFLOW,
+        eventType: 'PAYMENT_RECEIVED',
+        entityType: 'PAYMENT',
+        userId: 'f',
+        metadata: expect.objectContaining({ invoiceId: 'invoice-1', amount: 3564, paymentReference: 'R1' }),
+      }), expect.objectContaining({ manager: expect.anything() }));
+    });
   });
 
   describe('reversePayment — retire the row, recompute from what remains', () => {
@@ -683,6 +784,15 @@ describe('BillingEngineService', () => {
       expect(committed.find((row) => row.invoiceNumber)).toMatchObject({ status: InvoiceStatus.ISSUED, paidAmount: 0, outstandingAmount: 3564 });
       expect(committed.find((row) => row.entryNumber)).toMatchObject({ state: BillingState.INVOICED, paidAmount: 0, outstandingAmount: 3564 });
       expect(committed.find((row) => row.action === 'PAYMENT_REVERSED')).toMatchObject({ reason: 'Bounced cheque' });
+      expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+        category: EventCategory.WORKFLOW,
+        eventType: 'PAYMENT_REVERSED',
+        entityType: 'PAYMENT',
+        entityId: 'payment-1',
+        userId: 'f',
+        remarks: 'Bounced cheque',
+        metadata: expect.objectContaining({ invoiceId: 'invoice-1', amount: 3564, direction: 'INBOUND', reason: 'Bounced cheque' }),
+      }), expect.objectContaining({ manager: expect.anything() }));
     });
 
     it('reverses an outbound payment: the payable goes back to APPROVED', async () => {
@@ -690,6 +800,15 @@ describe('BillingEngineService', () => {
       payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.PAID, paidAmount: '1800.00', paidAt: new Date(), paidBy: 'f' }));
       await service.reversePayment('payment-1', 'Wrong account', 'f');
       expect(committed.find((row) => row.payableNumber)).toMatchObject({ status: AssayerPayableStatus.APPROVED, paidAmount: 0, paidAt: null, paidBy: null });
+      expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+        category: EventCategory.WORKFLOW,
+        eventType: 'PAYMENT_REVERSED',
+        entityType: 'PAYMENT',
+        entityId: 'payment-1',
+        userId: 'f',
+        remarks: 'Wrong account',
+        metadata: expect.objectContaining({ payableId: 'payable-1', amount: 1800, direction: 'OUTBOUND', reason: 'Wrong account' }),
+      }), expect.objectContaining({ manager: expect.anything() }));
     });
 
     it('refuses to reverse a payment twice', async () => {
@@ -744,6 +863,184 @@ describe('BillingEngineService', () => {
       const m: any = makeManager([], []);
       await expect(service.createReimbursementPayable({ id: 'exp-1', assayerId: 'a', assignmentId: 'asn-1', amount: 1, category: 'TOLL' }, m, 'u'))
         .rejects.toThrow(ConflictException);
+    });
+  });
+
+  // ── Region scoping (staged) ──────────────────────────────────────────────
+  //
+  // Billing rows carry no region of their own. Every one of them reaches a region through the
+  // assignment → project_branch → branch chain, except an assayer, which carries its own
+  // `region` column directly. `RegionGuardService.assertRegionAllowedStaged` itself is mocked
+  // here (it is `RegionGuardService`'s own contract, not this service's) — what these tests
+  // cover is that BillingEngineService resolves the right region(s) and calls it correctly:
+  // never for an unrestricted caller, with every distinct region for a multi-region invoice,
+  // and — for the list routes — filtering the query only in `enforce` mode while `log`'s count
+  // comes from the page already fetched, with no second query.
+
+  describe('Region scoping (staged) — detail routes', () => {
+    const restricted: Partial<GlobalScope> = { regions: ['NORTH'] as any };
+
+    it('assayerStatement asserts the assayer’s own region column — no join needed', async () => {
+      assayerRepo.findOne.mockImplementation(async () => ({ id: 'assayer-1', displayName: 'Priya', assayerCode: 'A1', region: 'SOUTH' }));
+      await service.assayerStatement('assayer-1', restricted);
+      expect(assertRegionAllowedStaged).toHaveBeenCalledWith('SOUTH', restricted, 'billing-engine:assayer-statement');
+    });
+
+    it('assayerStatement asserts null for an assayer with no region on file — never a refusal by construction', async () => {
+      assayerRepo.findOne.mockImplementation(async () => ({ id: 'assayer-1', displayName: 'Priya', region: null }));
+      await service.assayerStatement('assayer-1', restricted);
+      expect(assertRegionAllowedStaged).toHaveBeenCalledWith(null, restricted, 'billing-engine:assayer-statement');
+    });
+
+    it('assignmentMoneyLine resolves the branch region through project_branches only for a restricted caller', async () => {
+      assignmentRepo.findOne.mockImplementation(async () => ({ id: 'asn-1', assignmentNumber: 'ASN-001', status: 'COMPLETED', projectBranchId: 'pb-1' }));
+      managerQuery.mockImplementation(async (sql: string) => {
+        if (sql.includes('FROM project_branches pb JOIN branches')) return [{ region: 'SOUTH' }];
+        return [];
+      });
+      await service.assignmentMoneyLine('asn-1', restricted);
+      expect(assertRegionAllowedStaged).toHaveBeenCalledWith('SOUTH', restricted, 'billing-engine:assignment-money');
+    });
+
+    it('assignmentMoneyLine never resolves or asserts a region for an unrestricted (national) caller', async () => {
+      assignmentRepo.findOne.mockImplementation(async () => ({ id: 'asn-1', assignmentNumber: 'ASN-001', status: 'COMPLETED', projectBranchId: 'pb-1' }));
+      await service.assignmentMoneyLine('asn-1', { regions: null });
+      expect(assertRegionAllowedStaged).not.toHaveBeenCalled();
+    });
+
+    it('getInvoice loops the staged assert over every distinct region an invoice’s lines resolve to — a multi-branch invoice may span more than one', async () => {
+      invoiceRepo.findOne.mockImplementation(async () => ({ ...invoice(), entries: [line()], payments: [] }));
+      managerQuery.mockImplementation(async (sql: string) => {
+        if (sql.includes('DISTINCT b.region')) return [{ region: 'SOUTH' }, { region: 'NORTH' }];
+        if (sql.includes('FROM clients WHERE id')) return [{ name: 'Client A' }];
+        return [];
+      });
+      await service.getInvoice('invoice-1', restricted);
+      expect(assertRegionAllowedStaged).toHaveBeenCalledWith('SOUTH', restricted, 'billing-engine:invoice');
+      expect(assertRegionAllowedStaged).toHaveBeenCalledWith('NORTH', restricted, 'billing-engine:invoice');
+    });
+
+    it('getInvoice skips the region-resolution query entirely for an unrestricted caller', async () => {
+      invoiceRepo.findOne.mockImplementation(async () => ({ ...invoice(), entries: [line()], payments: [] }));
+      await service.getInvoice('invoice-1', { regions: null });
+      expect(assertRegionAllowedStaged).not.toHaveBeenCalled();
+      expect(managerQuery.mock.calls.some(([sql]) => sql.includes('DISTINCT b.region'))).toBe(false);
+    });
+
+    it('getInvoiceDocument asserts under its own context label, distinct from getInvoice', async () => {
+      invoiceRepo.findOne.mockImplementation(async () => ({ ...invoice(), entries: [line()] }));
+      managerQuery.mockImplementation(async (sql: string) => {
+        if (sql.includes('DISTINCT b.region')) return [{ region: 'SOUTH' }];
+        if (sql.includes('FROM clients c')) return [{ name: 'Client A' }];
+        return [];
+      });
+      await service.getInvoiceDocument('invoice-1', restricted);
+      expect(assertRegionAllowedStaged).toHaveBeenCalledWith('SOUTH', restricted, 'billing-engine:invoice-document');
+    });
+  });
+
+  describe('Region scoping (staged) — list routes', () => {
+    const restricted: Partial<GlobalScope> = { regions: ['NORTH'] as any };
+
+    it('listPayouts takes the ORIGINAL unfiltered path in off mode, even for a restricted caller — byte-identical to today', async () => {
+      stagedMode.mockImplementationOnce(async () => 'off');
+      payableRepo.findAndCount.mockImplementationOnce(async () => [[payable()], 1]);
+      const page = await service.listPayouts({}, restricted);
+      expect(page.items).toHaveLength(1);
+      expect(payableRepo.createQueryBuilder).not.toHaveBeenCalled();
+    });
+
+    it('listPayouts takes the ORIGINAL unfiltered path for an unrestricted caller, regardless of mode', async () => {
+      stagedMode.mockImplementationOnce(async () => 'enforce');
+      payableRepo.findAndCount.mockImplementationOnce(async () => [[payable()], 1]);
+      const page = await service.listPayouts({}, { regions: null });
+      expect(page.items).toHaveLength(1);
+      expect(payableRepo.createQueryBuilder).not.toHaveBeenCalled();
+    });
+
+    it('listPayouts filters by the assignment’s branch region in enforce mode', async () => {
+      stagedMode.mockImplementationOnce(async () => 'enforce');
+      const qb: any = queryBuilderStub();
+      qb.getRawAndEntities = jest.fn(async () => ({ entities: [payable({ id: 'payable-2' })], raw: [{ region_scope: 'NORTH' }] }));
+      qb.getCount = jest.fn(async () => 1);
+      payableRepo.createQueryBuilder.mockImplementation(() => qb);
+      const page = await service.listPayouts({}, restricted);
+      expect(qb.andWhere).toHaveBeenCalledWith('rg_b.region IN (:...regions)', { regions: ['NORTH'] });
+      expect(page.items).toHaveLength(1);
+      expect(page.total).toBe(1);
+    });
+
+    it('listPayouts stays unfiltered in log mode and warns from the page already fetched — no second query', async () => {
+      stagedMode.mockImplementationOnce(async () => 'log');
+      const qb: any = queryBuilderStub();
+      qb.getRawAndEntities = jest.fn(async () => ({
+        entities: [payable({ id: 'p-north' }), payable({ id: 'p-south' })],
+        raw: [{ region_scope: 'NORTH' }, { region_scope: 'SOUTH' }],
+      }));
+      qb.getCount = jest.fn(async () => 2);
+      payableRepo.createQueryBuilder.mockImplementation(() => qb);
+      const warn = jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);
+      const page = await service.listPayouts({}, restricted);
+      expect(qb.andWhere).not.toHaveBeenCalledWith('rg_b.region IN (:...regions)', expect.anything());
+      expect(page.items).toHaveLength(2);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('would filter 1 of 2'));
+      warn.mockRestore();
+    });
+
+    it('listClientLines follows the same off/log/enforce contract through the entry→assignment→branch join', async () => {
+      stagedMode.mockImplementationOnce(async () => 'enforce');
+      const qb: any = queryBuilderStub();
+      qb.getRawAndEntities = jest.fn(async () => ({ entities: [line({ id: 'entry-in-scope' })], raw: [{ region_scope: 'NORTH' }] }));
+      entryRepo.createQueryBuilder.mockImplementation(() => qb);
+      const lines = await service.listClientLines({}, restricted);
+      expect(qb.andWhere).toHaveBeenCalledWith('rg_b.region IN (:...regions)', { regions: ['NORTH'] });
+      expect(lines).toHaveLength(1);
+    });
+
+    it('listInvoiceable adds the region column to the SAME query only when restricted and not off, and filters only in enforce', async () => {
+      stagedMode.mockImplementationOnce(async () => 'enforce');
+      managerQuery.mockImplementationOnce(async (sql: string, params: any[]) => {
+        expect(sql).toContain('b.region AS region_scope');
+        expect(sql).toContain('b.region = ANY($2::text[])');
+        expect(params).toEqual([null, ['NORTH']]);
+        return [];
+      });
+      await service.listInvoiceable({}, restricted);
+    });
+
+    it('listInvoiceable leaves the query exactly as it was today when off', async () => {
+      stagedMode.mockImplementationOnce(async () => 'off');
+      managerQuery.mockImplementationOnce(async (sql: string, params: any[]) => {
+        expect(sql).not.toContain('region_scope');
+        expect(params).toEqual([null]);
+        return [];
+      });
+      await service.listInvoiceable({}, restricted);
+    });
+
+    it('findInvoicesPage excludes an invoice with ANY line outside scope, in enforce mode', async () => {
+      stagedMode.mockImplementationOnce(async () => 'enforce');
+      const qb: any = queryBuilderStub();
+      qb.getRawAndEntities = jest.fn(async () => ({ entities: [invoice()], raw: [{ would_filter: false }] }));
+      qb.getCount = jest.fn(async () => 1);
+      invoiceRepo.createQueryBuilder.mockImplementation(() => qb);
+      const page = await service.findInvoicesPage({}, restricted);
+      expect(qb.andWhere).toHaveBeenCalledWith(expect.stringContaining('NOT EXISTS'), { regions: ['NORTH'] });
+      expect(page.items).toHaveLength(1);
+    });
+
+    it('findInvoicesPage warns in log mode without filtering, computed from the fetched page', async () => {
+      stagedMode.mockImplementationOnce(async () => 'log');
+      const qb: any = queryBuilderStub();
+      qb.getRawAndEntities = jest.fn(async () => ({ entities: [invoice()], raw: [{ would_filter: true }] }));
+      qb.getCount = jest.fn(async () => 1);
+      invoiceRepo.createQueryBuilder.mockImplementation(() => qb);
+      const warn = jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);
+      const page = await service.findInvoicesPage({}, restricted);
+      expect(qb.andWhere).not.toHaveBeenCalledWith(expect.stringContaining('NOT EXISTS'), expect.anything());
+      expect(page.items).toHaveLength(1); // unfiltered
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('would filter 1 of 1'));
+      warn.mockRestore();
     });
   });
 });

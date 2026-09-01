@@ -109,6 +109,15 @@ describe('security controls are still wired', () => {
         + 'or a delete. Append-only is a property of the type here, not a convention.',
     },
     {
+      id: 'audit-events-db-level-immutable',
+      file: `${B}/infrastructure/database/migrations/1794000000000-AuditEventsImmutable.ts`,
+      marker: 'audit_events_reject_mutation',
+      why: 'Append-only was an application-code guarantee only — anything reaching Postgres '
+        + 'directly could still UPDATE/DELETE the trail. This is a BEFORE UPDATE OR DELETE '
+        + 'trigger, which fires regardless of table ownership (a plain REVOKE is a no-op against '
+        + "this deployment's single owning DB role, so the trigger is the real enforcement).",
+    },
+    {
       id: 'audit-tables-never-wiped',
       file: `${B}/infrastructure/data-reset/wipe-domains.registry.ts`,
       marker: 'NEVER_WIPEABLE_TABLES',
@@ -121,6 +130,15 @@ describe('security controls are still wired', () => {
       marker: 'GlobalScopeFilter',
       why: 'Region scoping is resolved from the authenticated principal, never from a query '
         + 'string. A query string is not a trust boundary.',
+    },
+    {
+      id: 'region-scope-staged-rollout-exists',
+      file: `${B}/infrastructure/scope/region-guard.service.ts`,
+      marker: 'assertRegionAllowedStaged',
+      why: 'Document, billing, expense, customer-master, validation-query and client had NO '
+        + 'region boundary at all until this method existed. It is the mechanism the staged '
+        + '(log -> enforce) rollout of that boundary depends on; losing it silently reopens all '
+        + 'six without anything failing loudly.',
     },
     {
       id: 'login-is-throttled',
@@ -295,6 +313,66 @@ describe('security controls are still wired', () => {
         + 'in Germany, no SLA — so a fresh deployment leaked those coordinates to a third party '
         + 'by default with no operator action required. Unset now degrades to the same '
         + 'great-circle ESTIMATE used on a live OSRM failure instead of ever reaching the network.',
+    },
+    {
+      id: 'admin-password-reset-forces-rotation',
+      file: `${B}/modules/user/user.service.ts`,
+      marker: 'user.mustChangePassword = true;',
+      why: 'An admin-set password is a temporary credential the holder did not choose. Without '
+        + 'this flag, forced-password-change enforcement (JwtAuthGuard, PASSWORD_CHANGE_EXEMPT_KEY) '
+        + 'has nothing to act on for an admin reset, and the temporary credential never actually '
+        + 'forces a change.',
+    },
+    {
+      id: 'list-limit-query-param-clamped',
+      file: `${B}/infrastructure/http/parse-limit.pipe.ts`,
+      marker: 'class ParseLimitPipe',
+      why: 'About twenty list endpoints read `Number(limit)` straight from the query string with '
+        + 'no ceiling — `?limit=5000000` becomes an unclamped `take:` in a TypeORM query, a '
+        + 'single-request memory/CPU exhaustion vector. This pipe is the reusable clamp; losing it '
+        + 'silently re-widens every route that switched to it back to an unbounded limit.',
+    },
+    {
+      id: 'staff-password-banned-list',
+      file: `${B}/modules/user/user.service.ts`,
+      marker: 'assertStaffPasswordAcceptable',
+      why: 'Staff password policy was `@MinLength(8)` only — no check against known-weak defaults '
+        + 'or a password that is just the account\'s own username/email. Applied on both admin '
+        + 'reset and self-service change, ahead of hashing.',
+    },
+    {
+      id: 'billing-money-movements-are-audited',
+      file: `${B}/modules/billing-engine/billing-engine.service.ts`,
+      marker: 'this.auditService.recordEvent(',
+      why: 'Every payout approval, disbursement, invoice issuance/cancellation, and payment '
+        + 'record/reversal used to write only to billing_history — a reconciliation table, not the '
+        + 'append-only compliance trail. That meant audit_events, the one place every other '
+        + 'sensitive action (logins, role changes, document access) is recorded, had no evidence '
+        + 'money had ever moved. This call is what puts it there, on the same transaction as the '
+        + 'money movement so the audit event commits or rolls back with it.',
+    },
+    {
+      id: 'validation-query-attachment-token-ownership',
+      file: `${B}/modules/validation-query/validation-query.controller.ts`,
+      marker: 'this.threadService.queryIdForAttachmentKey(key)',
+      why: '`GET /validation-queries/attachment-token` used to HMAC-sign a download token for '
+        + 'whatever storage key the caller supplied, with no lookup at all — any of the four '
+        + 'roles this route admits (ADMIN, ASSAYER, DESK_OPERATOR, DESK) could mint a valid '
+        + 'download token for ANY object in the bucket by guessing or reusing a key. This '
+        + 'resolves the key back to the clarification message it belongs to and 404s an '
+        + 'unrecognised one before an assayer caller is object-scoped to their own clarification.',
+    },
+    {
+      id: 'document-download-token-staff-region-scope',
+      file: `${B}/modules/document/document.controller.ts`,
+      marker: 'this.regionGuard.assertRegionAllowed(doc.assessment?.branch?.region ?? null, scope);',
+      why: '`GET /documents/:id/download-token` computed `isPrivileged` as "roles includes '
+        + 'anything other than ASSAYER" — true for ANY staff role (OPERATIONS, DESK, '
+        + 'DESK_OPERATOR) — and skipped the ownership check for a privileged caller with '
+        + 'nothing put in its place, so any of those roles could mint a download token for ANY '
+        + 'document id in the entire system with zero region scoping. Staff are now checked '
+        + 'against the same region ceiling branch.controller.ts/assignment.controller.ts already '
+        + 'enforce on their own single-record reads.',
     },
   ];
 

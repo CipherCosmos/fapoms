@@ -11,7 +11,10 @@ import { RegionGuardService } from './region-guard.service';
  */
 describe('RegionGuardService', () => {
   const dataSource = { query: jest.fn() };
-  const guard = new RegionGuardService(dataSource as any);
+  // Defaults to 'log' — matches the setting's own shipped default, so a spec that never
+  // touches security.regionScope.mode exercises the same behaviour a fresh deployment does.
+  const mockSettings = { get: jest.fn().mockResolvedValue('log') };
+  const guard = new RegionGuardService(dataSource as any, mockSettings as any);
 
   const west = { regions: [Region.WEST] };
   const national = { regions: null as any };
@@ -111,7 +114,7 @@ describe('RegionGuardService', () => {
     const guardWithRepo = () => {
       const repo = { createQueryBuilder: jest.fn(() => makeQueryBuilder()) };
       const ds = { getRepository: jest.fn(() => repo) };
-      return { guard: new RegionGuardService(ds as any), repo };
+      return { guard: new RegionGuardService(ds as any, mockSettings as any), repo };
     };
 
     it('refuses an unknown thread id', async () => {
@@ -147,6 +150,72 @@ describe('RegionGuardService', () => {
       const { guard: g } = guardWithRepo();
       const verdict = await g.feedbackVerdict({ id: 'assayer-2', roles: [{ name: 'ASSAYER' }] }, THREAD_ID);
       expect(verdict).toEqual({ found: true, allowed: false });
+    });
+  });
+
+  /**
+   * The staged rollout method for the six boundaries added without a prior region check
+   * (document, billing, expense, customer-master, validation-query, client). The one thing
+   * every case here must prove: Log and Enforce evaluate the IDENTICAL condition — they may
+   * only ever disagree about whether the refusal is real, never about whether one occurred.
+   */
+  describe('assertRegionAllowedStaged', () => {
+    const stagedSettings = { get: jest.fn() };
+    const stagedGuard = new RegionGuardService(dataSource as any, stagedSettings as any);
+
+    beforeEach(() => stagedSettings.get.mockReset());
+
+    it('off: skips the check entirely, even for a record that would be refused', async () => {
+      stagedSettings.get.mockResolvedValue('off');
+      await expect(
+        stagedGuard.assertRegionAllowedStaged(Region.SOUTH, west, 'test:off'),
+      ).resolves.toBeUndefined();
+    });
+
+    it('log: an in-scope record passes silently', async () => {
+      stagedSettings.get.mockResolvedValue('log');
+      await expect(
+        stagedGuard.assertRegionAllowedStaged(Region.WEST, west, 'test:log-allowed'),
+      ).resolves.toBeUndefined();
+    });
+
+    it('log: an out-of-scope record is let through, not refused', async () => {
+      stagedSettings.get.mockResolvedValue('log');
+      await expect(
+        stagedGuard.assertRegionAllowedStaged(Region.SOUTH, west, 'test:log-refused'),
+      ).resolves.toBeUndefined();
+    });
+
+    it('enforce: an in-scope record passes', async () => {
+      stagedSettings.get.mockResolvedValue('enforce');
+      await expect(
+        stagedGuard.assertRegionAllowedStaged(Region.WEST, west, 'test:enforce-allowed'),
+      ).resolves.toBeUndefined();
+    });
+
+    it('enforce: an out-of-scope record is genuinely refused', async () => {
+      stagedSettings.get.mockResolvedValue('enforce');
+      await expect(
+        stagedGuard.assertRegionAllowedStaged(Region.SOUTH, west, 'test:enforce-refused'),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('a national (unrestricted) account is never refused in any mode', async () => {
+      for (const mode of ['off', 'log', 'enforce']) {
+        stagedSettings.get.mockResolvedValue(mode);
+        await expect(
+          stagedGuard.assertRegionAllowedStaged(Region.SOUTH, national, `test:${mode}-national`),
+        ).resolves.toBeUndefined();
+      }
+    });
+
+    it('a settings-read failure falls back to log behaviour, not enforce', async () => {
+      stagedSettings.get.mockRejectedValue(new Error('cache miss, db down'));
+      // Must not throw ForbiddenException — a settings outage must never turn into a new 403
+      // on six screens that had no boundary at all a moment ago.
+      await expect(
+        stagedGuard.assertRegionAllowedStaged(Region.SOUTH, west, 'test:settings-failure'),
+      ).resolves.toBeUndefined();
     });
   });
 });

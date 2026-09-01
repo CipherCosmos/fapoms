@@ -6,6 +6,7 @@ import { QueryThreadService } from './query-thread.service';
 import { DocumentAccessTokenService } from '../document/document-access-token.service';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
 import { FileScanService } from '../../infrastructure/security/file-scan.service';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { SystemRole } from '@fapoms/shared';
 
 /**
@@ -36,6 +37,7 @@ describe('ValidationQueryController — assayer ownership on read/respond routes
   const mockThreadService = {
     listMessages: jest.fn(),
     getQueryDocumentId: jest.fn(),
+    queryIdForAttachmentKey: jest.fn(),
   };
 
   const mockDocumentAccessTokenService = {
@@ -43,6 +45,13 @@ describe('ValidationQueryController — assayer ownership on read/respond routes
   };
 
   const mockStorage = {};
+
+  // None of the tests below supply a `@GlobalScopeFilter()` scope (that decorator only resolves
+  // through the real HTTP pipeline), so every staged region-scope call the controller makes is
+  // short-circuited before it ever reaches `RegionGuardService` — this mock exists purely so
+  // Nest can resolve the controller's constructor, not because any test here exercises it. See
+  // `validation-query-region-scope.spec.ts` for the region-scoping coverage itself.
+  const mockRegionGuard = { assertRegionAllowedStaged: jest.fn(), stagedMode: jest.fn() };
 
   const assayerReq = (id: string) => ({ user: { id, roles: [SystemRole.ASSAYER] } });
   const staffReq = (id = 'staff-1', role: SystemRole = SystemRole.DESK) => ({ user: { id, roles: [role] } });
@@ -56,6 +65,7 @@ describe('ValidationQueryController — assayer ownership on read/respond routes
         { provide: QueryThreadService, useValue: mockThreadService },
         { provide: 'StorageEngine', useValue: mockStorage },
         { provide: DocumentAccessTokenService, useValue: mockDocumentAccessTokenService },
+        { provide: RegionGuardService, useValue: mockRegionGuard },
         // Pulled in only because FileScanInterceptor is referenced via @UseInterceptors on the
         // upload routes — this suite never exercises those, but Nest still resolves the DI graph.
         { provide: FileScanService, useValue: {} },
@@ -206,6 +216,65 @@ describe('ValidationQueryController — assayer ownership on read/respond routes
 
       expect(mockService.ownerAssayerId).not.toHaveBeenCalled();
       expect(mockThreadService.listMessages).toHaveBeenCalledWith('q-1');
+    });
+  });
+
+  /**
+   * Pins the fix for the attachment-token IDOR: `issueAttachmentToken` used to HMAC-sign a
+   * download token for whatever `key` the caller supplied, with no lookup at all — any of the
+   * four roles this route admits could mint a valid token for ANY object in the bucket by
+   * guessing or reusing a key. The fix resolves `key` back to the clarification message it
+   * belongs to via `queryIdForAttachmentKey`, 404s a key that resolves to nothing, and then runs
+   * it through the same `assertAssayerOwnsQuery` gate the other routes in this file use.
+   */
+  describe('GET /attachment-token (issueAttachmentToken)', () => {
+    it('404s a key that does not resolve to any clarification attachment', async () => {
+      mockThreadService.queryIdForAttachmentKey.mockResolvedValue(null);
+
+      await expect(
+        controller.issueAttachmentToken('some/arbitrary/bucket/key.pdf', assayerReq(ME) as any),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockDocumentAccessTokenService.issue).not.toHaveBeenCalled();
+    });
+
+    it('404s an unresolved key for a staff caller too — the lookup itself is not object-scoping', async () => {
+      mockThreadService.queryIdForAttachmentKey.mockResolvedValue(null);
+
+      await expect(
+        controller.issueAttachmentToken('some/arbitrary/bucket/key.pdf', staffReq() as any),
+      ).rejects.toThrow(NotFoundException);
+      expect(mockDocumentAccessTokenService.issue).not.toHaveBeenCalled();
+    });
+
+    it('refuses an assayer minting a token for an attachment on a clarification that is not theirs', async () => {
+      mockThreadService.queryIdForAttachmentKey.mockResolvedValue('q-1');
+      mockService.ownerAssayerId.mockResolvedValue(SOMEONE_ELSE);
+
+      await expect(
+        controller.issueAttachmentToken('chat/photo.jpg', assayerReq(ME) as any),
+      ).rejects.toThrow(ForbiddenException);
+      expect(mockDocumentAccessTokenService.issue).not.toHaveBeenCalled();
+    });
+
+    it('allows an assayer to mint a token for an attachment on their own clarification', async () => {
+      mockThreadService.queryIdForAttachmentKey.mockResolvedValue('q-1');
+      mockService.ownerAssayerId.mockResolvedValue(ME);
+
+      const res = await controller.issueAttachmentToken('chat/photo.jpg', assayerReq(ME) as any);
+
+      expect(mockDocumentAccessTokenService.issue).toHaveBeenCalledWith('chat/photo.jpg');
+      expect(res.success).toBe(true);
+      expect(res.data.downloadUrl).toContain(encodeURIComponent('chat/photo.jpg'));
+    });
+
+    it('never object-scopes a staff caller once the key resolves to a real attachment', async () => {
+      mockThreadService.queryIdForAttachmentKey.mockResolvedValue('q-1');
+
+      const res = await controller.issueAttachmentToken('chat/photo.jpg', staffReq() as any);
+
+      expect(mockService.ownerAssayerId).not.toHaveBeenCalled();
+      expect(mockDocumentAccessTokenService.issue).toHaveBeenCalledWith('chat/photo.jpg');
+      expect(res.success).toBe(true);
     });
   });
 });

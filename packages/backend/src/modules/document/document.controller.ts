@@ -2,6 +2,7 @@ import { Controller, Logger, Get, Post, Put, Param, Query, UseGuards, ParseUUIDP
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiQuery } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsInt, IsUUID, IsEnum, IsArray, ArrayNotEmpty, Min, MaxLength, IsEmail } from 'class-validator';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
 import { FileScanService } from '../../infrastructure/security/file-scan.service';
 import { Response } from 'express';
@@ -21,8 +22,45 @@ import { SystemRole, DocumentStatus, DocumentType, AssignmentStatus , DispatchMe
 import { ValidationService } from '../validation/validation.service';
 import { DocumentAccessTokenService } from './document-access-token.service';
 import { ChunkedUploadService } from './chunked-upload.service';
-import { assertUploadAllowed } from './upload-validation';
+import { assertUploadAllowed, MAX_UPLOAD_BYTES, MAX_RESUMABLE_UPLOAD_BYTES } from './upload-validation';
 import { AssignmentService } from '../assignment/assignment.service';
+import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
+
+/**
+ * Multer memory-storage configuration shared by the single-file document upload routes.
+ *
+ * Every `FileInterceptor`/`FilesInterceptor` on this controller used to declare no `limits` at
+ * all, so multer buffered an entire file into memory — of any size — before the handler's own
+ * `assertUploadAllowed` size check ever ran. A request body multer never caps is a request body
+ * the process cannot bound the memory cost of, regardless of what the handler goes on to check.
+ * `MAX_UPLOAD_BYTES` is the same ceiling `assertUploadAllowed` enforces by default on these
+ * routes (see `upload-validation.ts`), so the multer-level cap and the app-level cap agree —
+ * multer just gets to reject the oversized request earlier, mid-stream, rather than after the
+ * whole file has already landed in the process.
+ */
+const documentUploadMulterOptions = {
+  storage: memoryStorage(),
+  limits: { fileSize: MAX_UPLOAD_BYTES },
+};
+
+/** Same ceiling as `documentUploadMulterOptions`, plus the per-request file-count cap that already exists as the interceptor's own `maxCount` argument — restated here so multer enforces both at the streaming layer. */
+const documentBatchUploadMulterOptions = {
+  storage: memoryStorage(),
+  limits: { fileSize: MAX_UPLOAD_BYTES, files: 100 },
+};
+
+/**
+ * The resumable-chunk upload route has no `assertUploadAllowed` call of its own — each PUT is
+ * one slice of a file whose *total* size was already checked against `MAX_RESUMABLE_UPLOAD_BYTES`
+ * when the session was opened (`ChunkedUploadService.createSession`). A single chunk can
+ * therefore never legitimately exceed that same ceiling, so it is reused here as the multer-level
+ * cap rather than inventing a separate number for chunks.
+ */
+const resumableChunkMulterOptions = {
+  storage: memoryStorage(),
+  limits: { fileSize: MAX_RESUMABLE_UPLOAD_BYTES },
+};
 
 
 /**
@@ -142,11 +180,12 @@ export class DocumentController {
     private readonly documentAccessTokenService: DocumentAccessTokenService,
     private readonly chunkedUploadService: ChunkedUploadService,
     private readonly fileScanner: FileScanService,
+    private readonly regionGuard: RegionGuardService,
   ) {}
 
   @Post('upload')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
-  @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
+  @UseInterceptors(FileInterceptor('file', documentUploadMulterOptions), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload a file for an assessment' })
   async uploadFile(
@@ -390,7 +429,7 @@ export class DocumentController {
    */
   @Post('mobile-upload-binary')
   @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
-  @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
+  @UseInterceptors(FileInterceptor('file', documentUploadMulterOptions), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Binary audited-return upload (no base64 inflation)' })
   async mobileUploadBinary(
@@ -548,7 +587,7 @@ export class DocumentController {
 
   @Put('upload/session/:uploadId/chunk/:index')
   @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
-  @UseInterceptors(FileInterceptor('chunk'))
+  @UseInterceptors(FileInterceptor('chunk', resumableChunkMulterOptions))
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload one chunk (binary, resumable)' })
   async uploadChunk(
@@ -686,7 +725,7 @@ export class DocumentController {
   @Post('validate-customer-excel')
   @Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.OPERATIONS)
   @RequirePermissions('document:create:organization')
-  @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
+  @UseInterceptors(FileInterceptor('file', documentUploadMulterOptions), FileScanInterceptor)
   @ApiOperation({ summary: 'Validate Customer Master Excel file' })
   async validateCustomerExcel(@UploadedFile() file: any) {
     // A submitted form with no file attached reaches here as `undefined`, and reading
@@ -742,8 +781,12 @@ export class DocumentController {
   @Get(':id')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
   @ApiOperation({ summary: 'Get document metadata' })
-  async findOne(@Param('id', ParseUUIDPipe) id: string) {
+  async findOne(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
     const doc = await this.documentService.findOne(id);
+    // Staged region ceiling — `findOne` already eager-loads `assessment.branch`, so no second
+    // query is needed to learn the document's region. Same resolution path `issueDownloadToken`
+    // uses below, staged rather than immediate-enforcing (see region-guard.service.ts).
+    await this.regionGuard.assertRegionAllowedStaged(doc.assessment?.branch?.region ?? null, scope, 'document:findOne');
     return { success: true, data: doc };
   }
 
@@ -855,18 +898,42 @@ export class DocumentController {
     // validation reviews them before they go back to the client.
     SystemRole.DESK, SystemRole.DESK_OPERATOR)
   @ApiOperation({ summary: 'Issue a short-lived signed download URL for a document' })
-  async issueDownloadToken(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
-    // Confirms the document exists (and 404s if not) before minting a token for it.
-    await this.documentService.findOne(id);
+  async issueDownloadToken(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    // Confirms the document exists (and 404s if not) before minting a token for it — and is
+    // also the row the scope checks below read from (`findOne` already eager-loads
+    // `assessment.branch`, so no second query is needed to learn the document's region).
+    const doc = await this.documentService.findOne(id);
 
     // Field assayers are additionally constrained to documents that have actually
     // been dispatched to a branch they are assigned to. Previously this endpoint
     // minted a token for any document id to any assayer, so undispatched paperwork
     // — and other branches' paperwork — was downloadable.
     const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r);
-    const isPrivileged = roles.some((r) => r !== SystemRole.ASSAYER);
-    if (!isPrivileged && roles.includes(SystemRole.ASSAYER)) {
+    /**
+     * A "pure" assayer — ASSAYER and nothing else, the same test `isAssayerCaller` in
+     * validation-query.controller.ts applies. This used to be computed as
+     * `roles.some((r) => r !== SystemRole.ASSAYER)` and named `isPrivileged`: true for ANY role
+     * set that happened to include so much as one non-ASSAYER role, which is every staff
+     * account on this route (OPERATIONS, DESK, DESK_OPERATOR). "Privileged" then skipped the
+     * assayer ownership check with NOTHING put in its place — so any of those roles could mint a
+     * download token for ANY document id in the entire system, not merely "an assayer's
+     * undispatched paperwork", with zero region/project/client check either.
+     *
+     * The trigger condition for the assayer branch is unchanged (still only a pure-ASSAYER
+     * caller); what changed is the other branch, which used to do nothing and now enforces the
+     * same region ceiling `branch.controller.ts`/`assignment.controller.ts` already apply to
+     * their own single-record reads — `RegionGuardService.assertRegionAllowed` against the
+     * document's branch region, sourced from `GlobalScopeFilter` (`users.regions`).
+     */
+    const isPureAssayer = roles.includes(SystemRole.ASSAYER) && !roles.some((r) => r !== SystemRole.ASSAYER);
+    if (isPureAssayer) {
       await this.documentService.assertAssayerMayDownload(id, req.user.assayerId ?? req.user.id);
+    } else {
+      this.regionGuard.assertRegionAllowed(doc.assessment?.branch?.region ?? null, scope);
     }
     const { token, expiresAt } = this.documentAccessTokenService.issue(id);
     return {
@@ -882,8 +949,9 @@ export class DocumentController {
   @Get(':id/trail')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
   @ApiOperation({ summary: 'Full transport/chain-of-custody trail for a document' })
-  async getTransportTrail(@Param('id', ParseUUIDPipe) id: string) {
+  async getTransportTrail(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
     const doc = await this.documentService.findOne(id);
+    await this.regionGuard.assertRegionAllowedStaged(doc.assessment?.branch?.region ?? null, scope, 'document:trail');
     return {
       success: true,
       data: {
@@ -977,7 +1045,19 @@ export class DocumentController {
   @Get('project-branch/:projectBranchId/download-pdf')
   @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Directly download the Pre-Audit PDF file for a project branch' })
-  async downloadBranchPdf(@Param('projectBranchId', ParseUUIDPipe) projectBranchId: string, @Req() req: any, @Res() res: Response) {
+  async downloadBranchPdf(
+    @Param('projectBranchId', ParseUUIDPipe) projectBranchId: string,
+    @Req() req: any,
+    @Res() res: Response,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    // This route mints its own download token below (`documentAccessTokenService.issue`)
+    // rather than going through `issueDownloadToken`, so it needs the same staged region
+    // ceiling directly — resolved via the project branch, since no document has been loaded
+    // yet at this point.
+    const region = await this.documentService.resolveProjectBranchRegion(projectBranchId);
+    await this.regionGuard.assertRegionAllowedStaged(region, scope, 'document:downloadBranchPdf');
+
     // Resolves only from *dispatched* paperwork. This used to pick the first
     // matching document of any status — so an assayer following this link could
     // pull down a pre-audit PDF operations had not released yet.
@@ -999,7 +1079,17 @@ export class DocumentController {
   @Get('project-branch/:projectBranchId')
   @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Get documents for a project branch' })
-  async findByProjectBranch(@Param('projectBranchId', ParseUUIDPipe) projectBranchId: string, @Req() req: any) {
+  async findByProjectBranch(
+    @Param('projectBranchId', ParseUUIDPipe) projectBranchId: string,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    // Every document under one project branch belongs to that single branch, so this is a
+    // detail-route ceiling (gate, not filter) — same shape as `findOne`, resolved via the
+    // project branch since no document has been loaded yet at this point.
+    const region = await this.documentService.resolveProjectBranchRegion(projectBranchId);
+    await this.regionGuard.assertRegionAllowedStaged(region, scope, 'document:findByProjectBranch');
+
     // Assayers get the dispatch-gated view: only paperwork operations has actually
     // released to them, never documents still being prepared internally.
     const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r);
@@ -1050,7 +1140,7 @@ export class DocumentController {
 
   @Post('upload-generated-batch')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
-  @UseInterceptors(FilesInterceptor('files', 100), FileScanInterceptor)
+  @UseInterceptors(FilesInterceptor('files', 100, documentBatchUploadMulterOptions), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: "Upload a day's generated audit PDFs together, matching each file to its branch by filename" })
   async uploadGeneratedBatch(
@@ -1121,7 +1211,12 @@ export class DocumentController {
   @Get('project-branch/:projectBranchId/assayer-view')
   @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
   @ApiOperation({ summary: "Dispatch-gated documents for a branch, with readiness so the field app can explain what to expect" })
-  async assayerBranchDocuments(@Param('projectBranchId', ParseUUIDPipe) projectBranchId: string) {
+  async assayerBranchDocuments(
+    @Param('projectBranchId', ParseUUIDPipe) projectBranchId: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    const region = await this.documentService.resolveProjectBranchRegion(projectBranchId);
+    await this.regionGuard.assertRegionAllowedStaged(region, scope, 'document:assayerBranchDocuments');
     const { documents, readiness } = await this.documentService.findDispatchedForAssayer(projectBranchId);
     return { success: true, data: documents, meta: { readiness } };
   }
@@ -1129,7 +1224,12 @@ export class DocumentController {
   @Get('assessment/:assessmentId')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
   @ApiOperation({ summary: 'Get documents for an assessment' })
-  async findByAssessment(@Param('assessmentId', ParseUUIDPipe) assessmentId: string) {
+  async findByAssessment(@Param('assessmentId', ParseUUIDPipe) assessmentId: string, @GlobalScopeFilter() scope?: GlobalScope) {
+    // Every document under one assessment belongs to that assessment's single branch, so this
+    // is a detail-route ceiling — resolved via the assessment's own `branch` relation, since
+    // there is no project-branch id in this route's URL.
+    const region = await this.documentService.resolveAssessmentRegion(assessmentId);
+    await this.regionGuard.assertRegionAllowedStaged(region, scope, 'document:findByAssessment');
     const list = await this.documentService.findByAssessment(assessmentId);
     return { success: true, data: list };
   }
@@ -1137,32 +1237,34 @@ export class DocumentController {
   @Get('project/:projectId')
   @Roles(...STAFF_ROLES)
   @ApiOperation({ summary: 'Get all documents for a project' })
-  async findByProject(@Param('projectId', ParseUUIDPipe) projectId: string) {
-    const list = await this.documentService.findByProject(projectId);
+  async findByProject(@Param('projectId', ParseUUIDPipe) projectId: string, @GlobalScopeFilter() scope?: GlobalScope) {
+    // A project spans multiple branches — potentially multiple regions — so this is a list to
+    // filter (mode-aware, in the service), not a single ceiling to gate.
+    const list = await this.documentService.findByProject(projectId, scope);
     return { success: true, data: list };
   }
 
   @Get()
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
   @ApiOperation({ summary: 'Get all system documents' })
-  async findAll() {
-    const list = await this.documentService.findAll();
+  async findAll(@GlobalScopeFilter() scope?: GlobalScope) {
+    const list = await this.documentService.findAll(scope);
     return { success: true, data: list };
   }
 
   @Get('stats/summary')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
   @ApiOperation({ summary: 'Get document statistics' })
-  async getStats() {
-    const stats = await this.documentService.getDocumentStats();
+  async getStats(@GlobalScopeFilter() scope?: GlobalScope) {
+    const stats = await this.documentService.getDocumentStats(scope);
     return { success: true, data: stats };
   }
 
   @Get('queue/data-entry')
   @Roles(SystemRole.ADMIN, SystemRole.DESK)
   @ApiOperation({ summary: 'Get data entry queue — all received PDFs grouped by assessment' })
-  async getDataEntryQueue() {
-    const queue = await this.documentService.findDataEntryQueue();
+  async getDataEntryQueue(@GlobalScopeFilter() scope?: GlobalScope) {
+    const queue = await this.documentService.findDataEntryQueue(scope);
     return { success: true, data: queue };
   }
 
@@ -1180,7 +1282,7 @@ export class DocumentController {
 
   @Post('upload-excel')
   @Roles(SystemRole.ADMIN, SystemRole.DESK)
-  @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
+  @UseInterceptors(FileInterceptor('file', documentUploadMulterOptions), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload generated Excel report for an assessment from External OCR' })
   async uploadExcelReport(
@@ -1219,8 +1321,9 @@ export class DocumentController {
     @Query('search') search?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
-    return { success: true, data: await this.documentService.dataEntryQueue({ assignedTo, lane, search, page, limit }) };
+    return { success: true, data: await this.documentService.dataEntryQueue({ assignedTo, lane, search, page, limit }, scope) };
   }
 
   @Get('data-entry/mine')
@@ -1232,8 +1335,12 @@ export class DocumentController {
     @Query('search') search?: string,
     @Query('page') page?: number,
     @Query('limit') limit?: number,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
-    return { success: true, data: await this.documentService.dataEntryQueue({ assignedTo: req.user.id, lane, search, page, limit }) };
+    return {
+      success: true,
+      data: await this.documentService.dataEntryQueue({ assignedTo: req.user.id, lane, search, page, limit }, scope),
+    };
   }
 
   @Get('data-entry/team')

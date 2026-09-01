@@ -20,6 +20,8 @@ import { SystemRole } from '@fapoms/shared';
 import { Response } from 'express';
 import { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
 import { DocumentAccessTokenService } from '../document/document-access-token.service';
+import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 
 /**
  * Multer memory-storage configuration for chat attachments.
@@ -98,6 +100,7 @@ export class ValidationQueryController {
     private readonly threadService: QueryThreadService,
     @Inject('StorageEngine') private readonly storage: StorageEngine,
     private readonly documentAccessTokenService: DocumentAccessTokenService,
+    private readonly regionGuard: RegionGuardService,
   ) {}
 
   // ───────────────────────────────────────────────────────────────────────────
@@ -183,8 +186,25 @@ export class ValidationQueryController {
   @Get('attachment-token')
   @Roles(SystemRole.ADMIN, SystemRole.ASSAYER, SystemRole.DESK_OPERATOR, SystemRole.DESK)
   @ApiOperation({ summary: 'Issue a short-lived HMAC signed token for downloading an attachment' })
-  async issueAttachmentToken(@Query('key') key: string) {
+  async issueAttachmentToken(@Query('key') key: string, @Req() req: any) {
     if (!key) throw new BadRequestException('key query parameter is required.');
+
+    /**
+     * `key` is an arbitrary storage path off the query string — resolve it back to the
+     * clarification thread it belongs to and authorise the caller against THAT record before
+     * signing anything, the same shape as the ownership check on `listMessages`/`respondToQuery`
+     * above. Previously this signed a token for whatever key was supplied with no lookup at
+     * all, so any of the four roles this route admits could mint a valid download token for ANY
+     * object in the bucket — not just a clarification attachment — by guessing or reusing a key.
+     * A key that resolves to nothing is refused outright; an assayer is then pinned to their own
+     * clarification exactly as elsewhere in this file. Staff are not object-scoped here, same as
+     * every other route in this file — only the "does this key belong to a real attachment at
+     * all" check applies to them too, since that is the actual gap being closed.
+     */
+    const queryId = await this.threadService.queryIdForAttachmentKey(key);
+    if (!queryId) throw new NotFoundException('No clarification attachment matches that key.');
+    await this.assertAssayerOwnsQuery(req, queryId);
+
     const { token, expiresAt } = this.documentAccessTokenService.issue(key);
     return {
       success: true,
@@ -291,20 +311,20 @@ export class ValidationQueryController {
   @Roles(...STAFF_ROLES)
   @Get('worklist')
   @ApiOperation({ summary: 'Clarifications enriched for a worklist (branch, assayer, SLA, whose court)' })
-  async worklist(@Query() q: ClarificationWorklistQuery) {
+  async worklist(@Query() q: ClarificationWorklistQuery, @GlobalScopeFilter() scope?: GlobalScope) {
     return {
       success: true,
-      data: await this.validationQueryService.getClarificationWorklist({ filter: q.filter, limit: q.limit }),
+      data: await this.validationQueryService.getClarificationWorklist({ filter: q.filter, limit: q.limit, scope }),
     };
   }
 
   @Roles(...STAFF_ROLES)
   @Get('worklist/by-assayer')
   @ApiOperation({ summary: 'Open clarifications grouped by auditor, most pressing auditor first (for a single call)' })
-  async worklistByAssayer(@Query() q: ClarificationWorklistQuery) {
+  async worklistByAssayer(@Query() q: ClarificationWorklistQuery, @GlobalScopeFilter() scope?: GlobalScope) {
     return {
       success: true,
-      data: await this.validationQueryService.getClarificationsByAssayer({ limit: q.limit }),
+      data: await this.validationQueryService.getClarificationsByAssayer({ limit: q.limit, scope }),
     };
   }
 
@@ -335,20 +355,30 @@ export class ValidationQueryController {
     @Query('assayerId') assayerId?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
-    // An assayer sees only their own, whatever the query string asks for.
+    // An assayer sees only their own, whatever the query string asks for. Their own claim
+    // history does not depend on which region they happen to be standing in, so `scope` is
+    // deliberately not passed here — same reasoning `ExpenseService.findForAssayer` documents
+    // for `findMine`.
     if (this.isAssayerCaller(req)) {
       const list = await this.validationQueryService.findByAssayer(req.user.id);
       return { success: true, data: list };
     }
+    // Staff branch below — mode-aware region filtering applies from here down. `scope` is
+    // only forwarded when present so a direct (non-HTTP) caller that supplies no scope keeps
+    // hitting the exact unscoped overload — `@GlobalScopeFilter()` itself always resolves to a
+    // real object over HTTP, never `undefined`.
     if (assayerId) {
-      const list = await this.validationQueryService.findByAssayer(assayerId);
+      const list = scope
+        ? await this.validationQueryService.findByAssayer(assayerId, scope)
+        : await this.validationQueryService.findByAssayer(assayerId);
       return { success: true, data: list };
     }
     const pageNum = page ? parseInt(page, 10) : 1;
     const limitNum = limit ? parseInt(limit, 10) : 50;
     const { items, total, page: resolvedPage, limit: resolvedLimit } =
-      await this.validationQueryService.findAllQueries(pageNum, limitNum);
+      await this.validationQueryService.findAllQueries(pageNum, limitNum, scope);
     return {
       success: true,
       data: items,
@@ -371,10 +401,18 @@ export class ValidationQueryController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: RespondValidationQueryDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     // The service commits status=RESPONDED before its own (swallowed) ownership check, so gate here:
     // an assayer may answer only their own clarification.
     await this.assertAssayerOwnsQuery(req, id);
+    // Staged staff-side region ceiling — a no-op for an assayer caller (already object-scoped
+    // above) and for an unrestricted account (`scope.regions` null/empty), so the extra lookup
+    // only runs when it can actually matter.
+    if (!this.isAssayerCaller(req) && scope?.regions?.length) {
+      const region = await this.validationQueryService.resolveRegion(id);
+      await this.regionGuard.assertRegionAllowedStaged(region, scope, 'validation-query:respondToQuery');
+    }
     const query = await this.validationQueryService.respondToQuery(id, dto.response || '', req.user.id, dto.attachments);
     return { success: true, data: query };
   }
@@ -382,7 +420,13 @@ export class ValidationQueryController {
   @Post(':id/resolve')
   @Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.DESK_OPERATOR)
   @ApiOperation({ summary: 'Validator / Data Entry Head marks a responded query as RESOLVED' })
-  async resolveQuery(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+  async resolveQuery(@Param('id', ParseUUIDPipe) id: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    // This route admits no ASSAYER role, so every caller here is staff — the staged region
+    // ceiling always applies (skipped only for an unrestricted account, see above).
+    if (scope?.regions?.length) {
+      const region = await this.validationQueryService.resolveRegion(id);
+      await this.regionGuard.assertRegionAllowedStaged(region, scope, 'validation-query:resolveQuery');
+    }
     const query = await this.validationQueryService.resolveQuery(id, req.user.id);
     return { success: true, data: query };
   }
@@ -390,7 +434,12 @@ export class ValidationQueryController {
   @Post(':id/reopen')
   @Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.DESK_OPERATOR)
   @ApiOperation({ summary: 'Reopen a resolved clarification, returning it to the assayer' })
-  async reopenQuery(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+  async reopenQuery(@Param('id', ParseUUIDPipe) id: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    // Staff-only route, same as resolveQuery above.
+    if (scope?.regions?.length) {
+      const region = await this.validationQueryService.resolveRegion(id);
+      await this.regionGuard.assertRegionAllowedStaged(region, scope, 'validation-query:reopenQuery');
+    }
     const query = await this.validationQueryService.reopenQuery(id, req.user.id);
     return { success: true, data: query };
   }
@@ -398,7 +447,19 @@ export class ValidationQueryController {
   @Get('validation-case/:validationCaseId')
   @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Get all queries raised for a specific validation case' })
-  async findByValidationCase(@Param('validationCaseId', ParseUUIDPipe) validationCaseId: string, @Req() req: any) {
+  async findByValidationCase(
+    @Param('validationCaseId', ParseUUIDPipe) validationCaseId: string,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    // Every clarification under one case shares that case's single project branch, so this is
+    // a single detail-style ceiling rather than a per-row filter (see
+    // `ValidationQueryService.validationCaseRegion`'s doc comment). Staff only — an assayer is
+    // already object-scoped below, so the extra lookup is skipped for them.
+    if (!this.isAssayerCaller(req) && scope?.regions?.length) {
+      const region = await this.validationQueryService.validationCaseRegion(validationCaseId);
+      await this.regionGuard.assertRegionAllowedStaged(region, scope, 'validation-query:findByValidationCase');
+    }
     let list = await this.validationQueryService.findByValidationCase(validationCaseId);
     // An assayer may see only their own clarifications within a case, never a colleague's.
     if (this.isAssayerCaller(req)) list = list.filter((q) => q.assayerId === req.user?.id);
@@ -408,10 +469,17 @@ export class ValidationQueryController {
   @Get('assayer/:assayerId')
   @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Get all pending queries assigned to an assayer' })
-  async findByAssayer(@Param('assayerId') assayerId: string, @Req() req: any) {
-    // An assayer is pinned to their own id here, ignoring the path param.
-    const targetId = this.isAssayerCaller(req) ? req.user.id : assayerId;
-    const list = await this.validationQueryService.findByAssayer(targetId);
+  async findByAssayer(@Param('assayerId') assayerId: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    // An assayer is pinned to their own id here, ignoring the path param. Their own list does
+    // not depend on which region they happen to be standing in, so `scope` is only passed
+    // through for a staff caller viewing someone else's clarifications.
+    const isAssayer = this.isAssayerCaller(req);
+    const targetId = isAssayer ? req.user.id : assayerId;
+    // Scope is only forwarded for a staff caller, and only when present — see `findAll`'s
+    // `assayerId` branch above for why an absent `scope` keeps hitting the unscoped overload.
+    const list = !isAssayer && scope
+      ? await this.validationQueryService.findByAssayer(targetId, scope)
+      : await this.validationQueryService.findByAssayer(targetId);
     return { success: true, data: list };
   }
 
@@ -423,8 +491,14 @@ export class ValidationQueryController {
   @Get(':id/messages')
   @Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.OPERATIONS, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Full clarification thread' })
-  async listMessages(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+  async listMessages(@Param('id', ParseUUIDPipe) id: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
     await this.assertAssayerOwnsQuery(req, id);
+    // Staged staff-side region ceiling — see `respondToQuery` above for why this is skipped for
+    // an assayer caller (already object-scoped) and for an unrestricted account.
+    if (!this.isAssayerCaller(req) && scope?.regions?.length) {
+      const region = await this.validationQueryService.resolveRegion(id);
+      await this.regionGuard.assertRegionAllowedStaged(region, scope, 'validation-query:listMessages');
+    }
     const messages = await this.threadService.listMessages(id);
     // The packet this clarification is about — the same file for every message — resolved once so
     // an anchored message can carry an absolute link to it.

@@ -57,6 +57,7 @@ export const SETTINGS_GROUPS = [
   { key: 'field', label: 'In the field', description: 'What the app enforces on an assayer while they are out on a job, and how far a negotiation may run.' },
   { key: 'planning', label: 'Planning', description: 'How the recommendation engine spreads work across the people who are eligible for it.' },
   { key: 'roster', label: 'Roster import', description: 'How the appraiser roster spreadsheet is brought in.' },
+  { key: 'security', label: 'Access boundaries', description: 'Rollout controls for access checks being tightened — a value here is a staged switch, never a permanent policy.' },
   { key: 'qualification', label: 'Assayer qualification', description: 'How the qualification scores on an assayer\'s profile weigh their verification, background, credentials and track record. Weights are relative — they are normalized over whichever dimensions have data.' },
 ] as const;
 
@@ -629,6 +630,29 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     default: 3,
     envVar: 'MAX_NEGOTIATION_ROUNDS',
     min: 1, max: 20, unit: 'rounds',
+    applies: 'immediately',
+  },
+
+  // ── Access boundaries ─────────────────────────────────────────────────────
+  {
+    // Read by RegionGuardService.assertRegionAllowedStaged and by each of the six modules that
+    // adopt it (document, billing-engine, expense, customer-master, validation-query, client) —
+    // the ones that had NO region boundary at all until this rollout. Every OTHER module that
+    // already called the region ceiling (branch, assignment, project, planning, scheduling,
+    // assayer, reports, search, system-dashboard) is untouched by this setting: their check was
+    // already correct and unconditional, and stays that way regardless of this value.
+    key: 'security.regionScope.mode',
+    label: 'New region boundaries: rollout mode',
+    description: 'Six screens (documents, billing, expenses, customer master, validation queries, clients) had no region boundary at all — a region-restricted account could read every region\'s rows through them. "Log" runs the same check every other screen already enforces, but only records what it would have refused instead of refusing it, so you can watch real traffic before anything changes. "Enforce" makes the refusal real. "Off" skips the check entirely. Start on Log, read the logs for a while, then switch to Enforce.',
+    group: 'security',
+    type: 'select',
+    options: [
+      { value: 'off', label: 'Off — no check, no log' },
+      { value: 'log', label: 'Log — record what would be refused, refuse nothing' },
+      { value: 'enforce', label: 'Enforce — actually refuse' },
+    ],
+    default: 'log',
+    envVar: 'REGION_SCOPE_MODE',
     applies: 'immediately',
   },
 

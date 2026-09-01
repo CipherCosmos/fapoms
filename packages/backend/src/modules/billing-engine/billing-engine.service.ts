@@ -18,6 +18,9 @@ import { BillingHistoryEntity } from './history.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ProjectEntity } from '../project/project.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
+import { AuditService } from '../../core/audit/audit.service';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
+import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { PROFILE_IN_FORCE_SQL, PROFILE_IN_FORCE_ORDER } from '../pricing/profile-in-force';
 import { CacheService } from '../../infrastructure/cache/cache.service';
@@ -36,6 +39,7 @@ import {
   BillingAttentionItem,
   BillingOverview,
   AssignmentMoneyLine,
+  EventCategory,
   businessTodayDateKey,
   BUSINESS_TODAY_SQL,
   gstinStateCode,
@@ -169,6 +173,8 @@ export class BillingEngineService implements OnModuleInit {
     // account number are decrypted by the column transformer for the bank file and TDS report.
     @InjectRepository(AssayerEntity)
     private readonly assayerRepository: Repository<AssayerEntity>,
+    private readonly auditService: AuditService,
+    private readonly regionGuard: RegionGuardService,
     private readonly eventPublisher: DomainEventPublisher,
     private readonly cache: CacheService,
     private readonly uow: UnitOfWork,
@@ -775,6 +781,28 @@ export class BillingEngineService implements OnModuleInit {
             entityType: BillingEntityType.PAYABLE, entityId: saved.id, action: 'PAYABLE_STATUS_CHANGED',
             fromState: AssayerPayableStatus.PENDING, toState: AssayerPayableStatus.APPROVED,
           }, m);
+          // Compliance trail, alongside — not instead of — the reconciliation history row above.
+          // On the same manager so the audit event commits or rolls back with the approval itself.
+          const manager = m;
+          await this.auditService.recordEvent({
+            category: EventCategory.WORKFLOW,
+            eventType: 'PAYABLE_APPROVED',
+            entityType: 'PAYABLE',
+            entityId: saved.id,
+            previousState: AssayerPayableStatus.PENDING,
+            newState: AssayerPayableStatus.APPROVED,
+            userId,
+            remarks: `Approved payout ${saved.payableNumber} (₹${Number(saved.totalAmount)}) for assayer ${saved.assayerId}`,
+            metadata: {
+              payableId: saved.id,
+              payableNumber: saved.payableNumber,
+              assayerId: saved.assayerId,
+              clientId: saved.clientId,
+              projectId: saved.projectId,
+              assignmentId: saved.assignmentId,
+              amount: Number(saved.totalAmount),
+            },
+          }, { manager });
           emit('billing:payout-changed', { payableId: saved.id, assayerId: saved.assayerId, status: saved.status, onHold: saved.onHold });
           return saved;
         });
@@ -924,6 +952,31 @@ export class BillingEngineService implements OnModuleInit {
         newValue: { amount, paymentReference: dto.paymentReference, payableId: payable.id, balanceAfter: balance },
         reason: dto.notes ?? null,
       }, m);
+      // Compliance trail for the actual outbound money movement — who authorised the disbursement,
+      // how much left, to whom, and against which reference. Same manager as the state change.
+      const manager = m;
+      await this.auditService.recordEvent({
+        category: EventCategory.WORKFLOW,
+        eventType: 'PAYABLE_DISBURSED',
+        entityType: 'PAYMENT',
+        entityId: saved.id,
+        previousState: fromStatus,
+        newState: payable.status,
+        userId,
+        remarks: `Disbursed ₹${amount} against ${payable.payableNumber} (ref ${dto.paymentReference})`,
+        metadata: {
+          paymentId: saved.id,
+          payableId: payable.id,
+          payableNumber: payable.payableNumber,
+          assayerId: payable.assayerId,
+          clientId: payable.clientId,
+          amount,
+          paymentReference: dto.paymentReference,
+          method: dto.method,
+          balanceAfterDisbursement: balance,
+          fullyPaid,
+        },
+      }, { manager });
       emit('billing:payout-changed', { payableId: payable.id, assayerId: payable.assayerId, status: payable.status, onHold: payable.onHold, paymentId: saved.id, amount });
       if (fullyPaid) notify = { assignmentId: payable.assignmentId, assayerId: payable.assayerId, amount: Number(payable.paidAmount) };
       return saved;
@@ -1057,6 +1110,26 @@ export class BillingEngineService implements OnModuleInit {
         entityType: BillingEntityType.INVOICE, entityId: saved.id, action: 'INVOICE_STATUS_CHANGED',
         fromState: InvoiceStatus.DRAFT, toState: InvoiceStatus.ISSUED,
       }, m);
+      // Issuing turns a draft into a real receivable — the point money becomes owed to us.
+      const manager = m;
+      await this.auditService.recordEvent({
+        category: EventCategory.WORKFLOW,
+        eventType: 'INVOICE_ISSUED',
+        entityType: 'INVOICE',
+        entityId: saved.id,
+        previousState: InvoiceStatus.DRAFT,
+        newState: InvoiceStatus.ISSUED,
+        userId,
+        remarks: `Issued invoice ${saved.invoiceNumber} (₹${Number(saved.total)}) to client ${saved.clientId}`,
+        metadata: {
+          invoiceId: saved.id,
+          invoiceNumber: saved.invoiceNumber,
+          clientId: saved.clientId,
+          projectId: saved.projectId,
+          amount: Number(saved.total),
+          dueDate: saved.dueDate,
+        },
+      }, { manager });
       emit('billing:invoice-changed', { invoiceId: saved.id, clientId: saved.clientId, status: saved.status });
       return saved;
     });
@@ -1098,6 +1171,27 @@ export class BillingEngineService implements OnModuleInit {
         entityType: BillingEntityType.INVOICE, entityId: saved.id, action: 'INVOICE_STATUS_CHANGED',
         fromState: fromStatus, toState: InvoiceStatus.CANCELLED, reason: reason.trim(),
       }, m);
+      // The invoice-void: an audit reader must be able to tell a cancelled receivable from a
+      // collected one without cross-referencing billing_history.
+      const manager = m;
+      await this.auditService.recordEvent({
+        category: EventCategory.WORKFLOW,
+        eventType: 'INVOICE_CANCELLED',
+        entityType: 'INVOICE',
+        entityId: saved.id,
+        previousState: fromStatus,
+        newState: InvoiceStatus.CANCELLED,
+        userId,
+        remarks: reason.trim(),
+        metadata: {
+          invoiceId: saved.id,
+          invoiceNumber: saved.invoiceNumber,
+          clientId: saved.clientId,
+          projectId: saved.projectId,
+          amount: Number(saved.total),
+          reason: reason.trim(),
+        },
+      }, { manager });
       emit('billing:invoice-changed', { invoiceId: saved.id, clientId: saved.clientId, status: saved.status });
       return saved;
     });
@@ -1168,6 +1262,28 @@ export class BillingEngineService implements OnModuleInit {
         newValue: { amount, paymentReference: dto.paymentReference, invoiceId: invoice.id, invoiceNumber: invoice.invoiceNumber },
         reason: dto.notes ?? null,
       }, m);
+      // Compliance trail for the actual inbound money movement.
+      const manager = m;
+      await this.auditService.recordEvent({
+        category: EventCategory.WORKFLOW,
+        eventType: 'PAYMENT_RECEIVED',
+        entityType: 'PAYMENT',
+        entityId: saved.id,
+        previousState: fromStatus,
+        newState: invoice.status,
+        userId,
+        remarks: `Received ₹${amount} against ${invoice.invoiceNumber} (ref ${dto.paymentReference})`,
+        metadata: {
+          paymentId: saved.id,
+          invoiceId: invoice.id,
+          invoiceNumber: invoice.invoiceNumber,
+          clientId: invoice.clientId,
+          amount,
+          paymentReference: dto.paymentReference,
+          method: dto.method,
+          outstandingAfter: invoice.outstandingAmount,
+        },
+      }, { manager });
       emit('billing:invoice-changed', { invoiceId: invoice.id, clientId: invoice.clientId, status: invoice.status, paymentId: saved.id, amount });
       return saved;
     });
@@ -1212,6 +1328,27 @@ export class BillingEngineService implements OnModuleInit {
           newValue: { amount: Number(payment.amount), paymentReference: payment.paymentReference, invoiceId: invoice.id },
           reason: reason.trim(),
         }, m);
+        const manager = m;
+        await this.auditService.recordEvent({
+          category: EventCategory.WORKFLOW,
+          eventType: 'PAYMENT_REVERSED',
+          entityType: 'PAYMENT',
+          entityId: payment.id,
+          previousState: fromStatus,
+          newState: invoice.status,
+          userId,
+          remarks: reason.trim(),
+          metadata: {
+            paymentId: payment.id,
+            invoiceId: invoice.id,
+            invoiceNumber: invoice.invoiceNumber,
+            clientId: invoice.clientId,
+            amount: Number(payment.amount),
+            paymentReference: payment.paymentReference,
+            direction: 'INBOUND',
+            reason: reason.trim(),
+          },
+        }, { manager });
         emit('billing:invoice-changed', { invoiceId: invoice.id, clientId: invoice.clientId, status: invoice.status, reversedPaymentId: payment.id });
         return payment;
       }
@@ -1245,6 +1382,28 @@ export class BillingEngineService implements OnModuleInit {
           newValue: { amount: Number(payment.amount), paymentReference: payment.paymentReference, payableId: payable.id },
           reason: reason.trim(),
         }, m);
+        const manager = m;
+        await this.auditService.recordEvent({
+          category: EventCategory.WORKFLOW,
+          eventType: 'PAYMENT_REVERSED',
+          entityType: 'PAYMENT',
+          entityId: payment.id,
+          previousState: fromStatus,
+          newState: payable.status,
+          userId,
+          remarks: reason.trim(),
+          metadata: {
+            paymentId: payment.id,
+            payableId: payable.id,
+            payableNumber: payable.payableNumber,
+            assayerId: payable.assayerId,
+            clientId: payable.clientId,
+            amount: Number(payment.amount),
+            paymentReference: payment.paymentReference,
+            direction: 'OUTBOUND',
+            reason: reason.trim(),
+          },
+        }, { manager });
         emit('billing:payout-changed', { payableId: payable.id, assayerId: payable.assayerId, status: payable.status, onHold: payable.onHold, reversedPaymentId: payment.id });
         return payment;
       }
@@ -1332,7 +1491,7 @@ export class BillingEngineService implements OnModuleInit {
    * and the rows behind it. The mobile app's Earnings screen is this, verbatim — it never
    * computes money of its own.
    */
-  async assayerStatement(assayerId: string): Promise<any> {
+  async assayerStatement(assayerId: string, scope?: Partial<GlobalScope>): Promise<any> {
     // Loaded through the repository, not raw SQL, so the encrypted PAN is decrypted for the
     // statement's TDS block. tds.section is a label only — it never changes an amount.
     const [totals, payables, payments, assayer, tdsSection] = await Promise.all([
@@ -1342,6 +1501,9 @@ export class BillingEngineService implements OnModuleInit {
       this.assayerRepository.findOne({ where: { id: assayerId } }).catch(() => null),
       this.settings.get<string>('billing.tdsSection').catch(() => '194J'),
     ]);
+    // The staged region ceiling — an assayer carries its own home region directly, no join
+    // needed. `null` (unresolved region, or an unrestricted caller) is always allowed through.
+    await this.regionGuard.assertRegionAllowedStaged(assayer?.region ?? null, scope, 'billing-engine:assayer-statement');
     return {
       assayerId,
       assayerName: assayer?.displayName ?? null,
@@ -1377,21 +1539,62 @@ export class BillingEngineService implements OnModuleInit {
     };
   }
 
-  /** A page of payouts with their labels — what the Payouts tab renders. */
+  /**
+   * A page of payouts with their labels — what the Payouts tab renders.
+   *
+   * `scope` is the staged region ceiling (see the "Region scoping" primitives below). An
+   * unrestricted caller, or the rollout in `off` mode, takes the original unfiltered path
+   * unchanged; a restricted caller in `log`/`enforce` mode joins to each payable's assignment's
+   * branch region in the SAME query used to fetch the page, so `log` mode's warning is computed
+   * from the page already in hand rather than a second round trip.
+   */
   async listPayouts(filters: {
     assayerId?: string; clientId?: string; status?: AssayerPayableStatus; onHold?: boolean;
     page?: number | string; limit?: number | string;
-  } = {}): Promise<BillingPage<any>> {
+  } = {}, scope?: Partial<GlobalScope>): Promise<BillingPage<any>> {
     const w = billingPageWindow(filters.page, filters.limit);
-    const where: Record<string, unknown> = { isActive: true };
-    if (filters.assayerId) where.assayerId = filters.assayerId;
-    if (filters.clientId) where.clientId = filters.clientId;
-    if (filters.status) where.status = filters.status;
-    if (filters.onHold !== undefined) where.onHold = filters.onHold;
-    const [payables, total] = await this.payableRepository.findAndCount({
-      where, order: { createdAt: 'DESC' }, skip: w.skip, take: w.take,
-    });
-    return { items: await this.attachPayableNames(payables), total, page: w.page, limit: w.limit };
+    const regionScopeMode = await this.regionGuard.stagedMode();
+    const restrictedRegions = scope?.regions?.length ? scope.regions : null;
+
+    if (!restrictedRegions || regionScopeMode === 'off') {
+      const where: Record<string, unknown> = { isActive: true };
+      if (filters.assayerId) where.assayerId = filters.assayerId;
+      if (filters.clientId) where.clientId = filters.clientId;
+      if (filters.status) where.status = filters.status;
+      if (filters.onHold !== undefined) where.onHold = filters.onHold;
+      const [payables, total] = await this.payableRepository.findAndCount({
+        where, order: { createdAt: 'DESC' }, skip: w.skip, take: w.take,
+      });
+      return { items: await this.attachPayableNames(payables), total, page: w.page, limit: w.limit };
+    }
+
+    const buildQuery = () => {
+      const qb = this.payableRepository.createQueryBuilder('p').where('p.is_active = :isActive', { isActive: true });
+      if (filters.assayerId) qb.andWhere('p.assayer_id = :assayerId', { assayerId: filters.assayerId });
+      if (filters.clientId) qb.andWhere('p.client_id = :clientId', { clientId: filters.clientId });
+      if (filters.status) qb.andWhere('p.status = :status', { status: filters.status });
+      if (filters.onHold !== undefined) qb.andWhere('p.on_hold = :onHold', { onHold: filters.onHold });
+      qb.leftJoin('assignments', 'rg_a', 'rg_a.id = p.assignment_id')
+        .leftJoin('project_branches', 'rg_pb', 'rg_pb.id = rg_a.project_branch_id')
+        .leftJoin('branches', 'rg_b', 'rg_b.id = rg_pb.branch_id');
+      if (regionScopeMode === 'enforce') qb.andWhere('rg_b.region IN (:...regions)', { regions: restrictedRegions });
+      return qb;
+    };
+
+    const listQb = buildQuery().addSelect('rg_b.region', 'region_scope').orderBy('p.createdAt', 'DESC').skip(w.skip).take(w.take);
+    const [{ entities, raw }, total] = await Promise.all([listQb.getRawAndEntities(), buildQuery().getCount()]);
+
+    if (regionScopeMode === 'log') {
+      const outOfScope = raw.filter((r: any) => r.region_scope && !restrictedRegions.includes(r.region_scope)).length;
+      if (outOfScope > 0) {
+        this.logger.warn(
+          `[region-scope:billing-engine:payouts] would filter ${outOfScope} of ${raw.length} row(s) — outside ` +
+            `[${restrictedRegions.join(', ')}]. Currently in Log mode: request allowed through.`,
+        );
+      }
+    }
+
+    return { items: await this.attachPayableNames(entities), total, page: w.page, limit: w.limit };
   }
 
   /**
@@ -1403,16 +1606,24 @@ export class BillingEngineService implements OnModuleInit {
    * reading as "this is everything you have to invoice". A client past the cap is invoiced a
    * screenful at a time — scope to that client and the cap stops applying.
    */
-  async listInvoiceable(filters: { clientId?: string } = {}): Promise<{
+  async listInvoiceable(filters: { clientId?: string } = {}, scope?: Partial<GlobalScope>): Promise<{
     clients: Array<{ clientId: string; clientName: string; total: number; count: number; lines: any[] }>;
     total: number;
     truncated: boolean;
   }> {
+    const regionScopeMode = await this.regionGuard.stagedMode();
+    const restrictedRegions = scope?.regions?.length ? scope.regions : null;
+    // The query already joins to `branches` for the branch label — `off` leaves the query
+    // untouched; `log`/`enforce` add the region column to the same round trip so `log`'s count
+    // never costs a second query, and `enforce` narrows the WHERE by the same column.
+    const needsRegion = !!restrictedRegions && regionScopeMode !== 'off';
+    const applyFilter = !!restrictedRegions && regionScopeMode === 'enforce';
+
     const rows = await this.entryRepository.manager.query(
       `SELECT e.id, e.entry_number, e.client_id, c.name AS client_name, e.project_id, p.name AS project_name,
               e.assignment_id, a.assignment_number, b.name AS branch_name, e.assayer_id, s.display_name AS assayer_name,
               e.service_date, e.on_hold, e.hold_reason, e.base_amount, e.travel_amount, e.adjustment_amount,
-              e.taxable_amount, e.tax_amount, e.tds_amount, e.total_amount
+              e.taxable_amount, e.tax_amount, e.tds_amount, e.total_amount${needsRegion ? ', b.region AS region_scope' : ''}
          FROM billing_entries e
          JOIN clients c ON c.id = e.client_id
          LEFT JOIN projects p ON p.id = e.project_id
@@ -1422,10 +1633,22 @@ export class BillingEngineService implements OnModuleInit {
          LEFT JOIN assayers s ON s.id = e.assayer_id
         WHERE e.is_active = true AND e.state = 'UNBILLED'
           AND ($1::uuid IS NULL OR e.client_id = $1::uuid)
+          ${applyFilter ? 'AND b.region = ANY($2::text[])' : ''}
         ORDER BY c.name ASC, e.service_date DESC NULLS LAST, e.created_at DESC
         LIMIT ${INVOICEABLE_LIMIT}`,
-      [filters.clientId ?? null],
+      applyFilter ? [filters.clientId ?? null, restrictedRegions] : [filters.clientId ?? null],
     );
+
+    if (needsRegion && regionScopeMode === 'log') {
+      const outOfScope = rows.filter((r: any) => r.region_scope && !restrictedRegions!.includes(r.region_scope)).length;
+      if (outOfScope > 0) {
+        this.logger.warn(
+          `[region-scope:billing-engine:invoiceable] would filter ${outOfScope} of ${rows.length} row(s) — outside ` +
+            `[${restrictedRegions!.join(', ')}]. Currently in Log mode: request allowed through.`,
+        );
+      }
+    }
+
     const byClient = new Map<string, { clientId: string; clientName: string; total: number; count: number; lines: any[] }>();
     for (const r of rows) {
       const g = byClient.get(r.client_id) ?? { clientId: r.client_id, clientName: r.client_name, total: 0, count: 0, lines: [] as any[] };
@@ -1460,16 +1683,49 @@ export class BillingEngineService implements OnModuleInit {
   /** Client lines with their labels — the export and the assignment filter read this. */
   async listClientLines(filters: {
     clientId?: string; projectId?: string; assignmentId?: string; assayerId?: string; state?: BillingState; onHold?: boolean;
-  } = {}): Promise<any[]> {
-    const where: Record<string, unknown> = {};
-    if (filters.clientId) where.clientId = filters.clientId;
-    if (filters.projectId) where.projectId = filters.projectId;
-    if (filters.assignmentId) where.assignmentId = filters.assignmentId;
-    if (filters.assayerId) where.assayerId = filters.assayerId;
-    if (filters.state) where.state = filters.state;
-    if (filters.onHold !== undefined) where.onHold = filters.onHold;
-    const entries = await this.entryRepository.find({ where, order: { createdAt: 'DESC' } });
-    return this.attachEntryNames(entries);
+  } = {}, scope?: Partial<GlobalScope>): Promise<any[]> {
+    const regionScopeMode = await this.regionGuard.stagedMode();
+    const restrictedRegions = scope?.regions?.length ? scope.regions : null;
+
+    if (!restrictedRegions || regionScopeMode === 'off') {
+      const where: Record<string, unknown> = {};
+      if (filters.clientId) where.clientId = filters.clientId;
+      if (filters.projectId) where.projectId = filters.projectId;
+      if (filters.assignmentId) where.assignmentId = filters.assignmentId;
+      if (filters.assayerId) where.assayerId = filters.assayerId;
+      if (filters.state) where.state = filters.state;
+      if (filters.onHold !== undefined) where.onHold = filters.onHold;
+      const entries = await this.entryRepository.find({ where, order: { createdAt: 'DESC' } });
+      return this.attachEntryNames(entries);
+    }
+
+    const qb = this.entryRepository.createQueryBuilder('e');
+    if (filters.clientId) qb.andWhere('e.client_id = :clientId', { clientId: filters.clientId });
+    if (filters.projectId) qb.andWhere('e.project_id = :projectId', { projectId: filters.projectId });
+    if (filters.assignmentId) qb.andWhere('e.assignment_id = :assignmentId', { assignmentId: filters.assignmentId });
+    if (filters.assayerId) qb.andWhere('e.assayer_id = :assayerId', { assayerId: filters.assayerId });
+    if (filters.state) qb.andWhere('e.state = :state', { state: filters.state });
+    if (filters.onHold !== undefined) qb.andWhere('e.on_hold = :onHold', { onHold: filters.onHold });
+    qb.leftJoin('assignments', 'rg_a', 'rg_a.id = e.assignment_id')
+      .leftJoin('project_branches', 'rg_pb', 'rg_pb.id = rg_a.project_branch_id')
+      .leftJoin('branches', 'rg_b', 'rg_b.id = rg_pb.branch_id')
+      .addSelect('rg_b.region', 'region_scope')
+      .orderBy('e.createdAt', 'DESC');
+    if (regionScopeMode === 'enforce') qb.andWhere('rg_b.region IN (:...regions)', { regions: restrictedRegions });
+
+    const { entities, raw } = await qb.getRawAndEntities();
+
+    if (regionScopeMode === 'log') {
+      const outOfScope = raw.filter((r: any) => r.region_scope && !restrictedRegions.includes(r.region_scope)).length;
+      if (outOfScope > 0) {
+        this.logger.warn(
+          `[region-scope:billing-engine:lines] would filter ${outOfScope} of ${raw.length} row(s) — outside ` +
+            `[${restrictedRegions.join(', ')}]. Currently in Log mode: request allowed through.`,
+        );
+      }
+    }
+
+    return this.attachEntryNames(entities);
   }
 
   async findInvoices(filters: { clientId?: string; projectId?: string; status?: InvoiceStatus } = {}): Promise<BillingInvoiceEntity[]> {
@@ -1484,14 +1740,69 @@ export class BillingEngineService implements OnModuleInit {
     return where;
   }
 
-  /** One page of invoices, with a line count and the client's name, and never the lines. */
+  /**
+   * One page of invoices, with a line count and the client's name, and never the lines.
+   *
+   * An invoice can cover assignments in more than one region (see `invoiceRegions`), so the
+   * ceiling here mirrors the detail route's: a scoped caller sees an invoice only when NONE of
+   * its lines resolve to a region outside their assignment — a partially-in-scope invoice would
+   * otherwise be visible on the list but 403 when opened.
+   */
   async findInvoicesPage(
     filters: { clientId?: string; projectId?: string; status?: InvoiceStatus; page?: number | string; limit?: number | string } = {},
+    scope?: Partial<GlobalScope>,
   ): Promise<BillingPage<BillingInvoiceEntity & { entryCount: number; clientName: string | null }>> {
     const w = billingPageWindow(filters.page, filters.limit);
-    const [invoices, total] = await this.invoiceRepository.findAndCount({
-      where: this.invoiceWhere(filters), order: { createdAt: 'DESC' }, skip: w.skip, take: w.take,
-    });
+    const regionScopeMode = await this.regionGuard.stagedMode();
+    const restrictedRegions = scope?.regions?.length ? scope.regions : null;
+
+    let invoices: BillingInvoiceEntity[];
+    let total: number;
+
+    if (!restrictedRegions || regionScopeMode === 'off') {
+      const [rows, count] = await this.invoiceRepository.findAndCount({
+        where: this.invoiceWhere(filters), order: { createdAt: 'DESC' }, skip: w.skip, take: w.take,
+      });
+      invoices = rows;
+      total = count;
+    } else {
+      const where = this.invoiceWhere(filters);
+      const outOfScopeLine = `EXISTS (
+        SELECT 1 FROM billing_entries rg_e
+        JOIN assignments rg_a ON rg_a.id = rg_e.assignment_id
+        LEFT JOIN project_branches rg_pb ON rg_pb.id = rg_a.project_branch_id
+        LEFT JOIN branches rg_b ON rg_b.id = rg_pb.branch_id
+        WHERE rg_e.invoice_id = i.id AND rg_b.region IS NOT NULL AND rg_b.region NOT IN (:...regions)
+      )`;
+      const buildQuery = () => {
+        const qb = this.invoiceRepository.createQueryBuilder('i');
+        if (where.clientId) qb.andWhere('i.client_id = :clientId', { clientId: where.clientId });
+        if (where.projectId) qb.andWhere('i.project_id = :projectId', { projectId: where.projectId });
+        if (where.status) qb.andWhere('i.status = :status', { status: where.status });
+        if (regionScopeMode === 'enforce') qb.andWhere(`NOT ${outOfScopeLine}`, { regions: restrictedRegions });
+        return qb;
+      };
+      const listQb = buildQuery()
+        .addSelect(outOfScopeLine, 'would_filter')
+        .setParameter('regions', restrictedRegions)
+        .orderBy('i.createdAt', 'DESC')
+        .skip(w.skip)
+        .take(w.take);
+      const [{ entities, raw }, count] = await Promise.all([listQb.getRawAndEntities(), buildQuery().getCount()]);
+      invoices = entities;
+      total = count;
+
+      if (regionScopeMode === 'log') {
+        const outOfScope = raw.filter((r: any) => r.would_filter === true).length;
+        if (outOfScope > 0) {
+          this.logger.warn(
+            `[region-scope:billing-engine:invoices] would filter ${outOfScope} of ${raw.length} row(s) — a line ` +
+              `outside [${restrictedRegions.join(', ')}]. Currently in Log mode: request allowed through.`,
+          );
+        }
+      }
+    }
+
     const ids = invoices.map((i) => i.id);
     const clientIds = [...new Set(invoices.map((i) => i.clientId))];
     const [countRows, clientRows] = await Promise.all([
@@ -1510,9 +1821,10 @@ export class BillingEngineService implements OnModuleInit {
     };
   }
 
-  async getInvoice(invoiceId: string): Promise<any> {
+  async getInvoice(invoiceId: string, scope?: Partial<GlobalScope>): Promise<any> {
     const invoice = await this.invoiceRepository.findOne({ where: { id: invoiceId }, relations: ['entries', 'payments'] });
     if (!invoice) throw new NotFoundException(`Invoice ${invoiceId} not found.`);
+    await this.assertInvoiceRegionAllowed(invoiceId, scope, 'billing-engine:invoice');
     const [entries, clientRows] = await Promise.all([
       this.attachEntryNames(invoice.entries ?? []),
       this.invoiceRepository.manager.query(`SELECT name FROM clients WHERE id = $1`, [invoice.clientId]),
@@ -1537,9 +1849,10 @@ export class BillingEngineService implements OnModuleInit {
    * marked placeholder rather than a plausible-looking fake, so a half-configured system produces
    * an obviously-incomplete invoice instead of a wrong one.
    */
-  async getInvoiceDocument(invoiceId: string): Promise<any> {
+  async getInvoiceDocument(invoiceId: string, scope?: Partial<GlobalScope>): Promise<any> {
     const invoice = await this.invoiceRepository.findOne({ where: { id: invoiceId }, relations: ['entries'] });
     if (!invoice) throw new NotFoundException(`Invoice ${invoiceId} not found.`);
+    await this.assertInvoiceRegionAllowed(invoiceId, scope, 'billing-engine:invoice-document');
 
     const [lines, clientRows, seller] = await Promise.all([
       this.attachEntryNames(invoice.entries ?? []),
@@ -1814,9 +2127,16 @@ export class BillingEngineService implements OnModuleInit {
   }
 
   /** Everything money-related about one assignment — the one line the assignment detail shows. */
-  async assignmentMoneyLine(assignmentId: string): Promise<AssignmentMoneyLine> {
+  async assignmentMoneyLine(assignmentId: string, scope?: Partial<GlobalScope>): Promise<AssignmentMoneyLine> {
     const a = await this.assignmentRepository.findOne({ where: { id: assignmentId } });
     if (!a) throw new NotFoundException(`Assignment ${assignmentId} not found.`);
+    // The staged region ceiling. An assignment carries no region of its own — it reaches one
+    // through project_branches → branches, the same chain RegionGuardService.assertAssignmentInScope
+    // joins for the already-enforced callers.
+    if (scope?.regions?.length) {
+      const region = await this.projectBranchRegion(a.projectBranchId);
+      await this.regionGuard.assertRegionAllowedStaged(region, scope, 'billing-engine:assignment-money');
+    }
     const [entry, payables, history] = await Promise.all([
       this.entryRepository.findOne({ where: { assignmentId } }),
       this.payableRepository.find({ where: { assignmentId, isActive: true }, order: { createdAt: 'ASC' } }),
@@ -2145,6 +2465,57 @@ export class BillingEngineService implements OnModuleInit {
     const payable = await manager.findOne(AssayerPayableEntity, { where: { id: payableId }, lock: { mode: 'pessimistic_write' } });
     if (!payable) throw new NotFoundException(`Payable ${payableId} not found.`);
     return payable;
+  }
+
+  // -----------------------------------------------------------------------
+  // Region scoping (staged) — billing rows carry no region of their own; every one of them
+  // reaches a region through the assignment → project_branch → branch chain
+  // `RegionGuardService.assertAssignmentInScope` already joins for its already-enforced callers.
+  // -----------------------------------------------------------------------
+
+  /** The region a project_branch's branch belongs to, or `null` if either leg is missing. */
+  private async projectBranchRegion(projectBranchId: string | null | undefined): Promise<string | null> {
+    if (!projectBranchId) return null;
+    const rows = await this.assignmentRepository.manager.query(
+      `SELECT b.region FROM project_branches pb JOIN branches b ON b.id = pb.branch_id WHERE pb.id = $1`,
+      [projectBranchId],
+    );
+    return rows?.[0]?.region ?? null;
+  }
+
+  /**
+   * The distinct, non-null regions touched by an invoice's lines.
+   *
+   * An invoice is a set of assignments for one client (`createInvoice`'s `assignmentIds`), and
+   * nothing stops that set spanning more than one region — a client's audit project can cover
+   * branches in different states. So this returns every region the invoice's lines resolve to,
+   * not one: `assertInvoiceRegionAllowed` below refuses if ANY of them is outside the caller's
+   * assignment, matching the "may this request read this record" ceiling the single-region
+   * helpers apply, just extended to a row that can legitimately span more than one.
+   */
+  private async invoiceRegions(invoiceId: string): Promise<string[]> {
+    const rows = await this.invoiceRepository.manager.query(
+      `SELECT DISTINCT b.region
+         FROM billing_entries e
+         JOIN assignments a ON a.id = e.assignment_id
+         LEFT JOIN project_branches pb ON pb.id = a.project_branch_id
+         LEFT JOIN branches b ON b.id = pb.branch_id
+        WHERE e.invoice_id = $1 AND b.region IS NOT NULL`,
+      [invoiceId],
+    );
+    return rows.map((r: any) => r.region as string);
+  }
+
+  /**
+   * The staged ceiling for one invoice. Only queries at all when the caller actually holds a
+   * region restriction — an unrestricted (national) caller never pays for the resolution.
+   */
+  private async assertInvoiceRegionAllowed(invoiceId: string, scope: Partial<GlobalScope> | undefined, context: string): Promise<void> {
+    if (!scope?.regions?.length) return;
+    const regions = await this.invoiceRegions(invoiceId);
+    for (const region of regions.length ? regions : [null]) {
+      await this.regionGuard.assertRegionAllowedStaged(region, scope, context);
+    }
   }
 
   private seq(): string {

@@ -22,7 +22,7 @@
  * control. An explicit call per detail route is more typing and cannot fail silently.
  */
 
-import { ForbiddenException, Injectable } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
 import { GlobalScope, assignedRegions } from './global-scope';
@@ -32,6 +32,7 @@ import { ValidationQueryEntity } from '../../modules/validation-query/validation
 import { UserEntity } from '../../modules/user/user.entity';
 import { FeedbackThreadEntity } from '../../modules/feedback/feedback-thread.entity';
 import { FEEDBACK_TEAM_ROLE_NAMES } from '../../modules/feedback/feedback-roles';
+import { PlatformSettingsService } from '../settings/platform-settings.service';
 
 /** Distinguishes a UUID path param from a human-facing code on routes that accept both. */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -75,10 +76,13 @@ export function isInternalStaff(roles: unknown): boolean {
 }
 
 @Injectable()
-
-@Injectable()
 export class RegionGuardService {
-  constructor(@InjectDataSource() private readonly dataSource: DataSource) {}
+  private readonly logger = new Logger(RegionGuardService.name);
+
+  constructor(
+    @InjectDataSource() private readonly dataSource: DataSource,
+    private readonly settings: PlatformSettingsService,
+  ) {}
 
   /**
    * Refuse unless `region` is one the caller holds.
@@ -97,6 +101,60 @@ export class RegionGuardService {
         'That record belongs to a region your account is not assigned to.',
       );
     }
+  }
+
+  /**
+   * The staged version of `assertRegionAllowed`, for a boundary being ADDED where none existed
+   * before — documents, billing, expenses, customer master, validation queries, clients. Every
+   * other caller of `assertRegionAllowed` above already enforced correctly and stays exactly as
+   * it was; this method exists so six NEW checks can roll out without any of them being able to
+   * turn into a surprise 403 the moment they ship.
+   *
+   * Runs the identical check `assertRegionAllowed` does — log mode and enforce mode can never
+   * disagree about what WOULD be refused, only about whether the refusal is real — and reads
+   * `security.regionScope.mode` fresh on every call rather than caching it locally: this method
+   * is deliberately cheap to call (`PlatformSettingsService.get` is itself cache-backed), and a
+   * flip from Log to Enforce in the settings screen should take effect on the very next request,
+   * not the next deploy.
+   *
+   * `context` is a short label (e.g. `'document:download-token'`) so a Log-mode line in the
+   * server log says which of the six rollouts it belongs to — six checks sharing one setting but
+   * going quiet in the logs under one undifferentiated message would make Log mode useless for
+   * deciding "which of these is safe to enforce first".
+   */
+  async assertRegionAllowedStaged(
+    region: string | null | undefined,
+    scope: Partial<GlobalScope> | undefined,
+    context: string,
+  ): Promise<void> {
+    const mode = await this.settings
+      .get<string>('security.regionScope.mode')
+      .catch(() => 'log');
+    if (mode === 'off') return;
+
+    try {
+      this.assertRegionAllowed(region, scope);
+    } catch (err) {
+      if (mode === 'enforce') throw err;
+      this.logger.warn(
+        `[region-scope:${context}] would refuse — record region "${region ?? 'null'}" not in ` +
+          `[${(scope?.regions ?? []).join(', ')}]. Currently in Log mode: request allowed through.`,
+      );
+    }
+  }
+
+  /**
+   * The current rollout mode for the six staged region boundaries (document, billing, expense,
+   * customer-master, validation-query, client), read fresh on every call so a change in the
+   * settings screen is live on the next request. Shared here rather than duplicated in each of
+   * the six services' own list methods, all of which need this same value once at the top of
+   * their query before deciding whether to filter and/or log.
+   */
+  async stagedMode(): Promise<'off' | 'log' | 'enforce'> {
+    const mode = await this.settings
+      .get<string>('security.regionScope.mode')
+      .catch(() => 'log');
+    return mode === 'off' || mode === 'enforce' ? mode : 'log';
   }
 
   /** The ceiling, for a branch id. */

@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   ConflictException,
   BadRequestException,
@@ -17,6 +18,8 @@ import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { ConfigurationResolver } from '../platform/configuration/configuration.resolver';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
+import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { EventCategory, ClientLifecycleStatus, CLIENT_LIFECYCLE_TRANSITIONS, toWorkflowTransitions } from '@fapoms/shared';
 
 export interface CreateClientDto {
@@ -175,6 +178,8 @@ function findLifecyclePathTo(from: string, target: string): string[] | null {
 
 @Injectable()
 export class ClientService implements OnModuleInit {
+  private readonly logger = new Logger(ClientService.name);
+
   constructor(
     @InjectRepository(ClientEntity)
     private readonly clientRepository: Repository<ClientEntity>,
@@ -190,6 +195,7 @@ export class ClientService implements OnModuleInit {
     private readonly eventPublisher: DomainEventPublisher,
     private readonly cache: CacheService,
     private readonly workflowEngine: WorkflowEngine,
+    private readonly regionGuard: RegionGuardService,
     @InjectDataSource()
     private readonly dataSource: DataSource,
   ) {}
@@ -1028,5 +1034,68 @@ export class ClientService implements OnModuleInit {
     });
 
     return saved;
+  }
+
+  // -----------------------------------------------------------------------
+  // Region scoping — qualified assayers
+  // -----------------------------------------------------------------------
+
+  /**
+   * Staged region filtering for `GET :clientId/qualified-assayers`.
+   *
+   * A client is a national account: `ClientEntity` carries no `region` column, and neither do
+   * its contacts, contracts or billing profile — `branch.controller.ts findAll` filters branches
+   * by `clientId`, `zoneId` AND `region` as independent siblings, confirming a client's branches
+   * carry region, not the client itself. So `findOne`/`findAll`/`findContacts`/`findContracts`/
+   * `findBilling` have nothing resolvable to scope on and are deliberately left unwired.
+   *
+   * This route is the one exception: it returns *assayers*, and `AssayerEntity.region` is real.
+   * The result each candidate scored against this client's plannable pool, and a region-assigned
+   * operator is not supposed to see (or learn the vetting gaps of) an assayer outside their
+   * region any more than they'd see that assayer through the assayer module's own list route.
+   *
+   * `QualificationScoreService.qualifiedAssayersForClient` (assayer module, not modified here)
+   * returns `{ assayer: { id, displayName, assayerCode, city, state }, ... }` with no region
+   * field, so — unlike a same-entity list filter — this cannot be computed purely from the
+   * already-fetched result set: one batched `assayers.region` lookup for the ids already in the
+   * result is unavoidable to know what would even be filtered. It runs only when the caller is
+   * region-restricted and the mode is `log` or `enforce`; an unrestricted account, or `off` mode,
+   * costs nothing extra and returns `rows` completely untouched.
+   */
+  async filterQualifiedAssayersByRegion<T extends { assayer: { id: string } }>(
+    rows: T[],
+    scope: Partial<GlobalScope> | undefined,
+  ): Promise<T[]> {
+    const mode = await this.regionGuard.stagedMode();
+    if (mode === 'off') return rows;
+    if (!scope?.regions?.length || rows.length === 0) return rows;
+
+    const ids = rows.map((r) => r.assayer.id);
+    const regionRows: Array<{ id: string; region: string | null }> = await this.dataSource.query(
+      `SELECT id, region FROM assayers WHERE id = ANY($1)`,
+      [ids],
+    );
+    const regionById = new Map(regionRows.map((r) => [r.id, r.region]));
+    const allowed = new Set(scope.regions as string[]);
+
+    const outOfScope = rows.filter((r) => {
+      const region = regionById.get(r.assayer.id);
+      return !!region && !allowed.has(region);
+    });
+
+    if (mode === 'log') {
+      if (outOfScope.length > 0) {
+        this.logger.warn(
+          `[region-scope:client:qualified-assayers] would filter ${outOfScope.length} of ` +
+            `${rows.length} assayer(s) outside [${scope.regions.join(', ')}]. Currently in Log ` +
+            `mode: request allowed through.`,
+        );
+      }
+      return rows;
+    }
+
+    // enforce
+    const blocked = new Set(outOfScope);
+    return rows.filter((r) => !blocked.has(r));
   }
 }

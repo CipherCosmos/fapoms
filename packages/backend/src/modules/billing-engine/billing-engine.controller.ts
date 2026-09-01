@@ -10,6 +10,7 @@ import {
 } from 'class-validator';
 import { BillingEngineService } from './billing-engine.service';
 import { BillingJobsService } from './billing-jobs.service';
+import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { BILLING_ROLES, BILLING_READ_ROLES, DISBURSEMENT_ROLES } from './billing-roles';
 import { SystemRole, BillingState, InvoiceStatus, PaymentMethod, AssayerPayableStatus } from '@fapoms/shared';
@@ -150,7 +151,7 @@ export class BillingEngineController {
   @Get('payouts')
   @Roles(...BILLING_READ_ROLES)
   @ApiOperation({ summary: 'Assayer payouts (fee and reimbursement payables) with labels, paged' })
-  async payouts(@Query() q: PayoutsQuery) {
+  async payouts(@Query() q: PayoutsQuery, @GlobalScopeFilter() scope?: GlobalScope) {
     return {
       success: true,
       data: await this.service.listPayouts({
@@ -160,7 +161,7 @@ export class BillingEngineController {
         onHold: q.onHold === undefined ? undefined : q.onHold === 'true',
         page: q.page,
         limit: q.limit,
-      }),
+      }, scope),
     };
   }
 
@@ -207,14 +208,14 @@ export class BillingEngineController {
   @Get('assayers/:assayerId/statement')
   @Roles(...BILLING_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Assayer financial statement: earned, paid, outstanding and history' })
-  async assayerStatement(@Param('assayerId', ParseUUIDPipe) assayerId: string, @Req() req: any) {
+  async assayerStatement(@Param('assayerId', ParseUUIDPipe) assayerId: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
     // An assayer may read only their own statement; the path id is attacker-controlled.
     const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean);
     const isBillingStaff = roles.some((r) => (BILLING_ROLES as string[]).includes(r));
     if (!isBillingStaff && req.user?.id !== assayerId) {
       throw new ForbiddenException('You may only view your own statement.');
     }
-    return { success: true, data: await this.service.assayerStatement(assayerId) };
+    return { success: true, data: await this.service.assayerStatement(assayerId, scope) };
   }
 
   // ── Invoices ──────────────────────────────────────────────────────────────
@@ -222,8 +223,8 @@ export class BillingEngineController {
   @Get('invoiceable')
   @Roles(...BILLING_READ_ROLES)
   @ApiOperation({ summary: 'Completed work not yet invoiced, grouped by client' })
-  async invoiceable(@Query() q: InvoiceableQuery) {
-    return { success: true, data: await this.service.listInvoiceable({ clientId: q.clientId }) };
+  async invoiceable(@Query() q: InvoiceableQuery, @GlobalScopeFilter() scope?: GlobalScope) {
+    return { success: true, data: await this.service.listInvoiceable({ clientId: q.clientId }, scope) };
   }
 
   @Post('invoices')
@@ -236,22 +237,22 @@ export class BillingEngineController {
   @Get('invoices')
   @Roles(...BILLING_READ_ROLES)
   @ApiOperation({ summary: 'Invoices, paged' })
-  async invoices(@Query() q: InvoicesQuery) {
-    return { success: true, data: await this.service.findInvoicesPage(q) };
+  async invoices(@Query() q: InvoicesQuery, @GlobalScopeFilter() scope?: GlobalScope) {
+    return { success: true, data: await this.service.findInvoicesPage(q, scope) };
   }
 
   @Get('invoices/:id')
   @Roles(...BILLING_READ_ROLES)
   @ApiOperation({ summary: 'One invoice with its lines and payments' })
-  async invoice(@Param('id', ParseUUIDPipe) id: string) {
-    return { success: true, data: await this.service.getInvoice(id) };
+  async invoice(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
+    return { success: true, data: await this.service.getInvoice(id, scope) };
   }
 
   @Get('invoices/:id/document')
   @Roles(...BILLING_READ_ROLES)
   @ApiOperation({ summary: 'The GST tax invoice document: both GSTINs, place of supply, CGST/SGST or IGST split, amount in words' })
-  async invoiceDocument(@Param('id', ParseUUIDPipe) id: string) {
-    return { success: true, data: await this.service.getInvoiceDocument(id) };
+  async invoiceDocument(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
+    return { success: true, data: await this.service.getInvoiceDocument(id, scope) };
   }
 
   @Patch('invoices/:id/send')
@@ -287,8 +288,8 @@ export class BillingEngineController {
   @Get('assignments/:id/money')
   @Roles(...BILLING_READ_ROLES)
   @ApiOperation({ summary: 'Everything money-related about one assignment' })
-  async assignmentMoney(@Param('id', ParseUUIDPipe) id: string) {
-    return { success: true, data: await this.service.assignmentMoneyLine(id) };
+  async assignmentMoney(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
+    return { success: true, data: await this.service.assignmentMoneyLine(id, scope) };
   }
 
   @Patch('assignments/:id/client-line')
@@ -301,8 +302,8 @@ export class BillingEngineController {
   @Get('lines')
   @Roles(...BILLING_READ_ROLES)
   @ApiOperation({ summary: 'Client lines with labels (unpaged; for exports and filters)' })
-  async lines(@Query() q: LinesQuery) {
-    return { success: true, data: await this.service.listClientLines(q) };
+  async lines(@Query() q: LinesQuery, @GlobalScopeFilter() scope?: GlobalScope) {
+    return { success: true, data: await this.service.listClientLines(q, scope) };
   }
 
   // ── Reconcile (admin repair) ──────────────────────────────────────────────

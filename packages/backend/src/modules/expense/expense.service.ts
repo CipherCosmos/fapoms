@@ -10,6 +10,8 @@ import { EventCategory, AssignmentStatus } from '@fapoms/shared';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { BillingEngineService } from '../billing-engine/billing-engine.service';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
+import { GlobalScope } from '../../infrastructure/scope/global-scope';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 
 export interface CreateExpenseDto {
   category: ExpenseCategory;
@@ -35,6 +37,7 @@ export class ExpenseService {
     private readonly settings: PlatformSettingsService,
     private readonly billing: BillingEngineService,
     private readonly uow: UnitOfWork,
+    private readonly regionGuard: RegionGuardService,
   ) {}
 
   /**
@@ -49,6 +52,7 @@ export class ExpenseService {
     dto: CreateExpenseDto,
     userId: string,
     claimantAssayerId?: string | null,
+    scope?: Partial<GlobalScope>,
   ): Promise<ExpenseEntity> {
     const assignment = await this.assignmentRepository.findOne({
       where: { id: assignmentId },
@@ -57,6 +61,15 @@ export class ExpenseService {
     if (!assignment) {
       throw new NotFoundException(`Assignment ${assignmentId} not found.`);
     }
+
+    // The region is already on hand from the load above (no extra query): a region-restricted
+    // staff member raising a claim "on someone's behalf" against an out-of-region assignment is
+    // the same gap as reading one, just on the write side.
+    await this.regionGuard.assertRegionAllowedStaged(
+      assignment.projectBranch?.branch?.region ?? null,
+      scope,
+      'expense:create',
+    );
 
     if (claimantAssayerId && assignment.assayerId !== claimantAssayerId) {
       this.logger.warn(
@@ -138,19 +151,101 @@ export class ExpenseService {
     return saved;
   }
 
-  async findForAssignment(assignmentId: string): Promise<ExpenseEntity[]> {
-    return this.expenseRepository.find({
-      where: { assignmentId, isActive: true },
-      order: { createdAt: 'DESC' },
-    });
+  /**
+   * All claims raised against one assignment — always one assignment, so always one region.
+   * A join to that region rides along on the same query (`addSelect`, not `leftJoinAndSelect`)
+   * so it reaches `raw` without ever attaching to the hydrated entities: the returned rows are
+   * byte-for-byte what `.find()` returned before this check existed.
+   */
+  async findForAssignment(
+    assignmentId: string,
+    scope?: Partial<GlobalScope>,
+  ): Promise<ExpenseEntity[]> {
+    const { entities, raw } = await this.expenseRepository
+      .createQueryBuilder('expense')
+      .leftJoin('expense.assignment', 'assignment')
+      .leftJoin('assignment.projectBranch', 'pb')
+      .leftJoin('pb.branch', 'branch')
+      .addSelect('branch.region', 'region')
+      .where('expense.assignmentId = :assignmentId', { assignmentId })
+      .andWhere('expense.isActive = :isActive', { isActive: true })
+      .orderBy('expense.createdAt', 'DESC')
+      .getRawAndEntities();
+
+    // Every row shares one assignment, so one lookup covers the whole list — a detail-route
+    // ceiling wearing a list route's clothes, not a per-row filter.
+    await this.regionGuard.assertRegionAllowedStaged(
+      raw[0]?.region ?? null,
+      scope,
+      'expense:findForAssignment',
+    );
+    return entities;
   }
 
-  async findForAssayer(assayerId: string, status?: ExpenseStatus): Promise<ExpenseEntity[]> {
-    return this.expenseRepository.find({
-      where: { assayerId, isActive: true, ...(status ? { status } : {}) },
-      relations: ['assignment'],
-      order: { createdAt: 'DESC' },
-    });
+  /**
+   * `findMine` (an assayer's own claims) and the admin-facing `assayers/:assayerId/expenses`
+   * route both land here. Only the latter ever supplies `scope` — `findMine` calls this with two
+   * arguments, so `scope` is `undefined` and the method takes the untouched `.find()` path below,
+   * unconditionally, in every settings mode. A caller's own claim history does not depend on
+   * which region they happen to be standing in.
+   */
+  async findForAssayer(
+    assayerId: string,
+    status?: ExpenseStatus,
+    scope?: Partial<GlobalScope>,
+  ): Promise<ExpenseEntity[]> {
+    const baseQuery = () =>
+      this.expenseRepository.find({
+        where: { assayerId, isActive: true, ...(status ? { status } : {}) },
+        relations: ['assignment'],
+        order: { createdAt: 'DESC' },
+      });
+
+    if (!scope?.regions?.length) return baseQuery();
+
+    const mode = await this.regionGuard.stagedMode();
+    if (mode === 'off') return baseQuery();
+
+    // An assayer can work assignments in more than one region, so the ceiling is per-row
+    // (each claim's own assignment region), not the assayer's single home region — filtering on
+    // the assayer's home region would either hide a region-X claim from a region-X operator (if
+    // the assayer's home is elsewhere) or expose every region a national assayer has ever
+    // worked to an operator assigned to only one of them.
+    const query = this.expenseRepository
+      .createQueryBuilder('expense')
+      .leftJoinAndSelect('expense.assignment', 'assignment')
+      .leftJoin('assignment.projectBranch', 'pb')
+      .leftJoin('pb.branch', 'branch')
+      .addSelect('branch.region', 'region')
+      .where('expense.assayerId = :assayerId', { assayerId })
+      .andWhere('expense.isActive = :isActive', { isActive: true });
+    if (status) query.andWhere('expense.status = :status', { status });
+    query.orderBy('expense.createdAt', 'DESC');
+
+    const { entities, raw } = await query.getRawAndEntities();
+    const regions = scope.regions;
+
+    if (mode === 'enforce') {
+      return entities.filter((_, i) => {
+        const region = raw[i]?.region ?? null;
+        return !region || regions.includes(region as any);
+      });
+    }
+
+    // Log mode: never refuse. The count below is computed from the rows already in memory —
+    // no second query just to produce a log line.
+    const wouldRefuse = entities.reduce((count, _, i) => {
+      const region = raw[i]?.region ?? null;
+      return region && !regions.includes(region as any) ? count + 1 : count;
+    }, 0);
+    if (wouldRefuse > 0) {
+      this.logger.warn(
+        `[region-scope:expense:findForAssayer] would filter ${wouldRefuse} of ${entities.length} ` +
+          `claim(s) for assayer ${assayerId} outside [${regions.join(', ')}]. Currently in Log mode: ` +
+          `all rows returned.`,
+      );
+    }
+    return entities;
   }
 
   /** Totals for the mobile earnings screen, which previously had no source at all. */
@@ -172,13 +267,58 @@ export class ExpenseService {
     };
   }
 
-  /** Everything awaiting an operations or finance decision. */
-  async findPending(): Promise<ExpenseEntity[]> {
-    return this.expenseRepository.find({
-      where: { status: ExpenseStatus.PENDING, isActive: true },
-      relations: ['assignment', 'assayer'],
-      order: { createdAt: 'ASC' },
-    });
+  /**
+   * Everything awaiting an operations or finance decision — org-wide, every region, unless the
+   * caller is region-restricted. This is the bulk cross-region view the staged rollout is
+   * primarily about: a scoped operator hitting this route today sees every other region's
+   * pending claims too.
+   */
+  async findPending(scope?: Partial<GlobalScope>): Promise<ExpenseEntity[]> {
+    const baseQuery = () =>
+      this.expenseRepository.find({
+        where: { status: ExpenseStatus.PENDING, isActive: true },
+        relations: ['assignment', 'assayer'],
+        order: { createdAt: 'ASC' },
+      });
+
+    if (!scope?.regions?.length) return baseQuery();
+
+    const mode = await this.regionGuard.stagedMode();
+    if (mode === 'off') return baseQuery();
+
+    const { entities, raw } = await this.expenseRepository
+      .createQueryBuilder('expense')
+      .leftJoinAndSelect('expense.assignment', 'assignment')
+      .leftJoinAndSelect('expense.assayer', 'assayer')
+      .leftJoin('assignment.projectBranch', 'pb')
+      .leftJoin('pb.branch', 'branch')
+      .addSelect('branch.region', 'region')
+      .where('expense.status = :status', { status: ExpenseStatus.PENDING })
+      .andWhere('expense.isActive = :isActive', { isActive: true })
+      .orderBy('expense.createdAt', 'ASC')
+      .getRawAndEntities();
+
+    const regions = scope.regions;
+
+    if (mode === 'enforce') {
+      return entities.filter((_, i) => {
+        const region = raw[i]?.region ?? null;
+        return !region || regions.includes(region as any);
+      });
+    }
+
+    // Log mode: never refuse. Computed from the result set already in memory, not a second query.
+    const wouldRefuse = entities.reduce((count, _, i) => {
+      const region = raw[i]?.region ?? null;
+      return region && !regions.includes(region as any) ? count + 1 : count;
+    }, 0);
+    if (wouldRefuse > 0) {
+      this.logger.warn(
+        `[region-scope:expense:findPending] would filter ${wouldRefuse} of ${entities.length} ` +
+          `pending claim(s) outside [${regions.join(', ')}]. Currently in Log mode: all rows returned.`,
+      );
+    }
+    return entities;
   }
 
   async review(
@@ -186,11 +326,34 @@ export class ExpenseService {
     approve: boolean,
     userId: string,
     notes?: string,
+    scope?: Partial<GlobalScope>,
   ): Promise<ExpenseEntity> {
     const expense = await this.expenseRepository.findOne({ where: { id: expenseId } });
     if (!expense) {
       throw new NotFoundException(`Expense ${expenseId} not found.`);
     }
+
+    // Detail-route ceiling for a mutation: approving/rejecting a claim commits money, so an
+    // operator restricted to one region should not be able to act on another region's claim by
+    // guessing/being handed its id. `expense.assignmentId` is a plain column already loaded above
+    // — resolving the region is one small extra query (mirrors
+    // RegionGuardService.assertAssignmentInScope's join), skipped entirely for unrestricted
+    // callers.
+    if (scope?.regions?.length) {
+      const rows = await this.assignmentRepository
+        .createQueryBuilder('a')
+        .leftJoin('a.projectBranch', 'pb')
+        .leftJoin('pb.branch', 'b')
+        .select('b.region', 'region')
+        .where('a.id = :id', { id: expense.assignmentId })
+        .getRawOne<{ region: string | null }>();
+      await this.regionGuard.assertRegionAllowedStaged(
+        rows?.region ?? null,
+        scope,
+        'expense:review',
+      );
+    }
+
     if (expense.status !== ExpenseStatus.PENDING) {
       throw new BadRequestException(`This claim has already been ${expense.status.toLowerCase()}.`);
     }

@@ -17,6 +17,7 @@ import { LocalStorageService } from '../../infrastructure/storage/local-storage.
 import { ValidationService } from '../validation/validation.service';
 import { EmailProvider } from '../../infrastructure/notifications/email-provider';
 import { BranchEntity } from '../branch/branch.entity';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 
 describe('DocumentService', () => {
   let service: DocumentService;
@@ -25,7 +26,7 @@ describe('DocumentService', () => {
   const mockStorage = { getFileStream: jest.fn(), saveFile: jest.fn(), deleteFile: jest.fn(), statFile: jest.fn() };
   const mockEmailProvider = { isEnabled: jest.fn().mockReturnValue(false), send: jest.fn() };
   // Returns a promise: the write-back is fire-and-forget with a .catch() on it.
-  const mockBranchRepo = { update: jest.fn().mockResolvedValue({ affected: 1 }) };
+  const mockBranchRepo = { update: jest.fn().mockResolvedValue({ affected: 1 }), findOne: jest.fn() };
 
   const mockDocumentRepo = {
     create: jest.fn(),
@@ -43,6 +44,7 @@ describe('DocumentService', () => {
 
   const mockAssignmentRepo: any = {
     findOne: jest.fn().mockResolvedValue(null),
+    find: jest.fn().mockResolvedValue([]),
     createQueryBuilder: jest.fn(),
   };
 
@@ -66,6 +68,13 @@ describe('DocumentService', () => {
     sendToUser: jest.fn(),
   };
 
+  // Defaults to Off — the existing suite exercises no region scoping at all, and Off is the
+  // mode where every list/filter helper below returns immediately without even reading scope.
+  const mockRegionGuard = {
+    stagedMode: jest.fn().mockResolvedValue('off'),
+    assertRegionAllowedStaged: jest.fn(),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -86,6 +95,7 @@ describe('DocumentService', () => {
         { provide: 'StorageEngine', useValue: mockStorage },
         { provide: EmailProvider, useValue: mockEmailProvider },
         { provide: getRepositoryToken(BranchEntity), useValue: mockBranchRepo },
+        { provide: RegionGuardService, useValue: mockRegionGuard },
       ],
     }).compile();
 
@@ -778,6 +788,293 @@ describe('DocumentService', () => {
       mockDocumentRepo.createQueryBuilder.mockReturnValue(qb);
 
       expect(await service.getDocumentStats()).toEqual({ total: 0, uploaded: 0, dispatched: 0, received: 0 });
+    });
+  });
+
+  /**
+   * The staged region-scope rollout (`security.regionScope.mode`, read via
+   * `RegionGuardService.stagedMode()`): Off and Log must return exactly what the route returned
+   * before this rollout existed — Log's only observable difference is a warning log line,
+   * computed from rows already in hand rather than a second query — and Enforce is the only mode
+   * that actually narrows the result. An unrestricted account (`scope.regions` null/empty) is
+   * never filtered or logged against in any mode.
+   */
+  describe('region scope (staged rollout)', () => {
+    const restrictedScope = { regions: ['NORTH'] } as any;
+
+    afterEach(() => {
+      // These tests set stagedMode's resolved value explicitly per case; restore the file's
+      // shared Off default so later tests (and other describe blocks, which do not expect any
+      // region filtering) are unaffected.
+      mockRegionGuard.stagedMode.mockResolvedValue('off');
+    });
+
+    describe('findByProject', () => {
+      const branchDoc = (id: string, region: string | null) => ({
+        id, assessment: { branch: { region } },
+      });
+
+      beforeEach(() => {
+        mockAssessmentRepo.find.mockResolvedValue([{ id: 'a-1' }, { id: 'a-2' }]);
+        mockDocumentRepo.find.mockResolvedValue([branchDoc('doc-north', 'NORTH'), branchDoc('doc-south', 'SOUTH')]);
+      });
+
+      it('Off: returns everything and never reads the mode', async () => {
+        mockRegionGuard.stagedMode.mockResolvedValue('off');
+        const result = await service.findByProject('p-1', restrictedScope);
+        expect(result).toHaveLength(2);
+      });
+
+      it('an unrestricted account (regions: null) is never filtered, even in Enforce', async () => {
+        mockRegionGuard.stagedMode.mockResolvedValue('enforce');
+        const result = await service.findByProject('p-1', { regions: null } as any);
+        expect(result).toHaveLength(2);
+        expect(mockRegionGuard.stagedMode).not.toHaveBeenCalled();
+      });
+
+      it('Log: returns the FULL unfiltered result and logs, rather than narrowing it', async () => {
+        mockRegionGuard.stagedMode.mockResolvedValue('log');
+        const warnSpy = jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);
+
+        const result = await service.findByProject('p-1', restrictedScope);
+
+        expect(result.map((d) => d.id)).toEqual(['doc-north', 'doc-south']);
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('would filter 1 of 2'));
+      });
+
+      it('Enforce: narrows to the account\'s region(s), leaving a null-region row visible', async () => {
+        mockRegionGuard.stagedMode.mockResolvedValue('enforce');
+        mockDocumentRepo.find.mockResolvedValue([
+          branchDoc('doc-north', 'NORTH'),
+          branchDoc('doc-south', 'SOUTH'),
+          branchDoc('doc-unresolved', null),
+        ]);
+
+        const result = await service.findByProject('p-1', restrictedScope);
+
+        expect(result.map((d) => d.id).sort()).toEqual(['doc-north', 'doc-unresolved']);
+      });
+    });
+
+    describe('findAll', () => {
+      it('Log: returns the FULL unfiltered result and logs the would-be exclusion', async () => {
+        mockRegionGuard.stagedMode.mockResolvedValue('log');
+        mockDocumentRepo.find.mockResolvedValue([
+          { id: 'doc-north', assessment: { branch: { region: 'NORTH' } } },
+          { id: 'doc-south', assessment: { branch: { region: 'SOUTH' } } },
+        ]);
+        const warnSpy = jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);
+
+        const result = await service.findAll(restrictedScope);
+
+        expect(result).toHaveLength(2);
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('document:findAll'));
+      });
+
+      it('Enforce: narrows the list', async () => {
+        mockRegionGuard.stagedMode.mockResolvedValue('enforce');
+        mockDocumentRepo.find.mockResolvedValue([
+          { id: 'doc-north', assessment: { branch: { region: 'NORTH' } } },
+          { id: 'doc-south', assessment: { branch: { region: 'SOUTH' } } },
+        ]);
+
+        const result = await service.findAll(restrictedScope);
+
+        expect(result.map((d: any) => d.id)).toEqual(['doc-north']);
+      });
+    });
+
+    describe('findDataEntryQueue (grouped by assessment)', () => {
+      const doc = (assessmentId: string, region: string | null) => ({
+        assessmentId,
+        receivedAt: new Date('2026-01-01'),
+        createdAt: new Date('2026-01-01'),
+        status: 'RECEIVED',
+        assessment: { branch: { region }, project: { name: 'Proj' } },
+      });
+
+      beforeEach(() => {
+        mockAssignmentRepo.find.mockResolvedValue([]);
+      });
+
+      it('Log: returns every group unfiltered and logs the would-be exclusion', async () => {
+        mockRegionGuard.stagedMode.mockResolvedValue('log');
+        mockDocumentRepo.find.mockResolvedValue([doc('a-north', 'NORTH'), doc('a-south', 'SOUTH')]);
+        const warnSpy = jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);
+
+        const result = await service.findDataEntryQueue(restrictedScope);
+
+        expect(result.map((g) => g.assessmentId).sort()).toEqual(['a-north', 'a-south']);
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('would filter 1 of 2'));
+      });
+
+      it('Enforce: drops the out-of-scope group', async () => {
+        mockRegionGuard.stagedMode.mockResolvedValue('enforce');
+        mockDocumentRepo.find.mockResolvedValue([doc('a-north', 'NORTH'), doc('a-south', 'SOUTH')]);
+
+        const result = await service.findDataEntryQueue(restrictedScope);
+
+        expect(result.map((g) => g.assessmentId)).toEqual(['a-north']);
+      });
+    });
+
+    describe('dataEntryQueue (the raw-SQL paginated desk queue)', () => {
+      function makeQb(rawManyResults: any[][]) {
+        const qb: any = {};
+        for (const m of ['leftJoin', 'where', 'andWhere', 'select', 'addSelect', 'groupBy', 'orderBy']) {
+          qb[m] = jest.fn().mockReturnValue(qb);
+        }
+        qb.offset = jest.fn().mockReturnValue(qb);
+        qb.limit = jest.fn().mockReturnValue(qb);
+        qb.clone = jest.fn().mockReturnValue(qb);
+        qb.getCount = jest.fn().mockResolvedValue(0);
+        const impl = jest.fn();
+        rawManyResults.forEach((r) => impl.mockResolvedValueOnce(r));
+        qb.getRawMany = impl;
+        return qb;
+      }
+
+      it('Off: builds no region clause', async () => {
+        mockRegionGuard.stagedMode.mockResolvedValue('off');
+        const qb = makeQb([[], []]);
+        mockDocumentRepo.createQueryBuilder.mockReturnValue(qb);
+
+        await service.dataEntryQueue({}, restrictedScope);
+
+        expect(qb.andWhere).not.toHaveBeenCalledWith(expect.stringContaining('b.region'), expect.anything());
+      });
+
+      it('an unrestricted account is never filtered or logged, even in Enforce', async () => {
+        mockRegionGuard.stagedMode.mockResolvedValue('enforce');
+        const qb = makeQb([[], []]);
+        mockDocumentRepo.createQueryBuilder.mockReturnValue(qb);
+
+        await service.dataEntryQueue({}, { regions: null } as any);
+
+        expect(mockRegionGuard.stagedMode).not.toHaveBeenCalled();
+        expect(qb.andWhere).not.toHaveBeenCalledWith(expect.stringContaining('b.region'), expect.anything());
+      });
+
+      it('Log: returns the full unfiltered page (computed from rows already fetched, not a second query) and logs', async () => {
+        mockRegionGuard.stagedMode.mockResolvedValue('log');
+        const page = [
+          { id: 'd-1', fileName: 'a.pdf', __region: 'NORTH' },
+          { id: 'd-2', fileName: 'b.pdf', __region: 'SOUTH' },
+        ];
+        const qb = makeQb([[], page]);
+        mockDocumentRepo.createQueryBuilder.mockReturnValue(qb);
+        const warnSpy = jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);
+
+        const result = await service.dataEntryQueue({}, restrictedScope);
+
+        // Byte-for-byte: the internal __region field must not leak into the response, and
+        // nothing must have been dropped.
+        expect(result.items).toEqual([{ id: 'd-1', fileName: 'a.pdf' }, { id: 'd-2', fileName: 'b.pdf' }]);
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('would filter 1 of 2'));
+        // No second query: exactly the two calls dataEntryQueue always makes (lane counts, page).
+        expect(qb.getRawMany).toHaveBeenCalledTimes(2);
+      });
+
+      it('Enforce: adds the branch-region predicate to the shared query builder', async () => {
+        mockRegionGuard.stagedMode.mockResolvedValue('enforce');
+        const qb = makeQb([[], []]);
+        mockDocumentRepo.createQueryBuilder.mockReturnValue(qb);
+
+        await service.dataEntryQueue({}, restrictedScope);
+
+        expect(qb.andWhere).toHaveBeenCalledWith(
+          '(b.region IS NULL OR b.region = ANY(:regions))',
+          { regions: ['NORTH'] },
+        );
+      });
+    });
+
+    describe('getDocumentStats', () => {
+      function makeQb() {
+        const qb: any = {
+          select: jest.fn().mockReturnThis(),
+          addSelect: jest.fn().mockReturnThis(),
+          where: jest.fn().mockReturnThis(),
+          setParameters: jest.fn().mockReturnThis(),
+          leftJoin: jest.fn().mockReturnThis(),
+          andWhere: jest.fn().mockReturnThis(),
+          getRawOne: jest.fn().mockResolvedValue({ total: '10', uploaded: '4', dispatched: '3', received: '3' }),
+        };
+        return qb;
+      }
+
+      it('Off (no scope): unchanged — no join, no region predicate', async () => {
+        const qb = makeQb();
+        mockDocumentRepo.createQueryBuilder.mockReturnValue(qb);
+
+        await service.getDocumentStats();
+
+        expect(qb.leftJoin).not.toHaveBeenCalled();
+        expect(qb.andWhere).not.toHaveBeenCalled();
+      });
+
+      it('an unrestricted account never reads the mode and is never filtered', async () => {
+        const qb = makeQb();
+        mockDocumentRepo.createQueryBuilder.mockReturnValue(qb);
+
+        await service.getDocumentStats({ regions: null } as any);
+
+        expect(mockRegionGuard.stagedMode).not.toHaveBeenCalled();
+        expect(qb.andWhere).not.toHaveBeenCalled();
+      });
+
+      it('Log: totals are unchanged (no join added) — this route has no fetched row set to log a count from', async () => {
+        mockRegionGuard.stagedMode.mockResolvedValue('log');
+        const qb = makeQb();
+        mockDocumentRepo.createQueryBuilder.mockReturnValue(qb);
+        const warnSpy = jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);
+
+        const stats = await service.getDocumentStats(restrictedScope);
+
+        expect(stats).toEqual({ total: 10, uploaded: 4, dispatched: 3, received: 3 });
+        expect(qb.leftJoin).not.toHaveBeenCalled();
+        expect(warnSpy).toHaveBeenCalled();
+      });
+
+      it('Enforce: joins down to the branch and restricts the aggregate to the account\'s region(s)', async () => {
+        mockRegionGuard.stagedMode.mockResolvedValue('enforce');
+        const qb = makeQb();
+        mockDocumentRepo.createQueryBuilder.mockReturnValue(qb);
+
+        await service.getDocumentStats(restrictedScope);
+
+        expect(qb.leftJoin).toHaveBeenCalledWith('assessments', 'a', 'a.id = d.assessment_id');
+        expect(qb.leftJoin).toHaveBeenCalledWith('branches', 'b', 'b.id = a.branch_id');
+        expect(qb.andWhere).toHaveBeenCalledWith(
+          '(b.region IS NULL OR b.region = ANY(:regions))',
+          { regions: ['NORTH'] },
+        );
+      });
+    });
+
+    describe('resolveProjectBranchRegion / resolveAssessmentRegion', () => {
+      it('resolves a project branch to its branch region', async () => {
+        mockProjectBranchRepo.findOne.mockResolvedValue({ id: 'pb-1', branchId: 'br-1' });
+        mockBranchRepo.findOne.mockResolvedValue({ id: 'br-1', region: 'NORTH' });
+
+        await expect(service.resolveProjectBranchRegion('pb-1')).resolves.toBe('NORTH');
+      });
+
+      it('resolves null when the project branch does not exist', async () => {
+        mockProjectBranchRepo.findOne.mockResolvedValue(null);
+        await expect(service.resolveProjectBranchRegion('missing')).resolves.toBeNull();
+      });
+
+      it('resolves an assessment to its branch region via the branch relation', async () => {
+        mockAssessmentRepo.findOne.mockResolvedValue({ id: 'a-1', branch: { region: 'SOUTH' } });
+        await expect(service.resolveAssessmentRegion('a-1')).resolves.toBe('SOUTH');
+        expect(mockAssessmentRepo.findOne).toHaveBeenCalledWith({ where: { id: 'a-1' }, relations: ['branch'] });
+      });
+
+      it('resolves null when the assessment does not exist', async () => {
+        mockAssessmentRepo.findOne.mockResolvedValue(null);
+        await expect(service.resolveAssessmentRegion('missing')).resolves.toBeNull();
+      });
     });
   });
 });

@@ -19,8 +19,21 @@ import { Region } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
+import { MAX_UPLOAD_BYTES } from '../document/upload-validation';
+import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean, Min, IsObject, IsUUID } from 'class-validator';
+
+/**
+ * Same shape as `documentUploadMulterOptions` in document.controller.ts: multer's own `limits`
+ * enforced at the streaming layer, capped to the same `MAX_UPLOAD_BYTES` the app-level checks use,
+ * so a request this large is rejected mid-stream rather than fully buffered into memory first.
+ */
+const branchUploadMulterOptions = {
+  storage: memoryStorage(),
+  limits: { fileSize: MAX_UPLOAD_BYTES },
+};
 import { BranchService, CreateBranchDto, UpdateBranchDto, CreateContactDto, UpdateContactDto, CreateDocumentDto } from './branch.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
@@ -165,15 +178,16 @@ export class BranchController {
   @ApiQuery({ name: 'type', required: false })
   async findAll(
     @Query('page') page = 1,
-    @Query('limit') limit = 20,
+    // Bounded here rather than trusted from the caller: this list feeds a table, and the page
+    // that reads it used to ask for a thousand rows at a time and filter them in the browser.
+    // ParseLimitPipe keeps the previous 1-200 range and 20 default; see parse-limit.pipe.ts.
+    @Query('limit', new ParseLimitPipe({ default: 20, max: 200 })) limit: number,
     @GlobalScopeFilter() scope?: GlobalScope,
     @Query('search') search?: string,
     @Query('risk') risk?: string,
     @Query('type') type?: string,
   ) {
-    // Bounded here rather than trusted from the caller: this list feeds a table, and the page
-    // that reads it used to ask for a thousand rows at a time and filter them in the browser.
-    const safeLimit = Math.min(200, Math.max(1, Number(limit) || 20));
+    const safeLimit = limit;
     const safePage = Math.max(1, Number(page) || 1);
     const { branches, total } = await this.branchService.findAll(
       safePage, safeLimit, scope, { search, risk, type },
@@ -308,7 +322,7 @@ export class BranchController {
   @Post('import/:clientId')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('branch:create:organization')
-  @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
+  @UseInterceptors(FileInterceptor('file', branchUploadMulterOptions), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Import branches from Excel' })
   @ApiBody({

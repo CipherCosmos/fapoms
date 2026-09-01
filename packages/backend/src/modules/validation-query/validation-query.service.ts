@@ -14,6 +14,8 @@ import { PushNotificationService } from '../notifications/push-notification.serv
 import { QueryMessageAuthor } from './validation-query-message.entity';
 import { QueryThreadService } from './query-thread.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { GlobalScope } from '../../infrastructure/scope/global-scope';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 
 export interface CreateValidationQueryDto {
   validationCaseId: string;
@@ -54,6 +56,7 @@ export class ValidationQueryService {
     private readonly pushNotificationService: PushNotificationService,
     private readonly threadService: QueryThreadService,
     private readonly notificationDispatch: NotificationDispatchService,
+    private readonly regionGuard: RegionGuardService,
   ) {}
 
   async createQuery(dto: CreateValidationQueryDto, userId: string): Promise<ValidationQueryEntity> {
@@ -496,6 +499,47 @@ export class ValidationQueryService {
   }
 
   /**
+   * The region a single clarification is scoped to — query → validation case → project branch
+   * → branch, the exact join `RegionGuardService.queryVerdict` already uses for the realtime
+   * room check. Backs the staged staff-side ceiling on the detail-shaped routes
+   * (`listMessages`, `respondToQuery`, `resolveQuery`, `reopenQuery`): an assayer caller is
+   * already object-scoped by `assertAssayerOwnsQuery` in the controller, so this only ever
+   * needs to run for staff. Returns `null` for an unknown id or an unresolvable region, which
+   * `assertRegionAllowedStaged` treats as "no restriction" — a data gap, not a security
+   * boundary, per `RegionGuardService.assertRegionAllowed`'s own doc comment.
+   */
+  async resolveRegion(queryId: string): Promise<string | null> {
+    const row = await this.queryRepository
+      .createQueryBuilder('q')
+      .leftJoin('q.validationCase', 'vc')
+      .leftJoin('vc.projectBranch', 'pb')
+      .leftJoin('pb.branch', 'b')
+      .select('b.region', 'region')
+      .where('q.id = :id', { id: queryId })
+      .getRawOne<{ region: string | null }>();
+    return row?.region ?? null;
+  }
+
+  /**
+   * The region a validation case belongs to (case → project branch → branch). Every
+   * clarification under one case shares this exact value, so `findByValidationCase` uses a
+   * single detail-style check here rather than filtering row by row — unlike `findByAssayer`
+   * below, where one assayer can legitimately hold clarifications spread across more than one
+   * region (they are not confined to a single branch), so a per-row ceiling is the only
+   * correct one there.
+   */
+  async validationCaseRegion(validationCaseId: string): Promise<string | null> {
+    const row = await this.validationCaseRepository
+      .createQueryBuilder('vc')
+      .leftJoin('vc.projectBranch', 'pb')
+      .leftJoin('pb.branch', 'b')
+      .select('b.region', 'region')
+      .where('vc.id = :id', { id: validationCaseId })
+      .getRawOne<{ region: string | null }>();
+    return row?.region ?? null;
+  }
+
+  /**
    * Every clarification across all cases, enriched for a worklist: who it is with (the branch's
    * assayer), which branch/case, whether the ball is with us or the assayer, and its SLA state.
    *
@@ -503,7 +547,12 @@ export class ValidationQueryService {
    * to answer "which clarifications are open, whose court are they in, and which are overdue"
    * without walking every case. This is that list.
    */
-  async getClarificationWorklist(opts: { filter?: ClarificationFilter; limit?: number } = {}): Promise<{
+  async getClarificationWorklist(opts: {
+    filter?: ClarificationFilter;
+    limit?: number;
+    /** The caller's enforced region ceiling. Omitted or `regions: null` = unrestricted. */
+    scope?: Partial<GlobalScope>;
+  } = {}): Promise<{
     items: Array<{
       id: string;
       validationCaseId: string;
@@ -539,17 +588,47 @@ export class ValidationQueryService {
                            ELSE 'DONE' END`;
     const OVERDUE = `(q.sla_due_date IS NOT NULL AND q.status <> 'RESOLVED' AND q.sla_due_date < NOW())`;
 
+    /**
+     * Region ceiling, staged per `security.regionScope.mode` (off/log/enforce). Settings are
+     * only read for a region-restricted caller — an unrestricted account (`scope.regions`
+     * null/empty) always takes the `off` path below with no extra query, exactly as
+     * `ExpenseService`/`CustomerMasterService` do for their own staged list reads.
+     */
+    const regions = opts.scope?.regions && opts.scope.regions.length > 0 ? opts.scope.regions : null;
+    const mode = regions ? await this.regionGuard.stagedMode() : 'off';
+    const enforce = mode === 'enforce';
+
     // One grouped pass for the tabs. The page used to fetch every clarification ever raised —
     // including every resolved one, forever — and count them in the browser.
-    const countRow = await this.queryRepository.manager.query(
-      `SELECT COUNT(*)::int AS total,
-              COUNT(*) FILTER (WHERE ${AWAITING} = 'US')::int       AS us,
-              COUNT(*) FILTER (WHERE ${AWAITING} = 'ASSAYER')::int  AS assayer,
-              COUNT(*) FILTER (WHERE ${AWAITING} = 'DONE')::int     AS done,
-              COUNT(*) FILTER (WHERE ${OVERDUE})::int               AS overdue
-         FROM validation_queries q
-        WHERE q.is_active = true`,
-    );
+    //
+    // `off`/`log`: this SQL is byte-for-byte what it always was — no join, no filter — so the
+    // counts (and therefore the whole response) stay identical in both modes. `enforce`: the
+    // same branch join the row query below uses is added so the tabs count only what the
+    // caller may actually see. A null/unresolvable branch region is never excluded — a data
+    // gap, not a security boundary, per `RegionGuardService.assertRegionAllowed`.
+    const countRow = enforce
+      ? await this.queryRepository.manager.query(
+          `SELECT COUNT(*)::int AS total,
+                  COUNT(*) FILTER (WHERE ${AWAITING} = 'US')::int       AS us,
+                  COUNT(*) FILTER (WHERE ${AWAITING} = 'ASSAYER')::int  AS assayer,
+                  COUNT(*) FILTER (WHERE ${AWAITING} = 'DONE')::int     AS done,
+                  COUNT(*) FILTER (WHERE ${OVERDUE})::int               AS overdue
+             FROM validation_queries q
+             LEFT JOIN validation_cases vc ON vc.id = q.validation_case_id
+             LEFT JOIN project_branches pb ON pb.id = vc.project_branch_id
+             LEFT JOIN branches b ON b.id = pb.branch_id
+            WHERE q.is_active = true AND (b.region IS NULL OR b.region = ANY($1))`,
+          [regions],
+        )
+      : await this.queryRepository.manager.query(
+          `SELECT COUNT(*)::int AS total,
+                  COUNT(*) FILTER (WHERE ${AWAITING} = 'US')::int       AS us,
+                  COUNT(*) FILTER (WHERE ${AWAITING} = 'ASSAYER')::int  AS assayer,
+                  COUNT(*) FILTER (WHERE ${AWAITING} = 'DONE')::int     AS done,
+                  COUNT(*) FILTER (WHERE ${OVERDUE})::int               AS overdue
+             FROM validation_queries q
+            WHERE q.is_active = true`,
+        );
     const c = countRow?.[0] ?? {};
     const counts = {
       US: Number(c.us ?? 0),
@@ -563,6 +642,12 @@ export class ValidationQueryService {
       filter === 'OVERDUE' ? `AND ${OVERDUE}`
       : filter === 'ALL' ? ''
       : `AND ${AWAITING} = '${filter}'`;
+    const enforceFilterSql = enforce ? `AND (b.region IS NULL OR b.region = ANY($1))` : '';
+    // Only selected in `log` mode, purely to compute the warning below from this same result
+    // set — stripped back off every row before it reaches `items`, so `off`/`enforce` (which
+    // never select it) and `log` (which strips it) all return the identical column set today's
+    // callers already depend on.
+    const regionGateSelect = mode === 'log' ? `, b.region AS "regionGate"` : '';
 
     const rows = await this.queryRepository.manager.query(
       `SELECT q.id, q.validation_case_id AS "validationCaseId", vc.project_branch_id AS "projectBranchId", q.status,
@@ -570,23 +655,35 @@ export class ValidationQueryService {
               q.created_at AS "createdAt", q.last_message_at AS "lastMessageAt",
               q.sla_due_date AS "slaDueDate",
               b.name AS "branchName", a.display_name AS "assayerName", a.assayer_code AS "assayerCode"
+              ${regionGateSelect}
          FROM validation_queries q
          LEFT JOIN validation_cases vc ON vc.id = q.validation_case_id
          LEFT JOIN project_branches pb ON pb.id = vc.project_branch_id
          LEFT JOIN branches b ON b.id = pb.branch_id
          LEFT JOIN assayers a ON a.id = q.assayer_id
-        WHERE q.is_active = true ${filterSql}
+        WHERE q.is_active = true ${filterSql} ${enforceFilterSql}
         -- Soonest deadline first: what is left off the end is what can wait longest.
         ORDER BY q.sla_due_date ASC NULLS LAST, q.created_at DESC, q.id DESC
         LIMIT ${limit}`,
+      enforce ? [regions] : [],
     );
     const now = Date.now();
+    let outOfScope = 0;
     const items = rows.map((r: any) => {
+      const { regionGate, ...row } = r;
+      if (mode === 'log' && regionGate && !regions!.includes(regionGate)) outOfScope++;
       // Same split as `AWAITING` above — kept here because the row shape is what the page reads.
-      const awaiting = r.status === 'OPEN' ? 'ASSAYER' : r.status === 'RESPONDED' ? 'US' : 'DONE';
-      const slaOverdue = !!r.slaDueDate && r.status !== 'RESOLVED' && new Date(r.slaDueDate).getTime() < now;
-      return { ...r, awaiting, slaOverdue };
+      const awaiting = row.status === 'OPEN' ? 'ASSAYER' : row.status === 'RESPONDED' ? 'US' : 'DONE';
+      const slaOverdue = !!row.slaDueDate && row.status !== 'RESOLVED' && new Date(row.slaDueDate).getTime() < now;
+      return { ...row, awaiting, slaOverdue };
     });
+
+    if (mode === 'log' && outOfScope > 0) {
+      this.logger.warn(
+        `[region-scope:validation-query:worklist] would filter ${outOfScope}/${items.length} rows on ` +
+          `this page — caller holds [${regions!.join(', ')}]. Currently in Log mode: request allowed through.`,
+      );
+    }
 
     return { items, counts, limit };
   }
@@ -601,7 +698,11 @@ export class ValidationQueryService {
    * each group. Resolved clarifications are left out on purpose: this is the call list, not the
    * archive.
    */
-  async getClarificationsByAssayer(opts: { limit?: number } = {}): Promise<{
+  async getClarificationsByAssayer(opts: {
+    limit?: number;
+    /** The caller's enforced region ceiling. Omitted or `regions: null` = unrestricted. */
+    scope?: Partial<GlobalScope>;
+  } = {}): Promise<{
     groups: Array<{
       assayerId: string | null;
       assayerName: string | null;
@@ -631,22 +732,32 @@ export class ValidationQueryService {
   }> {
     const limit = Math.min(CLARIFICATION_PAGE_MAX, Math.max(1, Number(opts.limit) || CLARIFICATION_PAGE_DEFAULT));
 
+    // Same staged ceiling as `getClarificationWorklist` above — see its comment for why the
+    // settings read is skipped entirely for an unrestricted caller.
+    const regions = opts.scope?.regions && opts.scope.regions.length > 0 ? opts.scope.regions : null;
+    const mode = regions ? await this.regionGuard.stagedMode() : 'off';
+    const enforce = mode === 'enforce';
+    const enforceFilterSql = enforce ? `AND (b.region IS NULL OR b.region = ANY($1))` : '';
+    const regionGateSelect = mode === 'log' ? `, b.region AS "regionGate"` : '';
+
     const rows = await this.queryRepository.manager.query(
       `SELECT q.id, q.validation_case_id AS "validationCaseId", vc.project_branch_id AS "projectBranchId", q.status,
               q.query_text AS "queryText", q.target_field AS "targetField",
               q.created_at AS "createdAt", q.last_message_at AS "lastMessageAt",
               q.sla_due_date AS "slaDueDate", q.assayer_id AS "assayerId",
               b.name AS "branchName", a.display_name AS "assayerName", a.assayer_code AS "assayerCode"
+              ${regionGateSelect}
          FROM validation_queries q
          LEFT JOIN validation_cases vc ON vc.id = q.validation_case_id
          LEFT JOIN project_branches pb ON pb.id = vc.project_branch_id
          LEFT JOIN branches b ON b.id = pb.branch_id
          LEFT JOIN assayers a ON a.id = q.assayer_id
-        WHERE q.is_active = true AND q.status <> 'RESOLVED'
+        WHERE q.is_active = true AND q.status <> 'RESOLVED' ${enforceFilterSql}
         -- Soonest deadline first, so the auditor a group forms around is the most pressing one,
         -- and inside a group the most urgent question leads.
         ORDER BY q.sla_due_date ASC NULLS LAST, q.created_at ASC, q.id ASC
         LIMIT ${limit}`,
+      enforce ? [regions] : [],
     );
 
     const now = Date.now();
@@ -655,8 +766,14 @@ export class ValidationQueryService {
       assayerId: string | null; assayerName: string | null; assayerCode: string | null;
       openCount: number; overdueCount: number; oldestCreatedAt: string | null; items: any[];
     }>();
+    let outOfScope = 0;
 
-    for (const r of rows) {
+    for (const raw of rows) {
+      // Stripped off before the row becomes an item — see `getClarificationWorklist`'s comment
+      // on `regionGateSelect` for why this must never reach the response.
+      const { regionGate, ...r } = raw;
+      if (mode === 'log' && regionGate && !regions!.includes(regionGate)) outOfScope++;
+
       const key = r.assayerId ?? '__unassigned__';
       const awaiting = r.status === 'OPEN' ? 'ASSAYER' : r.status === 'RESPONDED' ? 'US' : 'DONE';
       const slaOverdue = !!r.slaDueDate && r.status !== 'RESOLVED' && new Date(r.slaDueDate).getTime() < now;
@@ -686,6 +803,14 @@ export class ValidationQueryService {
       }
     }
 
+    if (mode === 'log' && outOfScope > 0) {
+      this.logger.warn(
+        `[region-scope:validation-query:worklistByAssayer] would filter ${outOfScope}/${rows.length} rows ` +
+          `on this page — caller holds [${regions!.join(', ')}]. Currently in Log mode: request allowed ` +
+          `through.`,
+      );
+    }
+
     const groups = order.map((k) => byAssayer.get(k)!);
     return { groups, total: rows.length, limit };
   }
@@ -701,27 +826,135 @@ export class ValidationQueryService {
   async findAllQueries(
     page = 1,
     limit = 50,
+    /** The caller's enforced region ceiling. Omitted or `regions: null` = unrestricted. */
+    scope?: Partial<GlobalScope>,
   ): Promise<{ items: ValidationQueryEntity[]; total: number; page: number; limit: number }> {
     const safeLimit = Math.min(Math.max(Math.trunc(Number(limit)) || 50, 1), 200);
     const safePage = Math.max(Math.trunc(Number(page)) || 1, 1);
-    const [items, total] = await this.queryRepository.findAndCount({
-      where: { isActive: true },
-      order: { createdAt: 'DESC' },
-      take: safeLimit,
-      skip: (safePage - 1) * safeLimit,
-    });
-    return { items, total, page: safePage, limit: safeLimit };
+
+    const baseQuery = () =>
+      this.queryRepository.findAndCount({
+        where: { isActive: true },
+        order: { createdAt: 'DESC' },
+        take: safeLimit,
+        skip: (safePage - 1) * safeLimit,
+      });
+
+    // Settings are only read for a region-restricted caller — an unrestricted account always
+    // takes the unfiltered path below with no extra query.
+    const regions = scope?.regions && scope.regions.length > 0 ? scope.regions : null;
+    const mode = regions ? await this.regionGuard.stagedMode() : 'off';
+
+    if (mode === 'off') {
+      const [items, total] = await baseQuery();
+      return { items, total, page: safePage, limit: safeLimit };
+    }
+
+    if (mode === 'enforce') {
+      // Real query-level narrowing, joined through validationCase → projectBranch → branch — the
+      // same relation chain `resolveRegion` walks for the detail routes. A null/unresolvable
+      // branch region is never excluded (a data gap, not a security boundary).
+      const [items, total] = await this.queryRepository
+        .createQueryBuilder('q')
+        .leftJoin('q.validationCase', 'vc')
+        .leftJoin('vc.projectBranch', 'pb')
+        .leftJoin('pb.branch', 'b')
+        .where('q.isActive = :active', { active: true })
+        .andWhere('(b.region IS NULL OR b.region IN (:...regions))', { regions })
+        .orderBy('q.createdAt', 'DESC')
+        .take(safeLimit)
+        .skip((safePage - 1) * safeLimit)
+        .getManyAndCount();
+      return { items, total, page: safePage, limit: safeLimit };
+    }
+
+    // Log mode: the exact same unfiltered page and total as `off` — the entities never touch
+    // the join — plus a warning computed from the raw rows the same query already returned, no
+    // second query just to produce it.
+    const { entities, raw } = await this.queryRepository
+      .createQueryBuilder('q')
+      .leftJoin('q.validationCase', 'vc')
+      .leftJoin('vc.projectBranch', 'pb')
+      .leftJoin('pb.branch', 'b')
+      .addSelect('b.region', 'region_gate')
+      .where('q.isActive = :active', { active: true })
+      .orderBy('q.createdAt', 'DESC')
+      .take(safeLimit)
+      .skip((safePage - 1) * safeLimit)
+      .getRawAndEntities();
+    const total = await this.queryRepository.count({ where: { isActive: true } });
+
+    const outOfScope = raw.filter((r: any) => r.region_gate && !regions!.includes(r.region_gate)).length;
+    if (outOfScope > 0) {
+      this.logger.warn(
+        `[region-scope:validation-query:findAll] would filter ${outOfScope}/${entities.length} rows on ` +
+          `this page — caller holds [${regions!.join(', ')}]. Currently in Log mode: request allowed ` +
+          `through.`,
+      );
+    }
+
+    return { items: entities, total, page: safePage, limit: safeLimit };
   }
 
-  async findByAssayer(assayerId: string): Promise<ValidationQueryEntity[]> {
+  async findByAssayer(
+    assayerId: string,
+    /** The caller's enforced region ceiling. Omitted or `regions: null` = unrestricted. */
+    scope?: Partial<GlobalScope>,
+  ): Promise<ValidationQueryEntity[]> {
     const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(assayerId || '');
     if (!assayerId || !isUuid) {
       throw new BadRequestException('A valid assayerId UUID is required to query validation queries.');
     }
-    return this.queryRepository.find({
-      where: { assayerId, isActive: true },
-      relations: ['validationCase'],
-      order: { createdAt: 'DESC' },
-    });
+
+    const baseQuery = () =>
+      this.queryRepository.find({
+        where: { assayerId, isActive: true },
+        relations: ['validationCase'],
+        order: { createdAt: 'DESC' },
+      });
+
+    const regions = scope?.regions && scope.regions.length > 0 ? scope.regions : null;
+    const mode = regions ? await this.regionGuard.stagedMode() : 'off';
+    if (mode === 'off') return baseQuery();
+
+    /**
+     * An assayer is not confined to one region — they can hold clarifications across every
+     * branch they have ever been assigned to — so the ceiling here is per-row (each
+     * clarification's own case → project branch → branch region), the same reasoning
+     * `ExpenseService.findForAssayer` documents for the identical shape on expense claims.
+     * `leftJoinAndSelect` on `validationCase` reproduces the `relations: ['validationCase']`
+     * eager-load `baseQuery` uses, so `off`/`log` return byte-identical entities to today.
+     */
+    const { entities, raw } = await this.queryRepository
+      .createQueryBuilder('q')
+      .leftJoinAndSelect('q.validationCase', 'vc')
+      .leftJoin('vc.projectBranch', 'pb')
+      .leftJoin('pb.branch', 'b')
+      .addSelect('b.region', 'region')
+      .where('q.assayerId = :assayerId', { assayerId })
+      .andWhere('q.isActive = :active', { active: true })
+      .orderBy('q.createdAt', 'DESC')
+      .getRawAndEntities();
+
+    if (mode === 'enforce') {
+      return entities.filter((_, i) => {
+        const region = raw[i]?.region ?? null;
+        return !region || regions!.includes(region as any);
+      });
+    }
+
+    // Log mode: never refuse. Computed from the rows already in memory — no second query.
+    const wouldRefuse = entities.reduce((count, _, i) => {
+      const region = raw[i]?.region ?? null;
+      return region && !regions!.includes(region as any) ? count + 1 : count;
+    }, 0);
+    if (wouldRefuse > 0) {
+      this.logger.warn(
+        `[region-scope:validation-query:findByAssayer] would filter ${wouldRefuse} of ${entities.length} ` +
+          `clarification(s) for assayer ${assayerId} outside [${regions!.join(', ')}]. Currently in Log ` +
+          `mode: all rows returned.`,
+      );
+    }
+    return entities;
   }
 }

@@ -1,8 +1,18 @@
 import { Controller, Get, Post, Param, Query, UseGuards, ParseUUIDPipe, Req, UseInterceptors, UploadedFile, DefaultValuePipe, ParseIntPipe, Inject } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
+import { MAX_UPLOAD_BYTES } from '../document/upload-validation';
+import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
+import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { CustomerMasterService } from './customer-master.service';
+
+/** Same shape as `documentUploadMulterOptions` in document.controller.ts — see that file. */
+const customerMasterUploadMulterOptions = {
+  storage: memoryStorage(),
+  limits: { fileSize: MAX_UPLOAD_BYTES },
+};
 import { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';
@@ -19,8 +29,15 @@ export class CustomerMasterController {
 
   @Post('upload')
   @Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.OPERATIONS)
-    @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
+    @UseInterceptors(FileInterceptor('file', customerMasterUploadMulterOptions), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
+  // No region ceiling here, deliberately: one file covers every branch the client scheduled for
+  // an audit date (see `dailyRun`'s doc comment), so there is no single branchId the caller
+  // supplies to check a region against — reconciliation resolves a branch per ROW, from the
+  // spreadsheet's own SOL ID column, potentially spanning many branches and regions in one
+  // upload by design. The records this creates are read back through `findRecords`, which does
+  // carry the ceiling; gating the write here would not close a read gap, only add a check with
+  // no single id to check it against.
   @ApiOperation({ summary: 'Upload customer master Excel file, run database branch reconciliation, and register new version' })
   async upload(
     @UploadedFile() file: any,
@@ -70,8 +87,9 @@ export class CustomerMasterController {
   async dailyRun(
     @Param('projectId', ParseUUIDPipe) projectId: string,
     @Query('auditDate') auditDate: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
-    return { success: true, data: await this.customerMasterService.dailyRun(projectId, auditDate) };
+    return { success: true, data: await this.customerMasterService.dailyRun(projectId, auditDate, scope) };
   }
 
   @Get('projects/:projectId/versions')
@@ -91,10 +109,14 @@ export class CustomerMasterController {
   async findRecords(
     @Param('versionId', ParseUUIDPipe) versionId: string,
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
-    @Query('limit', new DefaultValuePipe(50), ParseIntPipe) limit: number,
+    // Previously ParseIntPipe alone — a valid but unbounded integer, so `?limit=5000000` reached
+    // `findRecords`'s `take:` unclamped. ParseLimitPipe keeps the existing default of 50 and
+    // adds a 200 ceiling; see parse-limit.pipe.ts.
+    @Query('limit', new ParseLimitPipe({ default: 50, max: 200 })) limit: number,
     @Query('branchId') branchId?: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
-    const result = await this.customerMasterService.findRecords(versionId, page, limit, branchId);
+    const result = await this.customerMasterService.findRecords(versionId, page, limit, branchId, scope);
     return {
       success: true,
       data: result.records,

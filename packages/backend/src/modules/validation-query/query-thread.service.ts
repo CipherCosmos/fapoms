@@ -86,6 +86,44 @@ export class QueryThreadService {
   }
 
   /**
+   * Resolve a storage key back to the clarification it belongs to.
+   *
+   * `GET /validation-queries/attachment-token?key=` used to HMAC-sign a download token for
+   * whatever key the caller supplied, with no lookup at all — so any of the four roles that
+   * route admits could mint a valid token for ANY object in the bucket, not just a clarification
+   * attachment, by guessing or reusing a key. This is the lookup that closes that: it searches
+   * every message across every thread for one whose `snapshotPath` or an `attachments[]` entry
+   * resolves to this key, and returns the clarification it belongs to (or `null` if nothing
+   * does), so the controller can 404 an unrecognised key and object-scope an assayer caller to
+   * their own clarification exactly like `listMessages`/`respondToQuery` already do.
+   *
+   * `key` arrives already decoded (both callers — ThreadPanel.tsx and the mobile app's
+   * `getAttachmentUrl` — pass the raw storage key, not the wrapped `/attachment/<encoded>` URL),
+   * so it is compared directly against `snapshot_path` and `attachments[].s3Key`. `url` fields
+   * are compared by suffix against the same marker `storageKeyFromUrl` strips, since a legacy
+   * attachment may carry only a wrapped URL and no bare `s3Key`.
+   */
+  async queryIdForAttachmentKey(key: string): Promise<string | null> {
+    if (!key) return null;
+    const urlSuffix = `${QueryThreadService.ATTACHMENT_MARKER}${encodeURIComponent(key)}`;
+    const rows = await this.messageRepository.manager.query(
+      `SELECT validation_query_id AS "queryId"
+         FROM validation_query_messages
+        WHERE snapshot_path = $1
+           OR snapshot_path LIKE '%' || $2
+           OR EXISTS (
+                SELECT 1 FROM jsonb_array_elements(COALESCE(attachments, '[]'::jsonb)) elem
+                 WHERE elem->>'s3Key' = $1
+                    OR elem->>'url' LIKE '%' || $2
+              )
+        ORDER BY created_at ASC
+        LIMIT 1`,
+      [key, urlSuffix],
+    );
+    return rows?.[0]?.queryId ?? null;
+  }
+
+  /**
    * The packet PDF this clarification is about — the same file for every message on the thread.
    * The read payload uses it to build a `markUrl` for any message anchored to a page + region, so
    * the assayer opens the real document with the mark on it rather than a cropped screenshot.

@@ -31,6 +31,7 @@ import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions }
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole, ClientLifecycleStatus } from '@fapoms/shared';
 import { QualificationScoreService } from '../assayer/qualification-score.service';
+import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 
 /**
  * Bounds, not just types.
@@ -217,6 +218,10 @@ export class ClientController {
    * ADMIN/OPERATIONS only, like the assayer dossier: each row's gap text names background-check
    * standing and unverified paperwork — exactly what the field-visibility rules keep from the
    * planning-only roles.
+   *
+   * Region-scoped (staged) by each candidate assayer's OWN region — see
+   * `ClientService.filterQualifiedAssayersByRegion` for why the client id this route is keyed on
+   * has no region of its own to scope by, and why the assayers do.
    */
   @Get(':clientId/qualified-assayers')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
@@ -224,13 +229,15 @@ export class ClientController {
   async qualifiedAssayers(
     @Param('clientId', ParseUUIDPipe) clientId: string,
     @Query('minScore') minScore?: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     const min = Number(minScore);
     const data = await this.qualificationScores.qualifiedAssayersForClient(
       clientId,
       Number.isFinite(min) ? min : 0,
     );
-    return { success: true, data };
+    const scoped = await this.clientService.filterQualifiedAssayersByRegion(data, scope);
+    return { success: true, data: scoped };
   }
 
   // -----------------------------------------------------------------------
@@ -246,6 +253,13 @@ export class ClientController {
     return { success: true, data: client };
   }
 
+  /**
+   * Not region-scoped, deliberately. `ClientEntity` has no `region` column — a client is a
+   * national account whose branches (not the client row) carry a region; see
+   * `branch.controller.ts findAll`, which filters branches by `clientId`, `zoneId` AND `region`
+   * as independent siblings, not a nested `client.region`. There is nothing resolvable here to
+   * filter by without inventing a "client's primary region" concept the schema doesn't have.
+   */
   @Get()
   @ApiOperation({ summary: 'List all active client profiles' })
   async findAll(
@@ -280,6 +294,7 @@ export class ClientController {
     };
   }
 
+  /** Not region-scoped: same reasoning as `findAll` above — a client has no region of its own. */
   @Get(':id')
   @ApiOperation({ summary: 'Get client profile with contacts, contracts, and billing' })
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
@@ -338,6 +353,10 @@ export class ClientController {
   // Contacts
   // -----------------------------------------------------------------------
 
+  /**
+   * Not region-scoped: `ClientContactEntity` has no `region`/`branchId` column — a contact is
+   * tied only to the (regionless) client, never to a branch.
+   */
   @Get(':id/contacts')
   @ApiOperation({ summary: 'List client contacts' })
   async findContacts(@Param('id', ParseUUIDPipe) id: string) {
@@ -387,6 +406,12 @@ export class ClientController {
   // Contracts
   // -----------------------------------------------------------------------
 
+  /**
+   * Not region-scoped: `ClientContractEntity` has no `region` or `branchId` column (checked
+   * directly — contracts carry `contractNumber`, `effectiveFrom/To`, `value`, `terms`, etc., but
+   * nothing branch- or region-shaped). A contract is a commercial agreement with the client as a
+   * whole, not with one of its branches, so there is no region to resolve.
+   */
   @Get(':id/contracts')
   @ApiOperation({ summary: 'List client contracts' })
   async findContracts(@Param('id', ParseUUIDPipe) id: string) {
@@ -436,6 +461,11 @@ export class ClientController {
   // Billing
   // -----------------------------------------------------------------------
 
+  /**
+   * Not region-scoped: `ClientBillingEntity` has no `region` column — one billing profile per
+   * client (payment terms, GST/TDS rates, bank details), with no per-branch override to resolve
+   * a region from.
+   */
   @Get(':id/billing')
   @ApiOperation({ summary: 'Get client billing information' })
   async findBilling(@Param('id', ParseUUIDPipe) id: string) {

@@ -17,6 +17,7 @@ import { ExpenseCategory, ExpenseStatus } from './expense.entity';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole } from '@fapoms/shared';
+import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 
 class CreateExpenseRequestDto {
   @IsEnum(ExpenseCategory)
@@ -62,13 +63,14 @@ export class ExpenseController {
     @Param('assignmentId', ParseUUIDPipe) assignmentId: string,
     @Body() dto: CreateExpenseRequestDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     // An assayer may only claim on their own assignment; the service enforces it when this
     // resolves to an id, and staff raising a claim on someone's behalf skip the check.
     const claimant = assayerIdOf(req.user);
     return {
       success: true,
-      data: await this.expenseService.create(assignmentId, dto, req.user.userId ?? req.user.id, claimant),
+      data: await this.expenseService.create(assignmentId, dto, req.user.userId ?? req.user.id, claimant, scope),
     };
   }
 
@@ -78,8 +80,9 @@ export class ExpenseController {
   async findForAssignment(
     @Param('assignmentId', ParseUUIDPipe) assignmentId: string,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
-    const expenses = await this.expenseService.findForAssignment(assignmentId);
+    const expenses = await this.expenseService.findForAssignment(assignmentId, scope);
     const claimant = assayerIdOf(req.user);
     if (claimant && expenses.some((e) => e.assayerId !== claimant)) {
       throw new ForbiddenException('You can only view claims on your own assignments.');
@@ -104,8 +107,8 @@ export class ExpenseController {
   @Get('expenses/pending')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Claims awaiting a decision' })
-  async findPending() {
-    return { success: true, data: await this.expenseService.findPending() };
+  async findPending(@GlobalScopeFilter() scope?: GlobalScope) {
+    return { success: true, data: await this.expenseService.findPending(scope) };
   }
 
   @Get('assayers/:assayerId/expenses')
@@ -114,8 +117,9 @@ export class ExpenseController {
   async findForAssayer(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
     @Query('status') status?: ExpenseStatus,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
-    return { success: true, data: await this.expenseService.findForAssayer(assayerId, status) };
+    return { success: true, data: await this.expenseService.findForAssayer(assayerId, status, scope) };
   }
 
   // Approving reimbursement commits money, so this is narrower than the read routes above.
@@ -126,10 +130,11 @@ export class ExpenseController {
     @Param('expenseId', ParseUUIDPipe) expenseId: string,
     @Body() dto: ReviewExpenseRequestDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     return {
       success: true,
-      data: await this.expenseService.review(expenseId, dto.approve, req.user.userId ?? req.user.id, dto.notes),
+      data: await this.expenseService.review(expenseId, dto.approve, req.user.userId ?? req.user.id, dto.notes, scope),
     };
   }
 }

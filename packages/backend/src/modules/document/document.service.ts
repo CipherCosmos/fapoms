@@ -14,6 +14,8 @@ import { PushNotificationService } from '../notifications/push-notification.serv
 import { EmailProvider } from '../../infrastructure/notifications/email-provider';
 import type { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
 import { BranchEntity } from '../branch/branch.entity';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
+import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import {
   EventCategory, DocumentStatus, DocumentType, DispatchMethod, businessTodayDateKey,
   DOCUMENT_TRANSITIONS, canTransitionDocument,
@@ -86,9 +88,15 @@ export class DocumentService {
     search?: string;
     page?: number;
     limit?: number;
-  } = {}): Promise<any> {
+  } = {}, scope?: Partial<GlobalScope>): Promise<any> {
     const page = Math.max(1, Number(opts.page) || 1);
     const limit = Math.min(100, Math.max(1, Number(opts.limit) || 25));
+
+    // Read once, up front: it decides both whether the query below gets a region filter
+    // (Enforce) and whether the fetched page gets a log line (Log) — a single mode used
+    // consistently rather than re-read mid-request.
+    const mode = scope?.regions?.length ? await this.regionGuard.stagedMode() : 'off';
+    const enforceRegions = mode === 'enforce' ? scope!.regions : null;
 
     const laneExpr = `CASE
       WHEN vc.status = 'CORRECTION_REQUIRED' THEN 'rework'
@@ -113,6 +121,9 @@ export class DocumentService {
       if (opts.search) {
         qb.andWhere('(b.name ILIKE :q OR b.sol_id ILIKE :q OR d.file_name ILIKE :q)', { q: `%${opts.search}%` });
       }
+      // Enforce mode only. Off and Log both leave the query — and so the response — untouched;
+      // `b.region IS NULL` stays visible in every mode, same rule as everywhere else.
+      if (enforceRegions) qb.andWhere('(b.region IS NULL OR b.region = ANY(:regions))', { regions: enforceRegions });
       return qb;
     };
 
@@ -138,15 +149,30 @@ export class DocumentService {
         'vc.status AS "caseStatus"',
         `${laneExpr} AS lane`,
         `COALESCE(NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''), u.username) AS "assigneeName"`,
+        // Log mode only needs this to compute the exclusion count below; stripped back off
+        // every row before the response goes out, so Off/Log stay byte-for-byte unchanged.
+        ...(mode === 'log' ? ['b.region AS "__region"'] : []),
       ]);
     if (opts.lane) listQb.andWhere(`${laneExpr} = :lane`, { lane: opts.lane });
 
     const total = await listQb.clone().getCount();
-    const items = await listQb
+    const rawItems = await listQb
       .orderBy('d.receivedAt', 'ASC', 'NULLS LAST')
       .offset((page - 1) * limit)
       .limit(limit)
       .getRawMany();
+
+    // Computed from the page already fetched above — no second query issued just to log this.
+    if (mode === 'log') {
+      const excluded = rawItems.filter((r: any) => r.__region && !scope!.regions!.includes(r.__region)).length;
+      if (excluded > 0) {
+        this.logger.warn(
+          `[region-scope:document:dataEntryQueue] would filter ${excluded} of ${rawItems.length} document(s) ` +
+          `on this page outside [${scope!.regions!.join(', ')}]. Currently in Log mode: all returned.`,
+        );
+      }
+    }
+    const items = mode === 'log' ? rawItems.map(({ __region, ...rest }: any) => rest) : rawItems;
 
     return { counts, total, page, limit, items };
   }
@@ -354,7 +380,107 @@ export class DocumentService {
     private readonly emailProvider: EmailProvider,
     @InjectRepository(BranchEntity)
     private readonly branchRepository: Repository<BranchEntity>,
+    private readonly regionGuard: RegionGuardService,
   ) {}
+
+  // ── Staged region scope (list-route filtering) ─────────────────────────────
+  //
+  // The six-module rollout described in RegionGuardService: off/log/enforce, read fresh on
+  // every call via `regionGuard.stagedMode()`. `null`/empty `scope.regions` (an unrestricted
+  // account) is never filtered or logged against, in any mode — the same rule
+  // `assertRegionAllowedStaged` applies to single-record reads.
+
+  /**
+   * The branch region behind a project-branch id. Every document filed against one project
+   * branch belongs to that single branch, so this one lookup is what the staged ceiling on the
+   * project-branch-keyed document routes needs (`GET project-branch/:id`, `.../download-pdf`,
+   * `.../assayer-view`) — mirroring how `RegionGuardService.assertProjectBranchInScope` resolves
+   * the same path, but staged rather than immediate-enforcing.
+   */
+  async resolveProjectBranchRegion(projectBranchId: string): Promise<string | null> {
+    const pb = await this.projectBranchRepository.findOne({ where: { id: projectBranchId } }).catch(() => null);
+    if (!pb?.branchId) return null;
+    const branch = await this.branchRepository.findOne({ where: { id: pb.branchId } }).catch(() => null);
+    return branch?.region ?? null;
+  }
+
+  /**
+   * The branch region behind an assessment id, for the staged ceiling on
+   * `GET assessment/:assessmentId` — that route has no project-branch id in its URL, so it
+   * resolves via the assessment's own `branch` relation instead.
+   */
+  async resolveAssessmentRegion(assessmentId: string): Promise<string | null> {
+    const assessment = await this.assessmentRepository
+      .findOne({ where: { id: assessmentId }, relations: ['branch'] })
+      .catch(() => null);
+    return assessment?.branch?.region ?? null;
+  }
+
+  /**
+   * Mode-aware region filter for a flat list of documents already loaded with
+   * `assessment.branch` — `findAll` and `findByProject`. A `null`/missing region on a document
+   * (a data gap, not a security boundary) is left visible in every mode, same as
+   * `RegionGuardService.assertRegionAllowed`.
+   */
+  private async applyRegionScopeToDocs(
+    docs: DocumentEntity[],
+    scope: Partial<GlobalScope> | undefined,
+    context: string,
+  ): Promise<DocumentEntity[]> {
+    if (!scope?.regions?.length) return docs; // unrestricted account — never filtered or logged
+    const mode = await this.regionGuard.stagedMode();
+    if (mode === 'off') return docs;
+
+    const inScope = (d: DocumentEntity) => {
+      const region = d.assessment?.branch?.region ?? null;
+      return !region || scope.regions!.includes(region as any);
+    };
+
+    if (mode === 'log') {
+      const excluded = docs.filter((d) => !inScope(d)).length;
+      if (excluded > 0) {
+        this.logger.warn(
+          `[region-scope:${context}] would filter ${excluded} of ${docs.length} document(s) outside ` +
+          `[${scope.regions.join(', ')}]. Currently in Log mode: all returned.`,
+        );
+      }
+      return docs;
+    }
+    return docs.filter(inScope);
+  }
+
+  /**
+   * Same filter as `applyRegionScopeToDocs`, for the grouped-by-assessment shape
+   * `findDataEntryQueue` returns. Every document in one group shares the same assessment (hence
+   * the same branch), so the group's region is read off its first document.
+   */
+  private async applyRegionScopeToGroups<T extends { documents: DocumentEntity[] }>(
+    groups: T[],
+    scope: Partial<GlobalScope> | undefined,
+    context: string,
+  ): Promise<T[]> {
+    if (!scope?.regions?.length) return groups;
+    const mode = await this.regionGuard.stagedMode();
+    if (mode === 'off') return groups;
+
+    const regionOf = (g: T): string | null => g.documents[0]?.assessment?.branch?.region ?? null;
+    const inScope = (g: T) => {
+      const region = regionOf(g);
+      return !region || scope.regions!.includes(region as any);
+    };
+
+    if (mode === 'log') {
+      const excluded = groups.filter((g) => !inScope(g)).length;
+      if (excluded > 0) {
+        this.logger.warn(
+          `[region-scope:${context}] would filter ${excluded} of ${groups.length} entry/entries outside ` +
+          `[${scope.regions.join(', ')}]. Currently in Log mode: all returned.`,
+        );
+      }
+      return groups;
+    }
+    return groups.filter(inScope);
+  }
 
   async create(dto: CreateDocumentDto, userId: string): Promise<DocumentEntity> {
     let assessment = await this.assessmentRepository.findOne({
@@ -1246,7 +1372,7 @@ export class DocumentService {
     });
   }
 
-  async findByProject(projectId: string): Promise<DocumentEntity[]> {
+  async findByProject(projectId: string, scope?: Partial<GlobalScope>): Promise<DocumentEntity[]> {
     const assessments = await this.assessmentRepository.find({
       where: { projectId, isActive: true },
       select: ['id'],
@@ -1258,7 +1384,7 @@ export class DocumentService {
     // and every client.
     if (assessments.length === 0) return [];
 
-    return this.documentRepository.find({
+    const list = await this.documentRepository.find({
       // `In(...)`, not a bare array cast to `any`. The array form compiled fine but emitted
       // `assessment_id = $1` with a Postgres array literal as the parameter, so the endpoint
       // failed with `invalid input syntax for type uuid: "{...}"` for any project that had
@@ -1267,6 +1393,11 @@ export class DocumentService {
       relations: ['assessment', 'assessment.branch'],
       order: { createdAt: 'DESC' },
     });
+
+    // A project spans multiple branches (hence potentially multiple regions), unlike the
+    // project-branch- and assessment-keyed routes above which resolve to exactly one branch —
+    // so this is a list to filter, not a single ceiling to gate.
+    return this.applyRegionScopeToDocs(list, scope, 'document:findByProject');
   }
 
   /**
@@ -1547,7 +1678,7 @@ export class DocumentService {
    * data-entry work. `daysPending` is computed from `received_at` (spec §8.5 asks for "days
    * pending"), falling back to createdAt for rows that predate transport tracking.
    */
-  async findDataEntryQueue(): Promise<
+  async findDataEntryQueue(scope?: Partial<GlobalScope>): Promise<
     {
       assessmentId: string;
       project: string;
@@ -1606,7 +1737,7 @@ export class DocumentService {
       }
       grouped.get(key)!.documents.push(doc);
     }
-    return Array.from(grouped.values());
+    return this.applyRegionScopeToGroups(Array.from(grouped.values()), scope, 'document:findDataEntryQueue');
   }
 
   /**
@@ -1654,21 +1785,24 @@ export class DocumentService {
     return stages.map((s) => ({ ...s, done: s.at != null }));
   }
 
-  async findAll(): Promise<DocumentEntity[]> {
-    return this.documentRepository.find({
+  async findAll(scope?: Partial<GlobalScope>): Promise<DocumentEntity[]> {
+    const list = await this.documentRepository.find({
       where: { isActive: true },
       relations: ['assessment', 'assessment.branch', 'assessment.project'],
       order: { createdAt: 'DESC' },
     });
+    return this.applyRegionScopeToDocs(list, scope, 'document:findAll');
   }
 
-  async getDocumentStats(): Promise<{ total: number; uploaded: number; dispatched: number; received: number }> {
+  async getDocumentStats(scope?: Partial<GlobalScope>): Promise<{ total: number; uploaded: number; dispatched: number; received: number }> {
     // A dashboard stat tile, so it is loaded and polled. It used to `find({ isActive: true })` —
     // pulling every active document as a fully-hydrated 21-column entity (including the text file
     // path) into Node just to derive four integers, on a table that grows with branches × doc
     // types. One grouped count returns the same four numbers straight from the database, and the
     // `status` index makes each conditional count index-assisted rather than a full scan + transfer.
-    const row = await this.documentRepository
+    const mode = scope?.regions?.length ? await this.regionGuard.stagedMode() : 'off';
+
+    const qb = this.documentRepository
       .createQueryBuilder('d')
       .select('COUNT(*)', 'total')
       .addSelect('COUNT(*) FILTER (WHERE d.status = :uploaded)', 'uploaded')
@@ -1679,8 +1813,26 @@ export class DocumentService {
         uploaded: DocumentStatus.UPLOADED,
         dispatched: DocumentStatus.DISPATCHED,
         received: DocumentStatus.RECEIVED,
-      })
-      .getRawOne<{ total: string; uploaded: string; dispatched: string; received: string }>();
+      });
+
+    if (mode === 'enforce') {
+      // This is a pure aggregate — there is no fetched row set to filter or count from, so
+      // scoping it (unlike the list methods above) means joining down to the branch here.
+      // `b.region IS NULL` stays visible in every mode, same rule as everywhere else.
+      qb.leftJoin('assessments', 'a', 'a.id = d.assessment_id')
+        .leftJoin('branches', 'b', 'b.id = a.branch_id')
+        .andWhere('(b.region IS NULL OR b.region = ANY(:regions))', { regions: scope!.regions });
+    } else if (mode === 'log') {
+      // No fetched result set exists to count exclusions from, and issuing a second query
+      // purely to produce a log figure is exactly what the staged rollout forbids — so Log
+      // mode here notes that a restriction would apply, without a number attached.
+      this.logger.warn(
+        `[region-scope:document:getStats] region scope would apply to these totals in Enforce mode ` +
+        `(regions: [${scope!.regions!.join(', ')}]); returning unfiltered totals in Log mode.`,
+      );
+    }
+
+    const row = await qb.getRawOne<{ total: string; uploaded: string; dispatched: string; received: string }>();
     return {
       total: Number(row?.total ?? 0),
       uploaded: Number(row?.uploaded ?? 0),

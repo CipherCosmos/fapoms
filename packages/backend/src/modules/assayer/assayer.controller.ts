@@ -26,11 +26,24 @@ import {
   Inject,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
 import type { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
 // The one place the upload rules live — see modules/document/upload-validation.ts. A second copy
 // here is how four upload paths came to disagree about what they accept.
-import { assertUploadAllowed, SCAN_UPLOAD_TYPES } from '../document/upload-validation';
+import { assertUploadAllowed, SCAN_UPLOAD_TYPES, MAX_UPLOAD_BYTES } from '../document/upload-validation';
+
+/**
+ * Same shape as `documentUploadMulterOptions` in document.controller.ts. All three routes below
+ * share this ceiling: the identity-document scan goes through `assertUploadAllowed`'s default
+ * `MAX_UPLOAD_BYTES` too (see `attachDocumentFile`), and the two roster/spreadsheet routes have
+ * no app-level size check of their own for multer's cap to agree with, but there is no reason
+ * for them to tolerate a larger request body than every other upload route in the system does.
+ */
+const assayerUploadMulterOptions = {
+  storage: memoryStorage(),
+  limits: { fileSize: MAX_UPLOAD_BYTES },
+};
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsEmail, IsArray, IsInt, IsObject, IsEnum, IsDateString, IsUUID, IsBoolean, MinLength, MaxLength, ValidateNested, ArrayMaxSize, Matches } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -1444,7 +1457,7 @@ export class AssayerController {
   @Post(':assayerId/document/:requirement/file')
   @HttpCode(201)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
-  @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
+  @UseInterceptors(FileInterceptor('file', assayerUploadMulterOptions), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Attach a scan or photograph to a document' })
   async attachDocumentFile(
@@ -1621,7 +1634,7 @@ export class AssayerController {
   @Post('/roster/import')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:create:organization')
-  @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
+  @UseInterceptors(FileInterceptor('file', assayerUploadMulterOptions), FileScanInterceptor)
   @ApiOperation({ summary: 'Import the appraiser roster workbook, or rehearse it with dryRun' })
   async importRoster(
     @UploadedFile() file: any,
@@ -1644,7 +1657,7 @@ export class AssayerController {
   @Post('/upload')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:create:organization')
-  @UseInterceptors(FileInterceptor('file'), FileScanInterceptor)
+  @UseInterceptors(FileInterceptor('file', assayerUploadMulterOptions), FileScanInterceptor)
   @ApiOperation({ summary: 'Upload assayers from Excel spreadsheet' })
   async uploadAssayers(@UploadedFile() file: any, @Req() req: any) {
     // A submitted form with no file attached reaches here as `undefined`, and reading

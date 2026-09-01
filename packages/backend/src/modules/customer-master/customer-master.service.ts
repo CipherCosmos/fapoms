@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
 import { CustomerMasterVersionEntity } from './customer-master-version.entity';
@@ -6,6 +6,8 @@ import { CustomerRecordEntity } from './customer-record.entity';
 import { BranchEntity } from '../branch/branch.entity';
 import { CustomerMasterStatus, EventCategory } from '@fapoms/shared';
 import { AuditService } from '../../core/audit/audit.service';
+import { GlobalScope } from '../../infrastructure/scope/global-scope';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import * as xlsx from 'xlsx';
 
 /** One account row from the upload that could not be tied to a branch. */
@@ -47,6 +49,8 @@ const UNMATCHED_SAMPLE_LIMIT = 100;
 
 @Injectable()
 export class CustomerMasterService {
+  private readonly logger = new Logger(CustomerMasterService.name);
+
   constructor(
     @InjectRepository(CustomerMasterVersionEntity)
     private readonly versionRepository: Repository<CustomerMasterVersionEntity>,
@@ -56,6 +60,7 @@ export class CustomerMasterService {
     private readonly branchRepository: Repository<BranchEntity>,
     private readonly auditService: AuditService,
     private readonly dataSource: DataSource,
+    private readonly regionGuard: RegionGuardService,
   ) {}
 
   async uploadAndReconcile(
@@ -251,6 +256,17 @@ export class CustomerMasterService {
     });
   }
 
+  /**
+   * No region ceiling here, deliberately.
+   *
+   * `RegionGuardService`'s detail-route pattern resolves ONE branch's region and refuses if the
+   * caller does not hold it. A customer-master version has no branch of its own to resolve —
+   * `CustomerMasterVersionEntity` carries a `projectId` and nothing else region-shaped, and one
+   * version's records routinely span every branch the client scheduled for that audit date
+   * (see `dailyRun`'s doc comment). There is no single region to check approval against without
+   * inventing one, and approving a version does not reveal any branch's data that
+   * `findRecords`/`dailyRun` were not already gating.
+   */
   async approveVersion(versionId: string, userId: string): Promise<CustomerMasterVersionEntity> {
     const version = await this.versionRepository.findOne({ where: { id: versionId, isActive: true } });
     if (!version) throw new NotFoundException(`CustomerMasterVersion ${versionId} not found.`);
@@ -299,7 +315,7 @@ export class CustomerMasterService {
    * and the PDFs they produce were uploaded one at a time with no record of which
    * run they belonged to.
    */
-  async dailyRun(projectId: string, auditDate: string): Promise<any> {
+  async dailyRun(projectId: string, auditDate: string, scope?: Partial<GlobalScope>): Promise<any> {
     const version = await this.versionRepository.findOne({
       where: { projectId, auditDate, isActive: true },
       order: { versionNumber: 'DESC' },
@@ -308,8 +324,11 @@ export class CustomerMasterService {
     // Branches scheduled for this date, from the plan — independent of whether the
     // client's data has arrived. Comparing the two is the point: a branch scheduled
     // but absent from the batch means the client under-delivered.
+    //
+    // `b.region` rides along so the region ceiling below can be applied from this one
+    // fetch — a per-branch breakdown is a list, and list routes filter, they don't 403.
     const scheduled = await this.dataSource.query(
-      `SELECT pb.id AS project_branch_id, b.id AS branch_id, b.name AS branch_name, b.sol_id
+      `SELECT pb.id AS project_branch_id, b.id AS branch_id, b.name AS branch_name, b.sol_id, b.region
          FROM project_branches pb
          JOIN branches b ON b.id = pb.branch_id
         WHERE pb.project_id = $1 AND pb.is_active = true AND pb.scheduled_date = $2
@@ -346,7 +365,7 @@ export class CustomerMasterService {
       if (!existing || p.customer_master_version_id === version?.id) pdfByBranch.set(p.branch_id, p);
     }
 
-    const branches = scheduled.map((s: any) => {
+    const allBranches = scheduled.map((s: any) => {
       const batch = batchByBranch.get(s.branch_id);
       const pdf = pdfByBranch.get(s.branch_id);
       return {
@@ -383,8 +402,45 @@ export class CustomerMasterService {
       };
     });
 
+    // Region ceiling on the per-branch breakdown — this endpoint's whole payload is a list of
+    // branches, one row per scheduled branch, so it is scoped the way every other list route is:
+    // narrow the query result, not throw. `mode` is read once, fresh, exactly as `stagedMode()`'s
+    // own doc comment intends. `off` and unrestricted (`scope.regions` null/empty) accounts never
+    // reach the filtering below at all — same response either way.
+    const regions = scope?.regions;
+    const mode = regions && regions.length > 0 ? await this.regionGuard.stagedMode() : 'off';
+    const regionByBranchId = new Map<string, string | null>(
+      scheduled.map((s: any) => [s.branch_id, s.region]),
+    );
+    const allowedRegions = regions as string[] | undefined;
+
+    let branches = allBranches;
+    if (allowedRegions && allowedRegions.length > 0) {
+      if (mode === 'enforce') {
+        branches = allBranches.filter((b: any) => {
+          const region = regionByBranchId.get(b.branchId);
+          // A branch with no resolvable region is a data gap, not a boundary — see
+          // `RegionGuardService.assertRegionAllowed`'s doc comment; the same rule applies here.
+          return !region || allowedRegions.includes(region);
+        });
+      } else if (mode === 'log') {
+        // Computed from `scheduled`, already fetched above — no second query just to log.
+        const wouldExclude = scheduled.filter((s: any) => s.region && !allowedRegions.includes(s.region));
+        if (wouldExclude.length > 0) {
+          this.logger.warn(
+            `[region-scope:customer-master:dailyRun] would exclude ${wouldExclude.length}/${scheduled.length} ` +
+              `scheduled branch(es) outside [${allowedRegions.join(', ')}] for project ${projectId} on ${auditDate}. ` +
+              `Currently in Log mode: request allowed through.`,
+          );
+        }
+      }
+    }
+
     // Branches the client sent data for that are not scheduled for this date — a
-    // real mismatch worth surfacing rather than silently ignoring.
+    // real mismatch worth surfacing rather than silently ignoring. Deliberately computed off the
+    // full (unfiltered) `scheduled` set even in enforce mode: this is a project-wide data-quality
+    // count, not a per-branch identity leak, and narrowing it would make the mismatch signal
+    // depend on which regions the viewing account happens to hold.
     const scheduledIds = new Set(scheduled.map((s: any) => s.branch_id));
     const unexpected = inBatch.filter((r) => !scheduledIds.has(r.branch_id)).length;
 
@@ -418,6 +474,16 @@ export class CustomerMasterService {
     };
   }
 
+  /**
+   * No region ceiling here, deliberately.
+   *
+   * This lists VERSIONS of one project's customer master, not records — and a version has no
+   * branch/region of its own (see `approveVersion`'s doc comment on `CustomerMasterVersionEntity`
+   * lacking anything region-shaped). One version's rows span whichever branches the client's
+   * file happened to cover, so "this version's region" is not a well-defined question; the
+   * region dimension only exists one level down, inside a version, which is exactly what
+   * `findRecords` filters.
+   */
   async findByProject(projectId: string): Promise<CustomerMasterVersionEntity[]> {
     return this.versionRepository.find({
       where: { projectId, isActive: true },
@@ -425,7 +491,53 @@ export class CustomerMasterService {
     });
   }
 
-  async findRecords(versionId: string, page = 1, limit = 50, branchId?: string): Promise<{ records: CustomerRecordEntity[]; total: number }> {
+  /**
+   * Paginated customer records inside a version — the actual PII-bearing rows, each tied to a
+   * branch (nullable, for unmatched rows) and therefore to that branch's region.
+   *
+   * Mode-aware, per `RegionGuardService.stagedMode()`'s contract:
+   *  - `off` / unrestricted account (`scope.regions` null/empty): `where` is built exactly as
+   *    before this change, so the query — and therefore the response — is byte-for-byte
+   *    unchanged.
+   *  - `log`: same unfiltered query as `off`, plus a warning computed from the page already
+   *    fetched (via the eager-loaded `branch` relation) — no second query.
+   *  - `enforce`: the region ceiling is folded into the `where` itself (TypeORM joins the
+   *    `branch` relation to filter on it), so both `records` and `total`/pagination reflect the
+   *    narrowed set, the same way `BranchQueryService.applyBranchFilters` narrows the branch list.
+   */
+  async findRecords(
+    versionId: string,
+    page = 1,
+    limit = 50,
+    branchId?: string,
+    scope?: Partial<GlobalScope>,
+  ): Promise<{ records: CustomerRecordEntity[]; total: number }> {
+    const regions = scope?.regions;
+    const mode = regions && regions.length > 0 ? await this.regionGuard.stagedMode() : 'off';
+
+    if (mode === 'enforce' && regions && regions.length > 0) {
+      // A real query-level narrowing, built with the query builder rather than a nested `where`
+      // object: a nested `{ branch: { region: In(regions) } }` filter would INNER JOIN `branch`,
+      // which drops every record whose `branchId` is null (unmatched rows from a reconciliation
+      // — a real, expected case, see `uploadAndReconcile`) and every record whose branch has no
+      // resolvable region — exactly the rows `RegionGuardService.assertRegionAllowed`'s doc
+      // comment says must stay visible ("a data gap, not a security boundary"). The explicit
+      // LEFT JOIN plus `region IS NULL OR region IN (...)` keeps that rule true here too.
+      const query = this.recordRepository.createQueryBuilder('cr')
+        .leftJoinAndSelect('cr.branch', 'branch')
+        .where('cr.customerMasterVersionId = :versionId', { versionId })
+        .andWhere('cr.isActive = true')
+        .andWhere('(branch.region IS NULL OR branch.region IN (:...regions))', { regions });
+      if (branchId) {
+        query.andWhere('cr.branchId = :branchId', { branchId });
+      }
+      const [records, total] = await query
+        .take(limit)
+        .skip((page - 1) * limit)
+        .getManyAndCount();
+      return { records, total };
+    }
+
     const where: any = { customerMasterVersionId: versionId, isActive: true };
     if (branchId) {
       where.branchId = branchId;
@@ -436,6 +548,21 @@ export class CustomerMasterService {
       take: limit,
       skip: (page - 1) * limit,
     });
+
+    if (mode === 'log' && regions && regions.length > 0) {
+      // Computed from the page already fetched above — no second query just to log. Mirrors the
+      // enforce-mode predicate exactly: a null/unresolvable branch region does not count as
+      // "would be excluded".
+      const outOfScope = records.filter((r) => !!r.branch?.region && !regions.includes(r.branch.region as any));
+      if (outOfScope.length > 0) {
+        this.logger.warn(
+          `[region-scope:customer-master:findRecords] would exclude ${outOfScope.length}/${records.length} ` +
+            `record(s) outside [${regions.join(', ')}] for version ${versionId}. ` +
+            `Currently in Log mode: request allowed through.`,
+        );
+      }
+    }
+
     return { records, total };
   }
 
