@@ -771,6 +771,14 @@ export class BillingEngineService implements OnModuleInit {
           if (p.status === AssayerPayableStatus.APPROVED) return null;
           if (p.status === AssayerPayableStatus.PAID) throw new ConflictException(`${p.payableNumber} is already paid.`);
           if (p.onHold) throw new ConflictException(`${p.payableNumber} is on hold: ${p.holdReason ?? 'no reason given'}.`);
+          // Expense-driven payables have no "booking" actor to compare against — only an
+          // assignment-completion payable does. Check the mode before the lookup, not inside
+          // assertSegregationOfDuties, so a deployment running Off (the default) never pays for
+          // an extra query on every single approval.
+          if (p.assignmentId && !p.expenseId && (await this.sodMode()) !== 'off') {
+            const assignment = await m.findOne(AssignmentEntity, { where: { id: p.assignmentId } });
+            await this.assertSegregationOfDuties(userId, assignment?.createdBy, `book assignment ${p.assignmentId} and also approve its payout`);
+          }
           p.status = AssayerPayableStatus.APPROVED;
           p.approvedAt = new Date();
           p.approvedBy = userId;
@@ -906,6 +914,7 @@ export class BillingEngineService implements OnModuleInit {
             : `${payable.payableNumber} has not been approved yet.`,
         );
       }
+      await this.assertSegregationOfDuties(userId, payable.approvedBy, `approve payout ${payable.payableNumber} and also pay it`);
       const outstanding = round2(Number(payable.totalAmount) - Number(payable.paidAmount));
       if (outstanding <= 0) throw new ConflictException(`${payable.payableNumber} is already fully paid.`);
       const amount = round2(dto.amount ?? outstanding);
@@ -2465,6 +2474,30 @@ export class BillingEngineService implements OnModuleInit {
     const payable = await manager.findOne(AssayerPayableEntity, { where: { id: payableId }, lock: { mode: 'pessimistic_write' } });
     if (!payable) throw new NotFoundException(`Payable ${payableId} not found.`);
     return payable;
+  }
+
+  // -----------------------------------------------------------------------
+  // Segregation of duties (staged) — see security.segregationOfDuties.mode in
+  // settings.registry.ts. approvePayouts compares the approver against whoever booked the
+  // ASSIGNMENT (not the payable's own createdBy, which is almost always the automated
+  // on-completion event); recordDisbursement compares the disburser against payable.approvedBy,
+  // already on the row. Both share this one check — only the two actor ids being compared differ.
+  // -----------------------------------------------------------------------
+
+  private async sodMode(): Promise<'off' | 'warn' | 'enforce'> {
+    const mode = await this.settings.get<string>('security.segregationOfDuties.mode').catch(() => 'off');
+    return mode === 'warn' || mode === 'enforce' ? mode : 'off';
+  }
+
+  /** Refuses (Enforce) or logs (Warn) when `actorId` is the same account as `otherPartyId`. */
+  private async assertSegregationOfDuties(actorId: string, otherPartyId: string | null | undefined, context: string): Promise<void> {
+    if (!otherPartyId || otherPartyId !== actorId) return;
+    const mode = await this.sodMode();
+    if (mode === 'off') return;
+    if (mode === 'enforce') {
+      throw new ConflictException(`Segregation of duties: the same account cannot ${context}.`);
+    }
+    this.logger.warn(`[sod:${context}] would refuse — same account (${actorId}) on both sides. Currently in Warn mode: request allowed through.`);
   }
 
   // -----------------------------------------------------------------------

@@ -655,6 +655,31 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     envVar: 'REGION_SCOPE_MODE',
     applies: 'immediately',
   },
+  {
+    // Read by BillingEngineService.approvePayouts (approver vs. the ASSIGNMENT's creator — the
+    // person who booked the work, not the automated on-completion event that usually creates the
+    // payable itself) and .recordDisbursement (disburser vs. payable.approvedBy, already on the
+    // row). BILLING_ROLES and DISBURSEMENT_ROLES are the identical set today — see
+    // billing-roles.ts — so this is the only technical control standing between "one person books
+    // an audit, approves the resulting payout, and pays it" and that not being possible.
+    //
+    // Defaults OFF, deliberately, and should stay off until there are enough people holding these
+    // roles that a real maker-checker split doesn't just stop payouts from happening. With two
+    // people on the roles today, Enforce would mean neither could ever pay the other's work.
+    key: 'security.segregationOfDuties.mode',
+    label: 'Payout maker-checker: rollout mode',
+    description: 'One person can currently book a completed audit, approve its payout, and pay it — the same technical gap "Log" for regions closes for reads, this closes for money leaving the business. "Warn" records every same-person approval/disbursement without blocking it, so you can see how often it would actually bite before anyone is locked out. "Enforce" refuses it: the account that booked the assignment cannot approve its payout, and the approver cannot also be the one who marks it paid. Leave this off until enough people hold these roles that enforcing it does not simply stop payouts.',
+    group: 'security',
+    type: 'select',
+    options: [
+      { value: 'off', label: 'Off — no check, no warning' },
+      { value: 'warn', label: 'Warn — record same-person approvals, block nothing' },
+      { value: 'enforce', label: 'Enforce — actually refuse' },
+    ],
+    default: 'off',
+    envVar: 'SEGREGATION_OF_DUTIES_MODE',
+    applies: 'immediately',
+  },
 
   // ── Retention ───────────────────────────────────────────────────────────
   {

@@ -210,6 +210,11 @@ describe('BillingEngineService', () => {
   const stagedMode = jest.fn(async () => 'log' as 'off' | 'log' | 'enforce');
   const assertRegionAllowedStaged = jest.fn(async () => undefined);
   const regionGuard = { stagedMode, assertRegionAllowedStaged };
+  // Platform settings, keyed. Only `security.segregationOfDuties.mode` is exercised by name below
+  // — every other key (billing.tdsSection, etc.) keeps resolving to `null`, same as before this
+  // was made key-aware, so no unrelated test needs to know this map exists.
+  const settingsValues: Record<string, any> = {};
+  const settingsGet = jest.fn(async (key: string) => settingsValues[key] ?? null);
   /** Let detached promise chains (the post-commit notifications) run to completion. */
   const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
   const outboxRepo: any = { update: jest.fn(async () => undefined) };
@@ -246,6 +251,7 @@ describe('BillingEngineService', () => {
     locks = [];
     txQueries = [];
     totalsRow = { earned: 0, paid: 0, outstanding: 0, awaiting_approval: 0, on_hold: 0, payable_count: 0 };
+    for (const k of Object.keys(settingsValues)) delete settingsValues[k];
     jest.clearAllMocks();
     managerQuery.mockImplementation(defaultManagerQuery);
     for (const r of [entryRepo, payableRepo, invoiceRepo, paymentRepo, historyRepo, assignmentRepo, projectRepo, assayerRepo]) {
@@ -262,7 +268,7 @@ describe('BillingEngineService', () => {
         {
           provide: PlatformSettingsService,
           useValue: {
-            get: jest.fn(async () => null),
+            get: settingsGet,
             getMany: jest.fn(async () => ({})),
             getNumber: jest.fn(async (_k: string, fb?: number) => fb as number),
             describeAll: jest.fn(async () => []),
@@ -583,6 +589,107 @@ describe('BillingEngineService', () => {
       payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED }));
       await expect(service.recordDisbursement({ payableId: 'payable-1', paymentReference: 'UTR-1', method: PaymentMethod.NEFT, amount: 1800.5 }, 'f'))
         .rejects.toThrow(BadRequestException);
+    });
+  });
+
+  /**
+   * Segregation of duties (staged) — see security.segregationOfDuties.mode in settings.registry.ts.
+   * approvePayouts compares the approver against whoever booked the ASSIGNMENT, not the payable's
+   * own (almost always automated) createdBy; recordDisbursement compares the disburser against
+   * approvedBy, already on the row. Off is the shipped default — every case below sets a mode
+   * explicitly so it never depends on that default silently staying off.
+   */
+  describe('Segregation of duties (staged)', () => {
+    describe('approvePayouts vs. the assignment booker', () => {
+      it('off: the same account books and approves without a lookup or a refusal', async () => {
+        settingsValues['security.segregationOfDuties.mode'] = 'off';
+        payableRepo.findOne.mockImplementation(async () => payable());
+        const r = await service.approvePayouts(['payable-1'], 'ops-1');
+        expect(r).toEqual({ done: ['payable-1'], refused: [] });
+        expect(assignmentRepo.findOne).not.toHaveBeenCalled();
+      });
+
+      it('warn: records the same-person approval but still approves it', async () => {
+        settingsValues['security.segregationOfDuties.mode'] = 'warn';
+        payableRepo.findOne.mockImplementation(async () => payable());
+        assignmentRepo.findOne.mockImplementation(async () => ({ id: 'asn-1', createdBy: 'ops-1' }));
+        const warn = jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);
+        const r = await service.approvePayouts(['payable-1'], 'ops-1');
+        expect(r).toEqual({ done: ['payable-1'], refused: [] });
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('same account (ops-1) on both sides'));
+        warn.mockRestore();
+      });
+
+      it('enforce: refuses when the approver is the account that booked the assignment', async () => {
+        settingsValues['security.segregationOfDuties.mode'] = 'enforce';
+        payableRepo.findOne.mockImplementation(async () => payable());
+        assignmentRepo.findOne.mockImplementation(async () => ({ id: 'asn-1', createdBy: 'ops-1' }));
+        const r = await service.approvePayouts(['payable-1'], 'ops-1');
+        expect(r.done).toEqual([]);
+        expect(r.refused).toEqual([{ id: 'payable-1', reason: expect.stringContaining('Segregation of duties') }]);
+        expect(committed).toHaveLength(0);
+      });
+
+      it('enforce: allows it when a different account booked the assignment', async () => {
+        settingsValues['security.segregationOfDuties.mode'] = 'enforce';
+        payableRepo.findOne.mockImplementation(async () => payable());
+        assignmentRepo.findOne.mockImplementation(async () => ({ id: 'asn-1', createdBy: 'field-ops-1' }));
+        const r = await service.approvePayouts(['payable-1'], 'finance-1');
+        expect(r).toEqual({ done: ['payable-1'], refused: [] });
+      });
+
+      it('enforce: an assignment auto-created by "system" never collides — the naive check this replaced was permanently inert here', async () => {
+        settingsValues['security.segregationOfDuties.mode'] = 'enforce';
+        payableRepo.findOne.mockImplementation(async () => payable());
+        assignmentRepo.findOne.mockImplementation(async () => ({ id: 'asn-1', createdBy: 'system' }));
+        const r = await service.approvePayouts(['payable-1'], 'finance-1');
+        expect(r).toEqual({ done: ['payable-1'], refused: [] });
+      });
+
+      it('enforce: an expense-driven payable is never checked against an assignment booker — it books nothing', async () => {
+        settingsValues['security.segregationOfDuties.mode'] = 'enforce';
+        payableRepo.findOne.mockImplementation(async () => payable({ assignmentId: null, expenseId: 'expense-1' }));
+        const r = await service.approvePayouts(['payable-1'], 'ops-1');
+        expect(r).toEqual({ done: ['payable-1'], refused: [] });
+        expect(assignmentRepo.findOne).not.toHaveBeenCalled();
+      });
+    });
+
+    describe('recordDisbursement vs. the payout approver', () => {
+      it('enforce: refuses when the disburser is also the one who approved the payout', async () => {
+        settingsValues['security.segregationOfDuties.mode'] = 'enforce';
+        payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED, approvedBy: 'finance-1' }));
+        await expect(service.recordDisbursement({ payableId: 'payable-1', paymentReference: 'UTR-1', method: PaymentMethod.NEFT }, 'finance-1'))
+          .rejects.toThrow(ConflictException);
+        expect(committed).toHaveLength(0);
+      });
+
+      it('enforce: allows it when a different account approved the payout', async () => {
+        settingsValues['security.segregationOfDuties.mode'] = 'enforce';
+        payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED, approvedBy: 'finance-1' }));
+        totalsRow = { ...totalsRow, outstanding: 0 };
+        const payment = await service.recordDisbursement({ payableId: 'payable-1', paymentReference: 'UTR-1', method: PaymentMethod.NEFT }, 'finance-2');
+        expect(payment).toMatchObject({ payableId: 'payable-1' });
+      });
+
+      it('warn: records the same-person disbursement but still pays it, and surfaces via the bulk endpoint as done', async () => {
+        settingsValues['security.segregationOfDuties.mode'] = 'warn';
+        payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED, approvedBy: 'finance-1' }));
+        totalsRow = { ...totalsRow, outstanding: 0 };
+        const warn = jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);
+        const r = await service.payPayouts(['payable-1'], { paymentReference: 'UTR-1', method: PaymentMethod.NEFT }, 'finance-1');
+        expect(r.done).toEqual([{ payableId: 'payable-1', paymentId: expect.any(String) }]);
+        expect(warn).toHaveBeenCalledWith(expect.stringContaining('same account (finance-1) on both sides'));
+        warn.mockRestore();
+      });
+
+      it('off: the same account approves and pays without a refusal', async () => {
+        settingsValues['security.segregationOfDuties.mode'] = 'off';
+        payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.APPROVED, approvedBy: 'finance-1' }));
+        totalsRow = { ...totalsRow, outstanding: 0 };
+        const payment = await service.recordDisbursement({ payableId: 'payable-1', paymentReference: 'UTR-1', method: PaymentMethod.NEFT }, 'finance-1');
+        expect(payment).toMatchObject({ payableId: 'payable-1' });
+      });
     });
   });
 

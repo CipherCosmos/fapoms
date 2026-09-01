@@ -363,6 +363,16 @@ describe('security controls are still wired', () => {
         + 'unrecognised one before an assayer caller is object-scoped to their own clarification.',
     },
     {
+      id: 'segregation-of-duties-staged-rollout-exists',
+      file: `${B}/modules/billing-engine/billing-engine.service.ts`,
+      marker: 'assertSegregationOfDuties',
+      why: 'BILLING_ROLES and DISBURSEMENT_ROLES are the identical set, and neither approvePayouts '
+        + 'nor recordDisbursement compared actors until this existed — one account could book a '
+        + 'completed audit, approve its payout, and pay it, with nothing to stop them. This is the '
+        + 'mechanism the staged (off -> warn -> enforce) rollout of that boundary depends on; '
+        + 'losing it silently reopens both routes with nothing failing loudly.',
+    },
+    {
       id: 'document-download-token-staff-region-scope',
       file: `${B}/modules/document/document.controller.ts`,
       marker: 'this.regionGuard.assertRegionAllowed(doc.assessment?.branch?.region ?? null, scope);',
