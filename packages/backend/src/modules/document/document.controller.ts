@@ -800,7 +800,13 @@ export class DocumentController {
     // Advertises resumability so clients know they may request a byte range.
     res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Content-Type', doc.mimeType || 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${doc.fileName}"`);
+    // `doc.fileName` is stored from client-supplied input on the JSON upload routes, so a quote or
+    // a CR/LF in it would break out of the quoted value and corrupt (or split) the response
+    // header. Strip the header-breaking characters from the quoted fallback and add the RFC 5987
+    // `filename*` form for correct Unicode — the same shape the report exports already use.
+    const safeName = (doc.fileName || 'document.pdf').replace(/[\r\n"]/g, '_');
+    const encodedName = encodeURIComponent(doc.fileName || 'document.pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${safeName}"; filename*=UTF-8''${encodedName}`);
 
     if (req.headers['if-none-match'] === etag) {
       res.status(304).end();

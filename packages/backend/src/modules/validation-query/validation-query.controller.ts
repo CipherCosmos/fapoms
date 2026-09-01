@@ -1,10 +1,12 @@
 import {
   Controller, Get, Post, Delete, Param, Body, UseGuards, ParseUUIDPipe, Req, Res,
   UseInterceptors, UploadedFile, UploadedFiles, Query, Inject, BadRequestException,
+  ForbiddenException, NotFoundException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
+import { assertUploadAllowed } from '../document/upload-validation';
 import { memoryStorage } from 'multer';
 import { IsOptional, IsString, IsArray, IsNumber, IsObject, IsIn, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
@@ -117,6 +119,10 @@ export class ValidationQueryController {
 
     const results = await Promise.all(
       (files || []).map(async (file) => {
+        // Type + size allowlist, the same gate the document upload paths use. This route
+        // scans for malware but accepted ANY declared type; a clarification thread is not a
+        // place to smuggle an arbitrary file type into storage.
+        assertUploadAllowed({ contentType: file.mimetype, size: file.size, hint: 'Attach a PDF, image, or spreadsheet.' });
         const key = await this.storage.saveFile(
           `chat/${file.originalname}`,
           file.buffer,
@@ -151,6 +157,8 @@ export class ValidationQueryController {
     if (!file?.buffer?.length) {
       throw new BadRequestException('No file was uploaded.');
     }
+    // Same allowlist as the multi-file route above.
+    assertUploadAllowed({ contentType: file.mimetype, size: file.size, hint: 'Attach a PDF, image, or spreadsheet.' });
 
     const key = await this.storage.saveFile(
       `chat/${file.originalname}`,
@@ -300,14 +308,39 @@ export class ValidationQueryController {
     };
   }
 
+  /**
+   * These read routes admit ASSAYER (the mobile app needs its own clarifications) but had NO
+   * object-level ownership check — so any field assayer could page the entire query table, read
+   * any other assayer's clarifications by id, and pull any validation case's threads (borrower
+   * and collateral discussion, PDF crops). The write path was hardened; the reads were not. An
+   * assayer is now pinned to their own records on every one of these; staff are unaffected.
+   */
+  private isAssayerCaller(req: any): boolean {
+    const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean);
+    return roles.includes(SystemRole.ASSAYER) && !roles.some((r) => (STAFF_ROLES as unknown as string[]).includes(r));
+  }
+
+  private async assertAssayerOwnsQuery(req: any, queryId: string): Promise<void> {
+    if (!this.isAssayerCaller(req)) return; // staff are not object-scoped on these routes
+    const owner = await this.validationQueryService.ownerAssayerId(queryId);
+    if (owner === undefined) throw new NotFoundException('Clarification not found.');
+    if (owner !== req.user?.id) throw new ForbiddenException('You can only view your own clarifications.');
+  }
+
   @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @Get()
   @ApiOperation({ summary: 'List validation queries (paginated; page/limit, default limit 50)' })
   async findAll(
+    @Req() req: any,
     @Query('assayerId') assayerId?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
+    // An assayer sees only their own, whatever the query string asks for.
+    if (this.isAssayerCaller(req)) {
+      const list = await this.validationQueryService.findByAssayer(req.user.id);
+      return { success: true, data: list };
+    }
     if (assayerId) {
       const list = await this.validationQueryService.findByAssayer(assayerId);
       return { success: true, data: list };
@@ -339,6 +372,9 @@ export class ValidationQueryController {
     @Body() dto: RespondValidationQueryDto,
     @Req() req: any,
   ) {
+    // The service commits status=RESPONDED before its own (swallowed) ownership check, so gate here:
+    // an assayer may answer only their own clarification.
+    await this.assertAssayerOwnsQuery(req, id);
     const query = await this.validationQueryService.respondToQuery(id, dto.response || '', req.user.id, dto.attachments);
     return { success: true, data: query };
   }
@@ -362,16 +398,20 @@ export class ValidationQueryController {
   @Get('validation-case/:validationCaseId')
   @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Get all queries raised for a specific validation case' })
-  async findByValidationCase(@Param('validationCaseId', ParseUUIDPipe) validationCaseId: string) {
-    const list = await this.validationQueryService.findByValidationCase(validationCaseId);
+  async findByValidationCase(@Param('validationCaseId', ParseUUIDPipe) validationCaseId: string, @Req() req: any) {
+    let list = await this.validationQueryService.findByValidationCase(validationCaseId);
+    // An assayer may see only their own clarifications within a case, never a colleague's.
+    if (this.isAssayerCaller(req)) list = list.filter((q) => q.assayerId === req.user?.id);
     return { success: true, data: list };
   }
 
   @Get('assayer/:assayerId')
   @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Get all pending queries assigned to an assayer' })
-  async findByAssayer(@Param('assayerId') assayerId: string) {
-    const list = await this.validationQueryService.findByAssayer(assayerId);
+  async findByAssayer(@Param('assayerId') assayerId: string, @Req() req: any) {
+    // An assayer is pinned to their own id here, ignoring the path param.
+    const targetId = this.isAssayerCaller(req) ? req.user.id : assayerId;
+    const list = await this.validationQueryService.findByAssayer(targetId);
     return { success: true, data: list };
   }
 
@@ -384,6 +424,7 @@ export class ValidationQueryController {
   @Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.OPERATIONS, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Full clarification thread' })
   async listMessages(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+    await this.assertAssayerOwnsQuery(req, id);
     const messages = await this.threadService.listMessages(id);
     // The packet this clarification is about — the same file for every message — resolved once so
     // an anchored message can carry an absolute link to it.

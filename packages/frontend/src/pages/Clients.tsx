@@ -21,6 +21,7 @@ import { BillingPanel } from './clients/BillingPanel';
 import { ConfigurationPanel } from './clients/ConfigurationPanel';
 import { useCurrentRoles, canDeleteClients } from '../hooks/useCurrentRoles';
 import { visibleSelection, hiddenSelectionNote } from '../utils/selection';
+import { safeHttpUrl } from '../utils/url';
 
 const LIFECYCLE_COLORS: Record<string, { color: string; bg: string }> = {
   PROSPECT: { color: 'var(--warning)', bg: 'var(--status-pending-bg)' },
@@ -498,9 +499,17 @@ const Clients: React.FC = () => {
         {selectedClient && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
             {selectedClient.website && (
-              <a href={selectedClient.website} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', gap: 4 }}>
-                <ExternalLink size={12} /> {selectedClient.website}
-              </a>
+              // Only link out if the stored value is a real http(s) URL. A `javascript:` value here
+              // would otherwise run in this origin on click — see utils/url. Non-URLs show as text.
+              safeHttpUrl(selectedClient.website) ? (
+                <a href={safeHttpUrl(selectedClient.website)!} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: 'var(--accent-primary)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <ExternalLink size={12} /> {selectedClient.website}
+                </a>
+              ) : (
+                <span style={{ fontSize: 12, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <ExternalLink size={12} /> {selectedClient.website}
+                </span>
+              )
             )}
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 12, fontSize: 13 }}>
               {[

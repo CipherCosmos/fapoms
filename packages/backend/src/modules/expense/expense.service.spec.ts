@@ -148,6 +148,27 @@ describe('ExpenseService', () => {
       expenseRepo.findOne.mockResolvedValue({ ...pending, status: ExpenseStatus.APPROVED });
       await expect(service.review('exp-1', false, 'ops-1', 'reversing')).rejects.toThrow(BadRequestException);
     });
+
+    it('refuses to let the claim\'s raiser approve their own claim', async () => {
+      // Approving books a payable — money out. The same person entering and approving a claim
+      // is exactly the self-dealing separation of duties exists to stop.
+      expenseRepo.findOne.mockResolvedValue({ ...pending, createdBy: 'ops-1' });
+      await expect(service.review('exp-1', true, 'ops-1', 'Looks fine')).rejects.toThrow(ForbiddenException);
+      expect(expenseRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('still lets the claim\'s raiser reject their own claim', async () => {
+      // Rejecting moves no money, so self-rejection is harmless and stays allowed.
+      expenseRepo.findOne.mockResolvedValue({ ...pending, createdBy: 'ops-1' });
+      const result = await service.review('exp-1', false, 'ops-1', 'Filed by mistake');
+      expect(result.status).toBe(ExpenseStatus.REJECTED);
+    });
+
+    it('lets a different reviewer approve a claim they did not raise', async () => {
+      expenseRepo.findOne.mockResolvedValue({ ...pending, createdBy: 'ops-1' });
+      const result = await service.review('exp-1', true, 'ops-2', 'Verified independently');
+      expect(result.status).toBe(ExpenseStatus.APPROVED);
+    });
   });
 
   describe('summaryForAssayer', () => {

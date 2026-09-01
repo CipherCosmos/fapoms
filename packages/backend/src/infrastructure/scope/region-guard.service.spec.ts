@@ -91,4 +91,62 @@ describe('RegionGuardService', () => {
       await expect(guard.assertBranchInScope('nope', west)).resolves.toBeUndefined();
     });
   });
+
+  /**
+   * `feedbackVerdict` — whether a socket may join a feedback thread's room. Mirrors the HTTP
+   * rule in FeedbackService.findOne: the reporter, or a feedback-team role, may; nobody else.
+   * `subscribe:feedback` used to be an unconditional join with no check at all.
+   */
+  describe('feedbackVerdict', () => {
+    const THREAD_ID = '33333333-3333-3333-3333-333333333333';
+
+    let row: any;
+    const makeQueryBuilder = () => {
+      const qb: any = {};
+      for (const method of ['select', 'addSelect', 'where']) qb[method] = jest.fn(() => qb);
+      qb.getRawOne = jest.fn(async () => row);
+      return qb;
+    };
+
+    const guardWithRepo = () => {
+      const repo = { createQueryBuilder: jest.fn(() => makeQueryBuilder()) };
+      const ds = { getRepository: jest.fn(() => repo) };
+      return { guard: new RegionGuardService(ds as any), repo };
+    };
+
+    it('refuses an unknown thread id', async () => {
+      row = undefined;
+      const { guard: g } = guardWithRepo();
+      const verdict = await g.feedbackVerdict({ id: 'someone' }, THREAD_ID);
+      expect(verdict).toEqual({ found: false, allowed: false });
+    });
+
+    it('admits the reporter by user id', async () => {
+      row = { id: THREAD_ID, reporterUserId: 'reporter-1', reporterAssayerId: null };
+      const { guard: g } = guardWithRepo();
+      const verdict = await g.feedbackVerdict({ id: 'reporter-1' }, THREAD_ID);
+      expect(verdict).toEqual({ found: true, allowed: true });
+    });
+
+    it('admits the reporter by assayer id', async () => {
+      row = { id: THREAD_ID, reporterUserId: null, reporterAssayerId: 'assayer-1' };
+      const { guard: g } = guardWithRepo();
+      const verdict = await g.feedbackVerdict({ id: 'assayer-1', roles: [{ name: 'ASSAYER' }] }, THREAD_ID);
+      expect(verdict).toEqual({ found: true, allowed: true });
+    });
+
+    it('admits a feedback-team member who is not the reporter', async () => {
+      row = { id: THREAD_ID, reporterUserId: 'reporter-1', reporterAssayerId: null };
+      const { guard: g } = guardWithRepo();
+      const verdict = await g.feedbackVerdict({ id: 'admin-1', roles: [{ name: 'ADMIN' }] }, THREAD_ID);
+      expect(verdict).toEqual({ found: true, allowed: true });
+    });
+
+    it('refuses a socket that is neither the reporter nor on the feedback team', async () => {
+      row = { id: THREAD_ID, reporterUserId: 'reporter-1', reporterAssayerId: null };
+      const { guard: g } = guardWithRepo();
+      const verdict = await g.feedbackVerdict({ id: 'assayer-2', roles: [{ name: 'ASSAYER' }] }, THREAD_ID);
+      expect(verdict).toEqual({ found: true, allowed: false });
+    });
+  });
 });

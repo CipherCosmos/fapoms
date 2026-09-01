@@ -4,6 +4,7 @@ import {
 } from '@nestjs/common';
 import { FilesInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
+import { Throttle } from '@nestjs/throttler';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import {
   IsOptional, IsString, IsNotEmpty, IsEnum, IsArray, IsObject, IsBoolean, ValidateNested,
@@ -122,6 +123,10 @@ export class FeedbackController {
 
   @Post()
   @AnyAuthenticated()
+  // Filing a thread fans out a realtime notification to the whole feedback team and can escalate.
+  // 20/min is far above any human filing rate but stops one account (staff, client or assayer)
+  // flooding the team's inbox and the notification pipeline. A retrying slow client is unaffected.
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
   @ApiOperation({ summary: 'File a bug, enhancement, process idea or question' })
   async create(@Body() dto: CreateFeedbackRequestDto, @Req() req: any) {
     const thread = await this.feedbackService.create(dto, this.actor(req));
@@ -323,6 +328,9 @@ export class FeedbackController {
 
   @Post(':id/messages')
   @AnyAuthenticated()
+  // Same reasoning as create: a reply also notifies the other side. 30/min allows a brisk
+  // back-and-forth while capping spam.
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
   @ApiOperation({ summary: 'Reply on a thread' })
   async postMessage(@Param('id', ParseUUIDPipe) id: string, @Body() dto: PostFeedbackMessageRequestDto, @Req() req: any) {
     return { success: true, data: await this.threadService.postMessage(id, this.actor(req), dto) };

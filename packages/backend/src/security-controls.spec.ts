@@ -143,6 +143,132 @@ describe('security controls are still wired', () => {
         + 'system routinely contain the data that caused them — a failing query includes its bound '
         + 'values, and those values are bank customer records.',
     },
+    {
+      id: 'document-download-content-disposition-sanitised',
+      file: `${B}/modules/document/document.controller.ts`,
+      marker: `filename*=UTF-8`,
+      why: 'doc.fileName is stored from client-supplied input on the JSON upload routes. Without '
+        + 'stripping CR/LF/quote and adding the RFC 5987 filename* form, a crafted filename corrupts '
+        + 'or splits the Content-Disposition response header (HTTP response splitting).',
+    },
+    {
+      id: 'report-sync-exports-throttled',
+      file: `${B}/modules/reports/reports.controller.ts`,
+      marker: 'Synchronous xlsx.write blocks the event loop with no yield',
+      why: 'The five synchronous GET export routes (coverage, assignments, billing, command-center, '
+        + 'assayer-roster) call xlsx.write with no yield point — an unthrottled CPU-bound DoS surface. '
+        + 'Their queued POST twins are already throttled; these must carry the same @Throttle.',
+    },
+    {
+      id: 'assayer-profile-read-is-self-or-privileged',
+      file: `${B}/modules/assayer/assayer.controller.ts`,
+      marker: 'view this profile',
+      why: '`GET :assayerId/profile` computed isSelf but used it only to decide REDACTION, never to '
+        + 'refuse — any assayer could pull any colleague\'s full profile by id. assertSelfOrPrivileged '
+        + 'must run before the record is fetched; staff (ADMIN/OPERATIONS) are unaffected.',
+    },
+    {
+      id: 'feedback-socket-room-entitlement',
+      file: `${B}/modules/realtime/events.gateway.ts`,
+      marker: 'this.regionGuard.feedbackVerdict(client.user!, threadId)',
+      why: 'subscribe:feedback was a bare join with no check — any authenticated socket, an assayer '
+        + 'included, could subscribe to any feedback thread by guessing its UUID and receive internal '
+        + 'team messages. Must go through joinIfEntitled like assignment: and query: rooms.',
+    },
+    {
+      id: 'socket-subscribe-rate-budget',
+      file: `${B}/modules/realtime/events.gateway.ts`,
+      marker: 'allowSubscribeAttempt',
+      why: 'Each subscribe attempt can run an uncached DB verdict (a not-found result is deliberately '
+        + 'not cached). Without a per-socket budget a client spraying random UUIDs issues an unbounded '
+        + 'stream of queries.',
+    },
+    {
+      id: 'expense-approval-blocks-self-dealing',
+      file: `${B}/modules/expense/expense.service.ts`,
+      marker: 'You cannot approve an expense claim you raised',
+      why: 'Approving an expense books a payable — money out. The claim\'s raiser must not be able to '
+        + 'approve their own entry; only rejecting your own claim is harmless and stays allowed.',
+    },
+    {
+      id: 'feedback-file-and-reply-throttled',
+      file: `${B}/modules/feedback/feedback.controller.ts`,
+      marker: '@Throttle',
+      why: 'Filing and replying each fan out a realtime notification to the whole feedback team. '
+        + 'Without a per-route ceiling above real human usage, one account can flood the team\'s '
+        + 'inbox and the notification pipeline.',
+    },
+    {
+      id: 'forced-password-change-enforced-server-side',
+      file: `${B}/modules/auth/guards.ts`,
+      marker: 'PASSWORD_CHANGE_EXEMPT_KEY',
+      why: '`mustChangePassword` used to be returned to the client and acted on only by the web '
+        + 'UI, so a curl script or a stale tab could use a seeded/admin-set password normally. '
+        + 'JwtAuthGuard now refuses every route except change-password, read-own-profile and '
+        + 'logout until the flag clears. Scoped to principals carrying the flag — the assayer '
+        + 'mobile principal never does, so the field app is unaffected.',
+    },
+    {
+      id: 'login-timing-oracle-equalised',
+      file: `${B}/modules/auth/auth.service.ts`,
+      marker: 'DUMMY_BCRYPT_HASH',
+      why: 'An unknown identifier used to return instantly while a known one paid a full bcrypt '
+        + 'compare — a timing oracle for which usernames/assayer codes exist. The not-found path '
+        + 'now spends the same work against a fixed dummy hash.',
+    },
+    {
+      id: 'refresh-token-reuse-detection',
+      file: `${B}/modules/auth/auth.service.ts`,
+      marker: 'handleRefreshTokenReuse',
+      why: 'A replayed, already-rotated refresh token used to just fail to match — reuse (the '
+        + 'signature of a stolen token) was indistinguishable from a random bad token. It is now '
+        + 'caught and treated as theft: the whole token family is revoked and an audit event is '
+        + 'raised, with a short grace window so an ordinary two-tab refresh race is not punished.',
+    },
+    {
+      id: 'refresh-token-replaced-by-stores-row-not-secret',
+      file: `${B}/modules/auth/auth.service.ts`,
+      marker: 'generateTokenPairWithRow',
+      why: 'Rotation used to write the NEW, still-valid refresh token in cleartext into the '
+        + 'predecessor row\'s `replaced_by`. Anyone who could read the table (a backup, a read '
+        + 'replica, a support export) could lift it and redeem a full session with no password. '
+        + '`replaced_by` now stores the successor ROW id; the secret exists only as its hash.',
+    },
+    {
+      id: 'password-change-revokes-all-sessions',
+      file: `${B}/modules/auth/auth.service.ts`,
+      marker: 'revokeAllSessions',
+      why: 'A password change or admin reset used to only rewrite the hash — it never ended '
+        + 'existing sessions, so a stolen or lingering refresh token kept rotating into fresh '
+        + 'access tokens for the full refresh TTL. Both staff paths now revoke every refresh '
+        + 'token and drop the cached principal on a `user:password-changed` event.',
+    },
+    {
+      id: 'password-change-invalidates-principal-cache-synchronously',
+      file: `${B}/modules/user/user.service.ts`,
+      marker: 'rbacPrincipalCacheKey',
+      why: 'The RBAC principal cache (~30s TTL) is what the forced-password-change guard reads. '
+        + 'The domain-event invalidation is fire-and-forget and not guaranteed to finish before '
+        + 'the HTTP response returns, so both password-change paths also await a direct cache '
+        + 'drop — without it, a user who just changed their password could stay wrongly 403\'d '
+        + 'by their own stale cached principal for up to the TTL.',
+    },
+    {
+      id: 'user-password-hash-not-selected',
+      file: `${B}/modules/user/user.entity.ts`,
+      marker: 'select: false',
+      why: 'The bcrypt hash must not load by default. Without this it rides along on every '
+        + 'entity read and lands in the Redis-cached principal — the same exposure already '
+        + 'closed on assayers.',
+    },
+    {
+      id: 'pii-encryption-key-production-check',
+      file: `${B}/main.ts`,
+      marker: 'PII_ENCRYPTION_KEY',
+      why: 'The field-encryption layer degrades to plaintext passthrough when this key is unset. '
+        + 'A production boot without it would silently store PAN, bank account and government-ID '
+        + 'numbers as cleartext, with no failure signal until someone reads the table.',
+    },
   ];
 
   it('has no duplicate ids', () => {

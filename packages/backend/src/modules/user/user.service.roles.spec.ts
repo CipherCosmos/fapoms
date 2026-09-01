@@ -8,6 +8,7 @@ import { RoleEntity } from './role.entity';
 import { PermissionEntity } from './permission.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { CacheService } from '../../infrastructure/cache/cache.service';
 
 /**
  * Guard rails on the role editor.
@@ -33,6 +34,7 @@ describe('UserService — roles & permissions', () => {
   };
   const mockAudit = { recordEventSafe: jest.fn().mockResolvedValue(undefined) };
   const mockEvents = { publish: jest.fn() };
+  const mockCache = { del: jest.fn().mockResolvedValue(undefined) };
 
   /** Query builder used both for holder counts and holder-id lookups. */
   const queryBuilder = (result: { count?: number; raw?: any[] }) => ({
@@ -54,6 +56,7 @@ describe('UserService — roles & permissions', () => {
         { provide: getRepositoryToken(PermissionEntity), useValue: mockPermissionRepo },
         { provide: AuditService, useValue: mockAudit },
         { provide: DomainEventPublisher, useValue: mockEvents },
+        { provide: CacheService, useValue: mockCache },
       ],
     }).compile();
 

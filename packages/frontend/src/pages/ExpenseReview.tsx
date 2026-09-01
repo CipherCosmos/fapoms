@@ -13,6 +13,7 @@ import { userMessage } from '../services/errors';
 import { useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from '../hooks/queryKeys';
 import { visibleSelection, hiddenSelectionNote } from '../utils/selection';
+import { safeHttpUrl } from '../utils/url';
 
 /**
  * Expense Review — the finance/ops queue for assayer reimbursement claims.
@@ -248,14 +249,24 @@ export const ExpenseReview: React.FC = () => {
     {
       key: 'receipt',
       header: 'Receipt',
-      render: (c) =>
-        c.receiptUrl ? (
-          <a href={c.receiptUrl} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--accent)' }}>
+      render: (c) => {
+        // The receipt URL is submitted by the assayer raising the claim and rendered here into an
+        // <a href> that a FINANCE/ADMIN reviewer clicks. Unchecked, a `javascript:` value would run
+        // in the reviewer's authenticated origin — a privilege-escalation XSS from the lowest role.
+        // Only link out for real http(s); anything else shows as an unlinked "View" (still there,
+        // just not clickable). Same guard already used for the client website field.
+        const href = safeHttpUrl(c.receiptUrl);
+        if (!c.receiptUrl) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
+        return href ? (
+          <a href={href} target="_blank" rel="noopener noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--accent)' }}>
             <Receipt size={14} /> View
           </a>
         ) : (
-          <span style={{ color: 'var(--text-muted)' }}>—</span>
-        ),
+          <span title="Receipt link is not a valid web address" style={{ display: 'inline-flex', alignItems: 'center', gap: 4, color: 'var(--text-muted)' }}>
+            <Receipt size={14} /> View
+          </span>
+        );
+      },
     },
     {
       key: 'submitted',

@@ -4,6 +4,7 @@ import { RegionGuardService } from '../../infrastructure/scope/region-guard.serv
 import { UserEntity } from '../user/user.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ValidationQueryEntity } from '../validation-query/validation-query.entity';
+import { FeedbackThreadEntity } from '../feedback/feedback-thread.entity';
 
 describe('EventsGateway — socket authentication', () => {
   let gateway: EventsGateway;
@@ -247,10 +248,12 @@ describe('EventsGateway — room subscription entitlement', () => {
   let assignmentRow: any;
   let queryRow: any;
   let userRow: any;
+  let feedbackRow: any;
 
   let assignmentRepo: { createQueryBuilder: jest.Mock };
   let queryRepo: { createQueryBuilder: jest.Mock };
   let userRepo: { findOne: jest.Mock };
+  let feedbackRepo: { createQueryBuilder: jest.Mock };
   let gateway: EventsGateway;
 
   const makeQueryBuilder = (row: () => any) => {
@@ -274,16 +277,19 @@ describe('EventsGateway — room subscription entitlement', () => {
     assignmentRow = null;
     queryRow = null;
     userRow = null;
+    feedbackRow = null;
 
     assignmentRepo = { createQueryBuilder: jest.fn(() => makeQueryBuilder(() => assignmentRow)) };
     queryRepo = { createQueryBuilder: jest.fn(() => makeQueryBuilder(() => queryRow)) };
     userRepo = { findOne: jest.fn(async () => userRow) };
+    feedbackRepo = { createQueryBuilder: jest.fn(() => makeQueryBuilder(() => feedbackRow)) };
 
     const dataSource = {
       getRepository: jest.fn((entity: any) => {
         if (entity === AssignmentEntity) return assignmentRepo;
         if (entity === ValidationQueryEntity) return queryRepo;
         if (entity === UserEntity) return userRepo;
+        if (entity === FeedbackThreadEntity) return feedbackRepo;
         throw new Error('Unexpected repository request');
       }),
     };
@@ -440,5 +446,138 @@ describe('EventsGateway — room subscription entitlement', () => {
     await gateway.handleSubscribeQuery(client as any, QUERY_ID);
 
     expect(client.join).not.toHaveBeenCalled();
+  });
+
+  /**
+   * subscribe:feedback used to be a bare `if (client.user?.id) join(...)` — any authenticated
+   * socket, an assayer included, could subscribe to any feedback thread by guessing its UUID
+   * and receive internal team messages. These pin the restored entitlement gate.
+   */
+  const THREAD_ID = '33333333-3333-3333-3333-333333333333';
+
+  it('refuses a socket that is neither the reporter nor on the feedback team', async () => {
+    feedbackRow = { id: THREAD_ID, reporterUserId: 'reporter-1', reporterAssayerId: null };
+    const client = makeClient({ id: 'assayer-2', roles: [{ name: 'ASSAYER' }] });
+
+    await gateway.handleSubscribeFeedback(client as any, THREAD_ID);
+
+    expect(client.join).not.toHaveBeenCalled();
+    expect(client.emit).toHaveBeenCalledWith('error', {
+      message: `Not authorized to subscribe to feedback:${THREAD_ID}`,
+    });
+  });
+
+  it('admits the thread\'s own reporter, by user id', async () => {
+    feedbackRow = { id: THREAD_ID, reporterUserId: 'reporter-1', reporterAssayerId: null };
+    const client = makeClient({ id: 'reporter-1', roles: [{ name: 'OPERATIONS' }] });
+
+    await gateway.handleSubscribeFeedback(client as any, THREAD_ID);
+
+    expect(client.join).toHaveBeenCalledWith(`feedback:${THREAD_ID}`);
+  });
+
+  it('admits the thread\'s own reporter, by assayer id', async () => {
+    feedbackRow = { id: THREAD_ID, reporterUserId: null, reporterAssayerId: 'assayer-1' };
+    const client = makeClient({ id: 'assayer-1', roles: [{ name: 'ASSAYER' }] });
+
+    await gateway.handleSubscribeFeedback(client as any, THREAD_ID);
+
+    expect(client.join).toHaveBeenCalledWith(`feedback:${THREAD_ID}`);
+  });
+
+  it('admits a feedback-team member who is not the reporter', async () => {
+    feedbackRow = { id: THREAD_ID, reporterUserId: 'reporter-1', reporterAssayerId: null };
+    const client = makeClient({ id: 'admin-1', roles: [{ name: 'ADMIN' }] });
+
+    await gateway.handleSubscribeFeedback(client as any, THREAD_ID);
+
+    expect(client.join).toHaveBeenCalledWith(`feedback:${THREAD_ID}`);
+  });
+
+  it('refuses an unknown feedback thread id', async () => {
+    feedbackRow = null;
+    const client = makeClient({ id: 'assayer-1', roles: [{ name: 'ASSAYER' }] });
+
+    await gateway.handleSubscribeFeedback(client as any, THREAD_ID);
+
+    expect(client.join).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Per-socket subscribe budget. Every subscribe:* handler can run an uncached DB verdict on a
+ * not-found id, so a client spraying random UUIDs could previously issue an unbounded stream of
+ * queries. This caps attempts per socket without affecting any real client.
+ */
+describe('EventsGateway — subscribe rate budget', () => {
+  const ASSIGNMENT_ID = '11111111-1111-1111-1111-111111111111';
+
+  const makeClient = (user: { id: string; roles?: any[] }) => ({
+    id: 'socket-1',
+    user,
+    emit: jest.fn(),
+    join: jest.fn(),
+    leave: jest.fn(),
+  });
+
+  it('refuses further subscribe attempts once the per-socket budget is spent', async () => {
+    const dataSource = {
+      // Every lookup refuses cleanly (unknown id) — the point here is the attempt count, not
+      // the entitlement outcome.
+      getRepository: jest.fn(() => ({
+        createQueryBuilder: jest.fn(() => {
+          const qb: any = {};
+          for (const method of ['leftJoin', 'select', 'addSelect', 'where']) qb[method] = jest.fn(() => qb);
+          qb.getRawOne = jest.fn(async () => null);
+          return qb;
+        }),
+      })),
+    };
+    const gateway = new EventsGateway(
+      {} as any,
+      new DomainEventPublisher(),
+      new RegionGuardService(dataSource as any),
+    );
+    const client = makeClient({ id: 'assayer-1', roles: [{ name: 'ASSAYER' }] });
+
+    for (let i = 0; i < 60; i++) {
+      await gateway.handleSubscribeAssignment(client as any, ASSIGNMENT_ID);
+    }
+    client.emit.mockClear();
+
+    await gateway.handleSubscribeAssignment(client as any, ASSIGNMENT_ID);
+
+    expect(client.emit).toHaveBeenCalledWith('error', {
+      message: 'Too many subscription attempts; please slow down.',
+    });
+  });
+
+  it('does not budget one socket against another', async () => {
+    const dataSource = {
+      getRepository: jest.fn(() => ({
+        createQueryBuilder: jest.fn(() => {
+          const qb: any = {};
+          for (const method of ['leftJoin', 'select', 'addSelect', 'where']) qb[method] = jest.fn(() => qb);
+          qb.getRawOne = jest.fn(async () => null);
+          return qb;
+        }),
+      })),
+    };
+    const gateway = new EventsGateway(
+      {} as any,
+      new DomainEventPublisher(),
+      new RegionGuardService(dataSource as any),
+    );
+    const spent = makeClient({ id: 'assayer-1', roles: [{ name: 'ASSAYER' }] });
+    for (let i = 0; i < 60; i++) {
+      await gateway.handleSubscribeAssignment(spent as any, ASSIGNMENT_ID);
+    }
+
+    const fresh = makeClient({ id: 'assayer-2', roles: [{ name: 'ASSAYER' }] });
+    await gateway.handleSubscribeAssignment(fresh as any, ASSIGNMENT_ID);
+
+    expect(fresh.emit).not.toHaveBeenCalledWith('error', {
+      message: 'Too many subscription attempts; please slow down.',
+    });
   });
 });

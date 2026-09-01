@@ -20,6 +20,8 @@ import { RoleEntity } from './role.entity';
 import { PermissionEntity } from './permission.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { CacheService } from '../../infrastructure/cache/cache.service';
+import { rbacPrincipalCacheKey } from '../auth/auth.service';
 import { EventCategory, UserStatus, SystemRole, Region, isRegion } from '@fapoms/shared';
 
 export interface CreateUserDto {
@@ -63,6 +65,9 @@ export class UserService {
     private readonly permissionRepository: Repository<PermissionEntity>,
     private readonly auditService: AuditService,
     private readonly eventPublisher: DomainEventPublisher,
+    // CacheModule is @Global(), so this needs no module wiring. Used only to invalidate the RBAC
+    // principal cache synchronously on a password change — see resetPassword/changePassword.
+    private readonly cache: CacheService,
   ) {}
 
   /**
@@ -403,6 +408,22 @@ export class UserService {
     user.updatedBy = actorId;
     await this.userRepository.save(user);
 
+    // Deterministic, awaited invalidation — not just the 'user:password-changed' event below.
+    // AuthService.validateJwtPayload caches the resolved principal (~30s TTL) and the domain-event
+    // subscription that also clears it is fire-and-forget, so it is not guaranteed to finish
+    // before this method's caller gets its HTTP response back. Without this direct call, the
+    // guard restored alongside forced-password-change enforcement could keep 403ing a user with
+    // a stale cached `mustChangePassword: true` for up to the TTL after the reset — which would
+    // look exactly like the guard breaking login, not like a cache race.
+    await this.cache.del(rbacPrincipalCacheKey(id));
+
+    // An admin reset is almost always a response to "this account is compromised" or "this person
+    // has left". Ending every existing session is the point of it: a stolen access/refresh token
+    // must stop working, not keep rotating for the refresh lifetime. AuthService.revokeAllSessions
+    // (triggered by this event) handles that; the cache drop above is deliberately not left to it
+    // alone — see the comment there.
+    this.eventPublisher.publish('user:password-changed', { userId: id });
+
     await this.auditService.recordEvent({
       category: EventCategory.USER,
       eventType: 'USER_PASSWORD_RESET',
@@ -442,6 +463,17 @@ export class UserService {
     user.mustChangePassword = false;
     user.updatedBy = id;
     await this.userRepository.save(user);
+
+    // Deterministic, awaited invalidation of the cached RBAC principal — see the identical
+    // comment in resetPassword. This is what lets a user call an authenticated route
+    // immediately after changing their own password rather than waiting out the cache TTL
+    // while the JwtAuthGuard's forced-password-change check still sees the stale flag.
+    await this.cache.del(rbacPrincipalCacheKey(id));
+
+    // End every other session — see the 'user:password-changed' handler in AuthService
+    // (AuthService.revokeAllSessions). Changing your password is the standard response to "you
+    // may be compromised", so it must end every OTHER session, not just clear the flag here.
+    this.eventPublisher.publish('user:password-changed', { userId: id });
 
     await this.auditService.recordEvent({
       category: EventCategory.USER,

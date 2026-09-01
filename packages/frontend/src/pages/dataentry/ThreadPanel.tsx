@@ -7,6 +7,7 @@ import { callManager } from '../../services/call.service';
 import type { RegionCapture, Region } from './PdfRegionViewer';
 import { userMessage } from '../../services/errors';
 import { fmtWhen } from '../../utils/dates';
+import { safeHttpUrl } from '../../utils/url';
 
 /**
  * One clarification thread: messages, composer, resolve.
@@ -312,17 +313,28 @@ export const ThreadPanel: React.FC<Props> = ({
                   * above as an image, which is the point of it, so it is skipped here rather
                   * than repeated as a file link underneath.
                   */}
-                {(m.attachments ?? []).filter((a) => a.url !== m.snapshotPath).map((a) => (
-                  <a key={a.url} href={signed[a.url] ?? a.url} target="_blank" rel="noreferrer"
-                    style={{
-                      display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11.5px',
-                      marginTop: '8px', padding: '4px 8px', borderRadius: '6px',
-                      background: isStaff ? 'rgba(255,255,255,0.2)' : 'var(--bg-surface)',
-                      color: isStaff ? '#ffffff' : 'var(--accent)', textDecoration: 'none',
-                    }}>
-                    <ImageIcon size={12} /> {a.fileName}
-                  </a>
-                ))}
+                {(m.attachments ?? []).filter((a) => a.url !== m.snapshotPath).map((a) => {
+                  // `a.url` is posted by the client with the message and rendered into an href the
+                  // desk reviewer clicks. A signed URL (S3, https) or the server's own relative
+                  // attachment path both pass; a `javascript:` value stored via the trusted-client
+                  // url does not, and falls back to unlinked text rather than running in-origin.
+                  const href = safeHttpUrl(signed[a.url] ?? a.url);
+                  const chipStyle = {
+                    display: 'inline-flex' as const, alignItems: 'center' as const, gap: '5px', fontSize: '11.5px',
+                    marginTop: '8px', padding: '4px 8px', borderRadius: '6px',
+                    background: isStaff ? 'rgba(255,255,255,0.2)' : 'var(--bg-surface)',
+                    color: isStaff ? '#ffffff' : 'var(--accent)', textDecoration: 'none',
+                  };
+                  return href ? (
+                    <a key={a.url} href={href} target="_blank" rel="noreferrer" style={chipStyle}>
+                      <ImageIcon size={12} /> {a.fileName}
+                    </a>
+                  ) : (
+                    <span key={a.url} title="Attachment link is not a valid web address" style={{ ...chipStyle, opacity: 0.7 }}>
+                      <ImageIcon size={12} /> {a.fileName}
+                    </span>
+                  );
+                })}
               </div>
             </div>
           );

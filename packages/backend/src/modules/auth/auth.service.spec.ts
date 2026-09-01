@@ -4,7 +4,7 @@ import { UnauthorizedException, ForbiddenException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
-import { AuthService } from './auth.service';
+import { AuthService, rbacPrincipalCacheKey } from './auth.service';
 import { UserEntity } from '../user/user.entity';
 import { RefreshTokenEntity } from './refresh-token.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
@@ -25,6 +25,7 @@ describe('AuthService', () => {
     findOne: jest.fn(),
     save: jest.fn(),
     create: jest.fn((data) => data),
+    update: jest.fn().mockResolvedValue({ affected: 1 }),
   };
 
   const mockAssayerRepo = {
@@ -229,5 +230,115 @@ describe('AuthService', () => {
       });
     });
 
+  describe('login — staff user path re-selects passwordHash (select: false on the entity)', () => {
+    it('authenticates a staff user even though the relation-loaded row does not carry the hash', async () => {
+      const hash = await bcrypt.hash('correct-password', 4);
+      // The first findOne (with relations) simulates `select: false` — no passwordHash on the
+      // returned row. The second, targeted findOne is what opts back in.
+      mockUserRepo.findOne
+        .mockResolvedValueOnce({
+          id: 'u-1', username: 'staff1', email: 'staff1@example.com', roles: [],
+          status: 'ACTIVE', failedLoginAttempts: 0, lockedUntil: null,
+        })
+        .mockResolvedValueOnce({ id: 'u-1', passwordHash: hash });
 
+      const result = await service.login('staff1', 'correct-password');
+
+      expect(result.user.id).toBe('u-1');
+      expect(result.accessToken).toBe('signed.jwt.token');
+      // The targeted re-select must have been asked for by id with an explicit passwordHash select.
+      expect(mockUserRepo.findOne).toHaveBeenNthCalledWith(2, {
+        where: { id: 'u-1' },
+        select: { id: true, passwordHash: true },
+      });
+    });
+  });
+
+  describe('login — assayer-not-found timing oracle (DUMMY_BCRYPT_HASH)', () => {
+    it('still spends a bcrypt compare when no assayer matches, so timing does not reveal existence', async () => {
+      mockUserRepo.findOne.mockResolvedValue(null);
+      mockAssayerRepo.findOne.mockResolvedValue(null);
+      const spy = jest.spyOn(bcrypt, 'compare');
+
+      await expect(service.login('nobody-like-this', 'whatever')).rejects.toThrow(UnauthorizedException);
+
+      expect(spy).toHaveBeenCalledWith('whatever', expect.stringMatching(/^\$2[aby]\$/));
+      spy.mockRestore();
+    });
+  });
+
+  describe('refresh token reuse detection', () => {
+    const baseToken = {
+      id: 'rt-1', userId: 'u-1', tokenHash: 'hash', isRevoked: true,
+      expiresAt: new Date(Date.now() + 100000),
+    };
+
+    it('rejects but does NOT revoke the family inside the grace window (an ordinary two-tab race)', async () => {
+      mockRefreshTokenRepo.findOne.mockResolvedValue({ ...baseToken, revokedAt: new Date() });
+
+      await expect(service.refreshAccessToken('some-token')).rejects.toThrow(UnauthorizedException);
+
+      expect(mockRefreshTokenRepo.update).not.toHaveBeenCalled();
+      expect(mockAuditService.recordEvent).not.toHaveBeenCalledWith(
+        expect.objectContaining({ eventType: 'REFRESH_TOKEN_REUSE_DETECTED' }),
+      );
+    });
+
+    it('treats a reuse outside the grace window as theft: revokes every session and audits it', async () => {
+      mockRefreshTokenRepo.findOne.mockResolvedValue({
+        ...baseToken, revokedAt: new Date(Date.now() - 60_000), // 60s ago, past the 30s default grace
+      });
+
+      await expect(service.refreshAccessToken('stolen-token')).rejects.toThrow(UnauthorizedException);
+
+      expect(mockRefreshTokenRepo.update).toHaveBeenCalledWith(
+        { userId: 'u-1', isRevoked: false },
+        expect.objectContaining({ isRevoked: true }),
+      );
+      expect(mockCache.del).toHaveBeenCalledWith(rbacPrincipalCacheKey('u-1'));
+      expect(mockAuditService.recordEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ eventType: 'REFRESH_TOKEN_REUSE_DETECTED', entityId: 'u-1' }),
+      );
+    });
+
+    it('rejects an expired (but not revoked) token without touching reuse handling', async () => {
+      mockRefreshTokenRepo.findOne.mockResolvedValue({
+        ...baseToken, isRevoked: false, revokedAt: null, expiresAt: new Date(Date.now() - 1000),
+      });
+
+      await expect(service.refreshAccessToken('expired-token')).rejects.toThrow(UnauthorizedException);
+      expect(mockRefreshTokenRepo.update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('revokeAllSessions', () => {
+    it('revokes every live refresh token for the user and drops their cached principal', async () => {
+      await service.revokeAllSessions('u-9');
+
+      expect(mockRefreshTokenRepo.update).toHaveBeenCalledWith(
+        { userId: 'u-9', isRevoked: false },
+        expect.objectContaining({ isRevoked: true }),
+      );
+      expect(mockCache.del).toHaveBeenCalledWith(rbacPrincipalCacheKey('u-9'));
+    });
+  });
+
+  describe('user:password-changed — session revocation and cache invalidation wiring', () => {
+    it('subscribes on module init and revokes sessions when the event fires', async () => {
+      service.onModuleInit();
+
+      const passwordChangedHandler = mockEvents.subscribe.mock.calls.find(
+        (call: any[]) => call[0] === 'user:password-changed',
+      )?.[1];
+      expect(passwordChangedHandler).toBeDefined();
+
+      await passwordChangedHandler({ userId: 'u-42' });
+
+      expect(mockRefreshTokenRepo.update).toHaveBeenCalledWith(
+        { userId: 'u-42', isRevoked: false },
+        expect.objectContaining({ isRevoked: true }),
+      );
+      expect(mockCache.del).toHaveBeenCalledWith(rbacPrincipalCacheKey('u-42'));
+    });
+  });
 });

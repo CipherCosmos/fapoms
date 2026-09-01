@@ -62,7 +62,14 @@ import { AssayerService, CreateAssayerDto, UpdateAssayerDto } from './assayer.se
 import { LocationTrailService } from './location-trail.service';
 import { LocationPingSource } from './assayer-location-ping.entity';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public, AnyAuthenticated } from '../auth/guards';
-import { SystemRole, AssayerLifecycleStatus, AssayerEngagementType, AssayerUnavailableReason } from '@fapoms/shared';
+import {
+  SystemRole,
+  AssayerLifecycleStatus,
+  AssayerEngagementType,
+  AssayerUnavailableReason,
+  SELF_EDITABLE_ASSAYER_FIELDS,
+  HR_MAINTAINED_ASSAYER_FIELDS,
+} from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { scopeAssayerForRoles, scopeAssayerListForRoles, rolesOf, assertSelfOrPrivileged } from './assayer-visibility';
@@ -95,29 +102,14 @@ const STAFF_ASSAYER_EDITORS: string[] = [
  *    they drive scheduling and eligibility, so an assayer could otherwise quietly remove
  *    themselves from the planning pool by setting a limit to zero.
  */
-const SELF_EDITABLE_FIELDS: string[] = [
-  'phone', 'alternatePhone', 'email',
-  'address', 'city', 'district', 'state', 'pincode',
-  'latitude', 'longitude',
-  'emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation',
-  'languages', 'skills', 'experienceYears',
-  'preferredRegions',
-  // Availability is the assayer's own to declare: when they are off and the hours they work.
-  // The scheduler already honours both (ConstraintEvaluator.checkLeaves / working hours), so
-  // letting an assayer set their own time off is what stops the desk offering them work on a
-  // day they are away — without an HR round-trip.
-  'leaves', 'workingHours',
-];
-
 /**
- * Fields the mobile app must render read-only. Exposed so the app can grey them out with a
- * reason rather than presenting an input that silently refuses to save.
+ * Both lists now live in `@fapoms/shared` — see SELF_EDITABLE_ASSAYER_FIELDS there for the
+ * reasoning about payroll diversion and scheduling. They were declared here, which meant the
+ * mobile app had to guess the same policy separately and got it wrong; the API rejected edits
+ * the phone had presented as editable, and the phone locked fields the API would have accepted.
  */
-const HR_MAINTAINED_FIELDS: string[] = [
-  'panNumber', 'bankAccountNumber', 'ifscCode',
-  'maxDailyWorkload', 'maxWeeklyWorkload',
-  'employmentType', 'performanceRating',
-];
+const SELF_EDITABLE_FIELDS = SELF_EDITABLE_ASSAYER_FIELDS;
+const HR_MAINTAINED_FIELDS = HR_MAINTAINED_ASSAYER_FIELDS;
 
 class CreateAssayerRequestDto implements CreateAssayerDto {
   /**
@@ -910,6 +902,11 @@ export class AssayerController {
   @Get(':assayerId/profile')
   @ApiOperation({ summary: 'Get detailed profile with stats for an assayer (by UUID or assayer code)' })
   async getProfile(@Param('assayerId') assayerId: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    // `isSelf` below only controlled REDACTION, never access — so an assayer could pull any
+    // colleague's profile by id (name, code, phone, email, address, employment status) and get a
+    // redacted-but-real record back. This refuses that outright: an assayer may read only their
+    // own profile; staff are unaffected, and the mobile app only ever fetches its own id.
+    assertSelfOrPrivileged(req.user, assayerId, 'view this profile');
     await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const assayer = await this.assayerService.getProfile(assayerId);
     return {
