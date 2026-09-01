@@ -44,16 +44,14 @@ export class ProjectBranchUnableToCoverEvent extends DomainEvent {}
 /** A previously uncoverable branch is back in play. */
 export class ProjectBranchCoverageReopenedEvent extends DomainEvent {}
 
-// Assignment Events
-export class AssignmentCandidateSelectedEvent extends DomainEvent {}
-export class AssignmentContactInitiatedEvent extends DomainEvent {}
-export class AssignmentNegotiationStartedEvent extends DomainEvent {}
-export class OfferAcceptedEvent extends DomainEvent {}
-export class OfferRejectedEvent extends DomainEvent {}
-export class AuditScheduledEvent extends DomainEvent {}
-export class AuditCompletedEvent extends DomainEvent {}
-export class AssignmentClosedEvent extends DomainEvent {}
-export class AssignmentCancelledEvent extends DomainEvent {}
+// No Assignment events.
+//
+// Nine of them lived here — candidate-selected, contact-initiated, negotiation-started,
+// offer-accepted/rejected, audit-scheduled/completed, closed, cancelled — and nothing ever
+// constructed one. `assignment.state-machine.ts` does not import this file at all; the
+// assignment lifecycle emits through the assignment service and the realtime gateway instead.
+// The classes were the skeleton of an approach that was never wired, and their names read like
+// a contract the system honours. Add one back only alongside the code that publishes it.
 
 // Validation Events
 export class ValidationApprovedEvent extends DomainEvent {}

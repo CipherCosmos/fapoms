@@ -15,7 +15,7 @@ Every step below was executed against a genuinely empty stack — new containers
 ## Deploy
 
 ```bash
-cp .env.docker.example .env.docker   # then edit — see "Before production" below
+cp .env.production.example .env.docker   # then edit — see "Before production" below
 docker compose up -d
 ```
 
@@ -95,7 +95,8 @@ takes no cross-instance lock, so parallel starts can race on the same migration.
 
 ## Before production
 
-`.env.docker.example` ships development defaults. These must change:
+`.env.production.example` is the one environment template — every key the stack reads, documented,
+with development defaults where a default is safe. These must change:
 
 | Variable | Why |
 |---|---|
@@ -223,7 +224,7 @@ systemctl --user edit fapoms-backup.service   # Environment=FAPOMS_OFFSITE_REMOT
 ## When something breaks
 
 Set `ALERT_WEBHOOK_URL` and an unexpected 500 pushes a notification instead of waiting in a log
-nobody reads. Any plain-text POST endpoint works; ntfy needs no account. See `.env.docker.example`
+nobody reads. Any plain-text POST endpoint works; ntfy needs no account. See `.env.production.example`
 for what is and is not included in an alert, and why.
 
 Without it, errors are still logged with a correlation id — and nothing tells you to go and look.

@@ -19,6 +19,7 @@ import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ProjectEntity } from '../project/project.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { PROFILE_IN_FORCE_SQL, PROFILE_IN_FORCE_ORDER } from '../pricing/profile-in-force';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import {
   NotificationDispatchService,
@@ -445,14 +446,14 @@ export class BillingEngineService implements OnModuleInit {
       this.settings.getNumber('billing.defaultClientTdsRate', 10).catch(() => 10),
       needsLegacyTravel
         ? m.query(
-            // In force NOW — both bounds. This checked only the end date, so a rate card
-            // dated for next quarter already governed today's travel reimbursement. See
-            // pricing/profile-in-force.ts for the one definition every reader now shares.
+            // In force NOW — both bounds. This once checked only the end date, so a rate card
+            // dated for next quarter already governed today's travel reimbursement. The predicate
+            // is imported rather than written here: a copy that merely *matches* the shared rule
+            // is one edit away from disagreeing with it again, which is how the four readers
+            // drifted apart the first time.
             `SELECT travel_reimbursement FROM assayer_commercial_profiles
-              WHERE assayer_id = $1 AND is_active = true
-                AND effective_start_date <= NOW()
-                AND (effective_end_date IS NULL OR effective_end_date >= NOW())
-              ORDER BY effective_start_date DESC LIMIT 1`,
+              WHERE ${PROFILE_IN_FORCE_SQL('$1', 'NOW()')}
+              ORDER BY ${PROFILE_IN_FORCE_ORDER} LIMIT 1`,
             [assayerId],
           )
         : Promise.resolve([]),

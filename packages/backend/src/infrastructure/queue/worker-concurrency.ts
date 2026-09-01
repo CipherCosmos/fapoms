@@ -154,6 +154,6 @@ export function assertConcurrencyWithinPool(
         : '. ') +
       `Either raise DB_POOL_MAX above ${slots} (and keep replicas x pool under Postgres ` +
       `max_connections), or split the roles: run PROCESS_ROLE=api replicas for HTTP and ` +
-      `PROCESS_ROLE=worker replicas for jobs. See docs/deployment-guide.md.`,
+      `PROCESS_ROLE=worker replicas for jobs. See DEPLOYMENT.md.`,
   );
 }

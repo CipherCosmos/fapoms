@@ -18,6 +18,7 @@ import { GlobalScope } from '../../infrastructure/scope/global-scope';
 // branch's state — re-exported here so existing imports keep working.
 import { canonicalState } from '@fapoms/shared';
 import { IN_FLIGHT_ASSIGNMENT_STATUSES, sqlStatusList } from '../assignment/assignment-workload';
+import { PROFILE_IN_FORCE_SQL, PROFILE_IN_FORCE_ORDER } from '../pricing/profile-in-force';
 export { canonicalState };
 
 /** A working day an assayer can actually sell, in hours. */
@@ -361,16 +362,15 @@ export class CommandCenterService {
               COALESCE(open_work.open_assignments, 0) AS open_assignments
          FROM roster r
          LEFT JOIN open_work ON open_work.assayer_id = r.id
-         -- The profile in force TODAY. This had no date filter, so the cost shown on the
-         -- command centre was the newest-starting row whether or not it had begun — a rate
-         -- card dated for next quarter priced today's screen. One definition, shared:
-         -- see pricing/profile-in-force.ts.
+         -- The profile in force TODAY. This once had no date filter at all, so the cost shown
+         -- on the command centre was the newest-starting row whether or not it had begun — a
+         -- rate card dated for next quarter priced today's screen. The predicate is imported
+         -- from pricing/profile-in-force.ts rather than restated here, so this join cannot
+         -- drift away from what the billing engine and the fee policy answer.
          LEFT JOIN LATERAL (
            SELECT base_fee FROM assayer_commercial_profiles
-            WHERE assayer_id = r.id AND is_active = true
-              AND effective_start_date <= NOW()
-              AND (effective_end_date IS NULL OR effective_end_date >= NOW())
-            ORDER BY effective_start_date DESC LIMIT 1
+            WHERE ${PROFILE_IN_FORCE_SQL('r.id', 'NOW()')}
+            ORDER BY ${PROFILE_IN_FORCE_ORDER} LIMIT 1
          ) cp ON true`,
       assayerParams,
     );

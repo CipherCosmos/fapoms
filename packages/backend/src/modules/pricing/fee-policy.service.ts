@@ -10,6 +10,7 @@ import { TravelMode } from '@fapoms/shared';
 import { TransportRateService, TransportEstimate, TransportPlace, RoadLeg } from './transport-rate.service';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { SETTING_BY_KEY } from '../../infrastructure/settings/settings.registry';
+import { PROFILE_IN_FORCE_QB } from './profile-in-force';
 
 /** Rate cards change rarely (contract renegotiations); a short TTL bounds staleness cheaply. */
 const RATES_CACHE_TTL_SECONDS = 300;
@@ -253,9 +254,7 @@ export class FeePolicyService implements OnModuleInit {
     const profile = await this.commercialRepository
       .createQueryBuilder('p')
       .where('p.assayerId = :assayerId', { assayerId })
-      .andWhere('p.isActive = true')
-      .andWhere('p.effectiveStartDate <= :at', { at })
-      .andWhere('(p.effectiveEndDate IS NULL OR p.effectiveEndDate >= :at)', { at })
+      .andWhere(PROFILE_IN_FORCE_QB, { at })
       .orderBy('p.effectiveStartDate', 'DESC')
       // No `.catch`: a failed read here is indistinguishable from "this assayer has no
       // commercial profile", and the fallback below is the platform default fee. Swallowing it
@@ -293,9 +292,7 @@ export class FeePolicyService implements OnModuleInit {
     const profiles = await this.commercialRepository
       .createQueryBuilder('p')
       .where('p.assayerId IN (:...assayerIds)', { assayerIds })
-      .andWhere('p.isActive = true')
-      .andWhere('p.effectiveStartDate <= :at', { at })
-      .andWhere('(p.effectiveEndDate IS NULL OR p.effectiveEndDate >= :at)', { at })
+      .andWhere(PROFILE_IN_FORCE_QB, { at })
       // Ascending, so the last write per assayer below is the latest start date — the same row
       // `getOne()` returns for a DESC order.
       .orderBy('p.effectiveStartDate', 'ASC')

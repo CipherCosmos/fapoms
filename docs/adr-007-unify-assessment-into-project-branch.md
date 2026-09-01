@@ -1,9 +1,21 @@
 # ADR-007 — Fold `assessments` into `project_branches` under one status machine
 
-- **Status:** Proposed — **needs explicit go-ahead before execution** (destructive schema migration on
-  live, billing-dependent data; backend is concurrently edited by another effort)
-- **Date:** 2026-08-09
-- **Scope owner sign-off required:** yes (data migration + core domain enum change)
+- **Status:** **Superseded — not executed.** Kept for the reasoning, not as pending work.
+- **Date:** 2026-08-09 · **Superseded:** 2026-09-01
+- **Superseded by:** migration `1793900000000`-era work, specifically
+  `1791900000000-AssessmentIsALink`, which solved the same problem a different way.
+
+> **What actually happened.** This ADR proposed grafting `AssessmentStatus`'s document tail onto
+> `ProjectBranchStatus` and dropping the `assessments` table. The shipped answer was narrower and
+> cheaper: `AssessmentIsALink` established that the eighteen-state `status` column — along with
+> `audit_date`, `assigned_assessor_id`, `agreed_fee`, `packet_size`, `coverage_flag`, `priority`,
+> `zone_id` and `remarks` — was **write-only**. Nothing read any of it. So those columns were
+> dropped and `assessments` was reduced to what it is actually for: a link a document can hang off
+> for one project and one branch. No status machine had to absorb anything, and the facts that
+> looked like they needed a new home already had one (`project_branches` for the audit date and
+> packet count, `assignments` for the assayer and agreed fee, `documents.status` for the paperwork).
+>
+> Nothing below needs doing. Read it for the analysis of the dual-write, which was correct.
 
 ## Problem
 

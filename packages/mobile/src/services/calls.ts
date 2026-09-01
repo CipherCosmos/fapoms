@@ -55,10 +55,6 @@ export function initializeCalling(): void {
   }
 }
 
-export function isCallingAvailable(): boolean {
-  return callingAvailable;
-}
-
 // ─────────────────────────────────────────────── URL normalisation
 
 /**
@@ -68,7 +64,7 @@ export function isCallingAvailable(): boolean {
  * The device never contacts LiveKit directly. Legacy absolute `localhost` URLs are still
  * rewritten to the API host; any other absolute URL passes through.
  */
-export function normalizeLiveKitUrl(rawUrl: string): string {
+function normalizeLiveKitUrl(rawUrl: string): string {
   if (rawUrl.startsWith('/')) {
     return `${MobileApiService.getApiOrigin()}${rawUrl}`;
   }
@@ -183,7 +179,7 @@ async function teardownRoom(): Promise<void> {
 }
 
 /** Full reset: leaves the room (if any) and returns the UI to idle. */
-export async function resetCall(): Promise<void> {
+async function resetCall(): Promise<void> {
   await teardownRoom();
   state = IDLE;
   listeners.forEach((l) => l());
@@ -204,21 +200,10 @@ async function post(path: string, body: Record<string, unknown>): Promise<any> {
   return data?.data ?? data;
 }
 
-/** The LiveKit server address, host-corrected for this device. Null when unreachable. */
-export async function getCallConfig(): Promise<{ url: string } | null> {
-  try {
-    const res = await MobileApiService.fetchWithAuth(
-      `${MobileApiService.getBaseUrl()}/calls/config`,
-      {},
-      10000,
-    );
-    const data = await res.json().catch(() => ({}));
-    const url = res.ok && data?.success !== false ? data?.data?.url : null;
-    return url ? { url: normalizeLiveKitUrl(url) } : null;
-  } catch {
-    return null;
-  }
-}
+// A `getCallConfig()` helper used to fetch `GET /calls/config` for the server address. Nothing
+// called it: `startCall` and `acceptCall` both receive the URL in the `/calls/initiate` and
+// `/calls/answer` responses, alongside the token they need anyway. A second way to learn the
+// same address is a second thing to keep correct.
 
 // ─────────────────────────────────────────────── Public actions
 

@@ -18,11 +18,11 @@ export function subscribeToConnection(cb: ConnectionListener): () => void {
   return () => { connectionListeners.delete(cb); };
 }
 
-export function isSocketConnected(): boolean {
+function isSocketConnected(): boolean {
   return !!socket?.connected;
 }
 
-export function getSocketToken(): string | null {
+function getSocketToken(): string | null {
   return localStorage.getItem('fapoms_token');
 }
 
@@ -89,18 +89,4 @@ export function disconnectSocket() {
 
 export function getSocket(): Socket | null {
   return socket;
-}
-
-export function subscribeToAssignment(assignmentId: string) {
-  const s = getSocket();
-  if (s?.connected) {
-    s.emit('subscribe:assignment', assignmentId);
-  }
-}
-
-export function unsubscribeFromAssignment(assignmentId: string) {
-  const s = getSocket();
-  if (s?.connected) {
-    s.emit('unsubscribe:assignment', assignmentId);
-  }
 }

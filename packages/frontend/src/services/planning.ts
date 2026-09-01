@@ -191,30 +191,12 @@ export const optimizeRoute = (payload: RouteOptimizePayload) =>
     body: JSON.stringify(payload),
   });
 
-// ── Pricing quote ────────────────────────────────────────────────────────────────
-export interface PricingQuotePayload {
-  assayerId: string;
-  clientId?: string | null;
-  distanceKm?: number;
-  branchCount?: number;
-  branchId?: string;
-}
-
-/** Fee breakdown. Caller supplies its own FeeQuote type. */
-export const getPricingQuote = <T = unknown>(payload: PricingQuotePayload) =>
-  api.request<T>('/pricing/quote', { method: 'POST', body: JSON.stringify(payload) });
-
-// ── Mutations (assignments, coverage, call logs) ─────────────────────────────────
-// Kept flexible: the component sends several body shapes to /assignments across its flows.
-export const createAssignment = (body: Record<string, unknown>) =>
-  api.request('/assignments', { method: 'POST', body: JSON.stringify(body) });
-
-export const transitionAssignment = (assignmentId: string, body: Record<string, unknown>) =>
-  api.request(`/assignments/${assignmentId}/transition`, {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
-
+// ── Coverage mutations ───────────────────────────────────────────────────────────
+//
+// `getPricingQuote`, `createAssignment`, `transitionAssignment` and `createCallLog` used to sit
+// here and had no callers. The live paths build those requests themselves, and `getPricingQuote`
+// had drifted further than unused: its `branchId` field is not on the backend's `QuoteRequestDto`,
+// so `forbidNonWhitelisted` would have rejected the call had anyone made it.
 export const markBranchUnableToCover = (projectBranchId: string, body: Record<string, unknown>) =>
   api.request(`/projects/branches/${projectBranchId}/unable-to-cover`, {
     method: 'POST',
@@ -223,9 +205,6 @@ export const markBranchUnableToCover = (projectBranchId: string, body: Record<st
 
 export const reopenBranchCoverage = (projectBranchId: string) =>
   api.request(`/projects/branches/${projectBranchId}/reopen-coverage`, { method: 'POST' });
-
-export const createCallLog = (body: Record<string, unknown>) =>
-  api.request('/call-logs', { method: 'POST', body: JSON.stringify(body) });
 
 // ── Coverage-plan lifecycle (generate → approve → deploy the whole project) ──────────────────
 // These backend capabilities existed but had no UI; the workspace could only assign one branch or

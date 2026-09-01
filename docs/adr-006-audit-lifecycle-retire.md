@@ -3,11 +3,12 @@
 - **Status:** Accepted & executed 2026-08-09 on branch `feat/real-time-sync` (backend build green;
   reversible via git — review before merge; heads-up to the billing/Track-B owner still advised)
 - **Date:** 2026-08-09
-- **Supersedes context:** corrects Part A of `surface-consolidation-assessment.md`
+- **Supersedes context:** corrects Part A of the surface-consolidation assessment
+  (`docs/surface-consolidation-assessment.md`, deleted 2026-09-01 — this ADR is what survived of it)
 
 ## Context
 
-`docs/surface-consolidation-assessment.md` originally listed `modules/audit` and
+The surface-consolidation assessment originally listed `modules/audit` and
 `modules/audit-history` as **dead code to delete**. A pre-deletion verification pass (the reason
 this ADR exists) found that framing was wrong in *both* directions, and the truth is more useful
 than either:

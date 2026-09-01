@@ -51,6 +51,11 @@ playwright-report/
 blob-report/
 coverage/
 evidence/
+release-artifacts/
+
+# Android bug reports. One of these (9.5 MB) was committed to the repository root and
+# downloaded by every clone for three weeks before anyone noticed it was there.
+bugreport-*.zip
 
 # Test spreadsheets & Excel dumps
 *.xlsx
@@ -89,3 +94,4 @@ packages/shared/src/*.d.ts
 # cloud build is signed with the same key as a local `./gradlew assembleRelease` — committing
 # it would both leak that path and go stale the moment anyone builds from a different machine.
 packages/mobile/credentials.json
+.neon

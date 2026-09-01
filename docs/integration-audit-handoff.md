@@ -4,32 +4,38 @@ These are the confirmed defects from the full-stack integration audit that were 
 changed** because they either live in the concurrent effort's uncommitted files (mobile auth) or need a
 runtime environment to change safely (timezone). Each entry is precise enough to action directly.
 
-## 1. Mobile auth lifecycle (HIGH) — owner: mobile effort (files are mid-flight)
+> **Triaged 2026-09-01.** Every item in §1 was re-checked against current source. What was fixed has
+> been struck from the list so that what remains is real work. Three items are still open.
+
+## 1. Mobile auth lifecycle (HIGH) — owner: mobile effort
 
 All in `packages/mobile` (`AuthContext.tsx`, `App.tsx`, `services/api.service.ts`) + one backend change.
 
-- **`mustChangePassword` gate bypassed on session-restore and biometric login.**
-  `AuthContext.tsx:96-99` (restore) and `:218-225` (biometric) build the user with only `{id,name}` — no
-  `mustChangePassword` — so the `App.tsx:671` gate never fires. Backend compounds it: biometric-login
-  (`auth.controller.ts:155-163`) omits the flag while password-login (`:129-133`) includes it.
-  **Fix:** (a) add `mustChangePassword` to the biometric-login user payload server-side; (b) set it in
-  `biometricLogin` from `res.user.mustChangePassword`; (c) in `initSession`, carry it from the
-  `/assayers/:id/profile` body `validateSession` already fetches. Otherwise an assayer on a seeded/HR-reset
-  shared password does GPS check-ins and uploads audit packets under that shared credential.
-- **Logout never revokes the server refresh token.** `AuthContext.logout` (`:258-267`) only wipes local
-  state; there is no `POST /auth/logout` call anywhere in mobile. **Fix:** add `MobileApiService.logout()`
-  → `POST /auth/logout` (best-effort, before clearing local state), await it from `AuthContext.logout`.
-  Matters on shared handsets / "sign in as someone else".
-- **Check-in shows "Bad Request" instead of the actionable message.** `api.service.ts:1073-1077` returns
-  `resData.error` ("Bad Request"); the useful "Turn on location…" text is in `resData.message`.
-  **Fix:** read `resData.message ?? resData.error` (the array-join pattern already used in
-  `changeOwnPassword`).
-- **Hardcoded fabricated values.** `api.service.ts:998` falls back to `15` customers; `App.tsx:1103`
-  seeds the negotiate modal at `₹1800`. Both look like real data on a fee-decision screen. **Fix:** carry
-  `null` when unknown and label "count pending" / drive the modal from real `proposedFee`.
-- **Dead controls:** `ProfileScreen.tsx:432` `preferredRadius` is editable but never saved (not in the
-  backend `SELF_EDITABLE_FIELDS`); `verifyAssayerIdentity`/`onVerifyIdentity` is wired but never called;
-  `uploadGovernmentDocument` has no caller. Either wire or make read-only/remove.
+**Still open:**
+
+- **Biometric login still omits `mustChangePassword` server-side.** The client half is done —
+  `AuthContext.tsx:145,159` now carries the flag through session-restore — but
+  `auth.controller.ts` `biometricLogin` returns a user of
+  `{id, username, name, email, phone, status}` with no `mustChangePassword`, while password-login
+  includes it. So the flag survives a restore and is lost on a biometric unlock.
+  **Fix:** add `mustChangePassword: result.user.mustChangePassword` to the biometric-login payload.
+- **Logout never revokes the server refresh token.** `AuthContext.logout` only wipes local state;
+  there is still no `POST /auth/logout` call anywhere in mobile. **Fix:** add
+  `MobileApiService.logout()` → `POST /auth/logout` (best-effort, before clearing local state), await
+  it from `AuthContext.logout`. Matters on shared handsets / "sign in as someone else".
+- **Two dead controls remain.** `ProfileScreen.tsx:1168` edits `preferredRadius`, which is **not** in
+  the backend `SELF_EDITABLE_FIELDS` (`assayer.controller.ts:98`) — the save is rejected, so the field
+  looks editable and silently is not. `uploadGovernmentDocument` (`api.service.ts:1443`) still has no
+  caller. Either wire them or make them read-only / remove.
+
+**Fixed since the audit** (verified 2026-09-01, no action needed):
+
+- ~~`mustChangePassword` dropped on session-restore~~ — carried in `AuthContext.tsx:145,159`.
+- ~~Check-in shows "Bad Request" instead of the actionable message~~ — `api.service.ts:1362` now reads
+  `resData.message || resData.error`.
+- ~~Hardcoded fabricated values (`15` customers, `₹1800` negotiate seed)~~ — both removed;
+  `App.tsx:1037` documents why the `|| 1800` fallback had to go.
+- ~~`verifyAssayerIdentity` wired but never called~~ — now called from `AuthContext.tsx:330`.
 
 ## 2. Date-only convention off-by-one (HIGH) — WEB + BACKEND FIXED; mobile remains
 
@@ -66,9 +72,12 @@ common `meta.pagination` pattern would read `undefined`.
 No client caller found (web or mobile) for: `OrganizationController` (CRUD `/organizations`);
 `CommunicationController`; a large slice of `planning.controller.ts` (`optimize`, `scenarios/simulate`,
 `coverage-plan/*`, `control-center/*`, `execution/packages/*`, `field/*`); `documents/queue/data-entry`
-and `documents/stats/summary`; and the `getPricingQuote` wrapper (whose `branchId` field the backend
-`QuoteRequestDto` would reject under `forbidNonWhitelisted`). These are the most compute-heavy planning
-endpoints — likely future/mobile WIP. **Decide surface-vs-remove; do not delete blind.**
+and `documents/stats/summary`. These are the most compute-heavy planning endpoints — likely
+future/mobile WIP. **Decide surface-vs-remove; do not delete blind.**
+
+_Resolved 2026-09-01:_ the `getPricingQuote` client wrapper was **removed** — it had no caller and its
+`branchId` field is not on the backend's `QuoteRequestDto`, so `forbidNonWhitelisted` would have
+rejected the call had anyone made it. The `/pricing/quote` endpoint itself is untouched.
 
 ---
 

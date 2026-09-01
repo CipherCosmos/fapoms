@@ -585,10 +585,9 @@ export const FEEDBACK_CATEGORY_LABELS: Record<FeedbackCategory, string> = {
   [FeedbackCategory.OTHER]: 'Other',
 };
 
-export function feedbackStatusLabel(status?: string | null): string {
-  if (!status) return '—';
-  return FEEDBACK_STATUS_LABELS[status as FeedbackStatus] ?? status;
-}
+// No `feedbackStatusLabel` wrapper: both surfaces read `FEEDBACK_STATUS_LABELS` directly, because
+// each pairs the word with its own chip colour. A wrapper nobody calls is a second way to ask the
+// same question, waiting to be answered differently.
 
 export function feedbackCategoryLabel(category?: string | null): string {
   if (!category) return '—';
@@ -643,12 +642,6 @@ export function roleLabel(role?: string | null): string {
   return ROLE_LABELS[role as SystemRole] ?? humanize(role);
 }
 
-/** Several roles on one line ("Operations Manager, Validator"). Empty list reads as a dash. */
-export function roleListLabel(roles?: readonly (string | null | undefined)[] | null): string {
-  const named = (roles ?? []).filter(Boolean).map((r) => roleLabel(r));
-  return named.length ? named.join(', ') : '—';
-}
-
 /**
  * Where an assayer sits with HR — onboarding, working, or gone.
  *
@@ -699,14 +692,9 @@ export function employmentTypeLabel(type?: string | null): string {
   return EMPLOYMENT_TYPE_LABELS[type.toUpperCase()] ?? humanize(type);
 }
 
-/**
- * The client-side ledger line for one assignment. Same values as `billingStateLabel` — named
- * for the record the finance desk is actually looking at ("this billing entry"), because
- * "state" is the schema's word and "status" is the one on the screen.
- */
-export function billingEntryStatusLabel(status?: string | null): string {
-  return billingStateLabel(status);
-}
+// `billingEntryStatusLabel` lived here as a second name for `billingStateLabel` — same values,
+// different word, no callers. Two names for one thing is the drift this file exists to prevent,
+// so the alias is gone; call `billingStateLabel`.
 
 /** Which ledger a billing history row belongs to. */
 export const BILLING_ENTITY_TYPE_LABELS: Record<BillingEntityType, string> = {

@@ -8,6 +8,24 @@ _Principal-architect review of the whole system: NestJS backend, React ops-desk 
 
 ---
 
+> ### ⚠ Point-in-time audit — read §1 with this correction
+>
+> _Added 2026-09-01._ This is a snapshot of the system as it stood on **9 August 2026**, kept for
+> its findings and its method. **All three "not yet production-deployable" blockers in §1 have
+> since been resolved**, and the system has been running in production since:
+>
+> | §1 blocker | Status today |
+> |---|---|
+> | 1. A fresh production database cannot be built | **Fixed.** `migrations/1784000000000-BaselineSchema.ts` builds the whole schema; the 65 superseded files moved to `migrations/_historical/` and are excluded by the loader glob. |
+> | 2. No production deployment artifact | **Fixed.** `packages/{backend,frontend}/Dockerfile`, `deploy/docker-compose.prod.yml`, `deploy/auto-deploy.sh` with a CI gate, backup/restore units. |
+> | 3. Money can be silently lost | **Fixed.** `1790500000000-BillingUniquenessPerAssignment` added the database backstop; billing errors log-and-rethrow rather than log-and-drop. |
+>
+> Individual findings in §2 onward were fixed piecemeal and are **not** individually re-verified
+> here. Treat any specific claim as needing a check against current source before acting on it.
+> For how to deploy the system today, see **`DEPLOYMENT.md`** — not this document.
+
+---
+
 ## 1. Executive summary
 
 The system is a **well-structured modular monolith** with genuinely strong bones: a clean 27-module NestJS domain, a deny-by-default guard stack that honours `@Public()`, a near-universal `{success,data,meta}` API envelope with real pagination on the major lists, HMAC-bound document-download tokens, role-scoped PII stripping, a Redis-backed Socket.IO adapter for multi-node realtime, and a boot-time `assertProductionSafeConfig()` that refuses to start on unsafe production config. This is not a prototype; it is a real application that a competent team built with care.
