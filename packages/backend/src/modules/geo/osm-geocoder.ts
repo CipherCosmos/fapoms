@@ -817,21 +817,29 @@ export async function resolveFreely(
  * (or a transposed lat/lng, which puts an Indian branch in the Indian Ocean or China) is caught
  * at the moment it is made rather than by whoever reads the map three weeks later.
  */
-export async function reverseFreely(coord: Coord): Promise<{ state?: string; district?: string; display?: string } | null> {
+export async function reverseFreely(
+  coord: Coord,
+): Promise<{ state?: string; district?: string; city?: string; pincode?: string; display?: string } | null> {
   const params = new URLSearchParams({
     format: 'jsonv2',
     lat: String(coord.lat),
     lon: String(coord.lng),
-    zoom: '12',
+    // zoom 16 (village/suburb) so the address carries the postcode and settlement, not just the
+    // district — one call now fills district, city AND pincode instead of only the district.
+    zoom: '16',
     addressdetails: '1',
   });
   const data = await politely('nominatim', NOMINATIM_MIN_INTERVAL_MS, () =>
     getJson(`${NOMINATIM_BASE_URL}/reverse?${params.toString()}`),
   );
   if (!data?.address) return null;
+  const a = data.address;
   return {
-    state: data.address.state,
-    district: data.address.state_district || data.address.county || data.address.city,
+    state: a.state,
+    district: a.state_district || a.county || a.city || a.town,
+    city: a.city || a.town || a.village || a.suburb || a.municipality,
+    // Indian postcodes are 6 digits; ignore anything else Nominatim may hand back.
+    pincode: typeof a.postcode === 'string' && /^[1-9]\d{5}$/.test(a.postcode.trim()) ? a.postcode.trim() : undefined,
     display: data.display_name,
   };
 }

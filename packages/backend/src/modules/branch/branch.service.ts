@@ -684,6 +684,11 @@ export class BranchService {
     // Rows that landed on a coarse tier, handed to the precision worker once the loop is done.
 
     const coarseIds: string[] = [];
+    // Every branch this import touched, handed to the address-enrichment worker so its
+    // district/pincode/city/zone fill in from the coordinate in the background (the file rarely
+    // carries them). The worker only works the ones actually missing a field, so this is safe to
+    // hand it all of them.
+    const enrichIds: string[] = [];
     let importedCount = 0;
 
     for (let index = 0; index < rows.length; index++) {
@@ -805,6 +810,7 @@ export class BranchService {
         if (saved?.id && needsBetterFix(saved.geoSource ?? null, saved.geoAccuracyMeters ?? null)) {
           coarseIds.push(saved.id);
         }
+        if (saved?.id) enrichIds.push(saved.id);
 
         importedCount++;
       } catch (err: any) {
@@ -826,6 +832,9 @@ export class BranchService {
     // Same hand-off as the project importer: coarse rows are upgraded in the background, and the
     // nightly sweep catches anything this enqueue cannot. Fire-and-forget on purpose.
     void this.geoPrecision.enqueueBackfill('branch', coarseIds, `client import ${clientId}`);
+    // And enrich the address fields the file did not carry — district, pincode, city, zone — from
+    // each branch's coordinate, in the background so the import stays fast.
+    void this.geoPrecision.enqueueAddressEnrich(enrichIds, `client import ${clientId}`);
 
     return { importedCount, errors };
   }

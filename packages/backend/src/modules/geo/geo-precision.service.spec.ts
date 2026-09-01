@@ -34,10 +34,12 @@ describe('GeoPrecisionService', () => {
   beforeEach(() => {
     branchRepo = { createQueryBuilder: jest.fn(() => chain()), save: jest.fn(async (r: any) => r) };
     const assayerRepo = { createQueryBuilder: jest.fn(() => chain()), save: jest.fn(async (r: any) => r) };
+    const zoneRepo = { findOne: jest.fn().mockResolvedValue(null), create: jest.fn((d: any) => d), save: jest.fn(async (z: any) => ({ id: 'z-1', ...z })) };
     queue = { add: jest.fn().mockResolvedValue(undefined) };
     service = new GeoPrecisionService(
       branchRepo as any,
       assayerRepo as any,
+      zoneRepo as any,
       { recordEventSafe: jest.fn() } as any,
       queue as any,
     );

@@ -18,6 +18,21 @@ export const GEO_PRECISION_TARGETED_JOB = 'backfill-ids';
 /** The nightly sweep over whatever is still coarse, bounded. */
 export const GEO_PRECISION_SWEEP_JOB = 'sweep';
 
+/**
+ * Fill a branch's derivable address fields — district, pincode, city (one reverse-geocode of the
+ * coordinate we already hold), plus zone/territory/branch-tier (pure functions, no network). Its
+ * own job because it reads the SELF-HOSTED geocoder (free, fast) and must not be paced by the
+ * public-provider rate limit the coordinate sweep lives under.
+ */
+export const GEO_ADDRESS_ENRICH_JOB = 'enrich-addresses';
+
+export interface GeoAddressEnrichJobData {
+  /** Narrow to specific branches (an import's new rows); omitted, the job sweeps whatever is missing. */
+  ids?: string[];
+  limit?: number;
+  reason?: string;
+}
+
 export interface GeoPrecisionTargetedJobData {
   target: 'branch' | 'assayer';
   ids: string[];

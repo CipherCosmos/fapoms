@@ -388,6 +388,40 @@ export function stateFromCity(value: string | null | undefined): string | null {
   return null;
 }
 
+/**
+ * The zone a branch belongs to, derived from its state — a pure function of geography, like the
+ * region. One zone per region so a branch is never left zone-less when we already know its state;
+ * shared by both branch importers and the address-enrichment pass so there is a single mapping.
+ * Returns null for an unrecognised state rather than guessing.
+ */
+export function zoneNameForState(state: string | null | undefined): string | null {
+  const region = resolveRegion(state);
+  if (!region) return null;
+  return `${REGION_LABELS[region]} Zone`;
+}
+
+/**
+ * India's metro cities, for the branch-type tier (a metro branch is planned and priced differently
+ * from an urban one). A curated set, matched tolerantly on the same normalised key the state map
+ * uses — an unknown place is simply "urban", never guessed into a metro.
+ */
+const METRO_PLACES: ReadonlySet<string> = new Set([
+  'mumbai', 'bombay', 'navi mumbai', 'thane', 'delhi', 'new delhi', 'gurgaon', 'gurugram',
+  'noida', 'ghaziabad', 'faridabad', 'bengaluru', 'bangalore', 'hyderabad', 'secunderabad',
+  'chennai', 'madras', 'kolkata', 'calcutta', 'howrah', 'pune', 'ahmedabad', 'surat',
+]);
+
+/** Whether a city or district name is one of India's metros — drives the METRO vs URBAN branch tier. */
+export function isMetroPlace(value: string | null | undefined): boolean {
+  if (!value) return false;
+  const key = normalizeStateKey(value);
+  if (!key) return false;
+  if (METRO_PLACES.has(key)) return true;
+  const despaced = key.replace(/\s/g, '');
+  for (const metro of METRO_PLACES) if (metro.replace(/\s/g, '') === despaced) return true;
+  return false;
+}
+
 /** Every canonical state name once, sorted — the dropdown source for state-scoped config. */
 export const CANONICAL_STATE_NAMES: readonly string[] = [
   ...new Set(Object.values(STATE_CANONICAL_NAMES)),

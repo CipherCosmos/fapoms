@@ -32,7 +32,9 @@ describe('the nightly precision sweep', () => {
     // without distinct ids replace each other instead of joining.
     const ids = [...source.matchAll(/jobId:\s*'([^']+)'/g)].map((m) => m[1]);
     expect(new Set(ids).size).toBe(ids.length);
-    expect(ids).toHaveLength(2);
+    // Branch sweep, assayer sweep, and the branch address-enrichment sweep.
+    expect(ids).toHaveLength(3);
+    expect(ids).toContain('enrich-branch-addresses');
   });
 
   it('does not leave a schedule relying on the worker default', () => {

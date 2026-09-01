@@ -21,15 +21,37 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import { Repository, IsNull, Not } from 'typeorm';
-import { GEO_PRECISION_QUEUE, GEO_PRECISION_TARGETED_JOB, GeoPrecisionTargetedJobData } from './geo-precision.constants';
+import {
+  GEO_PRECISION_QUEUE, GEO_PRECISION_TARGETED_JOB, GeoPrecisionTargetedJobData,
+  GEO_ADDRESS_ENRICH_JOB, GeoAddressEnrichJobData,
+} from './geo-precision.constants';
 import { BranchEntity } from '../branch/branch.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
+import { ZoneEntity } from '../zone/zone.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { NOT_A_RECORD_ENTITY_ID } from '../../core/audit/audit-event';
 import { EventCategory } from '@fapoms/shared';
 import { resolveCoordinates, needsBetterFix, isPlausibleIndianCoord, GeoFields } from './coordinate-resolution';
 import { reverseFreely, PRECISION_METERS, GeoPrecision } from './osm-geocoder';
-import { calculateHaversineDistance } from '@fapoms/shared';
+import {
+  calculateHaversineDistance, resolveRegion, zoneNameForState, isMetroPlace, canonicalStateName,
+} from '@fapoms/shared';
+
+export interface EnrichReport {
+  examined: number;
+  /** Rows a reverse-geocode enriched (district/pincode/city filled or corrected). */
+  geocoded: number;
+  /** Rows that gained a district. */
+  districtFilled: number;
+  /** Rows that gained a pincode. */
+  pincodeFilled: number;
+  /** Rows whose stored city was corrected against the coordinate. */
+  cityCorrected: number;
+  /** Rows that gained a zone. */
+  zoneFilled: number;
+  /** Rows changed in any field. */
+  updated: number;
+}
 
 export type GeoTarget = 'branch' | 'assayer';
 
@@ -61,9 +83,119 @@ export class GeoPrecisionService {
     private readonly branchRepository: Repository<BranchEntity>,
     @InjectRepository(AssayerEntity)
     private readonly assayerRepository: Repository<AssayerEntity>,
+    @InjectRepository(ZoneEntity)
+    private readonly zoneRepository: Repository<ZoneEntity>,
     private readonly auditService: AuditService,
     @InjectQueue(GEO_PRECISION_QUEUE) private readonly queue: Queue,
   ) {}
+
+  /** A zone per (client, name), created once and cached in-run — the same rule the importer uses. */
+  private async zoneIdFor(state: string, clientId: string | null, cache: Map<string, string>): Promise<string | null> {
+    if (!clientId) return null;
+    const name = zoneNameForState(state);
+    if (!name) return null;
+    const key = `${clientId}:${name}`;
+    const cached = cache.get(key);
+    if (cached) return cached;
+    let zone = await this.zoneRepository.findOne({ where: { name, clientId, isActive: true } });
+    if (!zone) {
+      zone = await this.zoneRepository.save(this.zoneRepository.create({ name, clientId, states: [state], districts: [] }));
+    }
+    cache.set(key, zone.id);
+    return zone.id;
+  }
+
+  /**
+   * Fill in everything a branch's location lets us derive but the file did not carry: district,
+   * pincode and city from one reverse-geocode of the coordinate we already hold, and — for free,
+   * no network — its zone (from state), territory (from district) and branch tier (metro/urban).
+   *
+   * ## Cost
+   *
+   * The reverse lookup goes to the self-hosted India Nominatim (throttle 0, ~200 ms) — free, so
+   * money cost is zero and this can run far faster than the coordinate backfill, which is bounded
+   * by the public providers' one-request-a-second. One call per branch fills three address fields;
+   * the derived fields cost nothing. The selection only returns branches still missing something,
+   * so a re-run is a cheap no-op and nothing is ever geocoded twice.
+   *
+   * Manual pins are irrelevant here — this writes address text, not the coordinate — so they are
+   * not excluded. "Fill empties, correct obvious errors": a blank field is filled; a stored city
+   * that flatly disagrees with the coordinate (matching neither the reverse city nor its district)
+   * is treated as a data-entry error and corrected, which is logged.
+   */
+  async enrichBranchAddresses(limit = 500, ids?: string[]): Promise<EnrichReport> {
+    const report: EnrichReport = {
+      examined: 0, geocoded: 0, districtFilled: 0, pincodeFilled: 0, cityCorrected: 0, zoneFilled: 0, updated: 0,
+    };
+    const blank = (v: string | null | undefined) => !v || !v.trim();
+    const norm = (v: string | null | undefined) => (v ?? '').toLowerCase().replace(/[^a-z]/g, '');
+
+    const qb = this.branchRepository
+      .createQueryBuilder('b')
+      .where('b.is_active = true')
+      .andWhere('b.latitude IS NOT NULL AND b.longitude IS NOT NULL')
+      // Only rows still missing something derivable — so the pass is idempotent and re-runs are free.
+      .andWhere(
+        `(b.district IS NULL OR b.district = '' OR b.pincode IS NULL OR b.pincode = ''
+          OR b.city IS NULL OR b.city = '' OR b.zone_id IS NULL OR b.territory IS NULL OR b.territory = ''
+          OR b.branch_type IS NULL OR b.branch_type = '' OR b.region IS NULL)`,
+      )
+      .orderBy('b.updatedAt', 'ASC', 'NULLS FIRST')
+      .take(limit);
+    if (ids && ids.length > 0) qb.andWhere('b.id IN (:...ids)', { ids });
+
+    const rows = await qb.getMany();
+    const zoneCache = new Map<string, string>();
+
+    for (const b of rows) {
+      report.examined++;
+      let changed = false;
+
+      // One reverse-geocode, only when an address field it can supply is still missing.
+      if (blank(b.district) || blank(b.pincode) || blank(b.city)) {
+        try {
+          const rev = await reverseFreely({ lat: Number(b.latitude), lng: Number(b.longitude) });
+          if (rev) {
+            report.geocoded++;
+            if (blank(b.district) && rev.district) { b.district = rev.district; report.districtFilled++; changed = true; }
+            if (blank(b.pincode) && rev.pincode) { b.pincode = rev.pincode; report.pincodeFilled++; changed = true; }
+            if (blank(b.city) && rev.city) { b.city = rev.city; changed = true; }
+            // Obvious error: a stored city matching neither the reverse city nor its district.
+            else if (!blank(b.city) && rev.city
+                     && norm(b.city) !== norm(rev.city) && norm(b.city) !== norm(rev.district)) {
+              this.logger.log(`Enrich: correcting branch ${b.id} city "${b.city}" -> "${rev.city}" (from coordinate).`);
+              b.city = rev.city; report.cityCorrected++; changed = true;
+            }
+          }
+        } catch (err: any) {
+          this.logger.warn(`Enrich reverse-geocode failed for branch ${b.id}: ${err?.message ?? err}`);
+        }
+      }
+
+      // Derived, no network. State drives region and zone; district drives territory and tier.
+      const region = resolveRegion(b.state);
+      if (region && b.region !== region) { b.region = region; changed = true; }
+      if (!b.zoneId) {
+        const zoneId = await this.zoneIdFor(b.state, b.clientId, zoneCache);
+        if (zoneId) { b.zoneId = zoneId; report.zoneFilled++; changed = true; }
+      }
+      if (blank(b.territory) && !blank(b.district)) { b.territory = `${b.district} Area`; changed = true; }
+      if (blank(b.branchType)) {
+        b.branchType = (isMetroPlace(b.district) || isMetroPlace(b.city)) ? 'METRO' : 'URBAN';
+        changed = true;
+      }
+      // A raw state name that never got canonicalised — align it while we are here.
+      const canonical = canonicalStateName(b.state);
+      if (canonical && b.state !== canonical) { b.state = canonical; changed = true; }
+
+      if (changed) {
+        await this.branchRepository.save(b);
+        report.updated++;
+      }
+    }
+
+    return report;
+  }
 
   /**
    * Hand a set of rows to the background precision worker.
@@ -92,6 +224,33 @@ export class GeoPrecisionService {
       this.logger.warn(
         `Could not queue precision backfill for ${unique.length} ${target} row(s): ${err?.message ?? err}. ` +
           `The nightly sweep will pick them up.`,
+      );
+    }
+  }
+
+  /**
+   * Hand a set of branches to the background address-enrichment worker — how an import passes over
+   * the rows it just created so their district/pincode/zone fill in minutes later rather than
+   * waiting for the nightly enrich. Fire-and-forget, chunked, for the same reasons as the coordinate
+   * backfill above.
+   */
+  async enqueueAddressEnrich(ids: string[], reason?: string): Promise<void> {
+    const unique = [...new Set(ids.filter(Boolean))];
+    if (unique.length === 0) return;
+    const CHUNK = 100;
+    try {
+      for (let i = 0; i < unique.length; i += CHUNK) {
+        const data: GeoAddressEnrichJobData = { ids: unique.slice(i, i + CHUNK), reason };
+        await this.queue.add(GEO_ADDRESS_ENRICH_JOB, data, {
+          attempts: 1,
+          removeOnComplete: { age: 24 * 60 * 60, count: 500 },
+          removeOnFail: { age: 7 * 24 * 60 * 60, count: 200 },
+        });
+      }
+    } catch (err: any) {
+      this.logger.warn(
+        `Could not queue address enrichment for ${unique.length} branch(es): ${err?.message ?? err}. ` +
+          `The nightly enrich will pick them up.`,
       );
     }
   }

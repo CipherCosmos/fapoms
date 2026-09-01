@@ -227,6 +227,17 @@ export class GeoController {
     return { success: true, data: await this.geoPrecision.backfill(assertTarget(target), limit) };
   }
 
+  @Post('branches/enrich-addresses')
+  @Roles(SystemRole.ADMIN)
+  @ApiOperation({ summary: 'Fill branch district/pincode/city (self-hosted reverse-geocode) + zone/territory/tier' })
+  async enrichBranchAddresses(@Body() dto: BackfillDto) {
+    // The reverse-geocode is the self-hosted India Nominatim (free, ~200 ms), so this can take a
+    // large bite in one call. Only branches still missing a derivable field are touched, so a
+    // re-run is a cheap no-op.
+    const limit = Math.min(Math.max(Number(dto?.limit) || 500, 1), 6000);
+    return { success: true, data: await this.geoPrecision.enrichBranchAddresses(limit) };
+  }
+
   @Post('precision/:target/:id/pin')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Pin a record to an exact coordinate by hand (5-10 m, and never re-geocoded)' })

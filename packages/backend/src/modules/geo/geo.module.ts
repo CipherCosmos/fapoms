@@ -8,10 +8,11 @@ import { GeoController } from './geo.controller';
 import { GeoSeedService } from './geo-seed.service';
 import { GeoPrecisionService } from './geo-precision.service';
 import { GeoPrecisionWorker } from './geo-precision.worker';
-import { GEO_PRECISION_QUEUE, GEO_PRECISION_SWEEP_JOB } from './geo-precision.constants';
+import { GEO_PRECISION_QUEUE, GEO_PRECISION_SWEEP_JOB, GEO_ADDRESS_ENRICH_JOB } from './geo-precision.constants';
 import { TileProxyService } from './tile-proxy.service';
 import { BranchEntity } from '../branch/branch.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
+import { ZoneEntity } from '../zone/zone.entity';
 import { ensureRepeatableSchedules } from '../../infrastructure/queue/repeatable-schedules';
 
 @Module({
@@ -19,7 +20,7 @@ import { ensureRepeatableSchedules } from '../../infrastructure/queue/repeatable
     // Branch and assayer rows are registered here for the precision service alone. It reads and
     // rewrites only the geo columns, which is why it lives in the geo module rather than being
     // duplicated into both feature modules — the manual-pin rule has to have exactly one home.
-    TypeOrmModule.forFeature([GeoStateEntity, GeoDistrictEntity, GeoCityEntity, BranchEntity, AssayerEntity]),
+    TypeOrmModule.forFeature([GeoStateEntity, GeoDistrictEntity, GeoCityEntity, BranchEntity, AssayerEntity, ZoneEntity]),
     // The precision backfill's own queue — see geo-precision.constants.ts for why not a shared one.
     BullModule.registerQueue({ name: GEO_PRECISION_QUEUE }),
   ],
@@ -41,6 +42,8 @@ export class GeoModule implements OnModuleInit {
 
   /** An hour after the branch sweep — see the note where these are registered. */
   private static readonly ASSAYER_SWEEP_CRON = '30 3 * * *';
+  /** Address enrichment, after both coordinate sweeps. Self-hosted geocoder, so it is quick. */
+  private static readonly ENRICH_CRON = '30 4 * * *';
   private static readonly TZ = 'Asia/Kolkata';
 
   constructor(@InjectQueue(GEO_PRECISION_QUEUE) private readonly queue: Queue) {}
@@ -88,6 +91,16 @@ export class GeoModule implements OnModuleInit {
           tz: GeoModule.TZ,
           jobId: 'sweep-assayer',
           data: { target: 'assayer' },
+          jobOptions: { attempts: 1 },
+        },
+        {
+          // Fills district/pincode/city + zone/territory/tier on branches still missing them.
+          // Converges: a branch that has them all stops being selected, so nightly runs are cheap.
+          name: GEO_ADDRESS_ENRICH_JOB,
+          cron: GeoModule.ENRICH_CRON,
+          tz: GeoModule.TZ,
+          jobId: 'enrich-branch-addresses',
+          data: {},
           jobOptions: { attempts: 1 },
         },
       ],

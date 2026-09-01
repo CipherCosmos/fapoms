@@ -20,7 +20,7 @@ import { BranchQueryService } from '../branch/branch-query.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { AssignmentStatus, EventCategory, ProjectStatus, ProjectBranchStatus, SystemRole, resolveRegion, PROJECT_TRANSITIONS, toWorkflowTransitions } from '@fapoms/shared';
+import { AssignmentStatus, EventCategory, ProjectStatus, ProjectBranchStatus, SystemRole, resolveRegion, zoneNameForState, PROJECT_TRANSITIONS, toWorkflowTransitions } from '@fapoms/shared';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import * as xlsx from 'xlsx';
 // One implementation of "read a spreadsheet column", shared with the assayer roster upload —
@@ -62,18 +62,10 @@ async function getRealCoordinates(
   };
 }
 
+// The default zone for a state, from the one shared state→zone map (one per region, complete over
+// India). Only reached when the client has not configured a zone that already claims the state.
 function getStateZone(stateName: string): string {
-  const s = stateName.toUpperCase();
-  if (['KERALA', 'TAMIL NADU', 'KARNATAKA', 'ANDHRA PRADESH', 'TELANGANA', 'PUDUCHERRY', 'PONDICHERRY'].some(x => s.includes(x))) {
-    return 'South Zone';
-  }
-  if (['MAHARASHTRA', 'GOA', 'GUJARAT'].some(x => s.includes(x))) {
-    return 'West Zone';
-  }
-  if (['DELHI', 'NORTH DELHI', 'NOIDA', 'PUNJAB', 'HARYANA', 'RAJASTHAN', 'UTTAR PRADESH', 'JHUNJHUNU', 'SIKAR'].some(x => s.includes(x))) {
-    return 'North Zone';
-  }
-  return 'East Zone';
+  return zoneNameForState(stateName) ?? 'East Zone';
 }
 
 /**

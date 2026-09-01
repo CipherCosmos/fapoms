@@ -9,7 +9,8 @@
  * concurrency, sensibly, as a local decision: "this scan is heavy, so one at a time".
  *
  * Nobody added them up. Counted 2026-08-17, across eleven `@Processor` classes (twelve since the
- * geo-precision worker joined on 2026-08-19, taking the total to 31):
+ * geo-precision worker joined on 2026-08-19; total 32 once that worker gained its address-enrichment
+ * handler):
  *
  *   | queue / worker                        | slots |
  *   |---------------------------------------|-------|
@@ -96,14 +97,16 @@ export const WORKER_CONCURRENCY = {
   imports: { branchImport: 1 },
   generic: { catchAll: 1 },
   /**
-   * Coordinate precision. Two named handlers (an import's targeted backfill, the nightly sweep),
-   * one slot each — and the slot count is a rate-limit decision, not a pool one: the free OSM
-   * providers allow ~1 request/second per client, and `politely()` serialises within a process,
-   * so one job at a time per handler keeps every geocode inside the providers' published limits.
-   * These slots are idle almost all the time and spend their active time waiting on HTTP, not
-   * holding a connection.
+   * Coordinate precision. Three named handlers — an import's targeted backfill, the nightly
+   * coordinate sweep, and the address-enrichment sweep (district/pincode/city + zone/territory/
+   * tier) — one slot each. The slot count is a rate-limit decision, not a pool one: the backfill
+   * handlers walk the free public OSM providers (~1 request/second), and `politely()` serialises
+   * within a process, so one job at a time per handler keeps every geocode inside those limits.
+   * Enrichment reads the self-hosted geocoder (no such limit) but still takes one slot so its
+   * reverse calls stay serialised. These slots are idle almost all the time and spend their active
+   * time waiting on HTTP, not holding a connection.
    */
-  geoPrecision: { backfillIds: 1, sweep: 1 },
+  geoPrecision: { backfillIds: 1, sweep: 1, enrichAddresses: 1 },
 } as const;
 
 /**

@@ -6,8 +6,10 @@ import {
   GEO_PRECISION_QUEUE,
   GEO_PRECISION_SWEEP_JOB,
   GEO_PRECISION_TARGETED_JOB,
+  GEO_ADDRESS_ENRICH_JOB,
   GeoPrecisionSweepJobData,
   GeoPrecisionTargetedJobData,
+  GeoAddressEnrichJobData,
 } from './geo-precision.constants';
 
 /**
@@ -75,6 +77,30 @@ export class GeoPrecisionWorker {
     this.logger.log(
       `Precision sweep: ${report.improved}/${report.examined} ${target} row(s) improved, ` +
         `${report.unchanged} unchanged, in ${Math.round((Date.now() - started) / 1000)}s.`,
+    );
+  }
+
+  /** How many branches one enrich job/sweep processes. Generous because the reverse-geocode is the
+   *  self-hosted India Nominatim (~200 ms, free), so a few thousand is minutes, not hours. */
+  static get enrichLimit(): number {
+    return Number(process.env.GEO_ADDRESS_ENRICH_LIMIT) || 3000;
+  }
+
+  /**
+   * Fill derivable address fields (district/pincode/city + zone/territory/tier). Reads the
+   * self-hosted geocoder, so it runs at its own pace rather than the public-provider rate limit —
+   * but still concurrency 1 within this queue so one job's reverse calls stay serialised.
+   */
+  @Process({ name: GEO_ADDRESS_ENRICH_JOB, concurrency: 1 })
+  async enrichAddresses(job: Job<GeoAddressEnrichJobData>): Promise<void> {
+    const started = Date.now();
+    const limit = job.data?.limit ?? (job.data?.ids?.length || GeoPrecisionWorker.enrichLimit);
+    const report = await this.precision.enrichBranchAddresses(limit, job.data?.ids);
+    if (report.examined === 0) return;
+    this.logger.log(
+      `Address enrich (${job.data?.reason ?? 'sweep'}): ${report.updated}/${report.examined} branch(es) filled ` +
+        `(+${report.districtFilled} district, +${report.pincodeFilled} pincode, +${report.zoneFilled} zone, ` +
+        `${report.cityCorrected} city corrected) in ${Math.round((Date.now() - started) / 1000)}s.`,
     );
   }
 }
