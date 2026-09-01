@@ -250,6 +250,14 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
    */
   const lastFrameKeyRef = useRef<string | null>(null);
   /**
+   * The route the map was last auto-framed to. Same problem, same fix as `lastFrameKeyRef`: the
+   * road-route overlay used to call `fitBounds` on every draw, and since a zoom or pan re-runs the
+   * draw effect, every attempt to move the map while a route was shown snapped it straight back to
+   * the route's bounds — so the map read as frozen. It is framed once, when the route first appears
+   * or changes, and left alone after that.
+   */
+  const lastRouteFitKeyRef = useRef<string | null>(null);
+  /**
    * The parent's click handler, read through a ref.
    *
    * Pins now outlive the effect run that drew them, and `onSelectBranch` is deliberately not in
@@ -1207,8 +1215,18 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
         }
       ).addTo(map);
 
-      // Fit map to show the entire road route
-      map.fitBounds(activeRoutePolylineRef.current.getBounds(), { padding: [40, 40] });
+      // Frame the route once — when it first appears or changes — never on the redraw a zoom or pan
+      // triggers, or the map would snap back to the route on every gesture and read as frozen. The
+      // key changes when the routed assayer, the geometry or the travel mode changes.
+      const routeFitKey = `${selectedAssayerForRouting.id ?? 'a'}:${roadGeometry.length}:${travelMode}`;
+      if (routeFitKey !== lastRouteFitKeyRef.current) {
+        lastRouteFitKeyRef.current = routeFitKey;
+        map.fitBounds(activeRoutePolylineRef.current.getBounds(), { padding: [40, 40] });
+      }
+    } else {
+      // No route on screen — forget the last frame so the next route (even to the same assayer)
+      // frames itself again.
+      lastRouteFitKeyRef.current = null;
     }
 
     // Layer 2: Routes
