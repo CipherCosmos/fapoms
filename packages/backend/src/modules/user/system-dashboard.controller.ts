@@ -51,41 +51,45 @@ export class SystemDashboardController {
     const regionParam = regions ? [regions] : [];
     const branchFilter = regions ? ' AND b.region = ANY($1)' : '';
 
-    // Run simple count queries for live aggregates
-    const clientsCount = await this.dataSource.query('SELECT COUNT(*) AS count FROM clients WHERE is_active = true');
-    const projectsCount = await this.dataSource.query('SELECT COUNT(*) AS count FROM projects WHERE is_active = true');
-    const activeProjectsCount = await this.dataSource.query("SELECT COUNT(*) AS count FROM projects WHERE is_active = true AND status = 'EXECUTION'");
-    const branchesCount = await this.dataSource.query(
-      `SELECT COUNT(*) AS count FROM branches b WHERE b.is_active = true${branchFilter}`,
-      regionParam,
-    );
-    const activeBranchesCount = await this.dataSource.query(
-      // `b.is_active` as well as `pb.is_active`: the join reaches a branch that may itself have
-      // been deleted, and a link whose own flag has not caught up would otherwise count a
-      // branch that no longer exists anywhere else in the product.
-      `SELECT COUNT(*) AS count FROM project_branches pb
-         JOIN branches b ON b.id = pb.branch_id
-        WHERE pb.is_active = true AND b.is_active = true AND pb.status = 'ASSIGNMENT_CONFIRMED'${branchFilter}`,
-      regionParam,
-    );
-    const usersCount = await this.dataSource.query('SELECT COUNT(*) AS count FROM users WHERE is_active = true');
-
-    const recentActivities = await this.dataSource.query(`
-      SELECT id, event_type AS action, remarks AS detail, occurred_at AS "occurredAt"
-      FROM audit_events
-      ORDER BY occurred_at DESC
-      LIMIT 10
-    `);
+    // The six live aggregates were six `await`s in a row — six sequential round-trips to a
+    // tunnelled Postgres for six independent scalar counts, the pattern the rest of this codebase
+    // long since replaced with one query / one Promise.all. They fold into a single row of scalar
+    // subqueries; `$1` (the region array) is referenced by both branch subqueries and ignored by
+    // the rest. The recent-activity list runs alongside it, so the whole endpoint is one round-trip
+    // of latency instead of seven. `b.is_active` as well as `pb.is_active` on the active-branches
+    // count: the join reaches a branch that may itself have been deleted, and a link whose own flag
+    // has not caught up would otherwise count a branch that no longer exists anywhere else.
+    const [counts, recentActivities] = await Promise.all([
+      this.dataSource.query(
+        `SELECT
+           (SELECT COUNT(*) FROM clients  WHERE is_active = true) AS clients,
+           (SELECT COUNT(*) FROM projects WHERE is_active = true) AS projects,
+           (SELECT COUNT(*) FROM projects WHERE is_active = true AND status = 'EXECUTION') AS active_projects,
+           (SELECT COUNT(*) FROM branches b WHERE b.is_active = true${branchFilter}) AS branches,
+           (SELECT COUNT(*) FROM project_branches pb
+              JOIN branches b ON b.id = pb.branch_id
+             WHERE pb.is_active = true AND b.is_active = true AND pb.status = 'ASSIGNMENT_CONFIRMED'${branchFilter}) AS active_branches,
+           (SELECT COUNT(*) FROM users WHERE is_active = true) AS users`,
+        regionParam,
+      ),
+      this.dataSource.query(`
+        SELECT id, event_type AS action, remarks AS detail, occurred_at AS "occurredAt"
+        FROM audit_events
+        ORDER BY occurred_at DESC
+        LIMIT 10
+      `),
+    ]);
+    const c = counts[0] ?? {};
 
     return {
       success: true,
       data: {
-        clients: Number(clientsCount[0]?.count || 0),
-        projects: Number(projectsCount[0]?.count || 0),
-        activeProjects: Number(activeProjectsCount[0]?.count || 0),
-        branches: Number(branchesCount[0]?.count || 0),
-        activeBranches: Number(activeBranchesCount[0]?.count || 0),
-        users: Number(usersCount[0]?.count || 0),
+        clients: Number(c.clients || 0),
+        projects: Number(c.projects || 0),
+        activeProjects: Number(c.active_projects || 0),
+        branches: Number(c.branches || 0),
+        activeBranches: Number(c.active_branches || 0),
+        users: Number(c.users || 0),
         activities: recentActivities,
       },
     };
