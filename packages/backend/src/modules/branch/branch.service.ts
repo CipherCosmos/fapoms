@@ -766,6 +766,12 @@ export class BranchService {
         );
         const geoFields: Partial<GeoFields> = geo ?? {};
 
+        // The state determines the branch's region — the field that scopes it to a desk and picks
+        // its holiday calendar. Resolved on every import (not just on the Add-Branch form and the
+        // project importer), so a branch loaded here is not left region-less and invisible to every
+        // region-scoped desk. Canonicalised so a raw state name never reaches the enum column.
+        const region = resolveRegion(state);
+
         let saved: BranchEntity;
         if (existing) {
           // Matched by SOL ID; refresh the branch's mutable facts from the sheet.
@@ -775,6 +781,7 @@ export class BranchService {
           existing.district = district;
           existing.city = city;
           existing.pincode = pincode || null;
+          if (region) existing.region = region;
           existing.updatedBy = userId;
           Object.assign(existing, geoFields);
           saved = await this.branchRepository.save(existing);
@@ -787,6 +794,7 @@ export class BranchService {
             district,
             city,
             pincode: pincode || null,
+            region,
             clientId,
             ...geoFields,
             createdBy: userId,
