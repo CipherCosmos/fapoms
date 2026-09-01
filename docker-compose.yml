@@ -105,7 +105,11 @@ services:
       - -c
       - track_io_timing=${PG_TRACK_IO_TIMING:-on}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U fapoms -d fapoms"]
+      # Same source as the credentials above, so this does not quietly describe a different
+      # database than the one that was created. (It passes either way — pg_isready reports whether
+      # the server is accepting connections and never authenticates — which is exactly why a stale
+      # user here would go unnoticed rather than failing loudly.)
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME:-fapoms} -d ${DB_DATABASE:-fapoms}"]
       interval: 5s
       timeout: 5s
       retries: 10
