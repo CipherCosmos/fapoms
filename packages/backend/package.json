@@ -12,9 +12,9 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
-    "migration:generate": "typeorm migration:generate -d src/infrastructure/database/data-source.ts",
-    "migration:run": "typeorm migration:run -d src/infrastructure/database/data-source.ts",
-    "migration:revert": "typeorm migration:revert -d src/infrastructure/database/data-source.ts",
+    "migration:generate": "typeorm-ts-node-commonjs migration:generate -d src/infrastructure/database/data-source.ts",
+    "migration:run": "typeorm-ts-node-commonjs migration:run -d src/infrastructure/database/data-source.ts",
+    "migration:revert": "typeorm-ts-node-commonjs migration:revert -d src/infrastructure/database/data-source.ts",
     "seed": "ts-node src/infrastructure/database/seed.ts",
     "seed:prod": "node dist/infrastructure/database/seed.js"
   },
