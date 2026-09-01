@@ -18,7 +18,7 @@
  * genuinely need to agree on a payload shape, and delete it when they stop.
  *
  * System identifiers (id) are separate from business identifiers
- * (clientCode, branchCode, solId, etc.) per Part 7 §12.
+ * (clientCode, solId, etc.) per Part 7 §12.
  */
 
 import {
@@ -201,8 +201,7 @@ export interface Project extends ExtendedAuditMetadata {
 
 export interface Branch extends AuditMetadata {
   id: string;
-  branchCode: string;           // Business identifier
-  solId?: string;               // SOL ID (bank-specific)
+  solId: string;                // SOL ID — the bank's own unique branch identifier, and ours
   name: string;
   address: string;
   state: string;
@@ -275,7 +274,6 @@ export interface Assessment extends ExtendedAuditMetadata {
 
   // Denormalized for display (populated from Branch)
   branchName?: string;
-  branchCode?: string;
   solId?: string;
   state?: string;
   district?: string;

@@ -27,7 +27,7 @@ interface TimelineEntry {
 
 interface BranchHistory {
   branchName: string | null;
-  branchCode: string | null;
+  solId: string | null;
   projectName: string | null;
   currentStatus: string;
   scheduledDate: string | null;
@@ -69,7 +69,7 @@ export const BranchHistoryDrawer: React.FC<{ projectBranchId: string; onClose: (
         <>
           <div style={{ fontSize: 17, fontWeight: 700 }}>{h?.branchName ?? 'Branch history'}</div>
           <div style={{ ...label, marginTop: 4 }}>
-            {h?.branchCode ?? '—'}{h?.projectName ? ` · ${h.projectName}` : ''}
+            {h?.solId ?? '—'}{h?.projectName ? ` · ${h.projectName}` : ''}
           </div>
         </>
       }

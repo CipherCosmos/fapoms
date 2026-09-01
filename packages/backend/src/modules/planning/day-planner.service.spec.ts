@@ -24,10 +24,10 @@ describe('DayPlannerService', () => {
 
   // Two branches ~5km apart so they always cluster together, in different states so the
   // state-scoped holiday logic has something to discriminate on.
-  const branchA = { id: 'br-a', name: 'Branch A', branchCode: 'A1', latitude: 18.52, longitude: 73.85, state: 'Maharashtra', district: 'Pune', city: 'Pune', estimatedDurationHours: 8 };
-  const branchB = { id: 'br-b', name: 'Branch B', branchCode: 'B1', latitude: 18.56, longitude: 73.89, state: 'Karnataka', district: 'Pune', city: 'Pune', estimatedDurationHours: 6 };
+  const branchA = { id: 'br-a', name: 'Branch A', solId: 'A1', latitude: 18.52, longitude: 73.85, state: 'Maharashtra', district: 'Pune', city: 'Pune', estimatedDurationHours: 8 };
+  const branchB = { id: 'br-b', name: 'Branch B', solId: 'B1', latitude: 18.56, longitude: 73.89, state: 'Karnataka', district: 'Pune', city: 'Pune', estimatedDurationHours: 6 };
   /** Light enough that A+C still fit one day on their stale estimates (8h + 2h). */
-  const branchC = { id: 'br-c', name: 'Branch C', branchCode: 'C1', latitude: 18.54, longitude: 73.87, state: 'Maharashtra', district: 'Pune', city: 'Pune', estimatedDurationHours: 2 };
+  const branchC = { id: 'br-c', name: 'Branch C', solId: 'C1', latitude: 18.54, longitude: 73.87, state: 'Maharashtra', district: 'Pune', city: 'Pune', estimatedDurationHours: 2 };
 
   const projectBranch = (branch: any, packetCount: number | null) => ({
     id: `pb-${branch.id}`,

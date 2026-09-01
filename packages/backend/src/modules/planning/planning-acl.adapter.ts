@@ -72,7 +72,7 @@ export class PlanningAntiCorruptionLayer
       const b = pb.branch;
       return {
         branchId: new BranchId(b.id),
-        branchCode: b.branchCode,
+        solId: b.solId,
         name: b.name,
         location: new GeoCoordinate(b.latitude || 0, b.longitude || 0),
         city: b.city,

@@ -69,9 +69,9 @@ interface BranchUploadMeta {
   created: number;
   updated: number;
   linked: number;
-  skipped: { row: number; branchCode?: string; reason: string }[];
+  skipped: { row: number; solId?: string; reason: string }[];
   /** Imported, but landed on a fallback coordinate and needs its location corrected. */
-  imprecise?: { row: number; branchCode?: string; reason: string }[];
+  imprecise?: { row: number; solId?: string; reason: string }[];
 }
 
 interface FormData {
@@ -1271,7 +1271,7 @@ export const Projects: React.FC = () => {
                   const suggestions = branchSearch.trim()
                     ? unassociated.filter((b: any) =>
                         (b.name || '').toLowerCase().includes(branchSearch.toLowerCase()) ||
-                        (b.branchCode || '').toLowerCase().includes(branchSearch.toLowerCase()) ||
+                        (b.solId || '').toLowerCase().includes(branchSearch.toLowerCase()) ||
                         (b.city || '').toLowerCase().includes(branchSearch.toLowerCase())
                       )
                     : [];
@@ -1335,7 +1335,7 @@ export const Projects: React.FC = () => {
                                   <div key={b.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 8px', fontSize: '11px' }}>
                                     <div>
                                       <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{b.name}</span>
-                                      <span style={{ color: 'var(--text-muted)', marginLeft: '6px' }}>({b.branchCode})</span>
+                                      <span style={{ color: 'var(--text-muted)', marginLeft: '6px' }}>({b.solId ?? '—'})</span>
                                     </div>
                                     {canManage && <button type="button" onClick={() => { handleAddBranch(b.id); setBranchSearch(''); }}
                                       style={{ padding: '2px 8px', fontSize: '10px', background: 'var(--accent-primary)', color: 'var(--on-accent)', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>

@@ -209,7 +209,7 @@ export class GeoPrecisionService {
 
       report.improved++;
       report.movedKm.push({
-        name: target === 'branch' ? `${row.name} (${row.branchCode})` : row.displayName,
+        name: target === 'branch' ? `${row.name} (${row.solId})` : row.displayName,
         km: Math.round(km * 10) / 10,
         from: before.tier,
         to: geo.geoSource!,
@@ -323,7 +323,7 @@ export class GeoPrecisionService {
       .map((r) => ({
         id: r.id,
         name: target === 'branch' ? r.name : r.displayName,
-        code: target === 'branch' ? r.branchCode : r.assayerCode,
+        code: target === 'branch' ? r.solId : r.assayerCode,
         address: r.address,
         city: r.city,
         district: r.district,

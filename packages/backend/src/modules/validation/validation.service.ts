@@ -118,7 +118,7 @@ export class ValidationService implements OnModuleInit {
     // not an equality match.
     if (reviewerId === 'none') qb.andWhere('vc.reviewerId IS NULL');
     else if (reviewerId) qb.andWhere('vc.reviewerId = :rid', { rid: reviewerId });
-    if (search) qb.andWhere('(b.name ILIKE :q OR b.branchCode ILIKE :q)', { q: `%${search}%` });
+    if (search) qb.andWhere('(b.name ILIKE :q OR b.solId ILIKE :q)', { q: `%${search}%` });
     // A validator's slice: cases for branches whose packet was delegated to them —
     // "where do MY handed-back reports stand" as a server-side filter, not a page-side
     // scan of the whole desk.

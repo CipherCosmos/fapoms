@@ -93,12 +93,12 @@ export interface BranchImportOutcome {
   updated: number;
   /** Branches newly attached to this project (an already-attached branch is not counted). */
   linked: number;
-  skipped: { row: number; branchCode?: string; reason: string }[];
+  skipped: { row: number; solId?: string; reason: string }[];
   /**
    * Rows that imported but could not be located precisely — they need their coordinates corrected
    * before planning or check-in will behave. Distinct from `skipped`: these branches exist.
    */
-  imprecise: { row: number; branchCode?: string; reason: string }[];
+  imprecise: { row: number; solId?: string; reason: string }[];
 }
 
 /**
@@ -695,7 +695,7 @@ export class ProjectService implements OnModuleInit {
     });
 
     const rows: Record<string, any>[] = projectBranches.map((pb) => ({
-      BRANCH: pb.branch.branchCode,
+      BRANCH: pb.branch.solId,
       BRANCH_NAME: pb.branch.name,
       DISTRICT: pb.branch.district,
       STATE: pb.branch.state,
@@ -718,7 +718,7 @@ export class ProjectService implements OnModuleInit {
 
     const instructions = [
       { Field: 'Worked out for you', Required: '', Description: 'You do not need to supply a location, a risk rating, a complexity, or audit hours. The branch is located from its address, risk follows the priority set on the project, and complexity and audit hours are calculated from Packets. Any of these can be adjusted afterwards on the Branches page if needed.' },
-      { Field: 'BRANCH', Required: 'Yes', Description: 'Branch code from the client, e.g. 8 or BR-0010. Re-importing the same code updates that branch rather than creating a duplicate.' },
+      { Field: 'BRANCH', Required: 'Yes', Description: 'The branch SOL ID from the client, e.g. 8 or 0751. Re-importing the same SOL ID updates that branch rather than creating a duplicate.' },
       { Field: 'BRANCH_NAME', Required: 'Yes', Description: 'Branch name, e.g. THENKURISSI.' },
       { Field: 'DISTRICT', Required: 'Yes', Description: 'District name — used to cluster nearby branches into one assayer-day and to compute travel.' },
       { Field: 'STATE', Required: 'Yes', Description: 'State name — used to apply state-specific public holidays when scheduling.' },
@@ -811,12 +811,12 @@ export class ProjectService implements OnModuleInit {
       // The same blank-trailing-row test the importer uses, so the estimate counts the rows that
       // will actually be worked rather than the empty ones Excel leaves at the bottom of a sheet.
       const name = get('BRANCH_NAME', 'Branch Name', 'BranchName', 'Name');
-      const code = get('BRANCH', 'Branch Code', 'BranchCode', 'BrCode', 'Code', 'SOL ID', 'SolId');
-      if (!name && !code) continue;
+      const solId = get('SOL ID', 'SolId', 'SOL_ID', 'Sol', 'SOL', 'BRANCH', 'Branch Code', 'BranchCode', 'BrCode', 'Code');
+      if (!name && !solId) continue;
       const lat = parseFloat(get('Latitude', 'Lat'));
       const lng = parseFloat(get('Longitude', 'Lng', 'Long'));
       candidates.push({
-        code,
+        code: solId,
         address: get('Branch Address', 'Address', 'BranchAddress'),
         district: get('DISTRICT', 'District', 'DistrictName').toUpperCase(),
         state: get('STATE', 'State', 'StateName'),
@@ -825,23 +825,23 @@ export class ProjectService implements OnModuleInit {
       });
     }
 
-    const codes = candidates.map((c) => c.code).filter(Boolean);
-    const known = codes.length
+    const sols = candidates.map((c) => c.code).filter(Boolean);
+    const known = sols.length
       ? await this.branchRepository.find({
           where: {
-            branchCode: In(codes),
+            solId: In(sols),
             isActive: true,
             ...(project.clientId ? { clientId: project.clientId } : {}),
           },
-          select: ['branchCode', 'address', 'district', 'state'],
+          select: ['solId', 'address', 'district', 'state'],
         })
       : [];
-    const knownByCode = new Map(known.map((b) => [b.branchCode, b]));
+    const knownBySol = new Map(known.map((b) => [b.solId, b]));
 
     let rowsNeedingGeocode = 0;
     for (const c of candidates) {
       if (c.hasCoords) continue;
-      const existing = knownByCode.get(c.code);
+      const existing = knownBySol.get(c.code);
       if (!existing) {
         rowsNeedingGeocode++; // A new branch: always located from its address.
         continue;
@@ -888,25 +888,25 @@ export class ProjectService implements OnModuleInit {
      * project's existing branch list — so the operator was told the upload succeeded while
      * nothing had been imported. Anything skipped is now named, with its spreadsheet row number.
      */
-    const skipped: { row: number; branchCode?: string; reason: string }[] = [];
+    const skipped: { row: number; solId?: string; reason: string }[] = [];
     let createdCount = 0;
     let updatedCount = 0;
     /**
-     * Which row first used each branch code, so a repeat inside one file can be named.
+     * Which row first used each SOL ID, so a repeat inside one file can be named.
      *
-     * The loop upserts by `branchCode`, so a sheet listing the same code twice silently applied
-     * the later row over the earlier one — and because the two rows rarely agree on every column,
-     * what survived was a mixture of both: one row's name and address on top of the other's
-     * contact and risk data. The counts said "created 6, updated 1", which reads as an ordinary
-     * refresh of a pre-existing branch rather than "two of your rows collided".
+     * The loop upserts by `solId`, so a sheet listing the same SOL ID twice silently applied the
+     * later row over the earlier one — and because the two rows rarely agree on every column, what
+     * survived was a mixture of both: one row's name and address on top of the other's contact and
+     * risk data. The counts said "created 6, updated 1", which reads as an ordinary refresh of a
+     * pre-existing branch rather than "two of your rows collided".
      */
-    const firstRowForCode = new Map<string, number>();
+    const firstRowForSol = new Map<string, number>();
     /**
      * Rows that imported but landed on a fallback coordinate — a warning list, not a skip list.
      * Kept separate from `skipped` because these branches DID import; they simply cannot be
      * planned or checked into until someone corrects where they are.
      */
-    const imprecise: { row: number; branchCode?: string; reason: string }[] = [];
+    const imprecise: { row: number; solId?: string; reason: string }[] = [];
     // The branch ids behind `imprecise`, handed to the precision worker when the import is done.
     const impreciseBranchIds: string[] = [];
 
@@ -930,7 +930,6 @@ export class ProjectService implements OnModuleInit {
       /** The remaining columns, read lazily in pass 2 — see rowReader for the alias handling. */
       get: RowReader;
       branchName: string;
-      branchCode: string;
       solId: string;
       district: string;
       state: string;
@@ -952,38 +951,38 @@ export class ProjectService implements OnModuleInit {
       // Every column is read through the alias list rather than one exact header, so the
       // client's own export, our template, and a hand-edited copy of either all import.
       const branchName = get('BRANCH_NAME', 'Branch Name', 'BranchName', 'Name');
-      const branchCode = get('BRANCH', 'Branch Code', 'BranchCode', 'BrCode', 'Code', 'SOL ID', 'SolId');
-      // The SOL id is read as its own field, not folded into branchCode, so this importer keys a
-      // branch's identity exactly as the Branches-page importer does — SOL id first, branch code
-      // second. Storing it identically is what lets a file uploaded through both doors match the
-      // same record instead of inserting a second copy. Left blank when the file has no SOL column.
-      const solId = get('SOL ID', 'SolId', 'SOL_ID', 'Sol', 'SOL', 'SOL NO', 'SolNo');
-      if (!branchName && !branchCode) {
+      // The SOL id is a branch's single identity, read from whichever column the bank used to name
+      // it — "SOL ID", or the plain "BRANCH"/"Branch Code" that holds the same number. Keyed here
+      // exactly as the Branches-page importer keys it, so a file uploaded through both doors matches
+      // the same record instead of inserting a second copy.
+      const solId = get('SOL ID', 'SolId', 'SOL_ID', 'Sol', 'SOL', 'SOL NO', 'SolNo',
+                        'BRANCH', 'Branch Code', 'BranchCode', 'BrCode', 'Code');
+      if (!branchName && !solId) {
         // A wholly blank row — the trailing rows Excel leaves behind. Not worth reporting.
         continue;
       }
       if (!branchName) {
-        skipped.push({ row: rowNumber, branchCode, reason: 'No branch name in this row.' });
+        skipped.push({ row: rowNumber, solId, reason: 'No branch name in this row.' });
         continue;
       }
-      if (!branchCode) {
-        skipped.push({ row: rowNumber, reason: `No branch code for "${branchName}".` });
+      if (!solId) {
+        skipped.push({ row: rowNumber, reason: `No SOL ID for "${branchName}".` });
         continue;
       }
 
-      // Same code twice in one sheet: keep the first occurrence and name the collision, rather
+      // Same SOL ID twice in one sheet: keep the first occurrence and name the collision, rather
       // than overwriting it with the later row and reporting the result as a routine "updated".
-      const codeKey = branchCode.trim().toUpperCase();
-      const firstRow = firstRowForCode.get(codeKey);
+      const solKey = solId.trim().toUpperCase();
+      const firstRow = firstRowForSol.get(solKey);
       if (firstRow !== undefined) {
         skipped.push({
           row: rowNumber,
-          branchCode,
-          reason: `Duplicate of row ${firstRow} (branch code ${branchCode}) — the first row was kept.`,
+          solId,
+          reason: `Duplicate of row ${firstRow} (SOL ID ${solId}) — the first row was kept.`,
         });
         continue;
       }
-      firstRowForCode.set(codeKey, rowNumber);
+      firstRowForSol.set(solKey, rowNumber);
 
       /**
        * One bad row must not cost the operator the other 399.
@@ -1002,7 +1001,7 @@ export class ProjectService implements OnModuleInit {
         if (!state) {
           // State drives the region, the zone and the public-holiday calendar. A branch without
           // one is unplannable, so it is refused loudly rather than imported into limbo.
-          skipped.push({ row: rowNumber, branchCode, reason: `No state for "${branchName}".` });
+          skipped.push({ row: rowNumber, solId, reason: `No state for "${branchName}".` });
           continue;
         }
 
@@ -1017,7 +1016,7 @@ export class ProjectService implements OnModuleInit {
         if (pincodeStr && !/^[1-9][0-9]{5}$/.test(pincodeStr.trim())) {
           skipped.push({
             row: rowNumber,
-            branchCode,
+            solId,
             reason: `"${pincodeStr}" is not a valid pincode for "${branchName}" — expected 6 digits.`,
           });
           continue;
@@ -1054,13 +1053,13 @@ export class ProjectService implements OnModuleInit {
         const region = resolveRegion(state);
 
         prepared.push({
-          rowNumber, get, branchName, branchCode, solId, district, state, address, pincodeStr,
+          rowNumber, get, branchName, solId, district, state, address, pincodeStr,
           packetCount, calculatedHours, suppliedCoords, region,
         });
       } catch (err: any) {
         skipped.push({
           row: rowNumber,
-          branchCode,
+          solId,
           reason: err?.message || 'Unexpected error importing this row.',
         });
       }
@@ -1087,26 +1086,16 @@ export class ProjectService implements OnModuleInit {
      * silently merging them here would be a behaviour change wearing a performance change's
      * clothes.
      */
-    const codes = prepared.map((p) => p.branchCode);
     const sols = prepared.map((p) => p.solId).filter(Boolean);
     const clientScope = project.clientId ? { clientId: project.clientId } : {};
-    // Existing branches this file might already know, found by EITHER key — a branch created
-    // through the Branches page may carry a SOL id this file matches even when the codes differ,
-    // and vice versa. One query per key over the whole file, not one per row.
-    const existingBranches = codes.length
-      ? await this.branchRepository.find({
-          where: { branchCode: In(codes), isActive: true, ...clientScope },
-        })
-      : [];
+    // Existing branches this file might already know, found by SOL id — the branch's single
+    // identity, per client. One query over the whole file, not one per row.
     const existingBySol = sols.length
       ? await this.branchRepository.find({
           where: { solId: In(sols), isActive: true, ...clientScope },
         })
       : [];
-    const branchByCode = new Map(existingBranches.map((b) => [b.branchCode, b]));
-    const branchBySol = new Map(
-      existingBySol.filter((b) => b.solId).map((b) => [b.solId as string, b]),
-    );
+    const branchBySol = new Map(existingBySol.map((b) => [b.solId, b]));
 
     // Which branches this project already carries, and which already have an assessment. Both
     // were per-row `findOne`s whose answer is a single query over one project.
@@ -1171,7 +1160,7 @@ export class ProjectService implements OnModuleInit {
     // ---- Pass 2: the writes, and the geocoding that makes this slow ------------------------
     for (let position = 0; position < prepared.length; position++) {
       const {
-        rowNumber, get, branchName, branchCode, solId, district, state, address, pincodeStr,
+        rowNumber, get, branchName, solId, district, state, address, pincodeStr,
         packetCount, calculatedHours, suppliedCoords, region,
       } = prepared[position];
 
@@ -1184,9 +1173,9 @@ export class ProjectService implements OnModuleInit {
        * with no way to tell how far it got. Each row now either lands or is reported by number.
        */
       try {
-        // SOL id first, branch code second — the same precedence the Branches-page importer uses,
-        // so a branch already on file is found by whichever id this sheet shares with it.
-        let branch = (solId ? branchBySol.get(solId) : null) ?? branchByCode.get(branchCode) ?? null;
+        // Matched by SOL id — the branch's single identity, per client — exactly as the
+        // Branches-page importer matches it.
+        let branch = branchBySol.get(solId) ?? null;
         if (!branch) {
           const coords = suppliedCoords ?? await getRealCoordinates(address, branchName, district, state);
 
@@ -1208,7 +1197,7 @@ export class ProjectService implements OnModuleInit {
             const km = Math.round(coords.geoAccuracyMeters / 1000);
             imprecise.push({
               row: rowNumber,
-              branchCode,
+              solId,
               // Honest about the placement AND about what happens next. The import takes the
               // fast tiers on purpose (see geocodeIndiaRobust); the precise lookup is queued the
               // moment this import finishes and usually lands within minutes. The operator is
@@ -1232,12 +1221,7 @@ export class ProjectService implements OnModuleInit {
           const phone = get('Branch Phone', 'Phone', 'Contact Number') || null;
 
           branch = await this.branchService.registerImportedBranch({
-            branchCode,
-            // When a file has no separate SOL column the branch code IS the SOL id (an ICICI list's
-            // "BRANCH" column holds it), so the code stands in — the same rule the Branches-page
-            // importer uses, so the two paths agree on identity and a re-upload matches rather than
-            // duplicating. A file that carries a real SOL column uses that instead.
-            solId: solId || branchCode,
+            solId,
             name: branchName,
             address,
             state,
@@ -1390,7 +1374,7 @@ export class ProjectService implements OnModuleInit {
       } catch (err: any) {
         skipped.push({
           row: rowNumber,
-          branchCode,
+          solId,
           reason: err?.message || 'Unexpected error importing this row.',
         });
       }
@@ -1758,7 +1742,7 @@ export class ProjectService implements OnModuleInit {
     return {
       projectBranchId,
       branchName: pb.branch?.name ?? null,
-      branchCode: pb.branch?.branchCode ?? null,
+      solId: pb.branch?.solId ?? null,
       projectName: pb.project?.name ?? null,
       currentStatus: pb.status,
       scheduledDate: pb.scheduledDate ?? null,

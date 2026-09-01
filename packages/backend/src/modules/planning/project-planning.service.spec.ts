@@ -50,13 +50,13 @@ describe('ProjectPlanningService', () => {
         id: 'pb-1',
         branchId: 'b-1',
         status: 'IMPORTED',
-        branch: { branchCode: 'B001', name: 'Branch 1', city: 'Mumbai', state: 'MH' },
+        branch: { solId: 'B001', name: 'Branch 1', city: 'Mumbai', state: 'MH' },
       },
       {
         id: 'pb-2',
         branchId: 'b-2',
         status: 'CLOSED', // Assigned branch should be filtered out
-        branch: { branchCode: 'B002', name: 'Branch 2', city: 'Pune', state: 'MH' },
+        branch: { solId: 'B002', name: 'Branch 2', city: 'Pune', state: 'MH' },
       },
     ]);
 
@@ -84,7 +84,7 @@ describe('ProjectPlanningService', () => {
         id: `pb-${i}`,
         branchId: `b-${i}`,
         status: 'IMPORTED',
-        branch: { branchCode: `B${i}`, name: `Branch ${i}`, city: 'Mumbai', state: 'MH' },
+        branch: { solId: `B${i}`, name: `Branch ${i}`, city: 'Mumbai', state: 'MH' },
       }));
 
     beforeEach(() => {
@@ -97,7 +97,7 @@ describe('ProjectPlanningService', () => {
       // the whole book would leave the bar stuck at a fraction on a mostly-scheduled project.
       mockProjectQueryService.findProjectBranches.mockResolvedValue([
         ...unassigned(3),
-        { id: 'pb-x', branchId: 'b-x', status: 'CLOSED', branch: { branchCode: 'BX', name: 'Closed', city: 'Pune', state: 'MH' } },
+        { id: 'pb-x', branchId: 'b-x', status: 'CLOSED', branch: { solId: 'BX', name: 'Closed', city: 'Pune', state: 'MH' } },
       ]);
       const onProgress = jest.fn();
 

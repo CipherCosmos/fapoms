@@ -35,7 +35,7 @@ export interface CustomerRecord {
   customerName: string;
   packetCount: number;
   declaredWeightGrams: number | null;
-  branch?: { id: string; branchCode?: string; name?: string } | null;
+  branch?: { id: string; solId?: string; name?: string } | null;
 }
 
 /** Version history for a project mandate, newest version first. */

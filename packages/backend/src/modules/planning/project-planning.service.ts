@@ -9,7 +9,7 @@ import type { ProgressCallback } from '../../infrastructure/queue/queued-job';
 export interface ProjectBranchCandidates {
   projectBranchId: string;
   branchId: string;
-  branchCode: string;
+  solId: string;
   branchName: string;
   city: string;
   state: string;
@@ -93,7 +93,7 @@ export class ProjectPlanningService {
       branchCandidatesList.push({
         projectBranchId: pb.id,
         branchId: pb.branchId,
-        branchCode: pb.branch.branchCode,
+        solId: pb.branch.solId,
         branchName: pb.branch.name,
         city: pb.branch.city,
         state: pb.branch.state,

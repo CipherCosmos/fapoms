@@ -87,7 +87,7 @@ describe('BranchService', () => {
       await expect(
         service.create(
           {
-            branchCode: 'B-1',
+            solId: 'B-1',
             name: 'Branch 1',
             address: 'Add 1',
             state: 'UnknownState',
@@ -110,7 +110,7 @@ describe('BranchService', () => {
 
       const mockCreatedBranch = {
         id: 'b-123',
-        branchCode: 'B-1',
+        solId: 'B-1',
         name: 'Pune Branch',
       };
       mockBranchRepo.create.mockReturnValue(mockCreatedBranch);
@@ -118,7 +118,7 @@ describe('BranchService', () => {
 
       const result = await service.create(
         {
-          branchCode: 'B-1',
+          solId: 'B-1',
           name: 'Pune Branch',
           address: '123 Main St',
           state: 'MH',
@@ -128,7 +128,7 @@ describe('BranchService', () => {
         'user-1',
       );
 
-      expect(result.branchCode).toBe('B-1');
+      expect(result.solId).toBe('B-1');
       expect(mockBranchRepo.save).toHaveBeenCalled();
       expect(mockAuditService.recordEvent).toHaveBeenCalled();
     });
@@ -145,12 +145,12 @@ describe('BranchService', () => {
       mockStateRepo.findOne.mockResolvedValue(null);
       mockDistrictRepo.findOne.mockResolvedValue(null);
       mockCityRepo.findOne.mockResolvedValue(null);
-      mockBranchRepo.create.mockReturnValue({ id: 'b-2', branchCode: 'B-2' });
-      mockBranchRepo.save.mockResolvedValue({ id: 'b-2', branchCode: 'B-2' });
+      mockBranchRepo.create.mockReturnValue({ id: 'b-2', solId: 'B-2' });
+      mockBranchRepo.save.mockResolvedValue({ id: 'b-2', solId: 'B-2' });
 
       const result = await service.create(
         {
-          branchCode: 'B-2',
+          solId: 'B-2',
           name: 'Andheri West',
           address: 'SV Road',
           state: 'MAHARASHTRA',
@@ -160,7 +160,7 @@ describe('BranchService', () => {
         'user-1',
       );
 
-      expect(result.branchCode).toBe('B-2');
+      expect(result.solId).toBe('B-2');
     });
 
     it('still refuses a state that is not a real state, with no lookup configured', async () => {
@@ -169,7 +169,7 @@ describe('BranchService', () => {
 
       await expect(
         service.create(
-          { branchCode: 'B-3', name: 'Nowhere', address: 'X', state: 'NARNIA', district: 'D', city: 'C' },
+          { solId: 'B-3', name: 'Nowhere', address: 'X', state: 'NARNIA', district: 'D', city: 'C' },
           'user-1',
         ),
       ).rejects.toThrow(/Could not verify 'NARNIA' as a real state/);
@@ -177,41 +177,37 @@ describe('BranchService', () => {
   });
 
   /**
-   * A branch is identified by its ids, per client — never its name, which two banks share for a
-   * branch at one address. Uniqueness is enforced per (client, id); a different bank keeps its
+   * A branch is identified by its SOL ID, per client — never its name, which two banks share for a
+   * branch at one address. Uniqueness is enforced per (client, sol_id); a different bank keeps its
    * own numbering.
    */
-  describe('branch identity — Branch Code and SOL ID are unique per client', () => {
+  describe('branch identity — SOL ID is unique per client', () => {
     const realState = { state: 'MAHARASHTRA', district: 'MUMBAI', city: 'MUMBAI' };
 
-    it('refuses a Branch Code already used by the same client', async () => {
-      mockBranchRepo.findOne.mockResolvedValue({ id: 'existing', branchCode: 'BR-1' });
-      await expect(
-        service.create({ branchCode: 'BR-1', name: 'MG Road', ...realState, clientId: 'axis' }, 'user-1'),
-      ).rejects.toThrow(/Branch Code 'BR-1' is already used/);
-    });
-
     it('refuses a SOL ID already used by the same client', async () => {
-      // First lookup (branch code) is free; second (SOL ID) hits the conflict.
-      mockBranchRepo.findOne
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce({ id: 'existing', solId: '0001' });
+      mockBranchRepo.findOne.mockResolvedValue({ id: 'existing', solId: '0001' });
       await expect(
-        service.create({ branchCode: 'BR-2', solId: '0001', name: 'MG Road', ...realState, clientId: 'axis' }, 'user-1'),
+        service.create({ solId: '0001', name: 'MG Road', ...realState, clientId: 'axis' }, 'user-1'),
       ).rejects.toThrow(/SOL ID '0001' is already used/);
     });
 
-    it('allows the same code for a DIFFERENT client — banks keep their own numbering', async () => {
-      // No existing branch for THIS client with that code/sol.
+    it('refuses a branch with no SOL ID — it is the required identity', async () => {
+      await expect(
+        service.create({ solId: '', name: 'MG Road', ...realState, clientId: 'axis' } as any, 'user-1'),
+      ).rejects.toThrow(/SOL ID is required/i);
+    });
+
+    it('allows the same SOL ID for a DIFFERENT client — banks keep their own numbering', async () => {
+      // No existing branch for THIS client with that SOL ID.
       mockBranchRepo.findOne.mockResolvedValue(null);
       mockClientService.findOne.mockResolvedValue({ id: 'icici', name: 'ICICI' });
-      mockBranchRepo.create.mockReturnValue({ id: 'b-new', branchCode: 'BR-1' });
-      mockBranchRepo.save.mockResolvedValue({ id: 'b-new', branchCode: 'BR-1' });
+      mockBranchRepo.create.mockReturnValue({ id: 'b-new', solId: '0001' });
+      mockBranchRepo.save.mockResolvedValue({ id: 'b-new', solId: '0001' });
       const result = await service.create(
-        { branchCode: 'BR-1', solId: '0001', name: 'MG Road', ...realState, clientId: 'icici' },
+        { solId: '0001', name: 'MG Road', ...realState, clientId: 'icici' },
         'user-1',
       );
-      expect(result.branchCode).toBe('BR-1');
+      expect(result.solId).toBe('0001');
     });
   });
 

@@ -91,7 +91,7 @@ describe('GeoPrecisionService', () => {
 
   describe('backfill — what it writes', () => {
     const coarseRow = () => ({
-      id: 'b-1', name: 'Thenkurissi', branchCode: 'BR-1', address: '1 Main Rd', city: 'Palakkad',
+      id: 'b-1', name: 'Thenkurissi', solId: 'BR-1', address: '1 Main Rd', city: 'Palakkad',
       district: 'Palakkad', state: 'Kerala', pincode: '678001', clientId: null,
       latitude: 10.5, longitude: 76.5, geoSource: 'locality', geoAccuracyMeters: 15000,
     });

@@ -16,7 +16,7 @@ export interface PagedQueue<T> { counts: QueueCounts; total: number; page: numbe
 export interface PacketRow {
   id: string; fileName: string; status: string;
   receivedAt: string | null; assignedAt: string | null; completedAt: string | null;
-  projectBranchId: string | null; branchName: string | null; branchCode: string | null;
+  projectBranchId: string | null; branchName: string | null; solId: string | null;
   assignedToUserId: string | null; assigneeName: string | null;
   caseStatus: string | null; lane: 'unassigned' | 'working' | 'rework' | 'done';
 }
@@ -25,7 +25,7 @@ export interface CaseListRow {
   id: string; status: string; projectBranchId: string;
   reviewerId?: string | null; reviewerName?: string | null;
   createdAt?: string;
-  projectBranch?: { branch?: { name: string; branchCode: string } };
+  projectBranch?: { branch?: { name: string; solId: string | null } };
 }
 
 export interface TeamMember { id: string; name: string; username: string; role: string }

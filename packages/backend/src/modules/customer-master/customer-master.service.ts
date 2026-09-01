@@ -11,7 +11,7 @@ import * as xlsx from 'xlsx';
 /** One account row from the upload that could not be tied to a branch. */
 export interface UnmatchedAccountDto {
   accountNumber: string;
-  branchCode: string | null;
+  solId: string | null;
   /** Plain-language why-it-didn't-match, ready to show a non-technical operator. */
   reason: string;
 }
@@ -90,10 +90,10 @@ export class CustomerMasterService {
 
     const recordEntities: Partial<CustomerRecordEntity>[] = [];
 
-    // Pre-fetch all branch codes for DB validation check
-    const dbBranches = await this.branchRepository.find({ select: ['id', 'branchCode'] });
+    // Pre-fetch all branch SOL IDs for DB validation check
+    const dbBranches = await this.branchRepository.find({ select: ['id', 'solId'] });
     const branchMap = new Map<string, string>();
-    dbBranches.forEach((b) => branchMap.set(b.branchCode.trim().toUpperCase(), b.id));
+    dbBranches.forEach((b) => branchMap.set(b.solId.trim().toUpperCase(), b.id));
 
     // HIGH-01 Remediation: Extract account numbers and query previous records in 1000-item chunks instead of full in-memory dump
     const accountNumbersFromRows = rows
@@ -116,7 +116,7 @@ export class CustomerMasterService {
 
     for (const row of rows) {
       const acc = String(row['Account Number'] || row.ACCOUNT_NO || row.AccountNo || '').trim();
-      const branchCode = String(row['Branch Code'] || row.BRANCH_CODE || row.BranchCode || '').trim().toUpperCase();
+      const solId = String(row['SOL ID'] || row.SOL_ID || row.SolId || row['Branch Code'] || row.BRANCH_CODE || row.BranchCode || '').trim().toUpperCase();
       const name = String(row['Customer Name'] || row.CUSTOMER_NAME || row.Name || 'Unknown Customer').trim();
       const packets = parseInt(String(row.Packets || row.PACKET_COUNT || 1), 10) || 1;
 
@@ -128,8 +128,8 @@ export class CustomerMasterService {
         accountSet.add(acc);
       }
 
-      const branchId = branchMap.get(branchCode) || null;
-      if (!branchId && branchCode) {
+      const branchId = branchMap.get(solId) || null;
+      if (!branchId && solId) {
         unmappedBranchCodes++;
       }
       if (!branchId) {
@@ -137,10 +137,10 @@ export class CustomerMasterService {
         if (unmatchedAccounts.length < UNMATCHED_SAMPLE_LIMIT) {
           unmatchedAccounts.push({
             accountNumber: acc,
-            branchCode: branchCode || null,
-            reason: branchCode
-              ? `Branch code "${branchCode}" is not in the system`
-              : 'No branch code in the row',
+            solId: solId || null,
+            reason: solId
+              ? `SOL ID "${solId}" is not in the system`
+              : 'No SOL ID in the row',
           });
         }
       }
@@ -309,7 +309,7 @@ export class CustomerMasterService {
     // client's data has arrived. Comparing the two is the point: a branch scheduled
     // but absent from the batch means the client under-delivered.
     const scheduled = await this.dataSource.query(
-      `SELECT pb.id AS project_branch_id, b.id AS branch_id, b.name AS branch_name, b.branch_code
+      `SELECT pb.id AS project_branch_id, b.id AS branch_id, b.name AS branch_name, b.sol_id
          FROM project_branches pb
          JOIN branches b ON b.id = pb.branch_id
         WHERE pb.project_id = $1 AND pb.is_active = true AND pb.scheduled_date = $2
@@ -353,7 +353,7 @@ export class CustomerMasterService {
         projectBranchId: s.project_branch_id,
         branchId: s.branch_id,
         branchName: s.branch_name,
-        branchCode: s.branch_code,
+        solId: s.sol_id,
         inBatch: !!batch,
         customerCount: batch ? Number(batch.record_count) : 0,
         packetCount: batch ? Number(batch.packet_total) : 0,

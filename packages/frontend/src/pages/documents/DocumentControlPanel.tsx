@@ -27,7 +27,7 @@ export interface DocRow {
   projectBranchId: string | null;
   assessmentId: string | null;
   branchName: string | null;
-  branchCode: string | null;
+  solId: string | null;
   projectName: string | null;
   clientName: string | null;
   scheduledDate: string | null;
@@ -54,7 +54,7 @@ export interface DocRow {
 export interface BranchGroup {
   projectBranchId: string;
   branchName: string;
-  branchCode: string | null;
+  solId: string | null;
   projectName: string;
   clientName: string | null;
   scheduledDate: string | null;
@@ -303,7 +303,7 @@ export const DocumentControlPanel: React.FC<{
                   <Trail trail={d.trail} />
                   <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 10 }}>
                     {d.projectName && <>Project: {d.projectName} · </>}
-                    {d.branchCode && <>Branch code: {d.branchCode} · </>}
+                    {d.solId && <>SOL ID: {d.solId} · </>}
                     {d.scheduledDate && <>Audit date: {new Date(d.scheduledDate).toLocaleDateString()}</>}
                   </div>
                 </div>

@@ -210,7 +210,7 @@ async function seed() {
       const district = (row.DISTRICT || '').toString().trim().toUpperCase();
       const state = (row.STATE || '').toString().trim();
       const address = (row['Branch Address'] || '').toString().trim();
-      const branchCode = (row.BRANCH || `RBL-BR-${branchCount + 1}`).toString().trim();
+      const solId = (row.BRANCH || `RBL-BR-${branchCount + 1}`).toString().trim();
 
       const coords = await getRealCoordinates(address, branchName, district, state);
 
@@ -226,8 +226,7 @@ async function seed() {
       const branchType = ['BANGALORE', 'CHENNAI', 'PUNE', 'NOIDA'].includes(district) ? 'METRO' : 'URBAN';
 
       const branch = branchRepo.create({
-        branchCode,
-        solId: branchCode,
+        solId,
         name: branchName,
         address,
         state,

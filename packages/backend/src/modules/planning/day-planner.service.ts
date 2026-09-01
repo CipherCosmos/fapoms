@@ -36,7 +36,7 @@ export interface DayPlanStop {
   order: number;
   branchId: string;
   branchName: string;
-  branchCode: string;
+  solId: string;
   address: string;
   latitude: number;
   longitude: number;
@@ -94,7 +94,7 @@ export interface BranchCluster {
     id: string;
     branchId: string;
     branchName: string;
-    branchCode: string;
+    solId: string;
     latitude: number;
     longitude: number;
     /** Packets to audit in THIS project cycle — the real driver of how long the branch takes. */
@@ -641,7 +641,7 @@ export class DayPlannerService {
           id: pb.id,
           branchId: pb.branchId,
           branchName: pb.branch.name,
-          branchCode: pb.branch.branchCode,
+          solId: pb.branch.solId,
           latitude: Number(pb.branch.latitude),
           longitude: Number(pb.branch.longitude),
           packetCount,
@@ -978,7 +978,7 @@ export class DayPlannerService {
           order: i + 1,
           branchId: branchData.branchId,
           branchName: branchData.branchName,
-          branchCode: branchData.branchCode,
+          solId: branchData.solId,
           address: `${branchData.city}, ${branchData.district}`,
           latitude: branchData.latitude,
           longitude: branchData.longitude,

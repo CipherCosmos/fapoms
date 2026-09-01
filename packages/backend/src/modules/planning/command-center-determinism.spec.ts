@@ -37,7 +37,7 @@ describe('CommandCenterService — determinism against row order', () => {
   ) => ({
     id,
     name: `Branch ${id}`,
-    branch_code: `BR-${id}`,
+    sol_id: `BR-${id}`,
     district,
     state,
     latitude: '19.1',
@@ -137,7 +137,7 @@ describe('CommandCenterService — determinism against row order', () => {
     // A branch that exists in the master but sits in no project — imported through the Branches
     // page. The live map must still show it; the packets/coverage totals must not count it.
     const orphan = {
-      id: 'orphan-1', name: 'Orphan Branch', branch_code: 'OB-1', district: 'THANE',
+      id: 'orphan-1', name: 'Orphan Branch', sol_id: 'OB-1', district: 'THANE',
       state: 'Maharashtra', latitude: '19.2', longitude: '72.97', client_id: 'client-1',
       client_name: 'Client 1',
     };

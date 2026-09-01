@@ -6,21 +6,18 @@ import type { BranchContactEntity } from './branch-contact.entity';
 import type { BranchDocumentEntity } from './branch-document.entity';
 
 @Entity('branches')
-@Index(['branchCode'])
 @Index(['solId'])
 @Index(['clientId'])
 @Index(['region'])
 @Index(['zoneId'])
-// A branch's identity is its ids, per client — never its name, which two different banks share
-// for a branch at the same address and one bank reuses across towns. Both ids are unique within
-// a client (SOL ID only where the bank supplied one) — enforced by UQ_branches_client_branch_code
-// and UQ_branches_client_sol_id (migration 1792900000000-BranchAndLinkUniqueness).
+// A branch's identity is its SOL ID, per client — never its name, which two different banks share
+// for a branch at the same address and one bank reuses across towns. The SOL ID is the bank's own
+// unique branch identifier (an ICICI list's "BRANCH" column holds it) and is unique within a client,
+// enforced by UQ_branches_client_sol_id (migration 1793800000000-BranchSolIdSingleIdentity, which
+// dropped the former separate branch_code identifier).
 export class BranchEntity extends BaseEntity {
-  @Column({ name: 'branch_code', length: 50 })
-  branchCode: string;
-
-  @Column({ name: 'sol_id', type: 'varchar', length: 50, nullable: true })
-  solId: string | null;
+  @Column({ name: 'sol_id', type: 'varchar', length: 50 })
+  solId: string;
 
   @Column({ length: 255 })
   name: string;

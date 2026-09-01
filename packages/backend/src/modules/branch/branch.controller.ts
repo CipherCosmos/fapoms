@@ -27,14 +27,8 @@ import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole } from '@fapoms/shared';
 
 class CreateBranchRequestDto implements CreateBranchDto {
-  /**
-   * Optional: left blank, the service allocates the next free `BR-####`.
-   *
-   * Backward-compatible — every existing caller (Excel import, the mobile app, scripts) sends a
-   * code and that code is still used verbatim. Only the *absence* of one is newly accepted.
-   */
-  @IsOptional() @IsString() branchCode?: string;
-  @IsOptional() @IsString() solId?: string;
+  /** The SOL ID — the branch's single unique identifier, required (a bank file's "BRANCH" column). */
+  @IsString() @IsNotEmpty() solId: string;
   @IsString() @IsNotEmpty() name: string;
   /**
    * Address, district and city are optional on admission; state is not.
@@ -77,7 +71,6 @@ class CreateBranchRequestDto implements CreateBranchDto {
  * all should be answered the same way rather than as a crash.
  */
 class UpdateBranchRequestDto implements UpdateBranchDto {
-  @IsOptional() @IsString() branchCode?: string;
   @IsOptional() @IsString() solId?: string;
   @IsOptional() @IsString() name?: string;
   @IsOptional() @IsString() address?: string;

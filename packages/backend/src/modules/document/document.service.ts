@@ -111,7 +111,7 @@ export class DocumentService {
       if (opts.assignedTo === 'unassigned') qb.andWhere('d.assigned_to_user_id IS NULL');
       else if (opts.assignedTo) qb.andWhere('d.assigned_to_user_id = :uid', { uid: opts.assignedTo });
       if (opts.search) {
-        qb.andWhere('(b.name ILIKE :q OR b.branch_code ILIKE :q OR d.file_name ILIKE :q)', { q: `%${opts.search}%` });
+        qb.andWhere('(b.name ILIKE :q OR b.sol_id ILIKE :q OR d.file_name ILIKE :q)', { q: `%${opts.search}%` });
       }
       return qb;
     };
@@ -134,7 +134,7 @@ export class DocumentService {
         'd.assigned_to_user_id AS "assignedToUserId"', 'd.assigned_at AS "assignedAt"',
         'd.data_entry_completed_at AS "completedAt"',
         'd.project_branch_id AS "projectBranchId"',
-        'b.name AS "branchName"', 'b.branch_code AS "branchCode"',
+        'b.name AS "branchName"', 'b.sol_id AS "solId"',
         'vc.status AS "caseStatus"',
         `${laneExpr} AS lane`,
         `COALESCE(NULLIF(TRIM(CONCAT_WS(' ', u.first_name, u.last_name)), ''), u.username) AS "assigneeName"`,
@@ -566,7 +566,7 @@ export class DocumentService {
         const q = `$${params.length}`;
         // The same fields the panel's own search box matched on, so moving it to the server
         // changes where it runs, not what it finds.
-        clauses.push(`(d.file_name ILIKE ${q} OR b.name ILIKE ${q} OR b.branch_code ILIKE ${q}
+        clauses.push(`(d.file_name ILIKE ${q} OR b.name ILIKE ${q} OR b.sol_id ILIKE ${q}
                        OR p.name ILIKE ${q} OR c.name ILIKE ${q})`);
       }
       const stage = (filters.stage ?? '').trim();
@@ -594,7 +594,7 @@ export class DocumentService {
               d.created_at, d.dispatched_at, d.dispatch_method, d.dispatched_by,
               d.received_at, d.sent_to_data_entry_at, d.sent_to_external_ocr_at,
               d.assessment_id,
-              b.name AS branch_name, b.branch_code,
+              b.name AS branch_name, b.sol_id,
               p.name AS project_name, p.project_number,
               c.name AS client_name,
               pb.id AS project_branch_id, pb.scheduled_date,
@@ -625,7 +625,7 @@ export class DocumentService {
       projectBranchId: r.project_branch_id,
       assessmentId: r.assessment_id,
       branchName: r.branch_name,
-      branchCode: r.branch_code,
+      solId: r.sol_id,
       projectName: r.project_name,
       projectNumber: r.project_number,
       clientName: r.client_name,
@@ -697,7 +697,7 @@ export class DocumentService {
     const awaitTypesIdx = awaitParams.length;
     const awaitRows = await this.documentRepository.manager.query(
       `SELECT d.id, d.file_name, d.file_size, d.type, d.status, d.doc_version, d.created_at,
-              b.name AS branch_name, b.branch_code, p.name AS project_name, p.project_number,
+              b.name AS branch_name, b.sol_id, p.name AS project_name, p.project_number,
               c.name AS client_name, pb.id AS project_branch_id, pb.scheduled_date,
               COUNT(*) OVER() AS total_matching
          ${DOC_JOINS}
@@ -717,7 +717,7 @@ export class DocumentService {
       version: r.doc_version,
       createdAt: r.created_at,
       branchName: r.branch_name,
-      branchCode: r.branch_code,
+      solId: r.sol_id,
       projectName: r.project_name,
       projectNumber: r.project_number,
       clientName: r.client_name,
@@ -777,7 +777,7 @@ export class DocumentService {
         const q = `$${params.length}`;
         // The same four fields the panel's own search box used to match on, so moving it to the
         // server changes where it runs, not what it finds.
-        clauses.push(`(b.name ILIKE ${q} OR b.branch_code ILIKE ${q} OR p.name ILIKE ${q} OR c.name ILIKE ${q})`);
+        clauses.push(`(b.name ILIKE ${q} OR b.sol_id ILIKE ${q} OR p.name ILIKE ${q} OR c.name ILIKE ${q})`);
       }
       const stage = (filters.stage ?? '').trim();
       if (stage === NEVER_PREPARED_STAGE) {
@@ -821,7 +821,7 @@ export class DocumentService {
     const [branchRows, countRows, gapRows] = await Promise.all([
       this.documentRepository.manager.query(
         `SELECT pb.id AS project_branch_id, pb.scheduled_date,
-                b.name AS branch_name, b.branch_code,
+                b.name AS branch_name, b.sol_id,
                 p.name AS project_name,
                 c.name AS client_name,
                 (${listFlag}) AS never_prepared
@@ -837,7 +837,7 @@ export class DocumentService {
       ),
       this.documentRepository.manager.query(
         `SELECT pb.id AS project_branch_id, pb.scheduled_date,
-                b.name AS branch_name, b.branch_code,
+                b.name AS branch_name, b.sol_id,
                 p.name AS project_name,
                 c.name AS client_name,
                 true AS never_prepared,
@@ -877,7 +877,7 @@ export class DocumentService {
       return {
         projectBranchId: r.project_branch_id,
         branchName: r.branch_name,
-        branchCode: r.branch_code,
+        solId: r.sol_id,
         projectName: r.project_name,
         clientName: r.client_name,
         scheduledDate: r.scheduled_date,
@@ -948,13 +948,13 @@ export class DocumentService {
     auditDate: string,
     fileNames: string[],
   ): Promise<{
-    matches: Array<{ fileName: string; projectBranchId: string; branchName: string; branchCode: string | null; matchedOn: 'CODE' | 'NAME' }>;
+    matches: Array<{ fileName: string; projectBranchId: string; branchName: string; solId: string | null; matchedOn: 'SOL' | 'NAME' }>;
     unmatched: Array<{ fileName: string; reason: string }>;
-    branchesWithoutFile: Array<{ projectBranchId: string; branchName: string; branchCode: string | null }>;
+    branchesWithoutFile: Array<{ projectBranchId: string; branchName: string; solId: string | null }>;
   }> {
-    const branches: Array<{ project_branch_id: string; branch_name: string; branch_code: string | null }> =
+    const branches: Array<{ project_branch_id: string; branch_name: string; sol_id: string | null }> =
       await this.documentRepository.manager.query(
-        `SELECT pb.id AS project_branch_id, b.name AS branch_name, b.branch_code
+        `SELECT pb.id AS project_branch_id, b.name AS branch_name, b.sol_id
            FROM project_branches pb
            JOIN branches b ON b.id = pb.branch_id
           WHERE pb.project_id = $1 AND pb.is_active = true AND pb.scheduled_date = $2`,
@@ -973,8 +973,8 @@ export class DocumentService {
 
       // Branch code first: it is the unambiguous identifier the client and the
       // external application both carry.
-      let candidates = branches.filter((b) => b.branch_code && haystack.includes(norm(b.branch_code)));
-      let matchedOn: 'CODE' | 'NAME' = 'CODE';
+      let candidates = branches.filter((b) => b.sol_id && haystack.includes(norm(b.sol_id)));
+      let matchedOn: 'SOL' | 'NAME' = 'SOL';
 
       if (candidates.length === 0) {
         // Fall back to the branch name, matched on its individual words rather
@@ -1017,7 +1017,7 @@ export class DocumentService {
         fileName,
         projectBranchId: branch.project_branch_id,
         branchName: branch.branch_name,
-        branchCode: branch.branch_code,
+        solId: branch.sol_id,
         matchedOn,
       });
     }
@@ -1029,7 +1029,7 @@ export class DocumentService {
       // day's set complete?".
       branchesWithoutFile: branches
         .filter((b) => !claimed.has(b.project_branch_id))
-        .map((b) => ({ projectBranchId: b.project_branch_id, branchName: b.branch_name, branchCode: b.branch_code })),
+        .map((b) => ({ projectBranchId: b.project_branch_id, branchName: b.branch_name, solId: b.sol_id })),
     };
   }
 

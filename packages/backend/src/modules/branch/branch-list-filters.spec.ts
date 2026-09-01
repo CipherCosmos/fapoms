@@ -45,7 +45,7 @@ describe('branch list filters', () => {
     await service.findAll(1, 50, {}, { search: 'Arapalayam' });
 
     const sql = wheres();
-    for (const field of ['branch.name', 'branch.branch_code', 'branch.sol_id', 'branch.city']) {
+    for (const field of ['branch.name', 'branch.sol_id', 'branch.city']) {
       expect(sql).toContain(field);
     }
     const params = [...qb.andWhere.mock.calls].map((c) => c[1]).filter(Boolean);

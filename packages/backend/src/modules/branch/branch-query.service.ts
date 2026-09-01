@@ -95,8 +95,7 @@ export class BranchQueryService {
       // The same four fields the page's own search box matched on, so moving it to the server
       // changes where it runs, not what it finds.
       query.andWhere(
-        `(branch.name ILIKE :q OR branch.branch_code ILIKE :q
-          OR branch.sol_id ILIKE :q OR branch.city ILIKE :q)`,
+        `(branch.name ILIKE :q OR branch.sol_id ILIKE :q OR branch.city ILIKE :q)`,
         { q: `%${search}%` },
       );
     }
@@ -195,9 +194,9 @@ export class BranchQueryService {
    * its address, coordinates and region) to this client's project. Pass the client whenever the
    * caller knows it.
    */
-  async findOneByCode(branchCode: string, clientId?: string | null): Promise<BranchEntity | null> {
+  async findOneBySol(solId: string, clientId?: string | null): Promise<BranchEntity | null> {
     return this.branchRepository.findOne({
-      where: { branchCode, isActive: true, ...(clientId ? { clientId } : {}) },
+      where: { solId, isActive: true, ...(clientId ? { clientId } : {}) },
     });
   }
 }

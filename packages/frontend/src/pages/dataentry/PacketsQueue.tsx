@@ -237,7 +237,7 @@ export const PacketsQueue: React.FC = () => {
                 <tr key={d.id} style={{ borderBottom: '1px solid var(--border-hair)' }}>
                   <td style={{ padding: '9px 14px' }}>
                     <div style={{ fontWeight: 600 }}>{d.branchName ?? d.fileName}</div>
-                    <div style={{ ...deskLabel, fontSize: '10px' }}>{d.branchCode ?? '—'}</div>
+                    <div style={{ ...deskLabel, fontSize: '10px' }}>{d.solId ?? '—'}</div>
                   </td>
                   <td style={{ padding: '9px 14px', whiteSpace: 'nowrap', color: 'var(--text-secondary)' }}>{fmtWhen(d.receivedAt)}</td>
                   <td style={{ padding: '9px 14px', whiteSpace: 'nowrap' }}>

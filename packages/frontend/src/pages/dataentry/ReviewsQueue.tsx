@@ -276,7 +276,7 @@ export const ReviewsQueue: React.FC = () => {
                   )}
                   <td style={{ padding: '9px 14px' }}>
                     <div style={{ fontWeight: 600 }}>{branch?.name ?? 'Branch'}</div>
-                    <div style={{ ...deskLabel, fontSize: '10px' }}>{branch?.branchCode ?? '—'}</div>
+                    <div style={{ ...deskLabel, fontSize: '10px' }}>{branch?.solId ?? '—'}</div>
                   </td>
                   <td style={{ padding: '9px 14px' }}>
                     <span style={{ fontSize: '10px', fontWeight: 800, padding: '2px 8px', borderRadius: '8px', color: tone, border: `1px solid ${tone}`, letterSpacing: '0.04em', whiteSpace: 'nowrap' }}>

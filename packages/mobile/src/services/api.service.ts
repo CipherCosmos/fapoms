@@ -1203,7 +1203,7 @@ export class MobileApiService {
           assignmentCode: item.assignmentNumber || '',
           projectBranchId: item.projectBranchId || item.projectBranch?.id || '',
           branchName: branch?.name || '',
-          branchCode: branch?.branchCode || '',
+          solId: branch?.solId || '',
           bankName: project?.client?.name || '',
           branchAddress: branch?.address || '',
           // `null`, not 0. 0,0 is Null Island, and the navigation sheet used to route there for a

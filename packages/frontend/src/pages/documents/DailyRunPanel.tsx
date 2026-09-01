@@ -22,7 +22,7 @@ export interface DailyRunBranch {
   projectBranchId: string;
   branchId: string;
   branchName: string;
-  branchCode: string | null;
+  solId: string | null;
   inBatch: boolean;
   customerCount: number;
   packetCount: number;
@@ -48,7 +48,7 @@ interface ReconOutcome {
   accepted: boolean;
   blockReason: string | null;
   unmatchedCount: number;
-  unmatchedAccounts: Array<{ accountNumber: string; branchCode: string | null; reason: string }>;
+  unmatchedAccounts: Array<{ accountNumber: string; solId: string | null; reason: string }>;
 }
 
 export interface DailyRun {
@@ -275,7 +275,7 @@ export const DailyRunPanel: React.FC<{
                 {recon.unmatchedAccounts.map((u, i) => (
                   <div key={`${u.accountNumber}-${i}`} style={{ fontSize: 11.5, color: 'var(--text-secondary)' }}>
                     <strong>{u.accountNumber}</strong>
-                    {u.branchCode ? ` · ${u.branchCode}` : ''} — {u.reason}
+                    {u.solId ? ` · ${u.solId}` : ''} — {u.reason}
                   </div>
                 ))}
               </div>
@@ -356,7 +356,7 @@ export const DailyRunPanel: React.FC<{
                       {b.inBatch
                         ? `${b.customerCount} customers · ${b.packetCount} packets`
                         : 'not in the client file'}
-                      {b.branchCode ? ` · ${b.branchCode}` : ''}
+                      {b.solId ? ` · ${b.solId}` : ''}
                     </div>
                   </div>
 

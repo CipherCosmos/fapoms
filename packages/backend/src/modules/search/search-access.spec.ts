@@ -81,7 +81,7 @@ describe('global search access', () => {
        * would make search answer differently from the page it feeds.
        */
       const geographic = clauses.filter(
-        (w: any) => 'branchCode' in w || 'assayerCode' in w || 'city' in w || 'address' in w
+        (w: any) => 'solId' in w || 'assayerCode' in w || 'city' in w || 'address' in w
           || 'firstName' in w || 'lastName' in w,
       );
       expect(geographic.length).toBeGreaterThan(0);

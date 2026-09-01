@@ -36,7 +36,7 @@ describe('PlanningAntiCorruptionLayer', () => {
     find: jest.fn().mockResolvedValue([
       {
         id: 'pb-1',
-        branch: { id: 'b-1', branchCode: 'B01', name: 'Pune Central', latitude: 18.5, longitude: 73.8, city: 'Pune', state: 'MH', requiredCompetencies: ['Gold'] },
+        branch: { id: 'b-1', solId: 'B01', name: 'Pune Central', latitude: 18.5, longitude: 73.8, city: 'Pune', state: 'MH', requiredCompetencies: ['Gold'] },
       },
     ]),
   };
@@ -59,7 +59,7 @@ describe('PlanningAntiCorruptionLayer', () => {
   it('should map ProjectBranchEntity into PlanningBranch domains', async () => {
     const branches = await acl.getBranchesForPlanning('p-1');
     expect(branches.length).toBe(1);
-    expect(branches[0].branchCode).toBe('B01');
+    expect(branches[0].solId).toBe('B01');
     expect(branches[0].location.latitude).toBe(18.5);
     expect(branches[0].requiredSkills.has('Gold')).toBe(true);
   });

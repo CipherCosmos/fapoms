@@ -20,7 +20,6 @@ const SERVICE_LEVELS = ['PREMIUM', 'STANDARD', 'BASIC'];
 
 // Fields available for Excel import, each mapped to a source column header.
 const IMPORT_FIELDS: { key: string; label: string }[] = [
-  { key: 'branchCode', label: 'Branch Code' },
   { key: 'solId', label: 'SOL ID' },
   { key: 'name', label: 'Branch Name' },
   { key: 'address', label: 'Address' },

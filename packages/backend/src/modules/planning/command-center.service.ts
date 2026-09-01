@@ -270,7 +270,7 @@ export class CommandCenterService {
      */
     const branches = await this.dataSource.query(
       `WITH scoped AS (
-         SELECT b.id, b.name, b.branch_code, b.district, b.state,
+         SELECT b.id, b.name, b.sol_id, b.district, b.state,
                 b.latitude, b.longitude,
                 pb.id AS project_branch_id, pb.status AS branch_status,
                 pb.packet_count, pb.scheduled_date,
@@ -315,7 +315,7 @@ export class CommandCenterService {
               LIMIT 1
            ) near ON sites.geog IS NOT NULL
        )
-       SELECT s.id, s.name, s.branch_code, s.district, s.state, s.latitude, s.longitude,
+       SELECT s.id, s.name, s.sol_id, s.district, s.state, s.latitude, s.longitude,
               s.project_branch_id, s.branch_status, s.packet_count, s.scheduled_date,
               s.project_id, s.project_name, s.client_id, s.client_name,
               s.minutes_per_packet, s.serviceable_radius_km,
@@ -394,7 +394,7 @@ export class CommandCenterService {
         id: b.id,
         projectBranchId: b.project_branch_id,
         name: b.name,
-        branchCode: b.branch_code,
+        solId: b.sol_id,
         district: b.district,
         state: canonicalState(b.state),
         rawState: b.state,
@@ -458,7 +458,7 @@ export class CommandCenterService {
       if (filters.regions?.length) { extraParams.push(filters.regions); extraWhere.push(`b.region = ANY($${extraParams.length})`); }
 
       const extras = await this.dataSource.query(
-        `SELECT b.id, b.name, b.branch_code, b.district, b.state, b.latitude, b.longitude,
+        `SELECT b.id, b.name, b.sol_id, b.district, b.state, b.latitude, b.longitude,
                 b.client_id, c.name AS client_name
            FROM branches b
            LEFT JOIN clients c ON c.id = b.client_id
@@ -472,7 +472,7 @@ export class CommandCenterService {
           id: b.id,
           projectBranchId: null,
           name: b.name,
-          branchCode: b.branch_code,
+          solId: b.sol_id,
           district: b.district,
           state: canonicalState(b.state),
           rawState: b.state,

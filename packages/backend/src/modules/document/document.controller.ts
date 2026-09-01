@@ -703,17 +703,17 @@ export class DocumentController {
     let duplicateAccountsCount = 0;
     let missingBranchesCount = 0;
     const accountNumbersSeen = new Set<string>();
-    const branchCodesSeen = new Set<string>();
+    const solIdsSeen = new Set<string>();
 
     for (const row of rows) {
       const acc = String(row['Account Number'] || row.ACCOUNT_NO || row.AccountNo || '').trim();
-      const branchCode = String(row['Branch Code'] || row.BRANCH_CODE || row.BranchCode || row['BRANCH'] || row.Branch || '').trim();
+      const solId = String(row['SOL ID'] || row.SOL_ID || row.SolId || row['Branch Code'] || row.BRANCH_CODE || row.BranchCode || row['BRANCH'] || row.Branch || '').trim();
       if (acc) {
         if (accountNumbersSeen.has(acc)) duplicateAccountsCount++;
         else accountNumbersSeen.add(acc);
       }
-      if (branchCode) {
-        branchCodesSeen.add(branchCode);
+      if (solId) {
+        solIdsSeen.add(solId);
       } else {
         missingBranchesCount++;
       }
@@ -728,7 +728,7 @@ export class DocumentController {
           totalRowsProcessed: totalRows,
           uniqueAccountsCount: accountNumbersSeen.size,
           duplicateAccountsCount,
-          uniqueBranchesCount: branchCodesSeen.size,
+          uniqueBranchesCount: solIdsSeen.size,
           missingBranchCodesCount: missingBranchesCount,
           status,
         },

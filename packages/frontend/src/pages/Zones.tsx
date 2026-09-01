@@ -172,13 +172,13 @@ export const Zones: React.FC = () => {
      */
     let affected: { total: number; names: string[] } | null = null;
     try {
-      const res = await api.request<{ id: string; name?: string; branchCode?: string }[]>(
+      const res = await api.request<{ id: string; name?: string; solId?: string }[]>(
         `/branches?zoneId=${encodeURIComponent(z.id)}&limit=10`,
         { withMeta: true },
       );
       const rows = Array.isArray(res) ? res : ((res as any)?.data ?? []);
       const total = (res as any)?.meta?.pagination?.total ?? rows.length;
-      affected = { total, names: rows.map((b: any) => b.name || b.branchCode).filter(Boolean) };
+      affected = { total, names: rows.map((b: any) => b.name || b.solId).filter(Boolean) };
     } catch {
       affected = null;   // unreadable — fall through to the "could not check" wording below
     }

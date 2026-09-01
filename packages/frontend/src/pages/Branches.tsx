@@ -26,7 +26,6 @@ interface ClientOption {
 
 interface Branch {
   id: string;
-  branchCode: string;
   solId: string | null;
   name: string;
   address: string;
@@ -84,7 +83,6 @@ interface BranchDocument {
 }
 
 interface BranchFormData {
-  branchCode: string;
   solId: string;
   name: string;
   address: string;
@@ -112,7 +110,7 @@ interface BranchFormData {
 }
 
 const emptyForm: BranchFormData = {
-  branchCode: '', solId: '', name: '', address: '', state: '', district: '', city: '',
+  solId: '', name: '', address: '', state: '', district: '', city: '',
   pincode: '', region: '', territory: '', zoneId: '', branchType: '', phone: '', email: '',
   managerName: '', openingDate: '', lastAuditDate: '', latitude: '', longitude: '',
   riskScore: '', riskCategory: '', complexity: 'STANDARD', estimatedDurationHours: '8',
@@ -278,7 +276,6 @@ export const Branches: React.FC = () => {
   const [riskFilter, setRiskFilter] = useState('ALL');
   // Off by default because the column repeats the branch code for almost every row; on demand for
   // the reconciliation job where the client's SOL register is the document being checked against.
-  const [showSolIdColumn, setShowSolIdColumn] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   /**
    * True from the first paint, not from when the request starts.
@@ -415,7 +412,7 @@ export const Branches: React.FC = () => {
       title: 'Delete this branch?',
       message: (
         <>
-          <b>{branch.name}</b> ({branch.branchCode}) in {branch.city}, {branch.state} will be removed,
+          <b>{branch.name}</b> ({branch.solId ?? '—'}) in {branch.city}, {branch.state} will be removed,
           along with its contacts and saved documents. Any audit already planned against it will no
           longer have a branch to visit.
         </>
@@ -423,7 +420,7 @@ export const Branches: React.FC = () => {
       confirmLabel: 'Delete branch',
       tone: 'danger',
       reversible: false,
-      confirmPhrase: branch.branchCode,
+      confirmPhrase: branch.solId ?? '',
     });
     if (!ok) return;
     try {
@@ -480,14 +477,6 @@ export const Branches: React.FC = () => {
   const totalPages = Math.max(1, Math.ceil((branchesTotal || 0) / BRANCH_PAGE_LIMIT));
   // One rule for what a loading list shows — see components/ui/list-phase.
   const phase = listPhase({ loading: isLoading, rowCount: filteredBranches.length });
-  // Every branch on file carries a SOL ID, and for all but a handful it is a copy of the branch
-  // code (156 of 166 in the live data). Two columns of the same string told the clerk nothing and
-  // pushed the branch name off the side of the table, so the SOL ID is shown beneath the code
-  // only where it actually says something different. Nothing is lost: the search box still
-  // matches on it, the detail panel still lists it, and the toggle below brings the full column
-  // back for anyone reconciling against a client's own SOL register.
-  const solIdDiffers = (b: Branch) => !!b.solId && b.solId !== b.branchCode;
-  const solIdIsInformative = branches.some(solIdDiffers);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
@@ -540,7 +529,7 @@ export const Branches: React.FC = () => {
                 <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFileUpload} disabled={isUploading} style={{ display: 'none' }} />
               </label>
             </div>
-            <SearchInput value={searchTerm} onChange={setSearchTerm} placeholder="Search by name, code or SOL ID..." compact style={{ minWidth: '180px' }} />
+            <SearchInput value={searchTerm} onChange={setSearchTerm} placeholder="Search by name or SOL ID..." compact style={{ minWidth: '180px' }} />
             <button onClick={() => setShowFilters(!showFilters)} className="btn btn-secondary" style={{ padding: '6px 10px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
               <Filter size={13} /> Filters <ChevronDown size={12} style={{ transform: showFilters ? 'rotate(180deg)' : '' }} />
             </button>
@@ -586,35 +575,22 @@ export const Branches: React.FC = () => {
               <table className="data-table">
                 <thead>
                   <tr>
-                    <th>
-                      Code
-                      {solIdIsInformative && (
-                        <button type="button" onClick={() => setShowSolIdColumn(v => !v)}
-                          style={{ marginLeft: 6, background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent-primary)', fontSize: '10px', fontWeight: 600 }}>
-                          {showSolIdColumn ? 'hide SOL ID' : 'show SOL ID'}
-                        </button>
-                      )}
-                    </th>
-                    {showSolIdColumn && <th>SOL ID</th>}
+                    <th>SOL ID</th>
                     <th>Branch Name</th><th>City / State</th><th>Region</th><th>Risk</th><th>Type</th><th>Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {phase === 'skeleton' ? (
-                    <SkeletonRows rows={8} columns={showSolIdColumn ? 9 : 8} />
+                    <SkeletonRows rows={8} columns={8} />
                   ) : phase === 'empty' ? (
-                    <tr><td colSpan={showSolIdColumn ? 9 : 8} style={{ textAlign: 'center', padding: '24px', color: 'var(--text-secondary)' }}>No branches to show. Branches come from a client’s branch list — clear your search and filters if you expected to see some.</td></tr>
+                    <tr><td colSpan={8} style={{ textAlign: 'center', padding: '24px', color: 'var(--text-secondary)' }}>No branches to show. Branches come from a client’s branch list — clear your search and filters if you expected to see some.</td></tr>
                   ) : filteredBranches.map((b) => (
-                    <tr key={b.id || b.branchCode}
+                    <tr key={b.id || b.solId || ''}
                       onClick={() => { loadBranchDetail(b); selectBranch(b.id); }}
                       style={{ cursor: 'pointer', background: selectedBranch?.id === b.id ? 'rgba(216,174,71,0.08)' : undefined }}>
                       <td style={{ fontSize: '12px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
-                        {b.branchCode}
-                        {!showSolIdColumn && solIdDiffers(b) && (
-                          <span style={{ display: 'block', fontSize: '10.5px', color: 'var(--text-muted)' }}>SOL {b.solId}</span>
-                        )}
+                        {b.solId ?? '—'}
                       </td>
-                      {showSolIdColumn && <td style={{ fontSize: '12px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>{b.solId || '-'}</td>}
                       <td style={{ fontWeight: 600, fontSize: '14px' }}>{b.name}</td>
                       <td style={{ fontSize: '13px' }}>{b.city}, {b.state}</td>
                       <td style={{ fontSize: '13px' }}>{regionLabel(b.region)}</td>
@@ -652,7 +628,7 @@ export const Branches: React.FC = () => {
             <>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
-                  <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>{branchDetail.branchCode}</span>
+                  <span style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 700, textTransform: 'uppercase' }}>{branchDetail.solId ?? '—'}</span>
                   <h4 style={{ fontSize: '16px', fontWeight: 700, margin: '2px 0' }}>{branchDetail.name}</h4>
                 </div>
                 <div style={{ display: 'flex', gap: '4px' }}>
@@ -777,7 +753,6 @@ export const Branches: React.FC = () => {
           title="Edit Branch"
           branchId={editingBranch.id}
           initial={{
-            branchCode: editingBranch.branchCode,
             solId: editingBranch.solId || '',
             name: editingBranch.name,
             address: editingBranch.address,
@@ -867,8 +842,8 @@ const BranchFormModal: React.FC<{
   ), [form.state]);
 
   /**
-   * Everything the branch controller does not require is behind this. Only branchCode, name and
-   * state are mandatory server-side (and branchCode is now allocated when left blank), so a
+   * Everything the branch controller does not require is behind this. Only solId, name and
+   * state are mandatory server-side, so a
    * short everyday form costs nothing functionally — every field is still here, one click away,
    * and an edit that already carries advanced values opens with the section expanded so nothing
    * a branch holds is ever hidden from the person changing it.
@@ -964,10 +939,7 @@ const BranchFormModal: React.FC<{
         state: form.state, district: form.district, city: form.city,
         clientId: form.clientId || undefined,
       };
-      // Omitted when blank so the server allocates the next free code. Sent verbatim when the
-      // user typed one — a code that came off a client's own list must survive untouched.
-      if (form.branchCode.trim()) body.branchCode = form.branchCode.trim();
-      if (form.solId) body.solId = form.solId;
+      if (form.solId) body.solId = form.solId.trim();
       if (form.pincode) body.pincode = form.pincode;
       if (form.region) body.region = form.region;
       if (form.territory) body.territory = form.territory;
@@ -1011,10 +983,9 @@ const BranchFormModal: React.FC<{
         <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>IDENTIFICATION</span>
         {field('Client', 'clientId', { options: clientOptions.map(c => ({ value: c.id, label: `${c.name} (${c.clientCode})` })), required: true })}
         {field('Branch Name', 'name', { required: true })}
-        {/* Not required. The server allocates the next free BR-#### when this is blank — the same
-            treatment the assayer form gives assayer codes. The office keeps no code register, so
-            asking them to invent one only produced duplicates and typos. */}
-        {field('Branch Code', 'branchCode', { placeholder: 'Left blank, one is assigned for you', full: true })}
+        {/* SOL ID is the single branch identifier. It comes off the client's own SOL register and
+            is mandatory — there is no auto-allocation. */}
+        {field('SOL ID', 'solId', { required: true, placeholder: 'e.g. 12345', full: true })}
 
         <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>LOCATION</span>
         {/* Pincode first, and deliberately so: it is the one thing on a branch letterhead that
@@ -1043,12 +1014,11 @@ const BranchFormModal: React.FC<{
           style={{ gridColumn: '1 / -1', marginTop: '6px', display: 'flex', alignItems: 'center', gap: '6px', background: 'none', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent-primary)', fontSize: '12px', fontWeight: 600 }}
         >
           <ChevronDown size={13} style={{ transform: showAdvanced ? 'rotate(180deg)' : '' }} />
-          {showAdvanced ? 'Hide advanced details' : 'Advanced details (SOL ID, zone, competencies, dates)'}
+          {showAdvanced ? 'Hide advanced details' : 'Advanced details (zone, competencies, dates)'}
         </button>
 
         {showAdvanced && <>
           <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>IDENTIFICATION</span>
-          {field('SOL ID', 'solId', { placeholder: 'e.g. 12345' })}
           {field('Branch Type', 'branchType', { options: keepRecorded(form.branchType, BRANCH_TYPES.map(t => ({ value: t, label: branchTypeLabel(t) }))) })}
           {field('Manager Name', 'managerName', { placeholder: 'Branch manager name', full: true })}
           {field('Email', 'email', { type: 'email', full: true })}

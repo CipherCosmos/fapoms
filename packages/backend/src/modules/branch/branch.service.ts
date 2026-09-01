@@ -29,7 +29,7 @@ const normHeader = (s: unknown): string => String(s ?? '').toLowerCase().replace
 /**
  * What each branch field may be called in a real bank's file — matched loosely, not exactly.
  *
- * Every bank exports its own headings: "BRANCH" for the code, "BRANCH_NAME", "STATE",
+ * Every bank exports its own headings: "BRANCH" for the SOL id, "BRANCH_NAME", "STATE",
  * "Branch Address". Forcing the operator to rename columns (or fill in a mapping) before an
  * import would run was ceremony; the alias below lets the file be uploaded as it arrived. A
  * client's explicit `importMapping` still wins where it is set. Compared on `normHeader`, so
@@ -37,9 +37,11 @@ const normHeader = (s: unknown): string => String(s ?? '').toLowerCase().replace
  */
 const BRANCH_IMPORT_ALIASES: Record<string, string[]> = {
   // Normalised (letters+digits, lower-cased), so "SOL ID", "Sol Id", "sol_id", "SOL-ID" all
-  // reduce to "solid"; "Branch Code", "BRANCH_NAME", "Branch Address" likewise.
-  branchCode: ['branchcode', 'branch', 'brcode', 'branchid', 'branchno', 'branchnumber', 'branchcd', 'bcode'],
-  solId: ['solid', 'sol', 'solno', 'solnumber', 'solcode', 'solmapid'],
+  // reduce to "solid"; "Branch Code", "BRANCH_NAME", "Branch Address" likewise. The SOL id is a
+  // branch's single identity, so the columns a bank uses to name it — "SOL ID", but also the plain
+  // "BRANCH"/"Branch Code" that hold the same number — all resolve to it.
+  solId: ['solid', 'sol', 'solno', 'solnumber', 'solcode', 'solmapid',
+          'branchcode', 'branch', 'brcode', 'branchid', 'branchno', 'branchnumber', 'branchcd', 'bcode'],
   name: ['branchname', 'name', 'branchnm', 'nameofbranch'],
   address: ['address', 'branchaddress', 'addr', 'fulladdress', 'completeaddress', 'branchadd'],
   state: ['state', 'statename'],
@@ -68,13 +70,10 @@ export function resolveBranchHeaders(headers: string[], mapping: Record<string, 
 
 export interface CreateBranchDto {
   /**
-   * Optional. Blank means "allocate the next free one" — see `allocateBranchCode()`.
-   *
-   * Still typed as possibly-present because every existing caller (the Excel importer, the
-   * mobile app, the seed) supplies one, and a supplied code is always honoured.
+   * The SOL ID — the bank's own unique branch identifier, and ours. Required: it is the single
+   * identity a branch has (a bank file's "BRANCH" column carries it), unique per client.
    */
-  branchCode?: string;
-  solId?: string;
+  solId: string;
   name: string;
   address?: string;
   /** The one geography field a branch cannot be planned without: region, zone and holidays. */
@@ -103,7 +102,6 @@ export interface CreateBranchDto {
 }
 
 export interface UpdateBranchDto {
-  branchCode?: string;
   solId?: string;
   name?: string;
   address?: string;
@@ -194,80 +192,27 @@ export class BranchService {
   // Branch Profile
   // -----------------------------------------------------------------------
 
-  /**
-   * The next free `BR-####`, allocated server-side.
-   *
-   * The office does not hold a branch-code register — the number only has to be unique and
-   * ordered, which is exactly the sort of fact the database already knows and the person filling
-   * in the form does not. Mirrors `AssayerService.allocateAssayerCode`, deliberately: one house
-   * style for "left blank, one is assigned for you".
-   *
-   * `withDeleted` matters. A soft-deleted branch still occupies its code, and a highest-of-the-
-   * living scan re-issues the code of the last branch anyone removed — which then collides with
-   * it in every report that reads deleted rows.
-   *
-   * Concurrency: the scan-and-increment is racy on its own (two simultaneous creates read the
-   * same highest), so the caller retries — see `create`. Branch codes repeat across clients by
-   * design (two banks each have their own "BR-0001"), so the uniqueness that backs this is
-   * per-client — `UQ_branches_client_branch_code`, added in 1792900000000 — and the create path
-   * also re-checks by hand to turn a collision into a readable message rather than a raw index
-   * error.
-   */
-  private async allocateBranchCode(): Promise<string> {
-    const rows = await this.branchRepository.find({ select: ['branchCode'], withDeleted: true } as any);
-    const highest = rows.reduce((max, r) => {
-      const m = /^BR-(\d+)$/.exec(r.branchCode ?? '');
-      return m ? Math.max(max, Number(m[1])) : max;
-    }, 0);
-    return `BR-${String(highest + 1).padStart(4, '0')}`;
-  }
-
   async create(dto: CreateBranchDto, userId: string, organizationId?: string | null): Promise<BranchEntity> {
-    /**
-     * A hand-typed code is honoured as-is; a blank one is allocated here, and only here.
-     *
-     * The retry exists for the two-people-at-once case: both read the same highest code, the
-     * first save wins, and the second finds its allocation taken and simply asks for the next
-     * one. A user-supplied code never retries — that must still surface as a conflict rather
-     * than silently save under a different code than the one that was typed.
-     */
-    const supplied = dto.branchCode?.trim();
-    if (supplied) {
-      dto = { ...dto, branchCode: supplied };
-    } else {
-      for (let attempt = 0; attempt < 5; attempt++) {
-        const candidate = await this.allocateBranchCode();
-        const taken = await this.branchRepository.findOne({
-          where: { branchCode: candidate },
-          withDeleted: true,
-        });
-        if (!taken) { dto = { ...dto, branchCode: candidate }; break; }
-      }
-      if (!dto.branchCode) {
-        throw new BadRequestException('Could not allocate a branch code just now. Please try again.');
-      }
+    // The SOL ID is a branch's single identity, supplied by the operator or the file — never
+    // generated. A blank one is a data error, refused here rather than saved as an empty identity.
+    const solId = dto.solId?.trim();
+    if (!solId) {
+      throw new BadRequestException('A SOL ID is required — it is the branch\'s unique identifier.');
     }
+    dto = { ...dto, solId };
 
     await this.validateGeography(dto.state, dto.district, dto.city);
 
-    // A branch is identified by its ids per client, never its name — two banks share a branch
-    // name at one address, and one bank reuses a name across towns. Refuse a Branch Code or a
-    // SOL ID this client already uses, with a message that names the conflict, rather than
-    // letting the database reject it with one nobody in the office can read.
+    // A branch is identified by its SOL ID per client, never its name — two banks share a branch
+    // name at one address, and one bank reuses a name across towns. Refuse a SOL ID this client
+    // already uses, with a message that names the conflict, rather than letting the database reject
+    // it with one nobody in the office can read.
     if (dto.clientId) {
-      const codeTaken = await this.branchRepository.findOne({
-        where: { branchCode: dto.branchCode, clientId: dto.clientId, isActive: true },
+      const solTaken = await this.branchRepository.findOne({
+        where: { solId, clientId: dto.clientId, isActive: true },
       });
-      if (codeTaken) {
-        throw new ConflictException(`Branch Code '${dto.branchCode}' is already used by another branch for this client.`);
-      }
-      if (dto.solId) {
-        const solTaken = await this.branchRepository.findOne({
-          where: { solId: dto.solId, clientId: dto.clientId, isActive: true },
-        });
-        if (solTaken) {
-          throw new ConflictException(`SOL ID '${dto.solId}' is already used by another branch for this client.`);
-        }
+      if (solTaken) {
+        throw new ConflictException(`SOL ID '${solId}' is already used by another branch for this client.`);
       }
     }
 
@@ -302,8 +247,7 @@ export class BranchService {
 
     const geoFields: Partial<GeoFields> = geo ?? {};
     const branch = this.branchRepository.create({
-      branchCode: dto.branchCode!,   // guaranteed above: supplied, or allocated
-      solId: dto.solId ?? null,
+      solId: dto.solId!,   // guaranteed above: required, trimmed
       name: dto.name,
       // NOT NULL columns that are optional on admission — empty is what the importer already
       // stores for an unknown field, and it reads as blank everywhere rather than crashing the
@@ -346,14 +290,14 @@ export class BranchService {
       entityType: 'BRANCH',
       entityId: saved.id,
       userId,
-      remarks: `Created branch ${saved.name} (${saved.branchCode})`,
+      remarks: `Created branch ${saved.name} (${saved.solId})`,
     });
 
     try {
       this.eventPublisher.publish('branch:created', {
         eventType: 'branch:created',
         branchId: saved.id,
-        branchCode: saved.branchCode,
+        solId: saved.solId,
         name: saved.name,
         clientId: saved.clientId,
         organizationId: saved.organizationId,
@@ -439,7 +383,6 @@ export class BranchService {
       if (geo) Object.assign(branch, geo);
     }
 
-    if (dto.branchCode !== undefined) branch.branchCode = dto.branchCode;
     if (dto.solId !== undefined) branch.solId = dto.solId;
     if (dto.name !== undefined) branch.name = dto.name;
     if (dto.address !== undefined) branch.address = dto.address;
@@ -481,7 +424,7 @@ export class BranchService {
       entityType: 'BRANCH',
       entityId: saved.id,
       userId,
-      remarks: `Updated branch ${saved.name} (${saved.branchCode})`,
+      remarks: `Updated branch ${saved.name} (${saved.solId})`,
     });
 
     try {
@@ -748,16 +691,10 @@ export class BranchService {
       const rowNum = index + 2;
 
       try {
-        let branchCode = cell(row, 'branchCode');
-        let solId = cell(row, 'solId');
-        // A branch's SOL id and our code are two names for the same identifier when a file carries
-        // only one of them, which most bank files do — the "BRANCH" column of an ICICI list holds
-        // the SOL id, and there is no separate code column. So each fills in for the other: the SOL
-        // stands in as our code, and the code stands in as the SOL id, rather than leaving one blank
-        // and showing a branch with a code but no SOL id. Both stay unique per client and match on
-        // re-import.
-        if (!branchCode && solId) branchCode = solId;
-        if (!solId && branchCode) solId = branchCode;
+        // The SOL id is a branch's single identity. It comes from whichever column the bank used to
+        // name the branch — "SOL ID", or the plain "BRANCH"/"Branch Code" that holds the same number
+        // (all fold onto `solId` in the alias map above).
+        const solId = cell(row, 'solId');
         const name = cell(row, 'name');
         const address = cell(row, 'address');
         let state = cell(row, 'state');
@@ -777,12 +714,12 @@ export class BranchService {
         const latitude = parseFloat(cell(row, 'latitude'));
         const longitude = parseFloat(cell(row, 'longitude'));
 
-        // A branch needs an identity, a name and a state — the state sets its region, zone and
-        // holiday calendar. District, city and address are welcome but not required: a file that
-        // carries coordinates (this one does) places the branch exactly without them, and one
+        // A branch needs an identity (its SOL ID), a name and a state — the state sets its region,
+        // zone and holiday calendar. District, city and address are welcome but not required: a file
+        // that carries coordinates (this one does) places the branch exactly without them, and one
         // that doesn't still resolves from state + pincode.
-        if (!branchCode || !name || !state) {
-          const missing = [!branchCode && 'branch code', !name && 'branch name', !state && 'state'].filter(Boolean).join(', ');
+        if (!solId || !name || !state) {
+          const missing = [!solId && 'SOL ID', !name && 'branch name', !state && 'state'].filter(Boolean).join(', ');
           errors.push(`Row ${rowNum}: missing ${missing}.`);
           continue;
         }
@@ -795,22 +732,12 @@ export class BranchService {
         }
 
         /**
-         * A branch is identified by the bank's own SOL ID and our Branch Code — per client, and
+         * A branch is identified by its SOL ID — the bank's own unique branch id — per client, and
          * never by name, because two different banks run a branch of the same name at the same
-         * address ("MG Road") and one bank reuses a name across towns. So the match is on the
-         * ids, SOL ID first (the lender's authoritative one). If the file's SOL ID and Branch
-         * Code point at two *different* existing branches, the row disagrees with itself and is
-         * refused rather than silently merged into the wrong record.
+         * address ("MG Road") and one bank reuses a name across towns. So the match is on the SOL
+         * ID alone.
          */
-        const bySol = solId
-          ? await this.branchRepository.findOne({ where: { solId, clientId, isActive: true } })
-          : null;
-        const byCode = await this.branchRepository.findOne({ where: { branchCode, clientId, isActive: true } });
-        if (bySol && byCode && bySol.id !== byCode.id) {
-          errors.push(`Row ${rowNum}: SOL ID '${solId}' and Branch Code '${branchCode}' already belong to two different branches for this client — fix whichever is wrong before re-importing.`);
-          continue;
-        }
-        const existing = bySol ?? byCode;
+        const existing = await this.branchRepository.findOne({ where: { solId, clientId, isActive: true } });
 
         /**
          * Located through the same chain as every other branch write.
@@ -841,11 +768,7 @@ export class BranchService {
 
         let saved: BranchEntity;
         if (existing) {
-          // Matched by one id, so keep BOTH in step: a row found by SOL ID may carry a corrected
-          // Branch Code, and a row found by Branch Code may be gaining its SOL ID for the first
-          // time. A blank SOL ID in the file never erases one already on the record.
-          existing.branchCode = branchCode;
-          if (solId) existing.solId = solId;
+          // Matched by SOL ID; refresh the branch's mutable facts from the sheet.
           existing.name = name;
           existing.address = address;
           existing.state = state;
@@ -857,8 +780,7 @@ export class BranchService {
           saved = await this.branchRepository.save(existing);
         } else {
           const branch = this.branchRepository.create({
-            branchCode,
-            solId: solId || null,
+            solId,
             name,
             address,
             state,

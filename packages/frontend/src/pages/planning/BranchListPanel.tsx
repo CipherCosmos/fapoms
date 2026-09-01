@@ -22,7 +22,6 @@ export interface ProjectBranch {
   remarks: string | null;
   branch: {
     id: string;
-    branchCode: string;
     solId: string | null;
     name: string;
     state: string;

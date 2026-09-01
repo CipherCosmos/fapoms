@@ -361,7 +361,7 @@ const OfferCard: React.FC<{
 }> = ({ assignment, busy, onAccept, onDecline }) => {
   const t = useTheme();
   const fee = assignmentFeeValue(assignment);
-  const subtitle = [assignment.bankName, assignment.branchCode].filter(Boolean).join(' · ');
+  const subtitle = [assignment.bankName, assignment.solId].filter(Boolean).join(' · ');
   // Accepting an offer is a commitment to a date; "Tomorrow" and "In 3 days" are different
   // decisions, and the bare date left that arithmetic to the assayer.
   const when = relativeDay(assignment.scheduledDate);
@@ -398,7 +398,7 @@ const CurrentJobCard: React.FC<{
 }> = ({ assignment, busy, onOpen, onCheckIn, onScan, onNavigate }) => {
   const t = useTheme();
   const checkedIn = assignment.status === 'CHECKED_IN' || assignment.status === 'IN_PROGRESS';
-  const subtitle = [assignment.bankName, assignment.branchCode].filter(Boolean).join(' · ');
+  const subtitle = [assignment.bankName, assignment.solId].filter(Boolean).join(' · ');
   // "Today" / "In 8 days" / "3 days overdue" — the calendar arithmetic done for the assayer.
   // The bare date this replaces answered "when is it?" but not the question the hero card
   // exists for: "is this now?".

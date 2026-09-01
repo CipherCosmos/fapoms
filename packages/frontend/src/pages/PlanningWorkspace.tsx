@@ -220,7 +220,7 @@ interface DayPlanStop {
   order: number;
   branchId: string;
   branchName: string;
-  branchCode: string;
+  solId: string;
   address: string;
   estimatedAuditHours: number;
   travelFromPreviousKm: number;
@@ -266,7 +266,7 @@ interface BranchCluster {
   // it — assigning a day plan needs it for POST /assignments, which takes projectBranchId,
   // not the bare branch id.
   branches: Array<{
-    id: string; branchId: string; branchName: string; branchCode: string;
+    id: string; branchId: string; branchName: string; solId: string;
     estimatedDurationHours: number; city: string; district: string;
     /** Packets in THIS cycle — what actually determines how long the branch takes. */
     packetCount: number | null;
@@ -1383,7 +1383,6 @@ export const PlanningWorkspace: React.FC = () => {
     if (!selectedProjectId || branches.length === 0) return;
 
     const data = branches.map((b) => ({
-      'Branch Code': b.branch?.branchCode || '',
       'SOL ID': b.branch?.solId || '',
       'Branch Name': b.branch?.name || '',
       'City': b.branch?.city || '',
@@ -1448,7 +1447,7 @@ export const PlanningWorkspace: React.FC = () => {
   const filteredBranches = useMemo(() => {
     const matched = branches.filter(b => {
       const q = searchTerm.toLowerCase();
-      return (b.branch?.name.toLowerCase().includes(q) || b.branch?.branchCode.toLowerCase().includes(q)) &&
+      return (b.branch?.name.toLowerCase().includes(q) || b.branch?.solId?.toLowerCase().includes(q)) &&
         (stateFilter === 'ALL' || b.branch?.state === stateFilter) &&
         (statusFilter === 'ALL' || b.status === statusFilter) &&
         (cityFilter === '' || (b.branch?.city || '').toLowerCase().includes(cityFilter.toLowerCase())) &&
@@ -2944,7 +2943,7 @@ export const PlanningWorkspace: React.FC = () => {
                 </div>
                 <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-primary)' }}>{selectedPb.branch.name}</div>
                 <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>{selectedPb.branch.city}, {selectedPb.branch.state}</div>
-                <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '1px' }}>Code: {selectedPb.branch.branchCode}</div>
+                <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '1px' }}>SOL ID: {selectedPb.branch.solId ?? '—'}</div>
               </div>
               <div style={{ padding: '12px', background: 'var(--status-active-bg)', borderRadius: 'var(--radius-sm)', border: '1px solid var(--status-active-bg)' }}>
                 <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '6px', display: 'flex', alignItems: 'center', gap: '4px' }}>
@@ -3497,7 +3496,7 @@ export const PlanningWorkspace: React.FC = () => {
                             <div key={b.branchId} style={{ background: 'rgba(216,174,71,0.06)', border: '1px solid rgba(216,174,71,0.15)', borderRadius: 'var(--radius-sm)', padding: '6px 10px', fontSize: '11px' }}>
                               <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{b.branchName}</div>
                               <div style={{ color: 'var(--text-muted)', fontSize: '10px' }}>
-                                {b.branchCode} • {b.city} •{' '}
+                                {b.solId ?? '—'} • {b.city} •{' '}
                                 {b.packetCount != null
                                   ? <>{b.packetCount} packets → {b.estimatedDurationHours}h</>
                                   : (
@@ -3680,7 +3679,7 @@ export const PlanningWorkspace: React.FC = () => {
                                             <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>
                                               #{stop.order} {stop.branchName}
                                             </span>
-                                            <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>({stop.branchCode})</span>
+                                            <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>({stop.solId ?? '—'})</span>
                                           </div>
                                           <div style={{ fontSize: '10px', color: 'var(--text-secondary)', display: 'flex', gap: '12px', marginTop: '2px' }}>
                                             <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Clock size={10} /> Arrive {stop.estimatedArrival} → Depart {stop.estimatedDeparture}</span>

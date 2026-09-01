@@ -299,7 +299,7 @@ describe('DocumentService', () => {
 
     const branchRow = (over: Record<string, any> = {}) => ({
       project_branch_id: 'pb-1', scheduled_date: null,
-      branch_name: 'Pune Main Branch', branch_code: 'BR-1',
+      branch_name: 'Pune Main Branch', sol_id: 'BR-1',
       project_name: 'P1', client_name: 'SBI', never_prepared: false, ...over,
     });
 
@@ -318,7 +318,7 @@ describe('DocumentService', () => {
       const docRow = (over: Record<string, any> = {}) => ({
         id: 'doc-1', file_name: 'pre-audit.pdf', file_size: 100, type: 'PRE_FIELD_AUDIT_PDF',
         status: 'DISPATCHED', doc_version: 1, created_at: new Date(), project_branch_id: 'pb-1',
-        branch_name: 'Pune Main Branch', branch_code: 'BR-1', project_name: 'P1',
+        branch_name: 'Pune Main Branch', sol_id: 'BR-1', project_name: 'P1',
         project_number: 'PRJ-1', client_name: 'SBI', scheduled_date: null, ...over,
       });
 
@@ -375,7 +375,7 @@ describe('DocumentService', () => {
         mockQueries({
           docs: [docRow()],
           awaitingRows: [
-            { id: 'doc-9', file_name: 'a.pdf', file_size: 1, type: 'PRE_FIELD_AUDIT_PDF', status: 'UPLOADED', doc_version: 1, created_at: new Date(), branch_name: 'B', branch_code: 'B1', project_name: 'P1', project_number: 'PRJ-1', client_name: 'SBI', project_branch_id: 'pb-1', scheduled_date: null, total_matching: '137' },
+            { id: 'doc-9', file_name: 'a.pdf', file_size: 1, type: 'PRE_FIELD_AUDIT_PDF', status: 'UPLOADED', doc_version: 1, created_at: new Date(), branch_name: 'B', sol_id: 'B1', project_name: 'P1', project_number: 'PRJ-1', client_name: 'SBI', project_branch_id: 'pb-1', scheduled_date: null, total_matching: '137' },
           ],
         });
 
@@ -389,8 +389,8 @@ describe('DocumentService', () => {
     it("groups a branch's multiple documents under one entry instead of repeating its name", async () => {
       mockQueries({
         docs: [
-          { id: 'doc-1', file_name: 'pre-audit.pdf', file_size: 100, type: 'PRE_FIELD_AUDIT_PDF', status: 'DISPATCHED', doc_version: 1, created_at: new Date(), project_branch_id: 'pb-1', branch_name: 'Pune Main Branch', branch_code: 'BR-1', project_name: 'P1', project_number: 'PRJ-1', client_name: 'SBI', scheduled_date: null },
-          { id: 'doc-2', file_name: 'return.pdf', file_size: 200, type: 'AUDITED_RETURN_PDF', status: 'RECEIVED', doc_version: 1, created_at: new Date(), project_branch_id: 'pb-1', branch_name: 'Pune Main Branch', branch_code: 'BR-1', project_name: 'P1', project_number: 'PRJ-1', client_name: 'SBI', scheduled_date: null },
+          { id: 'doc-1', file_name: 'pre-audit.pdf', file_size: 100, type: 'PRE_FIELD_AUDIT_PDF', status: 'DISPATCHED', doc_version: 1, created_at: new Date(), project_branch_id: 'pb-1', branch_name: 'Pune Main Branch', sol_id: 'BR-1', project_name: 'P1', project_number: 'PRJ-1', client_name: 'SBI', scheduled_date: null },
+          { id: 'doc-2', file_name: 'return.pdf', file_size: 200, type: 'AUDITED_RETURN_PDF', status: 'RECEIVED', doc_version: 1, created_at: new Date(), project_branch_id: 'pb-1', branch_name: 'Pune Main Branch', sol_id: 'BR-1', project_name: 'P1', project_number: 'PRJ-1', client_name: 'SBI', scheduled_date: null },
         ],
         branchRows: [branchRow()],
       });
@@ -416,7 +416,7 @@ describe('DocumentService', () => {
       expect(sqlFor(BRANCH_LIST_SQL)).not.toContain('JOIN assessments a ');
       // What the panel does render must still be there.
       expect(result.branches[0]).toMatchObject({
-        projectBranchId: 'pb-1', branchName: 'Pune Main Branch', branchCode: 'BR-1',
+        projectBranchId: 'pb-1', branchName: 'Pune Main Branch', solId: 'BR-1',
         projectName: 'P1', clientName: 'SBI',
       });
     });
@@ -458,7 +458,7 @@ describe('DocumentService', () => {
 
       const sql = sqlFor(BRANCH_LIST_SQL);
       expect(sql).toContain('b.name ILIKE');
-      expect(sql).toContain('b.branch_code ILIKE');
+      expect(sql).toContain('b.sol_id ILIKE');
       expect(sql).toContain('p.name ILIKE');
       expect(sql).toContain('c.name ILIKE');
       expect(paramsFor(BRANCH_LIST_SQL)).toContain('%Pune%');
@@ -541,9 +541,9 @@ describe('DocumentService', () => {
    */
   describe('matchPdfsToBranches', () => {
     const scheduled = [
-      { project_branch_id: 'pb-1', branch_name: 'Pune Main Branch', branch_code: 'BR-0010' },
-      { project_branch_id: 'pb-2', branch_name: 'Pune Yerwada Branch', branch_code: 'BR-0016' },
-      { project_branch_id: 'pb-3', branch_name: 'Nashik Main Branch', branch_code: 'BR-0020' },
+      { project_branch_id: 'pb-1', branch_name: 'Pune Main Branch', sol_id: 'BR-0010' },
+      { project_branch_id: 'pb-2', branch_name: 'Pune Yerwada Branch', sol_id: 'BR-0016' },
+      { project_branch_id: 'pb-3', branch_name: 'Nashik Main Branch', sol_id: 'BR-0020' },
     ];
 
     beforeEach(() => {
@@ -557,7 +557,7 @@ describe('DocumentService', () => {
         'br0016-packet.pdf',
       ]);
       expect(r.matches.map((m) => m.projectBranchId).sort()).toEqual(['pb-1', 'pb-2']);
-      expect(r.matches.every((m) => m.matchedOn === 'CODE')).toBe(true);
+      expect(r.matches.every((m) => m.matchedOn === 'SOL')).toBe(true);
       expect(r.unmatched).toHaveLength(0);
     });
 

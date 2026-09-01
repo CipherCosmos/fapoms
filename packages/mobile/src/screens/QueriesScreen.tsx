@@ -139,7 +139,7 @@ export const QueriesScreen: React.FC<QueriesScreenProps> = ({ assignments, onOpe
                       icon={meta.icon}
                       tone={state === 'NEEDS_YOU' ? 'danger' : 'warning'}
                       label={a.branchName}
-                      hint={q ? truncate(q.queryText, 64) : [a.bankName, a.branchCode].filter(Boolean).join(' · ') || undefined}
+                      hint={q ? truncate(q.queryText, 64) : [a.bankName, a.solId].filter(Boolean).join(' · ') || undefined}
                       value={countLabel}
                       trailing={
                         wait ? (
@@ -174,7 +174,7 @@ export const QueriesScreen: React.FC<QueriesScreenProps> = ({ assignments, onOpe
                       icon="checkmark-circle-outline"
                       tone="success"
                       label={a.branchName}
-                      hint={q?.queryText ? truncate(q.queryText, 64) : [a.bankName, a.branchCode].filter(Boolean).join(' · ') || undefined}
+                      hint={q?.queryText ? truncate(q.queryText, 64) : [a.bankName, a.solId].filter(Boolean).join(' · ') || undefined}
                       value={countLabel}
                       onPress={() => onOpenQueryChat(a)}
                       accessibilityLabel={`${a.branchName}, resolved, ${countLabel}`}

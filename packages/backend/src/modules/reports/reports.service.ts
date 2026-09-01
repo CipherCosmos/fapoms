@@ -82,7 +82,7 @@ export class ReportsService {
       const coverage = classify(pb.status);
       const assigned = (pb.assignments ?? []).filter((a) => a.isActive !== false);
       return [
-        pb.branch?.branchCode ?? '',
+        pb.branch?.solId ?? '',
         pb.branch?.name ?? '',
         pb.branch?.district ?? '',
         pb.branch?.state ?? '',
@@ -334,7 +334,7 @@ export class ReportsService {
 
     const branchRows = (data?.branchPoints ?? []).map((b: any) => [
       b.name ?? '',
-      b.branchCode ?? '',
+      b.solId ?? '',
       b.district ?? '',
       b.state ?? '',
       b.status ?? '',

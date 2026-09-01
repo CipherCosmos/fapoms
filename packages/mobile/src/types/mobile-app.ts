@@ -108,7 +108,7 @@ export interface AssayerAssignment {
   projectBranchId: string;
   assayerId?: string;
   branchName: string;
-  branchCode: string;
+  solId: string;
   bankName: string;
   branchAddress: string;
   /**

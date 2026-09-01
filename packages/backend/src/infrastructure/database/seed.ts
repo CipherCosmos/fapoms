@@ -524,7 +524,6 @@ async function seed() {
         priority: 'HIGH',
         budget: 5000000,
         mapping: {
-          branchCode: 'Branch Code',
           solId: 'SOL ID',
           name: 'Branch Name',
           address: 'Address',
@@ -576,7 +575,6 @@ async function seed() {
         priority: 'HIGH',
         budget: 3500000,
         mapping: {
-          branchCode: 'BrCode',
           solId: 'SolId',
           name: 'BranchName',
           address: 'BranchAddress',
@@ -1005,7 +1003,6 @@ async function seed() {
     if (sbiClient) {
       const branchesData = [
         {
-          branchCode: 'BR-0010',
           solId: '1029',
           name: 'Pune Main Branch',
           address: '123 Shivaji Road, Deccan, Pune',
@@ -1031,7 +1028,6 @@ async function seed() {
           ],
         },
         {
-          branchCode: 'BR-0012',
           solId: '1105',
           name: 'Mumbai Fort Branch',
           address: '789 Fort Chambers, Fort, Mumbai',
@@ -1056,7 +1052,6 @@ async function seed() {
           ],
         },
         {
-          branchCode: 'BR-0030',
           solId: '3049',
           name: 'Bangalore MG Road',
           address: '202 Mahatma Gandhi Road, Bangalore',
@@ -1081,7 +1076,6 @@ async function seed() {
           ],
         },
         {
-          branchCode: 'BR-0015',
           solId: '1035',
           name: 'Pune Aundh Branch',
           address: '45 Aundh Road, Pune',
@@ -1106,7 +1100,6 @@ async function seed() {
           ],
         },
         {
-          branchCode: 'BR-0016',
           solId: '1036',
           name: 'Pune Yerwada Branch',
           address: '89 Yerwada Central, Pune',
@@ -1131,7 +1124,6 @@ async function seed() {
           ],
         },
         {
-          branchCode: 'BR-0017',
           solId: '1037',
           name: 'Pune Hinjewadi Branch',
           address: '12 Rajiv Gandhi IT Park, Hinjewadi, Pune',
@@ -1156,7 +1148,6 @@ async function seed() {
           ],
         },
         {
-          branchCode: 'BR-0018',
           solId: '1038',
           name: 'Pune Koregaon Park Branch',
           address: '77 North Main Road, Koregaon Park, Pune',
@@ -1181,7 +1172,6 @@ async function seed() {
           ],
         },
         {
-          branchCode: 'BR-0020',
           solId: '2001',
           name: 'Nashik Main Branch',
           address: '9 MG Road, Nashik',
@@ -1206,7 +1196,6 @@ async function seed() {
           ],
         },
         {
-          branchCode: 'BR-0021',
           solId: '2002',
           name: 'Nashik Gangapur Road Branch',
           address: '45 Gangapur Road, Nashik',
@@ -1231,7 +1220,6 @@ async function seed() {
           ],
         },
         {
-          branchCode: 'BR-0025',
           solId: '2501',
           name: 'Nagpur Sitabuldi Branch',
           address: '101 Sitabuldi Road, Nagpur',
@@ -1259,11 +1247,10 @@ async function seed() {
 
       const seededBranches: BranchEntity[] = [];
       for (const bd of branchesData) {
-        let branch = await branchRepository.findOne({ where: { branchCode: bd.branchCode } });
+        let branch = await branchRepository.findOne({ where: { solId: bd.solId } });
         if (!branch) {
           branch = branchRepository.create({
             clientId: sbiClient.id,
-            branchCode: bd.branchCode,
             solId: bd.solId,
             name: bd.name,
             address: bd.address,
@@ -1288,7 +1275,7 @@ async function seed() {
             updatedBy: 'system',
           });
           branch = await branchRepository.save(branch);
-          console.log(`Seeded branch: ${branch.name} (${bd.branchCode})`);
+          console.log(`Seeded branch: ${branch.name} (${bd.solId})`);
 
           // Seed contacts
           for (const c of bd.contacts) {

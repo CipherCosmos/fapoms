@@ -330,7 +330,7 @@ describe('ImportJobWorker', () => {
   it('returns a partial import as a result rather than failing the job', async () => {
     const partial = {
       totalRows: 400, created: 388, updated: 0, linked: 388,
-      skipped: [{ row: 5, branchCode: 'BR-5', reason: 'No state for "Nowhere".' }],
+      skipped: [{ row: 5, solId: 'BR-5', reason: 'No state for "Nowhere".' }],
       imprecise: [],
     };
     mockProjectService.runBranchImport.mockResolvedValue(partial);

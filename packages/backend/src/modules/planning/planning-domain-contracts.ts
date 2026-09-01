@@ -16,7 +16,7 @@ export class SkillSet {
 
 export interface PlanningBranch {
   branchId: BranchId;
-  branchCode: string;
+  solId: string;
   name: string;
   location: GeoCoordinate;
   city: string;

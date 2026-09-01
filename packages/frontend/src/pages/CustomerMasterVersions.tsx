@@ -213,7 +213,7 @@ export const CustomerMasterVersions: React.FC = () => {
   const recordColumns: Column<CustomerRecord>[] = [
     { key: 'account', header: 'Account', render: (r) => r.accountNumber },
     { key: 'customer', header: 'Customer', render: (r) => r.customerName },
-    { key: 'branch', header: 'Branch', render: (r) => r.branch?.branchCode ?? r.branch?.name ?? '—' },
+    { key: 'branch', header: 'Branch', render: (r) => r.branch?.solId ?? r.branch?.name ?? '—' },
     { key: 'packets', header: 'Packets', align: 'right', render: (r) => r.packetCount },
     { key: 'weight', header: 'Declared weight (g)', align: 'right', render: (r) => (r.declaredWeightGrams != null ? Number(r.declaredWeightGrams).toLocaleString('en-IN') : '—') },
   ];

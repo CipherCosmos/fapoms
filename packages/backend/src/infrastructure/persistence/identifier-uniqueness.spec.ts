@@ -11,10 +11,10 @@ import { execSync } from 'child_process';
  * thing that actually refuses the second write is a UNIQUE index.
  *
  * This is the list of identifiers that must never collide, checked against the entity that
- * declares them. Branches were the ones missing: `branch_code` and `sol_id` were indexed for
- * lookup and unique on neither, so re-uploading an edited branch sheet inserted a second branch
- * with the same SOL ID and everything downstream pointed at whichever it found. Added scoped per
- * client — a SOL ID is a bank's own branch number and says nothing about anybody else's.
+ * declares them. A branch's identity is its `sol_id` — the bank's own branch number, unique per
+ * client. It used to be indexed for lookup but unique on nothing, so re-uploading an edited branch
+ * sheet inserted a second branch with the same SOL ID and everything downstream pointed at
+ * whichever it found. Added scoped per client — a SOL ID says nothing about anybody else's.
  */
 describe('business identifiers', () => {
   const ROOT = join(__dirname, '..', '..');
@@ -23,8 +23,8 @@ describe('business identifiers', () => {
   /**
    * Entity file → the identifier columns on it that must be unique.
    *
-   * `sol_id` and `branch_code` are scoped by client, so their guarantee is a partial unique index
-   * in a migration rather than a decorator; they are asserted separately below.
+   * `sol_id` is scoped by client, so its guarantee is a unique index in a migration rather than a
+   * decorator; it is asserted separately below.
    */
   const MUST_BE_UNIQUE: Record<string, string[]> = {
     'modules/project/project.entity.ts': ['projectNumber'],
@@ -56,14 +56,13 @@ describe('business identifiers', () => {
    * TypeORM's `@Unique` cannot carry a WHERE clause, and blank is not a value: a branch with no
    * SOL ID has not collided with another branch that also has none.
    */
-  it('protects branch codes, SOL IDs and project-branch links in a migration', () => {
+  it('protects branch SOL IDs and project-branch links in a migration', () => {
     const migrations = execSync(
       `grep -rl "CREATE UNIQUE INDEX" "${join(ROOT, 'infrastructure/database/migrations')}" || true`,
       { encoding: 'utf8' },
     );
     const sql = migrations.trim().split('\n').filter(Boolean).map((f) => readFileSync(f, 'utf8')).join('\n');
 
-    expect(sql).toMatch(/UQ_branches_client_branch_code[\s\S]*?"client_id",\s*"branch_code"/);
     expect(sql).toMatch(/UQ_branches_client_sol_id[\s\S]*?"client_id",\s*"sol_id"/);
     expect(sql).toMatch(/UQ_project_branches_pair[\s\S]*?"project_id",\s*"branch_id"/);
   });

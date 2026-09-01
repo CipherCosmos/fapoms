@@ -31,7 +31,7 @@ interface BusinessRule {
   isActive?: boolean;
 }
 
-interface BranchOption { id: string; name: string; branchCode?: string }
+interface BranchOption { id: string; name: string; solId?: string }
 
 /**
  * The five types RuleEngine.evaluateSingleRule() actually branches on, and the
@@ -351,7 +351,7 @@ export const RulesSection: React.FC = () => {
                 <Select
                   value={form.targetId}
                   onChange={(v) => setForm({ ...form, targetId: v })}
-                  options={branches.map((b: any) => ({ value: b.id, label: `${b.name} ${b.branchCode ? `(${b.branchCode})` : ''}` }))}
+                  options={branches.map((b: any) => ({ value: b.id, label: `${b.name} ${b.solId ? `(${b.solId})` : ''}` }))}
                   placeholder="Select a branch…"
                   style={inputStyle}
                 />

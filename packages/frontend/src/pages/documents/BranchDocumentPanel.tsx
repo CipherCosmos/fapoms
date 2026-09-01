@@ -187,7 +187,7 @@ export const BranchDocumentPanel: React.FC<{
                 <div style={{ flex: 1, minWidth: 160 }}>
                   <div style={{ fontSize: 13.5, fontWeight: 700 }}>{b.branchName}</div>
                   <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                    {b.clientName} · {b.projectName}{b.branchCode ? ` · ${b.branchCode}` : ''}
+                    {b.clientName} · {b.projectName}{b.solId ? ` · ${b.solId}` : ''}
                   </div>
                 </div>
                 {b.scheduledDate && (

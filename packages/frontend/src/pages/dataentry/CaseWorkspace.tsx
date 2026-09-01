@@ -35,7 +35,7 @@ interface DocRow {
 interface CaseRow {
   id: string; status: string; remarks: string | null; correctionNotes: string | null;
   ocrResult: any | null;
-  projectBranch?: { branch?: { name: string; branchCode: string } };
+  projectBranch?: { branch?: { name: string; solId: string | null } };
 }
 
 interface QueryRow {
@@ -261,7 +261,7 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
         message: (
           <>
             The report for <strong>{branchName ?? 'this branch'}</strong>
-            {branchCode ? ` (${branchCode})` : ''} will be sent to the client as final.
+            {solId ? ` (${solId})` : ''} will be sent to the client as final.
           </>
         ),
         confirmLabel: 'Send to client',
@@ -349,7 +349,7 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
   const status = validationCase?.status;
   const tone = status ? STATUS_TONE[status] ?? 'var(--text-muted)' : 'var(--text-muted)';
   const branchName = validationCase?.projectBranch?.branch?.name;
-  const branchCode = validationCase?.projectBranch?.branch?.branchCode;
+  const solId = validationCase?.projectBranch?.branch?.solId;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
@@ -360,7 +360,7 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
         </button>
         {branchName && (
           <div style={{ fontSize: '13.5px', fontWeight: 700 }}>
-            {branchName} <span style={{ fontFamily: 'monospace', fontWeight: 400, color: 'var(--text-muted)', fontSize: '12px' }}>{branchCode}</span>
+            {branchName} <span style={{ fontFamily: 'monospace', fontWeight: 400, color: 'var(--text-muted)', fontSize: '12px' }}>{solId ?? '—'}</span>
           </div>
         )}
         {status && (

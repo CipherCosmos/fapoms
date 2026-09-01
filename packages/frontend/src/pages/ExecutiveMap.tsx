@@ -15,7 +15,7 @@ import { useExcelExport } from '../hooks/useExcelExport';
 import { Select } from '../components/ui';
 
 interface BranchPoint {
-  id: string; projectBranchId: string; name: string; branchCode: string | null;
+  id: string; projectBranchId: string; name: string; solId: string | null;
   district: string | null; state: string;
   latitude: number | null; longitude: number | null;
   status: string; clientId: string; clientName: string; projectId: string;
@@ -122,7 +122,7 @@ export const ExecutiveMap: React.FC = () => {
     () => visibleBranches.map((b) => ({
       id: b.id, name: b.name, latitude: b.latitude, longitude: b.longitude,
       status: b.status, state: b.state, city: b.district ?? undefined,
-      branchCode: b.branchCode ?? undefined,
+      solId: b.solId ?? undefined,
       // What the colour-by-bank mode paints branch pins with.
       clientId: b.clientId, clientName: b.clientName,
     })),
@@ -231,7 +231,7 @@ export const ExecutiveMap: React.FC = () => {
                   <div>
                     <div style={{ fontSize: 15, fontWeight: 700 }}>{selected.name}</div>
                     <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                      {selected.branchCode} · {selected.district}, {selected.state}
+                      {selected.solId ?? '—'} · {selected.district}, {selected.state}
                     </div>
                   </div>
                   <Row label="Client" value={selected.clientName} />

@@ -90,7 +90,7 @@ export class SearchService {
       this.branchRepo.find({
         where: [
           { isActive: true, ...branchScope, name: ILike(term) },
-          { isActive: true, ...branchScope, branchCode: ILike(term) },
+          { isActive: true, ...branchScope, solId: ILike(term) },
           { isActive: true, ...branchScope, city: ILike(term) },
           { isActive: true, ...branchScope, state: ILike(term) },
           { isActive: true, ...branchScope, address: ILike(term) },
@@ -131,7 +131,9 @@ export class SearchService {
     ]);
 
     return {
-      branches: branches.map(b => ({ id: b.id, name: b.name, code: b.branchCode, city: b.city, state: b.state })),
+      // `code` is the generic short-identifier slot every search result carries (assayer code,
+      // client code, …); for a branch that identifier is its SOL ID.
+      branches: branches.map(b => ({ id: b.id, name: b.name, code: b.solId, city: b.city, state: b.state })),
       /**
        * The same field policy the roster applies, not a second one invented here.
        *

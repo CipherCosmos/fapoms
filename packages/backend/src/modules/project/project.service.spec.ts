@@ -371,47 +371,46 @@ describe('ProjectService', () => {
 
       expect(report.skipped).toHaveLength(0);
       expect(mockBranchService.registerImportedBranch).toHaveBeenCalledWith(
-        expect.objectContaining({ branchCode: 'BR-9', name: 'Aundh', region: 'WEST' }),
+        expect.objectContaining({ solId: 'BR-9', name: 'Aundh', region: 'WEST' }),
         'user-1',
       );
     });
 
     /**
      * The two branch importers — this one and the Branches page — must key identity the same way,
-     * or a file uploaded through both doors inserts a second copy of every branch. Both now treat
-     * the branch code as the SOL id when the file carries no separate SOL column (a bank list's
-     * "BRANCH" column holds the SOL id), so the two paths agree and a re-upload matches.
+     * or a file uploaded through both doors inserts a second copy of every branch. Both key on the
+     * SOL id, read from the "BRANCH"/"Branch Code" column when there is no separate SOL column, so
+     * the two paths agree and a re-upload matches.
      */
-    it('uses the branch code as the SOL id when the file has no SOL column', async () => {
+    it('reads the SOL id from the "BRANCH" column when the file has no SOL column', async () => {
       await service.uploadBranchesFromExcel('p-1', sheetBuffer([templateRow()]), 'user-1');
 
       expect(mockBranchService.registerImportedBranch).toHaveBeenCalledWith(
-        expect.objectContaining({ branchCode: 'BR-1', solId: 'BR-1' }),
+        expect.objectContaining({ solId: 'BR-1' }),
         'user-1',
       );
     });
 
-    it('carries the SOL id through when the file provides one', async () => {
+    it('prefers an explicit SOL column when the file provides one', async () => {
       await service.uploadBranchesFromExcel('p-1', sheetBuffer([templateRow({ 'SOL ID': 'S-77' })]), 'user-1');
 
       expect(mockBranchService.registerImportedBranch).toHaveBeenCalledWith(
-        expect.objectContaining({ branchCode: 'BR-1', solId: 'S-77' }),
+        expect.objectContaining({ solId: 'S-77' }),
         'user-1',
       );
     });
 
     it('matches an existing branch by its SOL id and updates it instead of creating a duplicate', async () => {
       const existing = {
-        id: 'b-existing', branchCode: 'OLD-CODE', solId: 'S-77', name: 'Old name',
+        id: 'b-existing', solId: 'S-77', name: 'Old name',
         clientId: 'c-1', latitude: 10.7867, longitude: 76.6548, region: 'SOUTH',
       };
-      // The importer queries the master twice — by branch code and by SOL id. This branch shares
-      // only the SOL id with the sheet (its code differs), so only the SOL query returns it.
+      // The importer queries the master by SOL id; this branch shares that SOL id with the sheet.
       mockBranchRepo.find.mockImplementation(async (opts: any) => (opts?.where?.solId ? [existing] : []));
       mockBranchService.update.mockImplementation(async (id: string, patch: any) => ({ ...existing, id, ...patch }));
 
       const report = await service.uploadBranchesFromExcel(
-        'p-1', sheetBuffer([templateRow({ BRANCH: 'NEW-CODE', 'SOL ID': 'S-77' })]), 'user-1',
+        'p-1', sheetBuffer([templateRow({ 'SOL ID': 'S-77' })]), 'user-1',
       );
 
       expect(mockBranchService.registerImportedBranch).not.toHaveBeenCalled();
@@ -459,7 +458,7 @@ describe('ProjectService', () => {
       expect(mockBranchRepo.find).toHaveBeenCalledTimes(1);
       expect(mockBranchRepo.find).toHaveBeenCalledWith({
         where: expect.objectContaining({
-          branchCode: In(['BR-1', 'BR-2', 'BR-3']),
+          solId: In(['BR-1', 'BR-2', 'BR-3']),
           clientId: 'c-1',
           isActive: true,
         }),
@@ -491,7 +490,7 @@ describe('ProjectService', () => {
      */
     it('corrects an existing branch from the sheet', async () => {
       mockBranchRepo.find.mockResolvedValue([{
-        id: 'b-old', branchCode: 'BR-1', name: 'Old Name', address: 'Old address', state: 'Kerala',
+        id: 'b-old', solId: 'BR-1', name: 'Old Name', address: 'Old address', state: 'Kerala',
         district: 'PALAKKAD', region: null, latitude: null, longitude: null,
       }]);
       mockBranchService.update.mockImplementation(async (id: string) => ({ id, zoneId: null }));
@@ -514,7 +513,7 @@ describe('ProjectService', () => {
 
     it('does not blank fields a sparse correction sheet omits', async () => {
       mockBranchRepo.find.mockResolvedValue([{
-        id: 'b-old', branchCode: 'BR-1', name: 'Thenkurissi', address: 'Keep me', state: 'Kerala',
+        id: 'b-old', solId: 'BR-1', name: 'Thenkurissi', address: 'Keep me', state: 'Kerala',
         district: 'PALAKKAD', region: 'SOUTH', latitude: 10.7867, longitude: 76.6548,
       }]);
       mockBranchService.update.mockImplementation(async (id: string) => ({ id, zoneId: null }));
@@ -548,7 +547,7 @@ describe('ProjectService', () => {
 
       expect(report.created).toBe(1);
       expect(report.skipped).toEqual([
-        { row: 2, branchCode: 'BR-BAD', reason: expect.stringContaining('Nowhere') },
+        { row: 2, solId: 'BR-BAD', reason: expect.stringContaining('Nowhere') },
       ]);
     });
 
@@ -690,7 +689,7 @@ describe('ProjectService', () => {
 
       it('re-derives complexity and hours on re-import when packets change, but never risk', async () => {
         mockBranchRepo.find.mockResolvedValue([{
-          id: 'b-old', branchCode: 'BR-1', name: 'Thenkurissi', address: '1 Main Road, Palakkad 678001',
+          id: 'b-old', solId: 'BR-1', name: 'Thenkurissi', address: '1 Main Road, Palakkad 678001',
           state: 'Kerala', district: 'PALAKKAD', region: 'SOUTH', latitude: 10.7867, longitude: 76.6548,
           // Ops escalated this one by hand — a re-import must leave it alone.
           riskCategory: 'CRITICAL', riskScore: 9, complexity: 'SIMPLE', estimatedDurationHours: 10,
@@ -738,7 +737,7 @@ describe('ProjectService', () => {
 
       it('counts nothing when every branch is already known and has not moved', async () => {
         mockBranchRepo.find.mockResolvedValue([
-          { branchCode: 'BR-1', address: '1 Main Road, Palakkad 678001', district: 'PALAKKAD', state: 'Kerala' },
+          { solId: 'BR-1', address: '1 Main Road, Palakkad 678001', district: 'PALAKKAD', state: 'Kerala' },
         ]);
 
         const result = await preflight([noCoords()]);
@@ -751,7 +750,7 @@ describe('ProjectService', () => {
 
       it('counts a known branch again once its address moves', async () => {
         mockBranchRepo.find.mockResolvedValue([
-          { branchCode: 'BR-1', address: 'The old address', district: 'PALAKKAD', state: 'Kerala' },
+          { solId: 'BR-1', address: 'The old address', district: 'PALAKKAD', state: 'Kerala' },
         ]);
 
         const result = await preflight([noCoords()]);
@@ -761,7 +760,7 @@ describe('ProjectService', () => {
 
       it('counts a known branch again when its district or state is corrected', async () => {
         mockBranchRepo.find.mockResolvedValue([
-          { branchCode: 'BR-1', address: '1 Main Road, Palakkad 678001', district: 'THRISSUR', state: 'Kerala' },
+          { solId: 'BR-1', address: '1 Main Road, Palakkad 678001', district: 'THRISSUR', state: 'Kerala' },
         ]);
 
         await expect(preflight([noCoords()])).resolves.toMatchObject({ rowsNeedingGeocode: 1 });
@@ -811,7 +810,7 @@ describe('ProjectService', () => {
       mockProjectBranchRepo.find.mockResolvedValue([{
         packetCount: 58,
         branch: {
-          branchCode: 'BR-1', name: 'Thenkurissi', district: 'Palakkad', state: 'Kerala',
+          solId: 'BR-1', name: 'Thenkurissi', district: 'Palakkad', state: 'Kerala',
           address: '1 Main Road', pincode: '678001', latitude: 10.78, longitude: 76.65,
           riskCategory: 'HIGH', complexity: 'STANDARD', estimatedDurationHours: 14.5,
           managerName: 'A. Nair', phone: '9876543210', email: 'b@x.in',
