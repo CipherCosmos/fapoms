@@ -33,6 +33,18 @@ services:
     # dev values this block used to hardcode, so nothing changes without it. These must agree with
     # DB_USERNAME/DB_PASSWORD/DB_DATABASE in that file — they are the credentials the role is
     # CREATED with here and the ones the backend then signs in with.
+    #
+    # Hardcoding them produced an error that points nowhere near its cause: the backend read
+    # DB_USERNAME/DB_PASSWORD from .env.docker while Postgres was created from the literals here,
+    # so any env file naming a different user failed with "password authentication failed for
+    # user ..." — a credentials error where the credentials are correct and simply describe a role
+    # that was never created.
+    #
+    # NOTE: POSTGRES_USER/PASSWORD/DB only take effect on the FIRST start against an empty data
+    # directory. Changing them later does nothing until the pgdata volume is recreated
+    # (`docker compose down -v`, which ERASES the database) or the role is added by hand. So on a
+    # machine that has already booted once, editing .env.docker is not enough — that is the second
+    # half of the same confusing error above.
     environment:
       POSTGRES_DB: ${DB_DATABASE:-fapoms}
       POSTGRES_USER: ${DB_USERNAME:-fapoms}
@@ -125,6 +137,8 @@ services:
     command: server /data --console-address ":9001"
     # Same rule as postgres: these create the MinIO root credentials, and AWS_ACCESS_KEY_ID /
     # AWS_SECRET_ACCESS_KEY in .env.docker are what the backend presents to sign in with them.
+    # A mismatch surfaces as SignatureDoesNotMatch on every upload, not as a startup failure — so
+    # the stack looks healthy and only fails when someone tries to file a document.
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-fapoms_minio}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-fapoms_minio_secret}
