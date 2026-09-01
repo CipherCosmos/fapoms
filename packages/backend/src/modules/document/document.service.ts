@@ -1663,12 +1663,29 @@ export class DocumentService {
   }
 
   async getDocumentStats(): Promise<{ total: number; uploaded: number; dispatched: number; received: number }> {
-    const all = await this.documentRepository.find({ where: { isActive: true } });
+    // A dashboard stat tile, so it is loaded and polled. It used to `find({ isActive: true })` —
+    // pulling every active document as a fully-hydrated 21-column entity (including the text file
+    // path) into Node just to derive four integers, on a table that grows with branches × doc
+    // types. One grouped count returns the same four numbers straight from the database, and the
+    // `status` index makes each conditional count index-assisted rather than a full scan + transfer.
+    const row = await this.documentRepository
+      .createQueryBuilder('d')
+      .select('COUNT(*)', 'total')
+      .addSelect('COUNT(*) FILTER (WHERE d.status = :uploaded)', 'uploaded')
+      .addSelect('COUNT(*) FILTER (WHERE d.status = :dispatched)', 'dispatched')
+      .addSelect('COUNT(*) FILTER (WHERE d.status = :received)', 'received')
+      .where('d.isActive = :active', { active: true })
+      .setParameters({
+        uploaded: DocumentStatus.UPLOADED,
+        dispatched: DocumentStatus.DISPATCHED,
+        received: DocumentStatus.RECEIVED,
+      })
+      .getRawOne<{ total: string; uploaded: string; dispatched: string; received: string }>();
     return {
-      total: all.length,
-      uploaded: all.filter(d => d.status === DocumentStatus.UPLOADED).length,
-      dispatched: all.filter(d => d.status === DocumentStatus.DISPATCHED).length,
-      received: all.filter(d => d.status === DocumentStatus.RECEIVED).length,
+      total: Number(row?.total ?? 0),
+      uploaded: Number(row?.uploaded ?? 0),
+      dispatched: Number(row?.dispatched ?? 0),
+      received: Number(row?.received ?? 0),
     };
   }
 }

@@ -32,6 +32,7 @@ describe('DocumentService', () => {
     save: jest.fn(),
     findOne: jest.fn(),
     find: jest.fn(),
+    createQueryBuilder: jest.fn(),
     manager: { query: mockManagerQuery },
   };
 
@@ -738,6 +739,45 @@ describe('DocumentService', () => {
       const saved = await service.dispatchDocument('doc-1', 'user-1');
       expect(mockEmailProvider.send).not.toHaveBeenCalled();
       expect(saved.dispatchedToEmail).toBeNull();
+    });
+  });
+
+  describe('getDocumentStats', () => {
+    /**
+     * The stat tile must count in the database, not hydrate every active document into Node to
+     * derive four integers. This pins the aggregate path: it reads a single grouped-count row and
+     * never falls back to loading the rows.
+     */
+    it('returns the four counts from one grouped-count query, never a full find', async () => {
+      const qb: any = {
+        select: jest.fn().mockReturnThis(),
+        addSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        setParameters: jest.fn().mockReturnThis(),
+        getRawOne: jest.fn().mockResolvedValue({ total: '120', uploaded: '30', dispatched: '50', received: '40' }),
+      };
+      mockDocumentRepo.createQueryBuilder.mockReturnValue(qb);
+      mockDocumentRepo.find.mockClear();
+
+      const stats = await service.getDocumentStats();
+
+      expect(stats).toEqual({ total: 120, uploaded: 30, dispatched: 50, received: 40 });
+      expect(qb.getRawOne).toHaveBeenCalledTimes(1);
+      // The whole point: no full-table hydration.
+      expect(mockDocumentRepo.find).not.toHaveBeenCalled();
+    });
+
+    it('reads zero cleanly when the table is empty', async () => {
+      const qb: any = {
+        select: jest.fn().mockReturnThis(),
+        addSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        setParameters: jest.fn().mockReturnThis(),
+        getRawOne: jest.fn().mockResolvedValue(undefined),
+      };
+      mockDocumentRepo.createQueryBuilder.mockReturnValue(qb);
+
+      expect(await service.getDocumentStats()).toEqual({ total: 0, uploaded: 0, dispatched: 0, received: 0 });
     });
   });
 });
