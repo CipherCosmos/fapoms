@@ -29,9 +29,55 @@ async function seed() {
   console.log('Database connection initialized.');
 
   try {
-    // Clean slate: Truncate existing tables to resolve potential database corruption
+    // Clean slate: Truncate existing tables to resolve potential database corruption.
+    //
+    // The list is filtered against the live schema before it is used, because a single name that
+    // no longer exists takes the WHOLE statement down with 42P01 — TRUNCATE is one statement, so
+    // there is no partial success. `assayer_government_documents` is exactly how that was found:
+    // it was dropped by a later migration, survived in long-lived databases as a leftover table,
+    // and therefore kept working here while failing on every FRESH install — the one case where
+    // seeding actually matters. Filtering keeps this working the next time a table is renamed or
+    // retired, without anyone having to remember to edit this line.
     console.log('Truncating existing tables for clean seed...');
-    await AppDataSource.query('TRUNCATE TABLE capabilities, capability_permissions, responsibilities, responsibility_capabilities, role_responsibilities, users, roles, permissions, organizations, clients, client_configurations, client_contacts, client_contracts, client_billing, assayers, assayer_commercial_profiles, assayer_government_documents, assayer_documents, assayer_remarks, assayer_activities, workforce_attributes, branches, branch_contacts, branch_documents, zones, projects, project_branches, assignments CASCADE;');
+    /**
+     * Sample DATA only. The RBAC tables — roles, permissions, capabilities, responsibilities and
+     * their join tables — are deliberately NOT here, because migrations own them.
+     *
+     * They used to be truncated, and it silently broke every fresh install: migrations create a
+     * row for all eight SystemRole values, the truncate deleted the lot, and this file only
+     * re-creates the three it happens to describe. DESK, AUDITOR, PRODUCT_SUPPORT and CLIENT_USER
+     * were left with no row and could not be assigned to anyone — StartupChecks reported
+     * "4 role(s) in SystemRole have no row … Run migrations", and running migrations could not fix
+     * it because they were already recorded as applied. Seeding sample data must not be able to
+     * dismantle the permission system.
+     *
+     * Nothing is lost by leaving them alone: the permission, capability, responsibility and role
+     * seeding below is all find-or-create, and the role branch merges rather than replaces.
+     */
+    const TRUNCATE_CANDIDATES = [
+      'users', 'organizations', 'clients',
+      'client_configurations', 'client_contacts', 'client_contracts', 'client_billing', 'assayers',
+      'assayer_commercial_profiles', 'assayer_government_documents', 'assayer_documents',
+      'assayer_remarks', 'assayer_activities', 'workforce_attributes', 'branches',
+      'branch_contacts', 'branch_documents', 'zones', 'projects', 'project_branches', 'assignments',
+    ];
+    const present: { table_name: string }[] = await AppDataSource.query(
+      `SELECT table_name FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_name = ANY($1)`,
+      [TRUNCATE_CANDIDATES],
+    );
+    const presentNames = new Set(present.map((r) => r.table_name));
+    const skipped = TRUNCATE_CANDIDATES.filter((t) => !presentNames.has(t));
+    if (skipped.length) {
+      console.log(`  skipping ${skipped.length} table(s) not in this schema: ${skipped.join(', ')}`);
+    }
+    const toTruncate = TRUNCATE_CANDIDATES.filter((t) => presentNames.has(t));
+    if (toTruncate.length) {
+      // Identifiers cannot be parameterised, so they are quoted individually. Every value comes
+      // from the hardcoded list above and is matched against information_schema, never from input.
+      const quoted = toTruncate.map((t) => `"${t}"`).join(', ');
+      await AppDataSource.query(`TRUNCATE TABLE ${quoted} CASCADE;`);
+    }
 
     // 1. Seed Default Organization
     console.log('Seeding default organization...');
@@ -332,8 +378,47 @@ async function seed() {
 
     const rolesMap = new Map<SystemRole, RoleEntity>();
 
-    for (const rd of roleDefinitions) {
-      let role = existingRoles.find(r => r.name === rd.name);
+    /**
+     * Collapse duplicate definitions by role name before anything is written.
+     *
+     * `roles.name` is UNIQUE, and the list above still carried the pre-consolidation shape: two
+     * ADMIN entries (Super Administrator / Administrator) and two OPERATIONS entries (Manager /
+     * Executive), left behind when SUPER_ADMIN folded into ADMIN and the two operations roles
+     * folded into OPERATIONS. Only the display names still told them apart. The first insert
+     * succeeded and the second hit UQ_648e3f5447f725579d7d4ffdfb7 with "Key (name)=(ADMIN)
+     * already exists", so `npm run seed` could not finish on a fresh database at all — which is
+     * the only kind of database that needs it. Long-lived databases hid this because the roles
+     * were already there from a migration.
+     *
+     * Union rather than pick-one: between them the pair described a single role's full remit, so
+     * keeping either alone would quietly narrow it. The first entry's display name and
+     * description win, being the broader of the two.
+     */
+    const mergedRoleDefinitions = [
+      ...roleDefinitions
+        .reduce((acc, rd) => {
+          const prev = acc.get(rd.name);
+          if (prev) {
+            prev.permissionKeys = [...new Set([...prev.permissionKeys, ...rd.permissionKeys])];
+            prev.responsibilityNames = [
+              ...new Set([...prev.responsibilityNames, ...rd.responsibilityNames]),
+            ];
+          } else {
+            acc.set(rd.name, {
+              ...rd,
+              permissionKeys: [...rd.permissionKeys],
+              responsibilityNames: [...rd.responsibilityNames],
+            });
+          }
+          return acc;
+        }, new Map<string, (typeof roleDefinitions)[number]>())
+        .values(),
+    ];
+
+    for (const rd of mergedRoleDefinitions) {
+      // `existingRoles` is a snapshot taken before this loop, so it never sees a role created by
+      // an earlier iteration; `rolesMap` covers that and keeps the lookup correct either way.
+      let role = existingRoles.find(r => r.name === rd.name) ?? rolesMap.get(rd.name as SystemRole);
       const rolePermissions = rd.permissionKeys
         .map(key => permissionMap.get(key))
         .filter((p): p is PermissionEntity => !!p);

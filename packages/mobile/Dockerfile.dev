@@ -19,7 +19,11 @@ COPY packages/frontend/package.json ./packages/frontend/
 COPY packages/mobile/package.json ./packages/mobile/
 
 # ---- 3. Install ALL workspace dependencies ----
-RUN npm install --legacy-peer-deps
+# --no-audit: skips the network-heavy audit step (saves time and bandwidth).
+# npm cache clean --force: removes the tarball cache in the same RUN layer so
+# it is never committed to the image layer, reducing image size by ~200-400 MB.
+RUN npm install --legacy-peer-deps --no-audit \
+    && npm cache clean --force
 
 # ---- 4. Fix React version conflict ----
 # The workspace root hoists React 19 (from frontend) to /app/node_modules/.
@@ -38,8 +42,9 @@ COPY packages/mobile/ ./packages/mobile/
 
 WORKDIR /app/packages/mobile
 
-# Ensure all mobile-specific packages are installed
-RUN npm install --legacy-peer-deps
+# NOTE: No second npm install needed here — workspace root install at step 3
+# already resolved and linked all mobile-specific packages. Running it again
+# would download ~300 MB of duplicate tarballs and waste significant disk space.
 
 EXPOSE 8081
 

@@ -31,13 +31,25 @@ const MIGRATIONS_GLOB = [
 
 export const databaseConfig = (
   configService: ConfigService,
-): TypeOrmModuleOptions => ({
+): TypeOrmModuleOptions => {
+  // A single connection string (Neon, RDS, any managed Postgres) takes precedence over the
+  // discrete DB_* vars. When it is set — or DB_SSL=true — TLS is turned on, which managed
+  // providers like Neon require. `rejectUnauthorized: false` keeps it working across
+  // environments without shipping a CA bundle; the transport is still encrypted.
+  const url = configService.get<string>('DATABASE_URL');
+  const sslEnabled = configService.get<string>('DB_SSL', url ? 'true' : 'false') === 'true';
+  return ({
   type: 'postgres',
-  host: configService.get<string>('DB_HOST', 'localhost'),
-  port: configService.get<number>('DB_PORT', 5432),
-  username: configService.get<string>('DB_USERNAME', 'fapoms'),
-  password: configService.get<string>('DB_PASSWORD', 'fapoms_dev'),
-  database: configService.get<string>('DB_DATABASE', 'fapoms'),
+  ...(url
+    ? { url }
+    : {
+        host: configService.get<string>('DB_HOST', 'localhost'),
+        port: configService.get<number>('DB_PORT', 5432),
+        username: configService.get<string>('DB_USERNAME', 'fapoms'),
+        password: configService.get<string>('DB_PASSWORD', 'fapoms_dev'),
+        database: configService.get<string>('DB_DATABASE', 'fapoms'),
+      }),
+  ...(sslEnabled ? { ssl: { rejectUnauthorized: false } } : {}),
   autoLoadEntities: true,
   // Compared to the literal 'true' rather than read as <boolean>. ConfigModule has no
   // schema, so ConfigService.get returns the raw environment string — and every non-empty
@@ -93,4 +105,5 @@ export const databaseConfig = (
     // Makes connections identifiable in pg_stat_activity when diagnosing load.
     application_name: 'fapoms-backend',
   },
-});
+  });
+};

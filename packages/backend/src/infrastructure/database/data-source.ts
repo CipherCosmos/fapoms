@@ -9,13 +9,27 @@ dotenv.config({ path: path.join(process.cwd(), '.env.local') });
 /** True when this file is the compiled build (dist) rather than the ts-node source. */
 const IS_COMPILED = __filename.endsWith('.js');
 
+// Migrations are DDL, so prefer a DIRECT (unpooled) connection — Neon's pooled endpoint
+// (PgBouncer, transaction mode) is the wrong place to run schema changes. Falls back to the
+// pooled URL, then to the discrete DB_* vars. TLS is on whenever a URL is used (managed
+// Postgres like Neon requires it).
+const migrationUrl = process.env.DATABASE_URL_UNPOOLED || process.env.DATABASE_URL;
+const sslEnabled = process.env.DB_SSL
+  ? process.env.DB_SSL === 'true'
+  : Boolean(migrationUrl);
+
 export const AppDataSource = new DataSource({
   type: 'postgres',
-  host: process.env.DB_HOST || 'localhost',
-  port: parseInt(process.env.DB_PORT || '5432', 10),
-  username: process.env.DB_USERNAME || 'fapoms',
-  password: process.env.DB_PASSWORD || 'fapoms_dev',
-  database: process.env.DB_DATABASE || 'fapoms',
+  ...(migrationUrl
+    ? { url: migrationUrl }
+    : {
+        host: process.env.DB_HOST || 'localhost',
+        port: parseInt(process.env.DB_PORT || '5432', 10),
+        username: process.env.DB_USERNAME || 'fapoms',
+        password: process.env.DB_PASSWORD || 'fapoms_dev',
+        database: process.env.DB_DATABASE || 'fapoms',
+      }),
+  ...(sslEnabled ? { ssl: { rejectUnauthorized: false } } : {}),
   synchronize: process.env.DB_SYNCHRONIZE === 'true',
   logging: process.env.DB_LOGGING === 'true',
   /**

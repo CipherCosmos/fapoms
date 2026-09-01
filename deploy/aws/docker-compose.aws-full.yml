@@ -1,0 +1,61 @@
+# =============================================================================
+# FAPOMS - 'full' mode overlay: the self-hosted OSM + scanning services.
+#
+# Composed ON TOP of the base AWS stack (prod minus MinIO). Only used when you
+# deploy in 'full' mode. In 'saving' mode these are skipped and the backend
+# points NOMINATIM_URL / OSRM_URL at a hosted API (or leaves them unset) and runs
+# with file scanning off.
+#
+# Reached by the backend over the compose network by service name:
+#   CLAMAV_HOST=clamav:3310 · NOMINATIM_URL=http://nominatim:8080 · OSRM_URL=http://osrm:5000
+#
+# No ports are published - these are internal to the box, not public.
+# =============================================================================
+services:
+  # Upload virus scanning. The backend blocks uploads it cannot scan when
+  # FILE_SCAN_REQUIRED=true (bootstrap sets that in full mode).
+  clamav:
+    image: docker.io/clamav/clamav:1.4
+    restart: unless-stopped
+    volumes:
+      - clamavdb:/var/lib/clamav          # virus signature DB, persisted so it isn't re-downloaded
+    mem_limit: 2g
+    healthcheck:
+      test: ["CMD-SHELL", "clamdcheck.sh || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 120s
+    logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
+
+  # Geocoder. First start downloads the India extract and imports it - this runs
+  # for HOURS and the container reports unhealthy until it finishes. Subsequent
+  # starts serve immediately from the persisted database.
+  nominatim:
+    image: docker.io/mediagis/nominatim:4.4
+    restart: unless-stopped
+    environment:
+      PBF_URL: ${NOMINATIM_PBF_URL:-https://download.geofabrik.de/asia/india-latest.osm.pbf}
+      REPLICATION_URL: ${NOMINATIM_REPLICATION_URL:-https://download.geofabrik.de/asia/india-updates/}
+      IMPORT_STYLE: address            # lighter than 'full' - address lookup is all FAPOMS needs
+      NOMINATIM_PASSWORD: ${NOMINATIM_PASSWORD:-nominatim}
+    volumes:
+      - nominatimdata:/var/lib/postgresql/14/main
+    shm_size: 1g
+    mem_limit: 6g
+    logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
+
+  # Router. The graph is prepared once by bootstrap.sh (osrm-extract/partition/
+  # customize) into the bind-mounted data dir; this service only serves it.
+  osrm:
+    image: docker.io/osrm/osrm-backend:latest
+    restart: unless-stopped
+    command: osrm-routed --algorithm mld --max-table-size 8000 /data/india-latest.osrm
+    volumes:
+      - ${OSM_DATA_DIR:-/opt/fapoms-osm}/osrm:/data
+    mem_limit: 4g
+    logging: { driver: json-file, options: { max-size: "10m", max-file: "3" } }
+
+volumes:
+  clamavdb:
+  nominatimdata:

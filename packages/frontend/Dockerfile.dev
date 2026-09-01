@@ -13,13 +13,26 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 
 # ---- 2. Copy all package.json files (for dependency resolution) ----
+# Mobile is excluded — frontend only resolves shared + backend peer deps at the root.
 COPY packages/shared/package.json ./packages/shared/
 COPY packages/backend/package.json ./packages/backend/
 COPY packages/frontend/package.json ./packages/frontend/
-COPY packages/mobile/package.json ./packages/mobile/
 
 # ---- 3. Install ALL workspace dependencies ----
-RUN npm install --legacy-peer-deps && npm install @rollup/rollup-linux-arm64-musl --no-save --legacy-peer-deps
+# --no-audit: skips the network-heavy audit step (saves time and bandwidth).
+# The arch check installs the correct platform-specific Rollup native binding:
+#   - aarch64 → arm64-musl (Alpine)
+#   - x86_64  → x64-musl   (Alpine)
+# This fixes a hard-coded arm64 install that would fail on x86 production servers.
+# npm cache clean --force: removes the tarball cache in the same RUN layer so
+# it is never committed to the image layer, reducing image size by ~200-400 MB.
+RUN npm install --legacy-peer-deps --no-audit \
+    && if [ "$(uname -m)" = "aarch64" ]; then \
+         npm install @rollup/rollup-linux-arm64-musl --no-save --legacy-peer-deps --no-audit; \
+       elif [ "$(uname -m)" = "x86_64" ]; then \
+         npm install @rollup/rollup-linux-x64-musl --no-save --legacy-peer-deps --no-audit; \
+       fi \
+    && npm cache clean --force
 
 # ---- 4. Copy and build the shared package ----
 COPY packages/shared/ ./packages/shared/

@@ -1,0 +1,261 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  FAPOMS - minimal-cost single-box deployment. One Graviton (ARM) EC2 instance
+  runs the whole application stack (Postgres+PostGIS, Redis, MinIO->S3, LiveKit,
+  backend, frontend, Caddy) via docker-compose.prod.yml. Object storage is S3.
+  Deliberately NO NAT Gateway, NO load balancer, NO RDS/ElastiCache - each of
+  those is a recurring cost this design avoids. Access is over SSM Session
+  Manager, so no SSH port is exposed. See README.md.
+
+# ---------------------------------------------------------------------------
+# Parameters - the only things you choose at deploy time.
+# ---------------------------------------------------------------------------
+Parameters:
+  DeployMode:
+    Type: String
+    Default: saving
+    AllowedValues: [saving, full]
+    Description: >
+      'saving' = minimal app stack (map engines external/off). 'full' = also self-hosts
+      ClamAV + Nominatim + OSRM on the box (needs a bigger instance and disk). This tags
+      the box; bootstrap.sh reads the same mode to decide what to start.
+
+  InstanceType:
+    Type: String
+    Default: t4g.large
+    AllowedValues: [t4g.medium, t4g.large, t4g.xlarge, t4g.2xlarge]
+    Description: >
+      Graviton (ARM) size. t4g.large (8 GB) is the minimal full app stack ('saving').
+      Use t4g.xlarge/2xlarge for 'full' - Nominatim + OSRM need the extra memory.
+
+  RootVolumeSizeGb:
+    Type: Number
+    Default: 60
+    MinValue: 30
+    MaxValue: 1000
+    Description: >
+      gp3 root volume (GB). ~60 is plenty for 'saving'. For 'full', use 250+ - the India
+      OSM extract plus the Nominatim database and OSRM graph are tens of GB.
+
+  AlertEmail:
+    Type: String
+    AllowedPattern: ".+@.+\\..+"
+    Description: Email for the billing budget alert (and where AWS sends the SES verification later).
+
+  BudgetLimitUsd:
+    Type: Number
+    Default: 75
+    Description: Monthly cost budget. You get an alert at 80% and 100% of this - a safety net, not a hard cap.
+
+  LatestAl2023Ami:
+    Type: "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>"
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64
+    Description: Resolved automatically to the current Amazon Linux 2023 ARM64 image - never hard-code an AMI.
+
+# ---------------------------------------------------------------------------
+Resources:
+
+  # --- Network: one public subnet, an internet gateway, no NAT (NAT = ~$32/mo). ---
+  Vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.20.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags: [{ Key: Name, Value: fapoms-vpc }]
+
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref Vpc
+      CidrBlock: 10.20.1.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags: [{ Key: Name, Value: fapoms-public }]
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags: [{ Key: Name, Value: fapoms-igw }]
+
+  VpcGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref Vpc
+      InternetGatewayId: !Ref InternetGateway
+
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref Vpc
+      Tags: [{ Key: Name, Value: fapoms-public-rt }]
+
+  DefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: VpcGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetRouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # --- Firewall. No SSH (22) - shell access is via SSM Session Manager instead. ---
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: FAPOMS - web + LiveKit media. No SSH; use SSM Session Manager.
+      VpcId: !Ref Vpc
+      SecurityGroupIngress:
+        - { IpProtocol: tcp, FromPort: 80,  ToPort: 80,  CidrIp: 0.0.0.0/0, Description: HTTP }
+        - { IpProtocol: tcp, FromPort: 443, ToPort: 443, CidrIp: 0.0.0.0/0, Description: HTTPS }
+        - { IpProtocol: tcp, FromPort: 7881, ToPort: 7881, CidrIp: 0.0.0.0/0, Description: LiveKit ICE/TCP fallback }
+        - { IpProtocol: udp, FromPort: 3478, ToPort: 3478, CidrIp: 0.0.0.0/0, Description: LiveKit embedded TURN }
+        - { IpProtocol: udp, FromPort: 50100, ToPort: 50200, CidrIp: 0.0.0.0/0, Description: LiveKit WebRTC media }
+      SecurityGroupEgress:
+        - { IpProtocol: "-1", CidrIp: 0.0.0.0/0, Description: All outbound }
+      Tags: [{ Key: Name, Value: fapoms-sg }]
+
+  # --- Object storage: private, encrypted, lifecycle-managed to keep cost flat. ---
+  StorageBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "fapoms-documents-${AWS::AccountId}"
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      VersioningConfiguration: { Status: Enabled }
+      LifecycleConfiguration:
+        Rules:
+          - Id: abort-incomplete-uploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 7 }
+          - Id: expire-old-versions
+            Status: Enabled
+            NoncurrentVersionExpiration: { NoncurrentDays: 30 }
+      Tags: [{ Key: project, Value: fapoms }]
+
+  # --- Instance identity: S3 to its own bucket, SES send, and SSM for shell. No keys on the box. ---
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: fapoms-s3-and-ses
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: [s3:ListBucket, s3:GetBucketLocation]
+                Resource: !GetAtt StorageBucket.Arn
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject]
+                Resource: !Sub "${StorageBucket.Arn}/*"
+              - Effect: Allow
+                Action: [ses:SendEmail, ses:SendRawEmail]
+                Resource: "*"
+      Tags: [{ Key: project, Value: fapoms }]
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InstanceRole]
+
+  # --- The box. gp3 root, encrypted. User-data only prepares the runtime; the app
+  #     itself is deployed with bootstrap.sh over SSM (it needs your code + secrets). ---
+  Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: !Ref LatestAl2023Ami
+      IamInstanceProfile: !Ref InstanceProfile
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds: [!Ref SecurityGroup]
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeType: gp3          # gp3 is cheaper than gp2; 3000 IOPS / 125 MB/s are free baseline
+            VolumeSize: !Ref RootVolumeSizeGb
+            Encrypted: true
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          set -euxo pipefail
+          dnf update -y
+          dnf install -y docker git
+          # docker compose v2 plugin
+          mkdir -p /usr/libexec/docker/cli-plugins
+          ARCH=$(uname -m); case "$ARCH" in aarch64) C=aarch64;; *) C=x86_64;; esac
+          curl -fsSL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$C" \
+            -o /usr/libexec/docker/cli-plugins/docker-compose
+          chmod +x /usr/libexec/docker/cli-plugins/docker-compose
+          systemctl enable --now docker
+          usermod -aG docker ssm-user 2>/dev/null || true
+          echo "FAPOMS host ready. Connect with SSM and run deploy/aws/bootstrap.sh" > /etc/motd
+      Tags:
+        - { Key: Name, Value: fapoms }
+        - { Key: project, Value: fapoms }
+        - { Key: deploy-mode, Value: !Ref DeployMode }
+
+  ElasticIp:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags: [{ Key: Name, Value: fapoms-eip }]
+
+  EipAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      AllocationId: !GetAtt ElasticIp.AllocationId
+      InstanceId: !Ref Instance
+
+  # --- Cost guardrail: a monthly budget that emails you before a surprise, not after. ---
+  Budget:
+    Type: AWS::Budgets::Budget
+    Properties:
+      Budget:
+        BudgetName: fapoms-monthly
+        BudgetType: COST
+        TimeUnit: MONTHLY
+        BudgetLimit: { Amount: !Ref BudgetLimitUsd, Unit: USD }
+      NotificationsWithSubscribers:
+        - Notification: { NotificationType: ACTUAL, ComparisonOperator: GREATER_THAN, Threshold: 80 }
+          Subscribers: [{ SubscriptionType: EMAIL, Address: !Ref AlertEmail }]
+        - Notification: { NotificationType: FORECASTED, ComparisonOperator: GREATER_THAN, Threshold: 100 }
+          Subscribers: [{ SubscriptionType: EMAIL, Address: !Ref AlertEmail }]
+
+# ---------------------------------------------------------------------------
+Outputs:
+  PublicIp:
+    Description: Elastic IP - the app's stable public address (put this in the env + mobile build).
+    Value: !Ref ElasticIp
+  AppUrlHttp:
+    Description: Where the app will answer once bootstrap.sh has run (HTTP until you add a domain).
+    Value: !Sub "http://${ElasticIp}"
+  S3Bucket:
+    Description: Object-storage bucket for documents, attachments, PDFs, and the APK.
+    Value: !Ref StorageBucket
+  ConnectCommand:
+    Description: Open a shell on the box - no SSH key, no open port. (Add --profile if you use a named one.)
+    Value: !Sub "aws ssm start-session --target ${Instance} --region ${AWS::Region}"
+  InstanceId:
+    Value: !Ref Instance
