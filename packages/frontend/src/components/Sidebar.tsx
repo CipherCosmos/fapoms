@@ -14,7 +14,8 @@ import {
   Users,
   Building2,
   Receipt,
-  UserCog, Inbox, MessageSquare, BellRing, SlidersHorizontal, AlertTriangle } from 'lucide-react';
+  UserCog, Inbox, MessageSquare, BellRing, SlidersHorizontal,
+  ScrollText, AlertTriangle } from 'lucide-react';
 import { GlobalSearch } from './GlobalSearch';
 import { canAccessRoute } from '../config/route-permissions';
 import { WORK_TABS } from '../pages/work/workTabs';
@@ -104,6 +105,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
         // question "where do I change X" had two answers and nothing to choose between them.
         // It is a section of Platform Settings now.
         { name: 'Platform Settings', path: '/admin/settings', icon: SlidersHorizontal },
+        { name: 'Service Logs', path: '/admin/logs', icon: ScrollText },
       ],
     },
     {

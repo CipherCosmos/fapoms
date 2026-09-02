@@ -131,6 +131,14 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR],
   },
   {
+    // Container logs. Administrators only, gated on the role itself rather than a grantable
+    // permission: logs are the least filtered view of the system there is, and that is not a
+    // capability anyone should be able to add to a role by editing a role. Mirrors
+    // @Roles(SystemRole.ADMIN) on ServiceLogsController.
+    path: '/admin/logs',
+    allowedRoles: [SystemRole.ADMIN],
+  },
+  {
     // Which events the platform raises, to whom, on what channels — super administrators only,
     // by the same decision. Mirrors NOTIFICATION_ADMIN_ROLES on the backend controller.
     path: '/admin/notifications',

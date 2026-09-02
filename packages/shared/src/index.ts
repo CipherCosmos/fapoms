@@ -42,3 +42,6 @@ export * from './assayer-roster-vocabulary';
 // Qualification scoring: dimension vocabulary, view types, standing caps, PII masking
 export * from './assayer-qualification';
 export * from './assignment-fee';
+
+// Service-log viewer: the readable-service allowlist, line shape and query ceilings
+export * from './service-logs';

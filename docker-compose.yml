@@ -205,6 +205,63 @@ services:
   # ---------------------------------------------------------------------------
   # Backend (NestJS) — Hot Reload via nest start --watch
   # ---------------------------------------------------------------------------
+  # ---------------------------------------------------------------------------------------------
+  # Read-only Docker API, so administrators can read service logs from the web app.
+  #
+  # The socket is mounted HERE and nowhere else. Handing /var/run/docker.sock to the backend would
+  # have been two lines shorter and considerably worse: that socket is root on the host with extra
+  # steps — whoever holds it can start a privileged container and mount the host filesystem. The
+  # backend parses uploaded spreadsheets and renders PDFs, so it is exactly the process you do not
+  # want holding it. This proxy permits GET on /containers and refuses everything else, including
+  # every POST, so the worst a compromised backend gains is the ability to read logs it can
+  # already read.
+  #
+  # No `ports:` — deliberately. It is reachable only from this compose network, never the host.
+  # ---------------------------------------------------------------------------------------------
+  dockerproxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    container_name: fapoms-dockerproxy
+    environment:
+      # Allowlist: containers only. Every other section of the API stays denied by default.
+      CONTAINERS: 1
+      # Explicitly denied rather than merely left unset, because these are the ones that would
+      # turn "read logs" into "control the host".
+      POST: 0
+      EXEC: 0
+      IMAGES: 0
+      VOLUMES: 0
+      NETWORKS: 0
+      SERVICES: 0
+      TASKS: 0
+      SECRETS: 0
+      CONFIGS: 0
+      SWARM: 0
+      NODES: 0
+      SYSTEM: 0
+      INFO: 0
+      AUTH: 0
+      BUILD: 0
+      COMMIT: 0
+      DISTRIBUTION: 0
+      PLUGINS: 0
+      SESSION: 0
+    volumes:
+      # Parameterised because the homeserver runs rootless podman, whose Docker-compatible socket
+      # lives at /run/user/<uid>/podman/podman.sock and only exists once `podman.socket` is
+      # enabled. Pointing DOCKER_SOCKET_PATH at it makes this work there unchanged; leaving it
+      # unset is correct on any Docker host.
+      - ${DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock:ro
+    restart: unless-stopped
+    # `read_only: true` is deliberately NOT set, having been tried and reverted. This image's
+    # entrypoint renders /usr/local/etc/haproxy/haproxy.cfg from a template beside it on every
+    # start; a read-only root crash-loops on "Read-only file system", and a tmpfs over that
+    # directory hides the template and crash-loops on "No such file or directory". The controls
+    # that actually bound this container are the ones below and above it: the socket is mounted
+    # read-only, no ports are published so it is reachable only from this network, and the
+    # environment permits GET on /containers and nothing else.
+    security_opt:
+      - no-new-privileges:true
+
   backend:
     build:
       context: .
@@ -215,6 +272,21 @@ services:
       - "3000:3000"
     env_file:
       - .env.docker
+    environment:
+      # The read-only Docker proxy that backs the admin service-log viewer. Set here rather than
+      # in .env.docker because .env.docker is generated per box and gitignored, so a value that
+      # must be identical everywhere does not belong in it.
+      DOCKER_API_URL: http://dockerproxy:2375
+      # Scopes log lookups to this stack, so that on a daemon hosting several compose projects
+      # 'postgres' cannot resolve to somebody else's database container.
+      #
+      # Passed through EMPTY by default rather than defaulted to a name. Compose derives the
+      # project from the directory, which here makes it `gssautomation`, not `fapoms` — a literal
+      # default was wrong on the very first machine it ran on and matched no container at all,
+      # producing an empty service list that looks exactly like a broken feature. Left unset, the
+      # backend identifies its own container by hostname and reads the project off its labels,
+      # which is right everywhere. Set this only to override that.
+      COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME:-}
     volumes:
       # Bind-mount source code for hot reload
       - ./packages/backend/src:/app/packages/backend/src
@@ -239,7 +311,10 @@ services:
       #
       # The image builds `shared` already, so nothing needs to be mounted for it to run. After
       # editing `packages/shared/src`, rebuild it inside the container:
-      #     docker compose exec backend npm run build:shared
+      #     docker compose exec -w /app backend npm run build:shared
+      #
+      # `-w /app` is required: build:shared is a root workspace script and this image's WORKDIR is
+      # /app/packages/backend, where npm resolves the backend package and reports "Missing script".
       - ./packages/shared/src:/app/packages/shared/src
       # Firebase service account (for FCM push notifications)
       - ./fapoms-gss-firebase-adminsdk-fbsvc-848e0d4888.json:/app/packages/backend/fapoms-gss-firebase-adminsdk-fbsvc-848e0d4888.json
@@ -258,6 +333,11 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+      # Started, not healthy: the proxy has no healthcheck, and the backend must come up whether
+      # or not the log viewer works — reading logs is an operator convenience, not a dependency
+      # of serving the application.
+      dockerproxy:
+        condition: service_started
 
   # ---------------------------------------------------------------------------
   # Frontend (Vite + React) — Hot Reload via Vite HMR

@@ -291,3 +291,10 @@ Three further properties worth knowing:
 
 **Mobile is not covered by this.** JavaScript changes reach handsets through `eas update`; native
 changes need a new APK. See `packages/mobile/BUILD-APK.md`.
+
+## Reading service logs without shell access
+
+`/admin/logs` serves live and historical container output to administrators, and the same logs are
+available over HTTP for pasting into a conversation. The Docker socket is never mounted into the
+backend — a read-only proxy container fronts it. See [docs/service-logs.md](docs/service-logs.md)
+for the endpoints, the security model and the retention caveats.

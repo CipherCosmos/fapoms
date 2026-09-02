@@ -57,6 +57,7 @@ const BREADCRUMBS: { prefix: string; category: string; label: string }[] = [
   { prefix: '/settings', category: 'My Account', label: 'Profile & Preferences' },
   // The org-wide pages, so the header names them instead of falling back to the brand text.
   { prefix: '/admin/settings', category: 'Administration', label: 'Platform Settings' },
+  { prefix: '/admin/logs', category: 'Administration', label: 'Service Logs' },
   { prefix: '/admin/notifications', category: 'Administration', label: 'Notification Rules' },
   { prefix: '/admin/rule-bypass', category: 'Administration', label: 'Rule Bypass' },
   { prefix: '/transport-costs', category: 'Operational Setup', label: 'Transport Costs' },

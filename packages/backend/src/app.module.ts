@@ -51,6 +51,7 @@ import { SecurityModule } from './infrastructure/security/security.module';
 import { TenancyModule } from './infrastructure/tenancy/tenancy.module';
 import { ScopeModule } from './infrastructure/scope/scope.module';
 import { RuleBypassModule } from './modules/platform/rule-bypass/rule-bypass.module';
+import { ServiceLogsModule } from './modules/platform/logs/service-logs.module';
 import { PersistenceModule } from './infrastructure/persistence/persistence.module';
 import { RetentionModule } from './infrastructure/retention/retention.module';
 import { HealthController } from './health.controller';
@@ -176,6 +177,7 @@ import { DataResetModule } from './infrastructure/data-reset/data-reset.module';
     ScopeModule,
     // Global: the rules it governs are enforced across planning, assignment and check-in.
     RuleBypassModule,
+    ServiceLogsModule,
     PersistenceModule,
     // Bounded, batched purges for the append-only tables. Nothing in this system deleted
     // anything before it: at 2,000 audits/day the audit trail, notifications, outbox and

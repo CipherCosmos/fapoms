@@ -44,6 +44,7 @@ const FeedbackPage = React.lazy(() => import('./pages/feedback/FeedbackPage').th
 const Holidays = React.lazy(() => import('./pages/Holidays'));
 const NotificationAdmin = React.lazy(() => import('./pages/admin/NotificationAdmin'));
 const PlatformSettings = React.lazy(() => import('./pages/admin/PlatformSettings'));
+const ServiceLogs = React.lazy(() => import('./pages/admin/ServiceLogs'));
 const Zones = React.lazy(() => import('./pages/Zones'));
 const Settings = React.lazy(() => import('./pages/Settings'));
 const RuleBypassPanel = React.lazy(() => import('./pages/admin/RuleBypassPanel').then((m) => ({ default: m.RuleBypassPanel })));
@@ -406,6 +407,7 @@ export const App: React.FC = () => {
           <Route path="/transport-costs" element={<Navigate to="/admin/settings?group=transport" replace />} />
           <Route path="/admin/notifications" element={<NotificationAdmin />} />
           <Route path="/admin/settings" element={<PlatformSettings />} />
+          <Route path="/admin/logs" element={<ServiceLogs />} />
           <Route path="/zones" element={<Zones />} />
           <Route path="/notifications" element={<Notifications />} />
           <Route path="/feedback" element={<FeedbackPage />} />
