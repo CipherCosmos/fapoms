@@ -85,10 +85,11 @@ set to review before anything is built. The script prints the outputs you need:
    ```bash
    aws ssm start-session --target <InstanceId> --region <your-region>
    ```
-2. **Get the code onto the box** — clone with a token (private repo) or copy it up:
+2. **Get the code onto the box** — the repository is public, so a plain clone works; add a PAT
+   only if you have made it private:
    ```bash
    sudo -i
-   export GIT_URL="https://<PAT>@github.com/<you>/gssAutomation.git"
+   export GIT_URL="https://github.com/CipherCosmos/fapoms.git"
    ```
 3. **Run bootstrap in the SAME mode you deployed:**
    ```bash
@@ -109,6 +110,86 @@ set to review before anything is built. The script prints the outputs you need:
    ```
 6. **Verify** — `curl -s http://localhost:8080/api/v1/health`, then open `http://<PublicIp>`.
 7. **Mobile** — rebuild the APK with `EXPO_PUBLIC_API_URL=http://<PublicIp>/api/v1`, upload the `.apk` to the bucket.
+
+---
+
+## 3. Auto-deploy a branch onto the box
+
+Makes the box follow a branch instead of waiting for someone to pull. A systemd timer checks
+every two minutes; when the branch has moved it deploys — but only past a CI gate, and only
+rebuilding the image whose package actually changed.
+
+```bash
+sudo -i
+BRANCH=test MODE=saving bash /opt/fapoms/deploy/aws/install-auto-deploy.sh
+```
+
+`MODE` must match the mode you bootstrapped with, so the compose file list agrees with what is
+actually running. Re-run the installer to change branch or mode; the stored token is preserved.
+
+| | |
+|---|---|
+| Watch | `tail -f /opt/fapoms-ops/auto-deploy.log` |
+| Next run | `systemctl list-timers fapoms-deploy.timer` |
+| Deploy now | `systemctl start fapoms-deploy.service` |
+| Turn off | `systemctl disable --now fapoms-deploy.timer` |
+
+### What it refuses to do
+
+Every uncertain answer fails closed and waits for the next tick, because a two-minute delay costs
+nothing and shipping an unverified commit to the box holding the audit record does not.
+
+- **A commit CI has not passed.** The verdict is read from the check runs on the exact SHA being
+  deployed. A failing check refuses; a still-running one waits. A *cancelled* run means a newer
+  push superseded this commit — normal on `test`, where `ci.yml` cancels in-flight runs — so it
+  waits for the commit that replaced it, unless that SHA is still branch head 15 minutes later.
+- **A commit with no CI run at all** after 15 minutes: that means Actions is disabled or the
+  workflow is broken, not that the run is slow.
+- **Unpushed commits on the box.** Every deploy begins with `git reset --hard`; real work was
+  found in a deploy checkout once already.
+- **A clone on the wrong branch**, rather than resetting it onto this one.
+- **An invalid Caddyfile** — validated inside the running container before the restart, because
+  the proxy is the only way in.
+
+Emergency bypass, logged loudly — use once and stop:
+`FAPOMS_SKIP_CI_GATE=1 /opt/fapoms-ops/auto-deploy.sh`
+
+### Two things worth knowing
+
+**`deploy/docker-compose.aws.yml` is generated**, not committed — `bootstrap.sh` derives it from
+`docker-compose.prod.yml` by removing MinIO. It is regenerated on every deploy
+(`render-aws-compose.sh`, wired in as `FAPOMS_POST_RESET_HOOK`). Without that it would freeze at
+whatever shape the stack had on install day while the deploy log reported success.
+
+**A stalled gate is silent.** Every uncertain answer fails closed, so when deploys go quiet the app
+just keeps serving the old build — nothing else visibly breaks. `auto-deploy.log` always names the
+reason; it is the first thing to read. `FAPOMS_GH_TOKEN` is optional while the repo is public (it
+only lifts the API rate limit from 60/hr to 5000/hr, counted per source IP), but it becomes
+**required** the day the repo is made private: private plus no token is an HTTP 404, and the gate
+then refuses forever.
+
+### One script, two boxes, two branches
+
+| | Homeserver | This box (AWS EC2) |
+|---|---|---|
+| Branch | `main` | `test` |
+| OS / runtime | AlmaLinux, rootless podman | Ubuntu, docker |
+| Checkout | `~/apps/fapoms` | `/opt/fapoms` |
+| Units | user units, `systemctl --user` | system units, `systemctl` |
+| Installer | `deploy/install-auto-deploy.sh` | `deploy/aws/install-auto-deploy.sh` |
+
+`deploy/auto-deploy.sh` is the same file on both. Everything that differs is a variable, and the
+defaults are the homeserver's values — so that box needs no configuration at all, and this one
+carries its five overrides in `/etc/default/fapoms-deploy`. `ci.yml` runs on both branches, so the
+gate is equally strong either way.
+
+`test` has no review step in front of it: whatever is pushed reaches this box about two minutes
+after CI goes green. That is the right trade for a box people are testing against, and the wrong
+one for a box with real users — which is exactly why `main` and the homeserver are kept separate.
+
+Note that builds run **on the box**. On a `t4g.large` (2 vCPU / 8 GB) a frontend rebuild competes
+with the running stack for RAM; if you see OOM-killed containers during deploys, add swap or move
+to a larger instance.
 
 ---
 

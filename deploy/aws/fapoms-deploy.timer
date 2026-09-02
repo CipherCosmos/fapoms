@@ -1,0 +1,14 @@
+[Unit]
+Description=Check for new FAPOMS commits every 2 minutes
+
+[Timer]
+# Polling, not a webhook: a webhook would mean opening an inbound endpoint on a box whose only
+# public port is the app's. Two minutes is well inside the time it takes to notice a change is
+# wanted, and a poll that finds nothing costs one git fetch.
+OnBootSec=2min
+OnUnitActiveSec=2min
+AccuracySec=15s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

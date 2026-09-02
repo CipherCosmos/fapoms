@@ -167,21 +167,13 @@ EOF
 fi
 
 # --- 4. AWS base compose: prod minus MinIO (S3 replaces it) ----------------
+# The transform lives in render-aws-compose.sh, not here, because auto-deploy has to run it too.
+# Generated from docker-compose.prod.yml and untracked, this file used to be written once at
+# install and never again, so every later change to the production stack stopped at the box's
+# git checkout without reaching a container.
 AWS_COMPOSE="$APP_DIR/deploy/docker-compose.aws.yml"
-python3 - "$APP_DIR/deploy/docker-compose.prod.yml" "$AWS_COMPOSE" <<'PY'
-import sys, yaml
-src, dst = sys.argv[1], sys.argv[2]
-d = yaml.safe_load(open(src))
-svcs = d.get("services", {})
-svcs.pop("minio", None)
-be = svcs.get("backend", {})
-dep = be.get("depends_on")
-if isinstance(dep, dict): dep.pop("minio", None)
-elif isinstance(dep, list) and "minio" in dep: dep.remove("minio")
-d.get("volumes", {}).pop("miniodata", None)
-yaml.safe_dump(d, open(dst, "w"), sort_keys=False)
-print(f"wrote {dst} (minio removed)")
-PY
+APP_DIR="$APP_DIR" bash "$APP_DIR/deploy/aws/render-aws-compose.sh" \
+  "$APP_DIR/deploy/docker-compose.prod.yml" "$AWS_COMPOSE"
 
 COMPOSE_FILES=(-f "$AWS_COMPOSE")
 

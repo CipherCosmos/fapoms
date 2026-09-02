@@ -4,6 +4,12 @@ After=network-online.target
 
 [Service]
 Type=oneshot
+# Optional (the leading '-'): with no config file the script's defaults already describe this
+# host — main, ~/apps/fapoms, rootless podman, docker-compose.prod.yml. The file exists only to
+# hold a GitHub token, and the deployment works without one while the repository is public.
+EnvironmentFile=-%h/.config/fapoms/deploy.env
+# Sourced by the script too, so a hand-run behaves exactly like a timer run.
+Environment=FAPOMS_DEPLOY_CONF=%h/.config/fapoms/deploy.env
 ExecStart=%h/apps/fapoms-ops/auto-deploy.sh
 # A build plus a health wait; well clear of the ~2 minutes a rebuild takes.
 TimeoutStartSec=1800

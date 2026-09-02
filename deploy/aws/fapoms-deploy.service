@@ -1,0 +1,16 @@
+# System unit, unlike the homeserver's user unit: on the EC2 box the stack was brought up by
+# bootstrap as root, /opt/fapoms is root-owned, and the docker socket is root's.
+[Unit]
+Description=Deploy FAPOMS if its branch moved
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/default/fapoms-deploy
+# Not the copy in the repository: git reset --hard rewrites files under /opt/fapoms mid-run, and
+# bash reads a script incrementally as it executes it.
+ExecStart=/opt/fapoms-ops/auto-deploy.sh
+# A build plus a health wait; well clear of the ~2 minutes a rebuild takes.
+TimeoutStartSec=1800
