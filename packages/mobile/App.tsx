@@ -1101,6 +1101,7 @@ function AppMain() {
           // that guard and re-fabricated the phantom asking price it exists to prevent.
           currentFee={negotiate.assignment.proposedFee || 0}
           quotedTravelFee={negotiate.assignment.quotedTravelFee}
+          counterTravelFee={negotiate.assignment.counterTravelFee}
           quotedTransportMode={negotiate.assignment.quotedTransportMode}
           quotedDistanceKm={negotiate.assignment.quotedDistanceKm}
           onCancel={overlay.close}

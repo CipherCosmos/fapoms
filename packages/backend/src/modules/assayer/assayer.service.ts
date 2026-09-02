@@ -17,11 +17,10 @@ import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { rbacPrincipalCacheKey } from '../auth/auth.service';
-import { EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey } from '@fapoms/shared';
+import { EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey } from '@fapoms/shared';
 import { COMMITTED_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { geocodeIndia, pincodeAuthority } from '../geo/india-geocoder';
-import { parseSheet, rowReader, describeMissingColumn } from '../../core/excel/sheet-reader';
 import { resolveCoordinates, needsBetterFix, isPlausibleIndianCoord, GeoFields } from '../geo/coordinate-resolution';
 import { reverseFreely } from '../geo/osm-geocoder';
 
@@ -134,32 +133,71 @@ async function assertAddressConsistent(dto: {
   }
 }
 
+/**
+ * One calendar day as `YYYY-MM-DD`, whatever shape it arrived in.
+ *
+ * `joining_date`, `exit_date` and `termination_date` are `date` columns, and the two sides of a
+ * comparison between them are rarely the same runtime type: the driver hands back the string
+ * `'2024-01-18'`, `update()` has just assigned `new Date(dto.exitDate)`, and the state machine
+ * stamps a bare `new Date()`. `a > b` across those shapes is the kind of check that passes its
+ * unit test and does nothing to a real row. Normalised to `YYYY-MM-DD`, which orders
+ * lexicographically exactly as it orders chronologically.
+ *
+ * A string that is already a calendar day is taken as written, with no zone conversion:
+ * `'2024-01-18'` names a day in the office, not an instant. A `Date` is read in the business zone
+ * for the same reason — a resignation processed at 01:00 in India belongs to that day, which is
+ * not the day UTC would file it under.
+ */
+function calendarDay(value: Date | string | null | undefined): string | null {
+  if (value === null || value === undefined || value === '') return null;
+  if (typeof value === 'string') {
+    const written = /^(\d{4}-\d{2}-\d{2})/.exec(value);
+    if (written) return written[1];
+  }
+  return businessDateKey(value) || null;
+}
 
 /**
- * What a roster upload actually did.
+ * Nobody leaves before they arrive.
  *
- * A bare `{ importedCount, errors }` could not distinguish the outcomes an operator needs to tell
- * apart: 25 new people vs 25 rows that overwrote the existing roster, and "imported" vs "imported
- * but unreachable". `sheetName` matters because the importer now searches every sheet in the
- * workbook — the operator should be able to see it read the one they meant.
+ * 36 of the 1,163 people on the live roster have a joining date later than their exit date — one
+ * joined in January 2024 and left in December 2023 — because no write path has ever compared the
+ * pair. (Most of those are a corrupt imported date rather than a mistyped one; around seven are
+ * genuine ordering errors with both years plausible, and those are the ones only a check at write
+ * time can stop.) The pair is read as a length of service — HR's attrition figures, the tenure
+ * input to the qualification score — and as a window of employment, and an inverted pair makes
+ * both nonsense: negative service, or somebody who was never employed at all.
+ *
+ * Equal dates pass. Joining and leaving on the same day is unusual and does happen.
+ *
+ * One function, called from every path that writes any of the three columns, so the pair cannot
+ * end up checked on admission and unchecked on edit — the shape of the defect already fixed in
+ * `BranchService.update`, where `create` refused a blank SOL ID and the edit form accepted one.
  */
-export interface AssayerUploadReport {
-  /** Rows that produced a record, whether created or updated. */
-  importedCount: number;
-  created: number;
-  updated: number;
-  /** Data rows found in the chosen sheet, so `totalRows - importedCount` is what did not land. */
-  totalRows: number;
-  /** Which sheet of the workbook was read. */
-  sheetName: string;
-  /**
-   * Assayer codes whose *record* has no phone number after the import — reachable in the app,
-   * not by phone. Read from the saved record rather than the sheet, so re-importing a
-   * phone-less roster over people who already have numbers does not report them as unreachable.
-   */
-  needingPhone: string[];
-  errors: string[];
+function assertEmploymentDatesArePossible(record: {
+  joiningDate?: Date | string | null;
+  exitDate?: Date | string | null;
+  terminationDate?: Date | string | null;
+}): void {
+  const joined = calendarDay(record.joiningDate);
+  if (!joined) return;
+
+  const departures: Array<[string, Date | string | null | undefined]> = [
+    ['exit date', record.exitDate],
+    ['termination date', record.terminationDate],
+  ];
+  for (const [label, raw] of departures) {
+    const left = calendarDay(raw);
+    if (left && joined > left) {
+      throw new BadRequestException(
+        `The joining date (${joined}) is after the ${label} (${left}), which would mean this ` +
+        'person left before they joined. Check which of the two dates is wrong and correct it.',
+      );
+    }
+  }
 }
+
+
 
 export interface CreateAssayerDto {
   /** Omit to have the server allocate the next free code. */
@@ -656,6 +694,16 @@ export class AssayerService implements OnModuleInit {
     await assertAddressConsistent(dto);
 
     /**
+     * Checked on admission too, even though `CreateAssayerDto` carries no exit date today.
+     *
+     * The rule has one home and both writers call it, so on the day somebody adds `exitDate` to
+     * admission — back-loading a leaver from the roster is the obvious reason, and this is where
+     * it would land — the check is already standing rather than something to remember. Skipping
+     * it here because the field does not exist yet is how `create` and `update` drift apart.
+     */
+    assertEmploymentDatesArePossible(dto);
+
+    /**
      * Resolved through the shared chain, so an assayer's home is placed by the same rules — and
      * carries the same precision record — as a branch. That symmetry is the point: the
      * conflict-of-interest floor and the serviceability radius are distances *between* the two,
@@ -741,6 +789,32 @@ export class AssayerService implements OnModuleInit {
       state: assayer.state,
       pincode: assayer.pincode,
     };
+
+    /**
+     * Where somebody stands in the workforce is not editable from the profile form.
+     *
+     * The copy loop below writes any key of the payload that matches a column, so a body carrying
+     * `lifecycleStatus: 'RESIGNED'` would move a person out of the workforce through the edit
+     * screen: no state-machine check on whether that transition is even legal, no reason on their
+     * employment record, no activity entry, and none of the departure bookkeeping in
+     * `doTransitionLifecycle` — so their client empanelments would stay ACTIVE and that bank would
+     * carry on being offered them. `status` is a projection of `lifecycleStatus` and has no
+     * independent value to set at all; see `AssayerEntity.deriveOperationalStatus`.
+     *
+     * Neither request DTO declares these, so the validation pipe strips both today. This is the
+     * rule outliving that: an internal caller passing the interface a wider object, or a field
+     * added to the DTO by somebody who did not read this far, would otherwise reopen the hole.
+     */
+    for (const decided of ['status', 'lifecycleStatus'] as const) {
+      if ((dto as Record<string, unknown>)[decided] !== undefined) {
+        throw new BadRequestException(
+          "An assayer's status is changed with the lifecycle actions on their record — activate, " +
+          'put on leave, suspend, resign, terminate — which ask for a reason and record who ' +
+          'decided. It cannot be set from the profile form.',
+        );
+      }
+    }
+
     /**
      * What an emptied box means, decided here rather than in every client.
      *
@@ -780,6 +854,23 @@ export class AssayerService implements OnModuleInit {
     if (dto.joiningDate) assayer.joiningDate = new Date(dto.joiningDate);
     if (dto.exitDate) assayer.exitDate = new Date(dto.exitDate);
     if (dto.terminationDate) assayer.terminationDate = new Date(dto.terminationDate);
+
+    /**
+     * The merged pair, not the fields that happened to arrive: sending a 2024 joining date against
+     * a 2023 exit date already on the row produces exactly the same impossible record as sending
+     * both together, and only the merged view can see it.
+     *
+     * Only when the edit touches one of the three dates, though. 36 people already carry an
+     * inverted pair, and validating unconditionally would refuse a clerk correcting one of those
+     * records' phone number — a guard that blocks ordinary work on the very rows it exists to
+     * protect, and that offers no way to save the correction it is demanding. Touch a date and you
+     * own the pair; leave the dates alone and an existing contradiction stays the data fix's
+     * problem rather than the editor's.
+     */
+    if (dto.joiningDate !== undefined || dto.exitDate !== undefined || dto.terminationDate !== undefined) {
+      assertEmploymentDatesArePossible(assayer);
+    }
+
     const addressChanged = dto.address !== undefined && dto.address !== orig.address;
     const cityChanged = dto.city !== undefined && dto.city !== orig.city;
     const districtChanged = dto.district !== undefined && dto.district !== orig.district;
@@ -1190,6 +1281,16 @@ export class AssayerService implements OnModuleInit {
     AssayerLifecycleStatus.TERMINATED,
   ]);
 
+  /**
+   * The two states that mean the person has left the workforce, as opposed to being unavailable
+   * within it. INACTIVE, SUSPENDED and ON_LEAVE are all "not right now"; these two are "not any
+   * more", and only these two carry a departure date and end the client standings.
+   */
+  private static readonly DEPARTED_LIFECYCLE = new Set<string>([
+    AssayerLifecycleStatus.RESIGNED,
+    AssayerLifecycleStatus.TERMINATED,
+  ]);
+
   async transitionLifecycle(id: string, targetStatus: string, userId: string, reason?: string): Promise<AssayerEntity> {
     if (AssayerService.LIFECYCLE_MOVES_NEEDING_A_REASON.has(targetStatus) && !reason?.trim()) {
       throw new BadRequestException(
@@ -1323,6 +1424,9 @@ export class AssayerService implements OnModuleInit {
       throw new BadRequestException(`Invalid lifecycle status: ${targetStatus}`);
     }
 
+    // Before the save, because these are columns on the entity about to be written.
+    const datesCorrected = this.reconcileDepartureDates(assayer, targetStatus);
+
     return this.workflowEngine.executeCommand(
       'assayer',
       assayer.id,
@@ -1334,7 +1438,27 @@ export class AssayerService implements OnModuleInit {
       [],
       async () => {
         const saved = await this.assayerRepository.save(assayer);
-        await this.recordActivity(saved.id, 'ASSAYER_LIFECYCLE_TRANSITION', currentStatus, targetStatus, userId, reason || null);
+
+        // After the save, so a departure whose workflow command was refused does not close the
+        // client standings of somebody still on the roster.
+        const empanelmentsClosed = AssayerService.DEPARTED_LIFECYCLE.has(targetStatus)
+          ? await this.closeClientEmpanelmentsOnDeparture(saved.id, targetStatus, userId)
+          : 0;
+
+        /**
+         * The bookkeeping goes on the record with the reason, not silently alongside it. A
+         * departure date the system chose and an empanelment it ended are both things somebody
+         * will ask about later — "who took her off the Axis list?" has to have an answer.
+         */
+        const consequences = [
+          datesCorrected,
+          empanelmentsClosed > 0
+            ? `${empanelmentsClosed} client empanelment${empanelmentsClosed === 1 ? '' : 's'} closed`
+            : null,
+        ].filter(Boolean).join('; ');
+        const remarks = [reason?.trim() || null, consequences || null].filter(Boolean).join(' — ') || null;
+
+        await this.recordActivity(saved.id, 'ASSAYER_LIFECYCLE_TRANSITION', currentStatus, targetStatus, userId, remarks);
         await this.auditService.recordEvent({
           category: EventCategory.WORKFLOW,
           eventType: 'ASSAYER_LIFECYCLE_TRANSITION',
@@ -1343,7 +1467,7 @@ export class AssayerService implements OnModuleInit {
           previousState: currentStatus,
           newState: targetStatus,
           userId,
-          remarks: reason || `Lifecycle transition: ${currentStatus} → ${targetStatus}`,
+          remarks: remarks || `Lifecycle transition: ${currentStatus} → ${targetStatus}`,
         });
 
         // Only on the crossing into ACTIVE, never on a re-save at ACTIVE. The dedupe key is the
@@ -1364,6 +1488,121 @@ export class AssayerService implements OnModuleInit {
         return { saved, event };
       }
     );
+  }
+
+  /**
+   * Brings the departure dates into line with the state the assayer is being moved to, and
+   * returns a sentence describing any correction so it can be written onto the record.
+   *
+   * Leaving. 5 of the 1,163 people on the roster are RESIGNED or TERMINATED with no departure
+   * date at all, so nothing that counts departures can see that they went: HR's attrition rate,
+   * the roster's "Exited" chip and the workforce header's exit count all read a date, and all
+   * three report zero for those five. The date is *recorded* rather than *demanded* deliberately.
+   * Refusing the transition until somebody types one leaves the person ACTIVE — still passing the
+   * planner's deployability gate, still being offered audits — and a departure dated the day it
+   * was processed instead of the day they actually left is a far smaller error than a departure
+   * that never got recorded because the form would not accept it. A date HR has already entered is
+   * never overwritten: that is the real last working day, and it beats today's.
+   *
+   * `exit_date` is the column that carries it, for both kinds of leaving. All 447 recorded
+   * departures on the live roster use it and not one uses `termination_date`, and HR's own
+   * queries read `COALESCE(exit_date, termination_date)`. A termination stamps `termination_date`
+   * as well, because "they were dismissed" is a fact the exit date alone does not carry — but a
+   * termination with only that column set is invisible to every reader above, which is what the
+   * two TERMINATED people with no exit date are.
+   *
+   * Coming back. 2 people are lifecycle ACTIVE with an exit date behind them: the record says both
+   * that they work here and that they left, and the departure counts include somebody who is on
+   * the plan tomorrow. Returning to ACTIVE therefore clears a departure date that has already
+   * passed. A date still ahead is left alone — that is a notice period, which is a coherent thing
+   * for a working person to have, and clearing it would erase a leaving date somebody entered on
+   * purpose.
+   */
+  private reconcileDepartureDates(assayer: AssayerEntity, target: AssayerLifecycleStatus): string | null {
+    const today = calendarDay(new Date())!;
+    const corrections: string[] = [];
+
+    if (AssayerService.DEPARTED_LIFECYCLE.has(target)) {
+      if (!assayer.exitDate) {
+        assayer.exitDate = new Date();
+        corrections.push(`exit date recorded as ${today}`);
+      }
+      if (target === AssayerLifecycleStatus.TERMINATED && !assayer.terminationDate) {
+        assayer.terminationDate = new Date();
+        corrections.push(`termination date recorded as ${today}`);
+      }
+      /**
+       * A date this method chose has to survive the same check a typed one does. Stamping today
+       * onto somebody whose joining date is in the future would manufacture precisely the
+       * impossible pair `create` and `update` refuse, and would do it automatically, at scale, in
+       * a bulk transition — the one route by which a guard can end up creating the rows it exists
+       * to prevent. Only asserted when something was stamped: an inverted pair the record already
+       * carried is the data fix's problem, and refusing to record a real departure because of it
+       * would leave that person deployable.
+       */
+      if (corrections.length) assertEmploymentDatesArePossible(assayer);
+      return corrections.length ? corrections.join(', ') : null;
+    }
+
+    if (target === AssayerLifecycleStatus.ACTIVE) {
+      const exit = calendarDay(assayer.exitDate);
+      if (exit && exit <= today) {
+        assayer.exitDate = null;
+        corrections.push(`exit date ${exit} cleared on returning to work`);
+      }
+      const terminated = calendarDay(assayer.terminationDate);
+      if (terminated && terminated <= today) {
+        assayer.terminationDate = null;
+        corrections.push(`termination date ${terminated} cleared on returning to work`);
+      }
+      return corrections.length ? corrections.join(', ') : null;
+    }
+
+    return null;
+  }
+
+  /**
+   * Ends the client standings that keep someone who has left selectable, and reports how many.
+   *
+   * 7 people who have left still hold an ACTIVE empanelment, so each remains an eligible candidate
+   * for that bank's branches: the planner's per-client gate admits an ACTIVE or RECOMMENDED
+   * standing and asks nothing whatsoever about whether the person still works here. Both standings
+   * are closed, not just ACTIVE — RECOMMENDED means "put forward, awaiting the client's decision",
+   * and somebody who has resigned is not a candidate we are still putting forward.
+   *
+   * They become INACTIVE — "empanelled once, dormant now" — rather than RESIGNED or TERMINATED.
+   * Those two record the *client's* decision about this person, and the client has not made one;
+   * writing them here would put words in a bank's mouth. INACTIVE is also the only closed standing
+   * the planner's excluded panel explains as reversible ("reactivate it on the vetting screen"),
+   * which is exactly the affordance a reinstatement needs. The reason names the departure so the
+   * next person to look does not have to infer it.
+   *
+   * Nothing reopens these. Coming back to ACTIVE clears the person's own contradictory dates, but
+   * putting somebody back onto a bank's empanelment list is the bank's decision, never a side
+   * effect of an HR screen — so the way back in is the vetting screen and a human. The asymmetry
+   * is the point: leaving is our fact to record, returning to a client's panel is theirs.
+   */
+  private async closeClientEmpanelmentsOnDeparture(
+    assayerId: string,
+    target: AssayerLifecycleStatus,
+    userId: string,
+  ): Promise<number> {
+    // TypeORM returns `[rows, rowCount]` from an UPDATE, not a rows array.
+    const [, affected] = await this.dataSource.query(
+      `UPDATE assayer_client_empanelments
+          SET status = $1, status_reason = $2, updated_by = $3
+        WHERE assayer_id = $4 AND is_active = true AND status IN ($5, $6)`,
+      [
+        EmpanelmentStatus.INACTIVE,
+        `Closed automatically on ${calendarDay(new Date())}: the assayer's workforce record was ` +
+        `moved to ${target}. Reinstating them with this client is a fresh decision for the client.`,
+        userId,
+        assayerId,
+        EmpanelmentStatus.ACTIVE,
+        EmpanelmentStatus.RECOMMENDED,
+      ],
+    ) ?? [];
+    return typeof affected === 'number' ? affected : 0;
   }
 
   async verifyDocuments(id: string, userId: string, reason?: string): Promise<AssayerEntity> {
@@ -2005,334 +2244,21 @@ export class AssayerService implements OnModuleInit {
     return Buffer.from(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' }));
   }
 
-  async uploadFromExcel(fileBuffer: Buffer, userId: string): Promise<AssayerUploadReport> {
-    /**
-     * Columns are matched ignoring case, spaces and punctuation — see core/excel/sheet-reader.
-     *
-     * This used to read `row['Assayer Code'] || row['Assayer code']` exactly, so a roster whose
-     * column said `ASSAYER CODE`, `Assayer_Code`, or `Assayer Code ` with a trailing space
-     * failed every single row with "Assayer Code is required" — 72 identical lines about a
-     * column the operator could see in front of them. Passing the required columns also lets
-     * the parser find a header row that is not the first, which is what a client file with a
-     * merged title row above the table looks like.
-     */
-    const sheet = parseSheet(fileBuffer, ['Assayer Code', 'Assayer Name', 'Phone']);
-    const rows = sheet.rows;
-
-    const errors: string[] = [];
-    let importedCount = 0;
-    let createdCount = 0;
-    let updatedCount = 0;
-    /** Admitted, but not yet reachable by phone — reported so the gap is worked, not discovered. */
-    const needingPhone: string[] = [];
-
-    const CODE_ALIASES = ['Assayer Code', 'Assayer code', 'AssayerCode', 'Code', 'Employee Code', 'Emp Code'];
-
-    /**
-     * If not one row carries a code, the column is missing — not seventy-two bad rows.
-     *
-     * Reported once, naming the headers actually found, because the per-row form of this
-     * message is unactionable: it tells the operator a column they are looking at is absent and
-     * gives them no way to see that the file says something slightly different.
-     */
-    if (rows.length > 0 && !rows.some((r: Record<string, any>) => rowReader(r)(...CODE_ALIASES))) {
-      return {
-        importedCount: 0,
-        created: 0,
-        updated: 0,
-        totalRows: rows.length,
-        sheetName: sheet.sheetName,
-        needingPhone: [],
-        errors: [describeMissingColumn('Assayer Code', CODE_ALIASES, sheet, 'assayer-roster')],
-      };
-    }
-
-    /**
-     * Codes already seen in *this* workbook, and the row they came from.
-     *
-     * Re-importing a code deliberately updates that assayer, which is how a corrected roster is
-     * re-uploaded. Two rows carrying the same code inside one file is a different thing: it is a
-     * mistake in the file. Applied in order it silently overwrote the earlier row — including
-     * blanking fields the earlier row had filled — and reported both as ordinary updates, so
-     * nothing on screen said a row had been discarded. Same treatment the branch import gives a
-     * repeated branch code.
-     */
-    const firstRowForCode = new Map<string, number>();
-
-    /**
-     * Every assayer this roster might already know about, resolved in one query.
-     *
-     * This was a `findOne({ where: { assayerCode } })` inside the loop, so a 200-person roster
-     * issued 200 queries to answer a question one `In(codes)` answers — the same shape of fault
-     * the branch importer had. Read before the loop because none of it depends on what an earlier
-     * row did: the duplicate-code guard above means each code is worked at most once, so an
-     * assayer this import creates can never also be matched by it.
-     *
-     * No `isActive` filter, matching the per-row lookup exactly. Re-importing a roster is meant
-     * to update the person it names even if their record has been deactivated; filtering here
-     * would quietly create a second record for them instead.
-     */
-    const codesInFile = Array.from(new Set(
-      rows.map((r: Record<string, any>) => rowReader(r)(...CODE_ALIASES)).filter(Boolean),
-    ));
-    const existingAssayers = codesInFile.length
-      ? await this.assayerRepository.find({ where: { assayerCode: In(codesInFile) } })
-      : [];
-    const assayerByCode = new Map(existingAssayers.map((a) => [a.assayerCode, a]));
-
-    /**
-     * And their current commercial profiles, for the rows that carry rates.
-     *
-     * Only assayers who already existed can have one, so this covers every case the per-row
-     * `findOne` did: a person this import is creating has no profile by definition, and that path
-     * now issues no query at all rather than one that is guaranteed to return nothing.
-     *
-     * Sorted ascending and written into the map in order, so the last write per assayer is the
-     * latest `effectiveStartDate` — the same record `order: { effectiveStartDate: 'DESC' }` with
-     * `findOne` picked. The whole preload is best-effort for the same reason the per-row lookup
-     * had `.catch(() => null)`: a missing profile must not fail the roster import.
-     */
-    const activeProfileByAssayerId = new Map<string, AssayerCommercialProfileEntity>();
-    if (existingAssayers.length > 0) {
-      try {
-        const profiles = await this.commercialRepository.find({
-          where: { assayerId: In(existingAssayers.map((a) => a.id)), isActive: true },
-          order: { effectiveStartDate: 'ASC' },
-        });
-        for (const profile of profiles) activeProfileByAssayerId.set(profile.assayerId, profile);
-      } catch {
-        /* best-effort: the import proceeds and simply writes a fresh profile */
-      }
-    }
-
-    for (let i = 0; i < rows.length; i++) {
-      const row = rows[i];
-      // +1 for the header row itself, plus however many rows preceded it.
-      const rowNum = i + sheet.headerRow + 1;
-      const get = rowReader(row);
-
-      try {
-        const assayerCode = get(...CODE_ALIASES);
-        if (!assayerCode) {
-          // A genuinely blank trailing row, not a header problem — that was ruled out above.
-          if (Object.values(row).every((v) => v === null || v === undefined || String(v).trim() === '')) continue;
-          errors.push(`Row ${rowNum}: no assayer code in this row`);
-          continue;
-        }
-
-        const codeKey = assayerCode.trim().toUpperCase();
-        const seenAt = firstRowForCode.get(codeKey);
-        if (seenAt !== undefined) {
-          errors.push(
-            `Row ${rowNum} (${assayerCode}): same assayer code as row ${seenAt} — only row ${seenAt} was used. ` +
-            'Merge the two rows into one and re-upload if both carry details you need.',
-          );
-          continue;
-        }
-        firstRowForCode.set(codeKey, rowNum);
-
-        // Rosters carry one combined name column; the record stores first/last
-        // separately. Split on whitespace, treating the final token as the surname
-        // and everything before it as the given name, so "R Jeganathan" and
-        // "Shinil T" both resolve sensibly.
-        let firstName = get('First Name', 'FirstName', 'Given Name');
-        let lastName = get('Last Name', 'LastName', 'Surname');
-        const combinedName = get('Assayer Name', 'Name', 'Full Name', 'Employee Name');
-        if ((!firstName || !lastName) && combinedName) {
-          const parts = combinedName.split(/\s+/).filter(Boolean);
-          if (parts.length === 1) {
-            firstName = firstName || parts[0];
-            lastName = lastName || parts[0];
-          } else {
-            firstName = firstName || parts.slice(0, -1).join(' ');
-            lastName = lastName || parts[parts.length - 1];
-          }
-        }
-        if (!firstName) {
-          errors.push(`Row ${rowNum} (${assayerCode}): provide 'Assayer Name' or 'First Name'`);
-          continue;
-        }
-        if (!lastName) lastName = firstName;
-
-        /**
-         * A missing phone is a gap in the record, not a reason to refuse it.
-         *
-         * This used to reject the row. The client rosters this importer is actually fed have no
-         * phone column at all — seven columns: name, code, residence address, location, district,
-         * state, zone — so a real roster imported nobody, and the only way past it was for an
-         * operator to invent numbers into a payroll-adjacent record.
-         *
-         * The record is admitted without one and counted as incomplete, which is reported back
-         * and shown on the HR record as "Phone — blocks calling and dispatch". The assayer opens
-         * at INVITED and the recommendation engine will not deploy them until ACTIVE, so an
-         * unreachable person cannot quietly end up on a plan.
-         */
-        const phone = get('Phone', 'Mobile', 'Contact Number', 'Mobile Number', 'Phone Number', 'Contact');
-
-        // State drives region, zone and the public-holiday calendar, so it is the one field an
-        // assayer cannot be planned without — the same line the branch importer draws.
-        const state = get('State');
-        if (!state) {
-          errors.push(`Row ${rowNum} (${assayerCode}): no State — it sets the region, zone and holiday calendar this assayer is planned against`);
-          continue;
-        }
-
-        const dto: any = {
-          assayerCode,
-          firstName,
-          lastName,
-          displayName: get('Display Name') || `${firstName} ${lastName}`,
-          email: get('Email') || undefined,
-          phone: phone || undefined,
-          alternatePhone: get('Alternate Phone') || undefined,
-          address: get('Address', 'Residence Address'),
-          state,
-          district: get('District'),
-          // Rosters name the town/locality "Location"; it maps to city.
-          city: get('City', 'Location'),
-          // Rosters rarely carry a separate pincode column — it is embedded in the
-          // residence address, so recover it rather than dropping it.
-          pincode: get('Pincode')
-            || (get('Residence Address').match(/\b\d{6}\b/)?.[0] ?? undefined),
-          // Zone is the operating region on a roster. Normalised because the same
-          // zone appears with inconsistent casing ("North" vs "north"), which would
-          // otherwise create two distinct regions.
-          region: get('Region', 'Zone').replace(/\b\w/g, (c: string) => c.toUpperCase()) || undefined,
-          employeeId: get('Employee ID') || undefined,
-          employeeCode: get('Employee Code') || undefined,
-          employmentType: get('Employment Type') || undefined,
-          department: get('Department') || undefined,
-          joiningDate: get('Joining Date') || undefined,
-          panNumber: get('PAN Number') || undefined,
-          bankAccountNumber: get('Bank Account Number') || undefined,
-          ifscCode: get('IFSC Code') || undefined,
-          experienceYears: parseInt(get('Experience (Years)'), 10) || undefined,
-          performanceRating: parseFloat(get('Performance Rating')) || undefined,
-          maxDailyWorkload: parseInt(get('Max Daily Workload'), 10) || undefined,
-          maxWeeklyWorkload: parseInt(get('Max Weekly Workload'), 10) || undefined,
-          emergencyContactName: get('Emergency Contact Name') || undefined,
-          emergencyContactPhone: get('Emergency Contact Phone') || undefined,
-          emergencyContactRelation: get('Emergency Contact Relation') || undefined,
-          workingHours: undefined,
-        };
-
-        // Parse array fields
-        const skills = get('Skills (comma-separated)', 'Skills');
-        if (skills) dto.skills = skills.split(',').map((s: string) => s.trim()).filter(Boolean);
-
-        const languages = get('Languages (comma-separated)', 'Languages');
-        if (languages) dto.languages = languages.split(',').map((s: string) => s.trim()).filter(Boolean);
-
-        const prefs = get('Preferred Regions (comma-separated)', 'Preferred Regions');
-        if (prefs) dto.preferredRegions = prefs.split(',').map((s: string) => s.trim()).filter(Boolean);
-
-        const specializations = get('Specializations (comma-separated)', 'Specializations');
-        if (specializations) dto.specializations = specializations.split(',').map((s: string) => s.trim()).filter(Boolean);
-
-        // Parse certifications: "Name|YYYY-MM-DD;Name2|YYYY-MM-DD"
-        const certs = get('Certifications (semicolon-separated: Name|YYYY-MM-DD)', 'Certifications');
-        if (certs) {
-          dto.certifications = certs.split(';').map((c: string) => {
-            const [name, expiryDate] = c.split('|').map((p: string) => p.trim());
-            return { name: name || c.trim(), expiryDate: expiryDate || undefined };
-          }).filter((c: any) => c.name);
-        }
-
-        // Parse working hours
-        const whStart = get('Working Hours Start');
-        const whEnd = get('Working Hours End');
-        if (whStart && whEnd) {
-          dto.workingHours = { start: whStart, end: whEnd };
-        }
-
-        // Resolved from the batch loaded before the loop, not a query per row.
-        const existing = assayerByCode.get(assayerCode) ?? null;
-        const saved = existing
-          ? await this.update(existing.id, dto, userId)
-          : await this.create(dto, userId);
-        if (existing) updatedCount++; else createdCount++;
-
-        /**
-         * Reported from the saved record, not from the spreadsheet cell.
-         *
-         * A roster without a phone column re-imported over people who already have numbers must
-         * not report 25 unreachable assayers — they are reachable, the sheet simply did not carry
-         * the number, and `update` leaves an absent field alone. What the operator needs to act
-         * on is who cannot be rung, which is a fact about the record.
-         */
-        if (!saved.phone || !String(saved.phone).trim()) needingPhone.push(assayerCode);
-
-        // A bulk-imported assayer had no password, so every one of them could be
-        // created successfully and then never sign in — the import looked like it
-        // worked while producing accounts that could not be used. Set an initial
-        // password on creation (from the sheet if supplied, otherwise the documented
-        // default) so an imported assayer can actually log in. Never overwrite an
-        // existing password: re-importing a roster must not reset live credentials.
-        if (!existing) {
-          const supplied = get('Initial Password', 'Password');
-          const initial = supplied || 'assayer123';
-          await this.assayerRepository.update(saved.id, {
-            passwordHash: await bcrypt.hash(initial, 12),
-          });
-        }
-
-        // Commercial rates drive what we owe this assayer and the cost side of
-        // every audit they perform, so they are imported with the record rather
-        // than needing a second pass. Only written when the sheet actually carries
-        // a rate — an all-zero profile would read as "this assayer is free".
-        const num = (v: any) => {
-          const n = parseFloat(String(v ?? '').replace(/[^0-9.-]/g, ''));
-          return Number.isFinite(n) ? n : undefined;
-        };
-        const rates = {
-          baseFee: num(get('Base Fee')),
-          dailyRate: num(get('Daily Rate')),
-          hourlyRate: num(get('Hourly Rate')),
-          travelReimbursement: num(get('Travel Reimbursement')),
-          accommodationAllowance: num(get('Accommodation Allowance')),
-          mealAllowance: num(get('Meal Allowance')),
-        };
-        if (Object.values(rates).some((v) => v !== undefined)) {
-          // From the preload. A brand-new assayer cannot have a profile, so that case no longer
-          // pays for a query whose answer is known.
-          const activeProfile = existing ? activeProfileByAssayerId.get(saved.id) ?? null : null;
-
-          const payload = {
-            baseFee: rates.baseFee ?? activeProfile?.baseFee ?? 0,
-            dailyRate: rates.dailyRate ?? activeProfile?.dailyRate ?? 0,
-            hourlyRate: rates.hourlyRate ?? activeProfile?.hourlyRate ?? 0,
-            travelReimbursement: rates.travelReimbursement ?? activeProfile?.travelReimbursement ?? 0,
-            accommodationAllowance: rates.accommodationAllowance ?? activeProfile?.accommodationAllowance ?? 0,
-            mealAllowance: rates.mealAllowance ?? activeProfile?.mealAllowance ?? 0,
-          };
-
-          if (activeProfile) {
-            await this.commercialRepository.save({ ...activeProfile, ...payload, updatedBy: userId });
-          } else {
-            await this.createCommercialProfile(
-              saved.id,
-              { ...payload, currency: 'INR', effectiveStartDate: new Date().toISOString() },
-              userId,
-            );
-          }
-        }
-
-        importedCount++;
-      } catch (err: any) {
-        errors.push(`Row ${rowNum}: ${err.message}`);
-      }
-    }
-
-    return {
-      importedCount,
-      created: createdCount,
-      updated: updatedCount,
-      totalRows: rows.length,
-      sheetName: sheet.sheetName,
-      needingPhone,
-      errors,
-    };
-  }
+  /**
+   * `uploadFromExcel` was removed, with `POST /assayers/upload`.
+   *
+   * It was the second assayer importer and the losing one. Fed a real client roster — several
+   * sheets, `Appraiser code`/`Appraiser Name` headers, 70-odd columns of HR, KYC, banking and
+   * compliance — it scored the branch-audit sheet above the roster sheet, read the wrong sheet
+   * entirely (an assayer code repeats per branch there), and called distinct people duplicates, so
+   * most of the file never landed. `RosterImportService.importAssayerSheet` reads the roster sheet,
+   * recognises the Appraiser headers, and spreads every column across the tables that hold them.
+   *
+   * Nothing called this: the web moved to `/assayers/roster/import` and the endpoint had no client
+   * in either app. The two behaviours it *did* have that the roster importer lacked — finding the
+   * roster whatever the sheet is called, and refusing a branch list as the wrong file — were moved
+   * across first, together with their tests (see `roster-import.spec.ts`).
+   */
 
   /**
    * Lets an assayer change their own password.

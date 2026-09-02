@@ -1,5 +1,6 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
+import { isUniqueViolation } from '../../infrastructure/database/unique-violation';
 import { GeoPrecisionService } from '../geo/geo-precision.service';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import * as xlsx from 'xlsx';
@@ -10,7 +11,9 @@ import {
   OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, EmpanelmentStatus,
   AssayerUnavailableReason, BackgroundCheckVerdict, CibilBand,
 } from '@fapoms/shared';
-import { rowReader } from '../../core/excel/sheet-reader';
+import {
+  rowReader, parseSheet, describeMissingColumn, normaliseHeader, ParsedSheet,
+} from '../../core/excel/sheet-reader';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerReferenceEntity } from './assayer-reference.entity';
 import { AssayerClientEmpanelmentEntity } from './assayer-client-empanelment.entity';
@@ -40,6 +43,37 @@ export interface RosterImportSummary {
   /** Set when the run was a rehearsal — nothing was written. */
   dryRun: boolean;
 }
+
+/**
+ * The columns that identify a roster sheet, used to pick it out of a multi-sheet workbook.
+ *
+ * Scored, not required: a file missing one of these is still read as the roster if it is the best
+ * candidate in the book. The hard requirement is an appraiser code, checked separately, because
+ * that is the one column without which a row cannot become a person.
+ */
+const ROSTER_SIGNATURE_COLUMNS = [
+  'Appraiser code', 'Appraiser Name', 'Residence Address', 'District', 'State',
+];
+
+/**
+ * Every spelling of the one column a row cannot be placed without.
+ *
+ * One list, read by the prefetch and by the row loop, because those two must agree: the prefetch
+ * decides who is already on the roster and the loop decides whether to insert, so a column the
+ * prefetch cannot see but the loop can is a row that gets inserted on top of a person who is
+ * already there. `normaliseHeader` folds the case, so `Appraiser Code` and `Appraiser code` are
+ * one entry here even though the file writes both.
+ */
+const CODE_COLUMNS = ['Appraiser code', 'Assayer code'] as const;
+
+/**
+ * The same column's spellings again, for the "this is not a roster" message.
+ *
+ * Longer than `CODE_COLUMNS` on purpose: this list is printed back to the operator as "Looked
+ * for: …", and the capitalisations they actually type belong in that sentence even though
+ * `normaliseHeader` makes them one key for matching.
+ */
+const CODE_ALIASES = ['Appraiser code', 'Assayer code', 'Appraiser Code', 'Assayer Code'];
 
 /**
  * Bring the appraiser roster spreadsheet in.
@@ -76,20 +110,109 @@ export class RosterImportService {
     private readonly platformSettings: PlatformSettingsService,
   ) {}
 
+  /**
+   * What this workbook is and how big it is — read from the file, and nothing else.
+   *
+   * For the caller that only needs to say "this roster has 1,155 rows, it is running in the
+   * background" and to refuse an unreadable or wrong file on the spot. That caller used to get
+   * those two facts by running a full `dryRun`, which is not a parse: a rehearsal performs the
+   * *entire* import inside a transaction and rolls it back — about ten writes per row, so some
+   * eleven thousand sequential statements for the real roster, on the request thread, holding a
+   * pool connection and taking row locks on `assayers` the whole time. Then the queued worker did
+   * all of it again for real. This does the parsing, which is the part that answers the question.
+   *
+   * Opens no transaction and issues no query.
+   *
+   * The rehearsal an operator explicitly asks for is a different thing and stays as it is: it
+   * writes exactly what a real run writes and rolls it back, because "what will this do to my
+   * data" cannot be answered by reading the file.
+   *
+   * @throws BadRequestException when the workbook has no readable sheet, or no appraiser-code
+   *   column — the same messages, from the same guard, that `importAssayerSheet` refuses with.
+   */
+  inspectSheet(
+    file: Buffer,
+    sheetName?: string,
+  ): { sheetName: string; rowsRead: number; headers: string[] } {
+    const { parsed } = this.resolveRosterSheet(file, sheetName);
+    return { sheetName: parsed.sheetName, rowsRead: parsed.rows.length, headers: parsed.headers };
+  }
+
+  /**
+   * Find the roster wherever it is, rather than demanding a sheet called "Assayers".
+   *
+   * This read `workbook.Sheets['Assayers']` and threw a bare `Error` when there wasn't one — a
+   * **500**, so the operator got "Internal server error" and the sentence naming the sheets that
+   * *were* in their file went to the server log. The real client workbook does not have a sheet
+   * by that name: the branch list comes first and the roster sheet is called `Assayer ` — with a
+   * trailing space. So the everyday file failed with an unreadable error.
+   *
+   * `parseSheet` scores every sheet against the columns a roster carries and also finds a header
+   * row that is not row 1 (a client file with a merged title above the table). It is the same
+   * reader the deleted `/assayers/upload` importer used, which is where this problem had already
+   * been solved once. An explicit `sheetName` still wins, for a caller that knows better.
+   *
+   * One implementation, called by both the import and the parse-only inspection. Two copies of a
+   * file-recognition guard drift, and the way they drift is that the cheap pre-flight accepts a
+   * workbook the import then refuses — after the operator has been told it was queued.
+   */
+  private resolveRosterSheet(
+    file: Buffer,
+    sheetName?: string,
+  ): { sheet: xlsx.WorkSheet; parsed: ParsedSheet } {
+    const workbook = xlsx.read(file, { type: 'buffer', cellDates: true });
+
+    const parsed: ParsedSheet = sheetName && workbook.Sheets[sheetName]
+      ? {
+          sheetName,
+          headerRow: 1,
+          headers: Object.keys(
+            (xlsx.utils.sheet_to_json<Record<string, any>>(workbook.Sheets[sheetName])[0] ?? {}),
+          ),
+          rows: xlsx.utils.sheet_to_json<Record<string, any>>(workbook.Sheets[sheetName], { defval: null }),
+        }
+      : parseSheet(file, ROSTER_SIGNATURE_COLUMNS);
+
+    const sheet = workbook.Sheets[parsed.sheetName];
+    if (!sheet) {
+      throw new BadRequestException(
+        `This workbook has no readable sheet. Sheets found: ${workbook.SheetNames.join(', ') || '(none)'}.`,
+      );
+    }
+
+    /**
+     * There is no appraiser-code *column*, so this is not a roster.
+     *
+     * Refused as a 400 carrying the headers the file actually has — and, when the file is
+     * recognisably one of the other importers' templates, the screen it belongs on. A branch list
+     * read as a roster creates people named after branches, which is why this guard is worth more
+     * than the rows it costs.
+     *
+     * Judged on the header, not on whether any row has a value under it. A roster whose rows are
+     * all missing their code is a roster with bad rows — each one is reported individually, with
+     * its row number — whereas a file with no such column at all is the wrong file. Testing the
+     * values conflates the two, and refuses a one-row sheet whose single code is blank.
+     */
+    const wanted = new Set(CODE_ALIASES.map(normaliseHeader));
+    if (!parsed.headers.some((h) => wanted.has(normaliseHeader(h)))) {
+      throw new BadRequestException(
+        describeMissingColumn('Appraiser code', CODE_ALIASES, parsed, 'assayer-roster'),
+      );
+    }
+
+    return { sheet, parsed };
+  }
+
   async importAssayerSheet(
     file: Buffer,
     actorId: string,
     options: { dryRun?: boolean; sheetName?: string } = {},
   ): Promise<RosterImportSummary> {
     const dryRun = options.dryRun ?? false;
-    const sheetName = options.sheetName ?? 'Assayers';
 
-    const workbook = xlsx.read(file, { type: 'buffer', cellDates: true });
-    const sheet = workbook.Sheets[sheetName];
-    if (!sheet) {
-      throw new Error(`The workbook has no sheet named "${sheetName}". Found: ${workbook.SheetNames.join(', ')}.`);
-    }
-    const rows: Record<string, any>[] = xlsx.utils.sheet_to_json(sheet, { defval: null });
+    const { sheet, parsed } = this.resolveRosterSheet(file, options.sheetName);
+    const sheetName = parsed.sheetName;
+    const rows: Record<string, any>[] = parsed.rows;
 
     /**
      * Hyperlink cells hold their URL in the cell's link attribute, not its text —
@@ -99,12 +222,15 @@ export class RosterImportService {
      */
     try {
       const range = xlsx.utils.decode_range(sheet['!ref'] ?? 'A1');
+      // The header is wherever the reader found it, not necessarily the first row of the range —
+      // a client file with a merged title above the table puts it lower down.
+      const headerRowIndex = range.s.r + (parsed.headerRow - 1);
       for (let c = range.s.c; c <= range.e.c; c++) {
-        const header = String(sheet[xlsx.utils.encode_cell({ c, r: range.s.r })]?.v ?? '').trim().toLowerCase();
+        const header = String(sheet[xlsx.utils.encode_cell({ c, r: headerRowIndex })]?.v ?? '').trim().toLowerCase();
         if (header !== 'link for document' && header !== 'link for documents') continue;
-        for (let r = range.s.r + 1; r <= range.e.r; r++) {
+        for (let r = headerRowIndex + 1; r <= range.e.r; r++) {
           const target = (sheet[xlsx.utils.encode_cell({ c, r })] as any)?.l?.Target;
-          const rowObj = rows[r - range.s.r - 1];
+          const rowObj = rows[r - headerRowIndex - 1];
           if (target && rowObj) rowObj['Link for Document'] = target;
         }
       }
@@ -136,10 +262,55 @@ export class RosterImportService {
     };
     const duplicatePairs = new Map<string, Set<string>>();
 
+    /**
+     * Every row's appraiser code, read once, before anything touches the database.
+     *
+     * Read here and nowhere else so the prefetch below and the loop can never disagree about
+     * what a row's code is: a prefetch that reads `Assayer code` while the loop reads
+     * `Appraiser code` looks like a cache miss and inserts a second record for somebody who is
+     * already there.
+     */
+    const rowCodes = rows.map((row) => blankToNull(rowReader(row)(...CODE_COLUMNS)));
+
     await this.uow.run(async (manager) => {
       // Resolved once, inside the transaction so it reads the same snapshot the import writes
       // against: a lookup per row over 1,155 rows would be 1,155 queries for two answers.
       const clients = await this.buildClientResolver(manager, autoCreateClients, actorId);
+
+      /**
+       * Everyone in this file who is already on the roster, in one query instead of one per row.
+       *
+       * This was a `findOne` per row inside the loop: the real 1,155-row roster asked the
+       * database 1,155 times for an answer a single `IN (…)` gives, and every one of those was a
+       * round trip the operator waited through. Same read, same key, one query.
+       *
+       * **No `isActive` filter**, deliberately, and the same decision the branch importer
+       * records: the per-row `findOne` had none either, and the assayer code is the identity
+       * (see this class's doc comment) — re-importing the roster is meant to update the person
+       * it names *even when their record has been deactivated*. Filtering would hide the
+       * deactivated record here, the insert below would then mint a second one under the same
+       * code, and the unique index would refuse it — so a deactivated appraiser would break the
+       * import of everyone after them.
+       *
+       * The map is kept current as rows land, because a file that names the same code twice must
+       * update that person twice, exactly as the per-row read did — the second read saw the row
+       * the first had just inserted, and a map that never learns would try to insert them again.
+       *
+       * Written through the manager's query builder rather than `find({ assayerCode: In(codes) })`
+       * because `In` would mean importing TypeORM into this service, and
+       * `persistence-boundary.spec.ts` records this file as deliberately free of that — it reaches
+       * every table through the transaction manager it is handed. Same `IN (…)`, one query.
+       */
+      const codesInFile = [...new Set(rowCodes.filter((c): c is string => !!c))];
+      const existingByCode = new Map<string, AssayerEntity>();
+      if (codesInFile.length) {
+        const found: AssayerEntity[] = await manager
+          .createQueryBuilder(AssayerEntity, 'assayer')
+          .where('assayer.assayerCode IN (:...codes)', { codes: codesInFile })
+          .getMany();
+        for (const person of found) existingByCode.set(person.assayerCode, person);
+      }
+
       for (const [index, row] of rows.entries()) {
         // +2: one for the header, one because a spreadsheet's first data row is row 2 to the
         // person who will go and look at it.
@@ -164,7 +335,7 @@ export class RosterImportService {
           }
         }
 
-        const code = blankToNull(read('Appraiser code', 'Assayer code', 'Appraiser Code'));
+        const code = rowCodes[index];
         if (!code) {
           issues.push({
             sourceSheet: sheetName, sourceRow, sourceColumn: 'Appraiser code',
@@ -177,7 +348,7 @@ export class RosterImportService {
           continue;
         }
 
-        const existing = await manager.findOne(AssayerEntity, { where: { assayerCode: code } });
+        const existing = existingByCode.get(code) ?? null;
         const assayer = existing ?? manager.create(AssayerEntity, { assayerCode: code });
         const isNew = !existing;
 
@@ -193,8 +364,40 @@ export class RosterImportService {
         // rehearsal was checking the reader, not the import.
         assayer.updatedBy = actorId;
         if (isNew) assayer.createdBy = actorId;
-        await manager.save(AssayerEntity, assayer);
-        isNew ? summary.created++ : summary.updated++;
+
+        if (isNew) {
+          const landed = await this.insertContestedRow(manager, assayer);
+          if (!landed) {
+            /**
+             * Somebody else inserted this appraiser code between the prefetch and this insert.
+             *
+             * One row's collision, reported as one row. Before this the unique index threw
+             * straight out of the loop, so a second operator importing the same workbook at the
+             * same moment — or a queued job re-run after a restart — killed the whole import and
+             * rolled back every person who had already landed. The winner's record is real; this
+             * row has nothing left to insert, and re-running the import brings its details in as
+             * an update.
+             */
+            issues.push({
+              sourceSheet: sheetName, sourceRow, sourceColumn: 'Appraiser code', rawValue: code,
+              reason: 'Another import created this appraiser code while this one was running, so this '
+                + 'row was not applied. Run the import again to bring its details in as an update.',
+            });
+            summary.skipped++;
+            summary.issues += issues.length;
+            await this.saveIssues(manager, issues, null, code);
+            continue;
+          }
+        } else {
+          await manager.save(AssayerEntity, assayer);
+        }
+
+        // Kept current so a file naming the same code twice updates that person the second time
+        // rather than inserting them again — what the per-row read did, since it saw the row this
+        // transaction had just written.
+        existingByCode.set(code, assayer);
+        if (isNew) summary.created++;
+        else summary.updated++;
 
         const assayerId = assayer.id;
         importedIds.push(assayerId);
@@ -208,6 +411,28 @@ export class RosterImportService {
         );
         summary.empanelments += await this.applyWorkingBanks(manager, assayerId, read, clients);
 
+        /**
+         * A collision goes into the review queue, not only into the summary's notes.
+         *
+         * The notes were the whole of it, and that is where the finding died. For a real import —
+         * which is queued — the notes exist only as the background job's return value: rendered
+         * once into a banner, on a page the operator is explicitly told they can leave, and kept
+         * for 24 hours. The rehearsal does show notes in the confirm dialog, but truncated to the
+         * first four, behind the client-stub and ambiguous-bank notes that the real roster's ~20
+         * lenders generate. So the one finding that requires two records to be compared by hand
+         * was the one most likely never to be read, and there was nothing to re-open, search, or
+         * close once it scrolled away. `assayer_import_issues` is the queue that survives the
+         * page, and `saveIssues` keeps one entry per finding however often the file is imported.
+         *
+         * `sourceColumn` says "Duplicate PAN" rather than "PAN Number" because `saveIssues`
+         * dedupes on (sheet, row, column): a row can carry both an unreadable-cell issue and a
+         * collision on the same column — an email cell holding two addresses whose first one is
+         * also somebody else's — and one must not silently overwrite the other.
+         *
+         * `rawValue` carries the two appraiser codes, never the shared PAN, phone or email
+         * itself. Which two records to compare is the fact a person needs; the identity number is
+         * not, and this queue is rendered on screen and grouped by that text.
+         */
         for (const [kind, value] of [
           ['PAN', assayer.panNumber], ['phone', assayer.phone], ['email', assayer.email],
         ] as const) {
@@ -217,6 +442,13 @@ export class RosterImportService {
           if (holder && holder !== code) {
             const pair = [holder, code].sort().join(' and ');
             (duplicatePairs.get(pair) ?? duplicatePairs.set(pair, new Set()).get(pair)!).add(kind);
+            issues.push({
+              sourceSheet: sheetName, sourceRow, sourceColumn: `Duplicate ${kind}`, rawValue: pair,
+              reason: `${holder} carries the same ${kind} as ${code}. That is usually one person `
+                + 'registered under two codes — compare both records and retire one. Nothing was '
+                + 'merged: two people really can share a phone, and a merge that guesses wrong '
+                + "destroys a real person's history.",
+            });
           } else if (!holder) {
             identitySeen[kind].set(key, code);
           }
@@ -259,6 +491,43 @@ export class RosterImportService {
       + `${summary.issues} needing review.`,
     );
     return summary;
+  }
+
+  /**
+   * Insert an appraiser the prefetch said was absent, surviving the case where they were not.
+   *
+   * Reading and then inserting is not one act: a second import of the same workbook — two
+   * operators, or a queued job re-run — reads the same gap and both aim at it. `assayer_code` is
+   * UNIQUE, so the data stays correct either way; what was wrong is that the loser threw out of
+   * the row loop and took the whole import down with it, rolling back the hundreds of people who
+   * had already landed. `false` here means "somebody else got there first", and the caller
+   * reports that row.
+   *
+   * **The savepoint is the part that actually makes this recoverable.** The whole import is one
+   * transaction, and a Postgres error aborts it: without the savepoint, catching 23505 would only
+   * change which error killed the import, because the very next statement fails with 25P02
+   * (`current transaction is aborted`). Rolling back to the savepoint restores a usable
+   * transaction and the loop carries on.
+   *
+   * Taken only around an insert, and only for a row the prefetch says is new — so a re-import of
+   * the maintained 1,155-person roster, where every code already exists, takes none at all.
+   *
+   * Matched on SQLSTATE alone rather than by constraint name: the uniqueness comes from
+   * `@Column({ unique: true })` on `assayerCode`, so the index carries a TypeORM-generated `UQ_`
+   * hash that no caller can name. `assayer_code` is the only unique column this importer writes,
+   * which is what makes the bare code unambiguous here.
+   */
+  private async insertContestedRow(manager: any, assayer: AssayerEntity): Promise<boolean> {
+    await manager.query('SAVEPOINT roster_row');
+    try {
+      await manager.save(AssayerEntity, assayer);
+    } catch (err) {
+      await manager.query('ROLLBACK TO SAVEPOINT roster_row');
+      if (isUniqueViolation(err)) return false;
+      throw err;
+    }
+    await manager.query('RELEASE SAVEPOINT roster_row');
+    return true;
   }
 
   // ── The person ───────────────────────────────────────────────────────────
@@ -368,7 +637,7 @@ export class RosterImportService {
     {
       const rawEmail = blankToNull(read('Email ID', 'Email'));
       if (rawEmail) {
-        const firstValid = rawEmail.split(/[\s\/,;]+/).find((t) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(t)) ?? null;
+        const firstValid = rawEmail.split(/[\s/,;]+/).find((t) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(t)) ?? null;
         if (firstValid) {
           a.email = firstValid.toLowerCase();
           if (firstValid.length < rawEmail.replace(/\s+/g, '').length) {
@@ -960,8 +1229,35 @@ export class RosterImportService {
       const d = new Date(`${dMonY[2]} ${dMonY[1]}, ${yr}`);
       if (!Number.isNaN(d.getTime())) return d;
     }
+    /**
+     * The last resort, and the one that did real damage.
+     *
+     * `new Date(s)` accepts a bare number as a **year**: `new Date("5484")` is 1 January 5484. A
+     * roster cell holding a plain number — a fee, an employee number, a code typed into the wrong
+     * column — therefore became a confident, valid-looking date in the fifth millennium, and
+     * nothing downstream questioned it. On the real 1,155-person file that produced **75 dates of
+     * birth** ranging from year 0138 to 9952, **58 joining dates** and **26 exit dates**, every one
+     * of them on `01-01`, which is the signature of exactly this parse.
+     *
+     * They were worse than missing values: `qualification-score.service` reads `joiningDate` for
+     * tenure, so someone who "joined in 6333" scored on a negative career length, and no screen
+     * showed anything wrong.
+     *
+     * So the parse is kept, but its RESULT is bounded. Anything outside a human range is treated as
+     * the unreadable cell it is and reported, rather than stored.
+     */
     const parsed = new Date(s);
-    if (!Number.isNaN(parsed.getTime())) return parsed;
+    if (!Number.isNaN(parsed.getTime())) {
+      if (this.isPlausibleHumanDate(parsed)) return parsed;
+      ctx?.issues.push({
+        sourceSheet: ctx.sheet, sourceRow: ctx.sourceRow, sourceColumn: ctx.column,
+        rawValue: String(s).slice(0, 100),
+        reason:
+          `Read as ${parsed.getFullYear()}, which is not a real date for a person — the cell is `
+          + 'probably not a date at all. Left blank; correct it on the source sheet and re-import.',
+      });
+      return null;
+    }
 
     // A silent null here loses a fact forever ("sanjayk" sits in a DOB cell on the real file);
     // a cell that claims to be a date but is not one is a review item.
@@ -970,6 +1266,21 @@ export class RosterImportService {
       reason: 'Could not be read as a date.',
     });
     return null;
+  }
+
+  /**
+   * Could a person's date of birth, joining or exit realistically be this?
+   *
+   * Deliberately generous at both ends rather than tuned: the job is to catch a parse that produced
+   * year 6333, not to police data entry. The lower bound admits the oldest plausible date of birth;
+   * the upper admits a genuinely future-dated exit, because a notice period served in advance is
+   * real — even though every one of the 26 future exit dates in the roster today turned out to be
+   * this corruption rather than notice. Checked against every date in the live table: no legitimate
+   * value falls outside this window, so the rule refuses nothing real.
+   */
+  private isPlausibleHumanDate(d: Date): boolean {
+    const year = d.getFullYear();
+    return year >= 1900 && year <= new Date().getFullYear() + 2;
   }
 }
 

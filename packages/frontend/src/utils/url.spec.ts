@@ -1,3 +1,6 @@
+/**
+ * @jest-environment-options {"url": "https://app.example.com"}
+ */
 import { safeHttpUrl } from './url';
 
 /**
@@ -5,19 +8,13 @@ import { safeHttpUrl } from './url';
  * expense receipt, chat attachment) and an `<a href>` that runs it. A `javascript:` value must
  * never survive this gate — that is the entire stored-XSS class it closes.
  *
- * The test environment runs under jest's "node" testEnvironment (see package.json), which has no
- * `window` global, so `window.location.origin` is stubbed for the duration of these tests.
+ * The app origin comes from the docblock above rather than from a stubbed `window`: these tests
+ * used to replace the whole `window` global, which worked only because the suite ran with no
+ * `window` at all. Under jsdom that assignment is ignored and every relative-URL assertion
+ * resolved against `http://localhost` instead. Setting jsdom's document URL exercises the real
+ * `Location` the browser will hand `safeHttpUrl` in production.
  */
 describe('safeHttpUrl', () => {
-  const originalWindow = (global as any).window;
-
-  beforeAll(() => {
-    (global as any).window = { location: { origin: 'https://app.example.com' } };
-  });
-
-  afterAll(() => {
-    (global as any).window = originalWindow;
-  });
 
   it('rejects a javascript: URL', () => {
     expect(safeHttpUrl('javascript:alert(document.cookie)')).toBeNull();

@@ -1281,6 +1281,7 @@ export class MobileApiService {
           // The quote breakdown recorded when the offer was priced. Grounding for display —
           // "includes ₹X travel by bus" — never added to totals: proposedFee already holds it.
           quotedTravelFee: item.quotedTravelFee != null ? Number(item.quotedTravelFee) : null,
+          counterTravelFee: item.counterTravelFee != null ? Number(item.counterTravelFee) : null,
           quotedTransportMode: item.quotedTransportMode ?? null,
           quotedDistanceKm: item.quotedDistanceKm != null ? Number(item.quotedDistanceKm) : null,
           distanceKm: (() => {

@@ -41,3 +41,4 @@ export * from './assayer-roster-vocabulary';
 
 // Qualification scoring: dimension vocabulary, view types, standing caps, PII masking
 export * from './assayer-qualification';
+export * from './assignment-fee';

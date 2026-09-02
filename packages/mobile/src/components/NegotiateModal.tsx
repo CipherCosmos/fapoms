@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Modal, View, TextInput, TextStyle, KeyboardAvoidingView, Platform } from 'react-native';
-import { travelModeLabel, parseRupeeInput, formatRupees } from '@fapoms/shared';
+import { travelModeLabel, formatRupees, describeAssignmentFee, previewFeeChange } from '@fapoms/shared';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Card } from './ui/primitives';
 
@@ -13,6 +13,13 @@ interface NegotiateModalProps {
    * be argued blind, in free-text remarks. Display-only; `currentFee` already contains it.
    */
   quotedTravelFee?: number | null;
+  /**
+   * The travel currently on the table, once the desk has countered.
+   *
+   * Without it this sheet re-seeded from the rate card's ORIGINAL quote after a counter, so the
+   * assayer was shown — and re-countered against — a number nobody was offering any more.
+   */
+  counterTravelFee?: number | null;
   quotedTransportMode?: string | null;
   quotedDistanceKm?: number | null;
   onSubmit: (counterTravelFee: number, remarks: string) => void | Promise<void>;
@@ -23,6 +30,7 @@ export const NegotiateModal: React.FC<NegotiateModalProps> = ({
   visible,
   currentFee,
   quotedTravelFee,
+  counterTravelFee,
   quotedTransportMode,
   quotedDistanceKm,
   onSubmit,
@@ -45,8 +53,10 @@ export const NegotiateModal: React.FC<NegotiateModalProps> = ({
    * ever be seeded from a travel figure. An empty box asks the question instead of answering it
    * wrongly, which is what happens when the desk quoted no travel at all.
    */
+  // Whatever travel is on the table: a counter if one was made, else the rate card's quote.
+  const travelOnTable = counterTravelFee ?? quotedTravelFee;
   const [feeText, setFeeText] = useState(
-    quotedTravelFee && quotedTravelFee > 0 ? String(quotedTravelFee) : '',
+    travelOnTable != null && travelOnTable > 0 ? String(travelOnTable) : '',
   );
   const [remarks, setRemarks] = useState('');
   const [loading, setLoading] = useState(false);
@@ -56,10 +66,10 @@ export const NegotiateModal: React.FC<NegotiateModalProps> = ({
   // over the previous one's figure — `useState` only reads its initial value on first mount.
   useEffect(() => {
     if (!visible) return;
-    setFeeText(quotedTravelFee && quotedTravelFee > 0 ? String(quotedTravelFee) : '');
+    setFeeText(travelOnTable != null && travelOnTable > 0 ? String(travelOnTable) : '');
     setRemarks('');
     setErrorMsg(null);
-  }, [visible, quotedTravelFee]);
+  }, [visible, travelOnTable]);
 
   /**
    * Placed after the hooks, not before them.
@@ -81,11 +91,22 @@ export const NegotiateModal: React.FC<NegotiateModalProps> = ({
      * same flaw with a different ending (it filed ₹0 and reported success); both now share one
      * reading of an amount field.
      */
-    const parsedFee = parseRupeeInput(feeText);
-    if (parsedFee === null) {
-      setErrorMsg('Enter the travel amount you are asking for.');
+    /**
+     * Zero is a legitimate answer — a branch inside the free commute allowance — and the desk's
+     * own form has always accepted it. `parseRupeeInput` returns null for 0 by contract, so
+     * leaning on it here made ₹0 un-enterable on the phone: an assayer countering a local branch
+     * was told to "enter the travel amount" they had just entered. Parsed through the shared fee
+     * model instead, which is the same code the desk uses.
+     */
+    const preview = previewFeeChange(
+      describeAssignmentFee({ proposedFee: currentFee, quotedTravelFee, counterTravelFee }),
+      feeText,
+    );
+    if (preview.travel === null) {
+      setErrorMsg(preview.error ?? 'Enter the travel amount you are asking for.');
       return;
     }
+    const parsedFee = preview.travel;
     setLoading(true);
     try {
       await onSubmit(parsedFee, remarks);

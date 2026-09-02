@@ -10,6 +10,7 @@ import { AssignmentModule } from '../../modules/assignment/assignment.module';
 import { AssayerModule } from '../../modules/assayer/assayer.module';
 import { NotificationsModule } from '../../modules/notifications/notifications.module';
 import { ValidationModule } from '../../modules/validation/validation.module';
+import { BillingEngineModule } from '../../modules/billing-engine/billing-engine.module';
 import { FeedbackModule } from '../../modules/feedback/feedback.module';
 
 @Module({
@@ -23,6 +24,9 @@ import { FeedbackModule } from '../../modules/feedback/feedback.module';
     ValidationModule,
     // And the feedback desk's response-time SLAs — see FeedbackEscalationService.
     FeedbackModule,
+    // And the money chain: unapproved payouts, attended-but-unclosed audits, and the booking
+    // reconcile that used to run only when somebody pressed a button.
+    BillingEngineModule,
   ],
   providers: [SlaScannerWorker, EmailDigestService],
   exports: [SlaScannerWorker],

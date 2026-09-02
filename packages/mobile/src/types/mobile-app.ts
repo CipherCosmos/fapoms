@@ -144,6 +144,8 @@ export interface AssayerAssignment {
    * quote breakdowns.
    */
   quotedTravelFee?: number | null;
+  /** The travel currently on the table once the desk has countered. Seeds the counter sheet. */
+  counterTravelFee?: number | null;
   /** The transport mode that travel figure assumed (a shared TravelMode value), if any. */
   quotedTransportMode?: string | null;
   /** One-way routed km the quote priced, as recorded at offer time. */

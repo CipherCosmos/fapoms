@@ -4,15 +4,14 @@
 
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { BullModule } from '@nestjs/bull';
 
 import { ProjectService } from './project.service';
-import { ImportJobService } from './import-job.service';
 import { ImportJobWorker } from './import-job.worker';
-import { IMPORT_QUEUE } from './import-job.constants';
+import { ImportModule } from '../import/import.module';
 import { BranchEntity } from '../branch/branch.entity';
 import { ProjectQueryService } from './project-query.service';
 import { ProjectController } from './project.controller';
+import { BranchImportController } from './branch-import.controller';
 import { ProjectEntity } from './project.entity';
 import { ProjectBranchEntity } from './project-branch.entity';
 import { AssessmentEntity } from './assessment.entity';
@@ -41,7 +40,10 @@ import { NotificationsModule } from '../notifications/notifications.module';
      * Not the shared `background-jobs` queue: that one adds named jobs to an unnamed processor,
      * so nothing added to it is ever picked up. See import-job.constants.ts.
      */
-    BullModule.registerQueue({ name: IMPORT_QUEUE }),
+    // The queue itself now lives in `ImportModule`, a leaf every feature module can import.
+    // Registering it here made the queue reachable only from code that could already reach
+    // `ProjectService` — which is why the Branches page grew its own inline importer instead.
+    ImportModule,
     PlatformModule,
     BranchModule,
     NotificationsModule,
@@ -50,8 +52,8 @@ import { NotificationsModule } from '../notifications/notifications.module';
     // feature module — so this cannot close a cycle.
     GeoModule,
   ],
-  controllers: [ProjectController, CallLogController],
-  providers: [ProjectService, ProjectQueryService, CallLogService, ImportJobService, ImportJobWorker],
-  exports: [ProjectService, ProjectQueryService, CallLogService, ImportJobService, TypeOrmModule],
+  controllers: [ProjectController, CallLogController, BranchImportController],
+  providers: [ProjectService, ProjectQueryService, CallLogService, ImportJobWorker],
+  exports: [ProjectService, ProjectQueryService, CallLogService, TypeOrmModule],
 })
 export class ProjectModule {}

@@ -13,7 +13,7 @@ import { useSocketConnection } from '../hooks/useSocketConnection';
 import { getRecommendations, suggestAuditDate, describeSuggestedDate } from '../services/planning';
 import { userMessage } from '../services/errors';
 import { todayDateKey, formatDateOnly } from '../utils/statusLabels';
-import { formatRouteDistance, type RouteSource, callOutcomeLabel } from '@fapoms/shared';
+import { formatRouteDistance, type RouteSource, callOutcomeLabel, describeAssignmentFee, previewFeeChange } from '@fapoms/shared';
 import { AlertBanner, useConfirm } from '../components/ui';
 
 import { usePlatformLimits } from '../hooks/usePlatformLimits';
@@ -202,16 +202,34 @@ export const OperationsInbox: React.FC = () => {
     }, `${item.assayerName} accepted ${item.branchName} at ${inr(fee)} (call logged).`);
   };
 
+  /**
+   * Record the TRAVEL figure the assayer asked for on the call.
+   *
+   * This posted `counterFee` — the whole-fee field — while the lane it sits in is headed "Travel
+   * fee" and the box says "They asked ₹". The server carves a whole fee as
+   * `max(0, whole − quotedBaseFee)`, so an operator who typed the travel they were told (₹650,
+   * against a ₹1,250 base) wrote **travel = 0** and dropped the offer to the base fee. The
+   * `Math.max` clamp made it silent, and the success toast then confirmed the ₹650 that had just
+   * been discarded.
+   *
+   * The amount is now sent as what the screen actually asked for, through the shared preview so
+   * the two fields cannot be swapped by hand again, and the toast states the resulting total
+   * rather than the input.
+   */
   const counter = (item: InboxItem) => {
-    const fee = Number(feeInput);
-    if (!fee) { setMessage({ type: 'error', text: 'Enter the fee they asked for.' }); return; }
+    const fee = describeAssignmentFee(item as any);
+    const preview = previewFeeChange(fee, feeInput);
+    if (preview.error || preview.travel === null) {
+      setMessage({ type: 'error', text: preview.error ?? 'Enter the travel amount they asked for.' });
+      return;
+    }
     void act(item, async () => {
       await api.request(`/assignments/${item.id}/transition`, {
         method: 'POST',
-        body: JSON.stringify({ targetStatus: 'NEGOTIATION', counterFee: fee, remarks: 'Fee requested on call, recorded by the desk' }),
+        body: JSON.stringify({ ...preview.body.counter, remarks: 'Travel requested on call, recorded by the desk' }),
       });
-      await logCall(item, 'NEGOTIATING', fee, 'Asked for a different fee on call');
-    }, `Recorded: ${item.assayerName} wants ${inr(fee)}. Decide when ready.`);
+      await logCall(item, 'NEGOTIATING', preview.newTotal ?? preview.travel!, 'Asked for a different travel amount on call');
+    }, `Recorded: ${item.assayerName} wants ${inr(preview.travel)} travel — the offer becomes ${inr(preview.newTotal)}.`);
   };
 
   const decline = (item: InboxItem) => {

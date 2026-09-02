@@ -1,5 +1,6 @@
 import { Logger } from '@nestjs/common';
 import type { JobOptions, Queue } from 'bull';
+import { FAILED_JOB_RETENTION } from './queued-job';
 
 /**
  * One wanted schedule on a queue: a named job that fires on `cron` (optionally in `tz`).
@@ -8,7 +9,10 @@ export interface WantedSchedule {
   name: string;
   cron: string;
   tz?: string;
-  /** Extra Bull job options (attempts, backoff…). `repeat`/`removeOnComplete` are set here. */
+  /**
+   * Extra Bull job options (attempts, backoff…). `repeat` is set below and cannot be overridden;
+   * `removeOnComplete`/`removeOnFail` are defaulted below and a schedule may override either.
+   */
   jobOptions?: Omit<JobOptions, 'repeat'>;
   /**
    * The payload each firing carries. Defaults to `{}`, which is what every caller got before
@@ -104,8 +108,29 @@ async function convergeOnce(queue: Queue, wanted: WantedSchedule[], logger: Logg
       w.name,
       w.data ?? {},
       {
+        /**
+         * Retention, not "keep every failure forever".
+         *
+         * `removeOnFail: false` kept every failed tick of every cron job in Redis permanently.
+         * That is worse here than on a user-triggered queue: a cron tick is guaranteed and
+         * unbounded in time, so the failures accrue on their own schedule with nobody having
+         * asked for anything. The outbox `drain` fires every minute — a database it cannot reach
+         * leaves 1,440 permanent failed entries a day, precisely when the system is already
+         * degraded — and the notification sweep (every 5 min) and SLA scan (every 15 min) add
+         * another 384 on top, before the hourly and daily schedules.
+         *
+         * Redis runs with `maxmemory` and `noeviction` in production (see bull-queue-manager.ts),
+         * so an unbounded key set does not quietly evict a cache key to make room: Redis starts
+         * refusing writes, which takes down the cache, the rate limiters and every other queue
+         * with it. `BullQueueManager` and the `ocr` queue were fixed for exactly this; the
+         * repeatable schedules — the one producer that is guaranteed to keep producing — were
+         * missed.
+         *
+         * Both sit before `...w.jobOptions` so an individual schedule can still declare its own
+         * (the SLA scan and geo sweeps already declare `attempts`/`backoff` there).
+         */
         removeOnComplete: true,
-        removeOnFail: false,
+        removeOnFail: FAILED_JOB_RETENTION,
         ...w.jobOptions,
         ...(w.jobId ? { jobId: w.jobId } : {}),
         repeat: { cron: w.cron, ...(w.tz ? { tz: w.tz } : {}) },

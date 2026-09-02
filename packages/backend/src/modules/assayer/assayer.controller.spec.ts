@@ -3,6 +3,7 @@ import { ForbiddenException } from '@nestjs/common';
 import { AssayerController } from './assayer.controller';
 import { AssayerService } from './assayer.service';
 import { RosterImportService } from './roster-import.service';
+import { ImportJobService } from '../import/import-job.service';
 import { RosterRecordsService } from './roster-records.service';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { LocationTrailService } from './location-trail.service';
@@ -41,6 +42,8 @@ describe('AssayerController — getProfile', () => {
       providers: [
         { provide: AssayerService, useValue: assayerService },
         { provide: RosterImportService, useValue: {} },
+        // The controller queues real roster imports; these tests are about profile access.
+        { provide: ImportJobService, useValue: {} },
         { provide: RosterRecordsService, useValue: {} },
         { provide: 'StorageEngine', useValue: {} },
         { provide: RegionGuardService, useValue: regionGuard },

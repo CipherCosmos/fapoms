@@ -49,6 +49,10 @@ export interface InboxAssignment {
   channel: ContactChannel;
   proposedFee: number | null;
   agreedFee: number | null;
+  /** The frozen quote behind `proposedFee`. Travel is the only negotiable part. */
+  quotedBaseFee: number | null;
+  quotedTravelFee: number | null;
+  counterTravelFee: number | null;
   /** The client's reference base fee, for the sanity guard below. */
   clientBaseFee: number | null;
   /** True when the proposed fee exceeds the configured multiple of the client reference — a
@@ -230,6 +234,17 @@ export class OperationsInboxService {
         channel: channels.get(a.assayerId) ?? 'PHONE',
         proposedFee: a.proposedFee != null ? Number(a.proposedFee) : null,
         agreedFee: a.agreedFee != null ? Number(a.agreedFee) : null,
+        /**
+         * The split behind the total, so the desk can see what a number is made of.
+         *
+         * Only the total was sent, and the inbox's counter box — headed "Travel fee" — had no way
+         * to know the audit fee it was adding to. It posted the typed figure as a whole fee, the
+         * server carved `max(0, whole − base)`, and travel silently became zero. A screen that
+         * asks for one component of a sum has to be told the other.
+         */
+        quotedBaseFee: a.quotedBaseFee != null ? Number(a.quotedBaseFee) : null,
+        quotedTravelFee: a.quotedTravelFee != null ? Number(a.quotedTravelFee) : null,
+        counterTravelFee: a.counterTravelFee != null ? Number(a.counterTravelFee) : null,
         clientBaseFee: clientBaseFees.get((a as any).project?.clientId) ?? null,
         feeFlagged: (() => {
           const ref = clientBaseFees.get((a as any).project?.clientId);

@@ -475,10 +475,11 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         break;
       }
 
+      // Every message posted to a clarification thread, and the thread's own lifecycle.
+      // Same audience for all three: the open thread's room, the assayer's phone, and the
+      // operational rooms.
       case 'query:raised':
       case 'query:responded':
-      // Every message posted to a clarification thread. Same audience as the lifecycle
-      // events: the open thread's room, the assayer's phone, and the operational rooms.
       case 'query:message': {
         if (payload.queryId) {
           this.server.to(`query:${payload.queryId}`).emit(eventType, payload);

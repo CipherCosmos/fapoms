@@ -3,6 +3,8 @@ import { useUrlSelection } from '../hooks/useUrlSelection';
 import { Upload, Building2, Globe, ShieldAlert, Activity, Plus, Edit2, Trash2, Phone, FileText, User, Filter, ChevronDown, Map, X } from 'lucide-react';
 import { SearchInput, FilterSelect, StatusBadge, AlertBanner, Modal, Select, useToast, useConfirm, Pagination, SkeletonRows, Refreshing } from '../components/ui';
 import { listPhase } from '../components/ui/list-phase';
+import { useImportJob } from '../components/import/useImportJob';
+import { ImportProgressPanel } from '../components/import/ImportProgressPanel';
 import { ChipMultiSelect } from '../components/ui/ChipMultiSelect';
 import { useWorkforceVocabulary, asOptions } from '../hooks/useWorkforceVocabulary';
 import { Autocomplete } from '../components/ui/Autocomplete';
@@ -16,7 +18,6 @@ import { connectSocket } from '../services/socket';
 import { useCurrentRoles, canManageBranches, canDeleteBranches } from '../hooks/useCurrentRoles';
 import { userMessage } from '../services/errors';
 import { getZones } from '../services/planning';
-import { counted } from '../utils/plural';
 
 interface ClientOption {
   id: string;
@@ -287,7 +288,15 @@ export const Branches: React.FC = () => {
    * same.
    */
   const [isLoading, setIsLoading] = useState(true);
-  const [isUploading, setIsUploading] = useState(false);
+  /**
+   * The import's whole lifetime, not a boolean.
+   *
+   * `isUploading` could only describe a request that returns, so this page awaited an import that
+   * ran every row inline — thousands of sequential lookups on the real client file, a frozen page,
+   * and then a timeout the operator reasonably read as failure and responded to by uploading the
+   * same file again. The server now queues anything large and names a job; this follows it.
+   */
+  const branchImport = useImportJob();
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   // Audit and finance can open this page but hold no branch write permission —
   // showing them Add/Edit/Delete only produces a 403 when they click.
@@ -433,32 +442,25 @@ export const Branches: React.FC = () => {
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    // Cleared immediately so choosing the same file twice still fires `onChange` — otherwise a
+    // failed import cannot be retried without picking a different file first.
+    e.target.value = '';
     if (!file || !selectedClientId) return;
-    setIsUploading(true); setMessage(null);
-    const formData = new FormData();
-    formData.append('file', file);
-    try {
-      const data = await api.request<{ importedCount: number; errors?: any[] }>(`/branches/import/${selectedClientId}`, {
-        method: 'POST',
-        body: formData
-      });
-      const { importedCount, errors } = data;
-      let msg = `Successfully imported ${counted(importedCount, 'branch', 'branches')}.`;
-      if (errors && errors.length > 0) {
-        // Show what actually failed, not just a count — the backend returns per-row reasons.
-        const detail = errors
-          .slice(0, 5)
-          .map((er: any) => (typeof er === 'string' ? er : er?.reason || er?.message || JSON.stringify(er)))
-          .join('; ');
-        msg += ` Excluded ${counted(errors.length, 'row')}: ${detail}${errors.length > 5 ? '…' : ''}`;
-      }
-      setMessage({ type: errors && errors.length > 0 ? 'error' : 'success', text: msg });
-      loadBranches(selectedClientId);
-    } catch (err) {
-      // The real failure (e.g. a 400 with a validation message), not a blanket "network error".
-      setMessage({ type: 'error', text: userMessage(err) });
-    } finally { setIsUploading(false); e.target.value = ''; }
+    setMessage(null);
+    await branchImport.start(`/branches/import/${selectedClientId}`, file);
   };
+
+  /**
+   * Refresh the list once an import finishes, whichever way it finished.
+   *
+   * A queued import completes long after the upload request returned, so reloading at the end of
+   * the handler — as this page used to — showed the operator the list as it was *before* their
+   * file was applied.
+   */
+  useEffect(() => {
+    if (branchImport.state.phase === 'done' && selectedClientId) loadBranches(selectedClientId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [branchImport.state.phase, selectedClientId]);
 
   // The server already applied the search and the risk filter, so these rows are the answer.
   const filteredBranches = branches;
@@ -509,6 +511,7 @@ export const Branches: React.FC = () => {
       </div>
 
       {message && <AlertBanner type={message.type} message={message.text} />}
+      <ImportProgressPanel state={branchImport.state} onDismiss={branchImport.reset} />
 
 
       <div className="responsive-grid-split" style={{ alignItems: 'start', gridTemplateColumns: 'minmax(0, 1fr) minmax(320px, 400px)' }}>
@@ -524,9 +527,9 @@ export const Branches: React.FC = () => {
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
               <label style={{ fontSize: '10px', fontWeight: 600, color: 'var(--text-muted)', textTransform: 'uppercase' }}>Excel Import</label>
-              <label className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 14px', cursor: isUploading ? 'not-allowed' : 'pointer', fontSize: '13px', opacity: isUploading ? 0.7 : 1 }}>
-                <Upload size={14} /> {isUploading ? 'Uploading...' : 'Import Excel'}
-                <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFileUpload} disabled={isUploading} style={{ display: 'none' }} />
+              <label className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '6px 14px', cursor: branchImport.busy ? 'not-allowed' : 'pointer', fontSize: '13px', opacity: branchImport.busy ? 0.7 : 1 }}>
+                <Upload size={14} /> {branchImport.busy ? 'Importing…' : 'Import Excel'}
+                <input type="file" accept=".xlsx,.xls,.csv" onChange={handleFileUpload} disabled={branchImport.busy} style={{ display: 'none' }} />
               </label>
             </div>
             <SearchInput value={searchTerm} onChange={setSearchTerm} placeholder="Search by name or SOL ID..." compact style={{ minWidth: '180px' }} />

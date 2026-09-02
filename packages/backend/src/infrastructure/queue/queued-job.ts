@@ -97,8 +97,10 @@ export interface QueuedJobEnvelope {
  * export job holds only a filename, so they cannot sensibly carry the same budget. Each queue
  * declares its own with the arithmetic written down.
  *
- * Never `false`. `BullQueueManager` sets `removeOnComplete: false, removeOnFail: false`, which
- * means "keep every job forever" — that is what filled Redis previously.
+ * Never `false`. `false` on both means "keep every job forever" — that is what filled Redis
+ * previously, and it was `BullQueueManager`'s setting until it was changed to a bounded
+ * `{ age, count }` (bull-queue-manager.ts). The `ocr` queue carried the same `false` for longer
+ * still; it is bounded now too. Nothing in this codebase should reintroduce it.
  */
 export const FAILED_JOB_RETENTION: KeepJobsOptions = { age: 7 * 86_400, count: 500 };
 

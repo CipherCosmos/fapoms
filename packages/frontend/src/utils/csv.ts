@@ -39,7 +39,7 @@ export function toCsv(headers: string[], rows: CsvCell[][]): string {
  * one per export.
  */
 export function downloadCsv(filename: string, headers: string[], rows: CsvCell[][]): void {
-  const csv = `﻿${toCsv(headers, rows)}`;
+  const csv = `\uFEFF${toCsv(headers, rows)}`; // BOM: without it Excel reads the file as Latin-1
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

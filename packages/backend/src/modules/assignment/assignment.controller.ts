@@ -20,6 +20,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 
 import { SystemRole, ASSIGNMENT_ISSUE_CATEGORIES } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { AssignmentService, CreateAssignmentDto, UpdateAssignmentDetailsDto } from './assignment.service';
 import { OperationsInboxService, SUGGEST_NEXT_AFTER_ATTEMPTS } from './operations-inbox.service';
@@ -49,6 +50,10 @@ class CreateAssignmentRequestDto implements CreateAssignmentDto {
 
   @IsOptional() @IsNumber() @Min(0)
   proposedFee?: number;
+
+  /** Send the job with no price. See CreateAssignmentDto.noFee. */
+  @IsOptional() @IsBoolean()
+  noFee?: boolean;
 
   @IsOptional() @IsDateString()
   scheduledDate?: string;
@@ -301,17 +306,33 @@ export class AssignmentController {
   @Get()
   @ApiOperation({ summary: 'List all assignments, optionally filtered by status, projectBranchStatus, or priority' })
   async findAll(
-    @Query('page') page?: number,
-    @Query('limit') limit?: number,
+    @Query('page') page = 1,
+    /**
+     * Bounded here rather than trusted from the caller.
+     *
+     * `Number(limit)` went straight into `findAll`'s `take:`, and `findAll` then re-reads the
+     * page with six relations hydrated (projectBranch, its branch, assessment, its branch,
+     * assayer, project). `?limit=60000` against the 200k-row assignment table is therefore one
+     * request asking the database for 60,000 rows and the process to hold every one of them
+     * fully joined — roughly 6 KB a row, so hundreds of megabytes — and every staff role on this
+     * route could send it.
+     *
+     * 50/200 are the numbers the rest of this codebase already settled on: 50 is this route's
+     * existing default, so no caller changes behaviour, and 200 is the same ceiling
+     * `findByAssayer` clamps to with MAX_ASSAYER_PAGE_SIZE, and the same one branch.controller.ts
+     * and customer-master.controller.ts pass to this pipe. See parse-limit.pipe.ts.
+     */
+    @Query('limit', new ParseLimitPipe({ default: 50, max: 200 })) limit: number,
     @Query('status') status?: string,
     @Query('projectBranchStatus') projectBranchStatus?: string,
     @Query('unscheduledOnly') unscheduledOnly?: string,
     @Query('priority') priority?: string,
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    const safePage = page ? Number(page) : 1;
     const result = await this.assignmentService.findAll(
-      page ? Number(page) : 1,
-      limit ? Number(limit) : 50,
+      safePage,
+      limit,
       status,
       projectBranchStatus,
       unscheduledOnly === 'true' || unscheduledOnly === '1',
@@ -323,8 +344,10 @@ export class AssignmentController {
       data: result.assignments,
       meta: {
         pagination: {
-          page: page ? Number(page) : 1,
-          limit: limit ? Number(limit) : 50,
+          page: safePage,
+          // The clamped value, not the raw query param: a caller that asked for 60,000 has to be
+          // told it got 200, or its next page calculation is built on a number it never received.
+          limit,
           total: result.total,
         },
       },
@@ -467,7 +490,15 @@ export class AssignmentController {
     const callerIsAssayer = callerRoles.includes(SystemRole.ASSAYER);
 
     if (callerIsAssayer) {
-      const ASSAYER_TRANSITIONS = ['ACCEPTED', 'REJECTED', 'CHECKED_IN', 'COUNTER_OFFER', 'NEGOTIATION', 'PENDING'];
+      /**
+       * `IN_PROGRESS` is included because the assayer is the only person who knows when the audit
+       * actually started — the desk can see they arrived, not that they have begun counting. It
+       * carries no money or scheduling consequence (see `startWork`), so admitting it here grants
+       * no authority the assayer did not already have by checking in.
+       *
+       * Cancelling and completing remain the desk's, which is what the message below explains.
+       */
+      const ASSAYER_TRANSITIONS = ['ACCEPTED', 'REJECTED', 'CHECKED_IN', 'IN_PROGRESS', 'COUNTER_OFFER', 'NEGOTIATION', 'PENDING'];
       if (!ASSAYER_TRANSITIONS.includes(targetStatus)) {
         throw new ForbiddenException(
           'Cancelling or completing an assignment is done by the operations team, not from the field app.',
@@ -502,9 +533,26 @@ export class AssignmentController {
       if (travelVal !== undefined && travelVal !== null && !isNaN(Number(travelVal))) {
         counterTravel = Number(travelVal);
       } else if (wholeFeeVal !== undefined && wholeFeeVal !== null && !isNaN(Number(wholeFeeVal))) {
+        /**
+         * A legacy whole-fee body: carve the travel out of it.
+         *
+         * The clamp here used to be `Math.max(0, whole − base)`, which turned the most likely
+         * mistake into silence. A caller that sends the TRAVEL figure in this field — which the
+         * operations inbox did for as long as it existed, under a lane headed "Travel fee" — gets
+         * `whole < base`, and the clamp wrote travel = 0, dropping the offer to the bare audit fee
+         * with no error and a success response. A number below the audit fee is not a whole fee;
+         * it is a caller confusion, and it has to fail where it happens.
+         */
         const current = await this.assignmentService.findOne(id);
         const base = Number(current?.quotedBaseFee ?? 0);
-        counterTravel = Math.max(0, Number(wholeFeeVal) - base);
+        const whole = Number(wholeFeeVal);
+        if (base > 0 && whole < base) {
+          throw new BadRequestException(
+            `₹${whole} is less than this assignment's audit fee of ₹${base}, so it cannot be the `
+            + 'whole fee. Send the travel amount as counterTravelFee instead.',
+          );
+        }
+        counterTravel = Math.max(0, whole - base);
       } else {
         throw new BadRequestException(
           'A travel amount is required to counter an offer. The audit fee itself is set by the '
@@ -579,6 +627,25 @@ export class AssignmentController {
         return { success: false, error: checkInRes.error, message: checkInRes.message };
       }
       assignment = checkInRes.assignment || (await this.assignmentService.findOne(id));
+    } else if (targetStatus === 'IN_PROGRESS') {
+      /**
+       * Work has started, as distinct from having arrived.
+       *
+       * `IN_PROGRESS` has always been a first-class AssignmentStatus with two legal paths in the
+       * state machine, a status tone in the app, a tab in the web UI, and a place in the states
+       * that permit an expense claim — and NOTHING in the codebase could set it. Every one of
+       * those readers branched on a value the database could never hold, and the expense gate in
+       * particular listed a state that was unreachable.
+       *
+       * Making it reachable rather than deleting it: the distinction it draws is real (an assayer
+       * standing in the branch is not yet an assayer counting stock), the state machine already
+       * describes it correctly, and the enum value is written into the Postgres type — removing
+       * it would be a migration against live data to erase a distinction the business does make.
+       *
+       * Deliberately carries no side effects. It does not book, schedule or price anything; the
+       * money chain still turns on COMPLETED alone.
+       */
+      assignment = await this.assignmentService.startWork(id, userId, body.reason ?? body.remarks);
     } else if (targetStatus === 'CANCELLED') {
       assignment = await this.assignmentService.cancelAssignment(id, userId, body.reason ?? body.remarks);
     } else if (targetStatus === 'COMPLETED') {

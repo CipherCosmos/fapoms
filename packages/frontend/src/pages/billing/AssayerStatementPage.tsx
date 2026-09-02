@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { Banknote, Search } from 'lucide-react';
 import { formatRupees as money } from '@fapoms/shared';
 import { useAssayerStatement } from '../../hooks/useBilling';
-import { api } from '../../services/api';
+import { fetchWholeAssayerRoster } from '../../services/assayer-roster';
+import { userMessage } from '../../services/errors';
 import type { AssayerStatement } from '../../services/billing';
 import { Select } from '../../components/ui';
 import { payableStatusLabel } from '@fapoms/shared';
@@ -31,13 +32,34 @@ export const AssayerStatementPage: React.FC = () => {
 
   const [roster, setRoster] = useState<AssayerLite[]>([]);
   const [search, setSearch] = useState('');
+  /** Why the dropdown is not showing everyone: a failed load, or a roster too big to load whole. */
+  const [rosterProblem, setRosterProblem] = useState<string | null>(null);
   const statement = useAssayerStatement(assayerId || null);
 
-  React.useEffect(() => {
+  /**
+   * Every page of the roster, and a sentence when that could not be managed.
+   *
+   * This asked for `?limit=1000` and swallowed any failure. On the customer's roster of 1,155
+   * appraisers, the 155 oldest records were missing from the only control on this page — so their
+   * statement could not be opened at all, and the dropdown looked like a complete list of the
+   * people who have one. The empty-on-failure case was worse still: a caught-and-discarded error
+   * left an empty picker that reads as "nobody is on the roster".
+   */
+  useEffect(() => {
     let cancelled = false;
-    api.request<AssayerLite[]>('/assayers?limit=1000')
-      .then((r) => { if (!cancelled) setRoster(r); })
-      .catch(() => {});
+    fetchWholeAssayerRoster<AssayerLite>()
+      .then(({ people, total, missing }) => {
+        if (cancelled) return;
+        setRoster(people);
+        setRosterProblem(
+          missing > 0
+            ? `Only ${people.length} of the ${total} people on the roster could be loaded, so ${missing} are not in this list. Reload the page to try again.`
+            : null,
+        );
+      })
+      .catch((e) => {
+        if (!cancelled) setRosterProblem(`The list of assayers could not be loaded. ${userMessage(e)}`);
+      });
     return () => { cancelled = true; };
   }, []);
 
@@ -70,6 +92,13 @@ export const AssayerStatementPage: React.FC = () => {
           compact
           style={{ minWidth: 240 }}
         />
+        {/* A picker that is quietly short of names is indistinguishable from one whose names have
+            all been shown, so the difference is stated rather than left to be discovered. */}
+        {rosterProblem && (
+          <div style={{ flexBasis: '100%', fontSize: 11.5, color: 'var(--warning)', lineHeight: 1.5 }}>
+            {rosterProblem}
+          </div>
+        )}
       </div>
 
       {!assayerId && <div style={{ ...card, color: 'var(--text-muted)', fontSize: 13 }}>Pick an assayer to see their statement.</div>}

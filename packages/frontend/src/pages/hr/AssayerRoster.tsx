@@ -23,6 +23,8 @@ import { STAGE_CONSEQUENCE, HARD_TO_REVERSE_STAGES } from './AssayerRecord';
 import { fmtDate } from '../../utils/dates';
 import { queryKeys } from '../../hooks/queryKeys';
 import { counted } from '../../utils/plural';
+import { useImportJob, ImportSummary } from '../../components/import/useImportJob';
+import { ImportProgressPanel } from '../../components/import/ImportProgressPanel';
 
 /** What `/assayers/roster/import` returns (also for its dryRun rehearsal). */
 interface RosterImportSummary {
@@ -240,6 +242,11 @@ export const AssayerRoster: React.FC<{
    * overlapping imports re-run every row against a roster the first is still writing.
    */
   const [uploading, setUploading] = useState(false);
+  /**
+   * The real roster import's lifetime — the same hook the branch importers use, so the three
+   * upload screens cannot drift into three different ideas of what "finished" means.
+   */
+  const rosterImport = useImportJob<RosterImportSummary>();
   /**
    * The per-row outcome of the last bulk move. Names are captured *at send time*: the report is
    * read after `refresh()` has replaced the roster, and a row that was archived out of the
@@ -572,23 +579,22 @@ export const AssayerRoster: React.FC<{
    * It always rehearses first (dryRun) and shows exactly what would happen, because nobody should
    * discover what importing a thousand people does by running it.
    */
-  const postRoster = (file: File, dryRun: boolean): Promise<RosterImportSummary> => {
+  /**
+   * Rehearse the workbook. Writes nothing; the operator is waiting on its answer, so it stays a
+   * plain request.
+   */
+  const rehearseRoster = (file: File): Promise<RosterImportSummary> => {
     const fd = new FormData();
     fd.append('file', file);
-    fd.append('dryRun', dryRun ? 'true' : 'false');
-    // A real import writes the person plus their references, checks and documents — thousands of
-    // rows for a full roster. Give it far longer than the default upload timeout so a big first
-    // import on a slower server is never cut off mid-write (which looked like "nothing happened").
-    return api.request<RosterImportSummary>('/assayers/roster/import', {
-      method: 'POST', body: fd, timeoutMs: dryRun ? undefined : 15 * 60 * 1000,
-    });
+    fd.append('dryRun', 'true');
+    return api.request<RosterImportSummary>('/assayers/roster/import', { method: 'POST', body: fd });
   };
 
   const handleUpload = async (file: File) => {
     setUploading(true);
     try {
       // Rehearse — writes nothing, tells us what the file holds.
-      const dry = await postRoster(file, true);
+      const dry = await rehearseRoster(file);
       const extras = [
         dry.references ? `${dry.references.toLocaleString('en-IN')} references` : '',
         dry.backgroundChecks ? `${dry.backgroundChecks.toLocaleString('en-IN')} background checks` : '',
@@ -614,7 +620,7 @@ export const AssayerRoster: React.FC<{
                 rows still import, just with that one detail left blank.
               </div>
             )}
-            {(dry.notes ?? []).slice(0, 4).map((n, i) => (
+            {(dry.notes ?? []).slice(0, 4).map((n: string, i: number) => (
               <div key={i} style={{ marginTop: '8px', fontSize: '12px', color: 'var(--text-muted)' }}>{n}</div>
             ))}
             <div style={{ marginTop: '10px', fontSize: '12px', color: 'var(--text-muted)' }}>
@@ -626,36 +632,15 @@ export const AssayerRoster: React.FC<{
       });
       if (!proceed) { setUploading(false); return; }
 
-      // Say so immediately, so the wait while thousands of rows are written never reads as
-      // "nothing happened" after the confirm — the success message below replaces this.
-      setNotice({
-        tone: 'warn',
-        text: `Importing ${dry.rowsRead.toLocaleString('en-IN')} appraisers and their references, checks and documents… this can take up to a minute for a full roster — please stay on this page.`,
-      });
-
-      // The real thing.
-      const real = await postRoster(file, false);
-      const extrasReal = [
-        real.references ? `${real.references.toLocaleString('en-IN')} references` : '',
-        real.backgroundChecks ? `${real.backgroundChecks.toLocaleString('en-IN')} background checks` : '',
-        real.empanelments ? `${real.empanelments.toLocaleString('en-IN')} empanelments` : '',
-        real.onboardingDocuments ? `${real.onboardingDocuments.toLocaleString('en-IN')} document records` : '',
-      ].filter(Boolean);
-
-      const details = [
-        ...(real.notes ?? []),
-        real.issues > 0 ? `${counted(real.issues, 'cell')} couldn't be read — open "Import issues" to review them.` : '',
-        real.skipped > 0 ? `${counted(real.skipped, 'row')} skipped (no appraiser code).` : '',
-      ].filter(Boolean);
-
-      setNotice({
-        tone: real.issues > 0 || real.skipped > 0 ? 'warn' : 'ok',
-        text: `Roster imported — ${real.created.toLocaleString('en-IN')} new, `
-          + `${real.updated.toLocaleString('en-IN')} updated`
-          + (extrasReal.length ? ` (plus ${extrasReal.join(', ')})` : '') + '.',
-        details: details.length ? details : undefined,
-      });
-      refresh();
+      /**
+       * The real import runs on the server's queue.
+       *
+       * It used to run inside the upload request, with a **fifteen-minute** client timeout to
+       * accommodate a full roster — a page the operator was told to stay on for a quarter of an
+       * hour, with nothing to look at and no way to tell a slow import from a dead one. The panel
+       * below follows the job the server returns, and the page can be left.
+       */
+      await rosterImport.start('/assayers/roster/import', file);
     } catch (e) {
       setNotice({ tone: 'err', text: userMessage(e) });
     } finally {
@@ -688,6 +673,13 @@ export const AssayerRoster: React.FC<{
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
       {confirmDialog}
+      {/* What the queued roster import is doing, and what it did. */}
+      <ImportProgressPanel
+        state={rosterImport.state}
+        onDismiss={rosterImport.reset}
+        summarise={summariseRosterImport}
+      />
+
       {notice && (() => {
         const tones = {
           ok: { bg: 'var(--status-active-bg)', fg: 'var(--success)' },
@@ -1189,3 +1181,45 @@ const RosterFilterSelect: React.FC<{
 );
 
 export default AssayerRoster;
+
+/**
+ * What a finished roster import did, in the operator's terms.
+ *
+ * The roster reports different things from a branch sheet — references, background checks, bank
+ * empanelments, and cells that could not be read — so it describes itself rather than being forced
+ * through the branch summary. Written to the same contract, so the shared panel renders it.
+ */
+export function summariseRosterImport(r: RosterImportSummary): ImportSummary {
+  const extras = [
+    r.references ? `${r.references.toLocaleString('en-IN')} references` : '',
+    r.backgroundChecks ? `${r.backgroundChecks.toLocaleString('en-IN')} background checks` : '',
+    r.empanelments ? `${r.empanelments.toLocaleString('en-IN')} empanelments` : '',
+    r.onboardingDocuments ? `${r.onboardingDocuments.toLocaleString('en-IN')} document records` : '',
+  ].filter(Boolean);
+
+  const notes = [
+    ...(r.notes ?? []),
+    r.issues > 0
+      ? `${counted(r.issues, 'cell')} couldn't be read — open "Import issues" to review them. Those rows still imported, just with that one detail left blank.`
+      : '',
+    r.skipped > 0 ? `${counted(r.skipped, 'row')} skipped (no appraiser code).` : '',
+  ].filter(Boolean);
+
+  if (r.created === 0 && r.updated === 0) {
+    return {
+      tone: 'error',
+      text:
+        `Nothing was imported. ${r.rowsRead.toLocaleString('en-IN')} row(s) were read but no appraiser `
+        + 'could be built from them — check that the workbook has an "Appraiser code" column.',
+      notes: notes.length ? notes : undefined,
+    };
+  }
+
+  return {
+    tone: r.issues > 0 || r.skipped > 0 ? 'warning' : 'success',
+    text:
+      `Roster imported — ${r.created.toLocaleString('en-IN')} new, ${r.updated.toLocaleString('en-IN')} updated`
+      + (extras.length ? ` (plus ${extras.join(', ')})` : '') + '.',
+    notes: notes.length ? notes : undefined,
+  };
+}

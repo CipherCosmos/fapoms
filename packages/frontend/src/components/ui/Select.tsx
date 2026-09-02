@@ -188,7 +188,7 @@ export const Select: React.FC<{
   const GUTTER = 8;
   let top = 0;
   let left = 0;
-  let width: number | string = menuWidth ?? Math.max(rect?.width ?? 0, 200);
+  const width: number | string = menuWidth ?? Math.max(rect?.width ?? 0, 200);
   if (rect) {
     const estimatedHeight = Math.min(menuMaxHeight, filtered.length * 34 + (effectiveSearchable ? 44 : 0) + 8) + 8;
     const spaceBelow = window.innerHeight - rect.bottom;

@@ -8,9 +8,10 @@ import { Processor, Process } from '@nestjs/bull';
 import { Injectable, Logger } from '@nestjs/common';
 import type { Job } from 'bull';
 
-import { IMPORT_QUEUE, BRANCH_IMPORT_JOB } from './import-job.constants';
-import { BranchImportJobData } from './import-job.service';
-import { ProjectService, BranchImportOutcome } from './project.service';
+import { IMPORT_QUEUE, BRANCH_IMPORT_JOB } from '../import/import.constants';
+import { BranchImportJobData, ImportJobService } from '../import/import-job.service';
+import type { BranchImportOutcome } from '../import/import.contract';
+import { ProjectService } from './project.service';
 
 @Injectable()
 @Processor(IMPORT_QUEUE)
@@ -30,25 +31,39 @@ export class ImportJobWorker {
    * anywhere. `BRANCH_IMPORT_JOB` is the single constant both sides read, so the two cannot
    * drift apart.
    *
-   * **`concurrency: 1` is a rate-limit decision, not a throughput one.** The geocoders space
-   * their calls per host with `politely()`, which serialises within one process — so two imports
-   * running side by side in the same worker would each be politely doing one lookup per second,
-   * i.e. two per second at the provider, which is double Nominatim's published limit and the
-   * kind of thing they enforce with an IP ban. One import at a time per worker keeps the process
-   * inside the limit. It does *not* solve the multi-replica case; see the note at the bottom of
-   * this file.
+   * **`concurrency: 1` bounds the database work, not the geocoding.** `politely()` chains its
+   * calls per *host* across the whole process, so however many importers are running, the provider
+   * still sees one request per second — this slot is not what keeps the deployment inside
+   * Nominatim's limit, and an earlier version of this comment claimed it was. What one slot buys is
+   * that a single import cannot run two copies of itself, and that a re-upload queues behind the
+   * first attempt instead of racing it into the same rows. Neither the slot nor `politely()` solves
+   * the multi-replica case; see the note at the bottom of this file.
    */
   @Process({ name: BRANCH_IMPORT_JOB, concurrency: 1 })
   async runBranchImport(job: Job<BranchImportJobData>): Promise<BranchImportOutcome> {
-    const { projectId, userId, fileBase64, totalRows, rowsNeedingGeocode } = job.data;
+    const { userId, fileBase64, totalRows, rowsNeedingGeocode } = job.data;
     const startedAt = Date.now();
 
+    /**
+     * Read through `scopeOf` rather than off the payload, so a job enqueued by the previous build
+     * — which wrote `projectId` and no `scope` — still runs after a deploy instead of failing on a
+     * field that moved. `attempts: 1` means nothing would re-create it.
+     */
+    const scope = ImportJobService.scopeOf(job.data);
+    if (!scope) {
+      throw new Error(
+        `Branch import ${job.id} carries neither a scope nor a projectId, so there is nothing to ` +
+          'import it into. This job cannot be run; re-upload the file.',
+      );
+    }
+
     this.logger.log(
-      `Branch import ${job.id} starting: project=${projectId} rows=${totalRows} geocodes=${rowsNeedingGeocode}`,
+      `Branch import ${job.id} starting: ${scope.kind.toLowerCase()}=${scope.id} ` +
+        `rows=${totalRows} geocodes=${rowsNeedingGeocode}`,
     );
 
     const outcome = await this.projectService.runBranchImport(
-      projectId,
+      scope,
       Buffer.from(fileBase64, 'base64'),
       userId,
       /**

@@ -14,9 +14,23 @@
   },
   "scripts": {
     "build": "tsc && tsc -p tsconfig.esm.json",
-    "watch": "tsc --watch"
+    "watch": "tsc --watch",
+    "test": "jest"
   },
   "devDependencies": {
     "typescript": "^5.8.0"
+  },
+  "jest": {
+    "moduleFileExtensions": [
+      "js",
+      "json",
+      "ts"
+    ],
+    "rootDir": "src",
+    "testRegex": ".*\\.spec\\.ts$",
+    "transform": {
+      "^.+\\.(t|j)s$": "ts-jest"
+    },
+    "testEnvironment": "node"
   }
 }

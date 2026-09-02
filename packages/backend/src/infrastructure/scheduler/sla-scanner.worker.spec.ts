@@ -7,6 +7,7 @@ import { DeskEscalationService } from '../../modules/validation/desk-escalation.
 import { FeedbackEscalationService } from '../../modules/feedback/feedback-escalation.service';
 import { LocationTrailService } from '../../modules/assayer/location-trail.service';
 import { EmailDigestService } from './email-digest.service';
+import { BillingEngineService } from '../../modules/billing-engine/billing-engine.service';
 import { PlatformSettingsService } from '../settings/platform-settings.service';
 
 /**
@@ -44,6 +45,17 @@ describe('SlaScannerWorker phase isolation', () => {
         { provide: FeedbackEscalationService, useValue: feedbackEscalation },
         { provide: LocationTrailService, useValue: locationTrail },
         { provide: EmailDigestService, useValue: { run: jest.fn() } },
+        // The money-chain phases: unapproved payouts, attended-but-unclosed audits, and the
+        // booking reconcile that used to run only when somebody pressed a button. Quiet by
+        // default here — these tests are about phase isolation, not about what they report.
+        {
+          provide: BillingEngineService,
+          useValue: {
+            payoutsAwaitingApproval: jest.fn().mockResolvedValue({ count: 0, totalAmount: 0, oldestDays: 0 }),
+            attendedButNotClosed: jest.fn().mockResolvedValue({ count: 0, oldestDate: null }),
+            reconcile: jest.fn().mockResolvedValue({ scanned: 0, booked: 0, skipped: 0, errors: [] }),
+          },
+        },
         {
           provide: PlatformSettingsService,
           // Nothing configured in tests: every lookup falls through to the caller's fallback,
@@ -67,7 +79,7 @@ describe('SlaScannerWorker phase isolation', () => {
 
   const anyJob = {} as any;
 
-  it('runs all six scans when every one succeeds', async () => {
+  it('runs every scan when all of them succeed', async () => {
     await worker.runScan(anyJob);
 
     expect(assignmentService.checkSlaBreaches).toHaveBeenCalledTimes(1);

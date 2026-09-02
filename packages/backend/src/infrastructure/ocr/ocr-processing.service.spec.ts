@@ -77,5 +77,31 @@ describe('OcrProcessingService', () => {
 
       await expect(service.createJob('doc-missing', 'user-1')).rejects.toThrow(NotFoundException);
     });
+
+    /**
+     * `removeOnComplete: false, removeOnFail: false` meant every OCR job this queue had ever run
+     * stayed in Redis — one entry per uploaded audit packet, never removed. Redis runs with
+     * `maxmemory` and `noeviction` in production (bull-queue-manager.ts), so an unbounded key set
+     * does not quietly evict a cache key to make room: Redis refuses writes, taking the cache, the
+     * rate limiters and every other queue down with it.
+     */
+    it('enqueues with bounded retention on both the completed and the failed set', async () => {
+      mockDocumentRepo.findOne.mockResolvedValue({ id: 'doc-1', fileName: 'packet.pdf', isActive: true });
+      mockOcrJobRepo.create.mockImplementation((v: any) => v);
+      mockOcrJobRepo.save.mockResolvedValue({ id: 'job-1' });
+
+      await service.createJob('doc-1', 'user-1');
+
+      const opts = mockOcrQueue.add.mock.calls[0][2];
+      expect(opts.removeOnComplete).not.toBe(false);
+      expect(opts.removeOnFail).not.toBe(false);
+      expect(opts.removeOnComplete).toEqual({ age: expect.any(Number), count: expect.any(Number) });
+      expect(opts.removeOnFail).toEqual({ age: expect.any(Number), count: expect.any(Number) });
+
+      // Failures outlive successes: with `attempts: 5` behind an exponential backoff, a job that
+      // has genuinely exhausted its retries is the one an operator asks about tomorrow, and its
+      // `failedReason` is the only record of why the packet never came back parsed.
+      expect(opts.removeOnFail.age).toBeGreaterThan(opts.removeOnComplete.age);
+    });
   });
 });

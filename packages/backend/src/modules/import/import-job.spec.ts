@@ -20,9 +20,9 @@ import { getQueueToken } from '@nestjs/bull';
 import { NotFoundException, PayloadTooLargeException } from '@nestjs/common';
 
 import { ImportJobService } from './import-job.service';
-import { ImportJobWorker } from './import-job.worker';
-import { IMPORT_QUEUE, BRANCH_IMPORT_JOB } from './import-job.constants';
-import { ProjectService } from './project.service';
+import { ImportJobWorker } from '../project/import-job.worker';
+import { IMPORT_QUEUE, BRANCH_IMPORT_JOB } from './import.constants';
+import { ProjectService } from '../project/project.service';
 
 describe('ImportJobService', () => {
   let service: ImportJobService;
@@ -82,10 +82,10 @@ describe('ImportJobService', () => {
 
   describe('job options', () => {
     /**
-     * `removeOnComplete: false` is what the rest of this codebase uses, and it means "keep every
-     * job forever". These payloads are whole workbooks, so that is a slow Redis leak — and Redis
-     * here also backs the queue, the socket adapter and the rate-limit store, so filling it takes
-     * more than imports down with it.
+     * `removeOnComplete: false` means "keep every job forever". These payloads are whole
+     * workbooks, so that is a slow Redis leak — and Redis here also backs the queue, the socket
+     * adapter and the rate-limit store, so filling it takes more than imports down with it. This test
+     * is what keeps this queue from drifting back to it.
      */
     it('bounds retention by both age and count, for successes and failures', () => {
       const { removeOnComplete, removeOnFail } = ImportJobService.JOB_OPTIONS;
@@ -116,13 +116,13 @@ describe('ImportJobService', () => {
      */
     it('adds the job under the name the worker handles', async () => {
       await service.enqueueBranchImport({
-        projectId: 'p-1', userId: 'u-1', fileBuffer: Buffer.from('xlsx'),
+        scope: { kind: 'PROJECT' as const, id: 'p-1' }, userId: 'u-1', fileBuffer: Buffer.from('xlsx'),
         fileName: 'branches.xlsx', totalRows: 400, rowsNeedingGeocode: 400,
       });
 
       expect(mockQueue.add).toHaveBeenCalledWith(
         BRANCH_IMPORT_JOB,
-        expect.objectContaining({ projectId: 'p-1', userId: 'u-1' }),
+        expect.objectContaining({ scope: { kind: 'PROJECT' as const, id: 'p-1' }, userId: 'u-1' }),
         ImportJobService.JOB_OPTIONS,
       );
     });
@@ -131,7 +131,7 @@ describe('ImportJobService', () => {
       const fileBuffer = Buffer.from('a real workbook would go here');
 
       await service.enqueueBranchImport({
-        projectId: 'p-1', userId: 'u-1', fileBuffer,
+        scope: { kind: 'PROJECT' as const, id: 'p-1' }, userId: 'u-1', fileBuffer,
         fileName: null, totalRows: 400, rowsNeedingGeocode: 400,
       });
 
@@ -141,7 +141,7 @@ describe('ImportJobService', () => {
 
     it('reports the job as waiting, with the work it represents', async () => {
       const status = await service.enqueueBranchImport({
-        projectId: 'p-1', userId: 'u-1', fileBuffer: Buffer.from('x'),
+        scope: { kind: 'PROJECT' as const, id: 'p-1' }, userId: 'u-1', fileBuffer: Buffer.from('x'),
         fileName: 'roster.xlsx', totalRows: 400, rowsNeedingGeocode: 380,
       });
 
@@ -161,7 +161,7 @@ describe('ImportJobService', () => {
       const huge = Buffer.alloc(ImportJobService.MAX_QUEUED_FILE_BYTES + 1);
 
       await expect(service.enqueueBranchImport({
-        projectId: 'p-1', userId: 'u-1', fileBuffer: huge,
+        scope: { kind: 'PROJECT' as const, id: 'p-1' }, userId: 'u-1', fileBuffer: huge,
         fileName: null, totalRows: 1, rowsNeedingGeocode: 0,
       })).rejects.toThrow(PayloadTooLargeException);
 
@@ -187,7 +187,7 @@ describe('ImportJobService', () => {
       const reported = { processed: 120, total: 400, created: 118, updated: 0, linked: 118, skipped: 2, imprecise: 9 };
       mockQueue.getJob.mockResolvedValue(job({ progress: jest.fn().mockReturnValue(reported) }));
 
-      const status = await service.getBranchImportStatus('p-1', '7');
+      const status = await service.getBranchImportStatus({ kind: 'PROJECT', id: 'p-1' }, '7');
 
       expect(status.state).toBe('active');
       expect(status.progress).toEqual(reported);
@@ -201,7 +201,7 @@ describe('ImportJobService', () => {
     it('does not mistake "never reported" for a progress reading', async () => {
       mockQueue.getJob.mockResolvedValue(job());
 
-      expect((await service.getBranchImportStatus('p-1', '7')).progress).toBeNull();
+      expect((await service.getBranchImportStatus({ kind: 'PROJECT', id: 'p-1' }, '7')).progress).toBeNull();
     });
 
     it('returns the result only once the job has completed', async () => {
@@ -212,7 +212,7 @@ describe('ImportJobService', () => {
         finishedOn: 1_700_000_600_000,
       }));
 
-      const status = await service.getBranchImportStatus('p-1', '7');
+      const status = await service.getBranchImportStatus({ kind: 'PROJECT', id: 'p-1' }, '7');
 
       expect(status.result).toEqual(outcome);
       expect(status.error).toBeNull();
@@ -225,7 +225,7 @@ describe('ImportJobService', () => {
         failedReason: 'connect ETIMEDOUT',
       }));
 
-      const status = await service.getBranchImportStatus('p-1', '7');
+      const status = await service.getBranchImportStatus({ kind: 'PROJECT', id: 'p-1' }, '7');
 
       expect(status.error).toBe('connect ETIMEDOUT');
       expect(status.result).toBeNull();
@@ -241,13 +241,13 @@ describe('ImportJobService', () => {
     it('refuses a job id belonging to a different project', async () => {
       mockQueue.getJob.mockResolvedValue(job({ data: { projectId: 'p-OTHER', totalRows: 1, rowsNeedingGeocode: 0, fileName: null } }));
 
-      await expect(service.getBranchImportStatus('p-1', '7')).rejects.toThrow(NotFoundException);
+      await expect(service.getBranchImportStatus({ kind: 'PROJECT', id: 'p-1' }, '7')).rejects.toThrow(NotFoundException);
     });
 
     it('explains that an old job was cleared rather than lost', async () => {
       mockQueue.getJob.mockResolvedValue(null);
 
-      await expect(service.getBranchImportStatus('p-1', '999')).rejects.toThrow(/kept for 24 hours/);
+      await expect(service.getBranchImportStatus({ kind: 'PROJECT', id: 'p-1' }, '999')).rejects.toThrow(/kept for 24 hours/);
     });
   });
 });
@@ -274,7 +274,7 @@ describe('ImportJobWorker', () => {
   const jobFor = (over: Record<string, any> = {}) => ({
     id: 11,
     data: {
-      projectId: 'p-1', userId: 'u-1',
+      scope: { kind: 'PROJECT' as const, id: 'p-1' }, userId: 'u-1',
       fileBase64: Buffer.from('workbook bytes').toString('base64'),
       fileName: 'b.xlsx', totalRows: 3, rowsNeedingGeocode: 3,
     },
@@ -287,8 +287,8 @@ describe('ImportJobWorker', () => {
 
     await worker.runBranchImport(jobFor());
 
-    const [projectId, buffer, userId] = mockProjectService.runBranchImport.mock.calls[0];
-    expect(projectId).toBe('p-1');
+    const [scope, buffer, userId] = mockProjectService.runBranchImport.mock.calls[0];
+    expect(scope).toEqual({ kind: 'PROJECT', id: 'p-1' });
     expect(userId).toBe('u-1');
     expect(buffer.toString()).toBe('workbook bytes');
   });
@@ -336,5 +336,53 @@ describe('ImportJobWorker', () => {
     mockProjectService.runBranchImport.mockResolvedValue(partial);
 
     await expect(worker.runBranchImport(jobFor())).resolves.toEqual(partial);
+  });
+});
+
+/**
+ * The two shapes a job payload can have.
+ *
+ * `scope` replaced `projectId` so a client's branch master could use the same queue as a project.
+ * A job enqueued by the previous build is already sitting in Redis with the old shape and, with
+ * `attempts: 1`, nothing will re-create it — so the worker has to read both or a deploy silently
+ * drops an import somebody is waiting on.
+ */
+describe('ImportJobService.scopeOf', () => {
+  it('reads a scoped payload', () => {
+    expect(ImportJobService.scopeOf({ scope: { kind: 'CLIENT', id: 'c-1' } } as any))
+      .toEqual({ kind: 'CLIENT', id: 'c-1' });
+  });
+
+  it('reads a pre-scope payload as a project import', () => {
+    expect(ImportJobService.scopeOf({ projectId: 'p-9' } as any))
+      .toEqual({ kind: 'PROJECT', id: 'p-9' });
+  });
+
+  it('prefers the scope when a payload somehow carries both', () => {
+    expect(ImportJobService.scopeOf({ scope: { kind: 'CLIENT', id: 'c-1' }, projectId: 'p-9' } as any))
+      .toEqual({ kind: 'CLIENT', id: 'c-1' });
+  });
+
+  it('reports a payload with neither, rather than inventing a scope', () => {
+    expect(ImportJobService.scopeOf({} as any)).toBeNull();
+    expect(ImportJobService.scopeOf(undefined)).toBeNull();
+  });
+});
+
+/**
+ * A client id and a project id are both UUIDs, so an id match alone would let a job enqueued
+ * against one be read through the other's endpoint. The kind is part of the comparison.
+ */
+describe('ImportJobService.getBranchImportStatus — scope isolation', () => {
+  it('refuses a job whose scope kind differs, even when the id matches', async () => {
+    const queue = {
+      getJob: jest.fn().mockResolvedValue({
+        id: '7', data: { scope: { kind: 'PROJECT', id: 'same-uuid' } },
+        getState: jest.fn().mockResolvedValue('completed'), progress: () => 0,
+      }),
+    };
+    const svc = new ImportJobService(queue as any);
+    await expect(svc.getBranchImportStatus({ kind: 'CLIENT', id: 'same-uuid' }, '7'))
+      .rejects.toBeInstanceOf(NotFoundException);
   });
 });

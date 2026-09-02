@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { User, MapPin, Briefcase, Award, CreditCard, Clock, X, CheckCircle, AlertTriangle } from 'lucide-react';
 import { INDIAN_STATES, todayDateKey, REGION_ORDER, REGION_LABELS, AssayerEngagementType, AssayerUnavailableReason } from '@fapoms/shared';
 import { api } from '../../services/api';
+import { fetchWholeAssayerRoster } from '../../services/assayer-roster';
 import { Modal, Select, useToast } from '../../components/ui';
 import { Autocomplete } from '../../components/ui/Autocomplete';
 import { ChipMultiSelect } from '../../components/ui/ChipMultiSelect';
@@ -130,28 +131,39 @@ export interface FieldDef {
  *
  * Loaded only where the field is actually shown. `null` means "still loading", which the
  * picker renders as such rather than as "there is nobody to choose".
+ *
+ * EVERY page of the roster, not the first thousand rows. This asked for `?limit=1000` and took
+ * whatever came back: on the customer's roster of 1,155 appraisers the 155 oldest records were
+ * absent from the dropdown, so those people could not be named as anybody's manager and nothing
+ * on the form said why. A warning would not have helped — the person choosing needs the name to
+ * be *in the list* — so the list is now complete instead. `incomplete` covers the case a warning
+ * is the only honest answer to: a roster past the loader's ceiling, or somebody enrolled while
+ * these requests were in flight.
  */
 export const useManagerOptions = (enabled: boolean, excludeId?: string) => {
   const [people, setPeople] = useState<{ value: string; label: string }[] | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
+  /** Set only when the roster genuinely could not all be loaded; null when the list is everyone. */
+  const [incomplete, setIncomplete] = useState<{ shown: number; total: number } | null>(null);
   useEffect(() => {
     if (!enabled) return;
     let alive = true;
-    api.request<Assayer[]>('/assayers?limit=1000')
-      .then((res) => {
+    fetchWholeAssayerRoster<Assayer>()
+      .then(({ people: roster, total, missing }) => {
         if (!alive) return;
-        const list = (Array.isArray(res) ? res : []).filter((a) => a.id !== excludeId).map((a) => ({
+        const list = roster.filter((a) => a.id !== excludeId).map((a) => ({
           value: a.id,
           // Code included because two people on a national roster share a name often enough
           // that a bare name would make the choice a coin toss.
           label: a.assayerCode ? `${a.displayName} · ${a.assayerCode}` : a.displayName,
         })).sort((x, y) => x.label.localeCompare(y.label));
         setPeople(list);
+        setIncomplete(missing > 0 ? { shown: roster.length, total } : null);
       })
       .catch((e) => { if (alive) { setPeople([]); setFailed(userMessage(e)); } });
     return () => { alive = false; };
   }, [enabled, excludeId]);
-  return { people, failed };
+  return { people, failed, incomplete };
 };
 
 /**
@@ -446,7 +458,12 @@ const renderFormField = (
   setForm: (v: Record<string, string>) => void,
   vocabulary?: { skills: string[] | null; languages: string[] | null; certifications: string[] | null },
   onBlurField?: (key: string) => void,
-  people?: { options: { value: string; label: string }[] | null; failed: string | null },
+  people?: {
+    options: { value: string; label: string }[] | null;
+    failed: string | null;
+    /** Present only when some of the roster could not be loaded — see `useManagerOptions`. */
+    incomplete?: { shown: number; total: number } | null;
+  },
 ) => {
   const val = form[field.key] || '';
   const isTextarea = FIELD_TEXTAREA.has(field.key);
@@ -519,6 +536,14 @@ const renderFormField = (
                 <div style={{ fontSize: '10.5px', color: 'var(--warning)', marginTop: '4px' }}>
                   {/* Named, not swallowed: without the list the field looks empty by choice. */}
                   Could not load the list of people. {people.failed}
+                </div>
+              )}
+              {/* A short list is worse than an empty one: it looks complete. Say what is not in it. */}
+              {people?.incomplete && (
+                <div style={{ fontSize: '10.5px', color: 'var(--warning)', marginTop: '4px' }}>
+                  Only {people.incomplete.shown} of the {people.incomplete.total} people on the
+                  roster could be loaded, so {people.incomplete.total - people.incomplete.shown} are
+                  not in this list. Reload the page to try again.
                 </div>
               )}
             </>

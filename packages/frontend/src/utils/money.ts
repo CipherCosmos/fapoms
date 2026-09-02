@@ -1,4 +1,4 @@
-import { formatRupees } from '@fapoms/shared';
+import { formatRupees, describeAssignmentFee } from '@fapoms/shared';
 
 /**
  * How this app renders money, and which fee it renders.
@@ -53,12 +53,18 @@ export interface FeeBearing {
  * that knows what was actually booked, held, paid and collected.
  */
 export function assignmentFeeValue(a: FeeBearing | null | undefined): number | null {
-  if (!a) return null;
-  const agreed = Number(a.agreedFee ?? NaN);
-  if (Number.isFinite(agreed) && agreed > 0) return agreed;
-  const proposed = Number(a.proposedFee ?? NaN);
-  return Number.isFinite(proposed) ? proposed : null;
+  /**
+   * Delegates to `describeAssignmentFee` in @fapoms/shared — the one place that decides this.
+   *
+   * This used to be a local copy whose comment claimed it mirrored the backend. It did not: it
+   * gated on `Number.isFinite(proposed)` where the backend and the mobile app both require
+   * `proposed > 0`. So a stored fee of 0 — reachable, because a desk override of 0 passes API
+   * validation — rendered here as a confident "₹0", telling an operator the job pays nothing,
+   * while the backend booked it as `source: 'NONE'` and the assayer's phone said "not set".
+   * Three answers to one question, and no test anywhere, because `packages/shared` had no test
+   * runner. It has one now, and this is a two-line pass-through so the three cannot drift again.
+   */
+  return describeAssignmentFee(a).total;
 }
 
-/** {@link assignmentFeeValue}, formatted — the one-liner five screens were each writing. */
 export const assignmentFee = (a: FeeBearing | null | undefined) => money(assignmentFeeValue(a));

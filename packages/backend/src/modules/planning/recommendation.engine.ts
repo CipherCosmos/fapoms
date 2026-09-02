@@ -41,6 +41,9 @@ const EXCLUSION_REASONS: Record<string, string> = {
   ruleEngineEligibility: 'Blocked by a business rule',
   requiredSkills: 'Missing a skill or certification this project requires',
   distancePolicy: "Outside the client's permitted distance band for this branch",
+  distancePolicyUnlocated:
+    "Home address not located yet, so the client's minimum-distance rule cannot be checked — "
+    + 'add a map pin on their profile, or wait for the address lookup to finish',
 };
 
 /**
@@ -395,11 +398,36 @@ export class DistancePolicyFilter implements CandidateFilter {
      * disqualified by where they live pass simply by travelling, and would make the same
      * candidate eligible or not depending on the hour.
      */
-    if (
-      context.branch?.latitude == null || context.branch?.longitude == null ||
-      assayer.homeLatitude == null || assayer.homeLongitude == null
-    ) {
+    /**
+     * A floor that cannot be measured is not a floor that has been met.
+     *
+     * Both coordinates used to fall through to `return true` together, which meant an assayer
+     * whose home had never been geocoded silently PASSED the conflict-of-interest check — the
+     * system reported "far enough from this branch" about someone whose address it did not know.
+     * That is a false negative on a compliance control, and it was not rare: on the day this was
+     * found, 310 of the 548 offerable assayers had no coordinate, because the roster had just
+     * been imported and the backfill geocodes at about one address per second.
+     *
+     * The two nulls are now treated differently, because they are different facts:
+     *
+     * - **The branch has no coordinate.** Nothing can be measured against, and this is not the
+     *   assayer's doing. Excluding here would empty the candidate list for that branch and give
+     *   ops no way to reopen it. Pass, as before.
+     *
+     * - **The assayer has no coordinate.** The unknown is about the person being checked, and the
+     *   client has explicitly set a floor (`preferences` is non-null, checked above). Asserting
+     *   compliance would be a claim the data does not support, so they are excluded — and the
+     *   excluded panel says so, which is what turns an invisible pass into a fixable worklist
+     *   entry. The fix is a geocode or a manual pin, both of which already exist.
+     *
+     * This only bites where a client has actually set `minDistanceKm` — 2 of 24 clients today —
+     * so it does not narrow planning for anyone who has not asked for the control.
+     */
+    if (context.branch?.latitude == null || context.branch?.longitude == null) {
       return true;
+    }
+    if (assayer.homeLatitude == null || assayer.homeLongitude == null) {
+      return false;
     }
 
     const distance = calculateHaversineDistance(
@@ -421,6 +449,18 @@ export class DistancePolicyFilter implements CandidateFilter {
      * still letting ops see and choose them.
      */
     return this.constraintEvaluator.checkDistancePolicy(preferences, distance, { relaxDistance: true }).passed;
+  }
+
+  /**
+   * Which of this filter's two refusals applied.
+   *
+   * The generic exclusion sentence says "outside the client's permitted distance band", and for an
+   * assayer whose home was never located that sentence is simply untrue — it reports a measurement
+   * that was never taken. Replacing a silent false pass with a confidently wrong reason would trade
+   * one wrong answer for another, so the caller asks which case it was and says so.
+   */
+  unlocatedHome(assayer: AssayerEntity): boolean {
+    return assayer.homeLatitude == null || assayer.homeLongitude == null;
   }
 }
 
@@ -2317,7 +2357,17 @@ export class RecommendationEngine {
 
       if (blockedBy) {
         let detail: string | undefined;
-        if (blockedBy === this.ruleEngineEligibilityFilter.name) {
+        /**
+         * Overrides the generic sentence for the one case where it would be false. Everything else
+         * keeps the shared wording, so this stays an exception rather than a second reason table.
+         */
+        let reasonOverride: string | undefined;
+        if (blockedBy === this.distancePolicyFilter.name && this.distancePolicyFilter.unlocatedHome(assayer)) {
+          reasonOverride = EXCLUSION_REASONS.distancePolicyUnlocated;
+          detail =
+            `${assayer.displayName} has no map pin yet, so the client's minimum-distance rule cannot be `
+            + 'checked for this branch. Add a pin on their profile, or wait for the address lookup to finish.';
+        } else if (blockedBy === this.ruleEngineEligibilityFilter.name) {
           detail = (await this.ruleEngineEligibilityFilter.explain(assayer, context)).join('; ') || undefined;
         } else if (blockedBy === this.deployabilityFilter.name) {
           // Which onboarding stage they are stuck at, and the click that unsticks them.
@@ -2369,7 +2419,7 @@ export class RecommendationEngine {
         excluded.push({
           assayerId: assayer.id,
           displayName: assayer.displayName,
-          reason: EXCLUSION_REASONS[blockedBy] ?? blockedBy,
+          reason: reasonOverride ?? EXCLUSION_REASONS[blockedBy] ?? blockedBy,
           detail,
           kind,
           // Already computed for the whole pool — free context for the ops decision.

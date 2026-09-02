@@ -1,7 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { Repository, DataSource } from 'typeorm';
-import * as XLSX from 'xlsx';
 import { BranchEntity } from './branch.entity';
 import { BranchContactEntity } from './branch-contact.entity';
 import { BranchDocumentEntity } from './branch-document.entity';
@@ -11,17 +10,11 @@ import { GeoStateEntity, GeoDistrictEntity, GeoCityEntity } from '../geo/geo.ent
 import { AuditService } from '../../core/audit/audit.service';
 import { BranchQueryService } from './branch-query.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { EventCategory, resolveRegion, canonicalStateName, stateFromCity } from '@fapoms/shared';
+import { EventCategory, resolveRegion, canonicalStateName } from '@fapoms/shared';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { autocompleteIndia, isPlaceLookupConfigured } from '../geo/india-autocomplete.helper';
-import { geocodeIndia } from '../geo/india-geocoder';
-import { resolveCoordinates, needsBetterFix, GeoFields } from '../geo/coordinate-resolution';
+import { resolveCoordinates, GeoFields } from '../geo/coordinate-resolution';
 import { GeoPrecisionService } from '../geo/geo-precision.service';
-
-async function geocodeAddress(address: string, city: string, district: string, state: string, pincode?: string | null): Promise<{ lat: number; lng: number } | null> {
-  const res = await geocodeIndia(address, city, district, state, pincode);
-  return res ? { lat: res.lat, lng: res.lng } : null;
-}
 
 /** A header reduced to letters and digits, lower-cased — so "STATE", "State" and "state" are one. */
 const normHeader = (s: unknown): string => String(s ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -208,12 +201,8 @@ export class BranchService {
     // already uses, with a message that names the conflict, rather than letting the database reject
     // it with one nobody in the office can read.
     if (dto.clientId) {
-      const solTaken = await this.branchRepository.findOne({
-        where: { solId, clientId: dto.clientId, isActive: true },
-      });
-      if (solTaken) {
-        throw new ConflictException(`SOL ID '${solId}' is already used by another branch for this client.`);
-      }
+      const solTaken = await this.findBySolId(solId, dto.clientId);
+      if (solTaken) throw this.solIdConflict(solId, solTaken);
     }
 
     if (dto.zoneId) {
@@ -282,7 +271,26 @@ export class BranchService {
       updatedBy: userId,
     });
 
-    const saved = await this.branchRepository.save(branch);
+    /**
+     * The check above and this write are not one atomic act.
+     *
+     * Two operators adding the same branch at the same moment — or an import running while someone
+     * adds a branch by hand — both find the SOL ID free and both insert. The database's unique index
+     * is what actually keeps the data correct; without this catch, the loser sees a raw
+     * `duplicate key value violates unique constraint "UQ_branches_client_sol_id"` as a 500, which
+     * says nothing and looks like the system broke rather than like the branch already existing.
+     */
+    let saved: BranchEntity;
+    try {
+      saved = await this.branchRepository.save(branch);
+    } catch (err: any) {
+      // 23505 = unique_violation. Re-read so the message can name the branch that won the race.
+      if (err?.code === '23505' && dto.clientId) {
+        const winner = await this.findBySolId(solId, dto.clientId);
+        if (winner) throw this.solIdConflict(solId, winner);
+      }
+      throw err;
+    }
 
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
@@ -337,6 +345,29 @@ export class BranchService {
 
   async update(id: string, dto: UpdateBranchDto, userId: string): Promise<BranchEntity> {
     const branch = await this.findOne(id);
+
+    /**
+     * The SOL ID is checked on edit exactly as it is on create.
+     *
+     * It was not checked at all: `update` did `if (dto.solId !== undefined) branch.solId = dto.solId`
+     * and saved. So the one field that IS a branch's identity — the field every import, every
+     * assignment and every re-import matches on — could be blanked or pointed at another branch's
+     * SOL ID from the edit form, while `create` a hundred lines above refused both. A blank one
+     * makes the branch unmatchable by any future import of that client's list, which shows up much
+     * later as a duplicate rather than as an error here.
+     */
+    if (dto.solId !== undefined) {
+      const solId = dto.solId?.trim();
+      if (!solId) {
+        throw new BadRequestException("A SOL ID is required — it is the branch's unique identifier.");
+      }
+      if (solId !== branch.solId) {
+        const clientId = dto.clientId ?? branch.clientId;
+        const taken = clientId ? await this.findBySolId(solId, clientId, branch.id) : null;
+        if (taken) throw this.solIdConflict(solId, taken);
+      }
+      dto = { ...dto, solId };
+    }
 
     if (dto.state !== undefined || dto.district !== undefined || dto.city !== undefined) {
       await this.validateGeography(
@@ -440,6 +471,49 @@ export class BranchService {
     } catch (err) {
       console.error('Failed to publish branch:updated event:', err);
     }
+
+    return saved;
+  }
+
+  /**
+   * Bring an archived branch back, because a client's own list still names it.
+   *
+   * Called only by the importer. A named act rather than an `isActive` field on `UpdateBranchDto`,
+   * for two reasons: reviving a branch is a real event that belongs in the audit trail under its
+   * own name, and a boolean on the edit DTO would let any caller of `PATCH /branches/:id` flip a
+   * branch's existence as a side effect of changing its phone number.
+   *
+   * Deliberately does NOT revive the branch's contacts, documents or project links. `remove()`
+   * deactivated those as a cascade, and a re-import says the *branch* exists again — it says
+   * nothing about whether a two-year-old contact list or a closed project's link should come back.
+   * Reviving those silently would restore stale records nobody asked for; the branch alone is what
+   * the file asserts.
+   */
+  async restoreArchived(id: string, userId: string): Promise<BranchEntity> {
+    /**
+     * Read straight from the repository, not through `findOne`.
+     *
+     * `BranchQueryService.findOne` ends `.andWhere('branch.isActive = true')` — correctly, it backs
+     * the detail view — so it cannot see the very row this method exists to bring back. Called that
+     * way, restoring an archived branch threw `Branch <uuid> not found.` and the importer recorded
+     * the row as skipped: the duplicate was gone, but so was the branch.
+     */
+    const branch = await this.branchRepository.findOne({ where: { id } });
+    if (!branch) throw new NotFoundException(`Branch ${id} not found.`);
+    if (branch.isActive) return branch;
+
+    branch.isActive = true;
+    branch.updatedBy = userId;
+    const saved = await this.branchRepository.save(branch);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'BRANCH_RESTORED',
+      entityType: 'BRANCH',
+      entityId: saved.id,
+      userId,
+      remarks: `Restored archived branch ${saved.name} (${saved.solId}) — named again by an import.`,
+    });
 
     return saved;
   }
@@ -639,209 +713,65 @@ export class BranchService {
   // -----------------------------------------------------------------------
   // Excel Import (unchanged pattern)
   // -----------------------------------------------------------------------
+  /**
+   * `importExcel` was removed. There is one branch-sheet importer now:
+   * `ProjectService.uploadBranchesFromExcel`, reached through
+   * `project/branch-import.controller.ts` for a client's branch master and through
+   * `POST /projects/:id/branches/upload` for a project.
+   *
+   * This one ran a geography check, a `findOne` and a geocode per row inside the HTTP request —
+   * thousands of sequential round trips on the real 3,759-row client file, against a 300-second
+   * socket timeout. The comment that used to sit on its geocoding line said it plainly:
+   * *"door into the same table, geocoded every row. Two importers, two answers."*
+   */
 
-  async importExcel(
-    fileBuffer: Buffer,
-    clientId: string,
-    userId: string,
-  ): Promise<{ importedCount: number; errors: string[] }> {
-    const client = await this.clientService.findOne(clientId);
-
-    /**
-     * The column mapping is an override, not a prerequisite.
-     *
-     * Every lookup below already falls back to a standard heading — `Branch Code`, `SOL ID`,
-     * `Branch Name` and so on — and those defaults are the same words the client's
-     * configuration screen offers as labels. So a file with the standard headings needed no
-     * mapping at all; the operator was made to type the defaults back in before the import
-     * would run, and a newly created client starts with an empty mapping, which meant every
-     * new client was blocked on this ceremony.
-     *
-     * It stays configurable because clients really do differ — one bank's file says
-     * `Branch Code` and another's says `BrCode` — but only the clients that differ have to say
-     * so. A mapping entry that is absent means "this file uses the standard heading".
-     */
-    const mapping: Record<string, string> = client.configuration?.importMapping ?? {};
-
-    const workbook = XLSX.read(fileBuffer, { type: 'buffer' });
-    const sheetName = workbook.SheetNames[0];
-    const worksheet = workbook.Sheets[sheetName];
-    const rows = XLSX.utils.sheet_to_json<Record<string, any>>(worksheet);
-
-    /**
-     * Resolve each field to the actual header this file uses, ONCE. The client's explicit
-     * mapping wins; otherwise the first header whose normalised form is a known alias is taken.
-     * So "BRANCH", "BRANCH_NAME", "STATE", "Branch Address" all land on the right field with no
-     * reshaping and no per-client setup.
-     */
-    const headers = rows.length ? Object.keys(rows[0] as object) : [];
-    const fieldHeader = resolveBranchHeaders(headers, mapping);
-    const cell = (row: Record<string, any>, field: string): string =>
-      fieldHeader[field] ? String(row[fieldHeader[field]] ?? '').trim() : '';
-
-    const errors: string[] = [];
-
-    // Rows that landed on a coarse tier, handed to the precision worker once the loop is done.
-
-    const coarseIds: string[] = [];
-    // Every branch this import touched, handed to the address-enrichment worker so its
-    // district/pincode/city/zone fill in from the coordinate in the background (the file rarely
-    // carries them). The worker only works the ones actually missing a field, so this is safe to
-    // hand it all of them.
-    const enrichIds: string[] = [];
-    let importedCount = 0;
-
-    for (let index = 0; index < rows.length; index++) {
-      const row = rows[index];
-      const rowNum = index + 2;
-
-      try {
-        // The SOL id is a branch's single identity. It comes from whichever column the bank used to
-        // name the branch — "SOL ID", or the plain "BRANCH"/"Branch Code" that holds the same number
-        // (all fold onto `solId` in the alias map above).
-        const solId = cell(row, 'solId');
-        const name = cell(row, 'name');
-        const address = cell(row, 'address');
-        let state = cell(row, 'state');
-        const district = cell(row, 'district');
-        const city = cell(row, 'city');
-
-        // Bank files often put a city in the State column ("Chennai", "Bangalore"). The state drives
-        // this branch's region, zone and holiday calendar, so rather than reject the row, recover the
-        // real state from the city — from the state cell itself, or, failing that, from the City
-        // column — before the geography check runs. A city we don't know still falls through to the
-        // normal state validation below, so a genuine typo is still caught.
-        if (state && !canonicalStateName(state)) {
-          const recovered = stateFromCity(state) ?? (city ? stateFromCity(city) : null);
-          if (recovered) state = recovered;
-        }
-        const pincode = cell(row, 'pincode');
-        const latitude = parseFloat(cell(row, 'latitude'));
-        const longitude = parseFloat(cell(row, 'longitude'));
-
-        // A branch needs an identity (its SOL ID), a name and a state — the state sets its region,
-        // zone and holiday calendar. District, city and address are welcome but not required: a file
-        // that carries coordinates (this one does) places the branch exactly without them, and one
-        // that doesn't still resolves from state + pincode.
-        if (!solId || !name || !state) {
-          const missing = [!solId && 'SOL ID', !name && 'branch name', !state && 'state'].filter(Boolean).join(', ');
-          errors.push(`Row ${rowNum}: missing ${missing}.`);
-          continue;
-        }
-
-        try {
-          await this.validateGeography(state, district, city);
-        } catch (geoErr: any) {
-          errors.push(`Row ${rowNum}: Geography validation failed - ${geoErr.message}`);
-          continue;
-        }
-
-        /**
-         * A branch is identified by its SOL ID — the bank's own unique branch id — per client, and
-         * never by name, because two different banks run a branch of the same name at the same
-         * address ("MG Road") and one bank reuses a name across towns. So the match is on the SOL
-         * ID alone.
-         */
-        const existing = await this.branchRepository.findOne({ where: { solId, clientId, isActive: true } });
-
-        /**
-         * Located through the same chain as every other branch write.
-         *
-         * This importer used to store `null` coordinates whenever the sheet had none — no
-         * geocode, no precision stamp — so a branch brought in this way had no pin at all: absent
-         * from the planning map, distance "unknown", and invisible to the precision sweep
-         * because it carried no `geo_source` to be judged by. The project importer, a different
-         * door into the same table, geocoded every row. Two importers, two answers.
-         *
-         * Same trade as the project importer: the fast tiers here (`precise: false`), because
-         * this is a bulk loop and the free providers allow about one lookup a second; the rows
-         * that land coarse are handed to the precision worker below, so they are upgraded in the
-         * background instead of waiting to be noticed. A coordinate pair the sheet does carry is
-         * honoured (`resolveCoordinates` rule 1), and a manual pin on an existing row is never
-         * overwritten (rule 2) — which is why `existing` is passed.
-         */
-        const geo = await resolveCoordinates(
-          {
-            address, city, district, state, pincode: pincode || null, name, brand: client.name,
-            suppliedLat: isNaN(latitude) ? null : latitude,
-            suppliedLng: isNaN(longitude) ? null : longitude,
-            precise: false,
-          },
-          existing ?? null,
-        );
-        const geoFields: Partial<GeoFields> = geo ?? {};
-
-        // The state determines the branch's region — the field that scopes it to a desk and picks
-        // its holiday calendar. Resolved on every import (not just on the Add-Branch form and the
-        // project importer), so a branch loaded here is not left region-less and invisible to every
-        // region-scoped desk. Canonicalised so a raw state name never reaches the enum column.
-        const region = resolveRegion(state);
-
-        let saved: BranchEntity;
-        if (existing) {
-          // Matched by SOL ID; refresh the branch's mutable facts from the sheet.
-          existing.name = name;
-          existing.address = address;
-          existing.state = state;
-          existing.district = district;
-          existing.city = city;
-          existing.pincode = pincode || null;
-          if (region) existing.region = region;
-          existing.updatedBy = userId;
-          Object.assign(existing, geoFields);
-          saved = await this.branchRepository.save(existing);
-        } else {
-          const branch = this.branchRepository.create({
-            solId,
-            name,
-            address,
-            state,
-            district,
-            city,
-            pincode: pincode || null,
-            region,
-            clientId,
-            ...geoFields,
-            createdBy: userId,
-            updatedBy: userId,
-          });
-          saved = await this.branchRepository.save(branch);
-        }
-        if (saved?.id && needsBetterFix(saved.geoSource ?? null, saved.geoAccuracyMeters ?? null)) {
-          coarseIds.push(saved.id);
-        }
-        if (saved?.id) enrichIds.push(saved.id);
-
-        importedCount++;
-      } catch (err: any) {
-        errors.push(`Row ${rowNum}: Unexpected parse error - ${err.message}`);
-      }
-    }
-
-    if (importedCount > 0) {
-      await this.auditService.recordEvent({
-        category: EventCategory.OPERATIONAL,
-        eventType: 'BRANCHES_BULK_IMPORT',
-        entityType: 'CLIENT',
-        entityId: clientId,
-        userId,
-        remarks: `Bulk imported/updated ${importedCount} branches. Errors: ${errors.length}`,
-      });
-    }
-
-    // Same hand-off as the project importer: coarse rows are upgraded in the background, and the
-    // nightly sweep catches anything this enqueue cannot. Fire-and-forget on purpose.
-    void this.geoPrecision.enqueueBackfill('branch', coarseIds, `client import ${clientId}`);
-    // And enrich the address fields the file did not carry — district, pincode, city, zone — from
-    // each branch's coordinate, in the background so the import stays fast.
-    void this.geoPrecision.enqueueAddressEnrich(enrichIds, `client import ${clientId}`);
-
-    return { importedCount, errors };
-  }
 
   // -------------------------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------------------------
+
+  /**
+   * Is this SOL ID already spoken for on this client — including by an archived branch?
+   *
+   * The `WHERE is_active = true` that used to be here (and is still on the database's unique index,
+   * `UQ_branches_client_sol_id`) is what let a branch be duplicated: archive branch 4021, re-import
+   * or re-create it, and a *second* row appears with the same client and SOL ID beside the archived
+   * original. Postgres allows it because the partial index does not constrain inactive rows, and
+   * nothing in the code looked. The result is two branches the operator cannot tell apart, one of
+   * which carries all the history.
+   *
+   * Deliberately not fixed by widening the index: archived rows really do need to coexist with a
+   * live successor in some estates, and a migration that fails on production data at deploy time is
+   * a worse outcome than a check in the one place that creates them. The index still guards the
+   * live set; this guards against reviving the ambiguity.
+   *
+   * @param excludeId A branch that may legitimately hold this SOL ID — itself, when editing.
+   */
+  private async findBySolId(solId: string, clientId: string, excludeId?: string): Promise<BranchEntity | null> {
+    const found = await this.branchRepository.find({
+      where: { solId, clientId },
+      select: ['id', 'name', 'isActive'],
+      take: 2,
+    });
+    return found.find((b) => b.id !== excludeId) ?? null;
+  }
+
+  /**
+   * The refusal, worded for whoever is looking at the screen.
+   *
+   * An archived match gets its own sentence because the operator has no way to discover it — the
+   * branch is not in any list they can see, so "already used by another branch" reads as a bug in
+   * the system rather than as a fact about their own data.
+   */
+  private solIdConflict(solId: string, existing: BranchEntity): ConflictException {
+    return new ConflictException(
+      existing.isActive
+        ? `SOL ID '${solId}' is already used by "${existing.name}" for this client.`
+        : `SOL ID '${solId}' belongs to "${existing.name}", an archived branch of this client. `
+          + 'Restore that branch instead of creating a second one, or give this branch a different SOL ID — '
+          + 'two branches sharing a SOL ID cannot be told apart by any later import.',
+    );
+  }
 
   /**
    * Verify only what the caller actually supplied.

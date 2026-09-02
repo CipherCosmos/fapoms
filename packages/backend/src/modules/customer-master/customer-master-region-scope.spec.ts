@@ -5,6 +5,7 @@ import { CustomerMasterService } from './customer-master.service';
 import { CustomerMasterVersionEntity } from './customer-master-version.entity';
 import { CustomerRecordEntity } from './customer-record.entity';
 import { BranchEntity } from '../branch/branch.entity';
+import { ProjectEntity } from '../project/project.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { Region } from '@fapoms/shared';
@@ -65,6 +66,7 @@ describe('customer-master region scoping', () => {
         { provide: getRepositoryToken(CustomerMasterVersionEntity), useValue: { find: jest.fn(), findOne: jest.fn() } },
         { provide: getRepositoryToken(CustomerRecordEntity), useValue: { findAndCount, createQueryBuilder, find: jest.fn() } },
         { provide: getRepositoryToken(BranchEntity), useValue: { find: jest.fn() } },
+        { provide: getRepositoryToken(ProjectEntity), useValue: { findOne: jest.fn() } },
         { provide: AuditService, useValue: { recordEvent: jest.fn() } },
         { provide: getDataSourceToken(), useValue: { query, transaction: jest.fn() } as unknown as DataSource },
         { provide: RegionGuardService, useValue: { stagedMode } },

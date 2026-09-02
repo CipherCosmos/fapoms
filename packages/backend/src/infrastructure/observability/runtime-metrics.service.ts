@@ -220,6 +220,9 @@ export class RuntimeMetricsService {
    * value forever — a permanently frozen series that reads as a query still running.
    */
   private registerStatementGauges(): void {
+    // prom-client calls collect() with `this` bound to the gauge itself (hence `this.set(...)`
+    // further down), so the service has to be captured here to stay reachable inside the callback.
+    // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this;
     const registers = [this.metrics.registry];
     const labelNames = ['queryid', 'statement'];

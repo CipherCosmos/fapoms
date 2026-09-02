@@ -25,11 +25,17 @@ export function isExhausted(attemptsMade: number | undefined, maxAttempts: numbe
 /**
  * Surfaces dead-letter jobs.
  *
- * Bull runs with `removeOnFail: false`, so a job that exhausts its retries stays in Redis — but
- * nothing logged or alerted, so a persistently failing OCR / dispatch / notification job simply
- * vanished from view (assessment §8, P3). This attaches a `failed` listener to every queue and,
- * only once a job has used up all its attempts, logs a structured dead-letter line and increments
- * `jobs_failed_total` so the failure is both greppable and alertable.
+ * A job that exhausts its retries used to fail in silence: nothing logged or alerted, so a
+ * persistently failing OCR / dispatch / notification job simply vanished from view (assessment
+ * §8, P3). This attaches a `failed` listener to every queue and, only once a job has used up all
+ * its attempts, logs a structured dead-letter line and increments `jobs_failed_total` so the
+ * failure is both greppable and alertable.
+ *
+ * It watches the live `failed` event, so it does not depend on the dead job being *kept* in
+ * Redis — which matters, because failed-job retention is bounded on every queue now
+ * (`FAILED_JOB_RETENTION` in queued-job.ts). An earlier version of this comment asserted the
+ * opposite, that `removeOnFail: false` leaves the job in Redis for good; that is no longer true
+ * anywhere and was never what this monitor relied on.
  *
  * Runs only on job-processing replicas (`PROCESS_ROLE !== 'api'`): Bull delivers `failed` events
  * to every listener across the cluster, and an API replica does not process jobs — without this

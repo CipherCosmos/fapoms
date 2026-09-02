@@ -86,7 +86,10 @@ import {
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { scopeAssayerForRoles, scopeAssayerListForRoles, rolesOf, assertSelfOrPrivileged } from './assayer-visibility';
+import type { Response } from 'express';
+import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 import { RosterImportService } from './roster-import.service';
+import { ImportJobService } from '../import/import-job.service';
 import { RosterRecordsService } from './roster-records.service';
 import { QualificationScoreService } from './qualification-score.service';
 import { STAFF_ROLES } from '../auth/staff-roles';
@@ -747,6 +750,7 @@ export class AssayerController {
   constructor(
     private readonly assayerService: AssayerService,
     private readonly rosterImport: RosterImportService,
+    private readonly importJobService: ImportJobService,
     private readonly rosterRecords: RosterRecordsService,
     @Inject('StorageEngine') private readonly storage: StorageEngine,
     private readonly regionGuard: RegionGuardService,
@@ -794,7 +798,19 @@ export class AssayerController {
   async findAll(
     @Req() req: any,
     @Query('page') page = 1,
-    @Query('limit') limit = 20,
+    /**
+     * Bounded, but generously — this is the route a screen uses to hold the whole roster.
+     *
+     * It was unclamped: `?limit=999999` returned every appraiser in one response, the same defect
+     * just closed on `/assignments` and the audit routes. The ceiling here is 1,000 rather than
+     * their 200 for the same reason the audit routes got 500: those routes page a long list, this
+     * one exists to be exhausted. `/assayers` has no search parameter, so a picker that must let
+     * any of 1,155 people be *found* has no option but to fetch them all — see
+     * `frontend/src/services/assayer-roster.ts`, which pages against this and reports any shortfall
+     * rather than silently listing fewer people than exist. A 200 ceiling would turn its two
+     * requests into six for no gain. The default stays 20, so no existing caller changes.
+     */
+    @Query('limit', new ParseLimitPipe({ default: 20, max: 1000 })) limit: number,
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     const { assayers, total } = await this.assayerService.findAll(page, limit, scope);
@@ -1640,6 +1656,7 @@ export class AssayerController {
     @UploadedFile() file: any,
     @Body() body: any,
     @Req() req: any,
+    @Res({ passthrough: true }) res: Response,
   ) {
     if (!file?.buffer?.length) {
       throw new BadRequestException('No file was uploaded. Choose the roster workbook and try again.');
@@ -1647,31 +1664,89 @@ export class AssayerController {
     // Multipart carries everything as text, so "false" arrives as a non-empty string and would
     // be truthy — the one mistake here would silently turn a rehearsal into a real import.
     const dryRun = String(body?.dryRun ?? '').toLowerCase() === 'true';
-    const summary = await this.rosterImport.importAssayerSheet(file.buffer, req.user.id, {
-      dryRun,
-      sheetName: body?.sheetName || undefined,
-    });
-    return { success: true, data: summary };
-  }
+    const sheetName = body?.sheetName || undefined;
 
-  @Post('/upload')
-  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
-  @RequirePermissions('assayer:create:organization')
-  @UseInterceptors(FileInterceptor('file', assayerUploadMulterOptions), FileScanInterceptor)
-  @ApiOperation({ summary: 'Upload assayers from Excel spreadsheet' })
-  async uploadAssayers(@UploadedFile() file: any, @Req() req: any) {
-    // A submitted form with no file attached reaches here as `undefined`, and reading
-    // `.buffer` off it threw a TypeError the caller saw as "Internal server error". Ops
-    // needs to be told to pick a file, not shown a crash.
-    if (!file?.buffer?.length) {
-      throw new BadRequestException('No file was uploaded. Choose a file and try again.');
+    /**
+     * The rehearsal stays in the request; the real import is queued.
+     *
+     * They are different acts. A rehearsal writes nothing and exists to answer a question the
+     * operator is sitting there waiting for — "what would this do?" — so its answer has to come
+     * back on the same request. The real run writes a person plus their references, background
+     * checks, documents and empanelments, and geocodes each address; the web client was holding
+     * the upload open for **fifteen minutes** to accommodate it, which is a page that cannot be
+     * told apart from a hung one.
+     *
+     * The rehearsal also does all the parsing, so a wrong or unreadable file is still refused
+     * immediately with a specific 400 — before anything is queued.
+     */
+    if (dryRun) {
+      const summary = await this.rosterImport.importAssayerSheet(file.buffer, req.user.id, {
+        dryRun: true,
+        sheetName,
+      });
+      return { success: true, data: summary };
     }
-    const result = await this.assayerService.uploadFromExcel(file.buffer, req.user.id);
+
+    /**
+     * Inspected, not rehearsed.
+     *
+     * This called `importAssayerSheet({ dryRun: true })` — written on the assumption that a dry run
+     * is a cheap parse. It is not: a dry run performs the *entire* import inside a transaction and
+     * rolls it back, roughly ten writes per row. For the real 1,155-person roster that is ~11,000
+     * sequential statements holding one of twenty pool connections and taking row locks on
+     * `assayers`, on the request thread — and then the queued job did all of it again for real.
+     *
+     * `inspectSheet` resolves the sheet, applies the same wrong-file guard and counts the rows,
+     * opening no transaction and issuing no query. So an unreadable workbook — or the branch list
+     * uploaded to the wrong screen — is still an immediate 400 with the same message, rather than a
+     * cheerful 202 and a failure the operator has to go looking for.
+     */
+    const inspection = this.rosterImport.inspectSheet(file.buffer, sheetName);
+
+    const job = await this.importJobService.enqueueRosterImport({
+      actorId: req.user.id,
+      fileBuffer: file.buffer,
+      fileName: file.originalname ?? null,
+      totalRows: inspection.rowsRead,
+      sheetName: sheetName ?? null,
+    });
+
+    // 202: accepted, not done. The body says where to watch.
+    res.status(202);
     return {
       success: true,
-      data: result,
+      data: {
+        ...job,
+        queued: true,
+        statusUrl: `/assayers/roster/import-jobs/${job.jobId}`,
+        message:
+          `This roster has ${inspection.rowsRead} row(s). Each one writes a person along with their ` +
+          `references, checks, documents and empanelments, and their address is looked up — so the ` +
+          `import is running in the background. It does not need this page kept open.`,
+      },
     };
   }
+
+  /**
+   * State and result of a queued roster import.
+   *
+   * Scoped to the person who started it: the roster is one national list, so there is no project
+   * or client to check a job id against, and Bull's ids are a per-queue counter that would
+   * otherwise be trivially enumerable — over results that name real people, their PANs and their
+   * home addresses.
+   */
+  @Get('/roster/import-jobs/:jobId')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:create:organization')
+  @ApiOperation({ summary: 'State and result of a queued roster import' })
+  async getRosterImportJob(@Param('jobId') jobId: string, @Req() req: any) {
+    return { success: true, data: await this.importJobService.getRosterImportStatus(req.user.id, jobId) };
+  }
+
+  /**
+   * `POST /assayers/upload` was removed — see `AssayerService` for why. Assayer imports go through
+   * `POST /assayers/roster/import`, which every caller already used.
+   */
 
   /**
    * The assayer's own password change. `@AnyAuthenticated()` rather than `@Roles(ASSAYER)`

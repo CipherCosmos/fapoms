@@ -25,7 +25,10 @@ import { StatusBadge, Modal, SearchInput, FilterSelect, AlertBanner, PrimaryButt
 import { ChipMultiSelect } from '../components/ui/ChipMultiSelect';
 import { useWorkforceVocabulary, asOptions } from '../hooks/useWorkforceVocabulary';
 import { localDateKey } from '../utils/statusLabels';
+import { useImportJob } from '../components/import/useImportJob';
+import { ImportProgressPanel } from '../components/import/ImportProgressPanel';
 import { useCurrentRoles, canManageProjects, canDeleteProjects } from '../hooks/useCurrentRoles';
+import { fetchWholeBranchDirectory } from '../services/branch-directory';
 
 interface ClientOption {
   id: string;
@@ -61,17 +64,6 @@ interface ProjectDetail extends ProjectItem {
   organizationId: string | null;
   updatedAt: string;
   client?: { id: string; name: string; clientCode: string; email?: string; phone?: string };
-}
-
-/** What a branch upload did — see the `meta` on POST /projects/:id/branches/upload. */
-interface BranchUploadMeta {
-  totalRows: number;
-  created: number;
-  updated: number;
-  linked: number;
-  skipped: { row: number; solId?: string; reason: string }[];
-  /** Imported, but landed on a fallback coordinate and needs its location corrected. */
-  imprecise?: { row: number; solId?: string; reason: string }[];
 }
 
 interface FormData {
@@ -282,9 +274,16 @@ export const Projects: React.FC = () => {
   const [activeTab, setActiveTab] = useState<'overview' | 'branches' | 'settings'>('overview');
   const [form, setForm] = useState<FormData>(getInitialProjectForm());
   const [isSaving, setIsSaving] = useState(false);
+  /** The branch import's lifetime — shared with the Branches page. See `useImportJob`. */
+  const branchImport = useImportJob();
 
   const [projectBranches, setProjectBranches] = useState<any[]>([]);
   const [allClientBranches, setAllClientBranches] = useState<any[]>([]);
+  /**
+   * Set only when some of this client's branches could not be loaded, which the search box below
+   * has to admit to. Null for every client the loader got through in full, which is the normal case.
+   */
+  const [branchShortfall, setBranchShortfall] = useState<{ shown: number; total: number } | null>(null);
   const [branchSearch, setBranchSearch] = useState('');
 
   /**
@@ -416,13 +415,28 @@ export const Projects: React.FC = () => {
     }
   };
 
+  /**
+   * Every branch this client has, not the first page of them.
+   *
+   * This asked for `?limit=1000` and used whatever came back. `GET /branches` clamps that to 200
+   * (`branch.controller.ts`, `ParseLimitPipe({ default: 20, max: 200 })`), so on a client with
+   * 3,400 branches the picker below held 200 of them and searched only those. Typing the name of
+   * the 201st answered "No matching unassociated branches found." — the same words it uses for a
+   * branch that is already on the project — so a branch that exists, belongs to this client and is
+   * not yet associated simply could not be added, and nothing on the screen said why. Nor could
+   * anything detect it: without `withMeta: true` the pagination total was thrown away by the
+   * client before this function ever saw it.
+   */
   const loadClientBranches = async (clientId: string) => {
+    // Cleared up front so a failure here cannot leave the previous project's notice on screen.
+    setBranchShortfall(null);
     try {
-      const response = await api.request<any>(`/branches?${withScope(scopeParamsRef.current, { clientId, limit: 1000 })}`);
-      if (response && Array.isArray(response)) {
-        setAllClientBranches(response);
-      } else if (response && response.data && Array.isArray(response.data)) {
-        setAllClientBranches(response.data);
+      const directory = await fetchWholeBranchDirectory<any>({
+        query: withScope(scopeParamsRef.current, { clientId }),
+      });
+      setAllClientBranches(directory.branches);
+      if (directory.missing > 0) {
+        setBranchShortfall({ shown: directory.branches.length, total: directory.total });
       }
     } catch (err) {
       console.error('Failed to load client branches', err);
@@ -655,75 +669,33 @@ export const Projects: React.FC = () => {
     }
   };
 
+  /**
+   * Import branches into this project.
+   *
+   * This used to await the upload, read `meta`, print a sentence and stop. For a file large enough
+   * to be queued there is no `meta` — the server answers 202 with a job id — so the branch of the
+   * code that ran was the fallback: *"Branches uploaded."*, said the instant the work began, with
+   * no way to see it finish and no report of the rows it could not use. The shared hook follows
+   * the job the server named; the Branches page uses the same one, so the two screens can no
+   * longer disagree about what an import did.
+   */
   const handleUploadBranches = async (file: File) => {
     if (!detail) return;
-    setIsSaving(true);
     setMessage(null);
-    const formData = new FormData();
-    formData.append('file', file);
-    try {
-      // withMeta so the counts and the skipped rows come through. This used to report
-      // "Successfully processed Excel sheet" unconditionally — including for a file whose
-      // header row did not match, where every row was dropped and nothing was imported.
-      const res = await api.request<{ meta?: BranchUploadMeta }>(`/projects/${detail.id}/branches/upload`, {
-        method: 'POST',
-        body: formData,
-        withMeta: true,
-      });
-      const meta = res?.meta;
-      if (meta) {
-        const parts = [
-          `${meta.created} branch${meta.created === 1 ? '' : 'es'} created`,
-          `${meta.updated} updated`,
-          `${meta.linked} newly linked to this project`,
-        ];
-        const skipped = meta.skipped ?? [];
-        if (skipped.length > 0) {
-          // Name the rows. A count alone ("12 skipped") sends ops back to a 400-row sheet
-          // with no idea which rows or why.
-          const detailText = skipped.slice(0, 5).map(s => `row ${s.row}: ${s.reason}`).join('; ');
-          setMessage({
-            type: 'error',
-            text: `${parts.join(', ')}. Skipped ${skipped.length} of ${meta.totalRows} row(s) — ${detailText}${skipped.length > 5 ? '…' : ''}`,
-          });
-        } else if (meta.created === 0 && meta.updated === 0 && meta.linked === 0) {
-          /**
-           * Rows were read and nothing came of them, with no per-row reason to report — which is
-           * what a sheet with the wrong headers looks like from here. Reporting that in green as
-           * "3 row(s) read: 0 created, 0 updated, 0 newly linked" told the operator the upload had
-           * worked while their file had in fact been ignored wholesale.
-           */
-          setMessage({
-            type: 'error',
-            text: `Nothing was imported from this file. ${meta.totalRows} row(s) were read but no branch could be built from them — the column headings probably do not match. Download the template and fill in the Branch sheet.`,
-          });
-        } else {
-          // These rows DID import — they just cannot be planned or checked into until someone
-          // fixes where they are, so this is a warning on an otherwise successful upload rather
-          // than a failure. Left silent, a branch pinned on a city centroid (or the fallback point
-          // for an address that would not resolve at all) looks identical to one pinned at its
-          // front door, and only shows up later as an assayer who cannot check in.
-          const vague = meta.imprecise ?? [];
-          if (vague.length > 0) {
-            const vagueText = vague.slice(0, 3).map((v) => `row ${v.row}: ${v.reason}`).join('; ');
-            setMessage({
-              type: 'error',
-              text: `${parts.join(', ')}. ${vague.length} branch(es) could not be located precisely — ${vagueText}${vague.length > 3 ? '…' : ''}`,
-            });
-          } else {
-            setMessage({ type: 'success', text: `${meta.totalRows} row(s) read: ${parts.join(', ')}.` });
-          }
-        }
-      } else {
-        setMessage({ type: 'success', text: 'Branches uploaded.' });
-      }
-      loadDetail(detail.id);
-    } catch (err: any) {
-      setMessage({ type: 'error', text: `Failed to upload branches. ${userMessage(err)}` });
-    } finally {
-      setIsSaving(false);
-    }
+    await branchImport.start(`/projects/${detail.id}/branches/upload`, file);
   };
+
+  /**
+   * Reload the project once an import finishes.
+   *
+   * A queued import completes long after the upload request returned, so refreshing at the end of
+   * the handler — as this page used to — redrew the branch list exactly as it had been before the
+   * file was applied.
+   */
+  useEffect(() => {
+    if (branchImport.state.phase === 'done' && detail?.id) loadDetail(detail.id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [branchImport.state.phase, detail?.id]);
 
   const handleDownloadTemplate = async () => {
     if (!detail) return;
@@ -1306,12 +1278,13 @@ export const Projects: React.FC = () => {
                             title={branchesLocked ? lockReason : undefined}
                             style={{ display: 'flex', gap: '8px', opacity: branchesLocked ? 0.45 : 1, pointerEvents: branchesLocked ? 'none' : 'auto' }}
                           >
-                            {/* `isSaving` is already set for the whole length of the branch-sheet import; it just
-                                had nowhere to go until the control took a `busy` prop. */}
-                            <UploadExcelControls onUpload={handleUploadBranches} onDownloadTemplate={handleDownloadTemplate} accept=".xlsx,.xls" busy={isSaving} busyLabel="Importing branches…" />
+                            <UploadExcelControls onUpload={handleUploadBranches} onDownloadTemplate={handleDownloadTemplate} accept=".xlsx,.xls" busy={branchImport.busy} busyLabel="Importing branches…" />
                           </div>
                         </div>
                       </div>
+
+                      {/* Progress and result sit where the operator acted, not at the top of the page. */}
+                      <ImportProgressPanel state={branchImport.state} onDismiss={branchImport.reset} />
 
                       {/* Dynamic Branch Search Adder Widget */}
                       {(
@@ -1323,6 +1296,25 @@ export const Projects: React.FC = () => {
                           <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600 }}>
                             ADD BRANCH MANUALLY{branchesLocked ? ` — ${lockReason.toUpperCase()}` : ''}
                           </span>
+                          {/*
+                            Inside the box, above the search field, because it is the search field
+                            it is about: this list is what the search looks through, and a search
+                            over part of it answers "no matching branches" for a branch that is
+                            simply not loaded — wording indistinguishable from a branch that does not
+                            exist. Said plainly, and only when some are genuinely absent.
+                          */}
+                          {branchShortfall && (
+                            <div style={{ display: 'flex', gap: '7px', alignItems: 'flex-start', fontSize: '11.5px', lineHeight: 1.5, color: 'var(--text-secondary)', background: 'var(--status-pending-bg)', border: '1px solid var(--status-pending-bg)', borderRadius: 'var(--radius-sm)', padding: '7px 9px' }}>
+                              <AlertTriangle size={13} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: '2px' }} />
+                              <span>
+                                Only {branchShortfall.shown.toLocaleString('en-IN')} of this client's{' '}
+                                {branchShortfall.total.toLocaleString('en-IN')} branches could be loaded, so the
+                                search below cannot find the other {(branchShortfall.total - branchShortfall.shown).toLocaleString('en-IN')}.
+                                Reload the page to try again. If the same message comes back, add the branches you
+                                need with the Excel upload above instead — that does not go through this list.
+                              </span>
+                            </div>
+                          )}
                           <input type="text" value={branchSearch} onChange={e => setBranchSearch(e.target.value)} disabled={branchesLocked}
                             placeholder={branchesLocked ? 'Branch list is fixed for this project' : 'Type branch name or code to search...'}
                             style={{ padding: '8px 10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '12px', cursor: branchesLocked ? 'not-allowed' : 'text' }} />

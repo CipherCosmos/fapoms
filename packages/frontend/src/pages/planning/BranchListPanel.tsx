@@ -35,6 +35,14 @@ export interface ProjectBranch {
     status: string;
     proposedFee: number;
     agreedFee: number | null;
+    /**
+     * What `proposedFee` is made of. A counter-offer moves the TRAVEL only — the audit fee comes
+     * from the rate card and neither side moves it — so a screen that shows only the total cannot
+     * say what a counter actually changed, and a form seeded from the total inflates the base.
+     */
+    quotedBaseFee?: number | null;
+    quotedTravelFee?: number | null;
+    counterTravelFee?: number | null;
     scheduledDate: string | null;
     remarks?: string | null;
     negotiatedByName?: string | null;

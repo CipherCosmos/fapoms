@@ -23,7 +23,7 @@ describe('DocumentDispatchWorker', () => {
 
   const mockQuery = jest.fn();
   const mockDocumentRepo = { find: jest.fn(), manager: { query: mockQuery } };
-  const mockAssignmentRepo = { findOne: jest.fn() };
+  const mockAssignmentRepo = { find: jest.fn() };
   const mockDocumentService = {
     dispatchDocument: jest.fn().mockResolvedValue({}),
     markSentToExternalOcr: jest.fn().mockResolvedValue({}),
@@ -42,7 +42,9 @@ describe('DocumentDispatchWorker', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
-    mockAssignmentRepo.findOne.mockResolvedValue({ id: 'asn-1', status: AssignmentStatus.ACCEPTED });
+    // One ACCEPTED assignment covering the default fixture's assessment. The worker batches the
+    // lookup, so this is a `find` returning rows keyed by assessmentId, not a per-document findOne.
+    mockAssignmentRepo.find.mockResolvedValue([{ id: 'asn-1', assessmentId: 'asmt-1' }]);
     mockDocumentService.dispatchDocument.mockResolvedValue({});
     mockDocumentService.markSentToExternalOcr.mockResolvedValue({});
     mockSettings.get.mockResolvedValue(false);
@@ -107,11 +109,64 @@ describe('DocumentDispatchWorker', () => {
   it('does not dispatch when no assayer has accepted the assignment', async () => {
     mockDocumentRepo.find.mockResolvedValue([doc()]);
     mockQuery.mockResolvedValue([{ project_id: 'proj-1', branch_id: 'br-1', scheduled_date: iso(1) }]);
-    mockAssignmentRepo.findOne.mockResolvedValue(null);
+    mockAssignmentRepo.find.mockResolvedValue([]);
 
     const result = await worker.autoDispatch({} as any);
 
     expect(result.dispatchedCount).toBe(0);
+  });
+
+  /**
+   * The wasted query this ordering prevents.
+   *
+   * The assignment lookup used to run for every candidate document *before* the free in-memory
+   * date test was consulted. The candidate query has no `take`, and a document only leaves
+   * UPLOADED when it dispatches, so a branch that never gets a confirmed date sits in that set
+   * permanently — one wasted round trip per packet, every night, for the life of the deployment.
+   */
+  describe('assignment lookup ordering and batching', () => {
+    it('does not query assignments at all when nothing is due', async () => {
+      mockDocumentRepo.find.mockResolvedValue([doc(), doc({ id: 'doc-2' })]);
+      mockQuery.mockResolvedValue([{ project_id: 'proj-1', branch_id: 'br-1', scheduled_date: iso(10) }]);
+
+      const result = await worker.autoDispatch({} as any);
+
+      expect(result.dispatchedCount).toBe(0);
+      expect(mockAssignmentRepo.find).not.toHaveBeenCalled();
+    });
+
+    it('does not query assignments for a branch with no confirmed date', async () => {
+      mockDocumentRepo.find.mockResolvedValue([doc()]);
+      mockQuery.mockResolvedValue([]); // nothing scheduled anywhere
+
+      await worker.autoDispatch({} as any);
+
+      expect(mockAssignmentRepo.find).not.toHaveBeenCalled();
+    });
+
+    it('resolves many due documents with a single batched query, not one per document', async () => {
+      const due = ['a', 'b', 'c', 'd'].map((k) =>
+        doc({
+          id: `doc-${k}`,
+          assessment: { id: `asmt-${k}`, projectId: 'proj-1', branchId: `br-${k}`, auditDate: null },
+        }),
+      );
+      mockDocumentRepo.find.mockResolvedValue(due);
+      mockQuery.mockResolvedValue(
+        ['a', 'b', 'c', 'd'].map((k) => ({ project_id: 'proj-1', branch_id: `br-${k}`, scheduled_date: iso(1) })),
+      );
+      // Only two of the four have an accepted assayer.
+      mockAssignmentRepo.find.mockResolvedValue([
+        { id: 'asn-a', assessmentId: 'asmt-a' },
+        { id: 'asn-c', assessmentId: 'asmt-c' },
+      ]);
+
+      const result = await worker.autoDispatch({} as any);
+
+      expect(mockAssignmentRepo.find).toHaveBeenCalledTimes(1);
+      expect(result.dispatchedCount).toBe(2);
+      expect(mockDocumentService.dispatchDocument.mock.calls.map((c) => c[0])).toEqual(['doc-a', 'doc-c']);
+    });
   });
 
   describe('auto-send to external OCR', () => {

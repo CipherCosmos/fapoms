@@ -3,6 +3,8 @@ import { useQuery } from '@tanstack/react-query';
 import { Trash2, Edit2, Shield, Sliders, AlertTriangle, Info } from 'lucide-react';
 import { INDIAN_STATES } from '@fapoms/shared';
 import { api } from '../services/api';
+import { fetchWholeBranchDirectory } from '../services/branch-directory';
+import { queryKeys } from '../hooks/queryKeys';
 import { useClientOptions } from '../hooks/useClients';
 import { StatusBadge, Modal, SearchInput, FilterSelect, PrimaryButton, Select, ChipMultiSelect } from '../components/ui';
 import { useWorkforceVocabulary, asOptions } from '../hooks/useWorkforceVocabulary';
@@ -122,8 +124,27 @@ export const RulesSection: React.FC = () => {
 
   const { data: clientsRes } = useClientOptions();
   const clients = (Array.isArray(clientsRes) ? clientsRes : (clientsRes as any)?.data) || [];
-  const { data: branchesRes } = useQuery({ queryKey: ['branches', 'all'], queryFn: () => api.request<any>('/branches?limit=1000') });
-  const branches: BranchOption[] = (Array.isArray(branchesRes) ? branchesRes : branchesRes?.data) || [];
+
+  /**
+   * Every branch, not the first page of them.
+   *
+   * This asked `/branches?limit=1000` once and used the result for two things: the picker that
+   * scopes a rule to a branch, and `targetName` below, which turns a saved rule's `targetId` into
+   * a name. `GET /branches` clamps the page size to 200 (`branch.controller.ts`,
+   * `ParseLimitPipe({ default: 20, max: 200 })`), so both were working off 200 rows out of the
+   * 20,097 the scale database holds. A BRANCH-scoped rule could not be created for the 201st
+   * branch onward — it was not in the dropdown, exactly as though it had been deleted — and a rule
+   * already pointed at one rendered its raw UUID on the card where its name belongs. Neither page
+   * asked for `withMeta: true`, so neither could tell that anything was missing.
+   */
+  const { data: directory } = useQuery({
+    queryKey: queryKeys.branches.directory,
+    queryFn: ({ signal }) => fetchWholeBranchDirectory<BranchOption>({ signal }),
+  });
+  const branches: BranchOption[] = directory?.branches ?? [];
+  const branchShortfall = directory && directory.missing > 0
+    ? { shown: directory.branches.length, total: directory.total }
+    : null;
 
   const fetchRules = async () => {
     setLoading(true);
@@ -248,6 +269,24 @@ export const RulesSection: React.FC = () => {
       {misconfiguredCount > 0 && (
         <div style={{ padding: '10px 14px', borderRadius: '8px', background: 'var(--status-pending-bg)', border: '1px solid var(--status-pending-bg)', color: 'var(--warning)', fontSize: '13px', display: 'flex', gap: '8px', alignItems: 'center' }}>
           <AlertTriangle size={15} /> {misconfiguredCount} rule(s) are missing the field their type actually needs — they are silently doing nothing. Flagged below with ⚠.
+        </div>
+      )}
+
+      {/*
+        Above the rules, because the branch list is behind two things a reader sees here: the names
+        on the cards below, and what the "One branch" picker will offer. A branch that did not load
+        is indistinguishable from one that does not exist unless this says otherwise.
+      */}
+      {branchShortfall && (
+        <div style={{ padding: '10px 14px', borderRadius: '8px', background: 'var(--status-pending-bg)', border: '1px solid var(--status-pending-bg)', color: 'var(--text-secondary)', fontSize: '13px', display: 'flex', gap: '8px', alignItems: 'flex-start', lineHeight: 1.55 }}>
+          <AlertTriangle size={15} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: '2px' }} />
+          <span>
+            Only {branchShortfall.shown.toLocaleString('en-IN')} of the{' '}
+            {branchShortfall.total.toLocaleString('en-IN')} branches could be loaded. A rule can only
+            be pointed at a branch on that list, and any rule already pointed at one of the other{' '}
+            {(branchShortfall.total - branchShortfall.shown).toLocaleString('en-IN')} shows a long ID
+            below in place of the branch name. Reload the page to try again.
+          </span>
         </div>
       )}
 

@@ -86,6 +86,9 @@ describe('ProjectService', () => {
 
   const mockBranchService = {
     registerImportedBranch: jest.fn(),
+    // Reviving an archived branch is a named act with its own audit event, not an `isActive` field
+    // on the edit DTO — see `BranchService.restoreArchived`.
+    restoreArchived: jest.fn(async (id: string) => ({ id, isActive: true })),
     findOrCreateZone: jest.fn(),
     update: jest.fn(),
   };
@@ -322,7 +325,9 @@ describe('ProjectService', () => {
         id: 'p-1', clientId: 'c-1', organizationId: 'o-1', status: ProjectStatus.PLANNING,
       });
       mockProjectQueryService.findProjectBranches.mockResolvedValue([]);
-      mockClientRepo.findOne.mockResolvedValue({ id: 'c-1', planningPreferences: {} });
+      // `organizationId` is on ClientEntity and is where a client-scoped import gets it from —
+      // a project import reads the project's copy instead.
+      mockClientRepo.findOne.mockResolvedValue({ id: 'c-1', organizationId: 'o-1', planningPreferences: {} });
       // Nothing in the branch master, no branches on the project, no assessments — the three
       // batched reads the importer now issues once for the whole file instead of once per row.
       mockBranchRepo.find.mockResolvedValue([]);
@@ -337,13 +342,133 @@ describe('ProjectService', () => {
     });
 
     /**
+     * The same file, uploaded on the Branches page instead of a project.
+     *
+     * This is what the second importer used to do — `BranchService.importExcel`, 200 lines that
+     * geocoded, checked geography and looked up the existing branch **per row inside the HTTP
+     * request**. It is deleted; a client-scoped import is now the same code as a project one with
+     * the linking half switched off. These tests pin that "switched off" means exactly two things
+     * — no project-branch row and no assessment — and nothing else.
+     */
+    /**
+     * The duplicate a re-import used to create.
+     *
+     * The prefetch filtered `isActive: true`, so an archived branch was invisible and the importer
+     * created a *second* branch with the same client and SOL ID beside it. The database allows it —
+     * `UQ_branches_client_sol_id` is `WHERE is_active = true` — and no later import can tell the two
+     * apart, while one of them holds all the history. Matching archived rows and restoring them is
+     * also what the assayer roster importer already does, for the same stated reason.
+     */
+    describe('a branch the file still names, but which was archived', () => {
+      const archived = {
+        id: 'b-old', solId: 'BR-1', name: 'Thenkurissi', isActive: false,
+        state: 'Kerala', district: 'Palakkad', address: '1 Main Road, Palakkad 678001',
+        latitude: 10.7867, longitude: 76.6548, estimatedDurationHours: 10, region: 'SOUTH',
+      };
+
+      beforeEach(() => {
+        mockBranchRepo.find.mockResolvedValue([archived]);
+        mockBranchService.update.mockImplementation(async (_id: string, patch: any) => ({ ...archived, ...patch }));
+      });
+
+      it('restores it instead of creating a twin', async () => {
+        await service.uploadBranchesFromExcel({ kind: 'CLIENT', id: 'c-1' }, sheetBuffer([templateRow()]), 'user-1');
+
+        expect(mockBranchService.restoreArchived).toHaveBeenCalledWith('b-old', 'user-1');
+        // The twin: a second create for a SOL ID that already exists on this client.
+        expect(mockBranchService.registerImportedBranch).not.toHaveBeenCalled();
+      });
+
+      it('tells the operator their file brought a branch back', async () => {
+        const report = await service.uploadBranchesFromExcel(
+          { kind: 'CLIENT', id: 'c-1' }, sheetBuffer([templateRow()]), 'user-1',
+        );
+
+        expect(report.revived).toHaveLength(1);
+        expect(report.revived[0]).toMatchObject({ solId: 'BR-1' });
+        expect(report.revived[0].reason).toMatch(/archived/i);
+        expect(report.created).toBe(0);
+      });
+
+      it('leaves an active branch alone — nothing to restore', async () => {
+        mockBranchRepo.find.mockResolvedValue([{ ...archived, isActive: true }]);
+
+        const report = await service.uploadBranchesFromExcel(
+          { kind: 'CLIENT', id: 'c-1' }, sheetBuffer([templateRow()]), 'user-1',
+        );
+
+        expect(mockBranchService.restoreArchived).not.toHaveBeenCalled();
+        expect(report.revived).toEqual([]);
+      });
+    });
+
+    describe('scope: CLIENT — the branch master, with no project', () => {
+      const CLIENT_SCOPE = { kind: 'CLIENT' as const, id: 'c-1' };
+
+      it('writes the branch, with the client and organisation taken from the client', async () => {
+        await service.uploadBranchesFromExcel(CLIENT_SCOPE, sheetBuffer([templateRow()]), 'user-1');
+
+        expect(mockBranchService.registerImportedBranch).toHaveBeenCalledWith(
+          expect.objectContaining({ clientId: 'c-1', organizationId: 'o-1', region: 'SOUTH' }),
+          'user-1',
+        );
+      });
+
+      it('creates no project-branch link and no assessment', async () => {
+        await service.uploadBranchesFromExcel(CLIENT_SCOPE, sheetBuffer([templateRow()]), 'user-1');
+
+        expect(mockProjectBranchRepo.save).not.toHaveBeenCalled();
+        expect(mockAssessmentRepo.save).not.toHaveBeenCalled();
+      });
+
+      it('reports linked: 0 and an empty branch list, not the project shape', async () => {
+        const report = await service.uploadBranchesFromExcel(
+          CLIENT_SCOPE, sheetBuffer([templateRow()]), 'user-1',
+        );
+
+        expect(report.created).toBe(1);
+        expect(report.linked).toBe(0);
+        expect(report.branches).toEqual([]);
+      });
+
+      /**
+       * A project-scoped import 404s on an unknown project; a client-scoped one has to do the
+       * same for an unknown client rather than accept the file and fail inside a job.
+       */
+      it('refuses an unknown client up front', async () => {
+        mockClientRepo.findOne.mockResolvedValue(null);
+
+        await expect(
+          service.uploadBranchesFromExcel({ kind: 'CLIENT', id: 'ghost' }, sheetBuffer([templateRow()]), 'user-1'),
+        ).rejects.toThrow(NotFoundException);
+      });
+
+      /**
+       * Every row-level rule is shared with the project path, so a rule proved on one holds on the
+       * other. Skip reporting is the one that used to differ most: the deleted importer returned
+       * `string[]` messages with no row numbers, so a 3,759-row file reported "Row 12: ..." as
+       * free text nothing could group or resolve.
+       */
+      it('reports an unusable row with its spreadsheet row number, as the project path does', async () => {
+        const report = await service.uploadBranchesFromExcel(
+          CLIENT_SCOPE,
+          sheetBuffer([templateRow(), templateRow({ BRANCH: '', BRANCH_NAME: '' })]),
+          'user-1',
+        );
+
+        expect(report.created).toBe(1);
+        expect(report.totalRows).toBe(2);
+      });
+    });
+
+    /**
      * The single most damaging bug here: the importer wrote `region: state`, so every branch it
      * ever created carried "Kerala" in a column the whole platform filters as an enum. Each
      * import silently re-broke the column the region migration had just normalised, and the
      * branches were invisible to the operator who owns that territory.
      */
     it('canonicalises the region from the state instead of storing the state name', async () => {
-      await service.uploadBranchesFromExcel('p-1', sheetBuffer([templateRow()]), 'user-1');
+      await service.uploadBranchesFromExcel({ kind: 'PROJECT', id: 'p-1' }, sheetBuffer([templateRow()]), 'user-1');
 
       expect(mockBranchService.registerImportedBranch).toHaveBeenCalledWith(
         expect.objectContaining({ region: 'SOUTH', state: 'Kerala' }),
@@ -367,7 +492,7 @@ describe('ProjectService', () => {
         Lng: 73.81,
       }]);
 
-      const report = await service.uploadBranchesFromExcel('p-1', buffer, 'user-1');
+      const report = await service.uploadBranchesFromExcel({ kind: 'PROJECT', id: 'p-1' }, buffer, 'user-1');
 
       expect(report.skipped).toHaveLength(0);
       expect(mockBranchService.registerImportedBranch).toHaveBeenCalledWith(
@@ -383,7 +508,7 @@ describe('ProjectService', () => {
      * the two paths agree and a re-upload matches.
      */
     it('reads the SOL id from the "BRANCH" column when the file has no SOL column', async () => {
-      await service.uploadBranchesFromExcel('p-1', sheetBuffer([templateRow()]), 'user-1');
+      await service.uploadBranchesFromExcel({ kind: 'PROJECT', id: 'p-1' }, sheetBuffer([templateRow()]), 'user-1');
 
       expect(mockBranchService.registerImportedBranch).toHaveBeenCalledWith(
         expect.objectContaining({ solId: 'BR-1' }),
@@ -392,7 +517,7 @@ describe('ProjectService', () => {
     });
 
     it('prefers an explicit SOL column when the file provides one', async () => {
-      await service.uploadBranchesFromExcel('p-1', sheetBuffer([templateRow({ 'SOL ID': 'S-77' })]), 'user-1');
+      await service.uploadBranchesFromExcel({ kind: 'PROJECT', id: 'p-1' }, sheetBuffer([templateRow({ 'SOL ID': 'S-77' })]), 'user-1');
 
       expect(mockBranchService.registerImportedBranch).toHaveBeenCalledWith(
         expect.objectContaining({ solId: 'S-77' }),
@@ -410,7 +535,7 @@ describe('ProjectService', () => {
       mockBranchService.update.mockImplementation(async (id: string, patch: any) => ({ ...existing, id, ...patch }));
 
       const report = await service.uploadBranchesFromExcel(
-        'p-1', sheetBuffer([templateRow({ 'SOL ID': 'S-77' })]), 'user-1',
+        { kind: 'PROJECT', id: 'p-1' }, sheetBuffer([templateRow({ 'SOL ID': 'S-77' })]), 'user-1',
       );
 
       expect(mockBranchService.registerImportedBranch).not.toHaveBeenCalled();
@@ -424,7 +549,7 @@ describe('ProjectService', () => {
         templateRow({ BRANCH: 'BR-3', STATE: '' }),
       ]);
 
-      const report = await service.uploadBranchesFromExcel('p-1', buffer, 'user-1');
+      const report = await service.uploadBranchesFromExcel({ kind: 'PROJECT', id: 'p-1' }, buffer, 'user-1');
 
       expect(report.totalRows).toBe(3);
       expect(report.created).toBe(1);
@@ -441,7 +566,7 @@ describe('ProjectService', () => {
     it('resolves existing branch codes within this project\'s client, in one query for the file', async () => {
       const buffer = sheetBuffer([templateRow(), templateRow({ BRANCH: 'BR-2' }), templateRow({ BRANCH: 'BR-3' })]);
 
-      await service.uploadBranchesFromExcel('p-1', buffer, 'user-1');
+      await service.uploadBranchesFromExcel({ kind: 'PROJECT', id: 'p-1' }, buffer, 'user-1');
 
       /**
        * Two things at once, and both matter.
@@ -454,13 +579,22 @@ describe('ProjectService', () => {
        * queries to answer a question one `In(codes)` answers. Asserting the call count is the
        * only way that stays true — a future edit that puts the lookup back inside the loop still
        * passes every behavioural test in this file.
+       *
+       * And deliberately NO `isActive` filter. It had one, and that is how a re-import produced
+       * duplicates: an archived branch was invisible here, so the importer created a second row
+       * with the same client and SOL ID beside it — permitted by the database, because
+       * `UQ_branches_client_sol_id` is `WHERE is_active = true`, and indistinguishable to every
+       * later import. Archived rows are matched and restored instead; see the "still names, but
+       * which was archived" block above.
        */
       expect(mockBranchRepo.find).toHaveBeenCalledTimes(1);
+      expect(mockBranchRepo.find).toHaveBeenCalledWith({
+        where: expect.not.objectContaining({ isActive: expect.anything() }),
+      });
       expect(mockBranchRepo.find).toHaveBeenCalledWith({
         where: expect.objectContaining({
           solId: In(['BR-1', 'BR-2', 'BR-3']),
           clientId: 'c-1',
-          isActive: true,
         }),
       });
     });
@@ -477,7 +611,7 @@ describe('ProjectService', () => {
         templateRow({ BRANCH: 'BR-3', STATE: 'Maharashtra', DISTRICT: 'Pune' }),
       ]);
 
-      await service.uploadBranchesFromExcel('p-1', buffer, 'user-1');
+      await service.uploadBranchesFromExcel({ kind: 'PROJECT', id: 'p-1' }, buffer, 'user-1');
 
       // Two distinct states across three rows.
       expect(mockBranchService.findOrCreateZone).toHaveBeenCalledTimes(2);
@@ -495,7 +629,7 @@ describe('ProjectService', () => {
       }]);
       mockBranchService.update.mockImplementation(async (id: string) => ({ id, zoneId: null }));
 
-      const report = await service.uploadBranchesFromExcel('p-1', sheetBuffer([templateRow()]), 'user-1');
+      const report = await service.uploadBranchesFromExcel({ kind: 'PROJECT', id: 'p-1' }, sheetBuffer([templateRow()]), 'user-1');
 
       expect(report.updated).toBe(1);
       expect(mockBranchService.update).toHaveBeenCalledWith(
@@ -520,7 +654,7 @@ describe('ProjectService', () => {
 
       // Only the code and name — everything else absent.
       const buffer = sheetBuffer([{ BRANCH: 'BR-1', BRANCH_NAME: 'Thenkurissi', STATE: 'Kerala' }]);
-      const report = await service.uploadBranchesFromExcel('p-1', buffer, 'user-1');
+      const report = await service.uploadBranchesFromExcel({ kind: 'PROJECT', id: 'p-1' }, buffer, 'user-1');
 
       // Nothing differs, so nothing is written at all.
       expect(report.updated).toBe(0);
@@ -543,7 +677,7 @@ describe('ProjectService', () => {
         templateRow({ BRANCH: 'BR-GOOD' }),
       ]);
 
-      const report = await service.uploadBranchesFromExcel('p-1', buffer, 'user-1');
+      const report = await service.uploadBranchesFromExcel({ kind: 'PROJECT', id: 'p-1' }, buffer, 'user-1');
 
       expect(report.created).toBe(1);
       expect(report.skipped).toEqual([
@@ -552,14 +686,14 @@ describe('ProjectService', () => {
     });
 
     it('refuses a file whose first sheet has no data rows', async () => {
-      await expect(service.uploadBranchesFromExcel('p-1', sheetBuffer([]), 'user-1'))
+      await expect(service.uploadBranchesFromExcel({ kind: 'PROJECT', id: 'p-1' }, sheetBuffer([]), 'user-1'))
         .rejects.toThrow(BadRequestException);
     });
 
     it('ignores the blank trailing rows Excel leaves behind', async () => {
       const buffer = sheetBuffer([templateRow(), { BRANCH: '', BRANCH_NAME: '' }]);
 
-      const report = await service.uploadBranchesFromExcel('p-1', buffer, 'user-1');
+      const report = await service.uploadBranchesFromExcel({ kind: 'PROJECT', id: 'p-1' }, buffer, 'user-1');
 
       expect(report.created).toBe(1);
       expect(report.skipped).toHaveLength(0);
@@ -586,7 +720,7 @@ describe('ProjectService', () => {
       });
 
       it('locates a branch from its address when no coordinates are supplied', async () => {
-        const report = await service.uploadBranchesFromExcel('p-1', sheetBuffer([plainRow()]), 'user-1');
+        const report = await service.uploadBranchesFromExcel({ kind: 'PROJECT', id: 'p-1' }, sheetBuffer([plainRow()]), 'user-1');
 
         expect(report.created).toBe(1);
         expect(mockGeocode).toHaveBeenCalledTimes(1);
@@ -603,13 +737,13 @@ describe('ProjectService', () => {
         // The stub geocoder answers at the pincode tier (2.5 km) — below the "needs a better fix"
         // threshold — so first prove the clean case enqueues nothing…
         mockGeoPrecision.enqueueBackfill.mockClear();
-        await service.uploadBranchesFromExcel('p-1', sheetBuffer([plainRow()]), 'user-1');
+        await service.uploadBranchesFromExcel({ kind: 'PROJECT', id: 'p-1' }, sheetBuffer([plainRow()]), 'user-1');
         expect(mockGeoPrecision.enqueueBackfill).toHaveBeenCalledWith('branch', [], expect.stringContaining('p-1'));
 
         // …then a district-centroid placement (15 km), which is the common real outcome.
         mockGeoPrecision.enqueueBackfill.mockClear();
         mockGeocode.mockResolvedValueOnce({ lat: 10.7, lng: 76.6, accuracyMeters: 15000, source: 'locality' });
-        const report = await service.uploadBranchesFromExcel('p-1', sheetBuffer([plainRow()]), 'user-1');
+        const report = await service.uploadBranchesFromExcel({ kind: 'PROJECT', id: 'p-1' }, sheetBuffer([plainRow()]), 'user-1');
 
         expect(report.imprecise).toHaveLength(1);
         expect(report.imprecise[0].reason).toMatch(/precise lookup is queued/);
@@ -617,7 +751,7 @@ describe('ProjectService', () => {
       });
 
       it('still honours a coordinate pair a sheet happens to carry, and skips the geocoder for it', async () => {
-        await service.uploadBranchesFromExcel('p-1', sheetBuffer([templateRow()]), 'user-1');
+        await service.uploadBranchesFromExcel({ kind: 'PROJECT', id: 'p-1' }, sheetBuffer([templateRow()]), 'user-1');
 
         expect(mockGeocode).not.toHaveBeenCalled();
         expect(mockBranchService.registerImportedBranch).toHaveBeenCalledWith(
@@ -627,7 +761,7 @@ describe('ProjectService', () => {
       });
 
       it("takes the branch's risk from the project's priority, and scores it so the planner's senior-assayer rule can fire", async () => {
-        await service.uploadBranchesFromExcel('p-1', sheetBuffer([plainRow()]), 'user-1');
+        await service.uploadBranchesFromExcel({ kind: 'PROJECT', id: 'p-1' }, sheetBuffer([plainRow()]), 'user-1');
 
         expect(mockBranchService.registerImportedBranch).toHaveBeenCalledWith(
           // HIGH → 7, the threshold the recommendation engine reads as "send someone senior".
@@ -637,7 +771,7 @@ describe('ProjectService', () => {
       });
 
       it('carries the project priority onto the project_branch row, which assignments inherit', async () => {
-        await service.uploadBranchesFromExcel('p-1', sheetBuffer([plainRow()]), 'user-1');
+        await service.uploadBranchesFromExcel({ kind: 'PROJECT', id: 'p-1' }, sheetBuffer([plainRow()]), 'user-1');
 
         expect(mockProjectBranchRepo.create).toHaveBeenCalledWith(
           expect.objectContaining({ priority: Priority.HIGH }),
@@ -651,7 +785,7 @@ describe('ProjectService', () => {
         for (const [packets, expected] of cases) {
           mockBranchService.registerImportedBranch.mockClear();
           await service.uploadBranchesFromExcel(
-            'p-1', sheetBuffer([plainRow({ BRANCH: `BR-${packets}`, Packets: packets })]), 'user-1',
+            { kind: 'PROJECT', id: 'p-1' }, sheetBuffer([plainRow({ BRANCH: `BR-${packets}`, Packets: packets })]), 'user-1',
           );
           expect(mockBranchService.registerImportedBranch).toHaveBeenCalledWith(
             expect.objectContaining({ complexity: expected }),
@@ -661,7 +795,7 @@ describe('ProjectService', () => {
       });
 
       it('falls back to STANDARD complexity and 6 hours when no packets are recorded', async () => {
-        await service.uploadBranchesFromExcel('p-1', sheetBuffer([plainRow({ Packets: '' })]), 'user-1');
+        await service.uploadBranchesFromExcel({ kind: 'PROJECT', id: 'p-1' }, sheetBuffer([plainRow({ Packets: '' })]), 'user-1');
 
         expect(mockBranchService.registerImportedBranch).toHaveBeenCalledWith(
           expect.objectContaining({ complexity: 'STANDARD', estimatedDurationHours: 6.0 }),
@@ -675,7 +809,7 @@ describe('ProjectService', () => {
           Packets: 16, // → SIMPLE
           'Risk Category': 'CRITICAL', 'Risk Score': 9, Complexity: 'COMPLEX', 'Estimated Hours': 99,
         });
-        await service.uploadBranchesFromExcel('p-1', sheetBuffer([row]), 'user-1');
+        await service.uploadBranchesFromExcel({ kind: 'PROJECT', id: 'p-1' }, sheetBuffer([row]), 'user-1');
 
         expect(mockBranchService.registerImportedBranch).toHaveBeenCalledWith(
           expect.objectContaining({
@@ -697,7 +831,7 @@ describe('ProjectService', () => {
         mockBranchService.update.mockImplementation(async (id: string) => ({ id, zoneId: null }));
 
         // This cycle the branch has far more packets.
-        const report = await service.uploadBranchesFromExcel('p-1', sheetBuffer([plainRow({ Packets: 140 })]), 'user-1');
+        const report = await service.uploadBranchesFromExcel({ kind: 'PROJECT', id: 'p-1' }, sheetBuffer([plainRow({ Packets: 140 })]), 'user-1');
 
         expect(report.updated).toBe(1);
         const [, patch] = mockBranchService.update.mock.calls[0];
@@ -715,7 +849,7 @@ describe('ProjectService', () => {
      */
     describe('preflight — counts the lookups that will actually happen', () => {
       const preflight = (rows: Record<string, any>[]) =>
-        service.preflightBranchExcel('p-1', sheetBuffer(rows));
+        service.preflightBranchExcel({ kind: 'PROJECT', id: 'p-1' }, sheetBuffer(rows));
 
       /** A row shaped like the current template: no coordinate columns at all. */
       const noCoords = (over: Record<string, any> = {}) => {

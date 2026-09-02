@@ -21,8 +21,13 @@ import { Injectable, Logger, NotFoundException, PayloadTooLargeException } from 
 import { InjectQueue } from '@nestjs/bull';
 import type { JobOptions, Queue } from 'bull';
 
-import { IMPORT_QUEUE, BRANCH_IMPORT_JOB } from './import-job.constants';
-import { BranchImportOutcome, BranchImportProgress } from './project.service';
+import { IMPORT_QUEUE, BRANCH_IMPORT_JOB, ROSTER_IMPORT_JOB } from './import.constants';
+import {
+  BranchImportOutcome,
+  BranchImportProgress,
+  ImportScope,
+  importScopeEquals,
+} from './import.contract';
 
 /**
  * What the worker needs to run a branch import.
@@ -33,7 +38,23 @@ import { BranchImportOutcome, BranchImportProgress } from './project.service';
  * both roles can already reach. `MAX_QUEUED_FILE_BYTES` keeps that honest.
  */
 export interface BranchImportJobData {
-  projectId: string;
+  /**
+   * What the sheet is being loaded into — a project, or a client's branch master.
+   *
+   * This was `projectId: string`, which is why the client-scoped Branches page could not use the
+   * queue at all and ran its own inline importer instead.
+   */
+  scope: ImportScope;
+  /**
+   * The pre-scope field, still read when present.
+   *
+   * A job enqueued by the previous build is sitting in Redis with `projectId` and no `scope`, and
+   * `attempts: 1` means nothing will re-create it. Reading both shapes costs one line and keeps a
+   * deploy from silently dropping an import that is already paid for.
+   *
+   * @deprecated Use `scope`. Remove once no job older than the retention window can exist.
+   */
+  projectId?: string;
   userId: string;
   /** The workbook, base64-encoded. */
   fileBase64: string;
@@ -44,17 +65,38 @@ export interface BranchImportJobData {
   rowsNeedingGeocode: number;
 }
 
+/**
+ * What the worker needs to run a roster import.
+ *
+ * Scoped to the person who uploaded it rather than to a project or client: the appraiser roster is
+ * one national list, so there is no narrower owner to check a job id against.
+ */
+export interface RosterImportJobData {
+  actorId: string;
+  /** The workbook, base64-encoded — same reasoning as `BranchImportJobData`. */
+  fileBase64: string;
+  fileName: string | null;
+  totalRows: number;
+  /** An explicit sheet, when the caller knows better than the reader's own scoring. */
+  sheetName: string | null;
+}
+
 /** Bull's own job states, plus the case where the job is gone. */
 export type ImportJobState =
   | 'waiting' | 'active' | 'completed' | 'failed' | 'delayed' | 'paused' | 'stuck' | 'unknown';
 
-export interface ImportJobStatus {
+/**
+ * Generic over what the job reports, because the queue now carries more than one kind of import.
+ *
+ * The defaults keep every existing branch-import caller reading exactly what it read before.
+ */
+export interface ImportJobStatus<TProgress = BranchImportProgress, TResult = BranchImportOutcome> {
   jobId: string;
   state: ImportJobState;
   /** Null until the worker has processed its first batch of rows. */
-  progress: BranchImportProgress | null;
+  progress: TProgress | null;
   /** Populated only once `state` is `completed`. */
-  result: BranchImportOutcome | null;
+  result: TResult | null;
   /** Populated only once `state` is `failed`. */
   error: string | null;
   fileName: string | null;
@@ -113,11 +155,14 @@ export class ImportJobService {
   /**
    * Retention, deliberately bounded on both axes.
    *
-   * `removeOnComplete: false` — which is what the rest of this codebase uses — keeps every job
-   * forever, and these jobs each carry a whole workbook. A month of daily imports would sit in
-   * Redis as tens of megabytes of base64 nobody will ever read again. Bounding by age *and*
-   * count means a burst of imports cannot outrun the age window, and a quiet month cannot leave
-   * a stale pile behind.
+   * `removeOnComplete: false` keeps every job forever, and these jobs each carry a whole
+   * workbook. A month of daily imports would sit in Redis as tens of megabytes of base64 nobody
+   * will ever read again. Bounding by age *and* count means a burst of imports cannot outrun the
+   * age window, and a quiet month cannot leave a stale pile behind.
+   *
+   * This queue was the first to bound retention, when unbounded was still the house default;
+   * it is now the house rule instead — `BullQueueManager`, the `ocr` queue, the repeatable
+   * schedules, geo-precision, planning, reports and billing all bound both axes.
    *
    * Failures are kept far longer than successes on purpose: a failed import is the one an
    * operator will ask about tomorrow, and its `failedReason` is the only record of why.
@@ -154,8 +199,21 @@ export class ImportJobService {
     );
   }
 
+  /**
+   * Read a job's scope, tolerating a payload written before scopes existed.
+   *
+   * Exported as a static so the worker reads it the same way the status endpoint does; two
+   * hand-written `?? { kind: 'PROJECT' }` fallbacks would be one more place for the two sides of a
+   * queue to drift apart.
+   */
+  static scopeOf(data: BranchImportJobData | undefined): ImportScope | null {
+    if (!data) return null;
+    if (data.scope?.kind && data.scope?.id) return data.scope;
+    return data.projectId ? { kind: 'PROJECT', id: data.projectId } : null;
+  }
+
   async enqueueBranchImport(params: {
-    projectId: string;
+    scope: ImportScope;
     userId: string;
     fileBuffer: Buffer;
     fileName?: string | null;
@@ -170,7 +228,7 @@ export class ImportJobService {
     }
 
     const data: BranchImportJobData = {
-      projectId: params.projectId,
+      scope: params.scope,
       userId: params.userId,
       fileBase64: params.fileBuffer.toString('base64'),
       fileName: params.fileName ?? null,
@@ -180,7 +238,7 @@ export class ImportJobService {
 
     const job = await this.queue.add(BRANCH_IMPORT_JOB, data, ImportJobService.JOB_OPTIONS);
     this.logger.log(
-      `Queued branch import job ${job.id} for project ${params.projectId}: ` +
+      `Queued branch import job ${job.id} for ${params.scope.kind.toLowerCase()} ${params.scope.id}: ` +
         `${params.totalRows} row(s), ${params.rowsNeedingGeocode} needing a geocode.`,
     );
 
@@ -200,22 +258,115 @@ export class ImportJobService {
   }
 
   /**
+   * Queue an appraiser-roster import.
+   *
+   * The roster import writes a person plus their references, background checks, documents and
+   * empanelments — thousands of rows for a full roster — and geocodes each home address. It ran
+   * inside the request, and the web client compensated with a **fifteen-minute** upload timeout: a
+   * page held open for a quarter of an hour, with nothing to look at and no way to tell a slow
+   * import from a dead one. Same queue, same reasoning as the branch import.
+   *
+   * There is no size threshold here, unlike branches: a roster row is expensive whatever the row
+   * count, and the rehearsal (`dryRun`) is what the operator waits for interactively.
+   */
+  async enqueueRosterImport(params: {
+    actorId: string;
+    fileBuffer: Buffer;
+    fileName?: string | null;
+    totalRows: number;
+    sheetName?: string | null;
+  }): Promise<ImportJobStatus<never, unknown>> {
+    if (params.fileBuffer.length > ImportJobService.MAX_QUEUED_FILE_BYTES) {
+      throw new PayloadTooLargeException(
+        `This file is ${Math.round(params.fileBuffer.length / (1024 * 1024))} MB, which is larger than the ` +
+          `${ImportJobService.MAX_QUEUED_FILE_BYTES / (1024 * 1024)} MB an import may be. Split it into smaller files and upload them one at a time.`,
+      );
+    }
+
+    const data: RosterImportJobData = {
+      actorId: params.actorId,
+      fileBase64: params.fileBuffer.toString('base64'),
+      fileName: params.fileName ?? null,
+      totalRows: params.totalRows,
+      sheetName: params.sheetName ?? null,
+    };
+
+    const job = await this.queue.add(ROSTER_IMPORT_JOB, data, ImportJobService.JOB_OPTIONS);
+    this.logger.log(`Queued roster import job ${job.id}: ${params.totalRows} row(s).`);
+
+    return {
+      jobId: String(job.id),
+      state: 'waiting',
+      progress: null,
+      result: null,
+      error: null,
+      fileName: data.fileName,
+      totalRows: data.totalRows,
+      rowsNeedingGeocode: 0,
+      enqueuedAt: new Date().toISOString(),
+      startedAt: null,
+      finishedAt: null,
+    };
+  }
+
+  /**
+   * Read a roster import job's state.
+   *
+   * @param actorId The user who started it. Roster jobs are not scoped to a project or a client —
+   *   the roster is one national list — so the ownership check is the person who uploaded the
+   *   file. Without it, Bull's incrementing job ids would let anyone who may import a roster read
+   *   any other import's result, which names real people, their PANs and their addresses.
+   */
+  async getRosterImportStatus(actorId: string, jobId: string): Promise<ImportJobStatus<never, unknown>> {
+    const job = await this.queue.getJob(jobId);
+    const data = job?.data as RosterImportJobData | undefined;
+
+    if (!job || !data || data.actorId !== actorId) {
+      throw new NotFoundException(
+        `Import job ${jobId} was not found. Jobs are kept for 24 hours after they finish ` +
+          `(7 days if they failed), so an older one will have been cleared.`,
+      );
+    }
+
+    const state = (await job.getState()) as ImportJobState;
+
+    return {
+      jobId: String(job.id),
+      state: state ?? 'unknown',
+      // The roster importer reports once, at the end: its work per row spans five tables inside one
+      // transaction, so there is no partial count that means anything until the commit.
+      progress: null,
+      result: state === 'completed' ? ((job.returnvalue as unknown) ?? null) : null,
+      error: state === 'failed' ? (job.failedReason ?? 'The import failed without recording a reason.') : null,
+      fileName: data.fileName,
+      totalRows: data.totalRows,
+      rowsNeedingGeocode: 0,
+      enqueuedAt: job.timestamp ? new Date(job.timestamp).toISOString() : null,
+      startedAt: job.processedOn ? new Date(job.processedOn).toISOString() : null,
+      finishedAt: job.finishedOn ? new Date(job.finishedOn).toISOString() : null,
+    };
+  }
+
+  /**
    * Read one import job's state.
    *
-   * @param projectId The project the caller reached this job through. Checked against the job's
-   *   own payload rather than trusted, because Bull job ids are a per-queue incrementing integer:
-   *   without this, anyone who may read one project could walk `1, 2, 3…` and pull back other
-   *   projects' import results — which name real branches, addresses and failure reasons. A
-   *   mismatch is reported as "not found" rather than "forbidden", so the response cannot be used
-   *   to confirm that some other project's job id exists.
+   * @param scope The project or client the caller reached this job through. Checked against the
+   *   job's own payload rather than trusted, because Bull job ids are a per-queue incrementing
+   *   integer: without this, anyone who may read one project could walk `1, 2, 3…` and pull back
+   *   other projects' import results — which name real branches, addresses and failure reasons.
+   *   The kind is part of the comparison, not just the id, so a client id can never be used to
+   *   read a project's job by coincidence of both being UUIDs. A mismatch is reported as "not
+   *   found" rather than "forbidden", so the response cannot be used to confirm that some other
+   *   scope's job id exists.
    */
-  async getBranchImportStatus(projectId: string, jobId: string): Promise<ImportJobStatus> {
+  async getBranchImportStatus(scope: ImportScope, jobId: string): Promise<ImportJobStatus> {
     const job = await this.queue.getJob(jobId);
     const data = job?.data as BranchImportJobData | undefined;
+    const jobScope = ImportJobService.scopeOf(data);
 
-    if (!job || !data || data.projectId !== projectId) {
+    if (!job || !data || !jobScope || !importScopeEquals(jobScope, scope)) {
       throw new NotFoundException(
-        `Import job ${jobId} was not found on this project. Jobs are kept for 24 hours after they ` +
+        `Import job ${jobId} was not found here. Jobs are kept for 24 hours after they ` +
           `finish (7 days if they failed), so an older one will have been cleared.`,
       );
     }

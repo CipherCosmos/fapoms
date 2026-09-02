@@ -1,3 +1,5 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import * as xlsx from 'xlsx';
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
@@ -812,90 +814,14 @@ describe('AssayerService', () => {
     });
   });
   /**
-   * The roster import, as the client's real file exercises it.
+   * The `uploadFromExcel` tests moved to `roster-import.spec.ts`.
    *
-   * Reported as "assayer/roster imports are not working", and it was two things at once: the
-   * reader only ever looked at sheet 1 of the workbook (the client's file puts Branch first and
-   * the roster second), and a phone number was required to admit anyone (the roster has no phone
-   * column). Either alone imported zero people.
+   * They covered two things the surviving importer did not do — finding the roster sheet whatever
+   * it is called, and refusing a branch list as the wrong file. Rather than delete them with the
+   * importer they were written against, the behaviour was moved into `RosterImportService` and the
+   * tests followed it there, where they now guard the importer that is actually used.
    */
-  describe('uploadFromExcel — the real client roster', () => {
-    /** The client's workbook: branch list first, roster second, trailing space in the name. */
-    function clientWorkbook(): Buffer {
-      const wb = xlsx.utils.book_new();
-      xlsx.utils.book_append_sheet(wb, xlsx.utils.aoa_to_sheet([
-        ['BRANCH', 'BRANCH_NAME', 'DISTRICT', 'STATE', 'Branch Address', 'Packets'],
-        ['BR-1', 'THENKURISSI', 'PALAKKAD', 'Kerala', 'Main Road', 120],
-      ]), 'Branch');
-      xlsx.utils.book_append_sheet(wb, xlsx.utils.aoa_to_sheet([
-        ['Assayer Name', 'Assayer code', 'Residence Address', 'Location', 'District', 'State', 'Zone'],
-        ['Shinil T', 'AS0643', 'Thykkattu, Kunnamangalam, kerala-673571', 'Kunnamangalam', 'Calicut', 'Kerala', 'South'],
-        ['R Jeganathan', 'AS0361', 'Anna Nagar, Chennai-600040', 'Chennai', 'Chennai', 'Tamil Nadu', 'South'],
-      ]), 'Assayer ');
-      return Buffer.from(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' }));
-    }
 
-    beforeEach(() => {
-      // No existing roster: every row is a create.
-      mockAssayerRepo.findOne.mockResolvedValue(null);
-      mockAssayerRepo.create.mockImplementation((v: any) => v);
-      mockAssayerRepo.save.mockImplementation((v: any) => Promise.resolve({ id: `asr-${v.assayerCode}`, ...v }));
-    });
-
-    it('reads the roster from the second sheet of the client workbook', async () => {
-      const report = await service.uploadFromExcel(clientWorkbook(), 'user-1');
-
-      expect(report.sheetName).toBe('Assayer ');
-      expect(report.errors).toEqual([]);
-      expect(report.importedCount).toBe(2);
-      expect(report.created).toBe(2);
-    });
-
-    it('admits people the roster has no phone number for, and names them', async () => {
-      const report = await service.uploadFromExcel(clientWorkbook(), 'user-1');
-
-      // Previously every one of these was a rejection: "Phone is required".
-      expect(report.needingPhone).toEqual(['AS0643', 'AS0361']);
-      expect(report.importedCount).toBe(2);
-    });
-
-    it('still refuses a row with no state — it sets the region, zone and holidays', async () => {
-      const wb = xlsx.utils.book_new();
-      xlsx.utils.book_append_sheet(wb, xlsx.utils.aoa_to_sheet([
-        ['Assayer code', 'Assayer Name', 'District', 'State'],
-        ['AS-01', 'Has State', 'Calicut', 'Kerala'],
-        ['AS-02', 'No State', 'Calicut', ''],
-      ]), 'Roster');
-      const report = await service.uploadFromExcel(
-        Buffer.from(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' })), 'user-1',
-      );
-
-      expect(report.importedCount).toBe(1);
-      expect(report.errors).toHaveLength(1);
-      expect(report.errors[0]).toContain('AS-02');
-      expect(report.errors[0]).toContain('State');
-    });
-
-    /**
-     * Searching every sheet must not weaken the wrong-file guard: a workbook that is only a
-     * branch list, uploaded here, still has to be sent to the right screen rather than read
-     * as a roster of 72 people named after branches.
-     */
-    it('still rejects a branch-only workbook as the wrong file', async () => {
-      const wb = xlsx.utils.book_new();
-      xlsx.utils.book_append_sheet(wb, xlsx.utils.aoa_to_sheet([
-        ['BRANCH', 'BRANCH_NAME', 'DISTRICT', 'STATE', 'Branch Address', 'Packets'],
-        ['BR-1', 'THENKURISSI', 'PALAKKAD', 'Kerala', 'Main Road', 120],
-      ]), 'Branch');
-      const report = await service.uploadFromExcel(
-        Buffer.from(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' })), 'user-1',
-      );
-
-      expect(report.importedCount).toBe(0);
-      expect(report.errors[0]).toContain('branch list');
-      expect(mockAssayerRepo.save).not.toHaveBeenCalled();
-    });
-  });
   /**
    * A skill, language or certification the person already holds must not be added twice.
    *
@@ -1052,5 +978,292 @@ describe('AssayerService', () => {
         service.create({ assayerCode: 'AS-92', firstName: 'A', lastName: 'B' } as any, 'user-1'),
       ).resolves.toBeDefined();
     });
+  });
+
+  /** The day in the office, which is the unit these `date` columns are in. */
+  const dayOf = (value: unknown) =>
+    new Date(value as any).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  const today = () => dayOf(new Date());
+  const daysFromNow = (n: number) => dayOf(new Date(Date.now() + n * 86_400_000));
+
+  /**
+   * Nobody leaves before they arrive.
+   *
+   * 36 of the 1,163 people on the live roster have a joining date later than their exit date —
+   * one joined in January 2024 and left in December 2023 — because no write path had ever
+   * compared the two. Length of service is read off that pair, by HR's attrition figures and by
+   * the qualification score's tenure input, and an inverted pair makes both of them nonsense.
+   */
+  describe('employment dates that cannot both be true', () => {
+    const onRoster = (over: Record<string, unknown> = {}) => ({
+      id: 'as-1', assayerCode: 'AS0279', firstName: 'Rajesh', lastName: 'Gupta',
+      displayName: 'Rajesh Gupta', address: 'Nashik Road', city: 'Nashik', district: 'Nashik',
+      state: 'Maharashtra', isActive: true,
+      // The driver hands `date` columns back as 'YYYY-MM-DD' strings while an edit has just
+      // assigned a `Date` — comparing across those two shapes is the whole difficulty.
+      joiningDate: '2020-04-01', exitDate: null, terminationDate: null, ...over,
+    });
+
+    beforeEach(() => {
+      mockAssayerRepo.save.mockImplementation(async (a: any) => a);
+    });
+
+    it('refuses a joining date later than the exit date already on the record', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(onRoster({ exitDate: '2023-12-31' }));
+
+      await expect(service.update('as-1', { joiningDate: '2024-01-18' }, 'u-1'))
+        .rejects.toThrow(/joining date \(2024-01-18\) is after the exit date \(2023-12-31\)/);
+    });
+
+    it('refuses the same pair when both halves arrive in one edit', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(onRoster());
+
+      await expect(service.update('as-1', { joiningDate: '2024-01-18', exitDate: '2023-12-31' }, 'u-1'))
+        .rejects.toThrow(/left before they joined/);
+    });
+
+    it('refuses a joining date later than the termination date, naming that one', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(onRoster({ terminationDate: '2024-04-30' }));
+
+      await expect(service.update('as-1', { joiningDate: '2024-05-29' }, 'u-1'))
+        .rejects.toThrow(/joining date \(2024-05-29\) is after the termination date \(2024-04-30\)/);
+    });
+
+    it('allows joining and leaving on the same day', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(onRoster());
+
+      await expect(service.update('as-1', { joiningDate: '2024-01-18', exitDate: '2024-01-18' }, 'u-1'))
+        .resolves.toBeDefined();
+    });
+
+    /**
+     * Somebody working out a notice period: the leaving date is ahead of today and the pair is in
+     * order. The rule is about the order of the two dates and never about which side of today
+     * either one falls on.
+     */
+    it('allows a leaving date in the future', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(onRoster());
+
+      await expect(service.update('as-1', { exitDate: daysFromNow(30) }, 'u-1')).resolves.toBeDefined();
+    });
+
+    /**
+     * The 36 records already carrying an inverted pair have to stay editable. Validating on every
+     * save would refuse a clerk correcting the phone number on one of them — blocking ordinary
+     * work on precisely the records the guard exists to protect, with no route to save the
+     * correction it is demanding. Touch a date and you own the pair.
+     */
+    it('does not block an edit that leaves all three dates alone', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(
+        onRoster({ joiningDate: '2024-01-18', exitDate: '2023-12-31' }),
+      );
+
+      await expect(service.update('as-1', { phone: '9876543210' }, 'u-1')).resolves.toBeDefined();
+    });
+
+    it('applies the same rule on admission, so the two paths cannot drift', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(null);
+      mockAssayerRepo.find.mockResolvedValue([]);
+      mockAssayerRepo.create.mockImplementation((v: any) => v);
+      mockAssayerRepo.save.mockImplementation(async (v: any) => ({ ...v, id: 'as-new' }));
+
+      // `CreateAssayerDto` has no exit date today; the guard reads whatever the create payload
+      // carries, so it is already standing on the day one is added.
+      await expect(service.create({
+        assayerCode: 'AS-95', firstName: 'A', lastName: 'B', state: 'Maharashtra',
+        joiningDate: '2024-01-18', exitDate: '2023-12-31',
+      } as any, 'user-1')).rejects.toThrow(/left before they joined/);
+    });
+
+    /**
+     * Ordinary roster shapes that must keep saving. A guard that refuses these costs more than
+     * the gap it closes.
+     */
+    it.each([
+      ['a leaver with the dates in order', { joiningDate: '2018-06-01', exitDate: '2024-03-31' }],
+      ['somebody serving notice', { joiningDate: '2018-06-01', exitDate: daysFromNow(45) }],
+      ['a live record with no leaving date at all', { joiningDate: '2018-06-01' }],
+      ['a leaving date on a record with no joining date', { exitDate: '2024-03-31' }],
+      ['a termination dated after the joining date', { joiningDate: '2018-06-01', terminationDate: '2024-03-31' }],
+    ])('accepts %s', async (_case, dates) => {
+      mockAssayerRepo.findOne.mockResolvedValue(onRoster({ joiningDate: null }));
+
+      await expect(service.update('as-1', dates as any, 'u-1')).resolves.toBeDefined();
+    });
+  });
+
+  /**
+   * Leaving has to leave a trace the rest of the system can read.
+   *
+   * 5 of the 1,163 people on the roster are RESIGNED or TERMINATED with no departure date, so
+   * every count of departures reports zero for them; 7 who have left still hold an ACTIVE client
+   * empanelment, which is what keeps them selectable for that bank's branches; and 2 are ACTIVE
+   * with an exit date behind them, the record asserting both things at once.
+   */
+  describe('a departure the rest of the system can see', () => {
+    const working = (over: Record<string, unknown> = {}) => ({
+      id: 'as-1', assayerCode: 'AS0431', displayName: 'Meera Nair', isActive: true,
+      lifecycleStatus: AssayerLifecycleStatus.ACTIVE, status: 'ACTIVE',
+      joiningDate: '2021-06-01', exitDate: null, terminationDate: null, ...over,
+    });
+
+    beforeEach(() => {
+      mockAssayerRepo.save.mockImplementation(async (a: any) => a);
+      mockActivityRepo.create.mockImplementation((v: any) => v);
+      mockActivityRepo.save.mockResolvedValue({});
+      // Reset rather than clear: a queued `mockResolvedValueOnce` survives clearAllMocks.
+      mockDataSource.query.mockReset();
+      // TypeORM answers an UPDATE with [rows, rowCount].
+      mockDataSource.query.mockResolvedValue([[], 0]);
+    });
+
+    it('records the exit date when a resignation carries none', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(working());
+
+      const saved = await service.acceptResignation('as-1', 'u-1', 'Relocating');
+
+      expect(dayOf(saved.exitDate)).toBe(today());
+    });
+
+    /**
+     * A termination stamps both. `termination_date` records that they were dismissed; `exit_date`
+     * is the column every reader of departures actually uses — all 447 recorded departures on the
+     * live roster set it and none set `termination_date`, and HR's own queries read
+     * COALESCE(exit_date, termination_date). A termination with only the former is invisible.
+     */
+    it('records both dates on a termination, so the departure is not invisible', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(
+        working({ lifecycleStatus: AssayerLifecycleStatus.SUSPENDED, status: 'SUSPENDED' }),
+      );
+
+      const saved = await service.terminateAssayer('as-1', 'u-1', 'Process not followed');
+
+      expect(dayOf(saved.exitDate)).toBe(today());
+      expect(dayOf(saved.terminationDate)).toBe(today());
+    });
+
+    it("keeps the last working day HR entered rather than today's date", async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(working({ exitDate: '2026-07-31' }));
+
+      const saved = await service.acceptResignation('as-1', 'u-1', 'Resigned in July');
+
+      expect(saved.exitDate).toBe('2026-07-31');
+    });
+
+    /**
+     * The stamp has to survive the same check a typed date does, or the guard becomes the thing
+     * writing impossible pairs — automatically, and across a whole batch in a bulk transition.
+     */
+    it('refuses to stamp a departure that would land before the joining date', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(working({ joiningDate: '2027-03-01' }));
+
+      await expect(service.acceptResignation('as-1', 'u-1', 'Relocating'))
+        .rejects.toThrow(/is after the exit date/);
+    });
+
+    it('closes the client standings that keep a leaver selectable', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(working());
+      mockDataSource.query.mockResolvedValue([[], 2]);
+
+      await service.acceptResignation('as-1', 'u-1', 'Relocating');
+
+      const [sql, params] = mockDataSource.query.mock.calls.at(-1)! as [string, unknown[]];
+      expect(sql).toMatch(/UPDATE assayer_client_empanelments/);
+      // ACTIVE and RECOMMENDED are the two standings the planner's per-client gate admits;
+      // they are closed to INACTIVE, the one closed standing that reads as reversible.
+      expect(params).toEqual(expect.arrayContaining(['ACTIVE', 'RECOMMENDED', 'INACTIVE', 'as-1']));
+      expect(params.some((p) => typeof p === 'string' && p.includes('RESIGNED'))).toBe(true);
+    });
+
+    it('puts the automatic corrections on the record beside the reason', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(working());
+      mockDataSource.query.mockResolvedValue([[], 3]);
+
+      await service.acceptResignation('as-1', 'u-1', 'Relocating');
+
+      const { remarks } = mockAuditService.recordEvent.mock.calls.at(-1)![0];
+      expect(remarks).toMatch(/Relocating/);
+      expect(remarks).toMatch(/exit date recorded as/);
+      expect(remarks).toMatch(/3 client empanelments closed/);
+    });
+
+    it('clears a departure date that has already passed when somebody comes back', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(working({
+        lifecycleStatus: AssayerLifecycleStatus.INACTIVE, status: 'INACTIVE', exitDate: '2025-11-30',
+      }));
+
+      const saved = await service.activateAssayer('as-1', 'u-1', 'Rejoined');
+
+      expect(saved.exitDate).toBeNull();
+      expect(saved.status).toBe('ACTIVE');
+    });
+
+    /** A notice period is coherent for a working person; clearing it would erase a leaving date
+     *  somebody entered on purpose. */
+    it('leaves a leaving date still ahead of today alone', async () => {
+      const notice = daysFromNow(30);
+      mockAssayerRepo.findOne.mockResolvedValue(working({
+        lifecycleStatus: AssayerLifecycleStatus.ON_LEAVE, status: 'INACTIVE', exitDate: notice,
+      }));
+
+      const saved = await service.activateAssayer('as-1', 'u-1', 'Back from leave');
+
+      expect(saved.exitDate).toBe(notice);
+    });
+
+    /**
+     * The door out is automatic; the door back in is not. Putting somebody onto a bank's
+     * empanelment list is that bank's decision, never a side effect of an HR screen — so a
+     * reinstatement goes through the vetting screen and a person.
+     */
+    it('never reopens a client empanelment on the way back', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(working({
+        lifecycleStatus: AssayerLifecycleStatus.INACTIVE, status: 'INACTIVE', exitDate: '2025-11-30',
+      }));
+
+      await service.activateAssayer('as-1', 'u-1', 'Rejoined');
+
+      const touched = mockDataSource.query.mock.calls
+        .some(([sql]) => String(sql).includes('assayer_client_empanelments'));
+      expect(touched).toBe(false);
+    });
+  });
+
+  /**
+   * `status` and `lifecycle_status` state one fact, and the planner reads the weaker one: the
+   * candidate query filters `status = 'ACTIVE'` while the explanation shown to a human reads
+   * `lifecycleStatus`. `AssayerEntity.deriveOperationalStatus` makes `status` a projection on
+   * every save, so the remaining way to put the two out of step — and to leave the workforce with
+   * none of the bookkeeping above — is the profile form writing the lifecycle directly.
+   */
+  describe('where somebody stands is not editable from the profile form', () => {
+    beforeEach(() => {
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'as-1', displayName: 'X', isActive: true });
+      mockAssayerRepo.save.mockImplementation(async (a: any) => a);
+    });
+
+    it.each(['status', 'lifecycleStatus'])('refuses %s in an update body', async (field) => {
+      await expect(service.update('as-1', { [field]: 'RESIGNED' } as any, 'u-1'))
+        .rejects.toThrow(/changed with the lifecycle actions/);
+    });
+
+    it('leaves an ordinary edit alone', async () => {
+      await expect(service.update('as-1', { phone: '9876543210' }, 'u-1')).resolves.toBeDefined();
+    });
+  });
+
+  /**
+   * The bulk importer writes appraisers through `manager.save(AssayerEntity, …)`, never through
+   * this service, so none of the guards above stand between the real 1,155-row roster file and the
+   * database — which is what lets a full import still succeed while the file carries the
+   * contradictions these guards refuse.
+   *
+   * Pinned because routing the importer through `create`/`update` would refuse rows part-way and
+   * leave a half-loaded roster. That is a decision to take deliberately, having decided what
+   * happens to the rows that fail, rather than by moving one call.
+   */
+  it('does not stand between the bulk roster importer and the database', () => {
+    const importer = readFileSync(join(__dirname, 'roster-import.service.ts'), 'utf8');
+    expect(importer).not.toMatch(/assayerService\.(create|update)\b/);
   });
 });

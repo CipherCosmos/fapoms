@@ -4,6 +4,7 @@ import { Repository, DataSource } from 'typeorm';
 import { CustomerMasterVersionEntity } from './customer-master-version.entity';
 import { CustomerRecordEntity } from './customer-record.entity';
 import { BranchEntity } from '../branch/branch.entity';
+import { ProjectEntity } from '../project/project.entity';
 import { CustomerMasterStatus, EventCategory } from '@fapoms/shared';
 import { AuditService } from '../../core/audit/audit.service';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
@@ -58,6 +59,8 @@ export class CustomerMasterService {
     private readonly recordRepository: Repository<CustomerRecordEntity>,
     @InjectRepository(BranchEntity)
     private readonly branchRepository: Repository<BranchEntity>,
+    @InjectRepository(ProjectEntity)
+    private readonly projectRepository: Repository<ProjectEntity>,
     private readonly auditService: AuditService,
     private readonly dataSource: DataSource,
     private readonly regionGuard: RegionGuardService,
@@ -95,8 +98,32 @@ export class CustomerMasterService {
 
     const recordEntities: Partial<CustomerRecordEntity>[] = [];
 
-    // Pre-fetch all branch SOL IDs for DB validation check
-    const dbBranches = await this.branchRepository.find({ select: ['id', 'solId'] });
+    /**
+     * The branches a SOL ID in this file may legitimately match — this client's, and only live ones.
+     *
+     * This loaded **every branch in the system** keyed on SOL ID alone. But a SOL ID is a bank's
+     * own branch numbering and is unique only *within* a client — the database says so:
+     * `UQ_branches_client_sol_id UNIQUE (client_id, sol_id) WHERE is_active = true`. Every bank has
+     * a branch "1". So `Map.set` silently kept whichever client happened to be loaded last, and a
+     * customer account could be filed against **another bank's branch** — which then skews
+     * `dailyRun`'s per-branch counts and misdirects the region filter in `findRecords`, both of
+     * which read `customer_records.branch_id`.
+     *
+     * Archived branches are excluded for the same reason the unique index excludes them: an
+     * archived row and its live replacement can share a SOL ID, and binding today's accounts to
+     * the retired one is never the intended answer.
+     */
+    const project = await this.projectRepository.findOne({
+      where: { id: projectId },
+      select: ['id', 'clientId'],
+    });
+    if (!project) {
+      throw new NotFoundException(`Project ${projectId} was not found, so this file has no branches to reconcile against.`);
+    }
+    const dbBranches = await this.branchRepository.find({
+      where: { isActive: true, ...(project.clientId ? { clientId: project.clientId } : {}) },
+      select: ['id', 'solId'],
+    });
     const branchMap = new Map<string, string>();
     dbBranches.forEach((b) => branchMap.set(b.solId.trim().toUpperCase(), b.id));
 

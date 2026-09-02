@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Wallet, Search, Pencil, Plus, AlertTriangle, Clock } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { api } from '../../services/api';
+import { fetchWholeAssayerRoster } from '../../services/assayer-roster';
 import { userMessage } from '../../services/errors';
 import { SkeletonRows } from '../../components/ui';
 import { listPhase } from '../../components/ui/list-phase';
@@ -80,14 +81,31 @@ export const HrPayPage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ assayerId: string; profile: CommercialProfile | null } | null>(null);
+  /**
+   * Set only when the roster could not all be loaded, which the four tiles above have to admit to.
+   * Null on any roster the loader got through in full, which is the normal case.
+   */
+  const [shortfall, setShortfall] = useState<{ shown: number; total: number } | null>(null);
 
+  /**
+   * Everybody, in as many requests as it takes — not the first thousand rows.
+   *
+   * This asked for `?limit=1000` and counted what arrived. On the customer's roster of 1,155
+   * appraisers that meant 155 people were absent from the table and absent from every figure on
+   * it: "On the roster" read 1,000, and "Cannot be paid — no bank details" counted only the
+   * thousand it had, so a person with no account number could be sitting outside the page while
+   * this screen reported the roster fully banked. Nothing said the list was partial. The four
+   * tiles are the reason this has to be the whole roster rather than a warning — a count is either
+   * of everyone or it is wrong.
+   */
   const load = async () => {
     try {
-      const [people, rows] = await Promise.all([
-        api.request<AssayerLite[]>('/assayers?limit=1000'),
+      const [everyone, rows] = await Promise.all([
+        fetchWholeAssayerRoster<AssayerLite>(),
         api.request<RosterPayRow[]>('/assayers/commercial/roster'),
       ]);
-      setRoster(people);
+      setRoster(everyone.people);
+      setShortfall(everyone.missing > 0 ? { shown: everyone.people.length, total: everyone.total } : null);
       setPay(Object.fromEntries(rows.map((r) => [r.assayerId, r])));
     } catch (e) {
       // userMessage, not `.message` — the raw one can be "Request failed with status code 403".
@@ -127,6 +145,21 @@ export const HrPayPage: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      {/*
+        Above the tiles, because it is the tiles it is about: if some of the roster is missing then
+        every figure below is a count of part of it, and a wrong count with nothing beside it is
+        read as a right one.
+      */}
+      {shortfall && (
+        <div style={{ ...card, borderLeft: '3px solid var(--warning)', display: 'flex', gap: '9px', alignItems: 'flex-start', fontSize: '12.5px' }}>
+          <AlertTriangle size={15} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: '1px' }} />
+          <span style={{ color: 'var(--text-secondary)' }}>
+            Only {shortfall.shown} of the {shortfall.total} people on the roster could be loaded, so
+            the counts and the table below leave {shortfall.total - shortfall.shown} out. Reload the
+            page to try again.
+          </span>
+        </div>
+      )}
       <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
         <button onClick={() => setFilter('all')} style={tile(filter === 'all')}>
           <div style={statValue}>{roster.length}</div>

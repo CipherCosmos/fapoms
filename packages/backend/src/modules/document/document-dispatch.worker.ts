@@ -2,7 +2,7 @@ import { Processor, Process } from '@nestjs/bull';
 import { Job } from 'bull';
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { DocumentEntity } from './document.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { DocumentService } from './document.service';
@@ -60,6 +60,24 @@ export class DocumentDispatchWorker {
       scheduledRows.map((r) => [`${r.project_id}:${r.branch_id}`, r.scheduled_date]),
     );
 
+    /**
+     * Two passes, and the split is the point.
+     *
+     * The date test is free — a map lookup and a string compare — and the assignment lookup is a
+     * database round trip. This loop used to run the round trip *first*, for every candidate
+     * document, and only then consult `isDueTomorrow`. The candidate query above has no `take`,
+     * and a document only leaves UPLOADED when it dispatches, so a branch that never gets a
+     * confirmed date is in this set forever: its packet cost one wasted query on this nightly
+     * scan, and would have gone on costing one every night for the life of the deployment.
+     *
+     * The remaining lookups are then batched into a single `In(...)` instead of one per document.
+     * Behaviour is unchanged: the old code only ever tested the result for truthiness, so a set
+     * of "assessment ids that have an ACCEPTED, active assignment" answers exactly the same
+     * question, and the dispatch pass still walks `docs` in its original order.
+     */
+    // `assessmentId` is carried rather than re-read off `doc.assessment` in the second pass: the
+    // `if (!doc.assessment) continue;` narrowing does not survive being stored in an array.
+    const due: Array<{ doc: DocumentEntity; assessmentId: string; auditDate: string }> = [];
     for (const doc of docs) {
       if (!doc.assessment) continue;
 
@@ -74,23 +92,37 @@ export class DocumentDispatchWorker {
       // catches anything already due, so a packet uploaded late still goes out
       // immediately rather than waiting for a date that has passed.
       const isDueTomorrow = auditDate === tomorrowStr || new Date(auditDate) <= tomorrow;
+      if (!isDueTomorrow) continue;
 
-      const assignment = await this.assignmentRepository.findOne({
+      due.push({ doc, assessmentId: doc.assessment.id, auditDate });
+    }
+
+    // `In([])` is not a harmless empty filter in TypeORM — skip the query outright on a night
+    // where nothing is due, which is most nights.
+    const acceptedAssessmentIds = new Set<string>();
+    if (due.length > 0) {
+      const accepted = await this.assignmentRepository.find({
         where: {
-          assessmentId: doc.assessment.id,
+          assessmentId: In([...new Set(due.map((d) => d.assessmentId))]),
           status: AssignmentStatus.ACCEPTED,
           isActive: true,
         },
+        select: { id: true, assessmentId: true },
       });
+      for (const a of accepted) {
+        if (a.assessmentId) acceptedAssessmentIds.add(a.assessmentId);
+      }
+    }
 
-      if (assignment && isDueTomorrow) {
-        try {
-          await this.documentService.dispatchDocument(doc.id, 'SYSTEM', DispatchMethod.AUTO);
-          dispatchedCount++;
-          this.logger.log(`Auto-dispatched document ${doc.id} for assessment ${doc.assessment.id} (Scheduled: ${auditDate})`);
-        } catch (err) {
-          this.logger.error(`Failed to auto-dispatch document ${doc.id}:`, err);
-        }
+    for (const { doc, assessmentId, auditDate } of due) {
+      if (!acceptedAssessmentIds.has(assessmentId)) continue;
+
+      try {
+        await this.documentService.dispatchDocument(doc.id, 'SYSTEM', DispatchMethod.AUTO);
+        dispatchedCount++;
+        this.logger.log(`Auto-dispatched document ${doc.id} for assessment ${assessmentId} (Scheduled: ${auditDate})`);
+      } catch (err) {
+        this.logger.error(`Failed to auto-dispatch document ${doc.id}:`, err);
       }
     }
 

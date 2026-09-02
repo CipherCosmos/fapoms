@@ -10,7 +10,7 @@
  *
  * Nobody added them up. Counted 2026-08-17, across eleven `@Processor` classes (twelve since the
  * geo-precision worker joined on 2026-08-19; total 32 once that worker gained its address-enrichment
- * handler):
+ * handler, and **33** since the roster import worker joined on 2026-09-02):
  *
  *   | queue / worker                        | slots |
  *   |---------------------------------------|-------|
@@ -24,7 +24,10 @@
  *   | generic `@Process('*')`               |     6 |
  *   | **total**                             |**29** |
  *
- * The connection pool is **20** (`DB_POOL_MAX`, `database.config.ts`). And the shipped production
+ * The connection pool is **20** (`DB_POOL_MAX`, `database.config.ts`). The total passed it in
+ * August 2026 and has stayed past it; the roster slot added in September did not newly cross that
+ * line, and it replaced work that used to occupy an API request handler for up to fifteen minutes,
+ * which drew from the same pool with none of this visibility. And the shipped production
  * default is `PROCESS_ROLE=all` (`.env.production.example`), meaning the API and all twenty-nine
  * of those slots live in one process and draw from that one pool.
  *
@@ -58,7 +61,11 @@
 import { Logger } from '@nestjs/common';
 
 /**
- * Slots per worker, keyed by the queue each belongs to.
+ * Slots per worker, one key per `@Processor` class.
+ *
+ * Usually that is also one key per queue, but not always: `imports` and `rosterImports` are two
+ * classes serving the same `import-jobs` queue. The key is the class because the class is what the
+ * fitness test can count from the source.
  *
  * **This is a mirror, not the definition.** The running values are the `@Process` decorators in
  * the worker classes, where each sits next to the comment explaining why it is what it is;
@@ -95,6 +102,23 @@ export const WORKER_CONCURRENCY = {
   billing: { syncAssignments: 1 },
   documents: { autoDispatch: 1 },
   imports: { branchImport: 1 },
+  /**
+   * The appraiser roster, on the *same* `import-jobs` queue as the branch import but in its own
+   * `@Processor` class — which is why it is its own key here rather than another slot under
+   * `imports`. This table is keyed per class, because that is what can be counted from the source.
+   *
+   * It joined on 2026-09-02, when the roster stopped running inside its upload request; the web
+   * client had been holding that request open for **fifteen minutes** to accommodate it.
+   *
+   * Two handlers on one queue means a branch import and a roster import **can** run at the same
+   * time — Bull's concurrency is per handler, not per queue. That is safe for the reason the
+   * `geoPrecision` note below gives: `politely()` chains calls per host across the whole process,
+   * so two concurrent importers still produce one geocode per second at the provider, not two.
+   * What the single slots buy is that neither import can run two copies of *itself*, which is what
+   * would double the database work, and that a re-upload queues behind the first attempt instead
+   * of racing it.
+   */
+  rosterImports: { rosterImport: 1 },
   generic: { catchAll: 1 },
   /**
    * Coordinate precision. Three named handlers — an import's targeted backfill, the nightly

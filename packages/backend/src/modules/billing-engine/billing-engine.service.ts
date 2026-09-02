@@ -408,6 +408,64 @@ export class BillingEngineService implements OnModuleInit {
     return rows.map((r) => r.id);
   }
 
+  /**
+   * Payouts that have been sitting unapproved, and the work that never reached a payout at all.
+   *
+   * Both exist because the chain from "audit done" to "assayer paid" is one automatic hop
+   * (completion books the payable) followed by several manual ones, and nothing anywhere noticed
+   * when a manual hop simply did not happen. A payable could rest in PENDING for weeks with the
+   * assayer's own screen calling it owed; an attended audit nobody closed produced no payable at
+   * all. Neither state raised anything — they were visible only as figures on a finance page
+   * somebody had to open, which is not a control.
+   *
+   * Read-only and cheap: two indexed aggregates, run from the SLA scanner.
+   */
+  async payoutsAwaitingApproval(minDays: number): Promise<{
+    count: number; totalAmount: number; oldestDays: number;
+  }> {
+    const rows: Array<{ count: string; total: string; oldest_days: string }> =
+      await this.assignmentRepository.manager.query(
+        `SELECT COUNT(*)::text AS count,
+                COALESCE(SUM(total_amount), 0)::text AS total,
+                COALESCE(MAX(EXTRACT(DAY FROM (now() - created_at))), 0)::text AS oldest_days
+           FROM assayer_payables
+          WHERE status = 'PENDING' AND is_active = true AND on_hold = false
+            AND created_at < now() - ($1 || ' days')::interval`,
+        [String(minDays)],
+      );
+    const r = rows?.[0];
+    return {
+      count: Number(r?.count ?? 0),
+      totalAmount: Number(r?.total ?? 0),
+      oldestDays: Math.floor(Number(r?.oldest_days ?? 0)),
+    };
+  }
+
+  /**
+   * Audits somebody actually attended that were never completed, so nothing was ever booked.
+   *
+   * Keyed on check-IN rather than check-out: a visit with no departure recorded is exactly as
+   * unclosed as one with it, and waiting for a check-out that the assayer may never tap would
+   * hide the worst cases. Cancelled and rejected work is excluded — those were closed, deliberately.
+   */
+  async attendedButNotClosed(minDays: number): Promise<{
+    count: number; oldestDate: string | null;
+  }> {
+    const rows: Array<{ count: string; oldest: string | null }> =
+      await this.assignmentRepository.manager.query(
+        `SELECT COUNT(*)::text AS count,
+                MIN(checked_in_at)::date::text AS oldest
+           FROM assignments
+          WHERE is_active = true
+            AND checked_in_at IS NOT NULL
+            AND status IN ('CHECKED_IN', 'IN_PROGRESS', 'ACCEPTED')
+            AND checked_in_at < now() - ($1 || ' days')::interval`,
+        [String(minDays)],
+      );
+    const r = rows?.[0];
+    return { count: Number(r?.count ?? 0), oldestDate: r?.oldest ?? null };
+  }
+
   // -----------------------------------------------------------------------
   // Pricing context and the two inserts
   // -----------------------------------------------------------------------

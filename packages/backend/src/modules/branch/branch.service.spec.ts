@@ -21,6 +21,9 @@ describe('BranchService', () => {
     create: jest.fn(),
     save: jest.fn(),
     findOne: jest.fn(),
+    // The SOL-ID uniqueness check reads through `find` (take: 2) rather than `findOne`, because it
+    // must see archived rows too and still exclude the branch being edited. Default: nothing taken.
+    find: jest.fn().mockResolvedValue([]),
     createQueryBuilder: jest.fn(),
   };
 
@@ -185,7 +188,7 @@ describe('BranchService', () => {
     const realState = { state: 'MAHARASHTRA', district: 'MUMBAI', city: 'MUMBAI' };
 
     it('refuses a SOL ID already used by the same client', async () => {
-      mockBranchRepo.findOne.mockResolvedValue({ id: 'existing', solId: '0001' });
+      mockBranchRepo.find.mockResolvedValue([{ id: 'existing', solId: '0001', name: 'Fort', isActive: true }]);
       await expect(
         service.create({ solId: '0001', name: 'MG Road', ...realState, clientId: 'axis' }, 'user-1'),
       ).rejects.toThrow(/SOL ID '0001' is already used/);
@@ -197,9 +200,122 @@ describe('BranchService', () => {
       ).rejects.toThrow(/SOL ID is required/i);
     });
 
+    /**
+     * The duplicate this used to create.
+     *
+     * The check filtered `isActive: true`, and so does the database's unique index
+     * (`UQ_branches_client_sol_id ... WHERE is_active = true`). Archive branch 4021 and create it
+     * again and you get a *second* row with the same client and SOL ID beside the archived one —
+     * permitted by Postgres, invisible to the code, and impossible for any later import to tell
+     * apart. One of the two carries all the history.
+     */
+    it('refuses a SOL ID held by an ARCHIVED branch, and says how to resolve it', async () => {
+      mockBranchRepo.find.mockResolvedValue([
+        { id: 'archived', solId: '0001', name: 'Fort (old)', isActive: false },
+      ]);
+
+      await expect(
+        service.create({ solId: '0001', name: 'Fort', ...realState, clientId: 'axis' }, 'user-1'),
+      ).rejects.toThrow(/archived branch/i);
+      // The operator cannot see the archived branch in any list, so the message has to tell them
+      // what to do about it rather than just refusing.
+      await expect(
+        service.create({ solId: '0001', name: 'Fort', ...realState, clientId: 'axis' }, 'user-1'),
+      ).rejects.toThrow(/Restore that branch/i);
+      expect(mockBranchRepo.save).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The check and the insert are not atomic. Two operators adding the same branch at once both
+     * find the SOL ID free; the database's unique index rejects the loser. Without this, that
+     * arrives as a raw `duplicate key value violates unique constraint` 500.
+     */
+    it('turns a lost race into the same readable conflict, not a 500', async () => {
+      mockBranchRepo.find
+        .mockResolvedValueOnce([])                                                     // the check: free
+        .mockResolvedValue([{ id: 'winner', solId: '0001', name: 'Fort', isActive: true }]); // after
+      mockClientService.findOne.mockResolvedValue({ id: 'axis', name: 'Axis' });
+      mockBranchRepo.create.mockReturnValue({ id: 'b-new', solId: '0001' });
+      mockBranchRepo.save.mockRejectedValue(Object.assign(new Error('duplicate key'), { code: '23505' }));
+
+      await expect(
+        service.create({ solId: '0001', name: 'Fort', ...realState, clientId: 'axis' }, 'user-1'),
+      ).rejects.toThrow(/already used by "Fort"/);
+    });
+
+    /**
+     * `update` did `if (dto.solId !== undefined) branch.solId = dto.solId` and saved — no trim, no
+     * blank check, no collision check — while `create` a hundred lines above refused all three. The
+     * SOL ID is the field every import matches on, so a blank one makes the branch unmatchable and
+     * surfaces later as a duplicate rather than as an error here.
+     */
+    it('refuses to blank a SOL ID from the edit form', async () => {
+      mockBranchQueryService.findOne.mockResolvedValue({
+        id: 'b-1', solId: '0001', name: 'Fort', clientId: 'axis', isActive: true,
+      });
+
+      await expect(service.update('b-1', { solId: '   ' }, 'user-1')).rejects.toThrow(/SOL ID is required/i);
+      expect(mockBranchRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('refuses to point one branch at another branch\'s SOL ID from the edit form', async () => {
+      mockBranchQueryService.findOne.mockResolvedValue({
+        id: 'b-1', solId: '0001', name: 'Fort', clientId: 'axis', isActive: true,
+      });
+      mockBranchRepo.find.mockResolvedValue([
+        { id: 'b-2', solId: '0002', name: 'Andheri', isActive: true },
+      ]);
+
+      await expect(service.update('b-1', { solId: '0002' }, 'user-1')).rejects.toThrow(/already used by "Andheri"/);
+    });
+
+    it('lets a branch keep its own SOL ID through an unrelated edit', async () => {
+      mockBranchQueryService.findOne.mockResolvedValue({
+        id: 'b-1', solId: '0001', name: 'Fort', clientId: 'axis', isActive: true,
+      });
+      mockBranchRepo.find.mockResolvedValue([]);
+      mockBranchRepo.save.mockResolvedValue({ id: 'b-1', solId: '0001', phone: '9000000000' });
+
+      await expect(service.update('b-1', { solId: '0001', phone: '9000000000' }, 'user-1')).resolves.toBeDefined();
+    });
+  });
+
+  /**
+   * Restoring is its own act, not a field on the edit DTO — see `restoreArchived`.
+   */
+  describe('restoreArchived', () => {
+    it('brings an archived branch back and records why', async () => {
+      // Read through the repository, not `BranchQueryService.findOne` — that one ends
+      // `.andWhere('branch.isActive = true')` and so cannot see the very row being restored.
+      mockBranchRepo.findOne.mockResolvedValue({
+        id: 'b-1', solId: '0001', name: 'Fort', isActive: false,
+      });
+      mockBranchRepo.save.mockImplementation(async (b: any) => b);
+
+      const restored = await service.restoreArchived('b-1', 'user-1');
+
+      expect(restored.isActive).toBe(true);
+      expect(mockAuditService.recordEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ eventType: 'BRANCH_RESTORED' }),
+      );
+    });
+
+    it('is a no-op on a branch that is already active', async () => {
+      mockBranchRepo.findOne.mockResolvedValue({ id: 'b-1', solId: '0001', isActive: true });
+      mockBranchRepo.save.mockClear();
+
+      await service.restoreArchived('b-1', 'user-1');
+
+      expect(mockBranchRepo.save).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('branch identity — trailing cases', () => {
+    const realState = { state: 'MAHARASHTRA', district: 'MUMBAI', city: 'MUMBAI' };
+
     it('allows the same SOL ID for a DIFFERENT client — banks keep their own numbering', async () => {
       // No existing branch for THIS client with that SOL ID.
-      mockBranchRepo.findOne.mockResolvedValue(null);
+      mockBranchRepo.find.mockResolvedValue([]);
       mockClientService.findOne.mockResolvedValue({ id: 'icici', name: 'ICICI' });
       mockBranchRepo.create.mockReturnValue({ id: 'b-new', solId: '0001' });
       mockBranchRepo.save.mockResolvedValue({ id: 'b-new', solId: '0001' });

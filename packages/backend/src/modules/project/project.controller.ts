@@ -39,7 +39,8 @@ import { In, Repository } from 'typeorm';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsArray, IsObject, ArrayNotEmpty, IsUUID, IsDateString, MaxLength, Min, Validate, ValidatorConstraint, ValidatorConstraintInterface, ValidationArguments } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ProjectService, CreateProjectDto } from './project.service';
-import { ImportJobService } from './import-job.service';
+import { ImportJobService } from '../import/import-job.service';
+import type { ImportScope } from '../import/import.contract';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole } from '@fapoms/shared';
@@ -345,6 +346,20 @@ export class ProjectController {
           status: activeAssignment.status,
           proposedFee: activeAssignment.proposedFee,
           agreedFee: activeAssignment.agreedFee,
+          /**
+           * The breakdown behind `proposedFee`, so the desk can see what a number is MADE of.
+           *
+           * Only the total was sent, and the counter-offer modal seeded its input from it while
+           * submitting that value as `counterTravelFee` — travel only. Every counter therefore
+           * re-proposed base + the whole previous total, and the screen could not show the base
+           * fee it was silently inflating because it had never been told it.
+           *
+           * `counterTravelFee` is whatever travel figure is currently on the table (null until
+           * somebody counters); `quotedTravelFee` is what the rate card originally priced.
+           */
+          quotedBaseFee: activeAssignment.quotedBaseFee,
+          quotedTravelFee: activeAssignment.quotedTravelFee,
+          counterTravelFee: activeAssignment.counterTravelFee,
           scheduledDate: activeAssignment.scheduledDate,
           // Was declared in the frontend's type but never actually sent — the counter-offer
           // banner's "(Remarks: ...)" text always rendered "None" as a result.
@@ -437,11 +452,12 @@ export class ProjectController {
      * looking for. Preflight parses the workbook and applies the same rejections the synchronous
      * import always did, before any routing decision is made.
      */
-    const preflight = await this.projectService.preflightBranchExcel(id, file.buffer);
+    const scope: ImportScope = { kind: 'PROJECT', id };
+    const preflight = await this.projectService.preflightBranchExcel(scope, file.buffer);
 
     if (ImportJobService.shouldQueue(preflight)) {
       const job = await this.importJobService.enqueueBranchImport({
-        projectId: id,
+        scope,
         userId: req.user.id,
         fileBuffer: file.buffer,
         fileName: file.originalname ?? null,
@@ -466,23 +482,33 @@ export class ProjectController {
       };
     }
 
-    const report = await this.projectService.uploadBranchesFromExcel(id, file.buffer, req.user.id);
+    const report = await this.projectService.uploadBranchesFromExcel(scope, file.buffer, req.user.id);
+    /**
+     * What the import did, in `data` — the same shape the client-scoped endpoint returns and the
+     * same shape the completed job's result carries.
+     *
+     * `data` used to be the project's resulting branch list, with the counts hidden in `meta`.
+     * That made the small-file response, the large-file response and the finished-job response
+     * three different shapes for one outcome, so each had to be read differently and the web app
+     * grew a separate reader for each. The branch list is dropped rather than moved: the only
+     * caller refetched `GET /projects/:id/branches` immediately afterwards anyway, and sending
+     * every hydrated row back twice was never doing anything.
+     */
     return {
       success: true,
-      data: report.branches,
-      // What the import actually did, including the rows it could not use. `data` alone is the
-      // project's branch list, which looks identical whether 400 branches were imported or none
-      // were — the caller cannot tell success from a silently mismatched header row.
-      meta: {
+      data: {
         totalRows: report.totalRows,
         created: report.created,
         updated: report.updated,
+        unchanged: report.unchanged,
         linked: report.linked,
         skipped: report.skipped,
         // Rows that imported but landed on a fallback coordinate. Distinct from `skipped` — these
         // branches exist, they just cannot be planned or checked into until someone corrects
         // where they are, so the operator has to be told while the import is still in front of them.
         imprecise: report.imprecise,
+        // Archived branches this file restored — see `BranchImportOutcome.revived`.
+        revived: report.revived,
       },
     };
   }
@@ -506,11 +532,11 @@ export class ProjectController {
     @Param('id', ParseUUIDPipe) id: string,
     @Param('jobId') jobId: string,
   ) {
-    // The project id is passed through and checked against the job's own payload — Bull ids are a
+    // The scope is passed through and checked against the job's own payload — Bull ids are a
     // per-queue counter, so without that check they are trivially enumerable across projects.
     return {
       success: true,
-      data: await this.importJobService.getBranchImportStatus(id, jobId),
+      data: await this.importJobService.getBranchImportStatus({ kind: 'PROJECT', id }, jobId),
     };
   }
 

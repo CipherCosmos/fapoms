@@ -247,8 +247,9 @@ describe('queued-job', () => {
 
   describe('retention', () => {
     it('never keeps jobs unboundedly', () => {
-      // `BullQueueManager` sets removeOnComplete/removeOnFail to false — "keep everything
-      // forever" — which is what filled Redis previously. Both bounds must be real numbers.
+      // `removeOnComplete: false` / `removeOnFail: false` — "keep everything forever" — is what
+      // filled Redis previously, on `BullQueueManager` and on the `ocr` queue; both are bounded
+      // now. Both bounds here must be real numbers, not `false` reintroduced by another name.
       expect(FAILED_JOB_RETENTION.age).toBeGreaterThan(0);
       expect(FAILED_JOB_RETENTION.count).toBeGreaterThan(0);
     });

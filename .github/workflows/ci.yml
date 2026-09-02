@@ -62,6 +62,15 @@ jobs:
           npx tsc --noEmit -p packages/frontend/tsconfig.json
           npx tsc --noEmit -p packages/mobile/tsconfig.json
 
+      # Lint runs at error level only. `eslint.config.mjs` deliberately files stylistic and
+      # opinionated rules as warnings, and there are ~298 of them; failing on those would mean
+      # either a red board on day one or a mass rewrite nobody reviewed. Errors are a different
+      # class — a real fallthrough, an unreachable branch, an invisible character in source — and
+      # the eight that existed when this step was added are fixed, so the gate starts green and
+      # any new error is genuinely new.
+      - name: Lint
+        run: npm run lint
+
       - name: Test
         run: npm test --workspaces --if-present
 

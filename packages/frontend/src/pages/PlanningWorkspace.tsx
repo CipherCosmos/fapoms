@@ -1631,15 +1631,28 @@ export const PlanningWorkspace: React.FC = () => {
   const handleOpenCounterProposal = (assignment: NonNullable<ProjectBranch['assignment']>) => {
     if (assignment.assayer) {
       setSelectedCandidate({ id: assignment.assayer.id, displayName: assignment.assayer.displayName } as any);
-      // The fee already proposed on this assignment — no invented fallback. A blank field
-      // reads as "nothing proposed yet", where a hardcoded ₹1500 read as a real offer.
-      setNegotiatingFee(assignment.proposedFee != null ? String(assignment.proposedFee) : '');
+      /**
+       * Seed the TRAVEL figure, because travel is what this form counters.
+       *
+       * It was seeded from `proposedFee` — the whole agreed number — while submit sends the
+       * value as `counterTravelFee`. So countering without editing did not repeat the current
+       * offer as the pre-filled number implied: it asked for base + the entire previous total,
+       * and the base silently absorbed it. The same mistake existed in the assayer's app.
+       *
+       * Whatever travel is currently on the table wins: a counter already made, else the rate
+       * card's original quote. Blank when neither is known — an empty field asks the question
+       * instead of answering it wrongly.
+       */
+      const travelOnTable = assignment.counterTravelFee ?? assignment.quotedTravelFee ?? null;
+      setNegotiatingFee(travelOnTable != null ? String(travelOnTable) : '');
       setCounterRemarks('');
       // This path opens the modal without fetching a fresh quote, so whatever quote the last
       // Call & Assign left behind belongs to a DIFFERENT assayer and branch. Clearing it keeps
       // the transport-grounding panel from lending this negotiation someone else's numbers.
       setFeeQuote(null);
-      setCommercialBaseFee(null);
+      // The audit fee this assignment was actually priced at, so the modal can show what the
+      // counter adds to rather than presenting a bare number with no context.
+      setCommercialBaseFee(assignment.quotedBaseFee != null ? Number(assignment.quotedBaseFee) : null);
       // Counter-back mode: submit will counter THIS assignment, not create a new one.
       setCounterOfferAssignmentId(assignment.id);
       setShowNegotiationModal(true);
@@ -2216,6 +2229,10 @@ export const PlanningWorkspace: React.FC = () => {
                       body: JSON.stringify({
                         projectBranchId: selectedPb.id,
                         assayerId: c.id,
+                        // Says what the button says. Omitting the fee used to mean "quote it from
+                        // the rate card", so this dispatched base + travel while the label, the
+                        // tooltip and the confirmation all promised no fee was recorded.
+                        noFee: true,
                         remarks: 'Dispatched directly via App Invitation',
                       }),
                     });
@@ -3007,6 +3024,29 @@ export const PlanningWorkspace: React.FC = () => {
                   style={{ width: '100%', padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px', boxSizing: 'border-box' }} />
               </div>
             </div>
+
+            {/*
+              What the assayer will actually be offered, spelled out.
+
+              Countering, the input above is TRAVEL ONLY while the number the assayer sees is
+              base + travel — so a desk typing 350 was shown nothing to tell them the offer
+              becomes 1,900, and a desk reading 1,900 on the card had no way to see that only
+              350 of it was theirs to move. Stating the arithmetic is the whole fix: the same
+              sum the server performs (quotedBaseFee + counterTravelFee), in the same place the
+              number is typed.
+            */}
+            {counterOfferAssignmentId && commercialBaseFee != null && negotiatingFee.trim() !== ''
+              && !Number.isNaN(Number(negotiatingFee)) && (
+              <div style={{ marginTop: '12px', padding: '10px 12px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+                <span>
+                  Audit fee ₹{commercialBaseFee.toLocaleString()} (fixed by the rate card)
+                  {' + '}travel ₹{Number(negotiatingFee).toLocaleString()}
+                </span>
+                <b style={{ color: 'var(--text-primary)', fontSize: '14px', whiteSpace: 'nowrap' }}>
+                  Assayer sees ₹{(commercialBaseFee + Number(negotiatingFee)).toLocaleString()}
+                </b>
+              </div>
+            )}
 
             {/* The transport grounding behind the recommended fee: what the journey actually
                 costs by the recommended mode, with the alternatives, so the caller can argue

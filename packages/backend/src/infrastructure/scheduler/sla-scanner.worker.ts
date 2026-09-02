@@ -8,6 +8,8 @@ import { DeskEscalationService } from '../../modules/validation/desk-escalation.
 import { FeedbackEscalationService } from '../../modules/feedback/feedback-escalation.service';
 import { LocationTrailService } from '../../modules/assayer/location-trail.service';
 import { EmailDigestService } from './email-digest.service';
+import { BillingEngineService } from '../../modules/billing-engine/billing-engine.service';
+import { businessTodayDateKey } from '@fapoms/shared';
 
 @Injectable()
 @Processor('sla-scanner')
@@ -18,6 +20,16 @@ export class SlaScannerWorker {
    * Far enough out that a renewal can realistically be started and completed, close
    * enough that HR are not told about paperwork half a year away and stop reading.
    */
+  /**
+   * How long a payout may sit unapproved, and a visit unclosed, before anyone is told.
+   *
+   * Days, not hours: approving payouts is a finance rhythm, not a live queue, and a scanner that
+   * shouted on the afternoon of the same day would be muted within a week — at which point the
+   * genuinely stuck ones stop being seen too.
+   */
+  private static readonly PAYOUT_APPROVAL_GRACE_DAYS = 3;
+  private static readonly UNCLOSED_VISIT_GRACE_DAYS = 2;
+
   private static readonly DOCUMENT_EXPIRY_LEAD_DAYS = 30;
 
   constructor(
@@ -28,6 +40,7 @@ export class SlaScannerWorker {
     private readonly feedbackEscalation: FeedbackEscalationService,
     private readonly locationTrail: LocationTrailService,
     private readonly emailDigest: EmailDigestService,
+    private readonly billingEngine: BillingEngineService,
   ) {}
 
   /**
@@ -135,6 +148,81 @@ export class SlaScannerWorker {
     await runPhase('feedback escalation scan', () => this.feedbackEscalation.scan());
 
     /**
+     * The money chain's watchdog — the half of the lifecycle nothing was watching.
+     *
+     * Everything from "audit completed" to "assayer paid" is a person clicking: approve the
+     * payout, export the bank file, mark it paid. Booking the payable was the single automatic
+     * hop, and no phase of this scanner looked at `assayer_payables` at all. So a payout could
+     * rest unapproved for weeks while the assayer's own screen called it owed, and an audit that
+     * was attended but never closed booked nothing and told nobody. Both ended with a real person
+     * not being paid, and neither raised anything.
+     *
+     * Day-bucketed dedupe keys, because this runs every 15 minutes: without them a slow week
+     * would be 672 notifications about the same stalled payout.
+     */
+    await runPhase('payout approval backlog', async () => {
+      const stale = await this.billingEngine.payoutsAwaitingApproval(
+        SlaScannerWorker.PAYOUT_APPROVAL_GRACE_DAYS,
+      );
+      if (stale.count === 0) return;
+      this.notificationDispatch.emitSafe({
+        type: 'PAYABLE_AWAITING_APPROVAL',
+        entityType: 'PAYABLE',
+        entityId: 'backlog',
+        dedupeKey: `PAYABLE_AWAITING_APPROVAL:${businessTodayDateKey()}`,
+        payload: {
+          count: stale.count,
+          amount: stale.totalAmount.toLocaleString('en-IN'),
+          days: stale.oldestDays,
+        },
+      });
+      this.logger.warn(
+        `${stale.count} payout(s) worth ₹${stale.totalAmount} awaiting approval (oldest ${stale.oldestDays}d).`,
+      );
+    });
+
+    await runPhase('attended but unclosed audits', async () => {
+      const stuck = await this.billingEngine.attendedButNotClosed(
+        SlaScannerWorker.UNCLOSED_VISIT_GRACE_DAYS,
+      );
+      if (stuck.count === 0) return;
+      this.notificationDispatch.emitSafe({
+        type: 'ASSIGNMENT_ATTENDED_NOT_CLOSED',
+        entityType: 'ASSIGNMENT',
+        entityId: 'backlog',
+        dedupeKey: `ASSIGNMENT_ATTENDED_NOT_CLOSED:${businessTodayDateKey()}`,
+        payload: { count: stuck.count, oldest: stuck.oldestDate ?? 'unknown' },
+      });
+      this.logger.warn(
+        `${stuck.count} attended audit(s) never closed — nothing booked for payment (oldest ${stuck.oldestDate}).`,
+      );
+    });
+
+    /**
+     * Re-run the booking sweep the system already had, on a schedule rather than on a click.
+     *
+     * `reconcile()` was written for "the day the event was lost, the lock failed open twice, or a
+     * database was restored" — and the only way to run it was a button on the finance page. A
+     * dropped completion event therefore meant an assayer was never paid and nothing ever noticed,
+     * which is precisely the failure the routine exists to repair. It is idempotent (two unique
+     * indexes make a re-book a no-op), so running it hourly costs a query and removes the
+     * dependency on somebody remembering.
+     */
+    await runPhase('billing reconcile sweep', async () => {
+      const hour = new Date().getUTCHours() * 60 + new Date().getUTCMinutes();
+      // Hourly, not every 15 minutes: it walks completed assignments, and the notifications above
+      // already surface anything it would repair.
+      if (hour % 60 >= 15) return;
+      // 'SYSTEM' as the actor: this run has no human behind it, and the history rows it writes
+      // should say so rather than attributing the repair to whoever last pressed the button.
+      const result = await this.billingEngine.reconcile('SYSTEM', { since: null });
+      const booked = result?.booked ?? 0;
+      if (booked > 0) {
+        this.logger.warn(`Billing reconcile booked ${booked} assignment(s) the completion event had missed.`);
+      }
+    });
+
+    /**
      * Trail retention. A no-op unless LOCATION_TRAIL_RETENTION_DAYS is set — see
      * LocationTrailService.purgeOlderThanRetention for why no default is chosen here. Drains in
      * slices so a first run over a long-neglected table does not hold a lock; bounded per tick so
@@ -155,7 +243,7 @@ export class SlaScannerWorker {
       // phase was attempted. AggregateError keeps each underlying cause for the logs.
       throw new AggregateError(
         failures.map((f) => f.error),
-        `SLA scanner: ${failures.length} of 6 phases failed (${failures.map((f) => f.phase).join(', ')}).`,
+        `SLA scanner: ${failures.length} of 9 phases failed (${failures.map((f) => f.phase).join(', ')}).`,
       );
     }
   }

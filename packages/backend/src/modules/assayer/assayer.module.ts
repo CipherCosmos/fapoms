@@ -15,6 +15,8 @@ import { AssayerScoreOverrideEntity } from './assayer-score-override.entity';
 import { QualificationScoreService } from './qualification-score.service';
 import { ClientEntity } from '../client/client.entity';
 import { RosterImportService } from './roster-import.service';
+import { RosterImportWorker } from './roster-import.worker';
+import { ImportModule } from '../import/import.module';
 import { RosterRecordsService } from './roster-records.service';
 import { StorageModule } from '../../infrastructure/storage/storage.module';
 import { HrController } from './hr.controller';
@@ -27,6 +29,10 @@ import { GeoModule } from '../geo/geo.module';
 
 @Module({
   imports: [
+    // The shared import queue — a leaf module, so this cannot introduce a cycle. Roster imports
+    // are queued for the same reason branch imports are: they are long, and the request path
+    // was being kept open for up to fifteen minutes to hold one.
+    ImportModule,
     // HR and ops learn when someone becomes assignable, and when credentials fall due.
     NotificationsModule,
     StorageModule,
@@ -51,7 +57,7 @@ import { GeoModule } from '../geo/geo.module';
     ]),
   ],
   controllers: [AssayerController, HrController],
-  providers: [AssayerService, HrWorkforceService, LocationTrailService, RosterImportService, RosterRecordsService, QualificationScoreService],
+  providers: [AssayerService, HrWorkforceService, LocationTrailService, RosterImportService, RosterImportWorker, RosterRecordsService, QualificationScoreService],
   exports: [AssayerService, HrWorkforceService, LocationTrailService, RosterImportService, RosterRecordsService, QualificationScoreService, TypeOrmModule],
 })
 export class AssayerModule {}

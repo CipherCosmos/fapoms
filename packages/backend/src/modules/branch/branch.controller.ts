@@ -319,28 +319,13 @@ export class BranchController {
   // Excel Import
   // -----------------------------------------------------------------------
 
-  @Post('import/:clientId')
-  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
-  @RequirePermissions('branch:create:organization')
-  @UseInterceptors(FileInterceptor('file', branchUploadMulterOptions), FileScanInterceptor)
-  @ApiConsumes('multipart/form-data')
-  @ApiOperation({ summary: 'Import branches from Excel' })
-  @ApiBody({
-    schema: {
-      type: 'object',
-      properties: { file: { type: 'string', format: 'binary' } },
-    },
-  })
-  async importExcel(
-    @Param('clientId', ParseUUIDPipe) clientId: string,
-    @UploadedFile() file: Express.Multer.File,
-    @Req() req: any,
-  ) {
-    // Same as above: this returned HTTP 201 Created for a request with no file attached.
-    if (!file?.buffer?.length) {
-      throw new BadRequestException('No file was uploaded. Choose a file and try again.');
-    }
-    const result = await this.branchService.importExcel(file.buffer, clientId, req.user.id);
-    return { success: true, data: result };
-  }
+  /**
+   * `POST /branches/import/:clientId` now lives in `project/branch-import.controller.ts`.
+   *
+   * It was served here by `BranchService.importExcel`, a second branch-sheet importer that ran a
+   * geography check, a `findOne` and a geocode per row inside the HTTP request. The queued
+   * importer already existed one module away and did the same work with prefetching, progress and
+   * per-row reasons; `BranchModule` simply could not reach it, because `ProjectModule` imports
+   * this one. Both doors now open onto that single implementation.
+   */
 }

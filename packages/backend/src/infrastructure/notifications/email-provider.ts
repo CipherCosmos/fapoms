@@ -118,7 +118,10 @@ export class EmailProvider implements OnModuleInit {
     // "email disabled", not prevent the application from starting.
     let nodemailer: any;
     try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      // An optional dependency, deliberately resolved at runtime: a missing nodemailer must
+      // disable email, not stop the application from booting. A static import throws at load and
+      // cannot be caught here.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       nodemailer = require('nodemailer');
     } catch {
       this.logger.warn('nodemailer is not installed — email delivery disabled.');

@@ -10,6 +10,13 @@ import { Repository, In, DataSource } from 'typeorm';
 
 import { ProjectEntity } from './project.entity';
 import { ProjectBranchEntity } from './project-branch.entity';
+import type {
+  BranchImportOutcome,
+  BranchUploadReport,
+  BranchImportProgress,
+  BranchImportPreflight,
+  ImportScope,
+} from '../import/import.contract';
 import { AssessmentEntity } from './assessment.entity';
 import { ClientEntity } from '../client/client.entity';
 import { ZoneEntity } from '../zone/zone.entity';
@@ -20,7 +27,7 @@ import { BranchQueryService } from '../branch/branch-query.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { AssignmentStatus, EventCategory, ProjectStatus, ProjectBranchStatus, SystemRole, resolveRegion, zoneNameForState, PROJECT_TRANSITIONS, toWorkflowTransitions } from '@fapoms/shared';
+import { AssignmentStatus, EventCategory, Priority, ProjectStatus, ProjectBranchStatus, SystemRole, resolveRegion, zoneNameForState, PROJECT_TRANSITIONS, toWorkflowTransitions } from '@fapoms/shared';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import * as xlsx from 'xlsx';
 // One implementation of "read a spreadsheet column", shared with the assayer roster upload —
@@ -69,85 +76,19 @@ function getStateZone(stateName: string): string {
 }
 
 /**
- * What a branch upload actually did.
+ * The import vocabulary now lives in `modules/import/import.contract.ts`, because it describes a
+ * spreadsheet import rather than a project — the client-scoped Branches import speaks it too, and
+ * could not while it was declared here (`BranchModule` cannot import `ProjectModule`).
  *
- * The endpoint used to return the project's branch list and nothing else, which cannot express
- * "your header row was wrong and all 400 rows were dropped" — the operator saw a success
- * message and a list that had not changed. The counts and the `skipped` rows are the answer to
- * "did that work?", so they travel with the result.
+ * Re-exported so the existing `from './project.service'` imports keep resolving.
  */
-export interface BranchImportOutcome {
-  /** Data rows found in the first sheet. */
-  totalRows: number;
-  /** Branches created in the branch master. */
-  created: number;
-  /** Existing branches corrected from the sheet. */
-  updated: number;
-  /** Branches newly attached to this project (an already-attached branch is not counted). */
-  linked: number;
-  skipped: { row: number; solId?: string; reason: string }[];
-  /**
-   * Rows that imported but could not be located precisely — they need their coordinates corrected
-   * before planning or check-in will behave. Distinct from `skipped`: these branches exist.
-   */
-  imprecise: { row: number; solId?: string; reason: string }[];
-}
-
-/**
- * The outcome plus the project's resulting branch list.
- *
- * Split from `BranchImportOutcome` because the queued path must NOT carry the entity list: a job
- * return value is serialised into Redis, and 2,000 hydrated `ProjectBranchEntity` rows (each with
- * its branch and assignments) is megabytes of duplicated state that the caller is about to refetch
- * from `GET /projects/:id/branches` anyway. The synchronous path keeps returning it, because the
- * existing endpoint's `data` field is that list and callers depend on it.
- */
-export interface BranchUploadReport extends BranchImportOutcome {
-  branches: ProjectBranchEntity[];
-}
-
-/**
- * Live counters for an import in flight, published onto the Bull job so the poll endpoint can
- * answer "how far has it got?".
- *
- * Counts only, never the `skipped`/`imprecise` detail arrays: progress is written repeatedly
- * during the run, and re-serialising a growing list of failure reasons on every update would make
- * the reporting cost grow with the number of problems in the file — exactly the shape of the
- * whole-file cache rewrite this work is removing elsewhere. The detail arrives once, in the
- * result, when the job finishes.
- */
-export interface BranchImportProgress {
-  processed: number;
-  total: number;
-  created: number;
-  updated: number;
-  linked: number;
-  skipped: number;
-  imprecise: number;
-}
-
-/**
- * What the request can determine about an upload before committing to do it.
- *
- * This exists so the HTTP request can still reject a wrong or empty file *synchronously* — with
- * the same messages it always gave — while handing the slow part to a queue. Without it, an
- * operator who uploaded the assayer roster to the branch importer would get a cheerful 202 and a
- * job id, and only discover the mistake by polling.
- */
-export interface BranchImportPreflight {
-  totalRows: number;
-  /**
-   * Rows with no usable Latitude/Longitude, i.e. the rows that will each cost a geocode.
-   *
-   * The honest predictor of how long an import takes. The free OSM tiers are rate-limited to
-   * about one lookup per second, so 400 unlocated rows is ~7 minutes regardless of how quick the
-   * database work is, whereas 2,000 rows that carry their own coordinates never touch the
-   * network. Row count alone would push the second case onto the queue for no reason and, worse,
-   * would let a 60-row file with no coordinates run synchronously for a minute.
-   */
-  rowsNeedingGeocode: number;
-  sheetName: string;
-}
+export type {
+  BranchImportOutcome,
+  BranchUploadReport,
+  BranchImportProgress,
+  BranchImportPreflight,
+  ImportScope,
+} from '../import/import.contract';
 
 /** Partial edit of a project. Lifecycle moves go through transition(). */
 export type UpdateProjectDto = Partial<CreateProjectDto>;
@@ -776,10 +717,61 @@ export class ProjectService implements OnModuleInit {
    * cheap and must not touch the network: it parses the workbook (milliseconds, even for
    * thousands of rows) and counts the rows that will each cost a rate-limited geocode.
    */
-  async preflightBranchExcel(projectId: string, fileBuffer: Buffer): Promise<BranchImportPreflight> {
-    // Settled in the request, so an upload against a project that does not exist still 404s
-    // immediately rather than being accepted and failing inside a job nobody is watching.
-    const project = await this.findOne(projectId);
+  /**
+   * Turn an import scope into the handful of facts the importer actually reads.
+   *
+   * A branch sheet uploaded on the Branches page and one uploaded on a project differ in exactly
+   * two ways: where the owning client and organisation come from, and whether each row also gets
+   * linked to a project with an assessment. Everything else — parsing, the SOL-ID identity, zone
+   * resolution, geocoding, the skip and imprecision reports — is identical, which is why running
+   * them as two separate importers produced two different answers for the same file.
+   *
+   * Resolving both to this shape lets one implementation serve both, with `projectId === null`
+   * being the only thing the row loop has to branch on.
+   */
+  private async resolveImportTarget(scope: ImportScope): Promise<{
+    projectId: string | null;
+    clientId: string | null;
+    organizationId: string | null;
+    /** Typed as the column's own enum so a project-branch row cannot be created with a free string. */
+    priority: Priority;
+    label: string;
+  }> {
+    if (scope.kind === 'PROJECT') {
+      // Settled in the request, so an upload against a project that does not exist still 404s
+      // immediately rather than being accepted and failing inside a job nobody is watching.
+      const project = await this.findOne(scope.id);
+      return {
+        projectId: project.id,
+        clientId: project.clientId ?? null,
+        organizationId: project.organizationId ?? null,
+        priority: project.priority || Priority.MEDIUM,
+        label: `project ${project.id}`,
+      };
+    }
+
+    const client = await this.clientRepository.findOne({ where: { id: scope.id } });
+    if (!client) {
+      throw new NotFoundException(
+        `Client ${scope.id} was not found, so there is nothing to import these branches into.`,
+      );
+    }
+    return {
+      projectId: null,
+      clientId: client.id,
+      organizationId: client.organizationId ?? null,
+      /**
+       * A client-scoped import has no project to inherit urgency from, so rows land on the
+       * column default. Nothing reads it until the branch is attached to a project, at which
+       * point that project's priority applies.
+       */
+      priority: Priority.MEDIUM,
+      label: `client ${client.id}`,
+    };
+  }
+
+  async preflightBranchExcel(scope: ImportScope, fileBuffer: Buffer): Promise<BranchImportPreflight> {
+    const target = await this.resolveImportTarget(scope);
     const sheet = this.parseBranchSheet(fileBuffer);
 
     /**
@@ -823,7 +815,7 @@ export class ProjectService implements OnModuleInit {
           where: {
             solId: In(sols),
             isActive: true,
-            ...(project.clientId ? { clientId: project.clientId } : {}),
+            ...(target.clientId ? { clientId: target.clientId } : {}),
           },
           select: ['solId', 'address', 'district', 'state'],
         })
@@ -854,16 +846,16 @@ export class ProjectService implements OnModuleInit {
    *   got. Absent on the synchronous path, where nothing can observe it mid-flight.
    */
   async uploadBranchesFromExcel(
-    projectId: string,
+    scope: ImportScope,
     fileBuffer: Buffer,
     userId: string,
     onProgress?: (progress: BranchImportProgress) => void,
   ): Promise<BranchUploadReport> {
-    const project = await this.findOne(projectId);
+    const target = await this.resolveImportTarget(scope);
 
     // Read client planning preferences for hours-per-packet rate
-    const client = project.clientId
-      ? await this.clientRepository.findOne({ where: { id: project.clientId } })
+    const client = target.clientId
+      ? await this.clientRepository.findOne({ where: { id: target.clientId } })
       : null;
     const planningPrefs = client?.planningPreferences || {};
     const minutesPerPacket = Number(planningPrefs.minutesPerPacket) || 15; // default 15min per packet
@@ -883,6 +875,8 @@ export class ProjectService implements OnModuleInit {
     const skipped: { row: number; solId?: string; reason: string }[] = [];
     let createdCount = 0;
     let updatedCount = 0;
+    /** Matched an existing branch and needed no change. See `BranchImportOutcome.unchanged`. */
+    let unchangedCount = 0;
     /**
      * Which row first used each SOL ID, so a repeat inside one file can be named.
      *
@@ -893,6 +887,12 @@ export class ProjectService implements OnModuleInit {
      * pre-existing branch rather than "two of your rows collided".
      */
     const firstRowForSol = new Map<string, number>();
+    /**
+     * Archived branches this file brought back. Reported alongside `imprecise` rather than being
+     * silent: a branch reappearing in the estate is a change the operator should see attributed to
+     * their upload.
+     */
+    const revived: { row: number; solId?: string; reason: string }[] = [];
     /**
      * Rows that imported but landed on a fallback coordinate — a warning list, not a skip list.
      * Kept separate from `skipped` because these branches DID import; they simply cannot be
@@ -1079,27 +1079,45 @@ export class ProjectService implements OnModuleInit {
      * clothes.
      */
     const sols = prepared.map((p) => p.solId).filter(Boolean);
-    const clientScope = project.clientId ? { clientId: project.clientId } : {};
-    // Existing branches this file might already know, found by SOL id — the branch's single
-    // identity, per client. One query over the whole file, not one per row.
+    const clientScope = target.clientId ? { clientId: target.clientId } : {};
+    /**
+     * Existing branches this file might already know, found by SOL id — the branch's single
+     * identity, per client. One query over the whole file, not one per row.
+     *
+     * **No `isActive` filter.** It had one, and that is how a re-import produced duplicates:
+     * archive a branch, re-upload the client's list, and the archived row was invisible here, so
+     * the importer created a *second* branch with the same client and SOL ID beside it. The
+     * database permits it — `UQ_branches_client_sol_id` is `WHERE is_active = true` — and the
+     * operator ends up with two branches they cannot tell apart, one holding all the history.
+     *
+     * Matching archived rows and reviving them is also what the assayer roster importer already
+     * does, and for the same stated reason: re-importing a list is meant to update the record it
+     * names, not to create a twin because the original was deactivated.
+     */
     const existingBySol = sols.length
       ? await this.branchRepository.find({
-          where: { solId: In(sols), isActive: true, ...clientScope },
+          where: { solId: In(sols), ...clientScope },
         })
       : [];
     const branchBySol = new Map(existingBySol.map((b) => [b.solId, b]));
 
     // Which branches this project already carries, and which already have an assessment. Both
     // were per-row `findOne`s whose answer is a single query over one project.
-    const existingProjectBranches = await this.projectBranchRepository.find({
-      where: { projectId: project.id, isActive: true },
-    });
+    // Empty for a client-scoped import: there is no project, so no row can already be linked to
+    // one. Skipping the query rather than running it with a null id keeps that explicit.
+    const existingProjectBranches = target.projectId
+      ? await this.projectBranchRepository.find({
+          where: { projectId: target.projectId, isActive: true },
+        })
+      : [];
     const projectBranchByBranchId = new Map(existingProjectBranches.map((pb) => [pb.branchId, pb]));
 
-    const existingAssessments = await this.assessmentRepository.find({
-      where: { projectId: project.id, isActive: true },
-      select: ['id', 'branchId'],
-    });
+    const existingAssessments = target.projectId
+      ? await this.assessmentRepository.find({
+          where: { projectId: target.projectId, isActive: true },
+          select: ['id', 'branchId'],
+        })
+      : [];
     const branchIdsWithAssessment = new Set(existingAssessments.map((a) => a.branchId));
 
     /**
@@ -1115,8 +1133,15 @@ export class ProjectService implements OnModuleInit {
     const resolveZoneForState = async (state: string): Promise<ZoneEntity | null> => {
       const key = state.toUpperCase();
       if (zoneByState.has(key)) return zoneByState.get(key) ?? null;
-      const zoneName = await this.resolveZoneName(state, project.clientId);
-      const zone = await this.branchService.findOrCreateZone(zoneName, project.clientId, [key]);
+      const zoneName = await this.resolveZoneName(state, target.clientId ?? undefined);
+      /**
+       * A zone belongs to a client, so a project with no client has no zone to put a branch in.
+       * Previously this passed a `string`-typed field that is nullable in the database, so the
+       * lookup ran with `clientId: null` and quietly created a client-less zone.
+       */
+      const zone = target.clientId
+        ? await this.branchService.findOrCreateZone(zoneName, target.clientId, [key])
+        : null;
       zoneByState.set(key, zone ?? null);
       return zone ?? null;
     };
@@ -1136,6 +1161,7 @@ export class ProjectService implements OnModuleInit {
         total: prepared.length,
         created: createdCount,
         updated: updatedCount,
+        unchanged: unchangedCount,
         linked: addedBranches.length,
         skipped: skipped.length,
         imprecise: imprecise.length,
@@ -1147,7 +1173,7 @@ export class ProjectService implements OnModuleInit {
      * once, here, because it is a property of the project and not of any row — and normalised so
      * an enum value and a stray lowercase string from an older record land on the same answer.
      */
-    const derivedRiskCategory = String(project.priority || 'MEDIUM').toUpperCase();
+    const derivedRiskCategory = target.priority.toUpperCase();
 
     // ---- Pass 2: the writes, and the geocoding that makes this slow ------------------------
     for (let position = 0; position < prepared.length; position++) {
@@ -1234,8 +1260,8 @@ export class ProjectService implements OnModuleInit {
             geoAccuracyMeters: coords.geoAccuracyMeters,
             geoMatchedName: coords.geoMatchedName,
             geoResolvedAt: new Date(),
-            organizationId: project.organizationId,
-            clientId: project.clientId,
+            organizationId: target.organizationId ?? undefined,
+            clientId: target.clientId ?? undefined,
             zoneId: zone ? zone.id : null,
             region,
             territory: `${district} Area`,
@@ -1281,6 +1307,24 @@ export class ProjectService implements OnModuleInit {
            * cannot blank out data it simply did not mention.
            */
           const patch: UpdateBranchDto = {};
+          /**
+           * A branch this client's own list still names is not archived — bring it back.
+           *
+           * The prefetch above now matches archived rows precisely so this can happen. Left out,
+           * the alternative was a second branch with the same SOL ID beside the archived one, which
+           * no later import can tell apart. Reported as an imported row like any other, and named
+           * in `revived` so the operator can see that their file resurrected something rather than
+           * discovering it as an unexplained reappearance.
+           */
+          const wasArchived = branch.isActive === false;
+          if (wasArchived) {
+            branch = await this.branchService.restoreArchived(branch.id, userId);
+            revived.push({
+              row: rowNumber,
+              solId,
+              reason: `"${branch.name}" was archived and has been restored, because this file still lists it.`,
+            });
+          }
           if (branchName && branchName !== branch.name) patch.name = branchName;
           if (address && address !== branch.address) patch.address = address;
           if (state && state !== branch.state) patch.state = state;
@@ -1318,8 +1362,20 @@ export class ProjectService implements OnModuleInit {
           if (Object.keys(patch).length > 0) {
             branch = await this.branchService.update(branch.id, patch, userId);
             updatedCount++;
+          } else {
+            unchangedCount++;
           }
         }
+
+        /**
+         * Linking is the project-only half of an import.
+         *
+         * A client-scoped import loads the branch master and stops: there is no project to attach
+         * to, no assessment to open, and `linked` stays 0. Everything above this point — the
+         * SOL-ID identity, the geocode, the zone, the region — ran identically for both, which is
+         * the whole reason the two importers could be collapsed into one.
+         */
+        if (!target.projectId) continue;
 
         // Served from the maps loaded before the loop rather than a query per row. A branch this
         // import just created cannot be in either map, which is the correct answer for it.
@@ -1327,7 +1383,7 @@ export class ProjectService implements OnModuleInit {
 
         if (!pb) {
           const created = this.projectBranchRepository.create({
-            projectId: project.id,
+            projectId: target.projectId,
             branchId: branch.id,
             zoneId: branch.zoneId,
             status: ProjectBranchStatus.IMPORTED,
@@ -1336,7 +1392,7 @@ export class ProjectService implements OnModuleInit {
             // everything). Assignments take theirs from this row (assignment.service), so
             // project → branch → assignment is now one line of truth instead of a HIGH project
             // dispatching MEDIUM work.
-            priority: project.priority,
+            priority: target.priority,
             createdBy: userId,
             updatedBy: userId,
           });
@@ -1349,7 +1405,7 @@ export class ProjectService implements OnModuleInit {
 
           if (!branchIdsWithAssessment.has(branch.id)) {
             const asmt = this.assessmentRepository.create({
-              projectId: project.id,
+              projectId: target.projectId,
               branchId: branch.id,
               createdBy: userId,
               updatedBy: userId,
@@ -1387,16 +1443,20 @@ export class ProjectService implements OnModuleInit {
      * "afterwards". Fire-and-forget: a Redis hiccup must not fail an import that has already
      * landed, and the nightly sweep selects by precision, so nothing is lost if the enqueue is.
      */
-    void this.geoPrecision.enqueueBackfill('branch', impreciseBranchIds, `import into project ${project.id}`);
+    void this.geoPrecision.enqueueBackfill('branch', impreciseBranchIds, `import into ${target.label}`);
 
     return {
-      branches: await this.findProjectBranches(project.id),
+      // The project's resulting branch list, for the endpoint whose `data` field is that list.
+      // A client-scoped import has none; its caller reads the branch master back on its own.
+      branches: target.projectId ? await this.findProjectBranches(target.projectId) : [],
       totalRows: rows.length,
       created: createdCount,
       updated: updatedCount,
+      unchanged: unchangedCount,
       linked: addedBranches.length,
       skipped,
       imprecise,
+      revived,
     };
   }
 
@@ -1407,13 +1467,13 @@ export class ProjectService implements OnModuleInit {
    * into a job's return value.
    */
   async runBranchImport(
-    projectId: string,
+    scope: ImportScope,
     fileBuffer: Buffer,
     userId: string,
     onProgress?: (progress: BranchImportProgress) => void,
   ): Promise<BranchImportOutcome> {
     const { branches: _branches, ...outcome } = await this.uploadBranchesFromExcel(
-      projectId, fileBuffer, userId, onProgress,
+      scope, fileBuffer, userId, onProgress,
     );
     return outcome;
   }

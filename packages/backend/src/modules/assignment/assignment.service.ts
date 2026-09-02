@@ -79,6 +79,13 @@ export interface CreateAssignmentDto {
   projectBranchId: string;
   assayerId: string;
   proposedFee?: number;
+  /**
+   * Dispatch with no price at all, as "Send to app (no fee)" promises.
+   *
+   * Distinct from omitting `proposedFee`, which means "quote it from the rate card". Without
+   * this the two intentions were indistinguishable and the no-fee button silently sent a fee.
+   */
+  noFee?: boolean;
   scheduledDate?: string;
   remarks?: string;
   autoSchedule?: boolean;
@@ -365,7 +372,9 @@ export class AssignmentService {
     const scheduledDateObj = new Date(targetDateStr);
 
     // Dynamic Proposed Fee Calculation based on Assayer Base Fee + Calculated Travel Distance Allowance
-    let resolvedProposedFee = dto.proposedFee;
+    // `null` is a real, distinct outcome here — see the `dto.noFee` branch below — so the
+    // variable has to be able to hold it rather than only a number or 'not decided yet'.
+    let resolvedProposedFee: number | null | undefined = dto.proposedFee;
     let calculatedTravelFee = 0;
     let distanceKm = 0;
     /**
@@ -466,7 +475,22 @@ export class AssignmentService {
     const baseFee = quote.baseFee;
     calculatedTravelFee = quote.travelFee;
 
-    if (resolvedProposedFee === undefined || resolvedProposedFee === null) {
+    if (dto.noFee) {
+      /**
+       * Dispatched without a price, because that is what the desk asked for.
+       *
+       * "Send to app (no fee)" sends no `proposedFee`, and an absent fee used to mean "quote it
+       * for me" — so the button, its tooltip and its confirmation dialog all promised "No fee is
+       * agreed or recorded" while the server quietly attached base + travel. The assayer then saw
+       * a fee nobody had agreed, and the desk had no idea one had been sent.
+       *
+       * Absent and "none" are different intentions and now say so separately: omit the field to
+       * be quoted, pass `noFee` to mean there is no price yet. Billing already understands an
+       * assignment with no fee — AssignmentMoneyCard says "Completed with no fee on the
+       * assignment — nothing to book" — so this is a state the system supports, not a hole.
+       */
+      resolvedProposedFee = null;
+    } else if (resolvedProposedFee === undefined || resolvedProposedFee === null) {
       resolvedProposedFee = quote.total;
     } else {
       // A client-supplied fee is an operator override, not a free-form number. The Day Plan
@@ -542,7 +566,7 @@ export class AssignmentService {
       assignment = existingAssignment;
       assignment.assayerId = dto.assayerId;
       assignment.status = AssignmentStatus.PENDING;
-      assignment.proposedFee = resolvedProposedFee;
+      assignment.proposedFee = resolvedProposedFee ?? null;
       assignment.agreedFee = null;
       assignment.scheduledDate = scheduledDateObj;
       assignment.cancelReason = null;
@@ -560,6 +584,14 @@ export class AssignmentService {
       assignment.checkInAccuracyMeters = null;
       assignment.checkInDistanceMeters = null;
       assignment.checkedInAt = null;
+      // The departure half of the same evidence. Left behind, a reused record would claim this
+      // assayer left a branch they have not yet been to — and the on-site window would be
+      // measured from a check-in that no longer exists.
+      assignment.checkOutLatitude = null;
+      assignment.checkOutLongitude = null;
+      assignment.checkOutAccuracyMeters = null;
+      assignment.checkOutDistanceMeters = null;
+      assignment.checkedOutAt = null;
       assignment.negotiationCount = 0;
       // The previous assayer's countered travel must die with their offer: assignmentMoney
       // prefers counterTravelFee over the frozen quote, so a stale one re-carves the NEW
@@ -1297,6 +1329,19 @@ export class AssignmentService {
     return saved;
   }
 
+  /**
+   * The assayer has started the audit, not merely arrived at the branch.
+   *
+   * Routed through the same transition pipeline as every other status so it gets the audit event,
+   * the realtime emit and the optimistic-lock check — the thing that made `IN_PROGRESS` a dead
+   * value was that no path wrote it at all, and a bespoke save here would have re-created that
+   * inconsistency in a quieter form.
+   */
+  async startWork(id: string, userId: string, reason?: string): Promise<AssignmentEntity> {
+    const { saved } = await this.executeAssignmentTransition(id, AssignmentStatus.IN_PROGRESS, userId, reason);
+    return saved;
+  }
+
   async cancelAssignment(id: string, userId: string, reason?: string): Promise<AssignmentEntity> {
     const { saved } = await this.executeAssignmentTransition(id, AssignmentStatus.CANCELLED, userId, reason);
     return saved;
@@ -1561,23 +1606,55 @@ export class AssignmentService {
     }
 
     const scheduleRepo = this.dataSource.getRepository(ScheduleEntity);
-    const existing = await scheduleRepo
-      .findOne({ where: { assignmentId: assignment.id, isActive: true } })
-      .catch(() => null);
-    if (existing) return;
 
-    const saved = await scheduleRepo.save(
-      scheduleRepo.create({
-        assignmentId: assignment.id,
-        projectId: assignment.projectId ?? null,
-        assayerId: assignment.assayerId,
-        scheduledDate: scheduledDateObj,
-        status: ScheduleStatus.CONFIRMED,
-        remarks: 'Auto-created upon offer acceptance (Direct Calendar Lock)',
-        createdBy: userId,
-        updatedBy: userId,
-      } as any),
-    );
+    /**
+     * One calendar entry per assignment, revived rather than duplicated.
+     *
+     * `schedules.assignment_id` carries a UNIQUE constraint (the one-to-one
+     * REL_1b1bb2cd81f25ee4761f4b1e0e), and this lookup used to filter on `isActive: true`. The
+     * constraint does not care about `is_active`, so the two disagreed the moment a schedule was
+     * retired: cancelling an accepted assignment sets `is_active = false` and KEEPS the row (see
+     * `retireSchedule`), the guard then found nothing, and the insert below hit the unique index.
+     *
+     * The visible failure was a 500 on the second acceptance of the same assignment — assign,
+     * accept, cancel, re-offer, accept — with the assignment left PENDING and unacceptable from
+     * either the desk or the phone. It looked like a negotiation bug because re-offering usually
+     * follows a re-negotiation, but negotiation is not involved: any accept → cancel → accept
+     * does it.
+     *
+     * Matching the constraint exactly (assignment id alone) is what keeps the two in step. A
+     * retired row is brought back rather than replaced, because the row IS the assignment's
+     * calendar identity — and its assayer and date are re-read from the assignment, since a
+     * re-offer may have moved either.
+     */
+    const existing = await scheduleRepo
+      .findOne({ where: { assignmentId: assignment.id } })
+      .catch(() => null);
+
+    if (existing && existing.isActive && existing.status === ScheduleStatus.CONFIRMED) return;
+
+    const saved = existing
+      ? await scheduleRepo.save(Object.assign(existing, {
+          projectId: assignment.projectId ?? null,
+          assayerId: assignment.assayerId,
+          scheduledDate: scheduledDateObj,
+          status: ScheduleStatus.CONFIRMED,
+          isActive: true,
+          remarks: 'Re-confirmed on a later acceptance of the same assignment',
+          updatedBy: userId,
+        }))
+      : await scheduleRepo.save(
+          scheduleRepo.create({
+            assignmentId: assignment.id,
+            projectId: assignment.projectId ?? null,
+            assayerId: assignment.assayerId,
+            scheduledDate: scheduledDateObj,
+            status: ScheduleStatus.CONFIRMED,
+            remarks: 'Auto-created upon offer acceptance (Direct Calendar Lock)',
+            createdBy: userId,
+            updatedBy: userId,
+          } as any),
+        );
 
     await this.auditService.recordEventSafe({
       category: EventCategory.OPERATIONAL,
@@ -2347,7 +2424,7 @@ export class AssignmentService {
     // was in fact always a straight line, but the row does not say so and this does not guess.
     let expectedDistanceSource: 'OSRM' | 'ESTIMATE' | null =
       expectedDistanceKm != null ? (assignment.quotedDistanceSource ?? null) : null;
-    let expectedIsRecomputed = expectedDistanceKm == null;
+    const expectedIsRecomputed = expectedDistanceKm == null;
 
     if (expectedDistanceKm == null &&
         branch?.latitude != null && branch?.longitude != null &&

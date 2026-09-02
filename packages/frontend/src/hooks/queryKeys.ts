@@ -65,6 +65,12 @@ export const queryKeys = {
     // `scopeKey` comes from `useScope()`. It must be part of the key: the branch list is
     // paginated server-side, so a scope change is a different query, not a re-slice.
     list: (scopeKey: string, page: number) => ['branches', 'list', scopeKey, page] as const,
+    /**
+     * Every branch there is, paged through until the list is complete — `fetchWholeBranchDirectory`.
+     * Distinct from `list` because it is not a page of a table: it is the whole set a picker must
+     * be able to offer, and one page of it is what made a branch past the 200th unpickable.
+     */
+    directory: ['branches', 'directory'] as const,
   },
   plans: {
     all: ['plans'] as const,

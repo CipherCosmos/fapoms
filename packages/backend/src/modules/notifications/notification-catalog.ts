@@ -621,6 +621,46 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     skipActor: true,
   },
 
+  /**
+   * A payout that nobody has approved.
+   *
+   * Booking a payable was automatic; every step after it was a person clicking, and nothing ever
+   * said the person had not clicked. A payable could sit in PENDING ("Due") indefinitely — the
+   * assayer had done the work, the money was calculated and waiting, and the only surface was a
+   * figure on a finance page somebody had to think to open. The assayer's own screen showed it as
+   * owed, so the silence looked like a decision.
+   *
+   * Raised once per payable per day by the SLA scanner, not per tick, or a 15-minute job would
+   * turn a slow week into 672 notifications.
+   */
+  PAYABLE_AWAITING_APPROVAL: {
+    category: NotificationCategory.BILLING,
+    priority: NotificationPriority.NORMAL,
+    roles: [...OPS, ...ADMINS],
+    channels: BOTH_CHANNELS,
+    title: 'Payouts waiting for approval',
+    body: '${count} payout(s) worth ₹${amount} have been waiting ${days}+ day(s) for approval.',
+    link: '/billing?tab=payouts',
+  },
+
+  /**
+   * Work that was attended but never closed, so no payout was ever booked.
+   *
+   * Completion is the only thing that creates a payable, and nothing completes an assignment on
+   * its own — it needs ops to click Complete, a return PDF to land, or a schedule to be marked
+   * done. An audit genuinely performed whose paperwork nobody filed is therefore invisible to
+   * billing forever: the assayer is simply never paid, and no alarm exists. This is that alarm.
+   */
+  ASSIGNMENT_ATTENDED_NOT_CLOSED: {
+    category: NotificationCategory.ASSIGNMENT,
+    priority: NotificationPriority.HIGH,
+    roles: [...OPS, ...ADMINS],
+    channels: BOTH_CHANNELS,
+    title: 'Attended audits not closed',
+    body: '${count} audit(s) were attended but never completed, so nothing has been booked for payment. Oldest: ${oldest}.',
+    link: '/assignments',
+  },
+
   // ── Calls ───────────────────────────────────────────────────────────────
   /** An unanswered clarification call left no trace anywhere the callee would look. */
   CALL_MISSED: {

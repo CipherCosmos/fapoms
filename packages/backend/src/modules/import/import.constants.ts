@@ -29,3 +29,13 @@ export const IMPORT_QUEUE = 'import-jobs';
  * whole routing mechanism, and getting it wrong fails silently in the way described above.
  */
 export const BRANCH_IMPORT_JOB = 'branch-import';
+
+/**
+ * Job name for an appraiser-roster spreadsheet import.
+ *
+ * On the same queue as the branch import, deliberately: both are long, both are rate-limited by
+ * the same geocoding providers, and both must not run two at a time in one process. A second queue
+ * would give each its own concurrency budget and reintroduce exactly the double-rate problem
+ * `concurrency: 1` exists to prevent.
+ */
+export const ROSTER_IMPORT_JOB = 'roster-import';
