@@ -351,6 +351,50 @@ describe('ProjectService', () => {
      * — no project-branch row and no assessment — and nothing else.
      */
     /**
+     * The same silent-loss class the roster importer had, on a file of 3,759 branches.
+     *
+     * A heading the importer does not recognise is dropped without a word and the run still
+     * reports success — the roster proved the cost when a sheet headed `Aadhaar Number` (it reads
+     * `Aadhar Card Number`) imported every row, said "created 6, skipped 0", and discarded every
+     * Aadhaar. Recorded from the real `get(...)` call sites, so the check cannot drift from the
+     * aliases actually in use.
+     */
+    describe('a column heading the importer does not know', () => {
+      it('names the column and how many rows carried data', async () => {
+        const report = await service.uploadBranchesFromExcel(
+          { kind: 'PROJECT', id: 'p-1' },
+          sheetBuffer([templateRow({ 'Manager Mobile': '9876543210' })]),
+          'user-1',
+        );
+
+        const note = (report.notes ?? []).find((n) => n.includes('Manager Mobile'));
+        expect(note).toBeDefined();
+        expect(note).toMatch(/not recognised/);
+        expect(note).toMatch(/1 row\(s\)/);
+        // The branch still imports — a stray column must not cost the row.
+        expect(report.created).toBe(1);
+      });
+
+      it('says nothing about the columns it does read', async () => {
+        const report = await service.uploadBranchesFromExcel(
+          { kind: 'PROJECT', id: 'p-1' }, sheetBuffer([templateRow()]), 'user-1',
+        );
+
+        expect((report.notes ?? []).some((n) => n.includes('not recognised'))).toBe(false);
+      });
+
+      it('says nothing about an unrecognised column that is entirely blank', async () => {
+        const report = await service.uploadBranchesFromExcel(
+          { kind: 'PROJECT', id: 'p-1' },
+          sheetBuffer([templateRow({ 'Spare Column': '' })]),
+          'user-1',
+        );
+
+        expect((report.notes ?? []).some((n) => n.includes('Spare Column'))).toBe(false);
+      });
+    });
+
+    /**
      * The duplicate a re-import used to create.
      *
      * The prefetch filtered `isActive: true`, so an archived branch was invisible and the importer

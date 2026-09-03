@@ -1,4 +1,5 @@
 import { Entity, Column, ManyToOne, JoinColumn, Index, Unique } from 'typeorm';
+import { encryptedColumn } from '../../infrastructure/security/field-encryption';
 import { BaseEntity } from '../../core/entities/base.entity';
 import { OnboardingDocument, DocumentVerification } from '@fapoms/shared';
 import { AssayerEntity } from './assayer.entity';
@@ -57,7 +58,18 @@ export class AssayerDocumentEntity extends BaseEntity {
   // ── Identity documents only ───────────────────────────────────────────
 
   /** The number on the document. Kept beside it, not on the person: a record has one PAN card. */
-  @Column({ name: 'document_number', type: 'text', nullable: true })
+  /**
+   * Encrypted from day one, unlike the three assayer columns that spent months as plaintext.
+   *
+   * This is where a PAN or Aadhaar number lands a SECOND time — typed against the scanned card so
+   * `verifyDocument` has something to attest against — and it was a bare `text` column. Not one
+   * row has ever held a value (11,160 of them arrived with the roster import), which is exactly
+   * the moment to add the transformer: there is nothing to backfill, and the first value ever
+   * written arrives as `enc:v1:` ciphertext. Check the claim as
+   * `WHERE document_number IS NOT NULL`, not by row count — the table grows by a few rows every
+   * time somebody walks the onboarding wizard, so the total drifts while the invariant does not.
+   */
+  @Column({ name: 'document_number', type: 'text', nullable: true, transformer: encryptedColumn })
   documentNumber: string | null;
 
   @Column({ name: 'expiry_date', type: 'date', nullable: true })

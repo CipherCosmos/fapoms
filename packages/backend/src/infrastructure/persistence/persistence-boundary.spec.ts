@@ -89,6 +89,11 @@ const IMPORTS_TYPEORM = [
   // Qualification scoring: compute-on-read over the five vetting tables the roster edits.
   // Reads dominate; the only writes are the override rows (audited via recordActivity).
   'modules/assayer/qualification-score.service.ts',
+  // The standing data-integrity scan. A plain repository service like its roster siblings —
+  // and it MUST read through repositories rather than SQL: the duplicate checks compare
+  // pan/aadhaar/bank values that the `encryptedColumn` transformer stores under a random IV,
+  // so only the decrypting repository read can see two records agree once the key is set.
+  'modules/assayer/data-integrity.service.ts',
   'modules/assignment/assignment.service.ts',
   // Read-only cross-aggregate queue aggregator (Operations Inbox); queries only, no writes.
   'modules/assignment/operations-inbox.service.ts',

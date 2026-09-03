@@ -3,6 +3,7 @@ import { View, Image, PanResponder, Animated, LayoutChangeEvent } from 'react-na
 import { AppText, Icon, Tappable } from './primitives';
 import { useTheme } from '../../theme/ThemeProvider';
 import { getApiBaseUrl, MobileApiService } from '../../services/api.service';
+import { useT } from '../../i18n';
 
 /**
  * A keyless "drop a pin" map, built from raster tiles, `<Image>` and `PanResponder`.
@@ -139,6 +140,7 @@ export const MapPicker: React.FC<MapPickerProps> = ({
   height = 210,
 }) => {
   const t = useTheme();
+  const tr = useT();
 
   const [width, setWidth] = useState(0);
   const [zoom, setZoom] = useState(() => Math.min(Math.max(initialZoom, MIN_ZOOM), MAX_ZOOM));
@@ -339,8 +341,8 @@ export const MapPicker: React.FC<MapPickerProps> = ({
 
       {editable && (
         <View style={{ position: 'absolute', right: t.space.sm, top: t.space.sm, gap: t.space.xs }}>
-          <ZoomButton icon="add" label="Zoom in" onPress={() => step(1)} disabled={zoom >= MAX_ZOOM} />
-          <ZoomButton icon="remove" label="Zoom out" onPress={() => step(-1)} disabled={zoom <= MIN_ZOOM} />
+          <ZoomButton icon="add" label={tr('shell.zoomIn')} onPress={() => step(1)} disabled={zoom >= MAX_ZOOM} />
+          <ZoomButton icon="remove" label={tr('shell.zoomOut')} onPress={() => step(-1)} disabled={zoom <= MIN_ZOOM} />
         </View>
       )}
 
@@ -353,8 +355,13 @@ export const MapPicker: React.FC<MapPickerProps> = ({
           backgroundColor: t.colors.scrim,
         }}
       >
-        <AppText variant="caption" style={{ color: t.colors.text, fontSize: 9, lineHeight: 12 }}>
-          © OpenStreetMap contributors
+        {/*
+          The `caption` token with no size override. This was 9pt — small enough that the credit
+          was technically present and practically invisible, which is not what the tile policy
+          asks for, and this map is on the address screen an assayer uses to place their own home.
+        */}
+        <AppText variant="caption" style={{ color: t.colors.text }}>
+          {tr('shell.mapAttribution')}
         </AppText>
       </View>
     </View>

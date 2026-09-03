@@ -80,6 +80,74 @@ describe('security controls are still wired', () => {
         + 'nothing else would surface it.',
     },
     {
+      id: 'forced-rotation-403-names-itself',
+      file: `${B}/modules/auth/guards.ts`,
+      marker: 'AUTH_ERROR_CODES.PASSWORD_CHANGE_REQUIRED',
+      why: 'The discriminator that lets a client tell "change your password first" apart from a '
+        + 'dead session or a permissions failure. The mobile app switches on it to raise the '
+        + 'change-password gate mid-session; without it the 403 is indistinguishable from any '
+        + 'other, the gate never rises, and an assayer whose password HR just reset sees an empty '
+        + 'schedule and an empty notification list with no route to the screen that fixes it. '
+        + 'Nothing errors, and the refusal itself still works — which is why removing the field '
+        + 'would look harmless.',
+    },
+    {
+      id: 'onboarding-sessions-are-deny-by-default',
+      file: `${B}/modules/auth/guards.ts`,
+      marker: 'AUTH_ERROR_CODES.REGISTRATION_IN_PROGRESS',
+      why: 'The four onboarding stages can sign in so an assayer can finish registering from a '
+        + 'phone. They have not been vetted — background verification is one of those stages — '
+        + 'and the ASSAYER role alone reaches nine controllers including assignments, documents, '
+        + 'expenses and billing. This refusal is what confines such a session to the routes '
+        + 'marked @OnboardingAllowed(). Remove it and every one of those controllers opens to '
+        + 'people mid-onboarding, with nothing failing and no error anywhere: they simply start '
+        + 'getting answers they should not.',
+    },
+    {
+      id: 'every-error-response-names-itself',
+      file: `${B}/infrastructure/http/global-exception.filter.ts`,
+      marker: 'codeForResponse',
+      why: 'The one place a machine-readable `code` is guaranteed onto every error body. The '
+        + 'mobile app is translated and the API is not, so without a code the phone falls back to '
+        + 'matching English sentences — which is what it did for thirty-five messages, and which '
+        + 'breaks silently the day anybody rewords one. Delete this call and every response still '
+        + 'looks correct in a browser: the status and the message are unchanged, nothing errors, '
+        + 'and the only symptom is that an assayer who does not read English starts seeing '
+        + 'English again.',
+    },
+    {
+      id: 'temporary-passwords-actually-expire',
+      file: `${B}/modules/auth/auth.service.ts`,
+      marker: 'tempPasswordExpiresAt',
+      why: 'The expiry HR is told about when it issues app access. Without this check the date is '
+        + 'display-only — which is what it was at first: a credential an administrator chose, '
+        + 'spoke aloud and possibly wrote on paper worked for ever, while the response said '
+        + 'otherwise in the same breath as issuing it. Removing it breaks nothing, errors '
+        + 'nowhere, and every existing sign-in keeps working; the only visible change is that a '
+        + 'password nobody has claimed in six months still opens the app.',
+    },
+    {
+      id: 'seeded-accounts-must-rotate-their-password',
+      file: `${B}/infrastructure/database/seed.ts`,
+      marker: 'mustChangePassword: true',
+      why: 'The forced-rotation guard reads this flag, and the seed is what sets it on the '
+        + 'accounts that ship with a password somebody else chose. It was missing once, and the '
+        + 'effect was a guard that was fully implemented, fully tested and protecting nobody: '
+        + 'every seeded account kept its known credential for ever, and the tests still passed '
+        + 'because they set the flag themselves.',
+    },
+    {
+      id: 'assayer-document-number-encrypted',
+      file: `${B}/modules/assayer/assayer-document.entity.ts`,
+      marker: 'transformer: encryptedColumn',
+      why: 'The number on a document row — the PAN, the Aadhaar, the passbook account — is as '
+        + 'sensitive as the same number on the person, and it is a separate table with a separate '
+        + 'entity, so the transformer on `assayers` does not reach it. It was added before the '
+        + 'registration flow started writing these; all 11,160 rows were empty until then, which '
+        + 'is exactly why losing it would go unnoticed — nothing breaks, reads keep working, and '
+        + 'the plaintext only accumulates as new people are registered.',
+    },
+    {
       id: 'assayer-field-redaction-interceptor',
       file: `${B}/infrastructure/http/assayer-redaction.interceptor.ts`,
       marker: 'redactAssayersDeep',
@@ -158,7 +226,9 @@ describe('security controls are still wired', () => {
     {
       id: 'verify-assayer-is-throttled',
       file: `${B}/modules/auth/auth.controller.ts`,
-      marker: 'cheaper to hammer than login',
+      // A code anchor, not the sentence above it: the route decorator and its throttle
+      // together, so moving the throttle off THIS route trips the wire.
+      marker: "@Throttle({ default: { limit: 20, ttl: 60_000 } })\n  @Post('verify-assayer')",
       why: 'verify-assayer needs no credentials to call at all, so it is a cheaper enumeration '
         + 'oracle than login itself — an unthrottled version lets an attacker harvest live '
         + 'assayer identifiers for free before ever spending a bcrypt compare.',
@@ -188,7 +258,7 @@ describe('security controls are still wired', () => {
     {
       id: 'report-sync-exports-throttled',
       file: `${B}/modules/reports/reports.controller.ts`,
-      marker: 'Synchronous xlsx.write blocks the event loop with no yield',
+      marker: '@Throttle({ default: { limit: 10, ttl: 60_000 } })',
       why: 'The five synchronous GET export routes (coverage, assignments, billing, command-center, '
         + 'assayer-roster) call xlsx.write with no yield point — an unthrottled CPU-bound DoS surface. '
         + 'Their queued POST twins are already throttled; these must carry the same @Throttle.',
@@ -239,8 +309,10 @@ describe('security controls are still wired', () => {
       why: '`mustChangePassword` used to be returned to the client and acted on only by the web '
         + 'UI, so a curl script or a stale tab could use a seeded/admin-set password normally. '
         + 'JwtAuthGuard now refuses every route except change-password, read-own-profile and '
-        + 'logout until the flag clears. Scoped to principals carrying the flag — the assayer '
-        + 'mobile principal never does, so the field app is unaffected.',
+        + 'logout until the flag clears. Both principal kinds are held to it: staff always '
+        + 'carried the flag, and `validateJwtPayload` now sets it on the assayer principal too — '
+        + 'the field workforce is the group it matters most for, since the bulk import seeded one '
+        + 'shared default password and every HR-issued temporary one sets the flag.',
     },
     {
       id: 'login-timing-oracle-equalised',
@@ -306,7 +378,7 @@ describe('security controls are still wired', () => {
     {
       id: 'osrm-does-not-silently-default-to-public-demo-server',
       file: `${B}/modules/geo/routing.provider.ts`,
-      marker: 'SECURITY: OSRM_URL unset -> never silently call the public OSRM demo server',
+      marker: 'if (!this.configured) return fallback();',
       why: 'Every route request sends an assayer\'s home/live coordinates and a branch\'s '
         + 'coordinates to whatever OSRM_URL points at. This provider used to default an unset '
         + 'OSRM_URL to https://router.project-osrm.org — the OSRM project\'s public demo server '
@@ -395,6 +467,38 @@ describe('security controls are still wired', () => {
     const missing = CONTROLS.filter((c) => !existsSync(join(REPO, c.file)))
       .map((c) => `${c.id} → ${c.file}`);
     expect(missing).toEqual([]);
+  });
+
+  /**
+   * A marker has to be CODE, not a sentence describing the code.
+   *
+   * Three entries here were anchored to a comment: "cheaper to hammer than login", "Synchronous
+   * xlsx.write blocks the event loop with no yield", and the OSRM `SECURITY:` note. Every one of
+   * those controls is genuinely present, so nothing was broken — but each tripwire would have gone
+   * on passing after the control was deleted, as long as the prose above it survived. That is the
+   * 7c9ee664 incident this whole file exists for, reproduced inside the safeguard itself: a green
+   * check that means nothing.
+   *
+   * The same mistake appeared twice more in other source-scanning specs the same day, which is why
+   * it is asserted rather than left to whoever writes the next entry.
+   */
+  it('anchors every control to code, never to a comment describing it', () => {
+    const codeOnly = (source: string) => source.split('\n')
+      .filter((l) => {
+        const t = l.trim();
+        return !t.startsWith('*') && !t.startsWith('//') && !t.startsWith('/*');
+      })
+      .join('\n');
+
+    const prose = CONTROLS
+      .filter((c) => existsSync(join(REPO, c.file)))
+      .filter((c) => {
+        const source = readFileSync(join(REPO, c.file), 'utf8');
+        return source.includes(c.marker) && !codeOnly(source).includes(c.marker);
+      })
+      .map((c) => `${c.id} → marker appears only in comments`);
+
+    expect(prose).toEqual([]);
   });
 
   it.each(CONTROLS.map((c) => [c.id, c] as const))('%s', (_id, control) => {

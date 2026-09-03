@@ -2,7 +2,7 @@ import { Controller, Get, HttpCode, HttpStatus, Param, ParseUUIDPipe, Post, Quer
 import { Response } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { BILLING_READ_ROLES } from '../billing-engine/billing-roles';
 import { SystemRole, BillingState } from '@fapoms/shared';
@@ -72,6 +72,7 @@ export class ReportsController {
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Get('billing')
   @Roles(...BILLING_READ_ROLES)
+  @RequirePermissions('billing:view:organization')
   @ApiOperation({ summary: 'Export billing entries and invoices to Excel' })
   async billing(
     @Query('clientId') clientId?: string,
@@ -159,7 +160,10 @@ export class ReportsController {
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Post('billing/jobs')
   @HttpCode(HttpStatus.ACCEPTED)
+  // A POST that reads: it only enqueues the export its GET twin performs, and produces the same
+  // workbook. Requiring `billing:create` would let a role that may not see the book order it.
   @Roles(...BILLING_READ_ROLES)
+  @RequirePermissions('billing:view:organization')
   @ApiOperation({ summary: 'Queue the billing export; returns a job id to poll' })
   async queueBilling(
     @Req() req: any,

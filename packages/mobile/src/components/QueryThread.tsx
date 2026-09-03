@@ -4,6 +4,7 @@ import { MobileApiService } from '../services/api.service';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Badge, Button, Card, Icon, IconButton, Tappable } from './ui/primitives';
 import { useFeedback } from './ui/Feedback';
+import { useT, t as translate, serverErrorText } from '../i18n';
 import type { QueryMessage, ValidationQuery } from '../types/mobile-app';
 
 interface QueryThreadProps {
@@ -36,8 +37,8 @@ const dayOf = (iso: string) => {
   const today = new Date();
   const yesterday = new Date(today.getTime() - 86400000);
   const same = (a: Date, b: Date) => a.toDateString() === b.toDateString();
-  if (same(d, today)) return 'Today';
-  if (same(d, yesterday)) return 'Yesterday';
+  if (same(d, today)) return translate('dates.today');
+  if (same(d, yesterday)) return translate('dates.yesterday');
   return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 };
 
@@ -53,6 +54,7 @@ const dayOf = (iso: string) => {
  */
 export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onAttach, onScan, onOpenPacketPage }) => {
   const t = useTheme();
+  const tr = useT();
   const feedback = useFeedback();
   const scrollRef = useRef<ScrollView>(null);
 
@@ -148,22 +150,22 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
     setSending(false);
 
     if (!res.success) {
-      feedback.error('Not sent', res.error || 'Your message could not be delivered.');
+      feedback.error(tr('queries.sendFailedTitle'), serverErrorText(res.error, 'queries.sendFailedBody'));
       return;
     }
     setDraft('');
     setPending([]);
     await load();
-  }, [draft, pending, query.id, feedback, load]);
+  }, [draft, pending, query.id, feedback, load, tr]);
 
   const attach = useCallback(async () => {
     try {
       const added = await onAttach();
       if (added.length > 0) setPending((prev) => [...prev, ...added]);
     } catch (err: any) {
-      feedback.error('Attachment failed', err?.message || 'The file could not be attached.');
+      feedback.error(tr('queries.attachFailedTitle'), serverErrorText(err?.message, 'queries.attachFailedBody'));
     }
-  }, [onAttach, feedback]);
+  }, [onAttach, feedback, tr]);
 
   const open = useCallback(
     async (url: string) => {
@@ -171,12 +173,12 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
       if (!resolved) return;
       const ok = await Linking.canOpenURL(resolved).catch(() => false);
       if (!ok) {
-        feedback.error('Cannot open', 'No app on this device can open that file.');
+        feedback.error(tr('queries.cannotOpenTitle'), tr('queries.cannotOpenBody'));
         return;
       }
       Linking.openURL(resolved);
     },
-    [feedback],
+    [feedback, tr],
   );
 
   const grouped = useMemo(() => {
@@ -203,14 +205,17 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm }}>
             <Icon name="help-circle" size={16} color={t.colors.warning} />
             <AppText variant="caption" tone="muted" style={{ flex: 1 }}>
-              {query.validatorName || 'Data entry'} asked about {query.customerName || 'this packet'}
+              {tr('queries.askedAbout', {
+                who: query.validatorName || tr('queries.deskShort'),
+                what: query.customerName || tr('queries.thisPacket'),
+              })}
             </AppText>
-            {resolved ? <Badge label="Resolved" tone="success" /> : null}
+            {resolved ? <Badge label={tr('queries.state.resolved')} tone="success" /> : null}
           </View>
           <AppText variant="body">{query.queryText}</AppText>
           {query.accountNumber ? (
             <AppText variant="caption" tone="faint">
-              A/C {query.accountNumber}
+              {tr('queries.account', { number: query.accountNumber })}
             </AppText>
           ) : null}
         </Card>
@@ -222,14 +227,14 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
         ) : loadFailed && grouped.length === 0 ? (
           <View style={{ paddingVertical: t.space['2xl'], alignItems: 'center', gap: t.space.md }}>
             <AppText variant="small" tone="muted" style={{ textAlign: 'center' }}>
-              Couldn't load this thread. The desk may have replied — check your connection and try again.
+              {tr('queries.loadFailed')}
             </AppText>
-            <Button label="Retry" icon="refresh" variant="neutral" onPress={() => { setLoading(true); void load(); }} />
+            <Button label={tr('common.retry')} icon="refresh" variant="neutral" onPress={() => { setLoading(true); void load(); }} />
           </View>
         ) : grouped.length === 0 ? (
           <View style={{ paddingVertical: t.space['2xl'], alignItems: 'center' }}>
             <AppText variant="small" tone="faint">
-              No replies yet. Answer below and the desk will see it immediately.
+              {tr('queries.noReplies')}
             </AppText>
           </View>
         ) : (
@@ -237,10 +242,10 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
           {loadFailed && (
             // Older messages are still shown, but the latest refresh failed — say so, or the
             // assayer reads a stale thread as current.
-            <Tappable onPress={() => { setLoading(true); void load(); }} accessibilityRole="button" accessibilityLabel="Retry loading the thread">
+            <Tappable onPress={() => { setLoading(true); void load(); }} accessibilityRole="button" accessibilityLabel={tr('queries.retryThread')}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm, alignSelf: 'center', paddingVertical: t.space.xs, paddingHorizontal: t.space.md, borderRadius: t.radius.pill, backgroundColor: t.colors.surfaceAlt, borderWidth: 1, borderColor: t.colors.border }}>
                 <Icon name="cloud-offline-outline" size={14} color={t.colors.warning} />
-                <AppText variant="caption" tone="muted">Showing an older copy — tap to refresh</AppText>
+                <AppText variant="caption" tone="muted">{tr('queries.stale')}</AppText>
               </View>
             </Tappable>
           )}
@@ -271,7 +276,7 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
       {resolved ? (
         <View style={{ padding: t.space.lg, borderTopWidth: 1, borderColor: t.colors.border }}>
           <AppText variant="small" tone="muted" style={{ textAlign: 'center' }}>
-            This clarification is resolved. The desk will reopen it if anything else is needed.
+            {tr('queries.resolvedComposer')}
           </AppText>
         </View>
       ) : (
@@ -305,7 +310,7 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
                   </AppText>
                   <Tappable
                     onPress={() => setPending((prev) => prev.filter((_, idx) => idx !== i))}
-                    accessibilityLabel={`Remove ${a.fileName}`}
+                    accessibilityLabel={tr('queries.removeAttachment', { file: a.fileName })}
                     hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                   >
                     <Icon name="close" size={13} color={t.colors.primary} />
@@ -316,12 +321,12 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
           )}
 
           <View style={{ flexDirection: 'row', alignItems: 'flex-end', gap: t.space.sm }}>
-            <IconButton icon="attach" onPress={attach} accessibilityLabel="Attach a file" />
-            <IconButton icon="scan" onPress={onScan} accessibilityLabel="Scan a document" />
+            <IconButton icon="attach" onPress={attach} accessibilityLabel={tr('queries.attachFile')} />
+            <IconButton icon="scan" onPress={onScan} accessibilityLabel={tr('queries.scanDocument')} />
             <TextInput
               value={draft}
               onChangeText={setDraft}
-              placeholder="Reply to the desk…"
+              placeholder={tr('queries.replyPlaceholder')}
               placeholderTextColor={t.colors.textFaint}
               multiline
               style={{
@@ -339,7 +344,7 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
                 fontSize: 15,
               }}
             />
-            <Tappable onPress={send} disabled={sending || (!draft.trim() && pending.length === 0)} accessibilityRole="button" accessibilityLabel={sending ? "Sending" : "Send reply"}>
+            <Tappable onPress={send} disabled={sending || (!draft.trim() && pending.length === 0)} accessibilityRole="button" accessibilityLabel={sending ? tr('queries.sending') : tr('queries.sendReply')}>
               <View
                 style={{
                   width: 42,
@@ -374,6 +379,7 @@ const Bubble: React.FC<{
   onOpenPacketPage?: (page: number) => void;
 }> = ({ message, signed, onOpenAttachment, onOpenMarkUrl, onOpenPacketPage }) => {
   const t = useTheme();
+  const tr = useT();
   const mine = message.authorType === 'ASSAYER';
 
   // The desk's mark opens the actual page of the actual packet with the questioned rectangle
@@ -451,7 +457,7 @@ const Bubble: React.FC<{
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
                 <Icon name="crop-outline" size={13} color={t.colors.textFaint} />
                 <AppText variant="caption" tone="faint">
-                  The desk marked this on page {message.pageNumber}
+                  {tr('queries.markedOnPage', { page: message.pageNumber })}
                 </AppText>
               </View>
             ) : null}
@@ -459,7 +465,7 @@ const Bubble: React.FC<{
               <Tappable
                 onPress={openMark}
                 accessibilityRole="button"
-                accessibilityLabel="See where on your document the desk marked"
+                accessibilityLabel={tr('queries.seeMarkAccessibility')}
                 hitSlop={6}
               >
                 <View
@@ -477,7 +483,7 @@ const Bubble: React.FC<{
                 >
                   <Icon name="document-text-outline" size={15} color={t.colors.warning} />
                   <AppText variant="small" tone="warning" style={{ flex: 1 }}>
-                    See where on your document →
+                    {tr('queries.seeMark')}
                   </AppText>
                 </View>
               </Tappable>

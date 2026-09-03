@@ -1,6 +1,7 @@
 import { Platform } from 'react-native';
 import { MobileApiService } from './api.service';
 import { getPreference } from './preferences';
+import { t } from '../i18n';
 
 let Notifications: any = null;
 let Device: any = null;
@@ -94,13 +95,22 @@ function androidPriorityFor(channelId: string): any {
 /**
  * The `name`/`description` strings below are shown verbatim to the user in Android's per-app
  * notification settings, so they are written as product copy rather than as internal labels.
+ *
+ * A function called from startup rather than a module-import side effect, which is what this
+ * used to be. That ordering mattered once the copy became translatable: the import runs before
+ * `loadPreferences()` has read the saved language, so the channels would have been created in
+ * English on every install regardless of what the assayer had chosen. `App` calls this
+ * immediately after applying the language preference; Android permits later updates to a
+ * channel's name and description (though not to its importance or sound), so a language change
+ * re-labels them on the following launch.
  */
-if (Platform.OS === 'android' && Notifications && Notifications.setNotificationChannelAsync) {
+export function registerAndroidNotificationChannels(): void {
+  if (Platform.OS !== 'android' || !Notifications?.setNotificationChannelAsync) return;
   const A = Notifications.AndroidImportance;
 
   Notifications.setNotificationChannelAsync(ANDROID_CHANNELS.CRITICAL, {
-    name: 'Critical alerts',
-    description: 'Escalations and deadlines that need your attention right now. These interrupt with sound and a distinct vibration.',
+    name: t('notifications.channels.criticalName'),
+    description: t('notifications.channels.criticalDescription'),
     importance: A.MAX,
     // Deliberately unlike every other channel: a long-short-long pulse is recognisable through
     // a pocket, which is the entire point of reserving MAX for genuine escalations.
@@ -112,8 +122,8 @@ if (Platform.OS === 'android' && Notifications && Notifications.setNotificationC
   }).catch(() => {});
 
   Notifications.setNotificationChannelAsync(ANDROID_CHANNELS.HIGH, {
-    name: 'Important updates',
-    description: 'New assignments, approvals and status changes that are worth looking at promptly.',
+    name: t('notifications.channels.highName'),
+    description: t('notifications.channels.highDescription'),
     importance: A.HIGH,
     vibrationPattern: [0, 250, 150, 250],
     lightColor: '#8B7CFF',
@@ -123,10 +133,10 @@ if (Platform.OS === 'android' && Notifications && Notifications.setNotificationC
   }).catch(() => {});
 
   Notifications.setNotificationChannelAsync(ANDROID_CHANNELS.NORMAL, {
-    name: 'General activity',
+    name: t('notifications.channels.normalName'),
     // DEFAULT importance still makes a sound but does not pop a heads-up banner over whatever
     // the user is doing — the distinction that stops routine activity feeling like an alarm.
-    description: 'Everyday activity on your audits and reports. Arrives with a sound, without taking over the screen.',
+    description: t('notifications.channels.normalDescription'),
     importance: A.DEFAULT,
     vibrationPattern: [0, 200],
     lightColor: '#8B7CFF',
@@ -136,8 +146,8 @@ if (Platform.OS === 'android' && Notifications && Notifications.setNotificationC
   }).catch(() => {});
 
   Notifications.setNotificationChannelAsync(ANDROID_CHANNELS.LOW, {
-    name: 'Quiet updates',
-    description: 'Informational notices such as onboarding and directory changes. Silent — they simply wait in your notification drawer.',
+    name: t('notifications.channels.lowName'),
+    description: t('notifications.channels.lowDescription'),
     importance: A.LOW,
     lightColor: '#8B7CFF',
     enableVibrate: false,

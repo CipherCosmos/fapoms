@@ -2,7 +2,7 @@ import { Controller, Get, UseGuards, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
-import { JwtAuthGuard, RolesGuard, Roles } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, Roles, RequirePermissions } from '../auth/guards';
 import { OperationsSnapshotService } from './operations-snapshot.service';
 import { SystemRole } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
@@ -30,6 +30,9 @@ export class SystemDashboardController {
     SystemRole.AUDITOR,
     SystemRole.CLIENT_USER,
   )
+  // The one permission all six of those roles hold, and the right floor for a dashboard: the
+  // payload is assembled per role, so this asks only whether the caller works the book at all.
+  @RequirePermissions('project:view:organization')
   @ApiOperation({ summary: "Role-scoped operational snapshot: only the sections the caller's roles include" })
   async getOperations(@Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
     // Sections follow the caller's own roles rather than a query parameter, so the
@@ -41,6 +44,7 @@ export class SystemDashboardController {
 
   @Get('metrics')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('project:view:organization')
   @ApiOperation({ summary: 'Retrieve live aggregated system counts and event history metrics' })
   async getMetrics(@GlobalScopeFilter() scope?: GlobalScope) {
     // Branch counts are territorial and follow the caller's region assignment; clients and

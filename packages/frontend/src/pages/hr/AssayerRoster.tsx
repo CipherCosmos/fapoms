@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import {
-  Plus, Search, X, ChevronUp, ChevronDown, Edit2, Trash2,
+  Plus, Search, Edit2, Trash2,
   AlertTriangle, Download, ArrowRightLeft, MapPin, CheckCircle2, Users, SlidersHorizontal, FileSpreadsheet,
 } from 'lucide-react';
 import { AssayerLifecycleStatus, assayerLifecyclePath, assayerLifecycleLabel, daysUntilExpiry } from '@fapoms/shared';
@@ -10,15 +10,20 @@ import { AssayerLifecycleStatus, assayerLifecyclePath, assayerLifecycleLabel, da
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { connectSocket } from '../../services/socket';
-import { Select, UploadExcelControls, useConfirm } from '../../components/ui';
+import { Select, UploadExcelControls, useConfirm, AlertBanner, DataTable } from '../../components/ui';
+import { listPhase } from '../../components/ui/list-phase';
 import { ImportIssuesPanel } from './ImportIssuesPanel';
 import { visibleSelection, hiddenSelectionNote } from '../../utils/selection';
 import { useSearchParams } from 'react-router-dom';
 import { useCurrentRoles, canManageAssayers } from '../../hooks/useCurrentRoles';
 import { useExcelExport } from '../../hooks/useExcelExport';
-import { CreateAssayerModal } from './AssayerForms';
+import { RegistrationWizard } from './registration/RegistrationWizard';
 import type { Assayer } from './assayer-shared';
-import { STATUS_COLORS, missingCriticalFields } from './assayer-shared';
+import {
+  STATUS_COLORS, missingCriticalFields, isOnboardingStage,
+  isAwaitingDocumentCheck, isAwaitingBackgroundCheck, isReadyToActivate, onboardingNextStep,
+  stillWorkable, isRecordedDeceased,
+} from './assayer-shared';
 import { STAGE_CONSEQUENCE, HARD_TO_REVERSE_STAGES } from './AssayerRecord';
 import { fmtDate } from '../../utils/dates';
 import { queryKeys } from '../../hooks/queryKeys';
@@ -73,20 +78,6 @@ function payoutBlockers(a: Assayer): string[] {
     .map((f) => f.label);
 }
 
-/** Stages that mean the person has left, whatever the date fields say. */
-const EXITED_STAGES: string[] = [
-  AssayerLifecycleStatus.RESIGNED,
-  AssayerLifecycleStatus.TERMINATED,
-  AssayerLifecycleStatus.ARCHIVED,
-];
-
-const ONBOARDING_STAGES: string[] = [
-  AssayerLifecycleStatus.INVITED,
-  AssayerLifecycleStatus.DOCUMENT_VERIFICATION,
-  AssayerLifecycleStatus.BACKGROUND_VERIFICATION,
-  AssayerLifecycleStatus.TRAINING,
-];
-
 /** Legal next steps per stage, mirroring the backend state machine. */
 
 /** Ordered path from `from` to `target` walking only legal transitions; [] if
@@ -94,33 +85,64 @@ const ONBOARDING_STAGES: string[] = [
  *  roster can offer the same destinations the API will accept. */
 
 /**
- * Still on the books and still workable — the same population the server's compliance figures
- * count (`ON_ROSTER` in hr-workforce.service.ts).
+ * One-click views onto the questions HR ask most.
  *
- * The gap chips used to match anybody with a blank field, so 444 people who had resigned or been
- * terminated sat in "Incomplete record" and "Cannot be paid" as though somebody ought to chase
- * their bank details. It also meant the chip and the Overview described different populations
- * from the same data — the Overview said 717, the chip counted from 1,163 — with nothing on
- * either screen to say why.
+ * `hint` is not decoration. Several of these chips are worklists — a queue of people somebody is
+ * supposed to do something to today — and the chip label alone ("Documents to check") does not
+ * say what the work is or where it is done. The hint is shown as a sentence under the chips
+ * whenever that chip is the selected one, so the queue explains itself on arrival rather than
+ * on hover.
  */
-const stillWorkable = (a: Assayer): boolean =>
-  !EXITED_STAGES.includes(a.lifecycleStatus) && !a.exitDate && !a.terminationDate;
-
-/** One-click views onto the questions HR ask most. */
-const SEGMENTS: { key: string; label: string; match: (a: Assayer) => boolean }[] = [
+const SEGMENTS: { key: string; label: string; hint?: string; match: (a: Assayer) => boolean }[] = [
   { key: 'all', label: 'Everyone', match: () => true },
   { key: 'active', label: 'Active', match: (a) => a.lifecycleStatus === AssayerLifecycleStatus.ACTIVE },
-  { key: 'onboarding', label: 'Onboarding', match: (a) => ONBOARDING_STAGES.includes(a.lifecycleStatus) },
+  { key: 'onboarding', label: 'Onboarding', match: (a) => isOnboardingStage(a.lifecycleStatus) },
+  /*
+   * THE THREE JOINING QUEUES.
+   *
+   * "Onboarding" above lumps all four joining stages into one pile, and it is the only view this
+   * screen had of them. So the two stages the platform actually enforces — document verification
+   * and background verification — had no worklist at all: a clerk asking "whose papers am I
+   * meant to check today" had nowhere in the application to look, and people sat in a stage for
+   * months because nothing counted them. The Onboarding chip stays (worklists elsewhere link to
+   * `?segment=onboarding`, and "how many are joining" is still a real question); these three
+   * split it into the queues somebody actually works through.
+   *
+   * Each queue's rule comes from the one place that already owns it — see assayer-shared.ts —
+   * so a chip can never disagree with the button on the record page.
+   */
+  {
+    key: 'to-verify',
+    label: 'Documents to check',
+    hint: 'These people are at the document-verification stage. Open anyone, go to Documents, '
+      + 'enter each document number and confirm it against the original — then move them on to '
+      + 'the background check.',
+    match: isAwaitingDocumentCheck,
+  },
+  {
+    key: 'background-due',
+    label: 'Background check due',
+    hint: 'Their documents are done and the background check has not been recorded. Open anyone, '
+      + 'go to Vetting, and record a check — then move them on to training.',
+    match: isAwaitingBackgroundCheck,
+  },
+  {
+    key: 'ready',
+    label: 'Ready to activate',
+    hint: 'Nothing is left blocking these people: the next legal step is Active and no required '
+      + 'field is missing. Open anyone and press "Move to Active", or tick several and use the '
+      + 'bar at the top.',
+    match: isReadyToActivate,
+  },
   { key: 'incomplete', label: 'Incomplete record', match: (a) => stillWorkable(a) && missingFields(a).length > 0 },
   { key: 'unpayable', label: 'Cannot be paid', match: (a) => stillWorkable(a) && payoutBlockers(a).length > 0 },
   { key: 'unprofiled', label: 'No skills', match: (a) => stillWorkable(a) && (!a.skills || a.skills.length === 0) },
-  // Lifecycle status first, dates second — matching the server's headcount. Someone shown as
-  // RESIGNED on the row itself has to appear under "Exited", whether or not a date was captured.
-  {
-    key: 'exited',
-    label: 'Exited',
-    match: (a) => EXITED_STAGES.includes(a.lifecycleStatus) || !!a.exitDate || !!a.terminationDate,
-  },
+  // Exactly the people the chips above leave alone, written as the complement rather than as a
+  // second list of ways to have left. Spelled out separately, the two drifted: this one knew
+  // about RESIGNED, TERMINATED, ARCHIVED and the dates, and neither knew that a death is filed as
+  // INACTIVE with a reason — so the one person in that state was in no exit view and in both
+  // worklists at once.
+  { key: 'exited', label: 'Exited', match: (a) => !stillWorkable(a) },
   // 21 people on the roster have audits attended by a member of staff, a relative or a friend
   // rather than by the person empanelled. The drawer says so once the record is open; without a
   // chip there is no way to ask who they all are, and that is the only question worth asking
@@ -165,13 +187,6 @@ function tenureMonths(a: Assayer): number | null {
   return Math.max(0, Math.floor((Date.now() - start) / (1000 * 60 * 60 * 24 * 30.44)));
 }
 
-const cell: React.CSSProperties = { padding: '9px 12px', fontSize: '12.5px', verticalAlign: 'middle' };
-const head: React.CSSProperties = {
-  padding: '8px 12px', fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase',
-  letterSpacing: '0.05em',   color: 'var(--text-muted)', textAlign: 'left',
-  whiteSpace: 'nowrap', userSelect: 'none',
-};
-
 export const AssayerRoster: React.FC<{
   /**
    * True totals for segments whose count must not be the loaded window's.
@@ -187,14 +202,24 @@ export const AssayerRoster: React.FC<{
   const [assayers, setAssayers] = useState<Assayer[]>([]);
   const [loading, setLoading] = useState(true);
   /**
-   * `warn` exists for the partial outcome a bulk import produces — some rows landed, some did
-   * not. Reporting that as `ok` hides the failures; reporting it as `err` implies nothing was
-   * saved, and sends someone re-uploading a file that has already half-imported.
+   * The one place this screen reports an outcome that needs a decision.
+   *
+   * It used to be a hand-rolled banner with its own three-tone palette, sitting alongside
+   * `toast()` in five sibling files and `setErr()` in four more — four ways of saying "that
+   * didn't work" across one section, so a clerk had to learn which corner of which screen each
+   * kind of failure appears in. It is now `AlertBanner`, the component thirteen non-HR pages
+   * already use and no HR page did. Toasts keep the transient successes; anything the reader
+   * has to act on stays on the page until they dismiss it.
+   *
+   * The third tone went with it: `warn` was declared for the half-imported case and never once
+   * set — the partial-outcome path below reports `err` and lists what failed, which is the
+   * honest reading anyway ("some rows did not land" is a failure you must act on, not a shade
+   * of success).
    *
    * `details` carries the per-row reasons. They belong on screen, not in the network tab.
    */
   const [notice, setNotice] = useState<
-    { tone: 'ok' | 'warn' | 'err'; text: string; details?: string[] } | null
+    { tone: 'ok' | 'err'; text: string; details?: string[] } | null
   >(null);
   const [noticeExpanded, setNoticeExpanded] = useState(false);
 
@@ -214,7 +239,7 @@ export const AssayerRoster: React.FC<{
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'displayName', dir: 'asc' });
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   /**
    * Opening somebody is navigation, not a panel.
    *
@@ -232,6 +257,24 @@ export const AssayerRoster: React.FC<{
     if (wanted) navigate(`/hr/roster/${wanted}`, { replace: true });
   }, [searchParams, navigate]);
   const [creating, setCreating] = useState(false);
+  /**
+   * `?register=<id>` reopens the registration flow on somebody already on the roster.
+   *
+   * Held in the URL rather than in state so the link survives being bookmarked, pasted to a
+   * colleague, or reached after the tab was closed mid-registration. Closing the flow clears both
+   * halves, and `?view=` with it — that is the flow's own step, and leaving it behind would make
+   * the next Add button land on whichever page the last registration stopped on.
+   */
+  const resumeRegistrationId = searchParams.get('register');
+  const closeRegistration = () => {
+    setCreating(false);
+    if (resumeRegistrationId || searchParams.get('view')) {
+      const next = new URLSearchParams(searchParams);
+      next.delete('register');
+      next.delete('view');
+      setSearchParams(next, { replace: true });
+    }
+  };
   const [bulkTarget, setBulkTarget] = useState('');
   const { download: downloadExcel, busy: exporting } = useExcelExport();
   const handleExportExcel = () => void downloadExcel('/reports/assayer-roster');
@@ -357,6 +400,8 @@ export const AssayerRoster: React.FC<{
    * When the active segment's true total is bigger than what is listed, by how much.
    * Null when they agree, when there is no exact total, or when another filter is narrowing.
    */
+  const selectedSegment = useMemo(() => SEGMENTS.find((s) => s.key === segment), [segment]);
+
   const segmentShortfall = useMemo(() => {
     const total = exactCounts?.[segment];
     if (total === undefined) return null;
@@ -389,9 +434,11 @@ export const AssayerRoster: React.FC<{
 
   useEffect(() => { setVisibleCount(RENDER_CHUNK); }, [assayers, search, segment, stateFilter, statusFilter, sort]);
 
+  /** Which of the four list states this table is in — see components/ui/list-phase.ts. */
+  const phase = listPhase({ loading, rowCount: rows.length });
+
   /** True when the server holds more people than this page asked for. */
   const truncated = rosterTotal > assayers.length;
-  const allShownSelected = rows.length > 0 && rows.every((r) => selectedIds.has(r.id));
   /**
    * The bulk bar acts on the ticked rows that are *on screen*, never on ticks the current
    * segment, filter or "show more" cut-off is hiding.
@@ -681,41 +728,31 @@ export const AssayerRoster: React.FC<{
       />
 
       {notice && (() => {
-        const tones = {
-          ok: { bg: 'var(--status-active-bg)', fg: 'var(--success)' },
-          warn: { bg: 'var(--status-pending-bg)', fg: 'var(--warning)' },
-          err: { bg: 'var(--status-cancelled-bg)', fg: 'var(--danger)' },
-        }[notice.tone];
         const details = notice.details ?? [];
         // A handful of rows is worth showing outright; a wall of them needs a toggle, or the
         // message pushes the roster off the screen.
         const shown = noticeExpanded ? details : details.slice(0, 5);
         return (
-          <div style={{
-            padding: '10px 14px', borderRadius: '8px', fontSize: '13px',
-            background: tones.bg, color: tones.fg,
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '10px' }}>
-              <span style={{ fontWeight: details.length ? 600 : 400 }}>{notice.text}</span>
-              <button onClick={() => { setNotice(null); setNoticeExpanded(false); }}
-                style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', flexShrink: 0 }}>
-                <X size={14} />
-              </button>
-            </div>
+          <AlertBanner
+            type={notice.tone === 'ok' ? 'success' : 'error'}
+            onClose={() => { setNotice(null); setNoticeExpanded(false); }}
+            style={{ alignItems: 'flex-start', fontSize: '13px' }}
+          >
+            <span style={{ fontWeight: details.length ? 600 : 400 }}>{notice.text}</span>
             {details.length > 0 && (
-              <ul style={{ margin: '7px 0 0', paddingLeft: '18px', fontSize: '12px', lineHeight: 1.55, fontWeight: 400 }}>
+              <ul style={{ margin: '7px 0 0', paddingLeft: '18px', fontSize: '12.5px', lineHeight: 1.55, fontWeight: 400 }}>
                 {shown.map((d, i) => <li key={i}>{d}</li>)}
               </ul>
             )}
             {details.length > 5 && (
               <button
                 onClick={() => setNoticeExpanded((v) => !v)}
-                style={{ marginTop: '6px', background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', fontSize: '11.5px', fontWeight: 700, textDecoration: 'underline', padding: 0 }}
+                style={{ marginTop: '6px', background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', fontSize: '12px', fontWeight: 700, textDecoration: 'underline', padding: 0 }}
               >
                 {noticeExpanded ? 'Show fewer' : `Show all ${details.length}`}
               </button>
             )}
-          </div>
+          </AlertBanner>
         );
       })()}
 
@@ -727,18 +764,20 @@ export const AssayerRoster: React.FC<{
         * under a tab badge reading 1,400 with nothing to explain the gap.
         */}
       {truncated && (
-        <div style={{ fontSize: '11.5px', color: 'var(--warning)', lineHeight: 1.5 }}>
+        <div style={{ fontSize: '12px', color: 'var(--warning)', lineHeight: 1.5 }}>
           Showing the {assayers.length} most recently added of {rosterTotal} people. The counts on
           these filters describe those {assayers.length}; search to find anyone not listed.
         </div>
       )}
-      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }} role="tablist">
         {SEGMENTS.map((s) => {
           const n = exactCounts?.[s.key] ?? assayers.filter(s.match).length;
           const on = segment === s.key;
           return (
             <button
               key={s.key}
+              role="tab"
+              aria-selected={on}
               onClick={() => setSegment(s.key)}
               style={{
                 padding: '5px 11px', borderRadius: '999px', fontSize: '12px', fontWeight: 600, cursor: 'pointer',
@@ -752,6 +791,24 @@ export const AssayerRoster: React.FC<{
           );
         })}
       </div>
+
+      {/*
+        What the selected queue is, and what to do with the people in it.
+
+        A chip reading "Documents to check 34" says a number and a noun. It does not say that
+        these 34 are waiting on somebody in this office, what "check" means here (enter the
+        number, confirm it against the paper original), or where that is done. One sentence,
+        under the chips, in the words the record page's own buttons use.
+      */}
+      {selectedSegment?.hint && (
+        <div style={{
+          fontSize: '12.5px', color: 'var(--text-secondary)', lineHeight: 1.55,
+          padding: '9px 12px', borderRadius: '8px',
+          background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)',
+        }}>
+          {selectedSegment.hint}
+        </div>
+      )}
 
       {/*
         A chip counting the whole roster above a list holding part of it.
@@ -843,7 +900,7 @@ export const AssayerRoster: React.FC<{
         * mouse, it needs a guess about which control to hover, and it vanishes. One quiet line
         * under the toolbar states both, so the choice can be made by reading.
         */}
-      <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', lineHeight: 1.5, marginTop: '-2px' }}>
+      <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.5, marginTop: '-2px' }}>
         <strong style={{ fontWeight: 600 }}>Export this view</strong> saves the {rows.length}{' '}
         {rows.length === 1 ? 'person' : 'people'} currently listed — contact and location details,
         plus what each file is missing — as a CSV.{' '}
@@ -851,7 +908,11 @@ export const AssayerRoster: React.FC<{
         covers everyone, adding assignment history and the payroll rate card, as an Excel workbook.
       </div>
 
-      {/* Directly under the import controls, because that is what puts entries in it. */}
+      {/*
+        Directly under the import controls, because that is what puts entries in it — and it also
+        has its own page now (`/hr/issues`, badged in the tab strip), because a collapsed panel
+        below a thousand-row table is not somewhere a queue can be found on purpose.
+      */}
       <ImportIssuesPanel canManage={canManage} onResolved={load} />
 
       {showFilters && (
@@ -868,7 +929,7 @@ export const AssayerRoster: React.FC<{
           {(stateFilter !== 'ALL' || statusFilter !== 'ALL' || search) && (
             <button
               onClick={() => { setStateFilter('ALL'); setStatusFilter('ALL'); setSearch(''); }}
-              className="btn btn-secondary" style={{ fontSize: '11px', padding: '6px 10px', alignSelf: 'flex-end' }}
+              className="btn btn-secondary" style={{ fontSize: '12px', padding: '6px 10px', alignSelf: 'flex-end' }}
             >
               Clear all
             </button>
@@ -881,11 +942,11 @@ export const AssayerRoster: React.FC<{
         <div style={{
           display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap',
           padding: '10px 14px', borderRadius: '8px',
-          background: 'var(--status-pending-bg)', border: '1px solid rgba(216,174,71,0.3)',
+          background: 'var(--status-pending-bg)', border: '1px solid color-mix(in srgb, var(--warning) 35%, transparent)',
         }}>
           <strong style={{ fontSize: '13px' }}>{selected.length} selected</strong>
           {hiddenNote && (
-            <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>{hiddenNote}</span>
+            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{hiddenNote}</span>
           )}
           <ArrowRightLeft size={13} style={{ color: 'var(--text-muted)' }} />
           {bulkOptions.length > 0 ? (
@@ -911,7 +972,7 @@ export const AssayerRoster: React.FC<{
               named a stage and the button said "Apply"; between the two, nothing said that
               "Archived" takes everyone selected off the working roster. */}
           {bulkTarget && STAGE_CONSEQUENCE[bulkTarget] && (
-            <div style={{ flexBasis: '100%', fontSize: '11.5px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+            <div style={{ flexBasis: '100%', fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
               {STAGE_CONSEQUENCE[bulkTarget]} Anyone who cannot reach that stage from where they are
               now is left alone, and you get a list of who moved and who did not.
             </div>
@@ -930,7 +991,7 @@ export const AssayerRoster: React.FC<{
             <span style={{ color: 'var(--status-active-text)' }}>{bulkReport.succeeded.length} moved</span>
             <span style={{ color: 'var(--text-muted)' }}>{bulkReport.skipped.length} skipped</span>
             {bulkReport.failed.length > 0 && <span style={{ color: 'var(--status-danger-text)' }}>{bulkReport.failed.length} failed</span>}
-            <button onClick={() => setBulkReport(null)} className="btn btn-secondary" style={{ fontSize: '11px', padding: '2px 8px', marginLeft: 'auto' }}>Dismiss</button>
+            <button onClick={() => setBulkReport(null)} className="btn btn-secondary" style={{ fontSize: '12px', padding: '2px 8px', marginLeft: 'auto' }}>Dismiss</button>
           </div>
           {bulkReport.skipped.length > 0 && (
             <div style={{ marginTop: '6px' }}>
@@ -938,7 +999,7 @@ export const AssayerRoster: React.FC<{
               {bulkReport.skipped.map((s) => (
                 <div key={s.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
                   <span style={{ color: 'inherit' }}>{bulkReport.names[s.id] ?? 'This assayer'} — {assayerLifecycleLabel(s.current)}</span>
-                  <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>— {s.reason}</span>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>— {s.reason}</span>
                 </div>
               ))}
             </div>
@@ -949,7 +1010,7 @@ export const AssayerRoster: React.FC<{
               {bulkReport.failed.map((f) => (
                 <div key={f.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
                   <span style={{ color: 'inherit' }}>{bulkReport.names[f.id] ?? 'This assayer'}</span>
-                  <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>— {f.reason}</span>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>— {f.reason}</span>
                 </div>
               ))}
             </div>
@@ -957,154 +1018,162 @@ export const AssayerRoster: React.FC<{
         </div>
       )}
 
-      {/* Roster */}
+      {/*
+        Roster.
+
+        This was hand-written `<table>` markup with its own `Th`, its own head and cell styles, its
+        own skeleton and its own selection column — the third table primitive in a section that
+        already had two. It is `DataTable` now, which is where the sortable header, the row keying,
+        the per-page select-all and the empty state come from; what stays here is only what is
+        actually about assayers.
+      */}
       <div style={{ border: '1px solid var(--border-color)', borderRadius: '10px', overflow: 'hidden', background: 'var(--bg-card)' }}>
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
-            <thead style={{ background: 'var(--bg-surface-2)' }}>
-              <tr>
-                {canManage && (
-                  <th style={{ ...head, width: '36px' }}>
-                    <input
-                      type="checkbox"
-                      checked={allShownSelected}
-                      onChange={() => setSelectedIds(allShownSelected ? new Set() : new Set(rows.map((r) => r.id)))}
-                      style={{ cursor: 'pointer' }}
-                    />
-                  </th>
-                )}
-                <Th label="Assayer" k="displayName" sort={sort} onSort={sortBy} />
-                <Th label="Code" k="assayerCode" sort={sort} onSort={sortBy} />
-                <Th label="Stage" k="lifecycleStatus" sort={sort} onSort={sortBy} />
-                <Th label="Location" k="state" sort={sort} onSort={sortBy} />
-                <Th label="Record" k="completeness" sort={sort} onSort={sortBy} />
-                <Th label="Joined" k="joiningDate" sort={sort} onSort={sortBy} />
-                {/* "Exp" could as easily have been an expiry date. It is years of experience. */}
-                <Th label="Experience" k="experienceYears" sort={sort} onSort={sortBy} />
-                <th style={{ ...head, textAlign: 'right' }}>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr><td colSpan={9} style={{ ...cell, textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading roster…</td></tr>
-              ) : rows.length === 0 ? (
-                <tr>
-                  <td colSpan={9} style={{ ...cell, textAlign: 'center', padding: '48px' }}>
-                    <Users size={26} style={{ opacity: 0.35 }} />
-                    <div style={{ fontSize: '14px', fontWeight: 600, marginTop: '10px' }}>Nobody matches this view</div>
-                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px' }}>
-                      {/* "Try a different segment or clear the filters" makes the reader hunt for
-                          which of four controls is responsible — and the segment pill and the
-                          Status dropdown can contradict each other outright (Active + Resigned
-                          can never match anybody) while the Filters panel is collapsed and shows
-                          nothing. Name the criteria actually in force. */}
-                      {assayers.length === 0
-                        ? 'The roster is empty — import a workforce file or add someone.'
-                        : `No one matches ${activeCriteria.join(' + ')}.`}
-                    </div>
-                    {assayers.length > 0 && (
-                      <button
-                        onClick={() => { setSegment('all'); setStateFilter('ALL'); setStatusFilter('ALL'); setSearch(''); }}
-                        className="btn btn-secondary"
-                        style={{ marginTop: '10px', fontSize: '11.5px', padding: '5px 12px' }}
-                      >
-                        Show everyone
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ) : rows.slice(0, visibleCount).map((a) => {
-                const missing = missingFields(a);
-                const blockers = payoutBlockers(a);
+        <DataTable<Assayer>
+          density="compact"
+          rows={phase === 'skeleton' ? [] : rows.slice(0, visibleCount)}
+          rowKey={(a) => a.id}
+          onRowClick={(a) => openRecord(a.id)}
+          /*
+            The shape of the table, not the words "Loading roster…". A bare string replaced the
+            entire table on every load, so arriving at the roster went blank → one line of text →
+            200 rows, and the page jumped as they landed.
+          */
+          loading={phase === 'skeleton'}
+          loadingRows={8}
+          sortKey={sort.key}
+          sortOrder={sort.dir}
+          onSort={(k) => sortBy(k as SortKey)}
+          selectable={canManage}
+          selected={selectedIds}
+          onToggleSelect={toggle}
+          onSelectAll={(checked) => setSelectedIds(checked ? new Set(rows.map((r) => r.id)) : new Set())}
+          // The roster's own tint for a ticked row, rather than DataTable's default: the bulk bar
+          // above it is already keyed to the accent, and the two have to read as one selection.
+          rowStyle={(a) => (selectedIds.has(a.id)
+            ? { background: 'color-mix(in srgb, var(--accent) 12%, transparent)' }
+            : undefined)}
+          emptyState={(
+            <>
+              <Users size={26} style={{ opacity: 0.35 }} />
+              <div style={{ fontSize: '14px', fontWeight: 600, marginTop: '10px' }}>Nobody matches this view</div>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px' }}>
+                {/* "Try a different segment or clear the filters" makes the reader hunt for which
+                    of four controls is responsible — and the segment pill and the Status dropdown
+                    can contradict each other outright (Active + Resigned can never match anybody)
+                    while the Filters panel is collapsed and shows nothing. Name the criteria
+                    actually in force. */}
+                {assayers.length === 0
+                  ? 'The roster is empty — import a workforce file or add someone.'
+                  : `No one matches ${activeCriteria.join(' + ')}.`}
+              </div>
+              {assayers.length > 0 && (
+                <button
+                  onClick={() => { setSegment('all'); setStateFilter('ALL'); setStatusFilter('ALL'); setSearch(''); }}
+                  className="btn btn-secondary"
+                  style={{ marginTop: '10px', fontSize: '12px', padding: '5px 12px' }}
+                >
+                  Show everyone
+                </button>
+              )}
+            </>
+          )}
+          columns={[
+            {
+              key: 'displayName',
+              header: 'Assayer',
+              sortable: true,
+              render: (a) => (
+                <>
+                  <div style={{ fontWeight: 600 }}>{a.displayName}</div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{a.phone}</div>
+                </>
+              ),
+            },
+            {
+              key: 'assayerCode',
+              header: 'Code',
+              sortable: true,
+              render: (a) => <span style={{ fontFamily: 'monospace', fontSize: '12px' }}>{a.assayerCode}</span>,
+            },
+            {
+              key: 'lifecycleStatus',
+              header: 'Stage',
+              sortable: true,
+              /*
+                Mid-joining stages carry what has to happen next, in the planner's own words
+                (`ONBOARDING_NEXT_STEP`, one map in @fapoms/shared). A coordinator who is told on
+                the planning screen that somebody is "in training — mark training complete on the
+                HR roster to activate" arrives here and finds the same sentence on the row.
+              */
+              render: (a) => {
                 const tone = STATUS_COLORS[a.lifecycleStatus] ?? 'var(--text-muted)';
+                return (
+                  <span
+                    title={onboardingNextStep(a) ? `Onboarding not finished: ${onboardingNextStep(a)}.` : undefined}
+                    style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '12px', fontWeight: 600, color: tone }}
+                  >
+                    <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: tone }} />
+                    {assayerLifecycleLabel(a.lifecycleStatus)}
+                  </span>
+                );
+              },
+            },
+            {
+              key: 'state',
+              header: 'Location',
+              sortable: true,
+              render: (a) => (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                  <MapPin size={11} style={{ color: 'var(--text-muted)' }} />
+                  {[a.city, a.state].filter(Boolean).join(', ') || '—'}
+                </span>
+              ),
+            },
+            {
+              key: 'completeness',
+              header: 'Record',
+              sortable: true,
+              render: (a) => <RecordGaps a={a} />,
+            },
+            {
+              key: 'joiningDate',
+              header: 'Joined',
+              sortable: true,
+              render: (a) => {
                 const months = tenureMonths(a);
                 return (
-                  <tr
-                    key={a.id}
-                    onClick={() => openRecord(a.id)}
-                    style={{
-                      borderTop: '1px solid var(--border-hair)', cursor: 'pointer',
-                      background: selectedIds.has(a.id) ? 'rgba(216,174,71,0.12)' : undefined,
-                    }}
-                  >
-                    {canManage && (
-                      <td style={cell} onClick={(e) => e.stopPropagation()}>
-                        <input type="checkbox" checked={selectedIds.has(a.id)} onChange={() => toggle(a.id)} style={{ cursor: 'pointer' }} />
-                      </td>
-                    )}
-                    <td style={cell}>
-                      <div style={{ fontWeight: 600 }}>{a.displayName}</div>
-                      <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{a.phone}</div>
-                    </td>
-                    <td style={{ ...cell, fontFamily: 'monospace', fontSize: '11px' }}>{a.assayerCode}</td>
-                    <td style={cell}>
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', fontWeight: 600, color: tone }}>
-                        <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: tone }} />
-                        {assayerLifecycleLabel(a.lifecycleStatus)}
-                      </span>
-                    </td>
-                    <td style={cell}>
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                        <MapPin size={11} style={{ color: 'var(--text-muted)' }} />
-                        {[a.city, a.state].filter(Boolean).join(', ') || '—'}
-                      </span>
-                    </td>
-                    <td style={cell}>
-                      {/*
-                        A record belonging to somebody who has left is stated, not demanded.
-
-                        The gap chips count only people who can still be given work, and this
-                        column shouted "Cannot be paid" in red at the same terminated records the
-                        chips had just excluded — so the list and its own filters disagreed on
-                        screen. The gaps are still shown, because a past payment may yet need
-                        settling; they are simply not an outstanding task.
-                      */}
-                      {missing.length > 0 && !stillWorkable(a) ? (
-                        <span
-                          title={`Missing: ${missing.join(', ')}`}
-                          style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11.5px', color: 'var(--text-muted)' }}
-                        >
-                          {counted(missing.length, 'gap')} · left
-                        </span>
-                      ) : missing.length === 0 ? (
-                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--success)', fontSize: '11.5px' }}>
-                          <CheckCircle2 size={12} /> Complete
-                        </span>
-                      ) : (
-                        <span
-                          title={`Missing: ${missing.join(', ')}`}
-                          style={{
-                            display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11.5px', fontWeight: 600,
-                            color: blockers.length ? 'var(--danger)' : 'var(--warning)',
-                          }}
-                        >
-                          <AlertTriangle size={12} />
-                          {/* "3 missing" reads as tidying-up. "Cannot be paid" is what it actually
-                              means, and it is the difference between a gap someone gets to next
-                              month and one that stops a payout run. */}
-                          {blockers.length
-                            ? `Cannot be paid · ${missing.length} missing`
-                            : `${missing.length} missing`}
-                        </span>
-                      )}
-                    </td>
-                    <td style={{ ...cell, whiteSpace: 'nowrap' }}>
-                      {fmtDate(a.joiningDate)}
-                      {months !== null && <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}> · {months}m</span>}
-                    </td>
-                    <td style={cell}>{a.experienceYears ?? 0}y</td>
-                    <td style={{ ...cell, textAlign: 'right', whiteSpace: 'nowrap' }} onClick={(e) => e.stopPropagation()}>
-                      {canManage && <IconBtn title="Edit" onClick={() => navigate(`/hr/roster/${a.id}?edit=1`)}><Edit2 size={13} /></IconBtn>}
-                      {canManage && <IconBtn title="Delete" tone="var(--danger)" onClick={() => remove(a)}><Trash2 size={13} /></IconBtn>}
-                    </td>
-                  </tr>
+                  <>
+                    {fmtDate(a.joiningDate)}
+                    {months !== null && <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}> · {months}m</span>}
+                  </>
                 );
-              })}
-            </tbody>
-          </table>
-        </div>
+              },
+            },
+            {
+              // "Exp" could as easily have been an expiry date. It is years of experience.
+              key: 'experienceYears',
+              header: 'Experience',
+              sortable: true,
+              render: (a) => <>{a.experienceYears ?? 0}y</>,
+            },
+            {
+              key: 'actions',
+              header: 'Actions',
+              align: 'right',
+              render: (a) => (
+                // Named per row, not generically: "Edit" beside 1,163 identical pencils tells a
+                // screen-reader user which control they are on and nothing about whose record it
+                // opens.
+                <span onClick={(e) => e.stopPropagation()}>
+                  {canManage && <IconBtn label={`Edit ${a.displayName}`} onClick={() => navigate(`/hr/roster/${a.id}?edit=1`)}><Edit2 size={13} /></IconBtn>}
+                  {canManage && <IconBtn label={`Delete ${a.displayName}`} tone="var(--danger)" onClick={() => remove(a)}><Trash2 size={13} /></IconBtn>}
+                </span>
+              ),
+            },
+          ]}
+        />
         {!loading && rows.length > 0 && (
-          <div style={{ padding: '8px 12px', fontSize: '11.5px', color: 'var(--text-muted)', borderTop: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
+          <div style={{ padding: '8px 12px', fontSize: '12px', color: 'var(--text-muted)', borderTop: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
             <span>
               Showing {Math.min(visibleCount, rows.length)} of {rows.length}
               {rows.filter((r) => missingFields(r).length > 0).length > 0 &&
@@ -1115,7 +1184,7 @@ export const AssayerRoster: React.FC<{
                 ` · ${rows.filter((r) => payoutBlockers(r).length > 0).length} cannot be paid yet`}
             </span>
             {rows.length > visibleCount && (
-              <button onClick={() => setVisibleCount((c) => c + RENDER_CHUNK)} className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: '11.5px' }}>
+              <button onClick={() => setVisibleCount((c) => c + RENDER_CHUNK)} className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: '12px' }}>
                 Show more ({rows.length - visibleCount} more)
               </button>
             )}
@@ -1123,32 +1192,93 @@ export const AssayerRoster: React.FC<{
         )}
       </div>
 
-      {creating && (
-        <CreateAssayerModal
-          onClose={() => setCreating(false)}
-          onCreated={() => { setCreating(false); refresh(); }}
+      {/*
+        * Opened either by the Add button or by `?register=<id>`, which is what makes an
+        * interrupted registration resumable: every step of the flow writes to the person's real
+        * record, so there is no draft to reopen — only the person, and a link that reopens the
+        * flow on them at the first thing still missing. Without the URL half, a clerk whose
+        * browser closed on step 4 would have to finish the person field by field on the record
+        * page, which is the screen the flow exists to spare them.
+        */}
+      {(creating || resumeRegistrationId) && (
+        <RegistrationWizard
+          resumeAssayerId={resumeRegistrationId ?? undefined}
+          onClose={closeRegistration}
+          onCreated={() => { closeRegistration(); refresh(); }}
         />
       )}
     </div>
   );
 };
 
-const Th: React.FC<{ label: string; k: SortKey; sort: { key: SortKey; dir: string }; onSort: (k: SortKey) => void }> = ({
-  label, k, sort, onSort,
-}) => (
-  <th style={{ ...head, cursor: 'pointer' }} onClick={() => onSort(k)}>
-    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
-      {label}
-      {sort.key === k && (sort.dir === 'asc' ? <ChevronUp size={11} /> : <ChevronDown size={11} />)}
-    </span>
-  </th>
-);
+/**
+ * What is missing from one person's record, and whether anybody is expected to do something.
+ *
+ * A record belonging to somebody who has left is stated, not demanded. The gap chips above count
+ * only people who can still be given work, and this cell used to shout "Cannot be paid" in red at
+ * the same terminated records the chips had just excluded — so the list and its own filters
+ * disagreed on screen. The gaps are still shown, because a past payment may yet need settling;
+ * they are simply not an outstanding task.
+ */
+const RecordGaps: React.FC<{ a: Assayer }> = ({ a }) => {
+  const missing = missingFields(a);
+  const blockers = payoutBlockers(a);
 
-const IconBtn: React.FC<{ title: string; onClick: () => void; tone?: string; children: React.ReactNode }> = ({
-  title, onClick, tone, children,
+  if (missing.length > 0 && !stillWorkable(a)) {
+    return (
+      <span
+        title={`Missing: ${missing.join(', ')}`}
+        style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', color: 'var(--text-muted)' }}
+      >
+        {/* "left" covers resigning, dismissal and archiving; it does not cover dying, and this
+            cell only started reaching those records once the gap chips learned to exclude them.
+            The backend says "no longer with us" for the same reason and in the same words. */}
+        {counted(missing.length, 'gap')} · {isRecordedDeceased(a) ? 'no longer with us' : 'left'}
+      </span>
+    );
+  }
+  if (missing.length === 0) {
+    return (
+      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', color: 'var(--success)', fontSize: '12px' }}>
+        <CheckCircle2 size={12} /> Complete
+      </span>
+    );
+  }
+  return (
+    <span
+      title={`Missing: ${missing.join(', ')}`}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', fontWeight: 600,
+        color: blockers.length ? 'var(--danger)' : 'var(--warning)',
+      }}
+    >
+      <AlertTriangle size={12} />
+      {/* "3 missing" reads as tidying-up. "Cannot be paid" is what it actually means, and it is
+          the difference between a gap someone gets to next month and one that stops a payout run. */}
+      {blockers.length ? `Cannot be paid · ${missing.length} missing` : `${missing.length} missing`}
+    </span>
+  );
+};
+
+/**
+ * A button that is nothing but a picture, forced to say what it is.
+ *
+ * `label` is required and becomes BOTH the accessible name and the hover text. It used to be
+ * `title` alone: a title attribute is invisible to a screen reader's button list, never appears
+ * on a touch screen, and needs a mouse to hover for it — so a pencil and a bin beside each other
+ * on every one of 1,163 rows were, to anyone not using a mouse, two unnamed buttons, one of
+ * which deletes a person's entire record.
+ *
+ * Making it required rather than optional is the point. Two icon-only buttons in this section
+ * had no accessible name at all, and both had been added by copying a neighbouring one; a prop
+ * the compiler insists on is the only version of this rule that survives the next copy-paste.
+ */
+const IconBtn: React.FC<{ label: string; onClick: () => void; tone?: string; children: React.ReactNode }> = ({
+  label: text, onClick, tone, children,
 }) => (
   <button
-    title={title}
+    aria-label={text}
+    title={text}
     onClick={onClick}
     style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px 5px', color: tone ?? 'var(--text-muted)' }}
   >
@@ -1169,7 +1299,7 @@ const RosterFilterSelect: React.FC<{
   label, value, onChange, options, formatOption = (v) => v, allLabel = 'All',
 }) => (
   <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-    <span style={{ fontSize: '10.5px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)' }}>{label}</span>
+    <span style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)' }}>{label}</span>
     <Select
       value={value}
       onChange={onChange}

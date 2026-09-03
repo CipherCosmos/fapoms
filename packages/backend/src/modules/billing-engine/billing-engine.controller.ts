@@ -141,6 +141,7 @@ export class BillingEngineController {
 
   @Get('overview')
   @Roles(...BILLING_READ_ROLES)
+  @RequirePermissions('billing:view:organization')
   @ApiOperation({ summary: 'The finance overview: payouts, receivables, margin, tax, cash, attention, by client' })
   async overview() {
     return { success: true, data: await this.service.overview() };
@@ -150,6 +151,7 @@ export class BillingEngineController {
 
   @Get('payouts')
   @Roles(...BILLING_READ_ROLES)
+  @RequirePermissions('billing:view:organization')
   @ApiOperation({ summary: 'Assayer payouts (fee and reimbursement payables) with labels, paged' })
   async payouts(@Query() q: PayoutsQuery, @GlobalScopeFilter() scope?: GlobalScope) {
     return {
@@ -193,6 +195,7 @@ export class BillingEngineController {
 
   @Get('tds-report')
   @Roles(...BILLING_READ_ROLES)
+  @RequirePermissions('billing:view:organization')
   @ApiOperation({ summary: 'PAN-wise TDS withheld from assayers over a period, for TDS substantiation' })
   async tdsReport(@Query() q: TdsReportQuery) {
     return { success: true, data: await this.service.tdsReport({ from: q.from || null, to: q.to || null }) };
@@ -200,6 +203,9 @@ export class BillingEngineController {
 
   @Patch('payouts/:id/hold')
   @Roles(...DISBURSEMENT_ROLES)
+  // A hold is the brake on the payment run, not an edit to a payout's figures: releasing one
+  // sends money that was stopped. It sits with approve/pay/bank-file, not with `billing:edit`.
+  @RequirePermissions('billing:approve:organization')
   @ApiOperation({ summary: 'Put a payout on hold, or release it' })
   async holdPayout(@Param('id', ParseUUIDPipe) id: string, @Body() dto: HoldDto, @Req() req: any) {
     return { success: true, data: await this.service.holdPayout(id, dto.onHold, dto.reason, this.userId(req)) };
@@ -207,6 +213,10 @@ export class BillingEngineController {
 
   @Get('assayers/:assayerId/statement')
   @Roles(...BILLING_ROLES, SystemRole.ASSAYER)
+  // Deliberately no @RequirePermissions: an assayer authenticates from the `assayers` table and
+  // holds no permission rows at all, so any declaration here would be checked against an empty
+  // set and lock the field app out of its own earnings screen. Custom roles reach this route by
+  // name only, until an assayer principal can hold a grant.
   @ApiOperation({ summary: 'Assayer financial statement: earned, paid, outstanding and history' })
   async assayerStatement(@Param('assayerId', ParseUUIDPipe) assayerId: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
     // An assayer may read only their own statement; the path id is attacker-controlled.
@@ -222,6 +232,7 @@ export class BillingEngineController {
 
   @Get('invoiceable')
   @Roles(...BILLING_READ_ROLES)
+  @RequirePermissions('billing:view:organization')
   @ApiOperation({ summary: 'Completed work not yet invoiced, grouped by client' })
   async invoiceable(@Query() q: InvoiceableQuery, @GlobalScopeFilter() scope?: GlobalScope) {
     return { success: true, data: await this.service.listInvoiceable({ clientId: q.clientId }, scope) };
@@ -229,6 +240,7 @@ export class BillingEngineController {
 
   @Post('invoices')
   @Roles(...BILLING_ROLES)
+  @RequirePermissions('billing:create:organization')
   @ApiOperation({ summary: 'Invoice a set of completed assignments for one client' })
   async createInvoice(@Body() dto: CreateInvoiceDto, @Req() req: any) {
     return { success: true, data: await this.service.createInvoice(dto, this.userId(req)) };
@@ -236,6 +248,7 @@ export class BillingEngineController {
 
   @Get('invoices')
   @Roles(...BILLING_READ_ROLES)
+  @RequirePermissions('billing:view:organization')
   @ApiOperation({ summary: 'Invoices, paged' })
   async invoices(@Query() q: InvoicesQuery, @GlobalScopeFilter() scope?: GlobalScope) {
     return { success: true, data: await this.service.findInvoicesPage(q, scope) };
@@ -243,6 +256,7 @@ export class BillingEngineController {
 
   @Get('invoices/:id')
   @Roles(...BILLING_READ_ROLES)
+  @RequirePermissions('billing:view:organization')
   @ApiOperation({ summary: 'One invoice with its lines and payments' })
   async invoice(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
     return { success: true, data: await this.service.getInvoice(id, scope) };
@@ -250,6 +264,7 @@ export class BillingEngineController {
 
   @Get('invoices/:id/document')
   @Roles(...BILLING_READ_ROLES)
+  @RequirePermissions('billing:view:organization')
   @ApiOperation({ summary: 'The GST tax invoice document: both GSTINs, place of supply, CGST/SGST or IGST split, amount in words' })
   async invoiceDocument(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
     return { success: true, data: await this.service.getInvoiceDocument(id, scope) };
@@ -257,6 +272,7 @@ export class BillingEngineController {
 
   @Patch('invoices/:id/send')
   @Roles(...BILLING_ROLES)
+  @RequirePermissions('billing:edit:organization')
   @ApiOperation({ summary: 'Mark an invoice as sent to the client' })
   async sendInvoice(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     return { success: true, data: await this.service.sendInvoice(id, this.userId(req)) };
@@ -264,6 +280,7 @@ export class BillingEngineController {
 
   @Post('invoices/:id/payment')
   @Roles(...BILLING_ROLES)
+  @RequirePermissions('billing:create:organization')
   @ApiOperation({ summary: 'Record money received against a sent invoice' })
   async recordPayment(@Param('id', ParseUUIDPipe) id: string, @Body() dto: InvoicePaymentDto, @Req() req: any) {
     return { success: true, data: await this.service.recordPayment({ ...dto, invoiceId: id }, this.userId(req)) };
@@ -271,6 +288,7 @@ export class BillingEngineController {
 
   @Patch('invoices/:id/cancel')
   @Roles(...BILLING_ROLES)
+  @RequirePermissions('billing:edit:organization')
   @ApiOperation({ summary: 'Cancel an unpaid invoice; its lines become invoiceable again' })
   async cancelInvoice(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ReasonDto, @Req() req: any) {
     return { success: true, data: await this.service.cancelInvoice(id, dto.reason, this.userId(req)) };
@@ -278,6 +296,9 @@ export class BillingEngineController {
 
   @Post('payments/:id/reverse')
   @Roles(...DISBURSEMENT_ROLES)
+  // Reversal moves money back, in either direction. Held with the disbursement controls rather
+  // than with `billing:edit`, which is where invoice corrections live.
+  @RequirePermissions('billing:approve:organization')
   @ApiOperation({ summary: 'Reverse a recorded payment (either direction)' })
   async reversePayment(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ReasonDto, @Req() req: any) {
     return { success: true, data: await this.service.reversePayment(id, dto.reason, this.userId(req)) };
@@ -287,6 +308,7 @@ export class BillingEngineController {
 
   @Get('assignments/:id/money')
   @Roles(...BILLING_READ_ROLES)
+  @RequirePermissions('billing:view:organization')
   @ApiOperation({ summary: 'Everything money-related about one assignment' })
   async assignmentMoney(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
     return { success: true, data: await this.service.assignmentMoneyLine(id, scope) };
@@ -294,6 +316,7 @@ export class BillingEngineController {
 
   @Patch('assignments/:id/client-line')
   @Roles(...BILLING_ROLES)
+  @RequirePermissions('billing:edit:organization')
   @ApiOperation({ summary: 'Adjust or hold the client line for an assignment (before invoicing)' })
   async editClientLine(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ClientLineDto, @Req() req: any) {
     return { success: true, data: await this.service.editClientLine(id, dto, this.userId(req)) };
@@ -301,6 +324,7 @@ export class BillingEngineController {
 
   @Get('lines')
   @Roles(...BILLING_READ_ROLES)
+  @RequirePermissions('billing:view:organization')
   @ApiOperation({ summary: 'Client lines with labels (unpaged; for exports and filters)' })
   async lines(@Query() q: LinesQuery, @GlobalScopeFilter() scope?: GlobalScope) {
     return { success: true, data: await this.service.listClientLines(q, scope) };
@@ -310,6 +334,7 @@ export class BillingEngineController {
 
   @Get('reconcile/preview')
   @Roles(...BILLING_ROLES)
+  @RequirePermissions('billing:view:organization')
   @ApiOperation({ summary: 'How many completed assignments a reconcile would book' })
   async reconcilePreview(@Query() q: ReconcilePreviewQuery) {
     return { success: true, data: await this.service.reconcilePreview({ since: q.since || null }) };
@@ -317,6 +342,7 @@ export class BillingEngineController {
 
   @Post('reconcile')
   @Roles(...BILLING_ROLES)
+  @RequirePermissions('billing:create:organization')
   @ApiOperation({ summary: 'Queue a reconcile: book every completed assignment missing a payout or client line' })
   @HttpCode(HttpStatus.ACCEPTED)
   async reconcile(@Body() dto: ReconcileDto, @Req() req: any) {
@@ -325,6 +351,7 @@ export class BillingEngineController {
 
   @Get('jobs/:jobId')
   @Roles(...BILLING_ROLES)
+  @RequirePermissions('billing:view:organization')
   @ApiOperation({ summary: 'Poll a queued billing job' })
   async jobStatus(@Param('jobId') jobId: string, @Req() req: any) {
     return { success: true, data: await this.jobs.status(jobId, this.userId(req)) };

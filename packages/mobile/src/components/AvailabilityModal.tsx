@@ -3,6 +3,7 @@ import { Modal, View, ScrollView, Pressable } from 'react-native';
 import { formatDateOnly } from '@fapoms/shared';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Icon, IconButton, Tappable } from './ui/primitives';
+import { useT, t as translate, type TranslationKey } from '../i18n';
 
 export interface LeavePeriod {
   startDate: string; // YYYY-MM-DD
@@ -17,7 +18,11 @@ export interface AvailabilityModalProps {
   onSave: (leaves: LeavePeriod[]) => Promise<boolean>;
 }
 
-const DAY_LABELS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+const DAY_LABEL_KEYS: TranslationKey[] = [
+  'availability.dayInitials.sun', 'availability.dayInitials.mon', 'availability.dayInitials.tue',
+  'availability.dayInitials.wed', 'availability.dayInitials.thu', 'availability.dayInitials.fri',
+  'availability.dayInitials.sat',
+];
 
 const toKey = (y: number, m: number, d: number): string =>
   `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
@@ -50,6 +55,7 @@ export const AvailabilityModal: React.FC<AvailabilityModalProps> = ({
   onSave,
 }) => {
   const t = useTheme();
+  const tr = useT();
   const [leaves, setLeaves] = useState<LeavePeriod[]>(initialLeaves);
   const [monthOffset, setMonthOffset] = useState(0);
   const [pendingStart, setPendingStart] = useState<string | null>(null);
@@ -131,7 +137,7 @@ export const AvailabilityModal: React.FC<AvailabilityModalProps> = ({
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <View style={{ flex: 1, backgroundColor: t.colors.scrim, justifyContent: 'flex-end' }}>
-        <Tappable onPress={onClose} style={{ flex: 1 }} accessibilityLabel="Dismiss">
+        <Tappable onPress={onClose} style={{ flex: 1 }} accessibilityLabel={tr('nav.dismiss')}>
           <View style={{ flex: 1 }} />
         </Tappable>
 
@@ -155,24 +161,24 @@ export const AvailabilityModal: React.FC<AvailabilityModalProps> = ({
               on Android hardware back) left field users with no obvious way out. */}
           <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: t.space.md }}>
             <View style={{ flex: 1, gap: t.space.xs }}>
-              <AppText variant="h2">Your availability</AppText>
+              <AppText variant="h2">{tr('availability.title')}</AppText>
               <AppText variant="small" tone="muted">
-                Mark the days you are off. You won't be offered audits on those days.
+                {tr('availability.subtitle')}
               </AppText>
             </View>
-            <IconButton icon="close" onPress={onClose} accessibilityLabel="Close" size={38} />
+            <IconButton icon="close" onPress={onClose} accessibilityLabel={tr('common.close')} size={38} />
           </View>
 
           <ScrollView showsVerticalScrollIndicator={false} style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: t.space.sm }}>
             {/* Month header */}
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: t.space.md }}>
-              <Tappable onPress={() => setMonthOffset((v) => Math.max(0, v - 1))} disabled={monthOffset === 0} accessibilityRole="button" accessibilityLabel="Previous month">
+              <Tappable onPress={() => setMonthOffset((v) => Math.max(0, v - 1))} disabled={monthOffset === 0} accessibilityRole="button" accessibilityLabel={tr('availability.previousMonth')}>
                 <View style={{ padding: t.space.sm, opacity: monthOffset === 0 ? 0.35 : 1 }}>
                   <Icon name="chevron-back" size={20} color={t.colors.text} />
                 </View>
               </Tappable>
               <AppText variant="bodyStrong">{monthLabel}</AppText>
-              <Tappable onPress={() => setMonthOffset((v) => v + 1)} accessibilityRole="button" accessibilityLabel="Next month">
+              <Tappable onPress={() => setMonthOffset((v) => v + 1)} accessibilityRole="button" accessibilityLabel={tr('availability.nextMonth')}>
                 <View style={{ padding: t.space.sm }}>
                   <Icon name="chevron-forward" size={20} color={t.colors.text} />
                 </View>
@@ -181,9 +187,9 @@ export const AvailabilityModal: React.FC<AvailabilityModalProps> = ({
 
             {/* Weekday labels */}
             <View style={{ flexDirection: 'row', marginBottom: t.space.xs }}>
-              {DAY_LABELS.map((d, i) => (
+              {DAY_LABEL_KEYS.map((key, i) => (
                 <View key={i} style={{ flex: 1, alignItems: 'center' }}>
-                  <AppText variant="caption" tone="faint">{d}</AppText>
+                  <AppText variant="caption" tone="faint">{tr(key)}</AppText>
                 </View>
               ))}
             </View>
@@ -216,7 +222,16 @@ export const AvailabilityModal: React.FC<AvailabilityModalProps> = ({
                       accessibilityRole="button"
                       // A bare "46" tells a screen-reader user nothing about which day it is or
                       // whether it is already marked; the visible state is colour alone.
-                      accessibilityLabel={`${day} ${monthLabel}${isToday ? ', today' : ''}${onLeave ? ', marked as time off' : isPending ? ', selected as start' : ''}`}
+                      // Built as a list of translated attributes rather than one glued
+                      // sentence: a screen reader reads these as a comma-separated list in any
+                      // language, and no locale has to fit clauses into English word order.
+                      accessibilityLabel={[
+                        `${day} ${monthLabel}`,
+                        ...(isToday ? [translate('dates.today')] : []),
+                        ...(onLeave
+                          ? [translate('availability.markedTimeOff')]
+                          : isPending ? [translate('availability.selectedAsStart')] : []),
+                      ].join(', ')}
                       accessibilityState={{ selected: onLeave || isPending, disabled: past }}
                     >
                       <View
@@ -240,15 +255,13 @@ export const AvailabilityModal: React.FC<AvailabilityModalProps> = ({
             ))}
 
             <AppText variant="caption" tone="faint" style={{ marginTop: t.space.sm }}>
-              {pendingStart
-                ? 'Now tap the last day of your time off.'
-                : 'Tap a start day, then an end day. Tap a marked day to remove it.'}
+              {pendingStart ? tr('availability.hintPickEnd') : tr('availability.hintPickStart')}
             </AppText>
 
             {/* Saved leave list */}
             {leaves.length > 0 && (
               <View style={{ gap: t.space.sm, marginTop: t.space.lg }}>
-                <AppText variant="overline" tone="faint">TIME OFF</AppText>
+                <AppText variant="overline" tone="faint">{tr('availability.timeOff')}</AppText>
                 {leaves.map((l, i) => (
                   <View
                     key={`${l.startDate}-${l.endDate}-${i}`}
@@ -277,7 +290,7 @@ export const AvailabilityModal: React.FC<AvailabilityModalProps> = ({
             )}
           </ScrollView>
 
-          <Button label={busy ? 'Saving…' : 'Save availability'} icon="checkmark" onPress={save} loading={busy} size="lg" full />
+          <Button label={busy ? tr('availability.saving') : tr('availability.save')} icon="checkmark" onPress={save} loading={busy} size="lg" full />
         </View>
       </View>
     </Modal>

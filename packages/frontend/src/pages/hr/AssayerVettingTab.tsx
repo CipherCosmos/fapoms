@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ShieldCheck, ShieldAlert, Building2, Phone, FileCheck, AlertTriangle, Plus, Check, Paperclip, Trash2 } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, Building2, Phone, FileCheck, AlertTriangle, Plus, Check, Paperclip, Trash2, Lock } from 'lucide-react';
 import {
   EmpanelmentStatus, BackgroundCheckVerdict, RiskGrade, CibilBand, HARD_COPY_LOCATIONS,
 } from '@fapoms/shared';
 
 import { api } from '../../services/api';
-import { Select, Modal, useConfirm, useToast } from '../../components/ui';
-import { card, label, Empty, Table } from './hr-ui';
+import { Select, Modal, useConfirm, useToast, AlertBanner, SkeletonList } from '../../components/ui';
+import { card, label, Empty } from './hr-ui';
+import { DataTable } from '../../components/ui';
+import { looksLikeMask } from './assayer-shared';
 import { fmtDate } from '../../utils/dates';
 import { userMessage } from '../../services/errors';
 import { counted } from '../../utils/plural';
@@ -117,6 +119,27 @@ const yesNo = (v: boolean | null | undefined) =>
       : <span style={{ color: 'var(--text-muted)' }}>—</span>;
 
 /**
+ * What the Scan column says when there is no scan.
+ *
+ * A green "Yes" against `soft_copy_received` was the wrong answer on 10,977 rows: the old import
+ * ticked that column straight from a spreadsheet, so it means "the sheet said a soft copy
+ * existed", not "there is a file here". Shown as a plain "Yes" it read identically to a row with
+ * a scan attached and made a whole roster look collected. This says which of the two it is, in
+ * the amber the rest of the app uses for "somebody needs to do something", so the difference is
+ * visible from across the table.
+ */
+const NoScan: React.FC<{ claimed: boolean | null | undefined }> = ({ claimed }) => (
+  claimed === true ? (
+    <span
+      style={{ color: 'var(--warning)', fontWeight: 600 }}
+      title="The old roster spreadsheet ticked this document as received, but no file was ever uploaded — so there is nothing here to look at or to check against the original. Upload the scan to close it."
+    >
+      Claimed on the old sheet — no scan
+    </span>
+  ) : yesNo(claimed)
+);
+
+/**
  * Nothing recorded is not the same as checked-and-fine, so an unverified document says so
  * rather than showing a blank the eye slides over.
  */
@@ -143,9 +166,12 @@ const Attachments: React.FC<{
   filePaths: string[];
   canManage: boolean;
   onRemoved: () => void;
-}> = ({ documentId, filePaths, canManage, onRemoved }) => {
+  /** Failures go to the tab's one banner, not to a toast of this component's own. */
+  onError: (message: string) => void;
+  /** Which document these scans belong to, so the delete button can name it. */
+  documentLabel: string;
+}> = ({ documentId, filePaths, canManage, onRemoved, onError, documentLabel }) => {
   const [urls, setUrls] = useState<(string | null)[]>([]);
-  const { toast } = useToast();
 
   useEffect(() => {
     if (!documentId || filePaths.length === 0) { setUrls([]); return undefined; }
@@ -166,7 +192,7 @@ const Attachments: React.FC<{
     try {
       await api.request(`/assayers/document/${documentId}/file/${index}`, { method: 'DELETE' });
       onRemoved();
-    } catch (e) { toast({ type: 'error', message: userMessage(e) }); }
+    } catch (e) { onError(userMessage(e)); }
   };
 
   if (filePaths.length === 0) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
@@ -195,14 +221,18 @@ const Attachments: React.FC<{
                   }}
                 />
               ) : (
-                <span style={{ fontSize: '11.5px', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
+                <span style={{ fontSize: '12px', display: 'inline-flex', alignItems: 'center', gap: '3px' }}>
                   <Paperclip size={11} /> {url ? 'Open' : 'Loading…'}
                 </span>
               )}
             </a>
             {canManage && (
-              <button onClick={() => remove(i)} title="Remove this scan"
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 0 }}>
+              <button
+                onClick={() => remove(i)}
+                aria-label={`Remove this scan of ${documentLabel}`}
+                title={`Remove this scan of ${documentLabel}`}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 0 }}
+              >
                 <Trash2 size={11} />
               </button>
             )}
@@ -223,12 +253,20 @@ const Attachments: React.FC<{
 const UploadButton: React.FC<{
   requirement: string;
   onPick: (requirement: string, file: File) => void;
-}> = ({ requirement, onPick }) => (
+  /** Named per row so the control says which document it is about. */
+  documentLabel: string;
+}> = ({ requirement, onPick, documentLabel }) => (
+  /*
+    "Attach" is email vocabulary. What this does is put a scan or a photograph of a paper
+    document onto the person's record, which is the whole point of the Documents tab and the
+    thing 11,160 requirement rows are waiting for — and a clerk hunting for where to put the
+    photocopy they are holding does not scan a table for the word "Attach".
+  */
   <label
     style={{ color: 'var(--primary)', fontSize: '12px', fontWeight: 600, cursor: 'pointer', whiteSpace: 'nowrap' }}
-    title="PDF or a photo of the document"
+    title={`Upload a PDF or a photo of the ${documentLabel}`}
   >
-    <Paperclip size={11} style={{ verticalAlign: '-1px' }} /> Attach
+    <Paperclip size={11} style={{ verticalAlign: '-1px' }} /> Upload scan
     <input
       type="file"
       accept="application/pdf,image/jpeg,image/png,image/webp,image/heic,image/heif"
@@ -261,7 +299,7 @@ const LocationPicker: React.FC<{ value: string | null; onChange: (v: string) => 
     value={value ?? ''}
     onChange={(e) => onChange(e.target.value)}
     style={{
-      padding: '4px 7px', fontSize: '11.5px', background: 'var(--bg-surface)',
+      padding: '4px 7px', fontSize: '12px', background: 'var(--bg-surface)',
       color: value ? 'var(--text-primary)' : 'var(--text-muted)',
       border: '1px solid var(--border-color)', borderRadius: '6px', fontFamily: 'inherit',
     }}
@@ -290,6 +328,17 @@ export const AssayerVettingTab: React.FC<{
   section: 'checks' | 'documents';
 }> = ({ assayerId, canManage, section }) => {
   const [data, setData] = useState<Dossier | null>(null);
+  /**
+   * Everything on this tab that failed and wants a decision, in one strip at the top.
+   *
+   * There were two channels here for one screen: this state, which held only "the dossier would
+   * not load", and fourteen `toast({ type: 'error' })` calls for every write — recording a
+   * check, saving a standing, attaching a scan, verifying a document. A toast is right for "3
+   * changes saved" and wrong for "that document was not attached": the operator is looking at
+   * the table they just acted on, the toast appears in the far corner, and four seconds later
+   * there is no evidence anything went wrong. Successes still toast; failures stay here until
+   * they are read.
+   */
   const [err, setErr] = useState<string | null>(null);
   const [clients, setClients] = useState<{ id: string; name: string }[]>([]);
   const [busy, setBusy] = useState(false);
@@ -297,7 +346,18 @@ export const AssayerVettingTab: React.FC<{
   const [checkDraft, setCheckDraft] = useState<
     { verdict: string; riskGrade: string; cibilScore: string; cibilBand: string; checkedOn: string; findings: string } | null
   >(null);
-  const [refDraft, setRefDraft] = useState<{ fullName: string; relationship: string; phone: string } | null>(null);
+  /**
+   * The reference being added or corrected. `id` present = correcting an existing one.
+   *
+   * The tab could add a reference and stamp it as spoken-to, and nothing else — while
+   * `PUT /assayers/:assayerId/reference/:id` and `DELETE /assayers/reference/:id` have existed
+   * all along. So a name typed wrong, a phone number that turned out to be someone else's, or a
+   * referee entered against the wrong person could only be added to, never fixed: the roster
+   * import brought in 1,983 of these rows.
+   */
+  const [refDraft, setRefDraft] = useState<
+    { id?: string; fullName: string; relationship: string; phone: string } | null
+  >(null);
   const [idDraft, setIdDraft] = useState<
     { requirement: string; label: string; documentNumber: string; expiryDate: string } | null
   >(null);
@@ -336,13 +396,29 @@ export const AssayerVettingTab: React.FC<{
     // "In hand" means the hard copy is actually in the building. A soft copy is progress, not
     // completion — the file this tracks is a physical one.
     const inHand = rows.filter((r) => r.hardCopyReceived === true).length;
-    const softOnly = rows.filter((r) => r.hardCopyReceived !== true && r.softCopyReceived === true).length;
+    /**
+     * A REQUIREMENT COUNTS AS HAVING A SOFT COPY ONLY WHEN A FILE IS ACTUALLY ON IT.
+     *
+     * `soft_copy_received` is ticked on 10,977 document rows that carry zero files: the old
+     * roster import copied a spreadsheet column of ticks, and a tick in a spreadsheet is
+     * somebody's claim that a scan existed somewhere, not a scan. Counting those as "soft copy
+     * received" told HR the collection was nearly done when in fact not one file had ever been
+     * uploaded, and it is the single reason nobody noticed for as long as they did.
+     *
+     * So the count is split. `withScan` is evidence — a file is attached and can be opened.
+     * `claimedNoScan` is the spreadsheet's claim with nothing behind it, reported separately and
+     * in the words of what it actually is. The flag itself is NOT reset: it truthfully records
+     * what the sheet said, and wiping 10,977 rows would destroy the only trace of who claimed
+     * what.
+     */
+    const withScan = rows.filter((r) => (r.filePaths ?? []).length > 0).length;
+    const claimedNoScan = rows.filter((r) => (r.filePaths ?? []).length === 0 && r.softCopyReceived === true).length;
     // The server decides which are identity documents — one definition, in @fapoms/shared.
     return {
       rows,
       identity: rows.filter((r) => r.identity),
       joining: rows.filter((r) => !r.identity),
-      inHand, softOnly, total: rows.length,
+      inHand, withScan, claimedNoScan, total: rows.length,
     };
   }, [data]);
 
@@ -366,7 +442,7 @@ export const AssayerVettingTab: React.FC<{
       });
       setStandingModal(null);
       reload();
-    } catch (e) { toast({ type: 'error', message: userMessage(e) }); } finally { setBusy(false); }
+    } catch (e) { setErr(userMessage(e)); } finally { setBusy(false); }
   };
 
   const saveCheck = async () => {
@@ -388,33 +464,91 @@ export const AssayerVettingTab: React.FC<{
       toast({ type: 'success', title: 'Check recorded', message: 'It is now the operative one; the previous check is kept below it.' });
       setCheckDraft(null);
       reload();
-    } catch (e) { toast({ type: 'error', message: userMessage(e) }); } finally { setBusy(false); }
+    } catch (e) { setErr(userMessage(e)); } finally { setBusy(false); }
   };
 
   const saveReference = async () => {
     if (!refDraft) return;
     if (!refDraft.fullName.trim()) {
-      toast({ type: 'error', message: 'A reference needs a name.' });
+      setErr('A reference needs a name.');
       return;
     }
+    const editingExisting = !!refDraft.id;
     setBusy(true);
+    setErr(null);
     try {
-      await api.request(`/assayers/${assayerId}/reference`, {
-        method: 'POST',
-        body: JSON.stringify({
-          fullName: refDraft.fullName.trim(),
-          relationship: refDraft.relationship || undefined,
-          phone: refDraft.phone || undefined,
-        }),
+      await api.request(
+        editingExisting
+          ? `/assayers/${assayerId}/reference/${refDraft.id}`
+          : `/assayers/${assayerId}/reference`,
+        {
+          method: editingExisting ? 'PUT' : 'POST',
+          body: JSON.stringify({
+            fullName: refDraft.fullName.trim(),
+            // `null`, not `undefined`: the server keeps the stored value when a key is absent
+            // (`dto.phone ?? row.phone`), so an emptied box would silently put the old number
+            // back — which is exactly the correction somebody opens this form to make.
+            relationship: refDraft.relationship || null,
+            phone: refDraft.phone.trim() || null,
+          }),
+        },
+      );
+      toast({
+        type: 'success',
+        title: editingExisting ? 'Reference updated' : 'Reference added',
+        message: editingExisting
+          ? `${refDraft.fullName.trim()} corrected.`
+          : `${refDraft.fullName.trim()} is on file. Nobody has rung them yet.`,
       });
-      toast({ type: 'success', title: 'Reference added', message: `${refDraft.fullName.trim()} is on file. Nobody has rung them yet.` });
       setRefDraft(null);
       reload();
-    } catch (e) { toast({ type: 'error', message: userMessage(e) }); } finally { setBusy(false); }
+    } catch (e) { setErr(userMessage(e)); } finally { setBusy(false); }
+  };
+
+  /**
+   * Removing a reference, asked about first and named in the question.
+   *
+   * Deleting a referee removes the record that somebody vouched for this person — including,
+   * where it was already stamped, the record that a call was actually made. That is evidence in
+   * a vetting file, so the dialog says what goes with it rather than asking "Are you sure?".
+   */
+  const removeReference = async (ref: any) => {
+    const ok = await confirm({
+      title: `Remove ${ref.fullName} as a reference?`,
+      message: ref.checkedAt
+        ? `${ref.fullName} was recorded as spoken to on ${fmtDate(ref.checkedAt)}. Removing them takes `
+          + 'that record of the call away with them.'
+        : `${ref.fullName} is taken off this person's vetting file. Nothing else changes.`,
+      confirmLabel: 'Remove reference',
+      reversible: false,
+      tone: 'danger',
+    });
+    if (!ok) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.request(`/assayers/reference/${ref.id}`, { method: 'DELETE' });
+      toast({ type: 'success', title: 'Reference removed', message: `${ref.fullName} is no longer on file.` });
+      reload();
+    } catch (e) { setErr(userMessage(e)); } finally { setBusy(false); }
   };
 
   const saveIdentity = async () => {
     if (!idDraft) return;
+    /**
+     * A document number that is still the mask is not an edit.
+     *
+     * The dossier masks `documentNumber` the same way the record masks the PAN and Aadhaar it
+     * writes through to (`NUMBER_LIVES_ON_THE_PERSON` in the backend), so anything filled from
+     * the row rather than typed from the card is `******234F`. The box is opened empty for that
+     * reason; this catches the case where somebody pastes a mask back in, which the server would
+     * refuse in language about revealing a field they never saw a reveal control for.
+     */
+    if (looksLikeMask(idDraft.documentNumber)) {
+      setErr(`That is the covered form of the ${idDraft.label.toLowerCase()} number, not the number. `
+        + 'Type it from the document itself, or press Cancel to leave the stored one alone.');
+      return;
+    }
     setBusy(true);
     try {
       await api.request(`/assayers/${assayerId}/document/${idDraft.requirement}`, {
@@ -426,7 +560,7 @@ export const AssayerVettingTab: React.FC<{
       });
       setIdDraft(null);
       reload();
-    } catch (e) { toast({ type: 'error', message: userMessage(e) }); } finally { setBusy(false); }
+    } catch (e) { setErr(userMessage(e)); } finally { setBusy(false); }
   };
 
   const verify = async (doc: any, verdict: string) => {
@@ -443,7 +577,7 @@ export const AssayerVettingTab: React.FC<{
         method: 'POST', body: JSON.stringify({ verdict }),
       });
       reload();
-    } catch (e) { toast({ type: 'error', message: userMessage(e) }); } finally { setBusy(false); }
+    } catch (e) { setErr(userMessage(e)); } finally { setBusy(false); }
   };
 
   /**
@@ -460,7 +594,7 @@ export const AssayerVettingTab: React.FC<{
         method: 'POST', body: form,
       });
       reload();
-    } catch (e) { toast({ type: 'error', message: userMessage(e) }); } finally { setBusy(false); }
+    } catch (e) { setErr(userMessage(e)); } finally { setBusy(false); }
   };
 
   /** Where the signed original is kept. A picked office, never a typed one — see the migration. */
@@ -471,7 +605,7 @@ export const AssayerVettingTab: React.FC<{
         method: 'PUT', body: JSON.stringify({ hardCopyLocation }),
       });
       reload();
-    } catch (e) { toast({ type: 'error', message: userMessage(e) }); } finally { setBusy(false); }
+    } catch (e) { setErr(userMessage(e)); } finally { setBusy(false); }
   };
 
   const togglePaperwork = async (requirement: string, field: 'softCopyReceived' | 'hardCopyReceived', value: boolean) => {
@@ -481,7 +615,7 @@ export const AssayerVettingTab: React.FC<{
         method: 'PUT', body: JSON.stringify({ [field]: value }),
       });
       reload();
-    } catch (e) { toast({ type: 'error', message: userMessage(e) }); } finally { setBusy(false); }
+    } catch (e) { setErr(userMessage(e)); } finally { setBusy(false); }
   };
 
   const markChecked = async (ref: any) => {
@@ -495,11 +629,27 @@ export const AssayerVettingTab: React.FC<{
     try {
       await api.request(`/assayers/reference/${ref.id}/checked`, { method: 'POST', body: JSON.stringify({}) });
       reload();
-    } catch (e) { toast({ type: 'error', message: userMessage(e) }); } finally { setBusy(false); }
+    } catch (e) { setErr(userMessage(e)); } finally { setBusy(false); }
   };
 
-  if (err) return <div style={{ color: 'var(--danger)', fontSize: '13px', padding: '16px' }}>{err}</div>;
-  if (!data) return <Empty>Loading…</Empty>;
+  /*
+    A failed write no longer takes the whole tab away.
+
+    `if (err) return <the error>` was right while `err` only ever meant "the dossier would not
+    load". Now that every write reports here, blanking the page on a failed upload would throw
+    away the table the operator is working in. The banner sits above the content; only a dossier
+    that never arrived leaves nothing to show under it.
+  */
+  const errorBanner = <AlertBanner type="error" message={err} onClose={() => setErr(null)} style={{ marginBottom: '14px' }} />;
+  if (!data) {
+    return (
+      <div>
+        {errorBanner}
+        {/* Was the word "Loading…" in the middle of an empty card. */}
+        {!err && <SkeletonList rows={3} height={92} />}
+      </div>
+    );
+  }
 
   const check = data.currentCheck;
   const unstanded = clients.filter((c) => !data.empanelments.some((e) => e.clientId === c.id));
@@ -507,6 +657,7 @@ export const AssayerVettingTab: React.FC<{
   return (
     <div style={{ opacity: busy ? 0.6 : 1, transition: 'opacity .15s' }}>
       {confirmDialog}
+      {errorBanner}
 
       {standing && (
         <Modal
@@ -554,7 +705,7 @@ export const AssayerVettingTab: React.FC<{
                 onClick={saveStanding}
                 disabled={busy}
                 style={{
-                  background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '8px',
+                  background: 'var(--primary)', color: 'var(--on-accent)', border: 'none', borderRadius: '8px',
                   padding: '8px 16px', fontSize: '13px', fontWeight: 600, cursor: busy ? 'default' : 'pointer',
                 }}
               >
@@ -576,7 +727,7 @@ export const AssayerVettingTab: React.FC<{
               <div style={{ marginTop: '6px' }}>
                 {data.openIssues.map((i) => (
                   <div key={i.id} style={{ marginBottom: '3px' }}>
-                    <code style={{ fontSize: '11px' }}>{i.sourceColumn}</code>{' — '}
+                    <code style={{ fontSize: '12px' }}>{i.sourceColumn}</code>{' — '}
                     {i.reason} Original text: “{i.rawValue}”.
                   </div>
                 ))}
@@ -643,7 +794,7 @@ export const AssayerVettingTab: React.FC<{
             <div style={{ flexBasis: '100%', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
               <button style={{ ...linkButton, color: 'var(--text-muted)' }} onClick={() => setCheckDraft(null)}>Cancel</button>
               <button onClick={saveCheck} disabled={busy} style={{
-                background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '7px',
+                background: 'var(--primary)', color: 'var(--on-accent)', border: 'none', borderRadius: '7px',
                 padding: '7px 14px', fontSize: '12.5px', fontWeight: 600, cursor: busy ? 'default' : 'pointer',
               }}>Record check</button>
             </div>
@@ -681,15 +832,48 @@ export const AssayerVettingTab: React.FC<{
           </div>
         )}
         {data.backgroundChecks.length > 1 && (
-          <Table
-            head={['Date', 'Verdict', 'Risk', 'Findings']}
-            rows={data.backgroundChecks.slice(1).map((c) => [
-              fmtDate(c.checkedOn) || '—',
-              <span style={{ color: verdictTone(c.verdict) }}>{VERDICT_LABELS[c.verdict] ?? c.verdict}</span>,
-              c.riskGrade ? (RISK_LABELS[c.riskGrade] ?? c.riskGrade) : '—',
-              c.findings || '—',
-            ])}
+          <DataTable
+            density="compact"
+            minWidth={false}
+            rows={data.backgroundChecks.slice(1)}
+            rowKey={(c) => c.id}
+            columns={[
+              { key: 'date', header: 'Date', render: (c) => <>{fmtDate(c.checkedOn) || '—'}</> },
+              {
+                key: 'verdict',
+                header: 'Verdict',
+                render: (c) => <span style={{ color: verdictTone(c.verdict) }}>{VERDICT_LABELS[c.verdict] ?? c.verdict}</span>,
+              },
+              { key: 'risk', header: 'Risk', render: (c) => <>{c.riskGrade ? (RISK_LABELS[c.riskGrade] ?? c.riskGrade) : '—'}</> },
+              // Free prose written by whoever did the check — the one column here that is a
+              // paragraph rather than a value, so it wraps instead of stretching the table.
+              { key: 'findings', header: 'Findings', wrap: true, render: (c) => <>{c.findings || '—'}</> },
+            ]}
           />
+        )}
+        {/*
+          SAY THAT THERE IS NO EDIT BUTTON, RATHER THAN LEAVING PEOPLE TO HUNT FOR ONE.
+
+          Every other list on this tab now has Change and Remove beside its rows, and this one
+          deliberately does not: a background check is a dated statement of what somebody found
+          when they looked, and a file where the finding can be quietly rewritten afterwards is
+          worth nothing to the client whose vault this person walks into. Correcting one means
+          recording a newer check, which is what the section's own first line describes. Without
+          this sentence the absence reads as a missing feature, and somebody eventually builds
+          it.
+        */}
+        {check && (
+          <div style={{
+            marginTop: '12px', display: 'flex', gap: '7px', alignItems: 'flex-start',
+            fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.5,
+          }}>
+            <Lock size={13} style={{ flexShrink: 0, marginTop: '1px' }} />
+            <span>
+              Checks cannot be edited or deleted — each one is the record of what was found on the
+              day it was done. If this is wrong or out of date, record a new check: it becomes the
+              operative one and this drops into the list above.
+            </span>
+          </div>
         )}
       </Section>
 
@@ -701,26 +885,39 @@ export const AssayerVettingTab: React.FC<{
         {data.empanelments.length === 0 ? (
           <Empty>No client standing has been recorded.</Empty>
         ) : (
-          <Table
-            head={canManage ? ['Client', 'Standing', 'Decided', 'Why', ''] : ['Client', 'Standing', 'Decided', 'Why']}
-            rows={data.empanelments.map((e) => {
-              const cells: React.ReactNode[] = [
-                e.client?.name ?? '—',
-                <span style={{ fontWeight: 600, color: BLOCKING_STANDINGS.has(e.status) ? 'var(--danger)' : 'var(--text-primary)' }}>
-                  {STANDING_LABELS[e.status] ?? e.status}
-                </span>,
-                fmtDate(e.decidedAt) || '—',
-                e.statusReason || e.documentsOutstanding || '—',
-              ];
-              if (canManage) {
-                cells.push(
+          /*
+            The Change column is one entry filtered out rather than a second header array. It used
+            to be `head={canManage ? [...5] : [...4]}` at the top and a `cells.push(...)` twenty
+            lines below: two halves of one column, kept in the same order by hand.
+          */
+          <DataTable
+            density="compact"
+            minWidth={false}
+            rows={data.empanelments}
+            rowKey={(e) => e.id}
+            columns={[
+              { key: 'client', header: 'Client', render: (e) => <>{e.client?.name ?? '—'}</> },
+              {
+                key: 'standing',
+                header: 'Standing',
+                render: (e) => (
+                  <span style={{ fontWeight: 600, color: BLOCKING_STANDINGS.has(e.status) ? 'var(--danger)' : 'var(--text-primary)' }}>
+                    {STANDING_LABELS[e.status] ?? e.status}
+                  </span>
+                ),
+              },
+              { key: 'decided', header: 'Decided', render: (e) => <>{fmtDate(e.decidedAt) || '—'}</> },
+              { key: 'why', header: 'Why', wrap: true, render: (e) => <>{e.statusReason || e.documentsOutstanding || '—'}</> },
+              ...(canManage ? [{
+                key: 'act',
+                header: '',
+                render: (e: typeof data.empanelments[number]) => (
                   <button style={linkButton} onClick={() => setStandingModal({ clientId: e.clientId, clientName: e.client?.name ?? 'this client', status: e.status, statusReason: e.statusReason ?? '' })}>
                     Change
-                  </button>,
-                );
-              }
-              return cells;
-            })}
+                  </button>
+                ),
+              }] : []),
+            ]}
           />
         )}
         {canManage && unstanded.length > 0 && (
@@ -770,35 +967,65 @@ export const AssayerVettingTab: React.FC<{
             <div style={{ flexBasis: '100%', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
               <button style={{ ...linkButton, color: 'var(--text-muted)' }} onClick={() => setRefDraft(null)}>Cancel</button>
               <button onClick={saveReference} disabled={busy} style={{
-                background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '7px',
+                background: 'var(--primary)', color: 'var(--on-accent)', border: 'none', borderRadius: '7px',
                 padding: '7px 14px', fontSize: '12.5px', fontWeight: 600, cursor: busy ? 'default' : 'pointer',
-              }}>Add reference</button>
+              }}>{refDraft.id ? 'Save changes' : 'Add reference'}</button>
             </div>
           </div>
         )}
         {data.references.length === 0 ? (
           <Empty>No references are on file.</Empty>
         ) : (
-          <Table
-            head={canManage ? ['Name', 'Relationship', 'Phone', 'Spoken to', ''] : ['Name', 'Relationship', 'Phone', 'Spoken to']}
-            rows={data.references.map((r) => {
-              const cells: React.ReactNode[] = [
-                r.fullName,
-                r.relationship || '—',
-                r.phone || '—',
-                r.checkedAt
+          <DataTable
+            density="compact"
+            minWidth={false}
+            rows={data.references}
+            rowKey={(r) => r.id}
+            columns={[
+              { key: 'name', header: 'Name', render: (r) => <>{r.fullName}</> },
+              { key: 'rel', header: 'Relationship', render: (r) => <>{r.relationship || '—'}</> },
+              { key: 'phone', header: 'Phone', render: (r) => <>{r.phone || '—'}</> },
+              {
+                key: 'checked',
+                header: 'Spoken to',
+                render: (r) => (r.checkedAt
                   ? <span style={{ color: 'var(--success)' }}><Check size={12} style={{ verticalAlign: '-2px' }} /> {fmtDate(r.checkedAt)}</span>
-                  : <span style={{ color: 'var(--text-muted)' }}>Not yet</span>,
-              ];
-              if (canManage) {
-                cells.push(
-                  r.checkedAt
-                    ? <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>—</span>
-                    : <button style={linkButton} onClick={() => markChecked(r)}>Record call</button>,
-                );
-              }
-              return cells;
-            })}
+                  : <span style={{ color: 'var(--text-muted)' }}>Not yet</span>),
+              },
+              ...(canManage ? [{
+                key: 'act',
+                header: '',
+                /*
+                  Three controls where there used to be one, because the backend has had all three
+                  since the vetting work landed and this table offered only "Record call". A
+                  misspelt name or somebody else's phone number could be added and never corrected
+                  — on 1,983 imported rows, that is the common case, not the edge one. "Record
+                  call" stays first: it is the action, and correcting the row is the thing you do
+                  on the way to it.
+                */
+                render: (r: typeof data.references[number]) => (
+                  <div style={{ display: 'flex', gap: '12px' }}>
+                    {r.checkedAt
+                      ? <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>Called</span>
+                      : <button style={linkButton} onClick={() => markChecked(r)}>Record call</button>}
+                    <button
+                      style={linkButton}
+                      onClick={() => setRefDraft({
+                        id: r.id,
+                        fullName: r.fullName ?? '',
+                        relationship: r.relationship ?? '',
+                        phone: r.phone ?? '',
+                      })}
+                    >
+                      Change
+                    </button>
+                    <button style={{ ...linkButton, color: 'var(--danger)' }} onClick={() => removeReference(r)}>
+                      Remove
+                    </button>
+                  </div>
+                ),
+              }] : []),
+            ]}
           />
         )}
       </Section>
@@ -809,7 +1036,12 @@ export const AssayerVettingTab: React.FC<{
       <Section
         title="Documents"
         icon={FileCheck}
-        hint={`${paperwork.inHand} of ${paperwork.total} in hand${paperwork.softOnly ? `, ${paperwork.softOnly} soft copy only` : ''}. A soft copy is progress; the file this tracks is a physical one.`}
+        hint={
+          `${paperwork.withScan} of ${paperwork.total} have a scan on file; ${paperwork.inHand} of ${paperwork.total} have the signed original in hand.`
+          + (paperwork.claimedNoScan
+            ? ` ${counted(paperwork.claimedNoScan, 'other was', 'others were')} ticked as received on the old roster sheet with no file attached — those still need collecting.`
+            : '')
+        }
       >
         {/*
           Identity documents first, and separately.
@@ -821,37 +1053,58 @@ export const AssayerVettingTab: React.FC<{
           to ignore the expiry.
         */}
         <div style={{ ...label, marginBottom: '8px' }}>Identity</div>
-        <Table
-          head={canManage ? ['Document', 'Number', 'Expires', 'Checked', 'Scan', ''] : ['Document', 'Number', 'Expires', 'Checked', 'Scan']}
-          rows={paperwork.identity.map((d) => {
-            const cells: React.ReactNode[] = [
-              d.label,
-              d.documentNumber
-                ? <code style={{ fontSize: '11.5px' }}>{d.documentNumber}</code>
-                : <span style={{ color: 'var(--text-muted)' }}>—</span>,
-              d.expiryDate ? fmtDate(d.expiryDate) : <span style={{ color: 'var(--text-muted)' }}>—</span>,
-              <VerificationChip status={d.verificationStatus} />,
-              <Attachments documentId={d.id} filePaths={d.filePaths ?? []} canManage={canManage} onRemoved={reload} />,
-            ];
-            if (canManage) {
-              cells.push(
-                <div style={{ display: 'flex', gap: '10px', whiteSpace: 'nowrap' }}>
+        <DataTable
+          density="compact"
+          minWidth={false}
+          rows={paperwork.identity}
+          rowKey={(d) => d.requirement}
+          columns={[
+            { key: 'doc', header: 'Document', render: (d) => <>{d.label}</> },
+            {
+              key: 'number',
+              header: 'Number',
+              render: (d) => (d.documentNumber
+                ? <code style={{ fontSize: '12px' }}>{d.documentNumber}</code>
+                : <span style={{ color: 'var(--text-muted)' }}>—</span>),
+            },
+            {
+              key: 'expires',
+              header: 'Expires',
+              render: (d) => (d.expiryDate ? <>{fmtDate(d.expiryDate)}</> : <span style={{ color: 'var(--text-muted)' }}>—</span>),
+            },
+            { key: 'checked', header: 'Checked', render: (d) => <VerificationChip status={d.verificationStatus} /> },
+            {
+              key: 'scan',
+              header: 'Scan',
+              render: (d) => (
+                <Attachments documentId={d.id} filePaths={d.filePaths ?? []} canManage={canManage} onRemoved={reload} onError={setErr} documentLabel={d.label} />
+              ),
+            },
+            ...(canManage ? [{
+              key: 'act',
+              header: '',
+              render: (d: typeof paperwork.identity[number]) => (
+                <div style={{ display: 'flex', gap: '10px' }}>
                   <button style={linkButton} onClick={() => setIdDraft({
                     requirement: d.requirement, label: d.label,
-                    documentNumber: d.documentNumber ?? '',
+                    // Empty, never the stored value: what the row holds is a mask (see
+                    // `saveIdentity`), and a box opening on `******234F` invites a one-character
+                    // correction that destroys the real number on the person's record.
+                    documentNumber: '',
                     expiryDate: d.expiryDate ? String(d.expiryDate).slice(0, 10) : '',
                   })}>
-                    {d.documentNumber ? 'Edit' : 'Add number'}
+                    {/* "Edit" promised the stored number in the box. It cannot be there — it is
+                        masked — so the button says what actually happens: you type a new one. */}
+                    {d.documentNumber ? 'Replace number' : 'Add number'}
                   </button>
                   {d.id && d.documentNumber && d.verificationStatus !== 'VERIFIED' && (
                     <button style={linkButton} onClick={() => verify(d, 'VERIFIED')}>Verify</button>
                   )}
-                  <UploadButton requirement={d.requirement} onPick={attach} />
-                </div>,
-              );
-            }
-            return cells;
-          })}
+                  <UploadButton requirement={d.requirement} onPick={attach} documentLabel={d.label} />
+                </div>
+              ),
+            }] : []),
+          ]}
         />
 
         {idDraft && (
@@ -865,13 +1118,14 @@ export const AssayerVettingTab: React.FC<{
                 onChange={(e) => setIdDraft({ ...idDraft, expiryDate: e.target.value })} />
             </Field>
             <div style={{ flexBasis: '100%', display: 'flex', justifyContent: 'flex-end', gap: '10px', alignItems: 'center' }}>
-              <span style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginRight: 'auto' }}>
-                Changing the number clears any verification — somebody checked the old one against
-                the original.
+              <span style={{ fontSize: '12px', color: 'var(--text-muted)', marginRight: 'auto', maxWidth: '52ch', lineHeight: 1.5 }}>
+                Type the number from the document itself — the stored one is covered on screen, so
+                the box starts empty. Saving replaces it and clears any verification, because
+                somebody checked the old number against the original.
               </span>
               <button style={{ ...linkButton, color: 'var(--text-muted)' }} onClick={() => setIdDraft(null)}>Cancel</button>
               <button onClick={saveIdentity} disabled={busy} style={{
-                background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '7px',
+                background: 'var(--primary)', color: 'var(--on-accent)', border: 'none', borderRadius: '7px',
                 padding: '7px 14px', fontSize: '12.5px', fontWeight: 600, cursor: busy ? 'default' : 'pointer',
               }}>Save</button>
             </div>
@@ -879,36 +1133,55 @@ export const AssayerVettingTab: React.FC<{
         )}
 
         <div style={{ ...label, margin: '18px 0 8px' }}>Joining paperwork</div>
-        <Table
-          head={canManage ? ['Document', 'Scan', 'Hard copy', 'Where', ''] : ['Document', 'Scan', 'Hard copy', 'Where']}
-          rows={paperwork.joining.map((d) => {
-            const cells: React.ReactNode[] = [
-              d.label,
+        <DataTable
+          density="compact"
+          minWidth={false}
+          rows={paperwork.joining}
+          rowKey={(d) => d.requirement}
+          columns={[
+            { key: 'doc', header: 'Document', render: (d) => <>{d.label}</> },
+            {
+              key: 'scan',
+              header: 'Scan',
               // The scan itself where there is one; the tick only where somebody said a copy
               // arrived without attaching it. A column that can show the document should.
-              (d.filePaths ?? []).length > 0
-                ? <Attachments documentId={d.id} filePaths={d.filePaths} canManage={canManage} onRemoved={reload} />
-                : yesNo(d.softCopyReceived),
-              yesNo(d.hardCopyReceived),
-              canManage
-                ? <LocationPicker
-                    value={d.hardCopyLocation}
-                    onChange={(v) => setWhere(d.requirement, v)}
-                  />
-                : (d.hardCopyLocation || '—'),
-            ];
-            if (canManage) {
-              cells.push(
-                <div style={{ display: 'flex', gap: '10px', whiteSpace: 'nowrap' }}>
-                  <UploadButton requirement={d.requirement} onPick={attach} />
-                  <button style={linkButton} onClick={() => togglePaperwork(d.requirement, 'hardCopyReceived', d.hardCopyReceived !== true)}>
-                    {d.hardCopyReceived === true ? 'Original out' : 'Original in'}
+              render: (d) => ((d.filePaths ?? []).length > 0
+                ? <Attachments documentId={d.id} filePaths={d.filePaths} canManage={canManage} onRemoved={reload} onError={setErr} documentLabel={d.label} />
+                : <NoScan claimed={d.softCopyReceived} />),
+            },
+            { key: 'hard', header: 'Hard copy', render: (d) => <>{yesNo(d.hardCopyReceived)}</> },
+            {
+              key: 'where',
+              header: 'Where',
+              render: (d) => (canManage
+                ? <LocationPicker value={d.hardCopyLocation} onChange={(v) => setWhere(d.requirement, v)} />
+                : <>{d.hardCopyLocation || '—'}</>),
+            },
+            ...(canManage ? [{
+              key: 'act',
+              header: '',
+              render: (d: typeof paperwork.joining[number]) => (
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <UploadButton requirement={d.requirement} onPick={attach} documentLabel={d.label} />
+                  {/*
+                    "Original in" / "Original out" is filing-room shorthand for a toggle: it does
+                    not say what pressing it records, and the two read as a pair of opposite
+                    actions rather than as one switch. What it actually tracks is whether the
+                    signed paper is in the office.
+                  */}
+                  <button
+                    style={linkButton}
+                    onClick={() => togglePaperwork(d.requirement, 'hardCopyReceived', d.hardCopyReceived !== true)}
+                    title={d.hardCopyReceived === true
+                      ? `Record that the signed ${d.label} has left the office`
+                      : `Record that the signed ${d.label} is now in the office`}
+                  >
+                    {d.hardCopyReceived === true ? 'Signed paper has gone out' : 'Signed paper is here'}
                   </button>
-                </div>,
-              );
-            }
-            return cells;
-          })}
+                </div>
+              ),
+            }] : []),
+          ]}
         />
       </Section>
       )}

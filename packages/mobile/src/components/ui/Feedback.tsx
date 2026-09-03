@@ -4,6 +4,7 @@ import { useTheme } from '../../theme/ThemeProvider';
 import { AppText, Icon } from './primitives';
 import type { IconName } from './primitives';
 import * as haptics from '../../lib/haptics';
+import { t as translate } from '../../i18n';
 
 export type Tone = 'success' | 'error' | 'warning' | 'info';
 
@@ -90,11 +91,13 @@ export const FeedbackProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       error: (t, m) => { haptics.error(); notify('error', t, m); },
       warning: (t, m) => notify('warning', t, m),
       info: (t, m) => notify('info', t, m),
-      confirm: (title, message, confirmLabel = 'Confirm') =>
+      // The default label is resolved at call time, not at module load: this provider is created
+      // once and would otherwise pin "Confirm" to whatever language was active at startup.
+      confirm: (title, message, confirmLabel) =>
         new Promise<boolean>((resolve) => {
           Alert.alert(title, message, [
-            { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
-            { text: confirmLabel, style: 'destructive', onPress: () => resolve(true) },
+            { text: translate('common.cancel'), style: 'cancel', onPress: () => resolve(false) },
+            { text: confirmLabel ?? translate('shell.confirm'), style: 'destructive', onPress: () => resolve(true) },
           ]);
         }),
     }),

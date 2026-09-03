@@ -430,12 +430,16 @@ export const IconButton: React.FC<{
         <Icon name={icon} size={Math.round(size * 0.45)} color={fg} />
         {badge != null && badge > 0 && (
           <View style={{
-            position: 'absolute', top: -4, right: -4, minWidth: 19, height: 19, borderRadius: 10,
+            // Sized around a 12pt count — the readable floor for this app. It was 10, which is
+            // below every size in the type scale, on a number that tells a field worker how much
+            // is waiting for them. Kept in step with the tab dock badge in AppShell so the same
+            // count never appears at two different sizes.
+            position: 'absolute', top: -5, right: -5, minWidth: 21, height: 21, borderRadius: 11,
             paddingHorizontal: 5, backgroundColor: t.colors.danger,
             alignItems: 'center', justifyContent: 'center',
             borderWidth: 2, borderColor: t.colors.bg,
           }}>
-            <Text style={{ color: t.colors.onDanger, fontSize: 10, fontWeight: '800' }}>{badge > 99 ? '99+' : badge}</Text>
+            <Text style={{ color: t.colors.onDanger, fontSize: 12, fontWeight: '800' }}>{badge > 99 ? '99+' : badge}</Text>
           </View>
         )}
       </View>
@@ -626,7 +630,10 @@ export const StatTile: React.FC<{
     <Card level={1} onPress={onPress} style={{ flex: 1, minWidth: 140 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm, marginBottom: t.space.sm }}>
         {icon && <Icon name={icon} size={15} color={fg} />}
-        <AppText variant="overline" tone="faint" numberOfLines={1}>{label.toUpperCase()}</AppText>
+        {/* Two lines, because Devanagari sets wider than Latin at the same size and a one-line
+            clamp turned "Expenses claimed" into an ellipsis the moment it was translated. The
+            strip stretches its tiles to the tallest, so a wrapped label costs no alignment. */}
+        <AppText variant="overline" tone="faint" numberOfLines={2}>{label.toUpperCase()}</AppText>
       </View>
       <Text style={[t.type.h1 as TextStyle, { color: fg }]} numberOfLines={1}>{value}</Text>
       {hint && <AppText variant="caption" tone="faint" numberOfLines={1} style={{ marginTop: 2 }}>{hint}</AppText>}

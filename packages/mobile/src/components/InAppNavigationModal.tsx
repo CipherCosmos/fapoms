@@ -8,6 +8,8 @@ import { AppText, Badge, Button, EmptyState, Icon, IconButton, Tappable } from '
 import { AssayerAssignment } from '../types/mobile-app';
 import { InteractiveMap } from './MapEntry';
 import { calculateHaversineDistance } from '@fapoms/shared';
+// Module-level `t` for the two pure formatters below; the component itself uses `useT`.
+import { useT, t as translate } from '../i18n';
 
 interface InAppNavigationModalProps {
   visible: boolean;
@@ -44,10 +46,12 @@ function haversineKm(a: LatLng, b: LatLng): number {
 
 function formatDuration(seconds: number): string {
   const mins = Math.max(1, Math.round(seconds / 60));
-  if (mins < 60) return `${mins} min`;
+  if (mins < 60) return translate('nav.durationMinutes', { count: mins });
   const h = Math.floor(mins / 60);
   const m = mins % 60;
-  return m > 0 ? `${h} hr ${m} min` : `${h} hr`;
+  return m > 0
+    ? translate('nav.durationHoursMinutes', { hours: h, minutes: m })
+    : translate('nav.durationHours', { count: h });
 }
 
 const DIRECTIONS_URL = 'https://maps.googleapis.com/maps/api/directions/json';
@@ -194,6 +198,7 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
   onClose,
 }) => {
   const t = useTheme();
+  const tr = useT();
   const { attachPositionSource, reportPosition } = useLocation();
   const [origin, setOrigin] = useState<LatLng | null>(null);
   const [routeCoords, setRouteCoords] = useState<LatLng[]>([]);
@@ -268,7 +273,7 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
   const requestPermission = useCallback(async (): Promise<LatLng | null> => {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== 'granted') {
-      setError('Location permission denied. Showing destination only.');
+      setError(tr('nav.permissionDenied'));
       return null;
     }
     const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
@@ -364,9 +369,9 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
               return;
             }
           }
-          setError(data?.error_message || 'Could not fetch a route.');
+          setError(data?.error_message || tr('nav.routeFailed'));
         } catch (e: any) {
-          setError('Route fetch failed.');
+          setError(tr('nav.routeFetchFailed'));
         }
       }
 
@@ -670,7 +675,7 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
     <RNModal visible={visible} animationType="slide" transparent onRequestClose={handleRequestClose}>
       {!expanded ? (
         <View style={{ flex: 1, backgroundColor: t.colors.scrim, justifyContent: 'flex-end' }}>
-          <Tappable onPress={onClose} style={{ flex: 1 }} accessibilityLabel="Dismiss">
+          <Tappable onPress={onClose} style={{ flex: 1 }} accessibilityLabel={tr('nav.dismiss')}>
             <View style={{ flex: 1 }} />
           </Tappable>
 
@@ -687,7 +692,7 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
 
             <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: t.space.md }}>
               <View style={{ flex: 1, gap: t.space.xs }}>
-                <AppText variant="h2" numberOfLines={1}>{assignment?.branchName || 'Branch'}</AppText>
+                <AppText variant="h2" numberOfLines={1}>{assignment?.branchName || tr('nav.branchFallback')}</AppText>
                 {assignment?.branchAddress ? (
                   <View style={{ flexDirection: 'row', gap: t.space.sm }}>
                     <Icon name="location-outline" size={14} color={t.colors.textFaint} style={{ marginTop: 3 }} />
@@ -697,15 +702,15 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
                   </View>
                 ) : null}
               </View>
-              <IconButton icon="close" onPress={onClose} accessibilityLabel="Close" size={38} />
+              <IconButton icon="close" onPress={onClose} accessibilityLabel={tr('common.close')} size={38} />
             </View>
 
             {/* Time and distance as a pair of tiles: they are the two numbers the sheet exists
                 to answer, and they were previously two bare labels lost against the address. */}
             <View style={{ flexDirection: 'row', gap: t.space.md }}>
               {([
-                { label: 'TRAVEL TIME', value: travelSeconds != null ? formatDuration(travelSeconds) : '—', icon: 'time-outline' },
-                { label: 'DISTANCE', value: distanceKm != null ? `${distanceKm.toFixed(1)} km` : '—', icon: 'navigate-outline' },
+                { label: tr('nav.travelTime'), value: travelSeconds != null ? formatDuration(travelSeconds) : '—', icon: 'time-outline' },
+                { label: tr('nav.distance'), value: distanceKm != null ? tr('home.distanceKm', { km: distanceKm.toFixed(1) }) : '—', icon: 'navigate-outline' },
               ]).map((tile) => (
                 <View
                   key={tile.label}
@@ -738,7 +743,7 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
                       key={m}
                       onPress={() => setMode(m)}
                       accessibilityRole="tab"
-                      accessibilityLabel={m === 'driving' ? 'Drive' : 'Transit'}
+                      accessibilityLabel={m === 'driving' ? tr('nav.drive') : tr('nav.transit')}
                       accessibilityState={{ selected: active }}
                     >
                       <View style={{
@@ -749,7 +754,7 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
                       }}>
                         <Icon name={m === 'driving' ? 'car' : 'bus'} size={16} color={active ? t.colors.primary : t.colors.textFaint} />
                         <AppText variant="caption" tone={active ? 'primary' : 'faint'}>
-                          {m === 'driving' ? 'Drive' : 'Transit'}
+                          {m === 'driving' ? tr('nav.drive') : tr('nav.transit')}
                         </AppText>
                       </View>
                     </Tappable>
@@ -757,12 +762,12 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
                 })}
               </View>
               {fare && mode === 'transit' && <Badge label={fare.text || `₹${fare.value}`} tone="success" />}
-              {usingFallback && !loading && <Badge label="ESTIMATE" tone="warning" />}
+              {usingFallback && !loading && <Badge label={tr('nav.estimate')} tone="warning" />}
             </View>
 
             {usingFallback && !loading && (
               <AppText variant="caption" tone="muted">
-                Straight-line estimate — no route service reachable. The real drive will be longer.
+                {tr('nav.estimateNote')}
               </AppText>
             )}
 
@@ -770,7 +775,7 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
 
             <View style={{ gap: t.space.sm }}>
               <Button
-                label="Start navigation"
+                label={tr('nav.start')}
                 icon="navigate"
                 onPress={startNavigation}
                 size="lg"
@@ -779,7 +784,7 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
               />
               {!canNavigate && !loading && (
                 <AppText variant="caption" tone="faint" style={{ textAlign: 'center' }}>
-                  Turn-by-turn needs your location and a reachable route service.
+                  {tr('nav.cannotNavigate')}
                 </AppText>
               )}
             </View>
@@ -801,12 +806,12 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
           }}
         >
           <View style={{ flex: 1 }}>
-            <AppText variant="h3" numberOfLines={1}>{assignment?.branchName || 'In-App Navigation'}</AppText>
+            <AppText variant="h3" numberOfLines={1}>{assignment?.branchName || tr('nav.titleFallback')}</AppText>
             <AppText variant="caption" tone="muted" numberOfLines={1}>{assignment?.branchAddress || ''}</AppText>
           </View>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm }}>
             <Button
-              label="Back"
+              label={tr('common.back')}
               variant="neutral"
               icon="chevron-back"
               onPress={collapseToSheet}
@@ -814,7 +819,7 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
             />
             {/* Direct dismissal from the map — the exit that was missing. Back returns to the
                 summary sheet; this closes the feature outright. */}
-            <IconButton icon="close" onPress={onClose} accessibilityLabel="Close navigation" size={38} />
+            <IconButton icon="close" onPress={onClose} accessibilityLabel={tr('nav.closeNavigation')} size={38} />
           </View>
         </View>
 
@@ -826,10 +831,10 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
                 <Icon name={maneuverIcon(steps[activeStepIndex]?.maneuver)} size={26} color={t.colors.primary} />
               </View>
               <View style={{ flex: 1 }}>
-                <AppText variant="h3" numberOfLines={2}>{steps[activeStepIndex]?.instruction || 'Arrive'}</AppText>
+                <AppText variant="h3" numberOfLines={2}>{steps[activeStepIndex]?.instruction || tr('nav.arrive')}</AppText>
                 {activeStepIndex < steps.length - 1 && (
                   <AppText variant="caption" tone="muted" numberOfLines={1}>
-                    Next: {steps[activeStepIndex + 1]?.instruction || ''}
+                    {tr('nav.next', { instruction: steps[activeStepIndex + 1]?.instruction || '' })}
                   </AppText>
                 )}
               </View>
@@ -841,12 +846,12 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
               </View>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                 <Icon name="navigate" size={14} color={t.colors.textFaint} />
-                <AppText variant="caption" tone="muted">{remainingKm != null ? `${remainingKm.toFixed(1)} km` : '--'}</AppText>
+                <AppText variant="caption" tone="muted">{remainingKm != null ? tr('home.distanceKm', { km: remainingKm.toFixed(1) }) : '--'}</AppText>
               </View>
               {speed != null && (
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                   <Icon name="speedometer" size={14} color={t.colors.textFaint} />
-                  <AppText variant="caption" tone="muted">{Math.max(0, Math.round(speed * 3.6))} km/h</AppText>
+                  <AppText variant="caption" tone="muted">{tr('nav.speed', { kmh: Math.max(0, Math.round(speed * 3.6)) })}</AppText>
                 </View>
               )}
             </View>
@@ -881,7 +886,7 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
                         // A hand-rolled segmented control. Without a role and selected state a
                         // screen reader reads two unrelated buttons and never says which is on.
                         accessibilityRole="tab"
-                        accessibilityLabel={m === 'driving' ? 'Drive' : 'Transit'}
+                        accessibilityLabel={m === 'driving' ? tr('nav.drive') : tr('nav.transit')}
                         accessibilityState={{ selected: active }}
                       >
                         <View style={{
@@ -895,7 +900,7 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
                         }}>
                           <Icon name={m === 'driving' ? 'car' : 'bus'} size={16} color={active ? t.colors.primary : t.colors.textFaint} />
                           <AppText variant="caption" tone={active ? 'primary' : 'faint'}>
-                            {m === 'driving' ? 'Drive' : 'Transit'}
+                            {m === 'driving' ? tr('nav.drive') : tr('nav.transit')}
                           </AppText>
                         </View>
                       </Tappable>
@@ -910,7 +915,9 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
               {loading ? (
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 6 }}>
                   <ActivityIndicator size="small" color={t.colors.primary} />
-                  <AppText variant="body" tone="muted">Calculating {mode === 'driving' ? 'drive' : 'transit'} route...</AppText>
+                  <AppText variant="body" tone="muted">
+                    {mode === 'driving' ? tr('nav.calculatingDrive') : tr('nav.calculatingTransit')}
+                  </AppText>
                 </View>
               ) : (
                 <>
@@ -922,17 +929,19 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
                     </View>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                       {fare && mode === 'transit' && (
-                        <Badge label={`Fare ${fare.text || `₹${fare.value}`}`} tone="success" />
+                        <Badge label={tr('nav.fare', { amount: fare.text || `₹${fare.value}` })} tone="success" />
                       )}
                       {usingFallback && (
-                        <Badge label="ESTIMATE" tone="warning" />
+                        <Badge label={tr('nav.estimate')} tone="warning" />
                       )}
                     </View>
                   </View>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 }}>
                     <Icon name="navigate" size={13} color={t.colors.textFaint} />
                     <AppText variant="caption" tone="muted">
-                      {distanceKm != null ? `${distanceKm.toFixed(1)} km` : '—'} {mode === 'driving' ? 'driving' : 'transit'} distance
+                      {tr(mode === 'driving' ? 'nav.drivingDistance' : 'nav.transitDistance', {
+                        distance: distanceKm != null ? tr('home.distanceKm', { km: distanceKm.toFixed(1) }) : '—',
+                      })}
                     </AppText>
                   </View>
 
@@ -950,7 +959,9 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
                               </AppText>
                               {s.distanceM > 0 && (
                                 <AppText variant="caption" tone="faint">
-                                  {s.distanceM >= 1000 ? `${(s.distanceM / 1000).toFixed(1)} km` : `${Math.round(s.distanceM)} m`}
+                                  {s.distanceM >= 1000
+                                    ? tr('home.distanceKm', { km: (s.distanceM / 1000).toFixed(1) })
+                                    : tr('nav.stepMetres', { count: Math.round(s.distanceM) })}
                                 </AppText>
                               )}
                             </View>
@@ -965,10 +976,10 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
                   {/* Action buttons */}
                   {origin && (
                     <View style={{ flexDirection: 'row', gap: t.space.md, marginTop: t.space.md }}>
-                      <Button label="Refresh" icon="refresh" variant="neutral" onPress={() => buildRoute(origin, mode)} style={{ flex: 1 }} />
+                      <Button label={tr('nav.refresh')} icon="refresh" variant="neutral" onPress={() => buildRoute(origin, mode)} style={{ flex: 1 }} />
                       {steps.length > 0 && (
                         <Button
-                          label={navigating ? 'Stop Nav' : 'Start Nav'}
+                          label={navigating ? tr('nav.stopNav') : tr('nav.startNav')}
                           icon={navigating ? 'square' : 'play'}
                           variant={navigating ? 'danger' : 'primary'}
                           onPress={() => setNavigating((n) => !n)}
@@ -989,8 +1000,8 @@ export const InAppNavigationModal: React.FC<InAppNavigationModalProps> = ({
           <View style={{ flex: 1, justifyContent: 'center' }}>
             <EmptyState
               icon="location-outline"
-              title="This branch has no map location yet"
-              body="Operations has not pinned it. Use the address on the assignment for now — nothing here would be accurate."
+              title={tr('nav.noPinTitle')}
+              body={tr('nav.noPinBody')}
             />
           </View>
         )}

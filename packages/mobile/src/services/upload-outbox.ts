@@ -1,4 +1,7 @@
 import { readCache, writeCache } from './token-store';
+// Module-level translator, not a hook: this is a storage module, and `outboxTitle` is called
+// from a row that subscribes to language changes for itself.
+import { t } from '../i18n/i18n';
 
 /**
  * The on-device outbox of completed audit packets waiting to reach the desk.
@@ -32,12 +35,40 @@ export type OutboxStatus =
   /** The last attempt did not arrive. Kept so the assayer can retry it. */
   | 'FAILED';
 
+/**
+ * Where an outbox entry is going.
+ *
+ * The outbox was built for one kind of payload — an audit packet for an assignment — and carried
+ * `assignmentId` and `branchName` as bare fields. Registration paperwork is the same problem
+ * (a large file, captured in the field, over a connection that may not be there) with a different
+ * destination and no assignment anywhere in it, so the destination became a tagged union rather
+ * than a second set of optional fields that every reader would have to test for emptiness.
+ *
+ * The tag is what `sendOne` switches on to pick an endpoint, and what the list reads to title a
+ * row. Adding a third destination means adding a case, and the compiler finds both places.
+ */
+export type OutboxTarget =
+  | {
+      kind: 'ASSIGNMENT_PACKET';
+      /** The assignment/assessment the packet belongs to — passed straight to the uploader. */
+      assignmentId: string;
+      /** For display, so the list reads in the assayer's own terms ("Kollam Main Branch"). */
+      branchName: string;
+    }
+  | {
+      kind: 'REGISTRATION_DOCUMENT';
+      /** Whose file this belongs to. The server refuses anything but the caller's own id. */
+      assayerId: string;
+      /** An `OnboardingDocument` value — it goes in the route path, never on screen. */
+      requirement: string;
+      /** The plain-English name of the paper, for the list. Never the requirement code. */
+      documentLabel: string;
+    };
+
 export interface OutboxUpload {
   id: string;
-  /** The assignment/assessment the packet belongs to — passed straight to the uploader. */
-  assignmentId: string;
-  /** For display, so the list reads in the assayer's own terms ("Kollam Main Branch"). */
-  branchName: string;
+  /** Where this is going, and what to call it. See `OutboxTarget`. */
+  target: OutboxTarget;
   fileName: string;
   /** Native file path. The packet streams off disk from here; survives an app restart. */
   fileUri?: string;
@@ -55,11 +86,46 @@ export interface OutboxUpload {
 
 /** What a caller hands in to file a packet. The bookkeeping fields are filled in here. */
 export interface OutboxInput {
-  assignmentId: string;
-  branchName: string;
+  target: OutboxTarget;
   fileName: string;
   fileUri?: string;
   base64?: string;
+}
+
+/**
+ * What to call an entry in the list.
+ *
+ * One place, because the row, its accessibility label and any future notification all need the
+ * same words, and a packet titled one thing in the list and another in a screen reader is the
+ * kind of small inconsistency that makes an app feel untrustworthy to someone who is relying on
+ * it to tell them whether their evidence arrived.
+ */
+export function outboxTitle(entry: OutboxUpload): string {
+  return entry.target.kind === 'REGISTRATION_DOCUMENT'
+    ? entry.target.documentLabel || t('uploads.fallbackDocument')
+    : entry.target.branchName || t('uploads.fallbackPacket');
+}
+
+/**
+ * Bring an entry written by an older build up to the current shape.
+ *
+ * Entries persisted before uploads had a target carry `assignmentId`/`branchName` at the top
+ * level and no `target` at all. Those are, by definition, packets that have not been delivered
+ * yet — a field worker's evidence, sitting on disk, waiting for signal. Dropping or ignoring them
+ * on upgrade would lose exactly what this queue exists to protect, so they are adopted into the
+ * union instead. Any entry that already has a target is returned untouched.
+ */
+function adopt(raw: any): OutboxUpload {
+  if (raw?.target?.kind) return raw as OutboxUpload;
+  const { assignmentId, branchName, ...rest } = raw ?? {};
+  return {
+    ...rest,
+    target: {
+      kind: 'ASSIGNMENT_PACKET',
+      assignmentId: assignmentId ?? '',
+      branchName: branchName ?? '',
+    },
+  } as OutboxUpload;
 }
 
 const OUTBOX_KEY = 'upload_outbox';
@@ -81,7 +147,7 @@ let processing = false;
 
 async function load(): Promise<OutboxUpload[]> {
   if (buffer) return buffer;
-  buffer = (await readCache<OutboxUpload[]>(OUTBOX_KEY)) ?? [];
+  buffer = ((await readCache<any[]>(OUTBOX_KEY)) ?? []).map(adopt);
   return buffer;
 }
 
@@ -139,8 +205,7 @@ export async function enqueueUpload(input: OutboxInput): Promise<OutboxUpload> {
   const now = new Date().toISOString();
   const entry: OutboxUpload = {
     id: `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-    assignmentId: input.assignmentId,
-    branchName: input.branchName,
+    target: input.target,
     fileName: input.fileName,
     fileUri: input.fileUri,
     base64: input.base64,

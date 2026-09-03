@@ -20,7 +20,7 @@ import {
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, ILike } from 'typeorm';
+import { Repository, ILike, Not, IsNull } from 'typeorm';
 import * as crypto from 'crypto';
 import * as bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
@@ -30,10 +30,12 @@ import { UserEntity } from '../user/user.entity';
 import { RefreshTokenEntity } from './refresh-token.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { AssayerEntity } from '../assayer/assayer.entity';
-import { EventCategory, UserStatus } from '@fapoms/shared';
+import { AssayerLifecycleStatus, AUTH_ERROR_CODES, EventCategory, UserStatus } from '@fapoms/shared';
+import { withCode } from '../../infrastructure/http/api-error';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { permissionKeysHeldBy } from './guards';
 import { businessTodayDateKey } from '@fapoms/shared';
 
 /**
@@ -43,6 +45,99 @@ import { businessTodayDateKey } from '@fapoms/shared';
  * valid credential — nobody knows the plaintext and nothing checks it for correctness.
  */
 const DUMMY_BCRYPT_HASH = '$2b$12$StcDs0lSbteaKXRTjYJSf.NLoQkM942PTrxyk4KjSBOQzhkTVzLvS';
+
+/**
+ * The lifecycle states an assayer may sign in from.
+ *
+ * ON_LEAVE is here because leave is not a withdrawal of access. Somebody on holiday still needs
+ * to see when they are due back, read a message from the desk, and set their availability for
+ * the weeks after — and the app is the only place any of that is visible to them. What leave
+ * actually means is "do not offer them work", and that is already handled elsewhere and
+ * separately: `deriveOperationalStatus` maps ON_LEAVE to INACTIVE, so the planner stops selecting
+ * them the moment HR sets it. Refusing the login as well locked an employed person out over a
+ * holiday and told them "Account is on_leave", which reads like a fault with their account.
+ *
+ * The four onboarding stages sign in too, but into a RESTRICTED session — see
+ * `ONBOARDING_SIGN_IN` below. They are listed separately rather than folded in here because the
+ * two groups are allowed different things, and a single list would have hidden that.
+ */
+const MAY_SIGN_IN: AssayerLifecycleStatus[] = [
+  AssayerLifecycleStatus.ACTIVE,
+  AssayerLifecycleStatus.ON_LEAVE,
+];
+
+/**
+ * Stages that may sign in only to finish their own registration.
+ *
+ * This is the deliberate decision the note above used to ask for, not a loosened condition. The
+ * phone half of registration — the assayer photographing their own Aadhaar instead of travelling
+ * to the office with it — is worthless if it only unlocks after they are already active, because
+ * by then the documents it was meant to collect have been collected some other way.
+ *
+ * What makes it safe is not this list but what the session can reach: a principal in one of these
+ * stages is marked `onboarding`, and `JwtAuthGuard` refuses it on every route that is not
+ * explicitly marked `@OnboardingAllowed()`. Deny-by-default, so bringing these people through the
+ * door does not require having audited all nine controllers an ASSAYER role can otherwise reach —
+ * and a route added tomorrow is closed to them until somebody decides otherwise.
+ *
+ * They still cannot be given work: deployability is `isActive && status === ACTIVE`, and the
+ * derived status for every stage here is INACTIVE. Signing in is not being on duty.
+ */
+const ONBOARDING_SIGN_IN: AssayerLifecycleStatus[] = [
+  AssayerLifecycleStatus.INVITED,
+  AssayerLifecycleStatus.DOCUMENT_VERIFICATION,
+  AssayerLifecycleStatus.BACKGROUND_VERIFICATION,
+  AssayerLifecycleStatus.TRAINING,
+];
+
+/**
+ * Either kind of session: full duty, or restricted to finishing registration.
+ *
+ * Exported because the app-access card has to tell HR whether the credential it is handing over
+ * works at all, and answering that from a second copy of the list is how the two would drift.
+ */
+export function maySignIn(status: AssayerLifecycleStatus): boolean {
+  return MAY_SIGN_IN.includes(status) || ONBOARDING_SIGN_IN.includes(status);
+}
+
+/** Is this a registration-only session? Drives the `onboarding` flag on the principal. */
+export function isOnboardingStage(status?: string | null): boolean {
+  return ONBOARDING_SIGN_IN.includes(status as AssayerLifecycleStatus);
+}
+
+/**
+ * Why sign-in was refused, in words the person reading them can act on.
+ *
+ * This said "Account is invited" / "Account is suspended" — the enum, lower-cased. An assayer
+ * standing outside a branch with a phone in their hand learns nothing from that, and "Account is
+ * inactive" reads like a fault to report rather than a state somebody chose. The detail is safe
+ * here: the password has already been verified two checks above, so this only ever reaches
+ * somebody holding valid credentials for the account it describes.
+ */
+function signInRefusal(status: AssayerLifecycleStatus): ForbiddenException {
+  // The four onboarding stages used to be refused here, with "your registration is not finished
+  // yet". They are not refused any more — they sign in to a session confined to finishing that
+  // registration (`ONBOARDING_SIGN_IN`), and the guard is what tells them where they can and
+  // cannot go. That branch is gone rather than left unreachable: a refusal message nothing can
+  // produce still reads as live policy to whoever finds it next.
+  //
+  // Returns the exception rather than the sentence so that the message and its `code` are chosen
+  // in the same branch. Split across two functions they would drift the first time a lifecycle
+  // state moved from one arm to the other, and a client would then act on a code describing a
+  // refusal other than the one the reader is looking at.
+  switch (status) {
+    case AssayerLifecycleStatus.SUSPENDED:
+      return withCode(
+        new ForbiddenException('Your access is on hold. Please speak to your HR contact.'),
+        AUTH_ERROR_CODES.ACCOUNT_ON_HOLD,
+      );
+    default:
+      return withCode(
+        new ForbiddenException('This account is closed. If you think that is wrong, please speak to your HR contact.'),
+        AUTH_ERROR_CODES.ACCOUNT_CLOSED,
+      );
+  }
+}
 
 /**
  * The key `validateJwtPayload` caches a resolved principal under. Exported so a password-change
@@ -181,6 +276,7 @@ export class AuthService implements OnModuleInit {
           id: true, assayerCode: true, displayName: true, email: true, phone: true,
           organizationId: true, lifecycleStatus: true, passwordHash: true,
           failedLoginAttempts: true, lockedUntil: true, mustChangePassword: true,
+          tempPasswordExpiresAt: true,
         },
       });
 
@@ -191,7 +287,7 @@ export class AuthService implements OnModuleInit {
         // that lets an attacker enumerate which usernames/assayer codes exist before guessing
         // passwords. The hash is a fixed dummy; the result is discarded.
         await bcrypt.compare(password, DUMMY_BCRYPT_HASH).catch(() => undefined);
-        throw new UnauthorizedException('Invalid credentials');
+        throw withCode(new UnauthorizedException('Invalid credentials'), AUTH_ERROR_CODES.INVALID_CREDENTIALS);
       }
 
       /**
@@ -199,20 +295,24 @@ export class AuthService implements OnModuleInit {
        *
        * This branch had no attempt counter at all, and the application has no rate limiting,
        * so an assayer code could be guessed against indefinitely. Combined with the bulk
-       * importer's documented default password (`assayer123`, shared by 24 of 25 live
-       * accounts), a single guess per account was enough to take the whole field workforce.
+       * importer's documented default password (`assayer123`, which every account it creates
+       * keeps until something forces a change), a single guess per account was enough to take
+       * the whole field workforce.
        */
       if (assayer.lockedUntil && assayer.lockedUntil > new Date()) {
         const minutes = Math.max(1, Math.ceil((assayer.lockedUntil.getTime() - Date.now()) / 60000));
-        throw new ForbiddenException(
-          `Too many incorrect sign-in attempts. Please try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`,
+        throw withCode(
+          new ForbiddenException(
+            `Too many incorrect sign-in attempts. Please try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`,
+          ),
+          AUTH_ERROR_CODES.ACCOUNT_LOCKED,
         );
       }
 
       // An assayer with no password set has never completed onboarding — deny access
       // rather than silently skipping verification.
       if (!assayer.passwordHash) {
-        throw new UnauthorizedException('Invalid credentials');
+        throw withCode(new UnauthorizedException('Invalid credentials'), AUTH_ERROR_CODES.INVALID_CREDENTIALS);
       }
 
       const isPasswordValid = await bcrypt.compare(password, assayer.passwordHash);
@@ -223,11 +323,32 @@ export class AuthService implements OnModuleInit {
           .update(assayer.id, { failedLoginAttempts: attempts, lockedUntil })
           .catch(() => undefined);
         if (lockedUntil) this.notifyAccountLocked(`Assayer ${assayer.displayName ?? assayer.assayerCode ?? assayer.id}`, assayer.id, attempts);
-        throw new UnauthorizedException('Invalid credentials');
+        throw withCode(new UnauthorizedException('Invalid credentials'), AUTH_ERROR_CODES.INVALID_CREDENTIALS);
       }
 
-      if (assayer.lifecycleStatus !== 'ACTIVE') {
-        throw new ForbiddenException(`Account is ${String(assayer.lifecycleStatus).toLowerCase()}`);
+      if (!maySignIn(assayer.lifecycleStatus as AssayerLifecycleStatus)) {
+        throw signInRefusal(assayer.lifecycleStatus as AssayerLifecycleStatus);
+      }
+
+      /**
+       * A temporary password stops working on the date HR was told it would.
+       *
+       * Issuing app access returns an `expiresAt` that HR reads out or sends on, and for a while
+       * nothing compared against it — a credential an administrator chose, spoke aloud and
+       * possibly wrote on paper worked for ever, while the API said otherwise in the same breath
+       * as issuing it. Checked only while `mustChangePassword` is still true: once the assayer
+       * has chosen their own password the expiry is cleared, so this can never shut somebody out
+       * of a credential they picked. A null expiry means none applies — that is the honest state
+       * for the accounts whose password predates the column, and they are not locked out for it.
+       */
+      if (assayer.mustChangePassword && assayer.tempPasswordExpiresAt
+        && assayer.tempPasswordExpiresAt.getTime() <= Date.now()) {
+        throw withCode(
+          new ForbiddenException(
+            'The temporary password you were given has expired. Ask your HR contact to send you a new one.',
+          ),
+          AUTH_ERROR_CODES.TEMPORARY_PASSWORD_EXPIRED,
+        );
       }
 
       // Successful sign-in clears the counter.
@@ -277,12 +398,18 @@ export class AuthService implements OnModuleInit {
 
     // Check user status — only ACTIVE users may access the platform (Part 8 §5)
     if (user.status !== UserStatus.ACTIVE) {
-      throw new ForbiddenException(`Account is ${user.status.toLowerCase()}`);
+      throw withCode(
+        new ForbiddenException(`Account is ${user.status.toLowerCase()}`),
+        AUTH_ERROR_CODES.ACCOUNT_INACTIVE,
+      );
     }
 
     // Check if account is locked
     if (user.lockedUntil && user.lockedUntil > new Date()) {
-      throw new ForbiddenException('Account is temporarily locked');
+      throw withCode(
+        new ForbiddenException('Account is temporarily locked'),
+        AUTH_ERROR_CODES.ACCOUNT_LOCKED,
+      );
     }
 
     // Verify password
@@ -300,7 +427,7 @@ export class AuthService implements OnModuleInit {
         );
       }
       await this.userRepository.save(user);
-      throw new UnauthorizedException('Invalid credentials');
+      throw withCode(new UnauthorizedException('Invalid credentials'), AUTH_ERROR_CODES.INVALID_CREDENTIALS);
     }
 
     // Reset failed attempts on success
@@ -331,6 +458,20 @@ export class AuthService implements OnModuleInit {
         email: user.email,
         displayName: user.displayName,
         roles: user.roles,
+        /**
+         * The flat permission keys this user holds, sent so the browser can decide what to show.
+         *
+         * `roles` serialises to names, and a name is all the web app had. Its route table gates on
+         * `SystemRole[]` — a closed set — so a role created in Admin → Roles matched no entry and
+         * `canAccessRoute` returned false for every path: the person signed in successfully and
+         * then had no page to land on. The API was taught to authorise by permission; without the
+         * same information reaching the client, the app would keep hiding screens the server would
+         * now happily serve.
+         *
+         * Same keys, same shape, same helper the guards use, so the two ends cannot form different
+         * opinions about what somebody holds.
+         */
+        permissions: [...permissionKeysHeldBy(user)],
         mustChangePassword: !!user.mustChangePassword,
       },
     };
@@ -399,11 +540,11 @@ export class AuthService implements OnModuleInit {
     });
 
     if (!storedToken) {
-      throw new UnauthorizedException('Invalid or expired refresh token');
+      throw withCode(new UnauthorizedException('Invalid or expired refresh token'), AUTH_ERROR_CODES.SESSION_EXPIRED);
     }
 
     if (storedToken.expiresAt <= new Date()) {
-      throw new UnauthorizedException('Invalid or expired refresh token');
+      throw withCode(new UnauthorizedException('Invalid or expired refresh token'), AUTH_ERROR_CODES.SESSION_EXPIRED);
     }
 
     if (storedToken.isRevoked) {
@@ -427,7 +568,7 @@ export class AuthService implements OnModuleInit {
       if (revokedMsAgo > graceMs) {
         await this.handleRefreshTokenReuse(storedToken, ipAddress, userAgent);
       }
-      throw new UnauthorizedException('Invalid or expired refresh token');
+      throw withCode(new UnauthorizedException('Invalid or expired refresh token'), AUTH_ERROR_CODES.SESSION_EXPIRED);
     }
 
     // Load user with roles
@@ -438,7 +579,10 @@ export class AuthService implements OnModuleInit {
 
     if (user) {
       if (user.status !== UserStatus.ACTIVE) {
-        throw new UnauthorizedException('User account is not active');
+        throw withCode(
+          new UnauthorizedException('User account is not active'),
+          AUTH_ERROR_CODES.ACCOUNT_INACTIVE,
+        );
       }
 
       storedToken.isRevoked = true;
@@ -459,6 +603,10 @@ export class AuthService implements OnModuleInit {
           email: user.email,
           displayName: user.displayName,
           roles: user.roles,
+          // The biometric path resumes a session without a password ever being typed, so the
+          // client learns about a pending forced change ONLY from this response — omit it and
+          // the app walks straight into a wall of 403s with no screen telling it why.
+          mustChangePassword: !!user.mustChangePassword,
         },
       };
     }
@@ -467,10 +615,18 @@ export class AuthService implements OnModuleInit {
       where: { id: storedToken.userId },
     });
     if (!assayer) {
-      throw new UnauthorizedException('Account is not active');
+      throw withCode(
+        new UnauthorizedException('Account is not active'),
+        AUTH_ERROR_CODES.ACCOUNT_INACTIVE,
+      );
     }
-    if (assayer.lifecycleStatus !== 'ACTIVE') {
-      throw new ForbiddenException('Assayer account is not active');
+    // The same rule as sign-in, deliberately. A refresh that refuses a principal the login
+    // accepts does not keep anybody out — it lets them in and then ejects them, because the
+    // mobile client treats a failed refresh as session death and clears the stored session. So a
+    // narrower rule here would have signed somebody on leave in and logged them out again at the
+    // first token expiry, which reads as the app being broken rather than as a policy.
+    if (!maySignIn(assayer.lifecycleStatus as AssayerLifecycleStatus)) {
+      throw signInRefusal(assayer.lifecycleStatus as AssayerLifecycleStatus);
     }
 
     const assayerPayload: JwtPayload = {
@@ -501,6 +657,11 @@ export class AuthService implements OnModuleInit {
         email: assayer.email,
         phone: assayer.phone,
         status: assayer.lifecycleStatus,
+        // Same reason as the staff branch above: biometric login redeems a token with no
+        // password step, so this response is the client's only cue to open the change-password
+        // screen instead of the schedule. The guard enforces either way; this keeps the app
+        // able to explain it.
+        mustChangePassword: !!assayer.mustChangePassword,
       },
     };
   }
@@ -640,14 +801,51 @@ export class AuthService implements OnModuleInit {
    * Exact-identifier existence check for the pre-login screen. Returns only the
    * display name — never contact details, banking data or the password hash.
    */
-  async verifyAssayerIdentifier(identifier: string): Promise<{ displayName: string; assayerCode: string } | null> {
+  async verifyAssayerIdentifier(
+    identifier: string,
+  ): Promise<{ displayName: string; assayerCode: string; needsAppAccess?: boolean } | null> {
     const key = (identifier || '').trim();
     if (!key) return null;
     const assayer = await this.assayerRepository.findOne({
       where: [{ assayerCode: ILike(key) }, { phone: key }, { email: ILike(key) }],
       select: { id: true, displayName: true, assayerCode: true, lifecycleStatus: true },
     });
-    if (!assayer || assayer.lifecycleStatus !== 'ACTIVE') return null;
+    // Also the sign-in rule, and this one gates the step BEFORE the password: the app confirms an
+    // identifier and shows the person's name, then asks for their password. Answering null here
+    // for somebody the login would accept makes the account look non-existent and they never
+    // reach the password field at all — so a wider rule at the login itself would have been
+    // unreachable for exactly the people it was widened for.
+    if (!assayer || !maySignIn(assayer.lifecycleStatus as AssayerLifecycleStatus)) return null;
+
+    /**
+     * Recognised, but with no credential to check — say so rather than waving them onward.
+     *
+     * Counted over exactly the population `maySignIn` above admits — ACTIVE and ON_LEAVE plus the
+     * four onboarding stages, 627 of the 1,163 imported assayers — 619 of them have no
+     * `password_hash` at all: they arrived on a roster sheet and have never had app access
+     * issued (the INVITED lifecycle is an onboarding stage, not a credential — eight accounts in
+     * the entire table hold one). This step confirmed the identifier and returned their real name
+     * for every one of them, and the password step then always answered "Invalid credentials" —
+     * so the app greeted somebody by name and then told them their password was wrong, for an
+     * account that has never had one. They have nothing to correct and no way to learn that from
+     * the screen; the honest answer is that access has not been issued yet.
+     *
+     * The figure is stated against that rule because it moves with it: while only ACTIVE and
+     * ON_LEAVE could sign in it was 540 of 548, and widening the rule added the 79 INVITED
+     * people — every one of them credential-less, and precisely the population this branch
+     * exists for, since before the widening they were told no such account existed.
+     *
+     * `password_hash` is `select: false` on the entity, so it takes an explicit count rather than
+     * riding along on the query above — and deliberately not `addSelect`, which would pull the
+     * hash into a response that is served to an unauthenticated caller.
+     */
+    const hasCredential = await this.assayerRepository.count({
+      where: { id: assayer.id, passwordHash: Not(IsNull()) },
+    });
+    if (!hasCredential) {
+      return { displayName: assayer.displayName, assayerCode: assayer.assayerCode, needsAppAccess: true };
+    }
+
     return { displayName: assayer.displayName, assayerCode: assayer.assayerCode };
   }
 
@@ -679,6 +877,30 @@ export class AuthService implements OnModuleInit {
         id: assayer.id,
         username: assayer.assayerCode,
         displayName: assayer.displayName,
+        /**
+         * Carried so `JwtAuthGuard` can enforce forced rotation on assayer principals too.
+         *
+         * This principal did not carry the flag, so the guard's check never fired for field
+         * accounts — an assayer still holding an HR-issued temporary password (the bulk import
+         * seeded `assayer123` across the workforce, and every staff reset sets the flag) could
+         * use the whole API from a curl script or a stale session while only the app's UI asked
+         * them to change it. Staff principals were already enforced; the field workforce is now
+         * held to the same rule. Fresh on every cache MISS, and both password-change paths
+         * (`changeOwnPassword`, `resetPasswordByStaff`) delete the cached principal, so the flag
+         * clears — or raises — within one request of the change rather than one cache TTL.
+         */
+        mustChangePassword: !!assayer.mustChangePassword,
+        /**
+         * Marks a session that exists only to finish this person's own registration.
+         *
+         * `JwtAuthGuard` refuses an onboarding principal on every route not marked
+         * `@OnboardingAllowed()`, so the restriction is enforced once here rather than per
+         * controller. Read from the row on every cache miss, so HR activating somebody clears it
+         * within the principal cache's TTL (`RBAC_CACHE_TTL_SECONDS`, 30s by default) without
+         * anyone signing out — worth knowing, because the failure it bounds is a newly activated
+         * assayer briefly still being told to finish registering.
+         */
+        onboarding: isOnboardingStage(assayer.lifecycleStatus),
         roles: [{
           name: 'ASSAYER',
           permissions: (payload.permissions || []).map(p => {

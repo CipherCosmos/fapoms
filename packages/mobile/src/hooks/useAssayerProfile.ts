@@ -3,6 +3,7 @@ import { MobileApiService } from '../services/api.service';
 import { useFeedback } from '../components/ui/Feedback';
 import type { ProfileDataState } from '../screens/ProfileScreen';
 import type { LeavePeriod } from '../components/AvailabilityModal';
+import { t, serverErrorText } from '../i18n';
 
 /**
  * The assayer's own record: their details, their pay totals, and the days they are unavailable.
@@ -85,7 +86,6 @@ function emptyProfile(seed: { assayerCode?: string; latitude?: number; longitude
     latitude: seed.latitude ?? 0,
     longitude: seed.longitude ?? 0,
     preferredRegions: '',
-    preferredRadius: 10,
     languages: '',
     licenseNo: '',
     emergencyName: '',
@@ -263,7 +263,7 @@ export function useAssayerProfile(user: {
     setSaving(true);
     try {
       if (!user?.id) {
-        feedback.error('Not signed in', 'Sign in again before saving your profile.');
+        feedback.error(t('profile.save.notSignedInTitle'), t('profile.save.notSignedInBody'));
         return false;
       }
       /**
@@ -283,7 +283,7 @@ export function useAssayerProfile(user: {
        */
       const changed = changedFields(profile, baseline);
       if (Object.keys(changed).length === 0) {
-        feedback.success('No changes to save');
+        feedback.success(t('profile.save.noChanges'));
         return true;
       }
       // `updateAssayerProfile` reports failure by return value, not by throwing, so a catch alone
@@ -291,16 +291,16 @@ export function useAssayerProfile(user: {
       // endpoint it called did not exist, so that is what every save did.
       const result = await MobileApiService.updateAssayerProfile(user.id, changed);
       if (!result.success) {
-        feedback.error('Not saved', result.error || 'Your profile could not be saved. Please try again.');
+        feedback.error(t('profile.save.notSavedTitle'), serverErrorText(result.error, 'profile.save.notSavedBody'));
         return false;
       }
       // What was just sent is now what the server has, so it's the new baseline — the Save
       // button (gated on `dirty`) should disappear again until the next actual edit.
       setBaseline(profile);
-      feedback.success('Profile saved');
+      feedback.success(t('profile.save.saved'));
       return true;
     } catch (e: any) {
-      feedback.error('Not saved', e?.message || 'Your profile could not be saved.');
+      feedback.error(t('profile.save.notSavedTitle'), serverErrorText(e?.message, 'profile.save.notSavedBody'));
       return false;
     } finally {
       setSaving(false);

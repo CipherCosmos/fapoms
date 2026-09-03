@@ -1,6 +1,15 @@
-import { ArgumentsHost, BadRequestException, NotFoundException } from '@nestjs/common';
+import {
+  ArgumentsHost,
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  HttpException,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { QueryFailedError } from 'typeorm';
 import { GlobalExceptionFilter } from './global-exception.filter';
+import { withCode } from './api-error';
 
 /**
  * The filter is a security boundary as much as an ergonomics one: the redaction test below
@@ -110,13 +119,103 @@ describe('GlobalExceptionFilter', () => {
     filter.catch(dbError, host);
 
     expect(res.statusCode).toBe(500);
+    // Exhaustive on purpose: this is the redaction contract, so the assertion has to fail if a
+    // key is ever ADDED as well as if one changes. `code` is part of it now — a generic 500 names
+    // itself like every other error, and INTERNAL_ERROR is the one code that must reveal nothing.
     expect(res.body).toEqual({
       statusCode: 500,
       message: 'Internal server error',
+      code: 'INTERNAL_ERROR',
       correlationId: 'cid-3',
     });
     const serialized = JSON.stringify(res.body);
     expect(serialized).not.toContain('secret_table');
     expect(serialized).not.toContain('uq_secret');
+  });
+
+  /**
+   * Every error body names itself.
+   *
+   * The mobile app is translated and the API is not, so the phone's only way to know WHAT went
+   * wrong was to match the English sentence — thirty-five of them, in `i18n/server-errors.ts`,
+   * each of which silently stops translating the day somebody rewords the message it matches.
+   * The guarantee that makes that unnecessary is not "most errors carry a code"; it is that
+   * every error does, so a client never has to keep the sentence matcher around as a fallback
+   * for the ones that do not. That is why the coarse status-derived codes below exist at all.
+   */
+  describe('the code guarantee', () => {
+    it('keeps the code a route named, and leaves its message untouched', () => {
+      const { host, res } = hostFor({ method: 'POST', originalUrl: '/login', correlationId: 'c' });
+
+      filter.catch(
+        withCode(new UnauthorizedException('Invalid credentials'), 'INVALID_CREDENTIALS'),
+        host,
+      );
+
+      expect(res.statusCode).toBe(401);
+      expect(res.body).toMatchObject({
+        code: 'INVALID_CREDENTIALS',
+        message: 'Invalid credentials',
+        error: 'Unauthorized',
+      });
+    });
+
+    /**
+     * The 41st throw site. Precise codes are chosen by hand and one will always be missed, so
+     * the boundary derives a coarse one from the status rather than letting `code` go absent —
+     * a client that has to handle `undefined` is back to reading prose for every error.
+     */
+    it.each([
+      [new BadRequestException('nope'), 400, 'BAD_REQUEST'],
+      [new UnauthorizedException('nope'), 401, 'UNAUTHENTICATED'],
+      [new ForbiddenException('nope'), 403, 'FORBIDDEN'],
+      [new NotFoundException('nope'), 404, 'NOT_FOUND'],
+      [new ConflictException('nope'), 409, 'CONFLICT'],
+    ])('falls back to a status-derived code when a route named none', (exception, status, code) => {
+      const { host, res } = hostFor({ method: 'GET', originalUrl: '/u', correlationId: 'c' });
+
+      filter.catch(exception as HttpException, host);
+
+      expect(res.statusCode).toBe(status);
+      expect(res.body).toMatchObject({ code, message: 'nope' });
+    });
+
+    /**
+     * A code invented outside the shared vocabulary is not a contract — the client has no case
+     * for it and cannot have been written against it. Treating it as coarse is the honest
+     * reading, and it keeps `ApiErrorCode` on the wire actually meaning what its type says.
+     */
+    it('ignores a code that is not in the shared vocabulary', () => {
+      const { host, res } = hostFor({ method: 'GET', originalUrl: '/u', correlationId: 'c' });
+      const rogue = new ForbiddenException('nope');
+      Object.assign(rogue.getResponse() as object, { code: 'SOMETHING_INVENTED' });
+
+      filter.catch(rogue, host);
+
+      expect(res.body).toMatchObject({ code: 'FORBIDDEN' });
+    });
+
+    /**
+     * The class-validator array is the case the sentence matcher could never touch: there is no
+     * single sentence, and its contents change with the DTO. The array itself must survive
+     * untouched — the web app renders it — so this asserts both halves at once.
+     */
+    it('carries a code and per-field detail alongside the untouched message array', () => {
+      const { host, res } = hostFor({ method: 'POST', originalUrl: '/a', correlationId: 'c' });
+      const messages = ['password should not be empty', 'password must be a string'];
+      const exception = withCode(new BadRequestException(messages), 'VALIDATION_FAILED');
+      Object.assign(exception.getResponse() as object, {
+        fields: [{ field: 'password', code: 'REQUIRED', message: messages[0] }],
+      });
+
+      filter.catch(exception, host);
+
+      expect(res.statusCode).toBe(400);
+      expect(res.body.message).toEqual(messages);
+      expect(res.body.code).toBe('VALIDATION_FAILED');
+      expect(res.body.fields).toEqual([
+        { field: 'password', code: 'REQUIRED', message: 'password should not be empty' },
+      ]);
+    });
   });
 });

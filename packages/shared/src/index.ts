@@ -43,5 +43,12 @@ export * from './assayer-roster-vocabulary';
 export * from './assayer-qualification';
 export * from './assignment-fee';
 
+// PAN/Aadhaar/IFSC/phone validation — one rulebook for the importer and every API write path
+export * from './identity-validation';
+
 // Service-log viewer: the readable-service allowlist, line shape and query ceilings
 export * from './service-logs';
+
+// The machine-readable name of every failure the API can return, and the shape of an error body.
+// Lives here so a translated client keys off a code rather than matching the English sentence.
+export * from './error-codes';

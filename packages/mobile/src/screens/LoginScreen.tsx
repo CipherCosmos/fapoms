@@ -8,6 +8,7 @@ import { OrbitMark } from '../components/ui/BrandMark';
 import { getApiBaseUrl, setApiBaseUrl, resetApiBaseUrl } from '../services/api.service';
 import { probeServerUrl, normaliseServerUrl, isBlockedCleartext, CLEARTEXT_REFUSED } from '../services/server-config';
 import { getPreference } from '../services/preferences';
+import { useT, serverErrorText } from '../i18n';
 import { versionLine } from '../utils/appVersion';
 import * as haptics from '../lib/haptics';
 
@@ -40,9 +41,11 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   onChangeUsername: controlledOnChangeUsername,
   onChangePassword: controlledOnChangePassword,
   onLogin,
+  onVerifyIdentity,
   onBiometricLogin,
-}) => {
+  }) => {
   const t = useTheme();
+  const tr = useT();
   const [internalUsername, setInternalUsername] = useState('');
   const [internalPassword, setInternalPassword] = useState('');
   const [internalLoading, setInternalLoading] = useState(false);
@@ -65,6 +68,33 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   /** So the code field's "Next" key can hand focus on, rather than being decorative. */
   const passwordRef = useRef<TextInput>(null);
 
+  /**
+   * Why the sign-in failed, in words the person can act on.
+   *
+   * The server cannot tell a wrong password from an account that has never had one: both come
+   * back as "Invalid credentials", because saying which would let anybody enumerate who has app
+   * access. For the 540 roster-imported assayers with no password at all, that message is not
+   * just unhelpful, it is a dead end — they are told to fix something that does not exist, and
+   * nothing on this screen tells them who can help.
+   *
+   * The pre-login identity check *can* tell the difference (`needsAppAccess`), so it is asked —
+   * but only after a failure, and only for the generic credential rejection. On the happy path
+   * this costs nothing, a specific refusal (locked, suspended, closed) is left alone because the
+   * server already said something true, and a failure of this call falls back to the original
+   * message rather than replacing one unhelpful sentence with a worse one.
+   */
+  const explainFailedSignIn = async (identifier: string, rawError: unknown): Promise<string> => {
+    const shown = serverErrorText(rawError, 'login.badCredentials');
+    if (!onVerifyIdentity || shown !== tr('errors.invalidCredentials')) return shown;
+    try {
+      const check: any = await onVerifyIdentity(identifier);
+      if (check?.needsAppAccess) return tr('login.needsAppAccess');
+    } catch {
+      // No signal, or the check is unavailable. The credential message stands.
+    }
+    return shown;
+  };
+
   const handleLoginPress = async () => {
     // A second tap while the first is in flight would issue a second sign-in, and on a slow
     // field connection that is the normal reaction to a button that has not visibly responded.
@@ -81,7 +111,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     const code = username.trim();
     if (!code || !password) {
       haptics.error();
-      setErrorMsg('Please enter both Assayer Code and Password.');
+      setErrorMsg(tr('login.missingFields'));
       return;
     }
     setInternalLoading(true);
@@ -90,7 +120,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         const res: any = await onLogin(code, password);
         if (res === false || (typeof res === 'object' && res?.success === false)) {
           haptics.error();
-          setErrorMsg(res?.error || 'Invalid credentials. Please try again.');
+          setErrorMsg(await explainFailedSignIn(code, res?.error));
         }
       }
     } catch (err: any) {
@@ -98,7 +128,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       // password read identically as "it didn't work" unless the message names the network, so an
       // assayer under a weak signal knows to retry rather than re-key a password that was fine.
       haptics.error();
-      setErrorMsg(err?.message || 'Could not reach the server. Check your connection or signal and try again.');
+      setErrorMsg(serverErrorText(err?.message, 'login.unreachable'));
     } finally {
       setInternalLoading(false);
     }
@@ -112,11 +142,11 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
         const res: any = await onBiometricLogin();
         if (res === false || (typeof res === 'object' && res?.success === false)) {
           haptics.error();
-          setErrorMsg(res?.error || 'Biometric authentication failed.');
+          setErrorMsg(serverErrorText(res?.error, 'login.biometricFailed'));
         }
       } catch (err: any) {
         haptics.error();
-        setErrorMsg(err?.message || 'Biometric login failed.');
+        setErrorMsg(serverErrorText(err?.message, 'login.biometricError'));
       } finally {
         setInternalLoading(false);
       }
@@ -146,8 +176,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       const result = await probeServerUrl(normaliseServerUrl(serverUrl));
       setProbeResult(
         result.ok
-          ? { ok: true, message: 'Server reachable.' }
-          : { ok: false, message: result.error || 'Could not reach that address.' },
+          ? { ok: true, message: tr('login.server.reachable') }
+          : { ok: false, message: serverErrorText(result.error, 'login.server.unreachable') },
       );
     } finally {
       setTestingServer(false);
@@ -165,17 +195,17 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
     try {
       const saved = await setApiBaseUrl(serverUrl);
       setServerUrl(saved.replace(/\/api\/v1$/, ''));
-      setProbeResult({ ok: true, message: 'Saved. Sign in to continue.' });
+      setProbeResult({ ok: true, message: tr('login.server.saved') });
       setErrorMsg(null);
     } catch {
-      setProbeResult({ ok: false, message: 'Could not save that address.' });
+      setProbeResult({ ok: false, message: tr('login.server.saveFailed') });
     }
   };
 
   const handleResetServer = async () => {
     const restored = await resetApiBaseUrl();
     setServerUrl(restored.replace(/\/api\/v1$/, ''));
-    setProbeResult({ ok: true, message: 'Reset to the built-in default.' });
+    setProbeResult({ ok: true, message: tr('login.server.resetDone') });
   };
 
   const enter = useRef(new Animated.Value(0)).current;
@@ -233,17 +263,17 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           transform: [{ translateY: enter.interpolate({ inputRange: [0, 1], outputRange: [18, 0] }) }],
           gap: t.space['2xl'],
         }}>
-          <View style={{ alignItems: 'center', gap: t.space.lg }} accessibilityLabel="Orbit">
+          <View style={{ alignItems: 'center', gap: t.space.lg }} accessibilityLabel={tr('login.appName')}>
             <OrbitMark size={150} />
             <View style={{ alignItems: 'center', gap: 6 }}>
-              <AppText variant="largeTitle">Orbit</AppText>
-              <AppText variant="overline" tone="muted" style={{ letterSpacing: 2.5, fontWeight: '700' }}>FIELD AUDIT OPERATIONS</AppText>
+              <AppText variant="largeTitle">{tr('login.appName')}</AppText>
+              <AppText variant="overline" tone="muted" style={{ letterSpacing: 2.5, fontWeight: '700' }}>{tr('login.tagline')}</AppText>
             </View>
           </View>
 
           <Card level={2} style={{ gap: t.space.lg, padding: t.space.xl, borderRadius: t.radius['2xl'] }}>
             <View style={{ gap: t.space.sm }}>
-              <AppText variant="overline" tone="faint">ASSAYER CODE OR PHONE</AppText>
+              <AppText variant="overline" tone="faint">{tr('login.codeLabel')}</AppText>
               <View style={inputWrap(focused === 'user')}>
                 <Icon name="person-outline" size={18} color={focused === 'user' ? t.colors.primary : t.colors.textFaint} />
                 <TextInput
@@ -251,12 +281,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                   onChangeText={setUsername}
                   onFocus={() => setFocused('user')}
                   onBlur={() => setFocused(null)}
-                  placeholder="AS0001"
+                  placeholder={tr('login.codePlaceholder')}
                   placeholderTextColor={t.colors.textFaint}
                   autoCapitalize="characters"
                   autoCorrect={false}
                   style={inputStyle}
-                  accessibilityLabel="Assayer code or phone"
+                  accessibilityLabel={tr('login.codeAccessibility')}
                   returnKeyType="next"
                   /**
                    * The keyboard has always shown a "Next" key here and nothing was wired to it,
@@ -272,7 +302,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
             </View>
 
             <View style={{ gap: t.space.sm }}>
-              <AppText variant="overline" tone="faint">PASSWORD</AppText>
+              <AppText variant="overline" tone="faint">{tr('login.passwordLabel')}</AppText>
               <View style={inputWrap(focused === 'pass')}>
                 <Icon name="lock-closed-outline" size={18} color={focused === 'pass' ? t.colors.primary : t.colors.textFaint} />
                 <TextInput
@@ -287,7 +317,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                   autoCapitalize="none"
                   autoCorrect={false}
                   style={inputStyle}
-                  accessibilityLabel="Password"
+                  accessibilityLabel={tr('login.passwordAccessibility')}
                   returnKeyType="go"
                   onSubmitEditing={handleLoginPress}
                 />
@@ -298,7 +328,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                   onPress={() => setShowPassword((v) => !v)}
                   hitSlop={14}
                   accessibilityRole="button"
-                  accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
+                  accessibilityLabel={showPassword ? tr('login.hidePassword') : tr('login.showPassword')}
                 >
                   <Icon name={showPassword ? 'eye-off-outline' : 'eye-outline'} size={18} color={t.colors.textFaint} />
                 </Tappable>
@@ -326,7 +356,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
             ) : null}
 
             <Button
-              label={authenticating ? 'Signing in…' : 'Sign in'}
+              label={authenticating ? tr('login.signingIn') : tr('login.signIn')}
               onPress={handleLoginPress}
               loading={authenticating}
               size="lg"
@@ -341,7 +371,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
             <Tappable onPress={handleBiometricPress}>
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: t.space.sm, paddingVertical: t.space.sm }}>
                 <Icon name="finger-print" size={18} color={t.colors.textMuted} />
-                <AppText variant="small" tone="muted">Use biometric sign-in</AppText>
+                <AppText variant="small" tone="muted">{tr('login.useBiometric')}</AppText>
               </View>
             </Tappable>
             )}
@@ -363,15 +393,15 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                 <Icon name="server-outline" size={14} color={t.colors.textFaint} />
                 <AppText variant="caption" tone="faint">
                   {showServerSettings
-                    ? 'Hide server settings'
-                    : serverUrl.replace(/^https?:\/\//, '') || 'Server settings'}
+                    ? tr('login.server.hideSettings')
+                    : serverUrl.replace(/^https?:\/\//, '') || tr('login.server.openSettings')}
                 </AppText>
               </View>
             </Tappable>
 
             {showServerSettings && (
               <Card level={1} style={{ gap: t.space.md, padding: t.space.lg, width: '100%' }}>
-                <AppText variant="overline" tone="faint">BACKEND ADDRESS</AppText>
+                <AppText variant="overline" tone="faint">{tr('login.server.addressLabel')}</AppText>
                 <View style={inputWrap(focused === 'server')}>
                   <Icon name="globe-outline" size={16} color={focused === 'server' ? t.colors.primary : t.colors.textFaint} />
                   <TextInput
@@ -379,13 +409,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                     onChangeText={setServerUrl}
                     onFocus={() => setFocused('server')}
                     onBlur={() => setFocused(null)}
-                    placeholder="http://192.168.1.10:3000"
+                    placeholder={tr('login.server.addressPlaceholder')}
                     placeholderTextColor={t.colors.textFaint}
                     autoCapitalize="none"
                     autoCorrect={false}
                     keyboardType="url"
                     style={inputStyle}
-                    accessibilityLabel="Backend server address"
+                    accessibilityLabel={tr('login.server.addressAccessibility')}
                   />
                 </View>
 
@@ -398,13 +428,13 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
                 )}
 
                 <View style={{ flexDirection: 'row', gap: t.space.sm }}>
-                  <Button label="Test" variant="neutral" onPress={handleTestServer} loading={testingServer} style={{ flex: 1 }} />
-                  <Button label="Save" onPress={handleSaveServer} style={{ flex: 1 }} />
+                  <Button label={tr('login.server.test')} variant="neutral" onPress={handleTestServer} loading={testingServer} style={{ flex: 1 }} />
+                  <Button label={tr('common.save')} onPress={handleSaveServer} style={{ flex: 1 }} />
                 </View>
 
                 <Tappable onPress={handleResetServer}>
                   <AppText variant="caption" tone="faint" style={{ textAlign: 'center' }}>
-                    Reset to default
+                    {tr('login.server.reset')}
                   </AppText>
                 </Tappable>
               </Card>
@@ -412,7 +442,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           </View>
 
           <AppText variant="caption" tone="faint" style={{ textAlign: 'center' }}>
-            Authorised field personnel only
+            {tr('login.authorisedOnly')}
           </AppText>
           {/*
             Shown BEFORE sign-in on purpose. The most common support question — "which version

@@ -155,6 +155,7 @@ export class PlanningController {
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Get('projects/:projectId/coverage-plan')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('planning:view:organization')
   @ApiOperation({ summary: 'Generate detailed coverage planning statistics, capacity analysis, and cluster plans' })
   async getProjectCoveragePlan(
     @Param('projectId', ParseUUIDPipe) projectId: string,
@@ -187,6 +188,7 @@ export class PlanningController {
   @Post('projects/:projectId/coverage-plan/jobs')
   @HttpCode(HttpStatus.ACCEPTED)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('planning:view:organization')
   @ApiOperation({ summary: 'Queue coverage plan generation; returns a job id to poll' })
   async queueProjectCoveragePlan(
     @Param('projectId', ParseUUIDPipe) projectId: string,
@@ -270,6 +272,7 @@ export class PlanningController {
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Get('projects/:projectId/candidates')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('planning:view:organization')
   @ApiOperation({ summary: 'Retrieve candidates for all unassigned branches of a project' })
   async getProjectCandidates(
     @Param('projectId', ParseUUIDPipe) projectId: string,
@@ -291,6 +294,7 @@ export class PlanningController {
   @Post('projects/:projectId/candidates/jobs')
   @HttpCode(HttpStatus.ACCEPTED)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('planning:view:organization')
   @ApiOperation({ summary: 'Queue the project-wide candidates report; returns a job id to poll' })
   async queueProjectCandidates(
     @Param('projectId', ParseUUIDPipe) projectId: string,
@@ -335,6 +339,7 @@ export class PlanningController {
 
   @Get('command-center')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR)
+  @RequirePermissions('planning:view:organization')
   @ApiOperation({ summary: 'Executive geographic intelligence: coverage, capacity, workload and value by territory' })
   async commandCenter(@GlobalScopeFilter() scope: GlobalScope) {
     // Takes the whole global scope now — the map is the surface where an operator most expects
@@ -344,6 +349,7 @@ export class PlanningController {
 
   @Get('suggest-date')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('planning:view:organization')
   @ApiOperation({ summary: 'Suggest the first workable audit date for a branch (skips Sundays, holidays, off Saturdays)' })
   async suggestAuditDate(
     @Query('branchId', ParseUUIDPipe) branchId: string,
@@ -355,6 +361,7 @@ export class PlanningController {
 
   @Get('recommendations')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('planning:view:organization')
   @ApiOperation({ summary: 'Retrieve and rank candidate assayers for a branch, for a given audit date' })
   async getRecommendations(
     @Query('branchId', ParseUUIDPipe) branchId: string,
@@ -408,6 +415,7 @@ export class PlanningController {
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Get('day-plans')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('planning:view:organization')
   @ApiOperation({ summary: 'Generate day plans spanning several projects, so one assayer can cover nearby branches across engagements' })
   async getMultiProjectDayPlans(
     @Query('projectIds') projectIds: string,
@@ -456,6 +464,7 @@ export class PlanningController {
   @Post('day-plans/jobs')
   @HttpCode(HttpStatus.ACCEPTED)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('planning:view:organization')
   @ApiOperation({ summary: 'Queue multi-project day plan generation; returns a job id to poll' })
   async queueMultiProjectDayPlans(
     @Query('projectIds') projectIds: string,
@@ -478,6 +487,7 @@ export class PlanningController {
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   @Get('projects/:projectId/day-plans')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('planning:view:organization')
   @ApiOperation({ summary: 'Generate multi-branch day plans grouping nearby branches for single assayer coverage' })
   async getDayPlans(
     @Param('projectId', ParseUUIDPipe) projectId: string,
@@ -504,6 +514,7 @@ export class PlanningController {
   @Post('projects/:projectId/day-plans/jobs')
   @HttpCode(HttpStatus.ACCEPTED)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('planning:view:organization')
   @ApiOperation({ summary: 'Queue day plan generation for one project; returns a job id to poll' })
   async queueDayPlans(
     @Param('projectId', ParseUUIDPipe) projectId: string,
@@ -538,6 +549,7 @@ export class PlanningController {
    */
   @Get('jobs/:jobId')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('planning:view:organization')
   @ApiOperation({ summary: 'Poll a queued planning job for progress and, once done, its result' })
   async getPlanningJob(@Param('jobId') jobId: string, @Req() req: any) {
     return { success: true, data: await this.planningJobsService.status(jobId, req.user?.id) };

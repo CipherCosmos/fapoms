@@ -52,11 +52,23 @@ describe('assayer redaction at the response boundary', () => {
     });
   });
 
-  it('leaves the record whole for the roles that onboard and pay', () => {
+  /**
+   * The privileged path is the one this walk used to skip entirely, and the one the masking is
+   * for. ADMIN and OPERATIONS keep the fields — that is what separates them from the desk, whose
+   * keys are deleted — but a join that reaches an assayer no longer hands over the real numbers.
+   * Before this, `/schedules`, `/assignments` and the operations inbox all did, on every request,
+   * with no audit row anywhere.
+   */
+  it('masks rather than strips for the roles that onboard and pay, wherever the assayer is nested', () => {
     for (const role of [SystemRole.ADMIN, SystemRole.OPERATIONS]) {
       const out: any = redactAssayersDeep(scheduleWithAssayer(), [role]);
-      expect(out.assayer.panNumber).toBe('ABCDE1234F');
-      expect(out.assayer.bankAccountNumber).toBe('000123456789');
+      expect(out.assayer.panNumber).toBe('******234F');
+      expect(out.assayer.bankAccountNumber).toBe('********6789');
+      // The second, differently-nested assayer is reached by the same walk — this is the join
+      // that leaked, and it is a different person with a different number.
+      expect(out.assignment.assayer.panNumber).toBe('******999Z');
+      // Everything else the role legitimately reads is untouched.
+      expect(out.assayer.displayName).toBe('Belekar');
     }
   });
 

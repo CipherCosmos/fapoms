@@ -6,7 +6,9 @@ import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 
 import { canonicalState } from '../planning/command-center.service';
 import { IN_FLIGHT_ASSIGNMENT_STATUSES, sqlStatusList } from '../assignment/assignment-workload';
-import { BUSINESS_TODAY_SQL, ASSAYER_RECORD_FIELDS, IDENTITY_DOCUMENTS } from '@fapoms/shared';
+import {
+  BUSINESS_TODAY_SQL, ASSAYER_RECORD_FIELDS, IDENTITY_DOCUMENTS, PLACEHOLDER_PIN_METRES,
+} from '@fapoms/shared';
 
 /**
  * FAPOMS — HR workforce analytics.
@@ -41,10 +43,29 @@ import { BUSINESS_TODAY_SQL, ASSAYER_RECORD_FIELDS, IDENTITY_DOCUMENTS } from '@
  * Note this is narrower than "not deleted": someone who has resigned or been terminated is also
  * off the roster, but their record is still live and still readable from their profile.
  */
-const ON_ROSTER = 'is_active = true AND exit_date IS NULL AND termination_date IS NULL';
+/**
+ * Has this person left, according to their status rather than their dates?
+ *
+ * `ON_ROSTER` below asks the same question of the DATES, and its comment has always said that
+ * somebody who resigned or was terminated is off the roster. On this data those two disagree for
+ * 25 people: they carry a departed lifecycle and no leaving date of any kind, because the roster
+ * import never had one and the corrupt-date repair blanked the rest. Reading only the dates, all
+ * 25 counted as current staff — in the headcount tile, in every coverage denominator, and in the
+ * records-completeness worklist that asks a clerk to go and finish their details.
+ *
+ * So the status is asked too. The date test stays: it is the one that catches a departure entered
+ * without the lifecycle being moved, and the two together are what "has gone" actually means.
+ * A death is filed as INACTIVE with a reason rather than as a lifecycle value, which is why that
+ * one case is spelled out — the same shape `DataIntegrityService.hasLeft` uses, deliberately.
+ */
+const HAS_LEFT = (p: string) =>
+  `(${p}lifecycle_status IN ('RESIGNED', 'TERMINATED', 'ARCHIVED')`
+  + ` OR (${p}lifecycle_status = 'INACTIVE' AND upper(coalesce(${p}unavailable_reason, '')) = 'DECEASED'))`;
+
+const ON_ROSTER = `is_active = true AND exit_date IS NULL AND termination_date IS NULL AND NOT ${HAS_LEFT('')}`;
 
 /** The same predicate for a query that aliases the table (`FROM assayers a`). */
-const ON_ROSTER_A = 'a.is_active = true AND a.exit_date IS NULL AND a.termination_date IS NULL';
+const ON_ROSTER_A = `a.is_active = true AND a.exit_date IS NULL AND a.termination_date IS NULL AND NOT ${HAS_LEFT('a.')}`;
 
 /**
  * The stages a candidate passes through, and the one they arrive at.
@@ -202,7 +223,12 @@ export class HrWorkforceService implements OnModuleInit {
         -- Lifecycle status first, dates second. Active and onboarding are both counted from
         -- lifecycle_status; counting departures from the dates alone meant a resigned assayer
         -- appeared in none of the three until someone happened to fill a date field in by hand.
-        COUNT(*) FILTER (WHERE lifecycle_status IN ('RESIGNED','TERMINATED','ARCHIVED')
+        --
+        -- Through HAS_LEFT rather than its own status list, because that same fall-through came
+        -- back for the one departure the list did not name: a death is filed as INACTIVE with a
+        -- reason, so the person was neither active, nor onboarding, nor exited — present in the
+        -- total and in none of the parts.
+        COUNT(*) FILTER (WHERE ${HAS_LEFT('')}
                             OR exit_date IS NOT NULL OR termination_date IS NOT NULL)::int AS exited
       FROM assayers WHERE is_active = true
     `);
@@ -299,9 +325,29 @@ export class HrWorkforceService implements OnModuleInit {
    * bank account, and TDS cannot be deducted without a PAN — so an empty column
    * here is an operational blocker, not a cosmetic gap.
    */
+  /**
+   * "This column is not usable", in SQL, saying exactly what `missingAssayerRecordFields` says.
+   *
+   * Blank is the general test — null, absent, or whitespace — and for ten of the eleven critical
+   * columns it is the whole of it. `latitude` carries one more clause, because for that field
+   * present and usable came apart: creating a record geocodes the address, so a person entered
+   * with nothing but a state comes back holding that state's centroid. Not blank, therefore
+   * complete, while the data-integrity scan raised the same record as a placeholder pin.
+   *
+   * Written once and read by all four call sites below. This list was consolidated into
+   * `@fapoms/shared` precisely because a hand-copied version here had drifted from the screens'
+   * version, and a rule that lives in only one of the two languages drifts the same way.
+   */
+  private static missingSql(column: string): string {
+    const blank = `${column} IS NULL OR ${column}::text = ''`;
+    return column === 'latitude'
+      ? `(${blank} OR geo_accuracy_meters >= ${PLACEHOLDER_PIN_METRES})`
+      : `(${blank})`;
+  }
+
   private async recordCompliance() {
     const selects = RECORD_FIELDS.map(
-      (f) => `COUNT(*) FILTER (WHERE ${f.column} IS NOT NULL AND ${f.column}::text <> '')::int AS "${f.column}"`,
+      (f) => `COUNT(*) FILTER (WHERE NOT ${HrWorkforceService.missingSql(f.column)})::int AS "${f.column}"`,
     ).join(',\n        ');
 
     const [filled] = await this.dataSource.query(`
@@ -328,8 +374,9 @@ export class HrWorkforceService implements OnModuleInit {
     // Who specifically is missing something critical — HR need names, not a bar.
     const criticalCols = RECORD_FIELDS.filter((f) => f.critical).map((f) => f.column);
     const missingExpr = criticalCols
-      .map((c) => `CASE WHEN ${c} IS NULL OR ${c}::text = '' THEN '${c}' END`)
+      .map((c) => `CASE WHEN ${HrWorkforceService.missingSql(c)} THEN '${c}' END`)
       .join(', ');
+    const anyMissing = criticalCols.map((c) => HrWorkforceService.missingSql(c)).join(' OR ');
 
     const incomplete = await this.dataSource.query(`
       SELECT id, assayer_code AS "assayerCode", display_name AS "displayName",
@@ -337,7 +384,7 @@ export class HrWorkforceService implements OnModuleInit {
              ARRAY_REMOVE(ARRAY[${missingExpr}], NULL) AS "missing"
       FROM assayers
       WHERE ${ON_ROSTER}
-        AND (${criticalCols.map((c) => `${c} IS NULL OR ${c}::text = ''`).join(' OR ')})
+        AND (${anyMissing})
       ORDER BY ARRAY_LENGTH(ARRAY_REMOVE(ARRAY[${missingExpr}], NULL), 1) DESC NULLS LAST,
                assayer_code
       LIMIT 100
@@ -355,7 +402,7 @@ export class HrWorkforceService implements OnModuleInit {
       SELECT COUNT(*)::int AS count
       FROM assayers
       WHERE ${ON_ROSTER}
-        AND (${criticalCols.map((c) => `${c} IS NULL OR ${c}::text = ''`).join(' OR ')})
+        AND (${anyMissing})
     `);
 
     // Only identity documents are verified, so only they are counted here. The register this
@@ -846,10 +893,25 @@ export class HrWorkforceService implements OnModuleInit {
   private async attrition() {
     const [totals] = await this.dataSource.query(`
       SELECT
-        COUNT(*) FILTER (WHERE exit_date IS NOT NULL OR termination_date IS NOT NULL)::int AS "totalExits",
+        -- Everyone who has gone, by status OR by date — the same rule the headcount tile uses.
+        -- This counted dates alone, so it read 421 where the "Exited" tile beside it read 446: the
+        -- 25 people carrying a departed lifecycle and no leaving date were missing from one number
+        -- and present in the other, on the same screen. Whichever a reader trusted, the other was
+        -- there to contradict it.
+        COUNT(*) FILTER (WHERE ${HAS_LEFT('')} OR exit_date IS NOT NULL OR termination_date IS NOT NULL)::int AS "totalExits",
+        -- The windowed counts stay date-only of necessity: a departure with no date cannot be
+        -- placed in a 90-day or 12-month window at all. undatedExits is published alongside so the
+        -- gap is visible rather than silently absorbed — see averageHeadcount12m below.
         COUNT(*) FILTER (WHERE COALESCE(exit_date, termination_date) > ${BUSINESS_TODAY_SQL} - INTERVAL '90 days')::int  AS "exits90d",
         COUNT(*) FILTER (WHERE COALESCE(exit_date, termination_date) > ${BUSINESS_TODAY_SQL} - INTERVAL '365 days')::int AS "exits12m",
-        COUNT(*) FILTER (WHERE termination_date IS NOT NULL)::int AS terminations,
+        COUNT(*) FILTER (WHERE ${HAS_LEFT('')} AND exit_date IS NULL AND termination_date IS NULL)::int AS "undatedExits",
+        -- Terminations by lifecycle, not by termination_date — that column is NULL on every row
+        -- in this table, so this counter read 0 against the 211 people whose lifecycle says
+        -- TERMINATED. Its population is everyone still on the books (the WHERE below), which is
+        -- deliberately NOT the dated-departures population the recent-exits query below walks:
+        -- 199 of those 421 are terminations, and the 12 that separate the two figures are
+        -- terminated people carrying no leaving date, who cannot appear in a dated list at all.
+        COUNT(*) FILTER (WHERE lifecycle_status = 'TERMINATED')::int AS terminations,
         COUNT(*) FILTER (WHERE joining_date > ${BUSINESS_TODAY_SQL} - INTERVAL '90 days')::int AS "joins90d"
       FROM assayers
       -- Attrition counts people who LEFT, which is a different thing from a record that was
@@ -861,7 +923,20 @@ export class HrWorkforceService implements OnModuleInit {
     const recent = await this.dataSource.query(`
       SELECT id, assayer_code AS "assayerCode", display_name AS "displayName", state,
              COALESCE(exit_date, termination_date) AS "exitDate",
-             CASE WHEN termination_date IS NOT NULL THEN 'TERMINATED' ELSE 'RESIGNED' END AS mode,
+             -- How somebody left, read from the lifecycle rather than from which date column was
+             -- filled in. This tested termination_date IS NOT NULL, and that column is NULL on
+             -- every row in the table — the roster importer never had a source for it — so the
+             -- CASE could not produce 'TERMINATED' at all and labelled all 421 dated departures
+             -- 'Resigned'. Only 106 of them had resigned. 199 were terminated, and three had died:
+             -- the screen told HR that a dead colleague resigned, which is the exact thing the
+             -- data-integrity scanner's leftWord was rewritten to stop saying.
+             CASE
+               WHEN upper(coalesce(unavailable_reason, '')) = 'DECEASED' THEN 'DECEASED'
+               WHEN lifecycle_status IN ('TERMINATED') THEN 'TERMINATED'
+               WHEN lifecycle_status IN ('RESIGNED') THEN 'RESIGNED'
+               WHEN termination_date IS NOT NULL THEN 'TERMINATED'
+               ELSE 'LEFT'
+             END AS mode,
              joining_date AS "joiningDate"
       FROM assayers
       WHERE is_active = true AND (exit_date IS NOT NULL OR termination_date IS NOT NULL)
@@ -879,6 +954,13 @@ export class HrWorkforceService implements OnModuleInit {
     /**
      * Everyone the rate is measured against: those still on the roster plus those who left
      * during the window. The standard read — you cannot leave a population you were never in.
+     *
+     * The 25 people who left with no leaving date are in NEITHER term, and cannot honestly be put
+     * in either: `active` correctly excludes them (they have gone) and `exits12m` cannot place an
+     * undated departure inside a 12-month window. So they are absent from the denominator rather
+     * than wrongly counted, and `undatedExits` is published so the screen can say the rate is
+     * computed on a population that excludes them. Quietly folding them into one side or the other
+     * would move the published rate by a number nobody could account for afterwards.
      */
     const averageHeadcount12m = active + exits12m;
     return {

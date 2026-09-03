@@ -6,6 +6,7 @@ import { isPlausibleIndianCoord } from './ui/MapPicker';
 import { useFeedback } from './ui/Feedback';
 import { useTheme } from '../theme/ThemeProvider';
 import { MobileApiService } from '../services/api.service';
+import { useT, serverErrorText } from '../i18n';
 
 /**
  * "We are not sure where you are on the map — is this you?"
@@ -25,6 +26,7 @@ export function LocationConfirmBanner({
   onConfirmed?: () => void;
 }) {
   const t = useTheme();
+  const tr = useT();
   const feedback = useFeedback();
   const [busy, setBusy] = useState(false);
   const [dismissed, setDismissed] = useState(false);
@@ -38,8 +40,8 @@ export function LocationConfirmBanner({
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
         feedback.warning(
-          'Location is off',
-          'Allow location access for this app in your phone settings, then try again.',
+          tr('registration.home.locationOffTitle'),
+          tr('registration.home.locationOffBody'),
         );
         return;
       }
@@ -47,24 +49,24 @@ export function LocationConfirmBanner({
       const { latitude, longitude } = fix.coords;
       if (!isPlausibleIndianCoord(latitude, longitude)) {
         feedback.error(
-          'That does not look right',
-          'Your phone reported a position outside India. Try again from where you are based.',
+          tr('registration.home.outsideIndiaTitle'),
+          tr('registration.home.outsideIndiaBody'),
         );
         return;
       }
       const res = await MobileApiService.confirmBaseLocation(assayerId, latitude, longitude);
       if (!res.success) {
-        feedback.error('Could not save', res.error || 'Please try again in a moment.');
+        feedback.error(
+          tr('registration.home.saveFailedTitle'),
+          serverErrorText(res.error, 'registration.home.saveFailedBody'),
+        );
         return;
       }
       setDone(true);
-      feedback.success('Thank you', 'Your location is set. Planners can now find work near you.');
+      feedback.success(tr('registration.home.thanksTitle'), tr('registration.home.thanksBody'));
       onConfirmed?.();
     } catch {
-      feedback.error(
-        'Could not get a fix',
-        'Step outside or near a window and try again.',
-      );
+      feedback.error(tr('registration.home.noFixTitle'), tr('registration.home.noFixBody'));
     } finally {
       setBusy(false);
     }
@@ -83,16 +85,15 @@ export function LocationConfirmBanner({
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm }}>
         <Icon name="location-outline" size={18} color={t.colors.warning} />
         <AppText variant="bodyStrong" tone="warning" style={{ flex: 1 }}>
-          Confirm where you are based
+          {tr('location.confirmTitle')}
         </AppText>
       </View>
       <AppText variant="caption" tone="muted">
-        We could not place you accurately on the map. Tap below where you live or work from, so we
-        send you jobs that are actually close by.
+        {tr('location.confirmBody')}
       </AppText>
       <View style={{ flexDirection: 'row', gap: t.space.sm }}>
         <Button
-          label="Use my current location"
+          label={tr('registration.home.useCurrent')}
           icon="navigate"
           variant="primary"
           loading={busy}
@@ -100,7 +101,7 @@ export function LocationConfirmBanner({
           style={{ flex: 1 }}
         />
         <Button
-          label="Not now"
+          label={tr('common.notNow')}
           variant="ghost"
           disabled={busy}
           onPress={() => setDismissed(true)}

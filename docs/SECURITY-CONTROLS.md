@@ -83,6 +83,23 @@ catch the accident, which is what actually happened, not an insider.
 3. **If the marker is stale but the control is intact** (a rename, a refactor), update the entry.
    Prefer a marker that is hard to change without changing behaviour.
 
+## Markers must be code, never prose
+
+A marker is a substring of the file, so a sentence from a comment satisfies it just as well as the
+control does. Three entries were written that way — anchored to "cheaper to hammer than login", to
+"Synchronous xlsx.write blocks the event loop with no yield", and to an OSRM `SECURITY:` note.
+Every one of those controls was genuinely present, so nothing was broken; but each tripwire would
+have kept passing after its control was deleted, as long as the comment above it survived.
+
+That is this document's own incident reproduced inside the safeguard: a green check that means
+nothing. The registry now asserts it — `anchors every control to code, never to a comment
+describing it` — so a prose marker fails at the moment somebody writes one, rather than at the
+moment somebody needed it to work.
+
+The same mistake turned up in two other source-scanning specs on the same day, both of which were
+matching text from neighbouring lines rather than the code they guarded. If you are writing a spec
+that reads source, strip comments before you match.
+
 ## Adding a control
 
 Add an entry when the control is one whose *absence is silent* — nothing fails, no user complains,

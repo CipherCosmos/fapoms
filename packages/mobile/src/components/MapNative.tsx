@@ -5,6 +5,7 @@ import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import { Icon } from './ui/primitives';
 import { useTheme } from '../theme/ThemeProvider';
 import { MapRenderProps } from './MapWeb';
+import { useT } from '../i18n';
 
 // Native (Android/iOS) implementation of the in-app map.
 // Android: Google Maps provider with live traffic layer + follow-camera nav.
@@ -49,6 +50,7 @@ export const InteractiveMapNative: React.FC<MapRenderProps> = ({
   passedIndex,
 }) => {
   const t = useTheme();
+  const tr = useT();
   const mapRef = useRef<any>(null);
 
   // Fit the full route when not following.
@@ -109,14 +111,15 @@ export const InteractiveMapNative: React.FC<MapRenderProps> = ({
       >
         <Icon name="map-outline" size={28} color={t.colors.textFaint} />
         <Text style={{ color: t.colors.text, fontSize: 15, fontWeight: '700', textAlign: 'center' }}>
-          Map unavailable in this build
+          {tr('nav.unavailableTitle')}
         </Text>
         <Text style={{ color: t.colors.textMuted, fontSize: 12, lineHeight: 18, textAlign: 'center' }}>
-          This app was built without a Google Maps key, so the map cannot be shown. Everything else
-          works — including check-in.
+          {tr('nav.unavailableBody')}
         </Text>
         <Text style={{ color: t.colors.textFaint, fontSize: 12, marginTop: 6 }} selectable>
-          Destination: {destination.latitude.toFixed(5)}, {destination.longitude.toFixed(5)}
+          {tr('nav.destinationCoords', {
+            coords: `${destination.latitude.toFixed(5)}, ${destination.longitude.toFixed(5)}`,
+          })}
         </Text>
       </View>
     );
@@ -143,8 +146,8 @@ export const InteractiveMapNative: React.FC<MapRenderProps> = ({
           longitudeDelta: 0.08,
         }}
       >
-        {origin && <MarkerComponent coordinate={origin} title="You" pinColor="#3b82f6" />}
-        <MarkerComponent coordinate={destination} title="Destination" pinColor="#ef4444" />
+        {origin && <MarkerComponent coordinate={origin} title={tr('nav.you')} pinColor="#3b82f6" />}
+        <MarkerComponent coordinate={destination} title={tr('nav.destination')} pinColor="#ef4444" />
         {routeCoords.length >= 2 && !follow && (
           <PolylineComponent coordinates={routeCoords} strokeColor="#2563eb" strokeWidth={5} />
         )}
@@ -172,8 +175,9 @@ export const InteractiveMapNative: React.FC<MapRenderProps> = ({
           gap: 4,
         }}
       >
-        <Icon name="navigate" size={12} color="#38bdf8" />
-        <Text style={{ fontSize: 10, color: '#94a3b8' }}>Live traffic</Text>
+        <Icon name="navigate" size={14} color="#38bdf8" />
+        {/* 12 is the readable floor for this app — see the tab dock in AppShell. */}
+        <Text style={{ fontSize: 12, color: '#94a3b8' }}>{tr('nav.liveTraffic')}</Text>
       </View>
     </View>
   );

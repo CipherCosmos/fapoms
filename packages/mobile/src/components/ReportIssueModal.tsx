@@ -8,6 +8,7 @@ import {
   type AssignmentIssueCategory,
 } from '@fapoms/shared';
 import type { AssayerAssignment } from '../types/mobile-app';
+import { useT, type TranslationKey } from '../i18n';
 
 const CATEGORY_ICON: Record<AssignmentIssueCategory, string> = {
   CANNOT_ATTEND: 'calendar-clear-outline',
@@ -33,8 +34,18 @@ export interface ReportIssueModalProps {
  * action. So the wording is "report", never "cancel", and the categories are the situations a
  * field worker actually hits.
  */
+/** Catalogue key per category; anything unmapped falls back to the shared English label. */
+const CATEGORY_LABEL_KEYS: Partial<Record<AssignmentIssueCategory, TranslationKey>> = {
+  CANNOT_ATTEND: 'issue.categories.cannotAttend',
+  BRANCH_INACCESSIBLE: 'issue.categories.branchInaccessible',
+  NEEDS_CLARIFICATION: 'issue.categories.needsClarification',
+  SAFETY_CONCERN: 'issue.categories.safetyConcern',
+  OTHER: 'issue.categories.other',
+};
+
 export const ReportIssueModal: React.FC<ReportIssueModalProps> = ({ visible, assignment, onClose, onSubmit }) => {
   const t = useTheme();
+  const tr = useT();
   const [category, setCategory] = useState<AssignmentIssueCategory | null>(null);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState(false);
@@ -63,7 +74,7 @@ export const ReportIssueModal: React.FC<ReportIssueModalProps> = ({ visible, ass
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={close}>
       <View style={{ flex: 1, backgroundColor: t.colors.scrim, justifyContent: 'flex-end' }}>
-        <Tappable onPress={close} style={{ flex: 1 }} accessibilityLabel="Dismiss">
+        <Tappable onPress={close} style={{ flex: 1 }} accessibilityLabel={tr('nav.dismiss')}>
           <View style={{ flex: 1 }} />
         </Tappable>
 
@@ -82,16 +93,16 @@ export const ReportIssueModal: React.FC<ReportIssueModalProps> = ({ visible, ass
 
           <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: t.space.md }}>
             <View style={{ flex: 1, gap: t.space.xs }}>
-              <AppText variant="h2">Report an issue</AppText>
+              <AppText variant="h2">{tr('issue.title')}</AppText>
               <AppText variant="small" tone="muted">
-                {assignment.branchName} · the operations desk will be notified and will follow up.
+                {tr('issue.subtitle', { branch: assignment.branchName })}
               </AppText>
             </View>
-            <IconButton icon="close" onPress={close} accessibilityLabel="Close" size={38} />
+            <IconButton icon="close" onPress={close} accessibilityLabel={tr('common.close')} size={38} />
           </View>
 
           <View style={{ gap: t.space.sm }}>
-            <AppText variant="overline" tone="faint">WHAT'S THE PROBLEM?</AppText>
+            <AppText variant="overline" tone="faint">{tr('issue.problemLabel')}</AppText>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.sm }}>
               {ASSIGNMENT_ISSUE_CATEGORIES.map((c) => {
                 const active = category === c;
@@ -116,7 +127,7 @@ export const ReportIssueModal: React.FC<ReportIssueModalProps> = ({ visible, ass
                         color={active ? t.colors.primary : t.colors.textFaint}
                       />
                       <AppText variant="caption" tone={active ? 'primary' : 'muted'}>
-                        {assignmentIssueCategoryLabel(c)}
+                        {CATEGORY_LABEL_KEYS[c] ? tr(CATEGORY_LABEL_KEYS[c]!) : assignmentIssueCategoryLabel(c)}
                       </AppText>
                     </View>
                   </Tappable>
@@ -126,7 +137,7 @@ export const ReportIssueModal: React.FC<ReportIssueModalProps> = ({ visible, ass
           </View>
 
           <View style={{ gap: t.space.sm }}>
-            <AppText variant="overline" tone="faint">DETAILS (OPTIONAL)</AppText>
+            <AppText variant="overline" tone="faint">{tr('issue.detailsLabel')}</AppText>
             <View
               style={{
                 backgroundColor: t.colors.surface,
@@ -139,7 +150,7 @@ export const ReportIssueModal: React.FC<ReportIssueModalProps> = ({ visible, ass
               <TextInput
                 value={note}
                 onChangeText={setNote}
-                placeholder="Add anything the desk needs to know…"
+                placeholder={tr('issue.detailsPlaceholder')}
                 placeholderTextColor={t.colors.textFaint}
                 multiline
                 numberOfLines={3}
@@ -156,7 +167,7 @@ export const ReportIssueModal: React.FC<ReportIssueModalProps> = ({ visible, ass
           </View>
 
           <Button
-            label={busy ? 'Sending…' : 'Send to desk'}
+            label={busy ? tr('issue.sending') : tr('issue.send')}
             icon="send"
             onPress={submit}
             loading={busy}

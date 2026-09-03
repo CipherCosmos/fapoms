@@ -8,6 +8,7 @@ import { AppText, Button, Icon, IconButton, Card, Tappable, Badge, EmptyState } 
 import { MobileApiService } from '../services/api.service';
 
 import { FEEDBACK_STATUS_LABELS, feedbackCategoryLabel } from '@fapoms/shared';
+import { useT, t as translate } from '../i18n';
 /**
  * The assayer's side of the two-way feedback & collaboration channel.
  *
@@ -33,8 +34,11 @@ type ViewMode = 'list' | 'compose' | 'thread';
  * would say their issue was marked "Seen" while the product team looked at "Acknowledged", and
  * neither could tell they meant the same state.
  */
-const CATEGORIES: { key: string; label: string; icon: string }[] = [
-  { key: '', label: 'Auto', icon: 'sparkles-outline' },
+// A function, not a constant: the "Auto" chip is translated, and a module-level array would
+// have frozen it in whatever language was active when this file was first imported — which is
+// before the saved language preference has been applied at all.
+const categories = (): { key: string; label: string; icon: string }[] => [
+  { key: '', label: translate('feedback.kindAuto'), icon: 'sparkles-outline' },
   { key: 'BUG', label: feedbackCategoryLabel('BUG'), icon: 'bug-outline' },
   { key: 'ENHANCEMENT', label: feedbackCategoryLabel('ENHANCEMENT'), icon: 'bulb-outline' },
   { key: 'PROCESS', label: feedbackCategoryLabel('PROCESS'), icon: 'git-branch-outline' },
@@ -48,6 +52,7 @@ const fmtWhen = (d: string | null) =>
 
 export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
   const t = useTheme();
+  const tr = useT();
   const [view, setView] = useState<ViewMode>('list');
   const [threads, setThreads] = useState<any[] | null>(null);
 
@@ -186,25 +191,27 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
           {/* Header */}
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm, paddingHorizontal: t.space.xl, paddingBottom: t.space.md }}>
             {view !== 'list' ? (
-              <IconButton icon="chevron-back" onPress={() => { setView('list'); setErr(null); loadList(); }} accessibilityLabel="Back" size={36} />
+              <IconButton icon="chevron-back" onPress={() => { setView('list'); setErr(null); loadList(); }} accessibilityLabel={tr('common.back')} size={36} />
             ) : (
               <Icon name="chatbox-ellipses-outline" size={20} color={t.colors.primary} />
             )}
             <AppText variant="h2" style={{ flex: 1 }}>
-              {view === 'compose' ? 'New feedback' : view === 'thread' ? (activeThread?.title ?? 'Feedback') : 'Feedback'}
+              {view === 'compose'
+                ? tr('feedback.newTitle')
+                : view === 'thread' ? (activeThread?.title ?? tr('feedback.title')) : tr('feedback.title')}
             </AppText>
-            <IconButton icon="close" onPress={close} accessibilityLabel="Close" size={36} />
+            <IconButton icon="close" onPress={close} accessibilityLabel={tr('common.close')} size={36} />
           </View>
 
           {view === 'list' && (
             <>
               <View style={{ paddingHorizontal: t.space.xl, paddingBottom: t.space.sm }}>
-                <Button label="Send new feedback" icon="add" onPress={() => { setView('compose'); setErr(null); }} full />
+                <Button label={tr('feedback.sendNew')} icon="add" onPress={() => { setView('compose'); setErr(null); }} full />
               </View>
               <ScrollView contentContainerStyle={{ padding: t.space.xl, paddingTop: t.space.sm, gap: t.space.md }}>
                 {threads === null && <ActivityIndicator color={t.colors.primary} style={{ marginTop: t.space.xl }} />}
                 {threads?.length === 0 && (
-                  <EmptyState icon="chatbox-outline" title="No feedback yet" body="Report a bug, suggest an improvement or ask a question — the product team will reply here." />
+                  <EmptyState icon="chatbox-outline" title={tr('feedback.emptyTitle')} body={tr('feedback.emptyBody')} />
                 )}
                 {threads?.map((th) => (
                   <Tappable key={th.id} onPress={() => openThread(th.id)}>
@@ -224,9 +231,9 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
           {view === 'compose' && (
             <ScrollView contentContainerStyle={{ padding: t.space.xl, paddingTop: 0, gap: t.space.lg }} keyboardShouldPersistTaps="handled">
               <View style={{ gap: t.space.sm }}>
-                <AppText variant="overline" tone="faint">WHAT KIND?</AppText>
+                <AppText variant="overline" tone="faint">{tr('feedback.kindLabel')}</AppText>
                 <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.sm }}>
-                  {CATEGORIES.map((c) => {
+                  {categories().map((c) => {
                     const active = category === c.key;
                     return (
                       <Tappable key={c.key || 'AUTO'} onPress={() => setCategory(c.key)}>
@@ -246,17 +253,17 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
               </View>
 
               <View style={{ gap: t.space.sm }}>
-                <AppText variant="overline" tone="faint">TITLE (OPTIONAL)</AppText>
+                <AppText variant="overline" tone="faint">{tr('feedback.titleLabel')}</AppText>
                 <View style={{ backgroundColor: t.colors.surface, borderRadius: t.radius.md, borderWidth: 1, borderColor: t.colors.border, paddingHorizontal: t.space.md }}>
-                  <TextInput value={title} onChangeText={setTitle} placeholder="Short summary" placeholderTextColor={t.colors.textFaint} maxLength={200}
+                  <TextInput value={title} onChangeText={setTitle} placeholder={tr('feedback.titlePlaceholder')} placeholderTextColor={t.colors.textFaint} maxLength={200}
                     style={{ color: t.colors.text, paddingVertical: t.space.md, ...(t.type.body as object) }} />
                 </View>
               </View>
 
               <View style={{ gap: t.space.sm }}>
-                <AppText variant="overline" tone="faint">DETAILS</AppText>
+                <AppText variant="overline" tone="faint">{tr('feedback.detailsLabel')}</AppText>
                 <View style={{ backgroundColor: t.colors.surface, borderRadius: t.radius.md, borderWidth: 1, borderColor: t.colors.border, paddingHorizontal: t.space.md }}>
-                  <TextInput value={body} onChangeText={setBody} placeholder="What happened, or what would help?" placeholderTextColor={t.colors.textFaint}
+                  <TextInput value={body} onChangeText={setBody} placeholder={tr('feedback.detailsPlaceholder')} placeholderTextColor={t.colors.textFaint}
                     multiline numberOfLines={5} maxLength={4000}
                     style={{ color: t.colors.text, paddingVertical: t.space.md, minHeight: 120, textAlignVertical: 'top', ...(t.type.body as object) }} />
                 </View>
@@ -270,7 +277,7 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
               <View style={{ gap: t.space.sm }}>
                 <Tappable
                   onPress={pickFiles}
-                  accessibilityLabel="Attach a photo or file"
+                  accessibilityLabel={tr('feedback.attach')}
                   style={{
                     flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start',
                     paddingVertical: t.space.sm, paddingHorizontal: t.space.md,
@@ -279,7 +286,7 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
                 >
                   <Icon name="attach" size={14} color={t.colors.textMuted} />
                   <AppText variant="caption" tone="muted">
-                    {files.length ? 'Add another' : 'Attach a photo or file'}
+                    {files.length ? tr('feedback.attachAnother') : tr('feedback.attach')}
                   </AppText>
                 </Tappable>
 
@@ -303,12 +310,18 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
                       style={{ flex: 1 }}
                       tone={f.error ? 'danger' : undefined}
                     >
-                      {f.asset?.name ?? 'Attachment'}
-                      {f.uploading ? ' · sending…' : f.error ? ` · ${f.error}` : ''}
+                      {(() => {
+                        const name = f.asset?.name ?? tr('feedback.attachmentFallback');
+                        if (f.uploading) return tr('feedback.attachmentSending', { file: name });
+                        if (f.error) return tr('feedback.attachmentFailed', { file: name, reason: f.error });
+                        return name;
+                      })()}
                     </AppText>
                     <Tappable
                       onPress={() => setFiles((prev) => prev.filter((_, idx) => idx !== i))}
-                      accessibilityLabel={`Remove ${f.asset?.name ?? 'attachment'}`}
+                      accessibilityLabel={tr('feedback.removeAttachment', {
+                        file: f.asset?.name ?? tr('feedback.attachmentFallback'),
+                      })}
                       hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                     >
                       <Icon name="close" size={12} color={t.colors.textMuted} />
@@ -318,7 +331,7 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
               </View>
 
               {err && <AppText variant="caption" tone="danger">{err}</AppText>}
-              <Button label={sending ? 'Sending…' : 'Send'} icon="send" onPress={submitNew} loading={sending} disabled={!body.trim()} size="lg" full />
+              <Button label={sending ? tr('feedback.sending') : tr('feedback.send')} icon="send" onPress={submitNew} loading={sending} disabled={!body.trim()} size="lg" full />
             </ScrollView>
           )}
 
@@ -328,7 +341,10 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
                 <View style={{ paddingHorizontal: t.space.xl, paddingBottom: t.space.sm, flexDirection: 'row', gap: t.space.sm, alignItems: 'center' }}>
                   <Badge label={STATUS_LABEL[activeThread.status] ?? activeThread.status} tone={activeThread.status === 'RESOLVED' ? 'success' : activeThread.status === 'OPEN' ? 'warning' : 'primary'} />
                   <AppText variant="caption" tone="faint">
-                    {feedbackCategoryLabel(activeThread.category)}{activeThread.firstRespondedAt ? ' · team responded' : ' · awaiting first response'}
+                    {tr(
+                      activeThread.firstRespondedAt ? 'feedback.categoryResponded' : 'feedback.categoryAwaiting',
+                      { category: feedbackCategoryLabel(activeThread.category) },
+                    )}
                   </AppText>
                 </View>
               )}
@@ -347,7 +363,7 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
                   return (
                     <View key={m.id} style={{ alignItems: mine ? 'flex-end' : 'flex-start' }}>
                       <AppText variant="caption" tone="faint" style={{ marginBottom: 3 }}>
-                        {mine ? 'You' : (m.authorName ?? 'Product team')} · {fmtWhen(m.createdAt)}
+                        {mine ? tr('feedback.you') : (m.authorName ?? tr('feedback.productTeam'))} · {fmtWhen(m.createdAt)}
                       </AppText>
                       <View style={{
                         maxWidth: '85%', paddingVertical: t.space.sm + 2, paddingHorizontal: t.space.md, borderRadius: t.radius.lg,
@@ -368,10 +384,10 @@ export const FeedbackModal: React.FC<Props> = ({ visible, onClose }) => {
               {activeThread?.status !== 'CLOSED' && (
                 <View style={{ flexDirection: 'row', gap: t.space.sm, padding: t.space.md, paddingBottom: t.space.xl, borderTopWidth: 1, borderTopColor: t.colors.border, alignItems: 'flex-end' }}>
                   <View style={{ flex: 1, backgroundColor: t.colors.surface, borderRadius: t.radius.lg, borderWidth: 1, borderColor: t.colors.border, paddingHorizontal: t.space.md }}>
-                    <TextInput value={draft} onChangeText={setDraft} placeholder="Add to the conversation…" placeholderTextColor={t.colors.textFaint}
+                    <TextInput value={draft} onChangeText={setDraft} placeholder={tr('feedback.replyPlaceholder')} placeholderTextColor={t.colors.textFaint}
                       multiline maxLength={4000} style={{ color: t.colors.text, paddingVertical: t.space.sm + 2, maxHeight: 100, ...(t.type.body as object) }} />
                   </View>
-                  <IconButton icon={replying ? 'hourglass-outline' : 'send'} onPress={sendReply} accessibilityLabel="Send" size={44} tone={draft.trim() && !replying ? 'primary' : 'default'} />
+                  <IconButton icon={replying ? 'hourglass-outline' : 'send'} onPress={sendReply} accessibilityLabel={tr('feedback.sendReply')} size={44} tone={draft.trim() && !replying ? 'primary' : 'default'} />
                 </View>
               )}
             </View>

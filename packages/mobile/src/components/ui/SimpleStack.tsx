@@ -3,6 +3,7 @@ import { Animated, BackHandler, Dimensions, Modal, PanResponder, ScrollView, Sty
 import { useTheme } from '../../theme/ThemeProvider';
 import { AppText, Icon, Tappable } from './primitives';
 import { TOP_INSET } from './AppShell';
+import { useT } from '../../i18n';
 
 /**
  * A minimal push/pop stack, built from `Animated`/`PanResponder`/`View` — all pure JS, already
@@ -60,6 +61,7 @@ interface SubScreenProps {
  */
 export const SubScreen: React.FC<SubScreenProps> = ({ active, title, onBack, trailing, style, children }) => {
   const t = useTheme();
+  const tr = useT();
   const translateX = useRef(new Animated.Value(SCREEN_W)).current;
   const [mounted, setMounted] = useState(active);
 
@@ -154,7 +156,7 @@ export const SubScreen: React.FC<SubScreenProps> = ({ active, title, onBack, tra
           paddingTop: TOP_INSET, paddingHorizontal: t.space.sm, paddingBottom: t.space.md,
           borderBottomWidth: 1, borderBottomColor: t.colors.border,
         }}>
-          <Tappable onPress={onBack} accessibilityRole="button" accessibilityLabel="Back" hitSlop={8}>
+          <Tappable onPress={onBack} accessibilityRole="button" accessibilityLabel={tr('common.back')} hitSlop={8}>
             <View style={{ flexDirection: 'row', alignItems: 'center', padding: t.space.sm }}>
               <Icon name="chevron-back" size={22} color={t.colors.primary} />
             </View>

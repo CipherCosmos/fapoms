@@ -65,6 +65,16 @@ export interface HrWorkforceOverview {
     attritionRate12m: number;
     /** The population the rate is measured against: still on the roster plus those who left. */
     averageHeadcount12m: number;
+    /**
+     * People who have gone with no leaving date recorded — 25 on the live roster.
+     *
+     * They are in neither term of the rate and cannot honestly be put in either: they are off the
+     * roster, and an undated departure cannot be placed inside a twelve-month window. The server
+     * has published the count all along, precisely so a screen could say the percentage is worked
+     * out on a population that leaves them out; the type stopped at `joins90d`, so no screen could
+     * read it and the published rate carried a silent hole. See `attritionExplainer` in hr-ui.
+     */
+    undatedExits: number;
     recent: { id: string; assayerCode: string; displayName: string; state: string; exitDate: string; mode: string; joiningDate: string | null }[];
   };
   activity: { id: string; eventType: string; previousState: string | null; newState: string | null; performedBy: string | null; remarks: string | null; occurredAt: string; assayerId: string; assayerCode: string; displayName: string }[];

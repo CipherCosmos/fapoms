@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { api } from '../../services/api';
 import { fetchWholeAssayerRoster } from '../../services/assayer-roster';
 import { userMessage } from '../../services/errors';
-import { SkeletonRows } from '../../components/ui';
+import { AlertBanner, DataTable } from '../../components/ui';
 import { listPhase } from '../../components/ui/list-phase';
 import { card, label, Empty, fmtDate } from './hr-ui';
 import { useHr } from './HrLayout';
@@ -71,6 +71,20 @@ const rate = (value: number | string | null | undefined, currency?: string | nul
     ? formatMoney(value, currency)
     : <span title="Nothing agreed for this — it was left blank" style={{ color: 'var(--text-muted)' }}>Not set</span>;
 
+/**
+ * One rate off a row, and the difference between "no terms exist" and "this box was left blank".
+ *
+ * Two different absences that must not print the same word: a person with no pay terms at all has
+ * nothing to say about their hourly rate, while a person whose terms exist with the hourly box
+ * empty has a term nobody agreed. The first is a dash; the second is "Not set".
+ */
+const rateOf = (
+  row: RosterPayRow | undefined,
+  pick: (p: CommercialProfile) => number | string | null | undefined,
+): React.ReactNode => (row?.profile
+  ? rate(pick(row.profile), row.profile.currency)
+  : <span style={{ color: 'var(--text-muted)' }}>—</span>);
+
 export const HrPayPage: React.FC = () => {
 
   const { canManage } = useHr();
@@ -132,7 +146,7 @@ export const HrPayPage: React.FC = () => {
 
   // The error still takes over the screen — there is nothing to show and something to fix.
   // Loading does not: see below, where the page keeps its shape and the rows fill in.
-  if (error) return <div style={{ padding: '20px 4px', color: 'var(--danger)' }}>{error}</div>;
+  if (error) return <AlertBanner type="error" message={error} style={{ margin: '20px 4px' }} />;
 
   /**
    * The page keeps its own shape while it loads.
@@ -217,110 +231,136 @@ export const HrPayPage: React.FC = () => {
           </div>
         </div>
 
-        {rows.length === 0 ? (
-          <Empty>
-            {search.trim()
-              ? `Nobody on the roster is called “${search.trim()}”. Check the spelling, or clear the search box to see everyone.`
-              : filter === 'unpriced'
-                ? 'Everyone on the roster has their own agreed base fee — nobody is falling back to the client default fee.'
-                : filter === 'priced'
-                  ? 'Nobody has their own agreed base fee yet. Use “Set pay terms” on a row after switching to “On the roster”, and every audit that person does will be paid at their agreed rate instead of the client default.'
-                  : 'Nobody is on the roster yet. People appear here as soon as they are added under Workforce, and their pay terms are set from this screen.'}
-          </Empty>
-        ) : (
-          <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px' }}>
-              <thead>
-                <tr>
-                  {/*
-                    Every column says per what. "Daily / Hourly / Travel" over four rupee figures
-                    left a clerk to guess whether ₹3,600 was a day, a visit or a month — and the
-                    only column that decides what is actually paid was indistinguishable from the
-                    three that do not.
-                  */}
-                  {['Person', 'Base fee (per audit) — what is paid', 'Daily rate', 'Hourly rate', 'Travel (per trip)', 'These terms apply from', ''].map((h) => (
-                    <th key={h} style={{ ...label, textAlign: h === 'Person' || h === '' ? 'left' : 'right', padding: '8px 10px', borderBottom: '1px solid var(--border-color)', whiteSpace: 'nowrap' }}>{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {phase === 'skeleton' && <SkeletonRows rows={6} columns={7} />}
-                {rows.map((a) => {
-                  const row = pay[a.id];
-                  const p = row?.profile;
+        {/*
+          The empty state is INSIDE the table now, which fixes a bug the old markup had built in:
+          it read `rows.length === 0 ? <Empty> : <table>`, and the skeleton rows lived inside that
+          table — so on a first load, with no rows yet, the page showed "Nobody is on the roster
+          yet" to somebody whose roster was still being fetched. `listPhase` exists precisely to
+          keep an empty answer and an unarrived one apart, and this screen was throwing that away
+          one line after computing it.
+        */}
+        <DataTable<AssayerLite>
+          density="compact"
+          rows={phase === 'skeleton' ? [] : rows}
+          rowKey={(a) => a.id}
+          loading={phase === 'skeleton'}
+          loadingRows={6}
+          emptyState={(
+            <Empty>
+              {search.trim()
+                ? `Nobody on the roster is called “${search.trim()}”. Check the spelling, or clear the search box to see everyone.`
+                : filter === 'unpriced'
+                  ? 'Everyone on the roster has their own agreed base fee — nobody is falling back to the client default fee.'
+                  : filter === 'priced'
+                    ? 'Nobody has their own agreed base fee yet. Use “Set pay terms” on a row after switching to “On the roster”, and every audit that person does will be paid at their agreed rate instead of the client default.'
+                    : 'Nobody is on the roster yet. People appear here as soon as they are added under Workforce, and their pay terms are set from this screen.'}
+            </Empty>
+          )}
+          columns={[
+            {
+              key: 'person',
+              header: 'Person',
+              render: (a) => (
+                <>
+                  <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{a.displayName}</div>
+                  <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{a.assayerCode}{a.district ? ` · ${a.district}` : ''}</div>
+                  {bankMissing(a) && (
+                    <Link
+                      /**
+                       * `section=financial` so the edit form opens on the Financial tab. Without
+                       * it this landed on the top of a four-tab form and the bank fields — the
+                       * entire reason for following this link — were three clicks away. The modal
+                       * reads the parameter itself (see AssayerForms), so nothing has to be
+                       * threaded through the roster.
+                       */
+                      to={`/hr/roster?assayer=${a.id}&section=financial`}
+                      style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', fontWeight: 600, color: 'var(--danger)', marginTop: '3px' }}
+                    >
+                      <AlertTriangle size={11} /> No bank details — add them
+                    </Link>
+                  )}
+                </>
+              ),
+            },
+            {
+              key: 'base',
+              // Every column says per what. "Daily / Hourly / Travel" over four rupee figures left
+              // a clerk to guess whether ₹3,600 was a day, a visit or a month — and the only column
+              // that decides what is actually paid was indistinguishable from the three that do not.
+              header: 'Base fee (per audit) — what is paid',
+              align: 'right',
+              render: (a) => {
+                const row = pay[a.id];
+                const p = row?.profile;
+                /*
+                  ONE PRESENTATION FOR ONE FACT. Both "no pay terms at all" and "pay terms with the
+                  base fee left at zero" mean the same thing to the person being paid: the client's
+                  default fee. They used to look completely different — the first was a sentence
+                  spanning five columns, the second a small amber line under a rupee figure — so a
+                  clerk scanning this column could not see that the two rows were in the same state.
+                */
+                if (!p) {
                   return (
-                    <tr key={a.id} style={{ borderBottom: '1px solid var(--border-hair)' }}>
-                      <td style={{ padding: '9px 10px' }}>
-                        <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{a.displayName}</div>
-                        <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{a.assayerCode}{a.district ? ` · ${a.district}` : ''}</div>
-                        {bankMissing(a) && (
-                          <Link
-                            /**
-                             * `section=financial` so the edit form opens on the Financial tab.
-                             * Without it this landed on the top of a four-tab form and the bank
-                             * fields — the entire reason for following this link — were three
-                             * clicks away. The modal reads the parameter itself (see
-                             * AssayerForms), so nothing has to be threaded through the roster.
-                             */
-                            to={`/hr/roster?assayer=${a.id}&section=financial`}
-                            style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', fontWeight: 600, color: 'var(--danger)', marginTop: '3px' }}
-                          >
-                            <AlertTriangle size={11} /> No bank details — add them
-                          </Link>
-                        )}
-                      </td>
-                      {p ? (
-                        <>
-                          <td style={{ ...num, color: 'var(--text-primary)', fontWeight: 600 }}>
-                            {rate(p.baseFee, p.currency)}
-                            {/*
-                              Pay terms exist, but with no base fee in them — so the system pays the
-                              client default and the row otherwise looks fully priced. This is the
-                              exact row a clerk would have sworn was on an agreed rate.
-                            */}
-                            {!paidOwnFee(row) && (
-                              <div style={{ fontSize: '10.5px', fontWeight: 500, color: 'var(--warning)', marginTop: '2px' }}>
-                                paid the client default
-                              </div>
-                            )}
-                          </td>
-                          <td style={num}>{rate(p.dailyRate, p.currency)}</td>
-                          <td style={num}>{rate(p.hourlyRate, p.currency)}</td>
-                          <td style={num}>{rate(p.travelReimbursement, p.currency)}</td>
-                          <td style={{ ...num, color: 'var(--text-muted)', fontSize: '11.5px' }}>
-                            {fmtDate(p.effectiveStartDate)}
-                            {/*
-                              The clock icon on its own said nothing: hovering for a tooltip is not
-                              how anyone reads a table, so "these are not the rates from next month"
-                              was information only a mouse could find.
-                            */}
-                            {row?.hasFutureProfile && (
-                              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'flex-end', color: 'var(--accent)', marginTop: '2px' }}>
-                                <Clock size={11} /> <span>Different terms start later</span>
-                              </div>
-                            )}
-                          </td>
-                        </>
-                      ) : (
-                        <td colSpan={5} style={{ padding: '9px 10px', color: 'var(--warning)', fontSize: '12px' }}>
-                          No pay terms agreed — paid the client's default fee for every audit
-                        </td>
-                      )}
-                      <td style={{ padding: '9px 10px', textAlign: 'right' }}>
-                        {canManage && (
-                          <button onClick={() => setEditing({ assayerId: a.id, profile: p ?? null })}
-                            style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '11.5px', fontWeight: 600, padding: '5px 10px', borderRadius: '7px', border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--accent)', cursor: 'pointer' }}>
-                            {p ? <><Pencil size={12} /> Change pay</> : <><Plus size={12} /> Set pay terms</>}
-                          </button>
-                        )}
-                      </td>
-                    </tr>
+                    <>
+                      <span style={{ color: 'var(--text-muted)' }}>—</span>
+                      <div style={{ fontSize: '12px', fontWeight: 500, color: 'var(--warning)', marginTop: '2px' }}>
+                        no pay terms · paid the client default
+                      </div>
+                    </>
                   );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+                }
+                return (
+                  <>
+                    <span style={{ color: 'var(--text-primary)', fontWeight: 600 }}>{rate(p.baseFee, p.currency)}</span>
+                    {!paidOwnFee(row) && (
+                      <div style={{ fontSize: '12px', fontWeight: 500, color: 'var(--warning)', marginTop: '2px' }}>
+                        paid the client default
+                      </div>
+                    )}
+                  </>
+                );
+              },
+            },
+            { key: 'daily', header: 'Daily rate', align: 'right', render: (a) => <>{rateOf(pay[a.id], (p) => p.dailyRate)}</> },
+            { key: 'hourly', header: 'Hourly rate', align: 'right', render: (a) => <>{rateOf(pay[a.id], (p) => p.hourlyRate)}</> },
+            { key: 'travel', header: 'Travel (per trip)', align: 'right', render: (a) => <>{rateOf(pay[a.id], (p) => p.travelReimbursement)}</> },
+            {
+              key: 'from',
+              header: 'These terms apply from',
+              align: 'right',
+              render: (a) => {
+                const row = pay[a.id];
+                if (!row?.profile) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
+                return (
+                  <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
+                    {fmtDate(row.profile.effectiveStartDate)}
+                    {/*
+                      The clock icon on its own said nothing: hovering for a tooltip is not how
+                      anyone reads a table, so "these are not the rates from next month" was
+                      information only a mouse could find.
+                    */}
+                    {row.hasFutureProfile && (
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '4px', justifyContent: 'flex-end', color: 'var(--accent)', marginTop: '2px' }}>
+                        <Clock size={11} /> <span>Different terms start later</span>
+                      </div>
+                    )}
+                  </span>
+                );
+              },
+            },
+            {
+              key: 'act',
+              header: '',
+              align: 'right',
+              render: (a) => (canManage ? (
+                <button onClick={() => setEditing({ assayerId: a.id, profile: pay[a.id]?.profile ?? null })}
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '12px', fontWeight: 600, padding: '5px 10px', borderRadius: '7px', border: '1px solid var(--border-color)', background: 'transparent', color: 'var(--accent)', cursor: 'pointer' }}>
+                  {pay[a.id]?.profile ? <><Pencil size={12} /> Change pay</> : <><Plus size={12} /> Set pay terms</>}
+                </button>
+              ) : null),
+            },
+          ]}
+        />
       </div>
 
       {editing && (
@@ -337,7 +377,6 @@ export const HrPayPage: React.FC = () => {
 };
 
 const statValue: React.CSSProperties = { fontSize: '24px', fontWeight: 700, lineHeight: 1.1 };
-const num: React.CSSProperties = { padding: '9px 10px', textAlign: 'right', fontVariantNumeric: 'tabular-nums', color: 'var(--text-secondary)' };
 const tile = (active: boolean, warn = false): React.CSSProperties => ({
   ...card, flex: '1 1 150px', minWidth: 0, textAlign: 'left', cursor: 'pointer',
   border: `1px solid ${active ? (warn ? 'var(--warning)' : 'var(--accent)') : 'var(--border-color)'}`,

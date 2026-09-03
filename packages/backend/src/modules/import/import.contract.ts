@@ -100,6 +100,16 @@ export interface BranchImportOutcome {
    * they just uploaded, not discover later as an unexplained reappearance.
    */
   revived: { row: number; solId?: string; reason: string }[];
+  /**
+   * Facts about the FILE rather than about a row — chiefly a column heading the importer does not
+   * recognise, whose data is therefore dropped in silence.
+   *
+   * The roster importer proved why this is needed: a sheet headed `Aadhaar Number` instead of
+   * `Aadhar Card Number` imported every row, reported "created 6, skipped 0", and discarded every
+   * Aadhaar. The branch importer reads its columns the same way and had the same blind spot, on a
+   * file of 3,759 branches.
+   */
+  notes: string[];
 }
 
 /**

@@ -115,6 +115,7 @@ export class ValidationController {
   // Static paths before ':id', or the router parses "team" as a uuid and 400s.
   @Get('team')
   @Roles(SystemRole.ADMIN, SystemRole.DESK)
+  @RequirePermissions('validation:view:organization')
   @ApiOperation({ summary: 'People a validation review can be routed to' })
   async team() {
     return { success: true, data: await this.validationService.validationTeam() };
@@ -122,6 +123,7 @@ export class ValidationController {
 
   @Get('workload')
   @Roles(SystemRole.ADMIN, SystemRole.DESK)
+  @RequirePermissions('validation:view:organization')
   @ApiOperation({ summary: 'Per-member desk workload: open packets, reviews held, aging' })
   async workload() {
     return { success: true, data: await this.validationService.workload() };
@@ -129,6 +131,7 @@ export class ValidationController {
 
   @Get('activity')
   @Roles(SystemRole.ADMIN, SystemRole.DESK)
+  @RequirePermissions('validation:view:organization')
   @ApiOperation({ summary: 'Recent desk activity: assignments, hand-backs, decisions — who did what' })
   async activity(@Query('limit') limit?: number) {
     return { success: true, data: await this.validationService.activity(limit) };
@@ -136,6 +139,7 @@ export class ValidationController {
 
   @Get('attention')
   @Roles(SystemRole.ADMIN, SystemRole.DESK)
+  @RequirePermissions('validation:view:organization')
   @ApiOperation({ summary: "The desk's SLA breaches, bucketed: what the head must unstick right now" })
   async attention() {
     return { success: true, data: await this.deskEscalation.attention() };
@@ -159,6 +163,10 @@ export class ValidationController {
 
   @Post(':id/assign')
   @Roles(SystemRole.ADMIN, SystemRole.DESK)
+  // `validation:edit`, not `validation:assign`: routing a case to a reviewer is a field on the
+  // case, and DESK — the head whose job this is — holds EDIT but not ASSIGN, so requiring ASSIGN
+  // would shut the desk out of its own routing screen.
+  @RequirePermissions('validation:edit:organization')
   @ApiOperation({ summary: 'Assign a validation case to a validator reviewer' })
   async assign(
     @Param('id', ParseUUIDPipe) id: string,
@@ -174,6 +182,7 @@ export class ValidationController {
 
   @Post('bulk/transition')
   @Roles(SystemRole.ADMIN, SystemRole.DESK)
+  @RequirePermissions('validation:edit:organization')
   @ApiOperation({ summary: 'Transition a batch of validation cases to a target status' })
   async bulkTransition(
     @Body() dto: BulkTransitionValidationCaseDto,
@@ -185,6 +194,10 @@ export class ValidationController {
 
   @Post(':id/transition')
   @Roles(SystemRole.ADMIN, SystemRole.DESK)
+  // A transition moves a case through the pipeline, including into approved states, but the two
+  // roles here hold EDIT and not APPROVE; the state machine, not this decorator, is what decides
+  // which transitions are legal from where.
+  @RequirePermissions('validation:edit:organization')
   @ApiOperation({ summary: 'Transition validation case status' })
   async transition(
     @Param('id', ParseUUIDPipe) id: string,

@@ -1,6 +1,9 @@
 import React, { useEffect, useRef } from 'react';
 import { View, Animated, Easing, Image } from 'react-native';
 import { useTheme } from '../../theme/ThemeProvider';
+// The module-level translator, not the hook: this is a presentational mark with no other copy
+// and no reason to subscribe to language changes for one accessibility label.
+import { t as translate } from '../../i18n';
 
 /**
  * The Orbit mark — a living logo, not a static drawing.
@@ -88,7 +91,7 @@ export const OrbitMark: React.FC<{ size?: number }> = ({ size = 120 }) => {
       <Image
         source={require('../../../assets/sumeru-logo.png')}
         style={{ width: core * 1.56, height: core * 1.2, resizeMode: 'contain' }}
-        accessibilityLabel="Sumeru Global"
+        accessibilityLabel={translate('shell.brand')}
       />
     </View>
   );

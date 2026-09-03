@@ -185,6 +185,7 @@ export class DocumentController {
 
   @Post('upload')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
+  @RequirePermissions('document:upload:organization')
   @UseInterceptors(FileInterceptor('file', documentUploadMulterOptions), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload a file for an assessment' })
@@ -263,6 +264,9 @@ export class DocumentController {
    */
   @Post('upload/presign')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
+  // The URL this mints is a write credential for the bucket, so it asks for the same permission
+  // as the upload it stands in for — not a lesser one because no bytes move on this request.
+  @RequirePermissions('document:upload:organization')
   @ApiOperation({ summary: 'Get a presigned URL to upload a file directly to object storage' })
   async presignUpload(@Body() body: PresignUploadRequestDto) {
     if (typeof this.storage.getSignedUploadUrl !== 'function') {
@@ -292,6 +296,7 @@ export class DocumentController {
 
   @Post('upload/finalize')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
+  @RequirePermissions('document:upload:organization')
   @ApiOperation({ summary: 'Register a file uploaded via a presigned URL as a document' })
   async finalizeUpload(@Body() body: FinalizeUploadRequestDto, @Req() req: any) {
     // Only keys minted by presignUpload can be finalized — never an arbitrary storage key,
@@ -1140,6 +1145,7 @@ export class DocumentController {
 
   @Post('upload-generated-batch')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
+  @RequirePermissions('document:upload:organization')
   @UseInterceptors(FilesInterceptor('files', 100, documentBatchUploadMulterOptions), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: "Upload a day's generated audit PDFs together, matching each file to its branch by filename" })
@@ -1262,6 +1268,7 @@ export class DocumentController {
 
   @Get('queue/data-entry')
   @Roles(SystemRole.ADMIN, SystemRole.DESK)
+  @RequirePermissions('document:view:organization')
   @ApiOperation({ summary: 'Get data entry queue — all received PDFs grouped by assessment' })
   async getDataEntryQueue(@GlobalScopeFilter() scope?: GlobalScope) {
     const queue = await this.documentService.findDataEntryQueue(scope);
@@ -1270,6 +1277,10 @@ export class DocumentController {
 
   @Post(':id/send-external-ocr')
   @Roles(SystemRole.ADMIN, SystemRole.DESK)
+  // Named for OCR but it is a document transition — one of the four STATUS_HAS_ITS_OWN_ROUTE
+  // states above, and the same permission `PATCH :id/status` asks for. The `ocr:*` permissions
+  // belong to the OCR boundary, which receives results; nothing is submitted to it here.
+  @RequirePermissions('document:edit:organization')
   @ApiOperation({ summary: 'Mark an audited PDF as sent to External OCR application' })
   async sendToExternalOcr(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     // Was a raw `assessmentRepository.update(...)` alongside a status write — the same
@@ -1282,6 +1293,7 @@ export class DocumentController {
 
   @Post('upload-excel')
   @Roles(SystemRole.ADMIN, SystemRole.DESK)
+  @RequirePermissions('document:upload:organization')
   @UseInterceptors(FileInterceptor('file', documentUploadMulterOptions), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload generated Excel report for an assessment from External OCR' })
@@ -1328,6 +1340,7 @@ export class DocumentController {
 
   @Get('data-entry/mine')
   @Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+  @RequirePermissions('document:view:organization')
   @ApiOperation({ summary: 'Packets delegated to the signed-in team member' })
   async myDataEntryQueue(
     @Req() req: any,
@@ -1345,6 +1358,10 @@ export class DocumentController {
 
   @Get('data-entry/team')
   @Roles(SystemRole.ADMIN, SystemRole.DESK)
+  // Returns people, but it is not the user directory — `GET /users` is that, and it is gated
+  // separately. This is the delegation picker for one document screen, restricted to the desk's
+  // own members, and `user:view` would lock DESK out of a list it exists to serve.
+  @RequirePermissions('document:view:organization')
   @ApiOperation({ summary: 'People a returned packet can be delegated to' })
   async dataEntryTeam() {
     return { success: true, data: await this.documentService.dataEntryTeam() };
@@ -1352,6 +1369,7 @@ export class DocumentController {
 
   @Post(':id/assign-data-entry')
   @Roles(SystemRole.ADMIN, SystemRole.DESK)
+  @RequirePermissions('document:edit:organization')
   @ApiOperation({ summary: 'Delegate a returned packet to a data entry team member' })
   async assignDataEntry(
     @Param('id', ParseUUIDPipe) id: string,

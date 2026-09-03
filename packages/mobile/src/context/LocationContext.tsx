@@ -14,6 +14,8 @@ import {
   type RecordReason,
 } from '../services/location-policy';
 import { MobileApiService } from '../services/api.service';
+// The module-level translator: these sentences are produced inside callbacks, not in render.
+import { t as translate, serverErrorText } from '../i18n';
 import { calculateHaversineDistance } from '@fapoms/shared';
 
 /**
@@ -343,11 +345,11 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
       setHasPermission(granted);
       hasPermissionRef.current = granted;
       if (!granted) {
-        setErrorMsg('Permission to access location was denied');
+        setErrorMsg(translate('location.permissionDenied'));
       }
       return granted;
     } catch (err: any) {
-      setErrorMsg(err?.message || 'Error requesting location permission');
+      setErrorMsg(serverErrorText(err?.message, 'location.permissionError'));
       setHasPermission(false);
       hasPermissionRef.current = false;
       return false;
@@ -392,15 +394,13 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         return coords;
       } else {
         // Permission refused. Say so plainly and report no position at all.
-        setErrorMsg('Location is turned off. Turn on location to check in at a branch.');
+        setErrorMsg(translate('location.servicesOff'));
         setLocation(null);
         setLoadingLocation(false);
         return null;
       }
     } catch (err: any) {
-      setErrorMsg(
-        'Could not get your location. Move to open sky if you are indoors, then try again.',
-      );
+      setErrorMsg(translate('location.noFix'));
       setLocation(null);
       setLoadingLocation(false);
       return null;
@@ -430,7 +430,7 @@ export const LocationProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         runRefreshLocation(),
         new Promise<null>((resolve) => {
           timer = setTimeout(() => {
-            setErrorMsg('Could not get your location in time. Move to open sky if you are indoors, then try again.');
+            setErrorMsg(translate('location.timedOut'));
             setLoadingLocation(false);
             resolve(null);
           }, FIX_TIMEOUT_MS);

@@ -3,6 +3,7 @@ import { View } from 'react-native';
 import { AssayerAssignment } from '../types/mobile-app';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Badge, Button, Card, EmptyState, Icon } from '../components/ui/primitives';
+import { useT } from '../i18n';
 
 interface PdfDocsScreenProps {
   activeAssignment: AssayerAssignment | null;
@@ -68,13 +69,14 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
   failedUploads = 0,
 }) => {
   const t = useTheme();
+  const tr = useT();
 
   if (!activeAssignment) {
     return (
       <EmptyState
         icon="document-text-outline"
-        title="No audit selected"
-        body="Open a stop from your route and check in to start returning its paperwork."
+        title={tr('paperwork.noAuditTitle')}
+        body={tr('paperwork.noAuditBody')}
       />
     );
   }
@@ -84,7 +86,7 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
   return (
     <View style={{ gap: t.space['3xl'] }}>
       <Card level={1} style={{ gap: t.space.sm }}>
-        <AppText variant="overline" tone="faint">RETURNING PAPERWORK FOR</AppText>
+        <AppText variant="overline" tone="faint">{tr('paperwork.forBranch')}</AppText>
         <AppText variant="h2" numberOfLines={2}>{activeAssignment.branchName}</AppText>
         <AppText variant="small" tone="muted" numberOfLines={2}>{activeAssignment.branchAddress}</AppText>
       </Card>
@@ -94,14 +96,14 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
           step get. The only place a bordered surface earns its keep on this screen is around the
           actual document once one exists, below. */}
       <View style={{ gap: t.space.lg }}>
-        <StepHeader index={1} title="Capture the audited sheets" done={hasFile} />
+        <StepHeader index={1} title={tr('paperwork.step1')} done={hasFile} />
         <AppText variant="small" tone="muted">
-          Scan every page of the completed packet, or attach a PDF you have already produced.
+          {tr('paperwork.step1Body')}
         </AppText>
         <View style={{ flexDirection: 'row', gap: t.space.sm }}>
           {onOpenScanner && (
             <Button
-              label="Scan pages"
+              label={tr('paperwork.scanPages')}
               icon="scan"
               onPress={onOpenScanner}
               disabled={uploadingPdf}
@@ -109,7 +111,7 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
             />
           )}
           <Button
-            label="Attach PDF"
+            label={tr('paperwork.attachPdf')}
             icon="folder-open-outline"
             variant="neutral"
             onPress={onSelectPdfFile}
@@ -125,7 +127,7 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
           document that resulted from step 1, the way a thumbnail earns a bordered surface
           where a plain instruction does not. */}
       <View style={{ gap: t.space.lg }}>
-        <StepHeader index={2} title="Review" />
+        <StepHeader index={2} title={tr('paperwork.step2')} />
         <Card level={1}>
           {hasFile ? (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
@@ -139,9 +141,9 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
                 <AppText variant="bodyStrong" numberOfLines={1}>{uploadedPdfName}</AppText>
                 <View style={{ flexDirection: 'row' }}>
                   {uploadingPdf ? (
-                    <Badge label="Uploading…" tone="info" dot />
+                    <Badge label={tr('paperwork.uploading')} tone="info" dot />
                   ) : (
-                    <Badge label="Ready to submit" tone="success" dot />
+                    <Badge label={tr('paperwork.readyToSubmit')} tone="success" dot />
                   )}
                 </View>
               </View>
@@ -150,7 +152,7 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
               <Icon name="alert-circle-outline" size={19} color={t.colors.textFaint} />
               <AppText variant="small" tone="muted" style={{ flex: 1 }}>
-                Nothing captured yet — complete step 1 first.
+                {tr('paperwork.nothingCaptured')}
               </AppText>
             </View>
           )}
@@ -159,9 +161,9 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
 
       {/* Step 3: submit. One obvious primary action, full-width, nothing competing with it. */}
       <View style={{ gap: t.space.lg }}>
-        <StepHeader index={3} title="Submit" />
+        <StepHeader index={3} title={tr('paperwork.step3')} />
         <Button
-          label={uploadingPdf ? 'Submitting…' : 'Submit to the data entry desk'}
+          label={uploadingPdf ? tr('paperwork.submitting') : tr('paperwork.submit')}
           icon="cloud-upload-outline"
           onPress={onSubmitCompletedPdf}
           loading={uploadingPdf}
@@ -171,14 +173,14 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
         />
         {!hasFile && (
           <AppText variant="caption" tone="faint" style={{ textAlign: 'center' }}>
-            Capture the sheets before submitting.
+            {tr('paperwork.captureFirst')}
           </AppText>
         )}
         {/* The packet is handed to the durable outbox and sent in the background, so — unlike
             before — the assayer is explicitly freed to leave. A weak-signal transfer keeps going
             and its progress is watchable in Uploads. */}
         <AppText variant="caption" tone="faint" style={{ textAlign: 'center' }}>
-          Once submitted, the packet sends in the background. You can leave this screen — it keeps going, even on weak signal.
+          {tr('paperwork.backgroundNote')}
         </AppText>
       </View>
 
@@ -204,26 +206,32 @@ export const PdfDocsScreen: React.FC<PdfDocsScreenProps> = ({
             <View style={{ flex: 1, minWidth: 0 }}>
               <AppText variant="bodyStrong">
                 {failedUploads > 0
-                  ? `${failedUploads} packet${failedUploads === 1 ? '' : 's'} not sent`
-                  : `${activeUploads} packet${activeUploads === 1 ? '' : 's'} sending`}
+                  ? (failedUploads === 1
+                      ? tr('paperwork.onePacketFailed')
+                      : tr('paperwork.manyPacketsFailed', { count: failedUploads }))
+                  : (activeUploads === 1
+                      ? tr('paperwork.onePacketSending')
+                      : tr('paperwork.manyPacketsSending', { count: activeUploads }))}
               </AppText>
               <AppText variant="caption" tone="muted">
-                {failedUploads > 0 ? 'Tap to retry the ones that failed.' : 'Tap to see progress.'}
+                {failedUploads > 0 ? tr('paperwork.tapToRetry') : tr('paperwork.tapForProgress')}
               </AppText>
             </View>
-            {failedUploads > 0 ? <Badge label="Action needed" tone="danger" dot /> : <Badge label="Sending" tone="info" dot />}
+            {failedUploads > 0
+              ? <Badge label={tr('paperwork.actionNeeded')} tone="danger" dot />
+              : <Badge label={tr('paperwork.sending')} tone="info" dot />}
           </View>
         </Card>
       ) : (
-        <Button label="View my uploads" icon="cloud-upload-outline" variant="ghost" onPress={onOpenUploads} />
+        <Button label={tr('paperwork.viewUploads')} icon="cloud-upload-outline" variant="ghost" onPress={onOpenUploads} />
       )}
 
       <View style={{ flexDirection: 'row', gap: t.space.sm }}>
-        <Button label="Log an expense" icon="receipt-outline" variant="ghost" onPress={onOpenExpenseModal} style={{ flex: 1 }} />
+        <Button label={tr('expense.title')} icon="receipt-outline" variant="ghost" onPress={onOpenExpenseModal} style={{ flex: 1 }} />
         {/* The field app's one route to raise a problem to the desk — it cannot cancel or
             reassign the job, so this is how an assayer signals "I can't do this / something's
             wrong" and the desk picks it up. */}
-        <Button label="Report an issue" icon="flag-outline" variant="ghost" onPress={onReportIssue} style={{ flex: 1 }} />
+        <Button label={tr('paperwork.reportIssue')} icon="flag-outline" variant="ghost" onPress={onReportIssue} style={{ flex: 1 }} />
       </View>
     </View>
   );

@@ -119,8 +119,15 @@ Both the database and the object store are switchable by env alone (local Postgr
 MinIO ↔ AWS S3). Neither provider is hardcoded.
 
 > **Back up `PII_ENCRYPTION_KEY` somewhere durable before go-live.** It encrypts appraiser PAN,
-> Aadhaar and bank details at rest. Lose it and that data is unrecoverable; set it late and it does
-> not retro-encrypt what is already stored.
+> Aadhaar and bank details at rest, and losing it makes that data unrecoverable — there is no
+> second copy and no reset.
+>
+> Setting it *late* is recoverable, which this used to say it was not. The layer self-migrates on
+> write, but those columns are written rarely, so waiting for organic writes leaves plaintext in
+> the table for months. `packages/backend/scripts/reencrypt-pii.js` walks them once instead: it
+> encrypts through the application's own compiled cipher (not a re-implementation), verifies each
+> value decrypts back before it commits, skips anything already carrying the `enc:v1:` prefix so a
+> second run reports zero, and writes an audit event with the counts. See DEPLOYMENT.md.
 
 ---
 

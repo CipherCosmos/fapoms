@@ -57,6 +57,90 @@ export const ASSAYER_LIFECYCLE_TRANSITIONS: Record<string, AssayerLifecycleStatu
 /** States an assayer can never leave — nothing further is offered from here. */
 export const ASSAYER_TERMINAL_LIFECYCLE: AssayerLifecycleStatus[] = [AssayerLifecycleStatus.ARCHIVED];
 
+/**
+ * The joining stages, in the order they are walked — the four an assayer passes through before
+ * they may be given work.
+ *
+ * `AssayerService.create` opens every new profile at INVITED, and the planner deliberately pulls
+ * candidates in these stages into its pool so it can say what is wrong rather than returning "no
+ * assayers found" for somebody who was added minutes ago. They are still excluded from the
+ * eligible list — dispatching unverified, untrained people is the control the lifecycle exists to
+ * enforce.
+ */
+export const ONBOARDING_STAGES: AssayerLifecycleStatus[] = [
+  AssayerLifecycleStatus.INVITED,
+  AssayerLifecycleStatus.DOCUMENT_VERIFICATION,
+  AssayerLifecycleStatus.BACKGROUND_VERIFICATION,
+  AssayerLifecycleStatus.TRAINING,
+];
+
+/**
+ * Is this person still joining?
+ *
+ * A predicate rather than leaving every caller to write `ONBOARDING_STAGES.includes(x)`: the
+ * lifecycle status arrives as a plain `string` from an API payload almost everywhere it is asked
+ * about, and an array of the enum cannot be `.includes`-ed with one without a cast at each site.
+ * Casts at call sites are where a list like this quietly acquires a second, laxer meaning.
+ */
+export function isOnboardingStage(lifecycleStatus?: string | null): boolean {
+  return !!lifecycleStatus && (ONBOARDING_STAGES as string[]).includes(lifecycleStatus);
+}
+
+/**
+ * WHAT BLOCKS ACTIVATION, stated once for the whole platform.
+ *
+ * This map lived in two places — `recommendation.engine.ts`, where the planner prints it when it
+ * refuses to offer an unfinished joiner work, and a hand-copied version in the frontend's
+ * `assayer-shared.ts` — with a spec pinning the strings on the frontend side to keep the two in
+ * step. A copy with a test holding it still is not one implementation: the test fails *after*
+ * somebody has edited one side, and it can only ever guard the strings, not the four keys or the
+ * stage list they are drawn from.
+ *
+ * The sentence matters because it is read at both ends of one journey. A coordinator is told on
+ * the planning screen "Onboarding not finished: in training — mark training complete on the HR
+ * roster to activate", follows that instruction to the HR roster, and must find the same words
+ * waiting there. Two copies is two chances for the roster to ask for something the planner did
+ * not.
+ *
+ * Phrased to be read mid-sentence after "Onboarding not finished:" and after "they are", which is
+ * why each entry starts lowercase and names the stage before the instruction.
+ */
+export const ONBOARDING_NEXT_STEP: Record<string, string> = {
+  [AssayerLifecycleStatus.INVITED]: 'invited — start document verification on the HR roster',
+  [AssayerLifecycleStatus.DOCUMENT_VERIFICATION]: 'in document verification — complete it on the HR roster',
+  [AssayerLifecycleStatus.BACKGROUND_VERIFICATION]: 'in background verification — complete it on the HR roster',
+  [AssayerLifecycleStatus.TRAINING]: 'in training — mark training complete on the HR roster to activate',
+};
+
+/** The next-step sentence for somebody still joining, or null once they are past it. */
+export function onboardingNextStep(lifecycleStatus?: string | null): string | null {
+  if (!lifecycleStatus) return null;
+  return ONBOARDING_NEXT_STEP[lifecycleStatus] ?? null;
+}
+
+/**
+ * The one move that carries somebody FORWARD through joining — the thing the sentence above is
+ * asking for — or null when they are not joining, or are joining but cannot advance.
+ *
+ * Derived from the stage order and then checked against the transition map, rather than written
+ * out as a fifth list. The two are statements of the same thing and this is the only place they
+ * are held against each other: if a stage is added to the chain without an edge to match, this
+ * returns null and the screen falls back to offering the legal moves plainly, instead of putting a
+ * button on screen that can only ever return 400.
+ *
+ * It exists so the HR record can offer that step as a button. Walking a new joiner to ACTIVE was
+ * four separate picks from a dropdown of filing states, each one requiring the clerk to already
+ * know which of them came next — while the planner had been printing that answer at them the whole
+ * time. Naming the step is not the same as taking it: nothing here advances anybody, and it is
+ * deliberately one button per decision rather than one button for the whole chain.
+ */
+export function nextOnboardingStep(from?: string | null): AssayerLifecycleStatus | null {
+  if (!isOnboardingStage(from)) return null;
+  const at = (ONBOARDING_STAGES as string[]).indexOf(from as string);
+  const forward = ONBOARDING_STAGES[at + 1] ?? AssayerLifecycleStatus.ACTIVE;
+  return nextAssayerLifecycleStates(from).includes(forward) ? forward : null;
+}
+
 export function nextAssayerLifecycleStates(from?: string | null): AssayerLifecycleStatus[] {
   if (!from) return [];
   return ASSAYER_LIFECYCLE_TRANSITIONS[from] ?? [];
@@ -114,4 +198,59 @@ export function assayerLifecyclePath(from: string, to: string): AssayerLifecycle
     }
   }
   return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Has this person left the workforce?
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * The lifecycle values that mean somebody has gone.
+ *
+ * INACTIVE is deliberately absent: it is the catch-all for "not available right now" and covers
+ * people who are still employed — no work in their area, a lapsed certification, a pause. Only the
+ * one INACTIVE case below counts as having left.
+ */
+export const DEPARTED_LIFECYCLE_STATES: AssayerLifecycleStatus[] = [
+  AssayerLifecycleStatus.RESIGNED,
+  AssayerLifecycleStatus.TERMINATED,
+  AssayerLifecycleStatus.ARCHIVED,
+];
+
+/**
+ * Has this person left, by their status rather than their dates?
+ *
+ * ## Why this is in shared, and what it cost to find out
+ *
+ * This rule existed in three places: a SQL fragment in `hr-workforce.service.ts`, a predicate in
+ * `data-integrity.service.ts`, and the roster's `stillWorkable` in the web app. The deceased arm
+ * was added to the two backend copies and never reached the third, so one man — recorded as having
+ * died, with no leaving date — stayed on the roster's worklists, where the screen asked a clerk to
+ * chase his missing bank details. Nothing failed; two of three copies were simply newer than the
+ * third.
+ *
+ * ## The awkward case this exists for
+ *
+ * A death is not a lifecycle value. It is filed as INACTIVE with `unavailableReason = 'DECEASED'`,
+ * because the reason column is where the roster import put it and INACTIVE is where such a record
+ * lands. So "has left" cannot be read off `lifecycleStatus` alone, which is exactly the shortcut
+ * each of the three copies took at first.
+ *
+ * ## What this does NOT answer
+ *
+ * Only the status question. Somebody can also have left by carrying an exit or termination date
+ * while their lifecycle was never moved — 25 people on the live roster are the mirror image, with a
+ * departed lifecycle and no date at all. Callers that own both facts should ask this AND the dates;
+ * `ON_ROSTER` in the backend and `stillWorkable` in the web app both do.
+ *
+ * The SQL fragment cannot import this function. `has-left-parity.spec.ts` fails if the two drift.
+ */
+export function hasLeftWorkforce(person: {
+  lifecycleStatus?: string | null;
+  unavailableReason?: string | null;
+}): boolean {
+  const lifecycle = (person.lifecycleStatus ?? '') as AssayerLifecycleStatus;
+  if (DEPARTED_LIFECYCLE_STATES.includes(lifecycle)) return true;
+  return lifecycle === AssayerLifecycleStatus.INACTIVE
+    && String(person.unavailableReason ?? '').toUpperCase() === 'DECEASED';
 }

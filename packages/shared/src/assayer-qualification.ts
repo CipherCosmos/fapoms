@@ -202,3 +202,29 @@ export function maskTail(value: string | null | undefined, keep = 4): string {
   if (v.length <= keep) return '*'.repeat(v.length);
   return '*'.repeat(v.length - keep) + v.slice(-keep);
 }
+
+/**
+ * Is this string something `maskTail` produced rather than a real identifier?
+ *
+ * The API now masks PAN, Aadhaar and bank account on every read, and the web edit form posts
+ * back whichever keys changed. Nothing stopped `******234F` making the return trip and being
+ * saved as the person's PAN — the encryption at rest would then be protecting a row of stars,
+ * with the real number gone and no copy of it anywhere.
+ *
+ * The test is "contains one covering character", not a precise shape, and deliberately so. The
+ * mask length varies with the value and with `keep`, a client may trim or re-pad the stars, and a
+ * partly edited field ("*****1234F") matches no fixed pattern at all — whereas NO legitimate PAN,
+ * Aadhaar, bank account or document number contains one of these characters in the first place.
+ * Anything that does is a display value someone tried to write back.
+ *
+ * The bullets are here because a mask is not always drawn with the character `maskTail` writes:
+ * the web roster covers these fields with `•` when it prints them, and it posts back the keys the
+ * operator changed. So this is the one definition both ends of the guard read — the web app
+ * re-exports it as the check it runs before sending, rather than keeping a second rule of its own
+ * that had already drifted (it wanted three covering characters where this wants one, so the mask
+ * of a five-character account number, `*2345`, was a mask one end refused and the other did not
+ * recognise). Widening it costs nothing real: a write carrying a bullet was never a number either.
+ */
+export function looksMasked(value: string | null | undefined): boolean {
+  return /[*•·●]/.test(value ?? '');
+}

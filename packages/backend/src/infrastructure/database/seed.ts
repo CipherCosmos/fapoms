@@ -485,6 +485,16 @@ async function seed() {
           username: du.username,
           email: du.email,
           passwordHash,
+          /**
+           * Seeded accounts must choose their own password before they can use the API.
+           *
+           * Every account here shares one demo password (`admin123`), and the forced-rotation
+           * guard added in `auth/guards.ts` only bites principals whose flag is TRUE — which
+           * defaults to false, so the guard read as delivered, tested green, and protected nobody:
+           * the seeded accounts were the exact population it names in its own comment. Setting it
+           * at creation is what connects the control to the people it was written for.
+           */
+          mustChangePassword: true,
           firstName: du.firstName,
           lastName: du.lastName,
           displayName: du.displayName,
@@ -988,6 +998,9 @@ async function seed() {
         assayer = assayerRepository.create({
           assayerCode: ad.code,
           passwordHash: assayerPasswordHash,
+          // Same reason as the staff block above: one shared demo password (`assayer123`) across
+          // the seeded workforce, and a rotation guard that only acts on an explicit flag.
+          mustChangePassword: true,
           firstName: ad.firstName,
           lastName: ad.lastName,
           displayName: `${ad.firstName} ${ad.lastName}`,

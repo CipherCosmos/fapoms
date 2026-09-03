@@ -1,4 +1,8 @@
 import { formatDateOnly, parseCalendarDate } from '@fapoms/shared';
+// The module-level `t`, not the hook: this file is plain functions over dates, called from
+// render paths in three screens. Every one of those calls `useT()` (or `useLocale()`, where the
+// result is memoised) for itself, which is what makes these labels follow a language change.
+import { t } from '../i18n/i18n';
 
 export type DayTone = 'neutral' | 'primary' | 'accent' | 'success' | 'warning' | 'danger' | 'info';
 
@@ -34,15 +38,19 @@ export function calendarDayDiff(iso: string, from: Date = new Date()): number {
  * ("prepare tonight"), and anything further keeps a calm neutral.
  */
 export function relativeDay(iso: string | null | undefined, from: Date = new Date()): RelativeDay {
-  if (!iso) return { label: 'Unscheduled', tone: 'neutral', diffDays: 0 };
+  if (!iso) return { label: t('dates.unscheduled'), tone: 'neutral', diffDays: 0 };
   const diffDays = calendarDayDiff(iso, from);
   if (diffDays < 0) {
     const n = Math.abs(diffDays);
-    return { label: n === 1 ? '1 day overdue' : `${n} days overdue`, tone: 'danger', diffDays };
+    return {
+      label: n === 1 ? t('dates.oneDayOverdue') : t('dates.daysOverdue', { count: n }),
+      tone: 'danger',
+      diffDays,
+    };
   }
-  if (diffDays === 0) return { label: 'Today', tone: 'accent', diffDays };
-  if (diffDays === 1) return { label: 'Tomorrow', tone: 'warning', diffDays };
-  if (diffDays <= 13) return { label: `In ${diffDays} days`, tone: 'neutral', diffDays };
+  if (diffDays === 0) return { label: t('dates.today'), tone: 'accent', diffDays };
+  if (diffDays === 1) return { label: t('dates.tomorrow'), tone: 'warning', diffDays };
+  if (diffDays <= 13) return { label: t('dates.inDays', { count: diffDays }), tone: 'neutral', diffDays };
   return {
     label: formatDateOnly(iso, { day: 'numeric', month: 'short' }),
     tone: 'neutral',
@@ -52,12 +60,12 @@ export function relativeDay(iso: string | null | undefined, from: Date = new Dat
 
 /** "Today · Mon 18 Aug" style header for a day group on the schedule. */
 export function dayGroupHeader(iso: string | null | undefined): string {
-  if (!iso) return 'Unscheduled';
+  if (!iso) return t('dates.unscheduled');
   const rel = relativeDay(iso);
   const dateText = formatDateOnly(iso, { weekday: 'short', day: 'numeric', month: 'short' });
-  if (rel.diffDays === 0) return `Today · ${dateText}`;
-  if (rel.diffDays === 1) return `Tomorrow · ${dateText}`;
-  if (rel.diffDays < 0) return `Overdue · ${dateText}`;
+  if (rel.diffDays === 0) return t('dates.groupToday', { date: dateText });
+  if (rel.diffDays === 1) return t('dates.groupTomorrow', { date: dateText });
+  if (rel.diffDays < 0) return t('dates.groupOverdue', { date: dateText });
   return dateText;
 }
 

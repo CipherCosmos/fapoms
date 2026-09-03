@@ -101,13 +101,78 @@ with development defaults where a default is safe. These must change:
 | Variable | Why |
 |---|---|
 | `JWT_SECRET` | Signs every session. A known value means anyone can mint an admin token. |
-| `PII_ENCRYPTION_KEY` | Encrypts PAN and bank details at rest. **Without it those fields are stored in plaintext**, and setting it later does not retro-encrypt what is already stored. |
+| `PII_ENCRYPTION_KEY` | Encrypts PAN, Aadhaar and bank details at rest. **Without it those fields are stored in plaintext.** Setting it late is recoverable — run `scripts/reencrypt-pii.js` (below) — but losing it is not. |
 | `DB_PASSWORD` | — |
 | `MINIO_ROOT_PASSWORD` / `AWS_SECRET_ACCESS_KEY` | Document storage credentials. |
 | `LIVEKIT_API_SECRET` | In-app calling. |
 | `APP_PUBLIC_URL` | Every link in every email and push notification is built from it. Wrong value = links that go nowhere. |
 
 Email is off until configured — set it at **Admin → Platform Settings**, no redeploy needed.
+
+### The PII encryption key
+
+This one is different from the others: the rest can be rotated with a redeploy, and this one
+cannot. It is the only key in the system whose loss destroys data rather than merely locking
+somebody out — appraiser PAN, Aadhaar, bank account and document numbers are AES-256-GCM
+ciphertext at rest, and there is no second copy anywhere.
+
+**Generate it.** Exactly 32 bytes. The backend refuses to boot in production on anything else:
+
+```bash
+openssl rand -hex 32
+```
+
+A passphrase will not do. A non-hex, non-base64 value used to be silently stretched with SHA-256
+and accepted, which turned a weak string into a weak key without saying so; production now rejects
+anything that is not 64 hex characters or exactly 32 bytes of base64, and development prints a loud
+warning rather than pretending.
+
+**Store it where a lost server does not lose it**, and where it is not in the same backup as the
+database — a key sitting beside the ciphertext it protects is not a control. Whoever holds it must
+be able to produce it after a total host loss.
+
+**If the database already holds plaintext** — because the key was set late, which is the ordinary
+case — the columns do not encrypt themselves. The transformer self-migrates on write, but these
+fields are written rarely, so organic writes would leave plaintext in the table for months:
+
+```bash
+docker compose exec backend node scripts/reencrypt-pii.js --report
+docker compose exec backend node scripts/reencrypt-pii.js
+```
+
+`--report` counts and changes nothing. The real run encrypts through the application's own compiled
+cipher rather than a second implementation, proves every value decrypts back to what it was before
+it commits, and aborts the whole transaction on any mismatch — a half-encrypted column is worse
+than a plaintext one. Rows already carrying the `enc:v1:` prefix are skipped, so a second run must
+report `0` everywhere. It writes an audit event with the counts.
+
+**Confirm it took**, in the database rather than in the API, since the API decrypts on read:
+
+```bash
+docker compose exec -T postgres psql -U fapoms -d fapoms -c \
+  "SELECT count(*) FILTER (WHERE pan_number LIKE 'enc:v1:%') AS encrypted,
+          count(*) FILTER (WHERE pan_number IS NOT NULL AND pan_number NOT LIKE 'enc:v1:%') AS plaintext
+     FROM assayers"
+```
+
+`plaintext` must be `0`.
+
+**What this does not cover: the files.** This key protects the *numbers* in the database columns.
+The scans themselves — PAN cards, photographs, government IDs — live in object storage, and their
+at-rest protection is a separate control: at boot the backend asks the bucket to apply default
+server-side encryption, chosen by `STORAGE_SSE` (`AES256` by default, or `aws:kms` with
+`STORAGE_SSE_KMS_KEY_ID`).
+
+On real AWS S3 that call simply succeeds and every object is encrypted, including presigned browser
+uploads that never pass through the API. On self-hosted **community-edition MinIO it cannot
+succeed** — MinIO requires a separate KMS (Vault, or MinIO KES) to satisfy SSE-S3 at all. The call
+is therefore non-fatal and logs a warning, because making it fatal would stop the API booting on
+every self-hosted deployment.
+
+So on a MinIO deployment, read that warning literally: the files are unencrypted at rest, and the
+compensating control is full-disk encryption on the host. Verify the host actually has it — when
+this was last checked on the self-hosted box there was no LUKS and no cloud-provider disk
+encryption, which means at that moment nothing was protecting the scans at rest.
 
 ---
 

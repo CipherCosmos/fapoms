@@ -140,6 +140,9 @@ export class BranchImportController {
         imprecise: report.imprecise,
         // Archived branches this file restored — see `BranchImportOutcome.revived`.
         revived: report.revived,
+        // Facts about the FILE, not a row — chiefly a heading nobody read, whose data was
+        // therefore dropped in silence. See `BranchImportOutcome.notes`.
+        notes: report.notes,
         /**
          * Kept because the Branches page has always read it.
          *

@@ -23,6 +23,73 @@ export function useCurrentRoles(): SystemRole[] {
   }, []);
 }
 
+/**
+ * A PLATFORM grant implies the same resource and action at every narrower scope, so somebody
+ * granted `DOCUMENT:VIEW:PLATFORM` satisfies a screen asking for `DOCUMENT:VIEW:ORGANIZATION`.
+ * Copied from `permissionKeysHeldBy` in the backend's guards and written out rather than
+ * computed, so the set of scopes is visible at the point it decides something.
+ */
+const NARROWER_THAN_PLATFORM = [
+  'ORGANIZATION', 'CLIENT', 'STATE', 'REGION', 'DEPARTMENT', 'TEAM', 'SELF',
+];
+
+/**
+ * Every permission key a cached user holds, in the `RESOURCE:ACTION:SCOPE` form routes declare.
+ *
+ * Two shapes reach the cache and both have to work. The sign-in response carries a flat,
+ * already-widened `permissions` array. `/users/me` — which is what App.tsx actually writes to the
+ * cache a moment later, and what is there on every subsequent page load — carries the raw rows
+ * nested under each role instead, un-widened. Reading only the flat array would have worked for
+ * the few hundred milliseconds after sign-in and then silently gone empty, which for a gate is
+ * the worst available failure: it looks fixed while you test it and locks people out afterwards.
+ *
+ * Exported apart from the hook because the shell components (Sidebar, Header) already hold the
+ * user object as a prop and should not re-read the cache to answer the same question.
+ */
+export function permissionKeysFrom(user: unknown): string[] {
+  const held = new Set<string>();
+  const add = (key: string) => {
+    const upper = key.toUpperCase();
+    held.add(upper);
+    const [resource, action, scope] = upper.split(':');
+    if (scope === 'PLATFORM' && resource && action) {
+      for (const narrower of NARROWER_THAN_PLATFORM) held.add(`${resource}:${action}:${narrower}`);
+    }
+  };
+
+  const cached = user as any;
+  for (const key of cached?.permissions ?? []) {
+    if (typeof key === 'string') add(key);
+  }
+  for (const role of cached?.roles ?? []) {
+    for (const perm of role?.permissions ?? []) {
+      if (perm?.resource && perm?.action && perm?.scope) {
+        add(`${perm.resource}:${perm.action}:${perm.scope}`);
+      }
+    }
+  }
+  return [...held];
+}
+
+/**
+ * The signed-in user's permissions, from the same cache `useCurrentRoles` reads.
+ *
+ * A cache written before this existed carries no permissions at all, and a session that predates
+ * the change must degrade to "role name only" rather than throwing on the first render after a
+ * deploy — hence an empty array for every shape this does not recognise.
+ */
+export function useCurrentPermissions(): string[] {
+  return useMemo(() => {
+    try {
+      const raw = localStorage.getItem('fapoms_user_cache');
+      if (!raw) return [];
+      return permissionKeysFrom(JSON.parse(raw));
+    } catch {
+      return [];
+    }
+  }, []);
+}
+
 /** HR own the assayer workforce record; admins retain override. */
 export function canManageAssayers(roles: SystemRole[]): boolean {
   return roles.some((r) =>

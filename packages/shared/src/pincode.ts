@@ -5,14 +5,22 @@ import { canonicalState } from './utils';
  * Reading a pincode out of an address, and refusing to guess.
  *
  * The appraiser roster was kept as a spreadsheet with one free-text address column, so the
- * pincode was written at the end of the address rather than in a field of its own: 1,111 of
- * 1,163 records carry one inside `address` and 8 have it in the `pincode` column. Every screen
+ * pincode was written at the end of the address rather than in a field of its own: of 1,163
+ * records, 1,111 carried one inside `address` and 8 had it in the `pincode` column. Every screen
  * that reports a missing pincode, and every geocoder that would use one, was looking at the
  * empty column.
  *
+ * That extraction has run (17e24f44) and the column is now the populated one — 1,110 rows. This
+ * is not a one-off script, though: it is the path the roster importer takes on every sheet, and
+ * the sheets have not changed shape, so it is read here as the rule for the next import.
+ *
  * Pulling it out is worth doing carefully, because a wrong pincode is worse than none: it is the
  * strongest signal the geocoder has, so a bad one puts somebody's home in another state with
- * more confidence than leaving it blank ever would.
+ * more confidence than leaving it blank ever would. That caution is what the remaining 53 empty
+ * columns are made of, not a shortfall in the extraction — 44 addresses contain no six-digit run
+ * at all, and the other 9 are refusals this file made on purpose: eight where the pincode's
+ * postal circle contradicts the record's own state column, and one whose address ends in a
+ * ten-digit phone number, read as a run starting 9 and so not a civilian pincode.
  */
 
 /**

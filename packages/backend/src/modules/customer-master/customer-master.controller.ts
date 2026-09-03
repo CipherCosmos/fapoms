@@ -14,7 +14,7 @@ const customerMasterUploadMulterOptions = {
   limits: { fileSize: MAX_UPLOAD_BYTES },
 };
 import { StorageEngine } from '../../infrastructure/storage/storage-engine.interface';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';
 
 @ApiTags('Customer Master')
@@ -29,6 +29,9 @@ export class CustomerMasterController {
 
   @Post('upload')
   @Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.OPERATIONS)
+  // The customer master arrives as a spreadsheet, so this is the file-upload permission rather
+  // than a project one — the version it registers is approved separately, below.
+  @RequirePermissions('document:upload:organization')
     @UseInterceptors(FileInterceptor('file', customerMasterUploadMulterOptions), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
   // No region ceiling here, deliberately: one file covers every branch the client scheduled for
@@ -69,6 +72,9 @@ export class CustomerMasterController {
 
   @Post('versions/:versionId/approve')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  // Approving a version supersedes the population the project is audited against, so it is a
+  // change to the project rather than to a document. There is no CUSTOMER_MASTER permission.
+  @RequirePermissions('project:edit:organization')
     @ApiOperation({ summary: 'Approve a reconciled customer master version and supersede prior active version' })
   async approveVersion(
     @Param('versionId', ParseUUIDPipe) versionId: string,
@@ -83,6 +89,7 @@ export class CustomerMasterController {
 
   @Get('projects/:projectId/daily-run')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.AUDITOR)
+  @RequirePermissions('project:view:organization')
   @ApiOperation({ summary: "A single audit date's run: the client batch, its branches, and where each branch's PDF has reached" })
   async dailyRun(
     @Param('projectId', ParseUUIDPipe) projectId: string,
@@ -94,6 +101,7 @@ export class CustomerMasterController {
 
   @Get('projects/:projectId/versions')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.AUDITOR)
+  @RequirePermissions('project:view:organization')
   @ApiOperation({ summary: 'List version history for a project mandate' })
   async findByProject(@Param('projectId', ParseUUIDPipe) projectId: string) {
     const list = await this.customerMasterService.findByProject(projectId);
@@ -105,6 +113,7 @@ export class CustomerMasterController {
 
   @Get('versions/:versionId/records')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.AUDITOR)
+  @RequirePermissions('project:view:organization')
   @ApiOperation({ summary: 'Get paginated customer records inside a version, optionally filtered by branchId' })
   async findRecords(
     @Param('versionId', ParseUUIDPipe) versionId: string,

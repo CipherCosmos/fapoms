@@ -28,6 +28,7 @@ import {
   retryUpload,
   dismissUpload,
   clearOutbox,
+  outboxTitle,
   __resetOutboxForTests,
   OutboxUpload,
 } from './upload-outbox';
@@ -36,10 +37,16 @@ import {
 const tokenStore = require('./token-store') as { __store: Record<string, unknown> };
 
 const packet = (branchName: string): Parameters<typeof enqueueUpload>[0] => ({
-  assignmentId: `asg-${branchName}`,
-  branchName,
+  target: { kind: 'ASSIGNMENT_PACKET', assignmentId: `asg-${branchName}`, branchName },
   fileName: `${branchName}.pdf`,
   fileUri: `file:///cache/${branchName}.pdf`,
+});
+
+/** A registration scan: same queue, different destination and no assignment anywhere in it. */
+const paper = (requirement: string, documentLabel: string): Parameters<typeof enqueueUpload>[0] => ({
+  target: { kind: 'REGISTRATION_DOCUMENT', assayerId: 'me-1', requirement, documentLabel },
+  fileName: `${requirement}.jpg`,
+  fileUri: `file:///cache/${requirement}.jpg`,
 });
 
 const ok = jest.fn(async () => ({ success: true as const }));
@@ -60,7 +67,95 @@ describe('enqueueing', () => {
 
     const list = await getUploads();
     expect(list).toHaveLength(1);
-    expect(list[0]).toMatchObject({ branchName: 'kollam', status: 'PENDING', progress: 0 });
+    expect(list[0]).toMatchObject({
+      target: { kind: 'ASSIGNMENT_PACKET', branchName: 'kollam' },
+      status: 'PENDING',
+      progress: 0,
+    });
+  });
+
+  it('carries a registration document with no assignment attached to it', async () => {
+    await enqueueUpload(paper('PAN_CARD', 'PAN card'));
+
+    __resetOutboxForTests();
+
+    const [entry] = await getUploads();
+    expect(entry.target).toEqual({
+      kind: 'REGISTRATION_DOCUMENT',
+      assayerId: 'me-1',
+      requirement: 'PAN_CARD',
+      documentLabel: 'PAN card',
+    });
+  });
+
+  /**
+   * An entry written by a build that predates targets is a field worker's evidence sitting on
+   * disk waiting for signal. An upgrade that dropped it, or left it with no destination for
+   * `sendOne` to read, would lose exactly what this queue exists to protect.
+   */
+  it('adopts a packet queued before uploads had a target', async () => {
+    tokenStore.__store['upload_outbox'] = [
+      {
+        id: 'legacy-1',
+        assignmentId: 'asg-old',
+        branchName: 'Kollam Main Branch',
+        fileName: 'old.pdf',
+        fileUri: 'file:///cache/old.pdf',
+        status: 'FAILED',
+        progress: 0,
+        error: 'no signal',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+    ];
+
+    const [entry] = await getUploads();
+
+    expect(entry.target).toEqual({
+      kind: 'ASSIGNMENT_PACKET',
+      assignmentId: 'asg-old',
+      branchName: 'Kollam Main Branch',
+    });
+    // Still retriable, which is the whole point of keeping it.
+    expect(entry.status).toBe('FAILED');
+    expect(outboxTitle(entry)).toBe('Kollam Main Branch');
+  });
+
+  it('an adopted legacy packet still sends', async () => {
+    tokenStore.__store['upload_outbox'] = [
+      {
+        id: 'legacy-2', assignmentId: 'asg-old', branchName: 'Kollam', fileName: 'old.pdf',
+        fileUri: 'file:///cache/old.pdf', status: 'PENDING', progress: 0,
+        createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+    ];
+
+    await processOutbox(ok);
+
+    expect(ok).toHaveBeenCalledTimes(1);
+    expect((await getUploads())[0].status).toBe('SENT');
+  });
+});
+
+describe('what the list calls each entry', () => {
+  it('names an audit packet by its branch and a document by its paper', async () => {
+    await enqueueUpload(packet('kollam'));
+    await enqueueUpload(paper('AADHAAR_FRONT', 'Aadhaar — front'));
+
+    const [assignment, document] = await getUploads();
+
+    expect(outboxTitle(assignment)).toBe('kollam');
+    expect(outboxTitle(document)).toBe('Aadhaar — front');
+  });
+
+  /** A packet whose branch name never arrived still needs something to show in the list. */
+  it('falls back rather than rendering an empty row', async () => {
+    await enqueueUpload({
+      target: { kind: 'ASSIGNMENT_PACKET', assignmentId: 'a1', branchName: '' },
+      fileName: 'x.pdf',
+    });
+
+    expect(outboxTitle((await getUploads())[0])).toBe('Audit packet');
   });
 });
 

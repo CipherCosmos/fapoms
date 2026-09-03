@@ -1,18 +1,8 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common';
-import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
-import { isUniqueViolation } from '../../infrastructure/database/unique-violation';
-import { GeoPrecisionService } from '../geo/geo-precision.service';
-import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
-import * as xlsx from 'xlsx';
 import {
-  AssayerLifecycleStatus, Region, resolveRegion,
-  readAvailability, readYesNo, readCibilBand, readBackgroundCheck, readEmpanelment,
-  readPhoneNumbers, blankToNull, vocabularyKey, readHardCopyLocation, pincodeFromAddress, readWorkingBanks,
-  OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, EmpanelmentStatus,
-  AssayerUnavailableReason, BackgroundCheckVerdict, CibilBand,
+  BadRequestException, Injectable, Logger } from '@nestjs/common'; import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work'; import { isUniqueViolation } from '../../infrastructure/database/unique-violation'; import { GeoPrecisionService } from '../geo/geo-precision.service'; import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import * as xlsx from 'xlsx'; import {   AssayerLifecycleStatus, Region, resolveRegion, readAvailability, readYesNo, readCibilBand, readBackgroundCheck, readEmpanelment, readPhoneNumbers, blankToNull, vocabularyKey, readHardCopyLocation, pincodeFromAddress, readWorkingBanks, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, EmpanelmentStatus, AssayerUnavailableReason, BackgroundCheckVerdict, CibilBand, PAN_PATTERN, AADHAAR_PATTERN, IFSC_PATTERN, isValidAadhaar, isPlaceholderAadhaar, looksMasked,
 } from '@fapoms/shared';
 import {
-  rowReader, parseSheet, describeMissingColumn, normaliseHeader, ParsedSheet,
+  rowReader, parseSheet, describeMissingColumn, normaliseHeader, BLANK_HEADER, ParsedSheet,
 } from '../../core/excel/sheet-reader';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerReferenceEntity } from './assayer-reference.entity';
@@ -74,6 +64,31 @@ const CODE_COLUMNS = ['Appraiser code', 'Assayer code'] as const;
  * `normaliseHeader` makes them one key for matching.
  */
 const CODE_ALIASES = ['Appraiser code', 'Assayer code', 'Appraiser Code', 'Assayer Code'];
+
+/**
+ * What a date on this sheet is FOR, which is what decides how far ahead it may plausibly sit.
+ * See `isPlausibleHumanDate` — a joining or exit date may be years ahead, a birth date may not
+ * be ahead at all, and one window for both was letting future birth dates through.
+ */
+type DateKind = 'birth' | 'employment';
+
+/**
+ * Matches the data-integrity scan's own future window, so the two cannot disagree about the same
+ * value. Narrower here meant the importer refused a date the scan considered entirely plausible.
+ */
+const FUTURE_EMPLOYMENT_YEARS = 5;
+
+/**
+ * yyyymmdd from the LOCAL fields, never `toISOString()`: this deployment runs in IST, where
+ * converting a local midnight back to UTC lands on the previous day and would make "is this in
+ * the future" flip for every date between midnight and 05:30.
+ */
+const dayNumber = (d: Date): number =>
+  d.getFullYear() * 10000 + (d.getMonth() + 1) * 100 + d.getDate();
+
+/** 'YYYY-MM-DD' from the same local fields, for a message a person reads. */
+const isoOf = (d: Date): string => `${String(d.getFullYear()).padStart(4, '0')}`
+  + `-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 /**
  * Bring the appraiser roster spreadsheet in.
@@ -215,6 +230,18 @@ export class RosterImportService {
     const rows: Record<string, any>[] = parsed.rows;
 
     /**
+     * Every column heading this import actually looks at, recorded as it reads.
+     *
+     * A heading the importer does not recognise is silently dropped, and the summary still reports
+     * success — proved on the live stack: a sheet headed `Aadhaar Number` (the importer reads
+     * `Aadhar Card Number`) imported all six rows, reported "created 6, skipped 0", and discarded
+     * every Aadhaar number without a word. On a 1,155-person roster that is 578 government IDs
+     * gone, with nothing on screen to suggest it. Recorded from the real `read(...)` call sites
+     * rather than a hand-kept list, so the two can never disagree.
+     */
+    const askedFor = new Set<string>();
+
+    /**
      * Hyperlink cells hold their URL in the cell's link attribute, not its text —
      * `sheet_to_json` returns "Vijay Varma, Amravati - Google Drive" where the actual Drive
      * URL lives in `.l.Target`. For the one column that IS a link, walk the sheet directly
@@ -270,7 +297,10 @@ export class RosterImportService {
      * `Appraiser code` looks like a cache miss and inserts a second record for somebody who is
      * already there.
      */
-    const rowCodes = rows.map((row) => blankToNull(rowReader(row)(...CODE_COLUMNS)));
+    // `askedFor` here too, not just in the row loop: the appraiser-code aliases are read only
+    // in this pre-pass, so leaving it out made the importer's own key column report itself as
+    // unrecognised — a false positive on the one column that is never optional.
+    const rowCodes = rows.map((row) => blankToNull(rowReader(row, askedFor)(...CODE_COLUMNS)));
 
     await this.uow.run(async (manager) => {
       // Resolved once, inside the transaction so it reads the same snapshot the import writes
@@ -315,7 +345,7 @@ export class RosterImportService {
         // +2: one for the header, one because a spreadsheet's first data row is row 2 to the
         // person who will go and look at it.
         const sourceRow = index + 2;
-        const read = rowReader(row);
+        const read = rowReader(row, askedFor);
         const issues: Partial<AssayerImportIssueEntity>[] = [];
 
         /**
@@ -467,6 +497,26 @@ export class RosterImportService {
 
       clients.flushNotes(summary, dryRun);
 
+      /**
+       * Name the columns nobody read, so a renamed heading cannot cost a field in silence.
+       *
+       * Only columns that actually carry data are reported: a spreadsheet's trailing empty
+       * columns are normal and naming them would bury the one that matters. And the column is
+       * NAMED, never fuzzy-matched into a field — guessing is how the wrong column lands in the
+       * right-looking place.
+       */
+      for (const header of parsed.headers) {
+        if (!header || BLANK_HEADER.test(header)) continue;
+        if (askedFor.has(normaliseHeader(header))) continue;
+        const carrying = rows.filter((r) => String(r?.[header] ?? '').trim() !== '').length;
+        if (carrying === 0) continue;
+        summary.notes.push(
+          `Column "${header}" was not recognised, so ${carrying} row(s) of data in it were not imported. `
+          + `If that column holds something this system stores, rename its heading to the one the `
+          + `template uses and import again — nothing was guessed.`,
+        );
+      }
+
       if (dryRun) {
         // Everything above ran against the real tables; rolling back is what makes it a
         // rehearsal rather than a promise.
@@ -570,15 +620,46 @@ export class RosterImportService {
      * Aadhaar column doubles as a status note — 129 cells hold the word "Inactive" — and the
      * first version of this importer stored those words verbatim, encrypted, as Aadhaar
      * numbers. A wrong shape goes to review, never into an identity field.
+     *
+     * The shapes themselves live in `@fapoms/shared` now, because these same rules gate
+     * `POST/PUT /assayers`: an importer and an API that disagree about what a PAN looks like
+     * would let the form store what the import refuses.
      */
-    a.panNumber = this.readShaped(read('PAN Number'), /^[A-Z]{5}\d{4}[A-Z]$/i,
+    a.panNumber = this.readShaped(read('PAN Number'), PAN_PATTERN,
       'Not a PAN (expected five letters, four digits, one letter).',
       { issues, sourceRow, sheet, column: 'PAN Number' }) ?? a.panNumber ?? null;
-    a.aadhaarNumber = this.readShaped(read('Aadhar Card Number', 'Aadhaar Card Number'), /^\d{12}$/,
-      'Not an Aadhaar number (expected 12 digits).',
-      { issues, sourceRow, sheet, column: 'Aadhar Card Number' }) ?? a.aadhaarNumber ?? null;
+    {
+      /**
+       * Aadhaar in three steps: shape (report-don't-throw, as every cell here), then the
+       * all-same-digit placeholder, then the Verhoeff checksum every genuine Aadhaar carries.
+       * Twelve digits that fail the checksum are a mistyped or invented number — under the
+       * length-only rule they were stored as identities and surfaced years later as KYC records
+       * matching nobody. Now the row goes to review while the person is still imported; an
+       * existing stored value is kept, exactly as for an unreadable cell.
+       *
+       * The placeholder branch exists because `999999999999` PASSES Verhoeff (see
+       * `isPlaceholderAadhaar`), so the single likeliest junk value in this column would
+       * otherwise be reported as a checksum failure and send the clerk to re-read a card
+       * against a number where no digit is wrong. It is a blank field, not a typo, and the
+       * reason has to say so or the trip to the filing cabinet is wasted.
+       */
+      const shaped = this.readShaped(read('Aadhar Card Number', 'Aadhaar Card Number'), AADHAAR_PATTERN,
+        'Not an Aadhaar number (expected 12 digits).',
+        { issues, sourceRow, sheet, column: 'Aadhar Card Number' });
+      if (shaped !== null && !isValidAadhaar(shaped)) {
+        issues.push({
+          sourceSheet: sheet, sourceRow, sourceColumn: 'Aadhar Card Number', rawValue: shaped,
+          reason: isPlaceholderAadhaar(shaped)
+            ? 'Twelve identical digits — that looks like a placeholder rather than a real Aadhaar number. The number was never filled in, so it has to be found from the card, not corrected.'
+            : 'Twelve digits, but not a real Aadhaar number — the checksum fails, so a digit is mistyped or swapped. Please re-read it from the card.',
+        });
+        a.aadhaarNumber = a.aadhaarNumber ?? null;
+      } else {
+        a.aadhaarNumber = shaped ?? a.aadhaarNumber ?? null;
+      }
+    }
     a.dateOfBirth = this.readDate(read('D.O.B', 'DOB', 'Date of Birth'),
-      { issues, sourceRow, sheet, column: 'D.O.B' }) ?? a.dateOfBirth ?? null;
+      { issues, sourceRow, sheet, column: 'D.O.B' }, 'birth') ?? a.dateOfBirth ?? null;
     a.qualification = blankToNull(read('Qualification')) ?? a.qualification ?? null;
     a.vstsCode = blankToNull(read('VSTS CODE', 'VSTS ID')) ?? a.vstsCode ?? null;
     {
@@ -704,8 +785,36 @@ export class RosterImportService {
     a.region ??= (resolveRegion(a.state ?? '') as Region) ?? null;
 
     a.bankName = blankToNull(read('Bank Name')) ?? a.bankName ?? null;
-    a.bankAccountNumber = blankToNull(read('A/c Number', 'Account Number')) ?? a.bankAccountNumber ?? null;
-    a.ifscCode = this.readShaped(read('IFSC Code'), /^[A-Z]{4}0[A-Z0-9]{6}$/i,
+    /**
+     * The one identity column with no shape to check, so the mask check has to be explicit.
+     *
+     * PAN and IFSC go through `readShaped`, whose pattern happens to reject an asterisk, so a
+     * masked value in either column is refused as a side effect of validating the format. A bank
+     * account has no format — digits of any length — so nothing stopped `***********0252` being
+     * written here, encrypted, with the real number gone and no copy anywhere.
+     *
+     * That is not hypothetical on this data. The API masks these columns on read, HR exports the
+     * roster, edits it and re-imports it, and the exported cell holds exactly what the screen
+     * showed. `assertNoMaskedPii` guards the two API write paths and cannot help here: the
+     * importer never calls `create` or `update`, it mutates the entity and persists it directly.
+     *
+     * Reported as an issue rather than thrown, like every other bad cell on this sheet — one
+     * unusable value must not abandon the other 1,162 rows — and the old value is kept rather
+     * than overwritten, because a masked cell carries no information to replace it with.
+     */
+    const rawAccount = blankToNull(read('A/c Number', 'Account Number'));
+    if (rawAccount !== null && looksMasked(rawAccount)) {
+      issues.push({
+        sourceSheet: sheet, sourceRow, sourceColumn: 'A/c Number',
+        rawValue: rawAccount,
+        reason: 'This is the masked version shown on screen, not the real account number, so it '
+          + 'has been left as it was rather than overwriting the real one. Reveal the field on the '
+          + 'record and copy the full number if it needs changing.',
+      });
+    } else {
+      a.bankAccountNumber = rawAccount ?? a.bankAccountNumber ?? null;
+    }
+    a.ifscCode = this.readShaped(read('IFSC Code'), IFSC_PATTERN,
       'Not an IFSC code (expected 4 letters, a zero, then 6 characters) — payments to this account would fail.',
       { issues, sourceRow, sheet, column: 'IFSC Code' }) ?? a.ifscCode ?? null;
   }
@@ -878,6 +987,17 @@ export class RosterImportService {
     const rawVerdict = blankToNull(read('Background Verification Done'));
     const rawCibil = blankToNull(read('CIBIL Status'));
     const rawScore = blankToNull(read('Cibil Score'));
+    /**
+     * Read here rather than where it is used, because `read` is also what tells the unrecognised-
+     * column report that this heading is one the importer knows.
+     *
+     * The call sat below the early return, so on a file where NOT ONE row carries background data
+     * the heading was never asked for, and the report would name "CIBIL date" as a column nobody
+     * read and say its values were not imported — a false alarm about data that in fact had
+     * nothing to attach itself to. The report exists to make silent column loss loud; inventing
+     * losses is the one way it can lose an operator's trust.
+     */
+    const rawCheckedOn = read('CIBIL  date', 'CIBIL date');
     if (!rawVerdict && !rawCibil && !rawScore) return 0;
 
     const { verdict, risk } = readBackgroundCheck(rawVerdict);
@@ -921,7 +1041,7 @@ export class RosterImportService {
      * screen last week with the spreadsheet's older "Clear" — silently rewriting the grounds
      * on which somebody is admitted to a bank vault. A stale sheet now files an issue instead.
      */
-    const sheetCheckedOn = this.readDate(read('CIBIL  date', 'CIBIL date'));
+    const sheetCheckedOn = this.readDate(rawCheckedOn);
     const existing = await manager.findOne(AssayerBackgroundCheckEntity, {
       where: { assayerId },
       order: { checkedOn: 'DESC', createdAt: 'DESC' },
@@ -961,6 +1081,10 @@ export class RosterImportService {
     // The roster carries one client's standing as columns. Others live only in free text, and
     // are not guessed at here — this reads what is actually structured.
     const raw = blankToNull(read('ICICI Status'));
+    // Asked for above the early return for the same reason as `CIBIL date` in the check above:
+    // `read` is what registers a heading as recognised, and a file with no ICICI standings would
+    // otherwise have this column reported as dropped data.
+    const rawDocsRequired = blankToNull(read('ICICI Documents required'));
     if (!raw) return 0;
 
     const clientId = await clients.resolve('ICICI');
@@ -981,7 +1105,7 @@ export class RosterImportService {
       assayerId, clientId, status,
       // The words after the slash are why, and they matter when somebody is put forward again.
       statusReason: raw,
-      documentsOutstanding: blankToNull(read('ICICI Documents required')),
+      documentsOutstanding: rawDocsRequired,
     });
     return 1;
   }
@@ -1207,12 +1331,58 @@ export class RosterImportService {
   private readDate(
     raw: unknown,
     ctx?: { issues: Partial<AssayerImportIssueEntity>[]; sourceRow: number; sheet: string; column: string },
+    kind: DateKind = 'employment',
   ): Date | null {
-    if (raw instanceof Date) return Number.isNaN(raw.getTime()) ? null : raw;
     // Excel marks a cell as text with a leading apostrophe; the roster has dates written that
     // way ("'11-01-1997"), and trailing punctuation ("27-04-2026.").
-    const s = blankToNull(raw)?.replace(/^'/, '').replace(/[.\s]+$/, '') ?? null;
-    if (!s) return null;
+    const s = raw instanceof Date ? raw : (blankToNull(raw)?.replace(/^'/, '').replace(/[.\s]+$/, '') ?? null);
+    if (s == null) return null;
+
+    const parsed = this.parseDateShape(s);
+    const shown = s instanceof Date ? s.toISOString().slice(0, 10) : String(s).slice(0, 100);
+
+    if (parsed == null) {
+      // A silent null here loses a fact forever ("sanjayk" sits in a DOB cell on the real file);
+      // a cell that claims to be a date but is not one is a review item.
+      ctx?.issues.push({
+        sourceSheet: ctx.sheet, sourceRow: ctx.sourceRow, sourceColumn: ctx.column, rawValue: shown,
+        reason: 'Could not be read as a date.',
+      });
+      return null;
+    }
+
+    /**
+     * Every shape is bounded, not just the last-resort one.
+     *
+     * The bound was written for `new Date("5484")` and applied only there, which left the two
+     * shapes above it — `01-01-5484` and `02-Nov-5484` — to return year 5484 unchecked. The
+     * comment on this rule already said "its RESULT is bounded", so the gap read as covered. Real
+     * corruption arrived as bare numbers, so nothing slipped through in the roster we have; a
+     * differently-broken sheet is exactly what a re-import is allowed to contain, and the check
+     * costs nothing on the shapes that were already fine.
+     */
+    if (this.isPlausibleHumanDate(parsed, kind)) return parsed;
+    ctx?.issues.push({
+      sourceSheet: ctx.sheet, sourceRow: ctx.sourceRow, sourceColumn: ctx.column,
+      rawValue: shown,
+      // Two different faults, and the message has to name the right one. A birth date of next
+      // Tuesday is a plausible date in the wrong place; year 9952 is a number that was never a
+      // date at all, and telling the operator it is "in the future" would send them looking for a
+      // typo in a cell whose whole content is wrong. So the gentler wording is used only where the
+      // value would otherwise have passed — inside the window an employment date may occupy.
+      reason: kind === 'birth' && this.isPlausibleHumanDate(parsed, 'employment')
+        ? `Read as ${isoOf(parsed)}, which is in the future — nobody is born on a date that has `
+          + 'not happened yet, so this cell is not a date of birth. Left blank; correct it on the '
+          + 'source sheet and re-import.'
+        : `Read as ${parsed.getFullYear()}, which is not a real date for a person — the cell is `
+          + 'probably not a date at all. Left blank; correct it on the source sheet and re-import.',
+    });
+    return null;
+  }
+
+  /** Every date shape the roster is written in, or null when none of them fits. */
+  private parseDateShape(s: Date | string): Date | null {
+    if (s instanceof Date) return Number.isNaN(s.getTime()) ? null : s;
 
     const dmy = /^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})$/.exec(s);
     if (dmy) {
@@ -1243,44 +1413,38 @@ export class RosterImportService {
      * tenure, so someone who "joined in 6333" scored on a negative career length, and no screen
      * showed anything wrong.
      *
-     * So the parse is kept, but its RESULT is bounded. Anything outside a human range is treated as
-     * the unreadable cell it is and reported, rather than stored.
+     * The parse is kept, because it reads shapes the two regexes above do not, and its result is
+     * bounded by the caller along with every other shape's.
      */
     const parsed = new Date(s);
-    if (!Number.isNaN(parsed.getTime())) {
-      if (this.isPlausibleHumanDate(parsed)) return parsed;
-      ctx?.issues.push({
-        sourceSheet: ctx.sheet, sourceRow: ctx.sourceRow, sourceColumn: ctx.column,
-        rawValue: String(s).slice(0, 100),
-        reason:
-          `Read as ${parsed.getFullYear()}, which is not a real date for a person — the cell is `
-          + 'probably not a date at all. Left blank; correct it on the source sheet and re-import.',
-      });
-      return null;
-    }
-
-    // A silent null here loses a fact forever ("sanjayk" sits in a DOB cell on the real file);
-    // a cell that claims to be a date but is not one is a review item.
-    ctx?.issues.push({
-      sourceSheet: ctx.sheet, sourceRow: ctx.sourceRow, sourceColumn: ctx.column, rawValue: String(s).slice(0, 100),
-      reason: 'Could not be read as a date.',
-    });
-    return null;
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
   }
 
   /**
    * Could a person's date of birth, joining or exit realistically be this?
    *
-   * Deliberately generous at both ends rather than tuned: the job is to catch a parse that produced
-   * year 6333, not to police data entry. The lower bound admits the oldest plausible date of birth;
-   * the upper admits a genuinely future-dated exit, because a notice period served in advance is
-   * real — even though every one of the 26 future exit dates in the roster today turned out to be
-   * this corruption rather than notice. Checked against every date in the live table: no legitimate
-   * value falls outside this window, so the rule refuses nothing real.
+   * Deliberately generous rather than tuned: the job is to catch a parse that produced year 6333,
+   * not to police data entry. The lower bound of 1900 admits the oldest plausible date of birth.
+   * Checked against every date in the live table: no legitimate value falls outside this, so the
+   * rule refuses nothing real.
+   *
+   * The upper bound depends on what the date is FOR, which is why the caller says.
+   *
+   * An employment date may sit up to five years ahead: a notice period served well in advance is
+   * real, and so is a fixed-term engagement with a known end date. Five and not two, because the
+   * data-integrity scan already treats anything within five years as perfectly plausible — while
+   * this said two, a date the scan would never have questioned was refused at the door, and the
+   * operator got an issue telling them a real date was "not a real date for a person". Two rules
+   * over one value must not disagree.
+   *
+   * A birth date gets no future allowance at all. Nobody is born tomorrow; a birth date even a
+   * day ahead is a misread cell every single time, and the generous employment window was quietly
+   * admitting two years of them.
    */
-  private isPlausibleHumanDate(d: Date): boolean {
-    const year = d.getFullYear();
-    return year >= 1900 && year <= new Date().getFullYear() + 2;
+  private isPlausibleHumanDate(d: Date, kind: DateKind): boolean {
+    if (d.getFullYear() < 1900) return false;
+    if (kind === 'birth') return dayNumber(d) <= dayNumber(new Date());
+    return d.getFullYear() <= new Date().getFullYear() + FUTURE_EMPLOYMENT_YEARS;
   }
 }
 

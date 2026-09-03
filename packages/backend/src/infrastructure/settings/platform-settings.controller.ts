@@ -14,7 +14,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Allow } from 'class-validator';
 import { SystemRole } from '@fapoms/shared';
 
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles } from '../../modules/auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../../modules/auth/guards';
 import { PlatformSettingsService, ResolvedSetting } from './platform-settings.service';
 import { SETTINGS_GROUPS } from './settings.registry';
 import { AuditService } from '../../core/audit/audit.service';
@@ -128,6 +128,7 @@ export class PlatformSettingsController {
 
   @Put(':key')
   @Roles(...SETTINGS_ADMIN_ROLES)
+  @RequirePermissions('configuration:edit:platform')
   @ApiOperation({ summary: 'Save one setting' })
   async set(
     @Param('key') key: string,
@@ -166,6 +167,7 @@ export class PlatformSettingsController {
 
   @Delete(':key')
   @Roles(...SETTINGS_ADMIN_ROLES)
+  @RequirePermissions('configuration:edit:platform')
   @ApiOperation({ summary: 'Clear a saved setting so it follows the environment or shipped default again' })
   async reset(@Param('key') key: string, @Req() req: any): Promise<{ success: boolean; data: ResolvedSetting[] }> {
     await this.settings.reset(key, req.user?.id);

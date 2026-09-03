@@ -39,19 +39,30 @@ export const ASSAYER_RECORD_FIELDS: AssayerRecordField[] = [
 
   /**
    * Fields the record has always held and this list never mentioned, so nothing counted them
-   * and no screen flagged them. Measured against the imported roster of 1,163 people: 1,155
-   * with no coordinates, 1,155 with no pincode, 456 with no Aadhaar, 450 with no city.
+   * and no screen flagged them. When they were added, the imported roster of 1,163 people had
+   * 1,155 with no coordinates, 1,155 with no pincode, 456 with no Aadhaar and 450 with no city.
+   *
+   * Two of those four have since been closed, by 17e24f44 rather than by anything here: the
+   * nightly geocoding sweep had never once run against assayers (one schedule carrying no data,
+   * against a worker reading `job.data?.target ?? 'branch'`), and the pincode was written at the
+   * end of the free-text address rather than into a column of its own. Every record now has
+   * coordinates, 1,110 carry a pincode, and the roster importer hands its own rows to the
+   * geocoder as it saves them — so this is history, not a backfill waiting to be run. What is
+   * still open is 53 records with no pincode anywhere and 450 with no city. The Aadhaar gap ROSE,
+   * from 456 to 585, and that is the importer working: it now refuses anything that is not twelve
+   * digits passing the Verhoeff checksum, and the growth is exactly the 129 cells in that column
+   * holding the word "Inactive" — a status note the sheet kept there, which the first version of
+   * the importer stored verbatim and encrypted as somebody's government ID. A counted blank is
+   * the better answer.
    *
    * `latitude` stands for the pair — coordinates are written together or not at all, and two
    * entries would report one gap twice. It is the only critical one here, and it is critical
    * because of what happens silently without it: `recommendation.engine.ts` returns `true` from
    * its distance check when either side has no coordinates, so a candidate who lives four
-   * states away passes the "near enough" filter rather than being excluded by it. Nothing on
-   * any screen said those records were being planned blind.
-   *
-   * They are blank because the bulk importer writes entities straight through the transaction
-   * manager, which skips the geocoding `create()` and `update()` do. Fixing the data is a
-   * geocoding run; this is the part that makes the gap visible in the meantime.
+   * states away passes the "near enough" filter rather than being excluded by it. It stays
+   * listed with the sweep working because a fresh import lands rows the geocoder has not reached
+   * yet — and because resolving is not the same as resolving to a home: nine records hold a
+   * centroid, which is what `PLACEHOLDER_PIN_METRES` below exists to catch.
    */
   { column: 'latitude', key: 'latitude', critical: true, label: 'Map location', blocks: 'Distance filtering, travel costs and day planning' },
   { column: 'pincode', key: 'pincode', critical: false, label: 'Pincode', blocks: 'Geocoding and travel estimates' },
@@ -130,14 +141,54 @@ export function splitMissingByOwnership(
 }
 
 /**
+ * At or beyond this stated accuracy, a coordinate is a fallback centroid rather than a home.
+ *
+ * 100 km is a state or district centroid in this data — the geocoder's own "I could not find it"
+ * answer, which it records honestly in `geo_accuracy_meters` (the live values are exactly 100 km
+ * and 500 km, the latter being the geographic centre of India). A real address resolves to metres
+ * or a few kilometres, so nothing legitimate is near this line.
+ *
+ * Shared because two things must agree on it: the data-integrity scan that raises "Home pin is a
+ * placeholder, not a home", and `missingAssayerRecordFields` below. A record whose pin is a state
+ * centroid used to be reported as complete by one and defective by the other.
+ */
+export const PLACEHOLDER_PIN_METRES = 100_000;
+
+/**
+ * Is this record's coordinate a placeholder rather than a location?
+ *
+ * Answered only when the record actually carries the geocoder's own accuracy figure. A caller
+ * that did not select those columns — a half-filled registration form, a projection built for
+ * something else — gets `false`, so an absent number can never be read as bad news about a pin
+ * that may well be fine.
+ */
+export function isPlaceholderPin(record: Record<string, unknown> | null | undefined): boolean {
+  if (!record) return false;
+  const metres = Number(record.geoAccuracyMeters ?? record.geo_accuracy_meters);
+  return Number.isFinite(metres) && metres >= PLACEHOLDER_PIN_METRES;
+}
+
+/**
  * The critical fields a record is still missing. Blank means null, absent, or whitespace only —
  * the same test the SQL side applies with `IS NULL OR ::text = ''`.
+ *
+ * `latitude` additionally counts as missing when the pin is a placeholder, because for this one
+ * field "present" and "usable" came apart. Creating a record geocodes the address, so somebody
+ * entered with nothing but a state comes straight back holding that state's centroid — a value,
+ * therefore not blank, therefore silently complete. The registration flow's own review step
+ * listed Phone, PAN, Bank and IFSC as gaps but not Map location, for a person whose recorded
+ * position was accurate to roughly two hundred kilometres; the roster's "incomplete record"
+ * filter had the same blind spot. That is the exact failure the field was added to prevent —
+ * `recommendation.engine.ts` passes its distance check when a coordinate is missing, and a
+ * centroid does not even trigger that mercy: it measures against a real-looking wrong place.
  */
 export function missingAssayerRecordFields(
   record: Record<string, unknown> | null | undefined,
 ): AssayerRecordField[] {
   if (!record) return [];
+  const pinIsPlaceholder = isPlaceholderPin(record);
   return CRITICAL_ASSAYER_RECORD_FIELDS.filter((f) => {
+    if (f.key === 'latitude' && pinIsPlaceholder) return true;
     const value = record[f.key];
     return value == null || String(value).trim() === '';
   });

@@ -1,5 +1,7 @@
 import { ForbiddenException } from '@nestjs/common';
-import { SystemRole } from '@fapoms/shared';
+import { SystemRole, maskTail } from '@fapoms/shared';
+import { ASSAYER_ERROR_CODES } from '@fapoms/shared';
+import { withCode } from '../../infrastructure/http/api-error';
 
 /**
  * Field-level visibility for assayer records.
@@ -58,7 +60,29 @@ const NEVER_EXPOSED = ['passwordHash'];
 const FULL_ACCESS: string[] = [SystemRole.ADMIN, SystemRole.OPERATIONS];
 
 /**
- * Strips fields the viewer's roles are not entitled to.
+ * The three identifiers a full-access role sees as last-4 rather than whole.
+ *
+ * The lists above answer "may this role see the field at all", which was the only question this
+ * policy asked. It left the privileged path wide open: PAN, Aadhaar and bank account are
+ * encrypted at rest (`enc:v1:` is in those Postgres columns today) and decrypt on entity load, so
+ * a single `GET /assayers?limit=1000` handed an ADMIN or OPERATIONS session every one of the
+ * 1,163 people's numbers in clear — and `audit_events` held 306 rows, not one of them a PII read.
+ * A stolen backup was safe and a logged-in session was not.
+ *
+ * Masking is the default because the work these roles actually do needs the last four digits, not
+ * the number: telling one bank account from another on a payout screen, matching a PAN against
+ * the card in the scan, spotting that the field is empty. The whole value is available from
+ * `GET /assayers/:id/sensitive/:field`, which records who asked for what about whom.
+ *
+ * A subset of IDENTITY_FIELDS and BANKING_FIELDS on purpose — date of birth, emergency contacts
+ * and IFSC are not masked. They are stripped from the roles that must not read them, and there is
+ * no last-4 of a date of birth that is any use to anybody.
+ */
+export const MASKED_IN_TRANSIT_FIELDS = ['panNumber', 'aadhaarNumber', 'bankAccountNumber'];
+
+/**
+ * Strips fields the viewer's roles are not entitled to, and masks the three it will only ever
+ * need the tail of.
  *
  * `isSelf` lets an assayer see their own banking and personal details in the
  * mobile app without opening anyone else's.
@@ -84,6 +108,24 @@ export function scopeAssayerForRoles<T extends Record<string, any>>(
   if (!canSeeIdentity) for (const f of IDENTITY_FIELDS) delete out[f];
   // Note the missing `|| isSelf`: staff-private text is not the subject's to read.
   if (!hasFull) for (const f of STAFF_PRIVATE_FIELDS) delete out[f];
+
+  /**
+   * The subject is not masked from themselves.
+   *
+   * `isSelf` is the assayer's own record in their own app, and masking there would be a control
+   * pointed at the one person the numbers belong to — who is holding the PAN card. The masking
+   * exists because a staff session can pull a thousand people's numbers in one request; a
+   * principal who can only ever fetch their own row is not that risk, and there is no reveal
+   * route for them to fall back on (`sensitive/:field` is ADMIN/OPERATIONS only, deliberately).
+   *
+   * A key that was stripped above stays stripped: `maskTail` runs only where the value survived,
+   * so a desk user is told nothing, not told a number exists.
+   */
+  if (!isSelf) {
+    for (const f of MASKED_IN_TRANSIT_FIELDS) {
+      if (typeof out[f] === 'string' && out[f]) out[f] = maskTail(out[f]);
+    }
+  }
 
   return out as Partial<T>;
 }
@@ -113,12 +155,22 @@ export function scopeAssayerListForRoles<T extends Record<string, any>>(
  *
  * Cost is one pass over an object graph the database has already produced; against the query
  * that fetched it, that is nothing.
+ *
+ * ## Why the full-access short circuit is gone
+ *
+ * This used to return the payload untouched for ADMIN and OPERATIONS — "nothing to strip for a
+ * role that may see everything" — which was true while the policy only stripped. Now that it also
+ * masks, those are exactly the roles with something to apply: they are the ones who still receive
+ * the fields, and they were receiving them whole on every route the interceptor covers. Skipping
+ * the walk for them would have meant masking `/assayers` and leaving every join that reaches an
+ * assayer — schedules, assignments, the operations inbox, documents, clarification threads —
+ * handing out the real numbers, which is the same shape of hole this function was written to
+ * close, one privilege level up.
+ *
+ * The walk is now paid on every response for every role. It was already paid for three of the
+ * five staff roles, and it is one pass over an object the database has already materialised.
  */
 export function redactAssayersDeep<T>(payload: T, roles: string[], selfId?: string): T {
-  const hasFull = roles.some((r) => FULL_ACCESS.includes(r));
-  // Nothing to strip for a role that may see everything — skip the walk entirely.
-  if (hasFull) return payload;
-
   // Guards against a cyclic graph: TypeORM hands back parent↔child references in both
   // directions, and a naive walk would not terminate.
   const seen = new WeakSet<object>();
@@ -140,10 +192,14 @@ export function redactAssayersDeep<T>(payload: T, roles: string[], selfId?: stri
     if (typeof node.assayerCode === 'string' && 'id' in node) {
       const isSelf = !!selfId && node.id === selfId;
       const scoped = scopeAssayerForRoles(node as Record<string, any>, roles, isSelf);
-      // Delete in place rather than returning a copy: the node may be referenced from several
+      // Edited in place rather than returning a copy: the node may be referenced from several
       // places in the graph, and replacing only this one would leave the others unredacted.
+      // Both halves of the policy have to be carried across — a stripped field disappears, and a
+      // masked one comes back with a different value under the same key. Assigning only on a
+      // change keeps this from rewriting every property of every assayer in the payload.
       for (const key of Object.keys(node)) {
         if (!(key in scoped)) delete node[key];
+        else if (node[key] !== scoped[key]) node[key] = scoped[key];
       }
     }
 
@@ -182,6 +238,9 @@ export function isAssayerActingOnAnother(user: any, targetAssayerId: string): bo
  */
 export function assertSelfOrPrivileged(user: any, targetAssayerId: string, action = 'modify this record'): void {
   if (isAssayerActingOnAnother(user, targetAssayerId)) {
-    throw new ForbiddenException(`You can only ${action} on your own record.`);
+    throw withCode(
+      new ForbiddenException(`You can only ${action} on your own record.`),
+      ASSAYER_ERROR_CODES.NOT_YOUR_RECORD,
+    );
   }
 }

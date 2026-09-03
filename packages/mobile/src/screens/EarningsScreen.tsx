@@ -4,8 +4,9 @@ import { AssayerPayableStatus, formatRupees as money, formatDateOnly } from '@fa
 import { AssayerAssignment, AssayerExpense, ExpenseSummary, AssayerStatement } from '../types/mobile-app';
 
 import { calendarDayDiff } from '../utils/dates';
-import { CAT_LABELS } from '../components/ExpenseModal';
+import { CAT_LABEL_KEYS } from '../components/ExpenseModal';
 import { useTheme } from '../theme/ThemeProvider';
+import { useT, t as translate, type TranslationKey } from '../i18n';
 import {
   AppText, Badge, Button, Card, CollapsibleSection, Divider, EmptyState, FadeIn, GlowBlob, Icon, StatStrip, StatTile,
 } from '../components/ui/primitives';
@@ -42,10 +43,10 @@ type Tone = 'neutral' | 'primary' | 'accent' | 'success' | 'warning' | 'danger' 
  * backend: due for approval, approved, paid. A hold is a flag on top of any of them, not a
  * fourth state — see the badge below.
  */
-const PAYABLE_STATE: Record<AssayerPayableStatus, { label: string; tone: Tone }> = {
-  [AssayerPayableStatus.PENDING]: { label: 'Awaiting approval', tone: 'warning' },
-  [AssayerPayableStatus.APPROVED]: { label: 'Approved', tone: 'info' },
-  [AssayerPayableStatus.PAID]: { label: 'Paid', tone: 'success' },
+const PAYABLE_STATE: Record<AssayerPayableStatus, { labelKey: TranslationKey; tone: Tone }> = {
+  [AssayerPayableStatus.PENDING]: { labelKey: 'earnings.payableStatus.pending', tone: 'warning' },
+  [AssayerPayableStatus.APPROVED]: { labelKey: 'earnings.payableStatus.approved', tone: 'info' },
+  [AssayerPayableStatus.PAID]: { labelKey: 'earnings.payableStatus.paid', tone: 'success' },
 };
 
 /** A rejected claim read as "pending" before — the same neutral grey as awaiting approval. */
@@ -55,10 +56,10 @@ const CLAIM_TONE: Record<string, Tone> = {
   REJECTED: 'danger',
 };
 
-const CLAIM_LABEL: Record<string, string> = {
-  APPROVED: 'Approved',
-  PENDING: 'Awaiting approval',
-  REJECTED: 'Rejected',
+const CLAIM_LABEL: Record<string, TranslationKey> = {
+  APPROVED: 'earnings.claimStatus.approved',
+  PENDING: 'earnings.claimStatus.pending',
+  REJECTED: 'earnings.claimStatus.rejected',
 };
 
 /**
@@ -70,9 +71,9 @@ const CLAIM_LABEL: Record<string, string> = {
 function pastDay(iso: string | null | undefined): string {
   if (!iso) return '—';
   const diff = calendarDayDiff(iso);
-  if (diff === 0) return 'Today';
-  if (diff === -1) return 'Yesterday';
-  if (diff < 0 && diff >= -13) return `${Math.abs(diff)} days ago`;
+  if (diff === 0) return translate('dates.today');
+  if (diff === -1) return translate('dates.yesterday');
+  if (diff < 0 && diff >= -13) return translate('dates.daysAgo', { count: Math.abs(diff) });
   return formatDateOnly(iso, { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
@@ -112,6 +113,7 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
   claimSummary,
 }) => {
   const t = useTheme();
+  const tr = useT();
 
   const expenses = claims?.length ? claims : assignments.flatMap((a) => a.expenses ?? []);
   const totalExpenses =
@@ -153,25 +155,23 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
           <GlowBlob color={t.colors.accent} size={220} opacity={t.mode === 'dark' ? 0.05 : 0.04} />
         </View>
 
-        <AppText variant="overline" tone="faint">BALANCE OWED TO YOU</AppText>
+        <AppText variant="overline" tone="faint">{tr('earnings.balanceLabel')}</AppText>
         {statement ? (
           <>
             <AppText variant="display" tone={owed > 0 ? 'accent' : 'muted'}>{money(owed)}</AppText>
             <AppText variant="caption" tone="muted">
-              {owed > 0
-                ? 'Owed to you across all completed work, after payments and TDS.'
-                : 'You are fully settled — nothing outstanding right now.'}
+              {owed > 0 ? tr('earnings.balanceOwed') : tr('earnings.balanceSettled')}
             </AppText>
 
             <Divider spacing={2} />
 
             {/* Paid vs pending at a glance, in the app's chip pattern. */}
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.sm }}>
-              <MoneyChip icon="trending-up" label="Earned" value={money(lifetime)} />
-              <MoneyChip icon="checkmark-circle-outline" label="Paid" value={money(paid)} iconColor={t.colors.success} />
-              <MoneyChip icon="hourglass-outline" label="Pending" value={money(awaiting)} iconColor={t.colors.warning} />
+              <MoneyChip icon="trending-up" label={tr('earnings.chipEarned')} value={money(lifetime)} />
+              <MoneyChip icon="checkmark-circle-outline" label={tr('earnings.chipPaid')} value={money(paid)} iconColor={t.colors.success} />
+              <MoneyChip icon="hourglass-outline" label={tr('earnings.chipPending')} value={money(awaiting)} iconColor={t.colors.warning} />
               {onHold > 0 && (
-                <MoneyChip icon="pause-circle-outline" label="On hold" value={money(onHold)} iconColor={t.colors.danger} />
+                <MoneyChip icon="pause-circle-outline" label={tr('earnings.payableStatus.onHold')} value={money(onHold)} iconColor={t.colors.danger} />
               )}
             </View>
           </>
@@ -180,52 +180,55 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
           <>
             <AppText variant="display" tone="muted">—</AppText>
             <AppText variant="caption" tone={statementError ? 'danger' : 'muted'}>
-              {statementError
-                ? "Couldn't load your statement. Pull down to try again — your money is safe, this screen just can't read it right now."
-                : 'Loading your statement…'}
+              {statementError ? tr('earnings.statementFailed') : tr('earnings.statementLoading')}
             </AppText>
           </>
         )}
       </Card>
 
       <StatStrip>
-        <StatTile label="Expenses claimed" value={money(totalExpenses)} icon="receipt-outline" />
-        <StatTile label="Audits completed" value={completed.length} icon="checkmark-done" tone="success" />
+        <StatTile label={tr('earnings.statExpenses')} value={money(totalExpenses)} icon="receipt-outline" />
+        <StatTile label={tr('earnings.statAudits')} value={completed.length} icon="checkmark-done" tone="success" />
         {claimSummary != null && claimSummary.pending > 0 && (
           <StatTile
-            label="Claims pending"
+            label={tr('earnings.statClaimsPending')}
             value={money(claimSummary.pending)}
             icon="hourglass-outline"
             tone="warning"
-            hint="awaiting desk approval"
+            hint={tr('earnings.statClaimsPendingHint')}
           />
         )}
       </StatStrip>
 
       {/* Secondary action — the hero owns the screen's attention, so no glow here. */}
-      <Button label="Log an expense" icon="add-circle-outline" variant="neutral" onPress={onOpenExpenseModal} full />
+      <Button label={tr('expense.title')} icon="add-circle-outline" variant="neutral" onPress={onOpenExpenseModal} full />
 
       {!hasAnyHistory && (
         <EmptyState
           icon="wallet-outline"
-          title="No earnings activity yet"
-          body="Complete your first audit and your fees, payables and payments will build up here."
+          title={tr('earnings.emptyTitle')}
+          body={tr('earnings.emptyBody')}
         />
       )}
 
       {statement && (
-        <CollapsibleSection title="Payouts" defaultOpen>
+        <CollapsibleSection title={tr('earnings.payoutsTitle')} defaultOpen>
           {payables.length === 0 ? (
             <EmptyState
               icon="document-text-outline"
-              title="Nothing raised yet"
-              body="A payout is raised the moment an audit completes — none are on your statement yet."
+              title={tr('earnings.payoutsEmptyTitle')}
+              body={tr('earnings.payoutsEmptyBody')}
             />
           ) : (
             payables.slice(0, 8).map((p, i) => {
+              const known = PAYABLE_STATE[p.status as AssayerPayableStatus];
+              // A status this build has never heard of keeps the server's own word rather than
+              // being given copy that might describe somebody's money wrongly.
               const state = p.onHold
-                ? { label: 'On hold', tone: 'danger' as Tone }
-                : PAYABLE_STATE[p.status as AssayerPayableStatus] ?? { label: String(p.status), tone: 'neutral' as Tone };
+                ? { label: tr('earnings.payableStatus.onHold'), tone: 'danger' as Tone }
+                : known
+                  ? { label: tr(known.labelKey), tone: known.tone }
+                  : { label: String(p.status), tone: 'neutral' as Tone };
               return (
                 <FadeIn key={p.id} delay={Math.min(i, 6) * 40}>
                   <Card level={1} style={{ gap: t.space.sm }}>
@@ -239,7 +242,7 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
                       <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
                         <AppText variant="h3">{money(p.totalAmount)}</AppText>
                         <AppText variant="caption" tone="faint" numberOfLines={1}>
-                          {p.expenseId ? 'Expense reimbursement' : p.payableNumber} · {pastDay(p.createdAt)}
+                          {p.expenseId ? tr('earnings.expenseReimbursement') : p.payableNumber} · {pastDay(p.createdAt)}
                         </AppText>
                         {p.onHold && p.holdReason ? (
                           <AppText variant="caption" tone="muted" numberOfLines={2}>{p.holdReason}</AppText>
@@ -248,7 +251,7 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
                       <View style={{ alignItems: 'flex-end', gap: 4 }}>
                         <Badge label={state.label} tone={state.tone} dot />
                         {p.outstanding > 0 && p.outstanding !== p.totalAmount && (
-                          <AppText variant="caption" tone="muted">{money(p.outstanding)} outstanding</AppText>
+                          <AppText variant="caption" tone="muted">{tr('earnings.outstanding', { amount: money(p.outstanding) })}</AppText>
                         )}
                       </View>
                     </View>
@@ -256,10 +259,10 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
                         assignment could never show TDS or a part payment. */}
                     <Divider />
                     <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                      <AppText variant="caption" tone="faint">Base {money(p.baseAmount)}</AppText>
-                      <AppText variant="caption" tone="faint">Travel {money(p.travelAmount)}</AppText>
+                      <AppText variant="caption" tone="faint">{tr('earnings.base', { amount: money(p.baseAmount) })}</AppText>
+                      <AppText variant="caption" tone="faint">{tr('earnings.travel', { amount: money(p.travelAmount) })}</AppText>
                       {p.tdsAmount > 0 && (
-                        <AppText variant="caption" tone="faint">TDS -{money(p.tdsAmount)}</AppText>
+                        <AppText variant="caption" tone="faint">{tr('earnings.tds', { amount: money(p.tdsAmount) })}</AppText>
                       )}
                     </View>
                   </Card>
@@ -271,7 +274,7 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
       )}
 
       {payments.length > 0 && (
-        <CollapsibleSection title="Payments received" summary="What has already been paid to you">
+        <CollapsibleSection title={tr('earnings.paymentsTitle')} summary={tr('earnings.paymentsSummary')}>
           {payments.slice(0, 8).map((pm, i) => (
             <FadeIn key={pm.id} delay={Math.min(i, 6) * 40}>
               <Card level={1} style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
@@ -284,7 +287,7 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
                   </AppText>
                 </View>
                 <View style={{ alignItems: 'flex-end', gap: 4 }}>
-                  <Badge label="Paid" tone="success" dot />
+                  <Badge label={tr('earnings.payableStatus.paid')} tone="success" dot />
                   <AppText variant="caption" tone="muted">{pastDay(pm.paidDate)}</AppText>
                 </View>
               </Card>
@@ -293,13 +296,13 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
         </CollapsibleSection>
       )}
 
-      <CollapsibleSection title="Expense claims" defaultOpen>
+      <CollapsibleSection title={tr('earnings.claimsTitle')} defaultOpen>
         {expenses.length === 0 ? (
           <EmptyState
             icon="receipt-outline"
-            title="No claims yet"
-            body="Log tolls, food and travel as you go — approved claims are reimbursed with your fees."
-            action={<Button label="Log an expense" icon="add-circle-outline" variant="neutral" size="sm" onPress={onOpenExpenseModal} />}
+            title={tr('earnings.claimsEmptyTitle')}
+            body={tr('earnings.claimsEmptyBody')}
+            action={<Button label={tr('expense.title')} icon="add-circle-outline" variant="neutral" size="sm" onPress={onOpenExpenseModal} />}
           />
         ) : (
           expenses.slice(0, 10).map((exp, i) => (
@@ -313,13 +316,15 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
                     {money(exp.amount)}
                   </AppText>
                   <AppText variant="caption" tone="faint" numberOfLines={1}>
-                    {CAT_LABELS[exp.category as keyof typeof CAT_LABELS] ?? exp.category}
+                    {CAT_LABEL_KEYS[exp.category as keyof typeof CAT_LABEL_KEYS]
+                      ? tr(CAT_LABEL_KEYS[exp.category as keyof typeof CAT_LABEL_KEYS])
+                      : exp.category}
                     {exp.branchName ? ` · ${exp.branchName}` : ''}
                     {exp.createdAt ? ` · ${pastDay(exp.createdAt)}` : ''}
                   </AppText>
                 </View>
                 <Badge
-                  label={CLAIM_LABEL[exp.status] ?? String(exp.status)}
+                  label={CLAIM_LABEL[exp.status] ? tr(CLAIM_LABEL[exp.status]) : String(exp.status)}
                   tone={CLAIM_TONE[exp.status] ?? 'neutral'}
                 />
               </Card>
@@ -328,12 +333,12 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
         )}
       </CollapsibleSection>
 
-      <CollapsibleSection title="Completed audits" summary="Your finished jobs">
+      <CollapsibleSection title={tr('earnings.completedTitle')} summary={tr('earnings.completedSummary')}>
         {completed.length === 0 ? (
           <EmptyState
             icon="wallet-outline"
-            title="No earnings yet"
-            body="Your fee appears here the moment you complete your first audit."
+            title={tr('earnings.completedEmptyTitle')}
+            body={tr('earnings.completedEmptyBody')}
           />
         ) : (
           completed.slice(0, 15).map((a, i) => (
@@ -345,12 +350,12 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
                       that may not be what is paid. */}
                   {bookedByAssignment.has(a.id)
                     ? <AppText variant="bodyStrong">{money(bookedByAssignment.get(a.id) as number)}</AppText>
-                    : <AppText variant="small" tone="muted">Not booked yet</AppText>}
+                    : <AppText variant="small" tone="muted">{tr('earnings.notBooked')}</AppText>}
                   <AppText variant="caption" tone="faint" numberOfLines={1}>
                     {a.branchName} · {a.scheduledDate ? pastDay(a.scheduledDate) : '—'}
                   </AppText>
                 </View>
-                <Badge label="Completed" tone="success" dot />
+                <Badge label={tr('earnings.completedBadge')} tone="success" dot />
               </Card>
             </FadeIn>
           ))

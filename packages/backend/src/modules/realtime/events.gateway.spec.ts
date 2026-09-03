@@ -6,6 +6,13 @@ import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ValidationQueryEntity } from '../validation-query/validation-query.entity';
 import { FeedbackThreadEntity } from '../feedback/feedback-thread.entity';
 
+/**
+ * Every test in this file drives a STAFF principal, for whom the gateway's assayer lookup finds
+ * nothing and the restricted-session gate does not apply. The case where it does apply lives in
+ * `events.gateway.restricted.spec.ts`.
+ */
+const noAssayer = () => ({ findOne: jest.fn().mockResolvedValue(null) }) as any;
+
 describe('EventsGateway — socket authentication', () => {
   let gateway: EventsGateway;
   let mockJwtService: { verifyAsync: jest.Mock; decode: jest.Mock };
@@ -28,7 +35,7 @@ describe('EventsGateway — socket authentication', () => {
       getUserRegions: jest.fn().mockResolvedValue(null),
       resolveEventRegion: jest.fn().mockResolvedValue(null),
     };
-    gateway = new EventsGateway(mockJwtService as any, new DomainEventPublisher(), mockRegionGuard as any);
+    gateway = new EventsGateway(mockJwtService as any, new DomainEventPublisher(), mockRegionGuard as any, noAssayer());
   });
 
   it('rejects a connection with no token at all', async () => {
@@ -71,7 +78,7 @@ describe('EventsGateway — territorial rooms', () => {
       getUserRegions: jest.fn().mockResolvedValue(regions),
       resolveEventRegion: jest.fn().mockResolvedValue(eventRegion),
     };
-    const gw = new EventsGateway(jwt as any, new DomainEventPublisher(), guard as any);
+    const gw = new EventsGateway(jwt as any, new DomainEventPublisher(), guard as any, noAssayer());
     const emit = jest.fn();
     (gw as any).server = { to: jest.fn().mockReturnValue({ emit }) };
     return { gw, jwt, guard, emit };
@@ -156,7 +163,7 @@ describe('EventsGateway — negotiation event routing', () => {
       getUserRegions: jest.fn().mockResolvedValue(null),
       resolveEventRegion: jest.fn().mockResolvedValue(eventRegion),
     };
-    const gw = new EventsGateway({} as any, new DomainEventPublisher(), guard as any);
+    const gw = new EventsGateway({} as any, new DomainEventPublisher(), guard as any, noAssayer());
     const emit = jest.fn();
     (gw as any).server = { to: jest.fn().mockReturnValue({ emit }) };
     return { gw, emit };
@@ -298,6 +305,7 @@ describe('EventsGateway — room subscription entitlement', () => {
       {} as any,
       new DomainEventPublisher(),
       new RegionGuardService(dataSource as any, { get: jest.fn().mockResolvedValue('log') } as any),
+      noAssayer(),
     );
   });
 
@@ -537,6 +545,7 @@ describe('EventsGateway — subscribe rate budget', () => {
       {} as any,
       new DomainEventPublisher(),
       new RegionGuardService(dataSource as any, { get: jest.fn().mockResolvedValue('log') } as any),
+      noAssayer(),
     );
     const client = makeClient({ id: 'assayer-1', roles: [{ name: 'ASSAYER' }] });
 
@@ -567,6 +576,7 @@ describe('EventsGateway — subscribe rate budget', () => {
       {} as any,
       new DomainEventPublisher(),
       new RegionGuardService(dataSource as any, { get: jest.fn().mockResolvedValue('log') } as any),
+      noAssayer(),
     );
     const spent = makeClient({ id: 'assayer-1', roles: [{ name: 'ASSAYER' }] });
     for (let i = 0; i < 60; i++) {

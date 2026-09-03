@@ -1,27 +1,34 @@
-import React, { useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import { User, MapPin, Briefcase, Award, CreditCard, Clock, X, CheckCircle, AlertTriangle } from 'lucide-react';
-import { INDIAN_STATES, todayDateKey, REGION_ORDER, REGION_LABELS, AssayerEngagementType, AssayerUnavailableReason } from '@fapoms/shared';
-import { api } from '../../services/api';
+import { useEffect, useState } from 'react';
+import {
+  INDIAN_STATES, REGION_ORDER, REGION_LABELS, AssayerEngagementType, AssayerUnavailableReason,
+  isValidPan, isValidIfsc, isValidAadhaar, AADHAAR_PATTERN, CRITICAL_ASSAYER_RECORD_FIELDS,
+} from '@fapoms/shared';
 import { fetchWholeAssayerRoster } from '../../services/assayer-roster';
-import { Modal, Select, useToast } from '../../components/ui';
+import { Select } from '../../components/ui';
 import { Autocomplete } from '../../components/ui/Autocomplete';
 import { ChipMultiSelect } from '../../components/ui/ChipMultiSelect';
-import { useWorkforceVocabulary, asOptions } from '../../hooks/useWorkforceVocabulary';
-import type { Assayer } from './assayer-shared';
-import { CRITICAL_FIELDS } from './assayer-shared';
+import { asOptions } from '../../hooks/useWorkforceVocabulary';
+import { blocksPhrase, type Assayer } from './assayer-shared';
 import { userMessage } from '../../services/errors';
 import { fetchWithTimeout } from '../../services/http';
 
 /**
- * Assayer create/edit forms.
+ * Assayer field definitions and the one renderer that draws them.
  *
  * Split out of the old Assayers page so the redesigned roster can reuse the exact
  * same field definitions and validation instead of growing a second, drifting copy
  * of the workforce form.
+ *
+ * The create form that used to live at the bottom of this file — an "Express / Advanced (6 Tabs)"
+ * mode switch — is gone; registering somebody is now the stepped flow in `registration/`, which
+ * renders these same definitions through `renderFormField`. What stays here is only what both
+ * that flow and the record page need, so neither can grow its own idea of what a PAN box is.
  */
 
-const labelStyle = { display: 'block', fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px' };
+// 12px, not the 11px this was. Every field the registration flow draws goes through this label,
+// and the flow's audience is a desk clerk who may not read English comfortably; 11px captions
+// over 13px inputs is the size at which a hint stops being read at all.
+const labelStyle = { display: 'block', fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px' };
 const formFieldStyle = { padding: '10px 12px', background: 'var(--bg-page)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', width: '100%', boxSizing: 'border-box' as const, outline: 'none', fontSize: '13px' };
 
 const FIELD_TEXTAREA = new Set(['address', 'notes']);
@@ -114,6 +121,13 @@ export interface FieldDef {
   /** Renders a ChipMultiSelect fed by the roster's own vocabulary instead of a text box. */
   vocab?: 'skills' | 'languages' | 'certifications';
   /**
+   * Renders a tick-list of the six operational regions, held as a JSON array string like the
+   * `vocab` fields. `preferredRegions` is a `text[]` column and the API's `@IsArray()` refuses a
+   * bare string, so a field marked this way must have its value parsed back to an array before it
+   * is sent — see `finaliseAssayerBody` in registration/persist.ts, the only writer of it.
+   */
+  regions?: true;
+  /**
    * Renders a searchable list of people instead of a text box, storing the id behind the name.
    * Used for the reporting manager, which is an id nobody can be expected to know by heart.
    */
@@ -167,28 +181,6 @@ export const useManagerOptions = (enabled: boolean, excludeId?: string) => {
 };
 
 /**
- * Deep link support: `?section=<tab>` opens this form on that section instead of at the top.
- *
- * The pay screen and the assayer drawer both link people here *because* their bank details are
- * missing, and both landed on the first tab — the person then had to know that "Financial" is
- * three clicks away, in a mode they may not be in. The section named in the URL is matched to a
- * tab by title, case-insensitively, so the link reads in plain words and survives re-ordering
- * of the tabs. An unknown or absent section leaves the form exactly as it was.
- *
- * A tab may also claim old names through `aliases`. "Financial" and "Pay" are now one tab called
- * "Money", and both old names still land on it — a link that another screen, a bookmark or a
- * pasted URL already carries must not start silently opening the form on Personal.
- */
-const sectionTabIndex = (section: string | null, groups: FieldGroup[]): number | null => {
-  const want = (section || '').trim().toLowerCase();
-  if (!want) return null;
-  const i = groups.findIndex((g) => (
-    g.title.toLowerCase() === want || (g.aliases || []).some((a) => a.toLowerCase() === want)
-  ));
-  return i >= 0 ? i : null;
-};
-
-/**
  * Skills, languages and certifications are lists, and this form's state is a flat
  * Record<string, string> shared by every field renderer.
  *
@@ -198,7 +190,7 @@ const sectionTabIndex = (section: string | null, groups: FieldGroup[]): number |
  * requirements that match nobody. The catch branch still accepts old comma text so a value
  * saved by the previous version of this form survives being opened for edit.
  */
-const parseList = (raw?: string): string[] => {
+export const parseList = (raw?: string): string[] => {
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);
@@ -206,24 +198,97 @@ const parseList = (raw?: string): string[] => {
   } catch { /* legacy comma text — fall through */ }
   return raw.split(',').map((x) => x.trim()).filter(Boolean);
 };
-const stringifyList = (list: string[]): string => (list.length > 0 ? JSON.stringify(list) : '');
+export const stringifyList = (list: string[]): string => (list.length > 0 ? JSON.stringify(list) : '');
 
 /**
  * Format checks that tell the operator what is wrong while they are still in the field.
  *
  * These are advisory hints, never a submit blocker: the server is the authority, and a
  * legitimate-but-unusual value must not be made unsaveable by a regex on this screen.
+ *
+ * They call the SHARED rulebook (`@fapoms/shared/identity-validation`) — the same functions
+ * `POST/PUT /assayers` runs through `IsPanFormat` / `IsAadhaarNumber` / `IsIfscFormat`. This
+ * file used to carry its own three regexes, and one of them was weaker than the server's: the
+ * local Aadhaar check was twelve digits and nothing else, so a mistyped or transposed digit
+ * showed no hint here and was then refused by the Verhoeff checksum on save — after the whole
+ * form had been filled. Sharing the rule means the hint appears while the card is still in the
+ * clerk's hand, and the two can never disagree about what "looks right" means.
  */
-const PAN_PATTERN = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
-const IFSC_PATTERN = /^[A-Z]{4}0[A-Z0-9]{6}$/;
-const AADHAAR_PATTERN = /^[0-9]{12}$/;
 const formatHint = (key: string, value: string): string | null => {
   const v = (value || '').trim();
   if (!v) return null;
-  if (key === 'panNumber' && !PAN_PATTERN.test(v)) return 'A PAN looks like ABCDE1234F — five letters, four digits, one letter.';
-  if (key === 'ifscCode' && !IFSC_PATTERN.test(v)) return 'An IFSC code looks like HDFC0001234 — four letters, a zero, then six characters.';
-  if (key === 'aadhaarNumber' && !AADHAAR_PATTERN.test(v.replace(/\s/g, ''))) return 'An Aadhaar number is 12 digits.';
+  if (key === 'panNumber' && !isValidPan(v)) return 'A PAN looks like ABCDE1234F — five letters, four digits, one letter.';
+  if (key === 'ifscCode' && !isValidIfsc(v)) return 'An IFSC code looks like HDFC0001234 — four letters, a zero, then six characters.';
+  if (key === 'aadhaarNumber' && !isValidAadhaar(v.replace(/\s/g, ''))) {
+    // Two failure modes, two sentences: a wrong-length value is a typing slip the clerk can see,
+    // while twelve digits that fail the checksum look perfectly right on screen — that one has to
+    // send them back to the card rather than back to the keyboard.
+    return AADHAAR_PATTERN.test(v.replace(/\s/g, ''))
+      ? 'These 12 digits do not add up to a real Aadhaar number — check them against the card.'
+      : 'An Aadhaar number is 12 digits.';
+  }
   if (key === 'pincode' && !/^\d{6}$/.test(v)) return 'A pincode is exactly 6 digits.';
+  return null;
+};
+
+/**
+ * Ask the postal directory what a pincode actually is, and hand the answer back.
+ *
+ * This used to be a submit-time consistency *check*: the operator filled the whole form, hit
+ * save, and was told "Pincode 682001 is in Kerala but you selected Delhi" — after the typing,
+ * with no offer to fix it. Worse, the old submit handler awaited it and then read the error
+ * from state in the same tick it was set, so the state it tested was always the previous
+ * render's value: a real conflict sailed through on the first attempt and only blocked the second.
+ *
+ * So it returns its finding instead of writing it to state, which makes it usable both on
+ * blur (to fill state/district in for the operator) and at save (to test the fresh answer).
+ */
+export const resolvePincode = async (pincode: string): Promise<{ state: string; district: string } | null> => {
+  if (!/^\d{6}$/.test(pincode || '')) return null;
+  try {
+    /**
+     * Five seconds, not the usual thirty, because of who is on the other end and who is waiting.
+     *
+     * This is a third-party host we neither operate nor monitor, and a caller may await it before
+     * saving — so whatever this does, the operator watches it do. An unbounded fetch to an
+     * unreachable third party froze the whole submit with the button disabled and nothing to click.
+     *
+     * The check is advisory: the catch below already swallows every failure because the backend
+     * enforces address consistency regardless. Waiting thirty seconds to discard the answer
+     * anyway is strictly worse than giving up at five and letting the save proceed.
+     */
+    const res = await fetchWithTimeout(`https://api.postalpincode.in/pincode/${pincode}`, {
+      timeoutMs: 5_000,
+    });
+    const data = await res.json();
+    const ok = data?.[0];
+    const po = ok && ok.Status === 'Success' ? ok.PostOffice?.[0] : null;
+    return po ? { state: String(po.State || ''), district: String(po.District || '') } : null;
+  } catch { return null; /* can't verify client-side; backend enforces */ }
+};
+
+/** A contradiction between what the directory says and what the operator typed, in plain words. */
+export const addressConflict = (
+  po: { state: string; district: string },
+  pincode: string,
+  state: string,
+  district: string,
+): { message: string; blocking: boolean } | null => {
+  if (state && po.state && state.trim().toLowerCase() !== po.state.trim().toLowerCase()) {
+    return {
+      message: `Pincode ${pincode} is in ${po.state}, but the state is set to ${state}. Change one of the two before saving.`,
+      blocking: true,
+    };
+  }
+  // A district named differently from the postal directory is normal — post offices and revenue
+  // districts are named differently across most of India — so it is said out loud and saved
+  // anyway. Dressing it in the same red as an unsaveable state is how a real warning gets ignored.
+  if (district && po.district && district.trim().toLowerCase() !== po.district.trim().toLowerCase()) {
+    return {
+      message: `Pincode ${pincode} is usually recorded as ${po.district} district. "${district}" will be saved as entered.`,
+      blocking: false,
+    };
+  }
   return null;
 };
 
@@ -253,81 +318,23 @@ const REGION_FIELD: FieldDef = {
 };
 
 /**
- * Admission asks for who this is and where they work, and nothing else.
+ * The code, which is the only identifier that does anything, and is create-time only.
  *
- * This form used to make eight fields mandatory — phone, address, district and city among them —
- * which is more than a real intake has on day one and more than the roster files this product is
- * fed even contain. The rest are not gone: they are collected here when known, and whatever is
- * still blank is listed on the record as a gap (CRITICAL_FIELDS) with what it blocks, so the
- * record gets completed rather than never created. State stays mandatory because it is what
- * makes an assayer plannable at all — it sets their region, zone and holiday calendar.
+ * Exported rather than declared inside the registration flow because the hint below is the
+ * whole point of the field: `AuthService` looks an assayer up by this at sign-in
+ * (`{ assayerCode: ILike(cleanKey) }`) and uses it as their username. A clerk who overwrote the
+ * assigned code to match a payroll number was changing somebody's login without being told so.
+ *
+ * Not required: blank means "allocate the next free one", which is the normal case, and only the
+ * server can see the codes that deleted assayers still hold.
  */
-const CREATE_FIELDS: FieldDef[] = [
-  // Not required: blank means "allocate the next free one", which is the normal case.
-  {
-    key: 'assayerCode', label: 'Assayer Code', placeholder: 'Left blank, one is assigned for you',
-    // Said out loud because this is the one identifier that *does* something: AuthService looks
-    // an assayer up by it at sign-in (`{ assayerCode: ILike(cleanKey) }`) and uses it as their
-    // username. A clerk who overwrote the assigned code to match a payroll number was changing
-    // somebody's login without being told so.
-    hint: 'Assigned by the system, and it is also their login username. Leave blank unless you have been given a specific code.',
-  },
-  { key: 'firstName', label: 'First Name', required: true },
-  { key: 'lastName', label: 'Last Name', required: true },
-  { key: 'email', label: 'Email', type: 'email' },
-  { key: 'phone', label: 'Phone' },
-  { key: 'alternatePhone', label: 'Alternate Phone' },
-  { key: 'address', label: 'Address', full: true },
-  { key: 'state', label: 'State', required: true, options: INDIAN_STATES },
-  { key: 'district', label: 'District' },
-  { key: 'city', label: 'City' },
-  { key: 'pincode', label: 'Pincode' },
-  REGION_FIELD,
-  EMPLOYEE_ID_FIELD,
-  EMPLOYEE_CODE_FIELD,
-  { key: 'employmentType', label: 'Employment Type', options: EMPLOYMENT_TYPES },
-  { key: 'department', label: 'Department', options: DEPARTMENTS },
-  { key: 'joiningDate', label: 'Joining Date', type: 'date' },
-  { key: 'panNumber', label: 'PAN Number' },
-  { key: 'aadhaarNumber', label: 'Aadhaar Number' },
-  { key: 'bankAccountNumber', label: 'Bank Account' },
-  { key: 'ifscCode', label: 'IFSC Code' },
-  { key: 'experienceYears', label: 'Experience (years)', type: 'number' },
-  // Picked from the roster's own vocabulary, not typed. These three feed the branch/project
-  // matching engine by exact string comparison, so a typo here is never rejected — it just
-  // becomes a capability nobody holds, and the person looks unassignable for no visible reason.
-  { key: 'skills', label: 'Skills', vocab: 'skills', full: true },
-  { key: 'languages', label: 'Languages', vocab: 'languages', full: true },
-  { key: 'certifications', label: 'Certifications', vocab: 'certifications', full: true },
-  { key: 'notes', label: 'Notes', full: true },
-  { key: 'baseFee', label: 'Base Fee (₹/audit)', type: 'number' },
-  { key: 'hourlyRate', label: 'Hourly Rate (₹)', type: 'number' },
-  { key: 'dailyRate', label: 'Daily Rate (₹)', type: 'number' },
-];
-
-const CREATE_FIELD_GROUPS: FieldGroup[] = [
-  { title: 'Personal', icon: <User size={13} />, fields: ['assayerCode', 'firstName', 'lastName', 'email', 'phone', 'alternatePhone'] },
-  { title: 'Address', icon: <MapPin size={13} />, fields: ['address', 'city', 'district', 'state', 'pincode', 'region'] },
-  { title: 'Employment', icon: <Briefcase size={13} />, fields: ['employeeId', 'employeeCode', 'employmentType', 'department', 'joiningDate'] },
-  /**
-   * "Financial" and "Pay" were two tabs, side by side, both with a card icon — one holding the
-   * bank account and PAN, the other the rates. Nothing on either title said which was which, so
-   * a clerk holding a new joiner's paperwork had to open both to find out where the account
-   * number goes, and anyone who found the rates first assumed they had done the money tab and
-   * left the bank details empty. One tab now, in the order the paperwork is read: where the
-   * money goes, then how much it is. Both old `?section=` names still open it.
-   */
-  {
-    title: 'Money', icon: <CreditCard size={13} />, aliases: ['financial', 'pay', 'bank'],
-    fields: ['panNumber', 'bankAccountNumber', 'ifscCode', 'baseFee', 'hourlyRate', 'dailyRate'],
-    blocks: [
-      { title: 'How we pay them', note: 'Bank and tax details. Needed before this person can be paid.', fields: ['panNumber', 'bankAccountNumber', 'ifscCode'] },
-      { title: "What they're paid", note: 'Leave at zero if the rates are not agreed yet — they can be set later.', fields: ['baseFee', 'hourlyRate', 'dailyRate'] },
-    ],
-  },
-  { title: 'Skills', icon: <Award size={13} />, fields: ['experienceYears', 'skills', 'languages', 'certifications'] },
-  { title: 'Other', icon: <Clock size={13} />, fields: ['notes'] },
-];
+export const ASSAYER_CODE_FIELD: FieldDef = {
+  key: 'assayerCode', label: 'Assayer code', placeholder: 'Left blank, one is given',
+  // Kept to two short lines. The hint sits in an auto-fit grid cell, so a paragraph here stretches
+  // its row and pushes the next field a screen down — which is what a four-line version of this
+  // did to "Qualification" on the first page.
+  hint: 'Given automatically when you save. It is also their sign-in username.',
+};
 
 export const EDIT_FIELDS: FieldDef[] = [
   { key: 'firstName', label: 'First Name', required: true },
@@ -452,7 +459,7 @@ const applyPlace = (fieldKey: string, place: { label: string; state: string; dis
   setForm(next);
 };
 
-const renderFormField = (
+export const renderFormField = (
   field: FieldDef,
   form: Record<string, string>,
   setForm: (v: Record<string, string>) => void,
@@ -483,23 +490,35 @@ const renderFormField = (
   /**
    * What this field being empty stops the company doing.
    *
-   * `CRITICAL_FIELDS` has carried this sentence all along — the record's Summary prints
+   * `CRITICAL_ASSAYER_RECORD_FIELDS` has carried this sentence all along — the record's Summary prints
    * "Bank account — blocks payouts" and offers a Fill them in button. Pressing it opened a grid
    * of identical grey boxes with none of that. Shown only while the box is still empty: once it
    * is filled, the consequence has stopped applying and the line is noise.
    */
-  const gap = CRITICAL_FIELDS.find((c) => String(c.key) === field.key);
-  const blocking = gap && !String(val ?? '').trim() ? gap.why : null;
+  const gap = CRITICAL_ASSAYER_RECORD_FIELDS.find((c) => c.key === field.key);
+  const blocking = gap && !String(val ?? '').trim() ? blocksPhrase(gap.blocks) : null;
+
+  /**
+   * A caption is not a label until something ties it to the box.
+   *
+   * These were bare `<label>` elements with no `for`, sitting above inputs with no `id` — so a
+   * screen reader announced every one of them as an unnamed edit box, and the caption as loose
+   * text belonging to nothing. The three place fields go through `Autocomplete`, which takes no
+   * id, so they are named by wrapping the control in a group that points back at the caption
+   * instead; the effect is the same and it needs no change to a shared component.
+   */
+  const inputId = `assayer-field-${field.key}`;
+  const labelId = `${inputId}-label`;
 
   return (
     <div key={field.key} style={field.full ? { gridColumn: '1 / -1' } : {}}>
-      <label style={labelStyle}>
+      <label id={labelId} htmlFor={inputId} style={labelStyle}>
         {field.label}
         {field.required && <span style={{ color: 'var(--danger)', marginLeft: '2px' }}>*</span>}
         {blocking && (
           <span
             style={{
-              marginLeft: '6px', fontWeight: 600, fontSize: '10.5px', color: 'var(--danger)',
+              marginLeft: '6px', fontWeight: 600, fontSize: '12px', color: 'var(--danger)',
               textTransform: 'none', letterSpacing: 0,
             }}
           >
@@ -533,14 +552,14 @@ const renderFormField = (
                 aria-label={field.label}
               />
               {people?.failed && (
-                <div style={{ fontSize: '10.5px', color: 'var(--warning)', marginTop: '4px' }}>
+                <div style={{ fontSize: '12px', color: 'var(--warning)', marginTop: '4px' }}>
                   {/* Named, not swallowed: without the list the field looks empty by choice. */}
                   Could not load the list of people. {people.failed}
                 </div>
               )}
               {/* A short list is worse than an empty one: it looks complete. Say what is not in it. */}
               {people?.incomplete && (
-                <div style={{ fontSize: '10.5px', color: 'var(--warning)', marginTop: '4px' }}>
+                <div style={{ fontSize: '12px', color: 'var(--warning)', marginTop: '4px' }}>
                   Only {people.incomplete.shown} of the {people.incomplete.total} people on the
                   roster could be loaded, so {people.incomplete.total - people.incomplete.shown} are
                   not in this list. Reload the page to try again.
@@ -549,6 +568,25 @@ const renderFormField = (
             </>
           );
         })()
+      ) : field.regions ? (
+        /**
+         * The six regions as a tick-list, because this column really is a list.
+         *
+         * `preferred_regions` is `text[]`, and the create/update DTOs declare it `@IsArray()`.
+         * A single-choice dropdown would have recorded one region for somebody who covers three
+         * and, worse, would have sent a bare string the API refuses outright. The value rides in
+         * form state as a JSON array string exactly like skills and languages do.
+         */
+        (() => (
+          <ChipMultiSelect
+            options={REGION_OPTIONS}
+            value={parseList(val)}
+            onChange={(next) => setForm({ ...form, [field.key]: stringifyList(next) })}
+            searchThreshold={99}
+            emptyText="No regions are set up."
+            aria-label={field.label}
+          />
+        ))()
       ) : field.vocab ? (
         /**
          * The vocabulary endpoint is HR-scoped, so a coordinator may legitimately get an empty
@@ -587,6 +625,8 @@ const renderFormField = (
             : field.options;
           return (
             <Select
+              id={inputId}
+              aria-label={field.label}
               value={val}
               onChange={(v) => setForm({ ...form, [field.key]: v })}
               options={opts.map(o => ({ value: o.value, label: o.label }))}
@@ -596,6 +636,9 @@ const renderFormField = (
           );
         })()
       ) : GEO_AUTO_FIELDS.has(field.key) ? (
+        // `Autocomplete` takes no id, so the caption is tied to it through a named group instead
+        // of a `for` — without either, the search box is announced with no name at all.
+        <div role="group" aria-labelledby={labelId}>
         <Autocomplete
           value={val}
           onChange={(v) => handleChange(v)}
@@ -607,13 +650,15 @@ const renderFormField = (
           placeholder={field.placeholder || (field.key === 'pincode' ? 'Search pincode…' : `Type to search ${field.label.toLowerCase()}…`)}
           filterType={(r) => field.key === 'pincode' ? !!r.pincode : true}
         />
+        </div>
       ) : isTextarea ? (
-        <textarea value={val} onChange={(e) => handleChange(e.target.value)} placeholder={field.placeholder || `Enter ${field.label.toLowerCase().replace(' *', '')}`}
+        <textarea id={inputId} value={val} onChange={(e) => handleChange(e.target.value)} placeholder={field.placeholder || `Enter ${field.label.toLowerCase().replace(' *', '')}`}
           rows={3} style={{ ...formFieldStyle, resize: 'vertical', minHeight: '60px', fontFamily: 'inherit' }} />
       ) : (
         <div style={{ position: 'relative' }}>
           {isTel && <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: '12px', pointerEvents: 'none' }}>+91</span>}
           <input
+            id={inputId}
             type={isTime ? 'time' : isTel ? 'tel' : isNum ? 'number' : field.type || 'text'}
             value={val}
             onChange={(e) => handleChange(e.target.value)}
@@ -639,7 +684,7 @@ const renderFormField = (
       )}
       {/* Advisory, shown while the operator is still on the field — never a reason to refuse a save. */}
       {(formatHint(field.key, val) || field.hint) && (
-        <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '4px' }}>
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
           {formatHint(field.key, val) || field.hint}
         </div>
       )}
@@ -647,605 +692,9 @@ const renderFormField = (
   );
 };
 
-/**
- * The body of one tab: either a plain grid of fields, or sub-headed blocks when the group
- * defines them.
- *
- * Anything in `group.fields` that no block claims is still rendered, after the blocks. That is
- * deliberate belt-and-braces: a field added to a group but forgotten in its blocks would
- * otherwise disappear from the form while still being saved from `form` state, which is the
- * quietest possible way to lose a value.
- */
-const renderGroupBody = (
-  group: FieldGroup,
-  fieldsMap: Map<string, FieldDef>,
-  renderOne: (field: FieldDef) => React.ReactNode,
-): React.ReactNode => {
-  const gridStyle = { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px' } as const;
-  if (!group.blocks || group.blocks.length === 0) {
-    return <div style={gridStyle}>{group.fields.map((key) => { const f = fieldsMap.get(key); return f ? renderOne(f) : null; })}</div>;
-  }
-  const claimed = new Set(group.blocks.flatMap((b) => b.fields));
-  const leftover = group.fields.filter((k) => !claimed.has(k));
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-      {group.blocks.map((block) => (
-        <div key={block.title}>
-          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '2px' }}>{block.title}</div>
-          {block.note && <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginBottom: '8px' }}>{block.note}</div>}
-          <div style={gridStyle}>
-            {block.fields.map((key) => { const f = fieldsMap.get(key); return f ? renderOne(f) : null; })}
-          </div>
-        </div>
-      ))}
-      {leftover.length > 0 && (
-        <div style={gridStyle}>
-          {leftover.map((key) => { const f = fieldsMap.get(key); return f ? renderOne(f) : null; })}
-        </div>
-      )}
-    </div>
-  );
-};
-
-export const CreateAssayerModal: React.FC<{
-  onClose: () => void;
-  onCreated: () => void;
-  /** Overrides `?section=` when the opening screen already knows which section it wants. */
-  initialSection?: string;
-}> = ({ onClose, onCreated, initialSection }) => {
-  const { toast } = useToast();
-  const [urlParams] = useSearchParams();
-  const wantedTab = sectionTabIndex(initialSection ?? urlParams.get('section'), CREATE_FIELD_GROUPS);
-  const [mode, setMode] = useState<'express' | 'advanced'>('express');
-  const [form, setForm] = useState<Record<string, string>>(() => {
-    // Deliberately blank: the server allocates the code, because it is the only side that can see
-    // the codes deleted assayers still hold and can settle a race between two people creating at
-    // once. Guessing it from the number of rows on screen produced a duplicate after any delete.
-    return {
-      assayerCode: '',
-      employmentType: 'FULL_TIME',
-      department: 'Gold Testing',
-      // No state/district/city default. This form used to open pre-filled with Delhi, Central
-      // Delhi and New Delhi, which is only correct for one hire in a national roster and wrong
-      // for the rest — and wrong in the quietest way, because a pre-filled field reads as
-      // already-answered. Everyone outside Delhi had to notice and correct three fields; anyone
-      // who didn't notice filed the person into the wrong region, zone and holiday calendar.
-      // Experience years had the same problem seeded as "5": a number nobody entered, saved as
-      // if they had. Blank now, and the pincode lookup below fills the address for real.
-      joiningDate: todayDateKey(),
-    };
-  });
-  const [activeTab, setActiveTab] = useState(wantedTab ?? 0);
-  const [submitting, setSubmitting] = useState(false);
-
-  const [addrError, setAddrError] = useState<string | null>(null);
-  const [addrLookup, setAddrLookup] = useState(false);
-  const { skills, languages, certifications } = useWorkforceVocabulary();
-  const vocabulary = { skills, languages, certifications };
-  /**
-   * Express mode has no tabs, so a `?section=financial` link opens the collapsed bank block
-   * instead — otherwise the deep link works in Advanced and silently does nothing in the mode
-   * most people are actually in, which is the failure it was added to prevent.
-   */
-  // Every name the Money tab answers to, not just "financial" — the tab merge would otherwise
-  // have left `?section=money` and `?section=pay` opening Express mode with the bank block still
-  // collapsed, which is precisely the failure the collapsed-block deep link was added to prevent.
-  const [showBank, setShowBank] = useState(
-    ['financial', 'money', 'pay', 'bank'].includes((initialSection ?? urlParams.get('section') ?? '').trim().toLowerCase()),
-  );
-
-  /**
-   * Ask the postal directory what a pincode actually is, and hand the answer back.
-   *
-   * This used to be a submit-time consistency *check*: the operator filled the whole form, hit
-   * save, and was told "Pincode 682001 is in Kerala but you selected Delhi" — after the typing,
-   * with no offer to fix it. Worse, `handleSubmit` awaited it and then read `addrError` in the
-   * same tick it was set, so the state it tested was always the previous render's value: a real
-   * conflict sailed through on the first attempt and only blocked the second.
-   *
-   * So it returns its finding instead of writing it to state, which makes it usable both on
-   * blur (to fill state/district in for the operator) and at submit (to test the fresh answer).
-   */
-  const resolvePincode = async (pincode: string): Promise<{ state: string; district: string } | null> => {
-    if (!/^\d{6}$/.test(pincode || '')) return null;
-    try {
-      /**
-       * Five seconds, not the usual thirty, because of who is on the other end and who is waiting.
-       *
-       * This is a third-party host we neither operate nor monitor, and `handleSubmit` *awaits*
-       * this call before saving — so whatever this does, the operator watches it do. An unbounded
-       * fetch to an unreachable third party therefore froze the whole submit with the button
-       * disabled and nothing to click.
-       *
-       * The check is advisory: the catch below already swallows every failure because the backend
-       * enforces address consistency regardless. Waiting thirty seconds to discard the answer
-       * anyway is strictly worse than giving up at five and letting the save proceed.
-       */
-      const res = await fetchWithTimeout(`https://api.postalpincode.in/pincode/${pincode}`, {
-        timeoutMs: 5_000,
-      });
-      const data = await res.json();
-      const ok = data?.[0];
-      const po = ok && ok.Status === 'Success' ? ok.PostOffice?.[0] : null;
-      return po ? { state: String(po.State || ''), district: String(po.District || '') } : null;
-    } catch { return null; /* can't verify client-side; backend enforces */ }
-  };
-
-  /** A contradiction between what the directory says and what the operator typed, in plain words. */
-  const addressConflict = (po: { state: string; district: string }, pincode: string, state: string, district: string): string | null => {
-    if (state && po.state && state.trim().toLowerCase() !== po.state.trim().toLowerCase()) {
-      return `Pincode ${pincode} is in ${po.state}, but the state is set to ${state}. Change one of the two before saving.`;
-    }
-    if (district && po.district && district.trim().toLowerCase() !== po.district.trim().toLowerCase()) {
-      return `Pincode ${pincode} is usually recorded as ${po.district} district. "${district}" will be saved as entered.`;
-    }
-    return null;
-  };
-
-  /**
-   * On blur of the pincode: fill in whatever the operator has not typed, warn only about a real
-   * contradiction. Filling blanks rather than demanding them is the whole point — a pincode is
-   * six digits the office always has, and state and district follow from it.
-   */
-  const applyPincodeLookup = async (pincode: string) => {
-    if (!/^\d{6}$/.test((pincode || '').trim())) { setAddrError(null); return; }
-    setAddrLookup(true);
-    const po = await resolvePincode(pincode.trim());
-    setAddrLookup(false);
-    if (!po) { setAddrError(null); return; }
-    setForm((prev) => ({
-      ...prev,
-      state: prev.state || po.state,
-      district: prev.district || po.district,
-      city: prev.city || po.district,
-    }));
-    setAddrError(addressConflict(po, pincode.trim(), form.state, form.district));
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    // The select-backed required fields (State) used to be blocked from submitting empty by the
-    // browser's own <select required> constraint validation; the custom dropdown doesn't
-    // participate in that, so the check is re-asserted explicitly here.
-    const missingRequired = CREATE_FIELDS.filter((f) => f.required && f.options && !form[f.key]?.trim());
-    if (missingRequired.length > 0) {
-      toast({ type: 'error', title: 'Missing required field', message: `${missingRequired.map((f) => f.label).join(', ')} must be set.` });
-      return;
-    }
-    setSubmitting(true);
-    try {
-      // Tested against the value this call just returned, not against `addrError` state written
-      // in the same tick — that was always one render stale, so the first submit ignored it.
-      const po = await resolvePincode(form.pincode || '');
-      const conflict = po ? addressConflict(po, (form.pincode || '').trim(), form.state || '', form.district || '') : null;
-      if (po && form.state && po.state && form.state.trim().toLowerCase() !== po.state.trim().toLowerCase()) {
-        setAddrError(conflict);
-        setSubmitting(false);
-        toast({ type: 'error', title: 'Pincode and state disagree', message: conflict || '' });
-        return;
-      }
-      // A district that reads differently from the postal directory is normal (post offices and
-      // revenue districts are named differently), so it is shown and saved, never blocked.
-      setAddrError(conflict);
-      const firstName = form.firstName?.trim() || '';
-      const lastName = form.lastName?.trim() || '';
-      // Left blank, the server allocates the next free code. It used to be guessed here from the
-      // number of assayers on screen — a count of active people, blind to the codes that deleted
-      // assayers keep — so the first create after any delete was refused as a duplicate.
-      const autoCode = form.assayerCode?.trim();
-
-      const rawPhone = form.phone?.replace(/\D/g, '') || '';
-      const formattedPhone = rawPhone ? (rawPhone.startsWith('91') ? `+${rawPhone}` : `+91${rawPhone}`) : '';
-
-      const body: any = {
-        // Omitted entirely when blank rather than sent as "", so the server takes it as "allocate
-        // one for me". An empty string is a value, and the DTO rejects it as empty.
-        ...(autoCode ? { assayerCode: autoCode } : {}),
-        firstName: firstName,
-        lastName: lastName,
-        phone: formattedPhone,
-        // No invented address. This used to fabricate first.last@fapoms.com for anyone without
-        // an email — a mailbox that does not exist, that notifications were then sent to, and
-        // that collides outright for the second "Ravi Kumar" on the roster.
-        email: form.email?.trim() || null,
-        address: form.address?.trim() || '',
-        city: form.city?.trim() || '',
-        district: form.district?.trim() || form.city?.trim() || '',
-        state: form.state?.trim() || '',
-        pincode: form.pincode?.trim() || null,
-        employmentType: form.employmentType || 'FULL_TIME',
-        department: form.department || 'Operations',
-        experienceYears: form.experienceYears ? Number(form.experienceYears) : 0,
-        joiningDate: form.joiningDate ? new Date(form.joiningDate).toISOString() : new Date().toISOString(),
-        alternatePhone: form.alternatePhone?.trim() || null,
-        region: form.region?.trim() || null,
-        employeeId: form.employeeId?.trim() || null,
-        employeeCode: form.employeeCode?.trim() || null,
-        panNumber: form.panNumber?.trim() || null,
-        bankAccountNumber: form.bankAccountNumber?.trim() || null,
-        ifscCode: form.ifscCode?.trim() || null,
-        notes: form.notes?.trim() || null,
-        // Picked from the roster vocabulary; omitted entirely when nothing was chosen so an
-        // untouched field never blanks out what is already on the record.
-        ...(parseList(form.skills).length ? { skills: parseList(form.skills) } : {}),
-        ...(parseList(form.languages).length ? { languages: parseList(form.languages) } : {}),
-        ...(parseList(form.certifications).length
-          ? { certifications: parseList(form.certifications).map((name) => ({ name, expiryDate: '' })) }
-          : {}),
-      };
-
-      const created = await api.request<any>('/assayers', { method: 'POST', body: JSON.stringify(body) });
-      const createdId = created?.id ?? (created?.data as any)?.id;
-      const baseFee = Number(form.baseFee) || 0;
-      const hourlyRate = Number(form.hourlyRate) || 0;
-      const dailyRate = Number(form.dailyRate) || 0;
-      if (createdId && (baseFee > 0 || hourlyRate > 0 || dailyRate > 0)) {
-        await api.request(`/assayers/${createdId}/commercial`, {
-          method: 'POST',
-          body: JSON.stringify({
-            baseFee, hourlyRate, dailyRate,
-            travelReimbursement: Number(form.travelReimbursement) || 0,
-            accommodationAllowance: Number(form.accommodationAllowance) || 0,
-            mealAllowance: Number(form.mealAllowance) || 0,
-            currency: 'INR',
-            effectiveStartDate: new Date().toISOString(),
-          }),
-        });
-      }
-      onCreated();
-    } catch (err) {
-      toast({ type: 'error', title: 'Could not create assayer', message: userMessage(err) });
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const fieldsMap = new Map(CREATE_FIELDS.map(f => [f.key, f]));
-  const currentGroup = CREATE_FIELD_GROUPS[activeTab];
-  /** Only a state that disagrees with the pincode stops a save; see addressConflict. */
-  const addrBlocking = !!addrError && addrError.includes('Change one of the two');
-
-  return (
-    <Modal
-      open
-      onClose={onClose}
-      width="720px"
-      height="min(680px, 85vh)"
-      closeIcon={<X size={18} />}
-      asForm
-      onSubmit={handleSubmit}
-      title={<><User size={18} style={{ color: 'var(--accent-primary)' }} /> Enroll New Assayer</>}
-      footer={
-        mode === 'express' ? (
-          <>
-            <button type="button" onClick={onClose} className="btn btn-secondary" style={{ padding: '9px 18px', fontSize: '13px' }}>Cancel</button>
-            <button type="submit" disabled={submitting} className="btn btn-primary" style={{ padding: '9px 22px', fontSize: '13px', display: 'flex', alignItems: 'center', gap: '8px', background: 'var(--gradient-neon)', color: 'var(--on-gradient)' }}>
-              {submitting ? 'Enrolling...' : <><CheckCircle size={16} /> Enroll Assayer Instantly ⚡</>}
-            </button>
-          </>
-        ) : (
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              {activeTab > 0 && (
-                <button type="button" onClick={() => setActiveTab(activeTab - 1)} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  ← Previous
-                </button>
-              )}
-            </div>
-            <div style={{ display: 'flex', gap: '8px' }}>
-              <button type="button" onClick={onClose} className="btn btn-secondary" style={{ padding: '8px 16px', fontSize: '12px' }}>Cancel</button>
-              {activeTab < CREATE_FIELD_GROUPS.length - 1 ? (
-                <button type="button" onClick={() => setActiveTab(activeTab + 1)} className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  Next →
-                </button>
-              ) : (
-                <button type="submit" disabled={submitting} className="btn btn-primary" style={{ padding: '8px 16px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  {submitting ? 'Saving...' : <><CheckCircle size={14} /> Create Assayer</>}
-                </button>
-              )}
-            </div>
-          </div>
-        )
-      }
-    >
-      <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>
-        Only a first name, a last name and a state are needed to create the record. Everything
-        else can be filled in now or later — anything left blank is listed on the record as a gap.
-      </div>
-      <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-        <div style={{ background: 'rgba(255,255,255,0.06)', padding: '3px', borderRadius: '8px', display: 'flex', gap: '2px', border: '1px solid var(--border-color)' }}>
-          <button
-            type="button"
-            onClick={() => setMode('express')}
-            style={{
-              padding: '5px 12px',
-              fontSize: '11px',
-              fontWeight: 700,
-              borderRadius: '6px',
-              border: 'none',
-              cursor: 'pointer',
-              background: mode === 'express' ? 'var(--accent-primary)' : 'transparent',
-              color: mode === 'express' ? 'var(--on-accent)' : 'var(--text-muted)',
-            }}
-          >
-            ⚡ Express Mode
-          </button>
-          <button
-            type="button"
-            onClick={() => setMode('advanced')}
-            style={{
-              padding: '5px 12px',
-              fontSize: '11px',
-              fontWeight: 700,
-              borderRadius: '6px',
-              border: 'none',
-              cursor: 'pointer',
-              background: mode === 'advanced' ? 'var(--accent-primary)' : 'transparent',
-              color: mode === 'advanced' ? 'var(--on-accent)' : 'var(--text-muted)',
-            }}
-          >
-            📋 Advanced ({CREATE_FIELD_GROUPS.length} Tabs)
-          </button>
-        </div>
-      </div>
-
-      {mode === 'express' ? (
-        <>
-          <div style={{ background: 'var(--status-pending-bg)', border: '1px solid rgba(216,174,71,0.25)', padding: '12px 16px', borderRadius: '8px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <div>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>Auto-Generated Assayer Code</span>
-              <span style={{ fontSize: '15px', fontWeight: 800, fontFamily: 'monospace', color: 'var(--accent-primary)' }}>
-                {form.assayerCode || 'Assigned when you save'}
-              </span>
-            </div>
-            <div style={{ textAlign: 'right' }}>
-              <span style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'block' }}>Department</span>
-              {/* Echoes the value actually on the form — it used to print "Gold Testing & Assay"
-                  as a fixed string, which stayed on screen after Advanced mode changed it. */}
-              <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--success)' }}>{form.department || 'Operations'}</span>
-            </div>
-          </div>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '14px' }}>
-            <div>
-              <label style={labelStyle}>First Name <span style={{ color: 'var(--danger)' }}>*</span></label>
-              <input
-                type="text"
-                required
-                placeholder="e.g. Deepak"
-                className="form-input"
-                style={formFieldStyle}
-                value={form.firstName || ''}
-                onChange={(e) => setForm({ ...form, firstName: e.target.value })}
-              />
-            </div>
-
-            <div>
-              <label style={labelStyle}>Last Name <span style={{ color: 'var(--danger)' }}>*</span></label>
-              <input
-                type="text"
-                required
-                placeholder="e.g. Verma"
-                className="form-input"
-                style={formFieldStyle}
-                value={form.lastName || ''}
-                onChange={(e) => setForm({ ...form, lastName: e.target.value })}
-              />
-            </div>
-
-            <div>
-              <label style={labelStyle}>Mobile Phone Number</label>
-              <div style={{ position: 'relative' }}>
-                <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: '12px', pointerEvents: 'none' }}>+91</span>
-                <input
-                  type="tel"
-                  placeholder="9876543217"
-                  maxLength={10}
-                  style={{ ...formFieldStyle, paddingLeft: '42px' }}
-                  value={form.phone || ''}
-                  onChange={(e) => setForm({ ...form, phone: e.target.value.replace(/\D/g, '') })}
-                />
-              </div>
-            </div>
-
-            <div>
-              <label style={labelStyle}>Email Address (Optional)</label>
-              <input
-                type="email"
-                placeholder="deepak.verma@fapoms.com"
-                className="form-input"
-                style={formFieldStyle}
-                value={form.email || ''}
-                onChange={(e) => setForm({ ...form, email: e.target.value })}
-              />
-            </div>
-
-            <div style={{ gridColumn: '1 / -1' }}>
-              {/* Not required. Express mode marked phone, address, pincode and city mandatory
-                  while the field table beside it, and the server DTO behind both, treated all
-                  four as optional — so the "fast" path was the strict one, and a roster row that
-                  genuinely has no phone could not be entered at all. Only first name, last name
-                  and state are required, which is exactly what CreateAssayerRequestDto demands. */}
-              <label style={labelStyle}>Base Street Address</label>
-              <input
-                type="text"
-                placeholder="e.g. Connaught Place, Radial Road 1"
-                className="form-input"
-                style={formFieldStyle}
-                value={form.address || ''}
-                onChange={(e) => setForm({ ...form, address: e.target.value })}
-              />
-            </div>
-
-            <div>
-              <label style={labelStyle}>Pincode {addrLookup && <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>· looking up…</span>}</label>
-              {/* Autocomplete now has a real `onBlur`, which fires only once focus has left the
-                  whole control. The previous wrapper <div> caught bubbled focusout, so moving
-                  the mouse into the suggestion list counted as leaving the field and looked up
-                  a half-typed pincode — reporting it as unknown a moment before the click that
-                  would have filled in a valid one. */}
-              <Autocomplete
-                value={form.pincode || ''}
-                onBlur={(v) => { void applyPincodeLookup(v); }}
-                onChange={(v) => setForm({ ...form, pincode: v })}
-                onSelect={(place) => {
-                  const next: Record<string, string> = { ...form, pincode: place.pincode || form.pincode || '' };
-                  if (place.district) { next.district = place.district; }
-                  if (place.state) { next.state = place.state; }
-                  if (!next.city) next.city = (place.label || '').split(',')[0].trim();
-                  setForm(next);
-                  setAddrError(null);
-                }}
-                placeholder="Search pincode, e.g. 110001"
-                filterType={(r) => !!r.pincode}
-              />
-              <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '4px' }}>Fills in city and state for you.</div>
-            </div>
-
-            <div>
-              <label style={labelStyle}>City / Base District</label>
-              <Autocomplete
-                value={form.city || ''}
-                onChange={(v) => setForm({ ...form, city: v, district: v })}
-                onSelect={(place) => {
-                  const next: Record<string, string> = { ...form, city: (place.label || '').split(',')[0].trim() };
-                  if (place.district) next.district = place.district;
-                  if (place.state) next.state = place.state;
-                  setForm(next);
-                }}
-                placeholder="Type to search city / district…"
-              />
-            </div>
-
-            <div>
-              <label style={labelStyle}>State <span style={{ color: 'var(--danger)' }}>*</span></label>
-              <Select
-                value={form.state || ''}
-                onChange={(v) => {
-                  setForm({ ...form, state: v });
-                  // Re-check against the pincode with the state the operator just picked, not the
-                  // one still in `form` — reading it back from state here compared the old value.
-                  void resolvePincode(form.pincode || '').then((po) => setAddrError(po ? addressConflict(po, (form.pincode || '').trim(), v, form.district || '') : null));
-                }}
-                options={INDIAN_STATES.map(st => ({ value: st.value, label: st.label }))}
-                placeholder="-- Select State --"
-                style={{ width: '100%' }}
-              />
-              <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '4px' }}>Sets their region, zone and holiday calendar.</div>
-            </div>
-
-            {addrError && (
-              <div style={{
-                gridColumn: '1 / -1', padding: '9px 12px', borderRadius: '8px', fontSize: '12.5px',
-                // A district named differently from the postal directory is normal and saves fine,
-                // so it must not be dressed up in the same red as a state that cannot be saved.
-                background: addrBlocking ? 'var(--status-cancelled-bg)' : 'var(--status-pending-bg)',
-                color: addrBlocking ? 'var(--danger)' : 'var(--warning)',
-                display: 'flex', gap: '7px', alignItems: 'center',
-              }}>
-                <AlertTriangle size={14} /> {addrError}
-              </div>
-            )}
-
-            <div>
-              <label style={labelStyle}>Employment Type</label>
-              <Select
-                value={form.employmentType || 'FULL_TIME'}
-                onChange={(v) => setForm({ ...form, employmentType: v })}
-                options={EMPLOYMENT_TYPES.map(o => ({ value: o.value, label: o.label }))}
-                style={{ width: '100%' }}
-              />
-            </div>
-
-            {/**
-              * Bank and tax details, offered here rather than only on Advanced tab four.
-              *
-              * Not one assayer on the roster has a bank account recorded. The fields were never
-              * missing — they were three clicks into a mode most people never switch to, on a tab
-              * called "Financial", at the moment when whoever is enrolling the person is holding
-              * exactly the paperwork these come from. Collapsed by default so the express path
-              * stays short, but one click away and saying out loud what it is for.
-              */}
-            <div style={{ gridColumn: '1 / -1' }}>
-              <button
-                type="button"
-                onClick={() => setShowBank(!showBank)}
-                style={{ background: 'transparent', border: 'none', padding: 0, cursor: 'pointer', color: 'var(--accent-primary)', fontSize: '12px', fontWeight: 600 }}
-              >
-                {showBank ? '▾' : '▸'} Bank &amp; tax details (optional)
-              </button>
-              <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginTop: '3px' }}>
-                Needed before this person can be paid. Can be added later from Edit.
-              </div>
-              {showBank && (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px', marginTop: '10px' }}>
-                  {['panNumber', 'bankAccountNumber', 'ifscCode'].map((key) => {
-                    const field = CREATE_FIELDS.find((f) => f.key === key);
-                    return field ? renderFormField(field, form, setForm, vocabulary) : null;
-                  })}
-                </div>
-              )}
-            </div>
-
-            {/* Competencies, in express too: these decide what work the person can be given, so
-                collecting them at enrolment is what makes the record assignable straight away. */}
-            <div style={{ gridColumn: '1 / -1', display: 'grid', gap: '12px' }}>
-              {['skills', 'languages'].map((key) => {
-                const field = CREATE_FIELDS.find((f) => f.key === key);
-                return field ? renderFormField(field, form, setForm, vocabulary) : null;
-              })}
-            </div>
-          </div>
-        </>
-      ) : (
-        <>
-          <div style={{ display: 'flex', gap: '0', borderBottom: '1px solid var(--border-color)', overflowX: 'auto' }}>
-            {CREATE_FIELD_GROUPS.map((group, i) => (
-              <button key={group.title} type="button" onClick={() => setActiveTab(i)}
-                style={{
-                  padding: '8px 14px', background: 'transparent', border: 'none',
-                  borderBottom: activeTab === i ? '2px solid var(--accent-primary)' : '2px solid transparent',
-                  color: activeTab === i ? 'var(--accent-primary)' : 'var(--text-muted)',
-                  fontWeight: activeTab === i ? 700 : 500, fontSize: '12px', cursor: 'pointer',
-                  display: 'flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap',
-                  transition: 'all 0.15s', opacity: activeTab === i ? 1 : 0.6,
-                }}>
-                {group.icon} {group.title}
-              </button>
-            ))}
-          </div>
-          <div key={activeTab} className="tab-pane" style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <div style={{ fontSize: '13px', fontWeight: 600, color: 'var(--text-secondary)' }}>{currentGroup.title}</div>
-            {renderGroupBody(currentGroup, fieldsMap, (field) => renderFormField(
-              field, form, setForm, vocabulary,
-              (k) => { if (k === 'pincode') void applyPincodeLookup(form.pincode || ''); },
-            ))}
-          </div>
-        </>
-      )}
-    </Modal>
-  );
-};
-
-interface FieldGroup {
-  title: string;
-  icon: React.ReactNode;
-  fields: string[];
-  /**
-   * Other names a `?section=` link may use for this tab. Renaming a tab must never break a link
-   * that another screen already sends people through — see `sectionTabIndex`.
-   */
-  aliases?: string[];
-  /**
-   * Optional sub-headings inside one tab. Used by "Money", which holds two things a clerk thinks
-   * of separately — where the money goes, and how much it is — and which were two tabs before.
-   * The keys listed here must all appear in `fields`; anything in `fields` that no block claims
-   * is rendered after the blocks, so a field can never be lost by forgetting to list it.
-   */
-  blocks?: { title: string; note?: string; fields: string[] }[];
-}
-
-// The single-assayer edit modal that used to live here was removed: a record is now
-// edited in place on its own page (see AssayerRecord), not in a parallel modal with a
-// second set of tabs. CreateAssayerModal above stays — enrolling a new person is a
-// genuinely different task from correcting an existing record.
+// The Express/Advanced create modal that used to close this file is gone. Registering a person
+// is now a stepped flow with its own folder (see registration/RegistrationWizard), because the
+// thing it has to get right is a SEQUENCE — create, then pin, then identity, then scans — and a
+// mode switch with a Previous/Next pair and no progress could not express one. The field
+// definitions and `renderFormField` above are what it draws; the single-record edit modal that
+// preceded both was removed earlier for the same reason (a record is edited on its own page).

@@ -36,9 +36,12 @@ export class AssayerEntity extends BaseEntity {
    *
    * The assayer login branch had no attempt counter and no lockout, and there is no rate
    * limiting anywhere in the application — so an unlimited number of guesses could be made
-   * against any assayer code. That mattered enormously because the bulk importer defaults
-   * every new assayer to the documented password `assayer123`: 24 of 25 live accounts share
-   * it. Without this, one wordlist of one entry unlocks the entire field workforce.
+   * against any assayer code. That mattered enormously because the bulk importer defaults every
+   * new assayer to the documented password `assayer123` and nothing ever forced a change: an
+   * imported account keeps it until its holder is made to choose another, so on any deployment
+   * the share of accounts on that one string is however many have not been through a reset.
+   * (`scripts/flag-weak-passwords.js --report` counts them for a given database.) Without this,
+   * one wordlist of one entry unlocks the entire field workforce.
    */
   @Column({ name: 'failed_login_attempts', type: 'int', default: 0 })
   failedLoginAttempts: number;
@@ -56,6 +59,20 @@ export class AssayerEntity extends BaseEntity {
    */
   @Column({ name: 'must_change_password', type: 'boolean', default: false })
   mustChangePassword: boolean;
+
+  /**
+   * When an HR-issued temporary password stops working.
+   *
+   * Only ever consulted while `mustChangePassword` is true — that is, while the password is still
+   * the one somebody else chose, spoke aloud and possibly wrote down. Choosing your own clears it,
+   * so this can never expire a credential its owner picked.
+   *
+   * NULL means no expiry applies, and that reads correctly for both populations it covers: the
+   * accounts whose password predates this column, whose issue date nobody recorded, and everybody
+   * who has already chosen their own. See migration 1794200000000.
+   */
+  @Column({ name: 'temp_password_expires_at', type: 'timestamptz', nullable: true })
+  tempPasswordExpiresAt: Date | null;
 
 
   @Column({ name: 'employee_code', type: 'varchar', length: 50, nullable: true })
@@ -416,8 +433,16 @@ export class AssayerEntity extends BaseEntity {
    * caller that did not know it existed.
    *
    * It does NOT fire on `QueryBuilder.update()` or `repository.update()`, which bypass the
-   * entity entirely. Nothing writes `lifecycle_status` that way today, and
-   * `derived-status.spec.ts` fails the build if something starts.
+   * entity entirely. Nothing writes `lifecycle_status` that way today, and `derived-status.spec.ts`
+   * scans every non-spec source file for the forms that would — `.update(Entity).set({…})`,
+   * `update(criteria, { lifecycleStatus })` with the column in any argument position, and raw
+   * `UPDATE … SET lifecycle_status` — so the build fails if one appears.
+   *
+   * It has one blind spot, and this claim used to have a larger one: the scan only reads source
+   * text, so a payload assembled into a variable before the call — `repository.update(id, update)`,
+   * which is how the live-location writer in `assayer.service.ts` already writes other columns —
+   * never names the column at the call site and cannot be recognised. That is the way past this
+   * guard, and nothing would say so.
    */
   @BeforeInsert()
   @BeforeUpdate()

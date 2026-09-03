@@ -6,6 +6,7 @@ import { NotificationDispatchService } from '../../modules/notifications/notific
 import { DeskEscalationService } from '../../modules/validation/desk-escalation.service';
 import { FeedbackEscalationService } from '../../modules/feedback/feedback-escalation.service';
 import { LocationTrailService } from '../../modules/assayer/location-trail.service';
+import { DataIntegrityService } from '../../modules/assayer/data-integrity.service';
 import { EmailDigestService } from './email-digest.service';
 import { BillingEngineService } from '../../modules/billing-engine/billing-engine.service';
 import { PlatformSettingsService } from '../settings/platform-settings.service';
@@ -33,6 +34,13 @@ describe('SlaScannerWorker phase isolation', () => {
   const feedbackEscalation = { scan: jest.fn().mockResolvedValue(0) };
   // Retention is a no-op unless LOCATION_TRAIL_RETENTION_DAYS is configured.
   const locationTrail = { purgeOlderThanRetention: jest.fn().mockResolvedValue({ configured: false, deleted: 0 }) };
+  // The roster data-integrity scan. Quiet by default: nothing found, nothing written.
+  const dataIntegrity = {
+    scan: jest.fn().mockResolvedValue({
+      findings: 0, inserted: 0, reopened: 0, updated: 0,
+      unchanged: 0, skippedResolved: 0, suppressed: 0, autoClosed: 0,
+    }),
+  };
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -44,6 +52,7 @@ describe('SlaScannerWorker phase isolation', () => {
         { provide: DeskEscalationService, useValue: deskEscalation },
         { provide: FeedbackEscalationService, useValue: feedbackEscalation },
         { provide: LocationTrailService, useValue: locationTrail },
+        { provide: DataIntegrityService, useValue: dataIntegrity },
         { provide: EmailDigestService, useValue: { run: jest.fn() } },
         // The money-chain phases: unapproved payouts, attended-but-unclosed audits, and the
         // booking reconcile that used to run only when somebody pressed a button. Quiet by
@@ -88,6 +97,7 @@ describe('SlaScannerWorker phase isolation', () => {
     expect(deskEscalation.scan).toHaveBeenCalledTimes(1);
     expect(feedbackEscalation.scan).toHaveBeenCalledTimes(1);
     expect(locationTrail.purgeOlderThanRetention).toHaveBeenCalledTimes(1);
+    expect(dataIntegrity.scan).toHaveBeenCalledTimes(1);
   });
 
   it('still runs the later scans when the first phase throws', async () => {
@@ -98,6 +108,27 @@ describe('SlaScannerWorker phase isolation', () => {
     // The point: every later phase ran despite phase 1 failing.
     expect(assignmentService.autoDeclineExpiredOffers).toHaveBeenCalledTimes(1);
     expect(hrWorkforceService.credentialsExpiringWithin).toHaveBeenCalledTimes(1);
+    expect(deskEscalation.scan).toHaveBeenCalledTimes(1);
+    expect(feedbackEscalation.scan).toHaveBeenCalledTimes(1);
+    expect(locationTrail.purgeOlderThanRetention).toHaveBeenCalledTimes(1);
+    expect(dataIntegrity.scan).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let a broken data-integrity scan starve the other phases', async () => {
+    // The newest phase, held to the same rule as the rest: a throw stays contained to it —
+    // the money-chain notifications and SLA escalations for that tick must still go out.
+    dataIntegrity.scan.mockRejectedValueOnce(new Error('issues table gone'));
+
+    await worker.runScan(anyJob).then(
+      () => { throw new Error('expected runScan to reject'); },
+      (err: any) => {
+        expect(err).toBeInstanceOf(AggregateError);
+        expect(err.message).toContain('data integrity scan');
+      },
+    );
+
+    expect(assignmentService.checkSlaBreaches).toHaveBeenCalledTimes(1);
+    expect(assignmentService.autoDeclineExpiredOffers).toHaveBeenCalledTimes(1);
     expect(deskEscalation.scan).toHaveBeenCalledTimes(1);
     expect(feedbackEscalation.scan).toHaveBeenCalledTimes(1);
     expect(locationTrail.purgeOlderThanRetention).toHaveBeenCalledTimes(1);

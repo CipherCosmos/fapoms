@@ -59,6 +59,12 @@ export interface ImportReport {
    * has no such notion, simply reports nothing here.
    */
   revived?: ImportRowNote[];
+  /**
+   * Facts about the file rather than a row — chiefly a column heading the importer did not
+   * recognise, whose data was dropped without being counted as skipped. Shown prominently,
+   * because the run otherwise reads as a clean success.
+   */
+  notes?: string[];
 }
 
 /** Live counters while a queued import runs. */
@@ -332,6 +338,11 @@ export function summariseImport(report: ImportReport): ImportSummary {
     };
   }
 
+  // A dropped column is not a success, however many rows landed: the operator has to know before
+  // they move on, so it decides the tone rather than sitting in a disclosure.
+  if ((report.notes ?? []).length > 0) {
+    return { tone: 'warning', text: head, notes: report.notes, sections: rowSections(report) };
+  }
   return { tone: 'success', text: head, sections: rowSections(report) };
 }
 

@@ -1,9 +1,25 @@
 import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { card, label, Stat, Empty, Table, OpenLink, fmtDate } from './hr-ui';
+import { card, label, Stat, Empty, OpenLink, fmtDate, attritionExplainer } from './hr-ui';
+import { DataTable } from '../../components/ui';
 import type { HrWorkforceOverview } from '../../hooks/useHrWorkforce';
 import { useHr } from './HrLayout';
 import { assayerLifecycleLabel } from '@fapoms/shared';
+
+/**
+ * What each departure mode is called on screen.
+ *
+ * `assayerLifecycleLabel` covers the lifecycle values, but two of these are not lifecycle values:
+ * a death is filed as INACTIVE with a reason, and LEFT is the honest answer where a record carries
+ * a leaving date and nothing saying why. Falling through to the lifecycle labeller for those two
+ * printed the raw enum at a person's name.
+ */
+const DEPARTURE_MODE_LABEL: Record<string, string> = {
+  RESIGNED: 'Resigned',
+  TERMINATED: 'Terminated',
+  DECEASED: 'Died in service',
+  LEFT: 'Left — reason not recorded',
+};
 
 /**
  * How loaded one assayer is. Not a stored status — the backend derives it per person from
@@ -17,6 +33,21 @@ const WORKLOAD_POSTURE: Record<string, string> = {
   UNDER_UTILIZED: 'Room for more',
   BALANCED: 'Balanced',
   OVER_UTILIZED: 'Over capacity',
+};
+
+/**
+ * The colour a workload figure is printed in.
+ *
+ * Lifted out of the row so the percentage and the status word beside it cannot come out in
+ * different colours — they are the same judgement twice. `noWorkYet` stands the amber down: when
+ * nothing has been assigned to anybody, every row is "idle" and a screen of amber reads as an
+ * accusation aimed at people who were never given work.
+ */
+const workloadTone = (posture: string, noWorkYet: boolean): string => {
+  if (noWorkYet) return 'var(--text-muted)';
+  if (posture === 'OVER_UTILIZED') return 'var(--danger)';
+  if (posture === 'UNDER_UTILIZED' || posture === 'IDLE') return 'var(--warning)';
+  return 'var(--success)';
 };
 
 /**
@@ -34,6 +65,7 @@ const UtilisationTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate:
   // amber "idle" and "0%" reads as an accusation. Say once, at the top, why it is all zero and
   // where work is created, and stand the per-person amber down for the same reason.
   const noWorkYet = p.totalAssignments === 0 && d.utilisation.idleCount === d.utilisation.neverAssigned;
+  const attrition = attritionExplainer(d.attrition);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
       {noWorkYet && (
@@ -74,25 +106,35 @@ const UtilisationTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate:
         {d.utilisation.utilization.length === 0 ? (
           <Empty>Nobody is on the active roster yet, so there is no workload to measure. Add people in Roster first.</Empty>
         ) : (
-          <Table
-            // "Loaded" and "Util %" are the model's words, not a clerk's: "Loaded 3 / 6" reads as a
-            // fraction of nothing in particular, and "Util %" is an abbreviation of a word this
-            // audience does not use. The headers now say what the cell beneath them contains.
-            head={['Assayer', 'Location', 'Jobs now / can take', 'Spare capacity', 'Share of capacity used', 'Status', '']}
-            rows={d.utilisation.utilization.map((r) => {
-              const tone = noWorkYet ? 'var(--text-muted)' :
-                r.posture === 'OVER_UTILIZED' ? 'var(--danger)' :
-                r.posture === 'UNDER_UTILIZED' || r.posture === 'IDLE' ? 'var(--warning)' : 'var(--success)';
-              return [
-                <strong>{r.displayName}</strong>,
-                [r.district, r.state].filter(Boolean).join(', ') || '—',
-                `${r.currentAllocation} / ${r.weeklyCapacity}`,
-                r.remainingCapacity > 0 ? `${r.remainingCapacity} free` : 'at limit',
-                <strong style={{ color: tone }}>{r.utilizationPercentage}%</strong>,
-                <span style={{ color: tone, fontSize: '11px', fontWeight: 600 }}>{WORKLOAD_POSTURE[r.posture] ?? r.posture}</span>,
-                <OpenLink onClick={() => navigate(`/assayers/${r.id}`)} />,
-              ];
-            })}
+          <DataTable
+            density="compact"
+            minWidth={false}
+            rows={d.utilisation.utilization}
+            rowKey={(r) => r.id}
+            columns={[
+              // "Loaded" and "Util %" are the model's words, not a clerk's: "Loaded 3 / 6" reads as
+              // a fraction of nothing in particular, and "Util %" is an abbreviation of a word this
+              // audience does not use. The headers say what the cell beneath them contains.
+              { key: 'who', header: 'Assayer', render: (r) => <strong>{r.displayName}</strong> },
+              { key: 'where', header: 'Location', render: (r) => <>{[r.district, r.state].filter(Boolean).join(', ') || '—'}</> },
+              { key: 'load', header: 'Jobs now / can take', render: (r) => <>{r.currentAllocation} / {r.weeklyCapacity}</> },
+              { key: 'spare', header: 'Spare capacity', render: (r) => <>{r.remainingCapacity > 0 ? `${r.remainingCapacity} free` : 'at limit'}</> },
+              {
+                key: 'pct',
+                header: 'Share of capacity used',
+                render: (r) => <strong style={{ color: workloadTone(r.posture, noWorkYet) }}>{r.utilizationPercentage}%</strong>,
+              },
+              {
+                key: 'posture',
+                header: 'Status',
+                render: (r) => (
+                  <span style={{ color: workloadTone(r.posture, noWorkYet), fontSize: '12px', fontWeight: 600 }}>
+                    {WORKLOAD_POSTURE[r.posture] ?? r.posture}
+                  </span>
+                ),
+              },
+              { key: 'open', header: '', render: (r) => <OpenLink onClick={() => navigate(`/assayers/${r.id}`)} /> },
+            ]}
           />
         )}
       </section>
@@ -104,16 +146,25 @@ const UtilisationTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate:
         {d.utilisation.idle.length === 0 ? (
           <Empty>Everyone on the active roster has had work in the last {d.utilisation.idleAfterDays} days.</Empty>
         ) : (
-          <Table
-            head={['Assayer', 'Location', 'Last assignment', 'Idle', 'Lifetime jobs', '']}
-            rows={d.utilisation.idle.map((r) => [
-              <strong>{r.displayName}</strong>,
-              r.state ?? '—',
-              r.lastAssignmentDate ? fmtDate(r.lastAssignmentDate) : <span style={{ color: 'var(--warning)' }}>never</span>,
-              r.daysIdle === null ? '—' : `${r.daysIdle}d`,
-              r.totalAssignments ?? 0,
-              <OpenLink onClick={() => navigate(`/assayers/${r.id}`)} />,
-            ])}
+          <DataTable
+            density="compact"
+            minWidth={false}
+            rows={d.utilisation.idle}
+            rowKey={(r) => r.id}
+            columns={[
+              { key: 'who', header: 'Assayer', render: (r) => <strong>{r.displayName}</strong> },
+              { key: 'where', header: 'Location', render: (r) => <>{r.state ?? '—'}</> },
+              {
+                key: 'last',
+                header: 'Last assignment',
+                render: (r) => (r.lastAssignmentDate
+                  ? <>{fmtDate(r.lastAssignmentDate)}</>
+                  : <span style={{ color: 'var(--warning)' }}>never</span>),
+              },
+              { key: 'idle', header: 'Idle', render: (r) => <>{r.daysIdle === null ? '—' : `${r.daysIdle}d`}</> },
+              { key: 'total', header: 'Lifetime jobs', render: (r) => <>{r.totalAssignments ?? 0}</> },
+              { key: 'open', header: '', render: (r) => <OpenLink onClick={() => navigate(`/assayers/${r.id}`)} /> },
+            ]}
           />
         )}
       </section>
@@ -125,21 +176,68 @@ const UtilisationTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate:
           <Stat value={d.attrition.exits12m} caption="Exits (12 months)" />
           <Stat value={d.attrition.terminations} caption="Terminations" />
           <Stat value={d.attrition.joins90d} caption="Joins (90 days)" />
+          {/*
+            The same percentage the Overview tile prints, so it gets the same sentence under it —
+            this one said "as a percentage of the people on the books" and named no numbers at
+            all, which is a description of a formula rather than an account of this figure.
+          */}
           <Stat value={`${d.attrition.attritionRate12m}%`} caption="Share of the roster, past year"
-            hint="Exits in the last 12 months as a percentage of the people on the books" />
+            hint={attrition.hint} />
         </div>
+        {/*
+          The leavers the percentage cannot hold, printed beside the exit counts they contradict.
+          "Exits (12 months)" and "Share of the roster" both leave these people out, and this is
+          the only screen that shows the two side by side — so it is the screen where the gap
+          would otherwise look like an error in one of them.
+        */}
+        {attrition.unaccounted && (
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.5, marginBottom: '12px' }}>
+            {attrition.unaccounted}
+          </div>
+        )}
         {d.attrition.recent.length === 0 ? (
           <Empty>
             Nobody has left. People appear here once an exit or termination date is recorded on their record;
             joining and exit dates are largely unfilled today, so tenure figures are thin.
           </Empty>
         ) : (
-          <Table
-            head={['Assayer', 'State', 'Joined', 'Left', 'Mode']}
-            rows={d.attrition.recent.map((r) => [
-              <strong>{r.displayName}</strong>, r.state ?? '—', fmtDate(r.joiningDate), fmtDate(r.exitDate),
-              <span style={{ color: r.mode === 'TERMINATED' ? 'var(--danger)' : 'var(--text-muted)', fontSize: '11px', fontWeight: 600 }}>{assayerLifecycleLabel(r.mode)}</span>,
-            ])}
+          <DataTable
+            density="compact"
+            minWidth={false}
+            rows={d.attrition.recent}
+            rowKey={(r) => r.id}
+            columns={[
+              { key: 'who', header: 'Assayer', render: (r) => <strong>{r.displayName}</strong> },
+              { key: 'state', header: 'State', render: (r) => <>{r.state ?? '—'}</> },
+              { key: 'joined', header: 'Joined', render: (r) => <>{fmtDate(r.joiningDate)}</> },
+              { key: 'left', header: 'Left', render: (r) => <>{fmtDate(r.exitDate)}</> },
+              {
+                key: 'mode',
+                header: 'How they left',
+                /**
+                 * Four outcomes, not two.
+                 *
+                 * The server derived this from `termination_date`, a column that is NULL on every
+                 * row, so every departure arrived here as 'RESIGNED' and the TERMINATED branch of
+                 * this very expression was unreachable. On the live roster that mislabelled 315 of
+                 * 421 departures — including three people who had died, listed as resigned. It
+                 * reads from the lifecycle now, and can also say DECEASED, or LEFT where a record
+                 * carries a leaving date and nothing saying why.
+                 *
+                 * DECEASED is deliberately not coloured as a danger: red here marks a decision
+                 * that went badly, and a bereavement is not one. Plain tone, honest word.
+                 */
+                render: (r) => (
+                  <span style={{
+                    color: r.mode === 'TERMINATED' ? 'var(--danger)' : 'var(--text-muted)',
+                    fontSize: '12px',
+                    fontWeight: 600,
+                  }}>
+                    {DEPARTURE_MODE_LABEL[r.mode] ?? assayerLifecycleLabel(r.mode)}
+                  </span>
+                ),
+              },
+            ]}
           />
         )}
       </section>

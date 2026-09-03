@@ -3,6 +3,10 @@ import * as FileSystem from 'expo-file-system';
 import Constants from 'expo-constants';
 import { AssignmentStatus, calculateHaversineDistance } from '@fapoms/shared';
 import { readToken, writeToken, deleteToken, ALL_TOKEN_KEYS } from './token-store';
+// Imported from the runtime module rather than the `../i18n` barrel: the barrel also exports the
+// React hooks, which pull in `services/preferences` and, through it, this file's own siblings.
+import { t } from '../i18n/i18n';
+import { serverErrorText } from '../i18n/server-errors';
 import { AssayerAssignment, AppNotification, AssayerExpense, ExpenseSummary, AssayerStatement, QueryMessage } from '../types/mobile-app';
 import {
   getDefaultServerUrl,
@@ -18,6 +22,43 @@ export interface NotificationPreference {
   inApp: boolean;
   push: boolean;
   email: boolean;
+}
+
+/**
+ * One piece of paperwork on the assayer's own registration checklist.
+ *
+ * Mirrors what `GET /assayers/:id/registration-checklist` returns. Note what is NOT here: the
+ * server's legacy `softCopyReceived` flag, which is set on thousands of rows that have no file
+ * behind them because it records what an old spreadsheet claimed. `hasScan` is the only thing
+ * that means a document has actually arrived, and it is the only signal this app is given.
+ */
+export interface RegistrationChecklistItem {
+  /** An `OnboardingDocument` code. Used in the upload path; never shown to the assayer. */
+  requirement: string;
+  /** The document's name in plain English, from the server's own label map. */
+  label: string;
+  /** Accepted if offered but never chased — alternates like a passport or a voter ID. */
+  optional: boolean;
+  identity: boolean;
+  hasScan: boolean;
+  fileCount: number;
+  verificationStatus: 'PENDING' | 'VERIFIED' | 'REJECTED' | null;
+  expiryDate: string | null;
+  hasNumber: boolean;
+}
+
+export interface RegistrationChecklist {
+  items: RegistrationChecklistItem[];
+  summary: {
+    required: number;
+    received: number;
+    outstanding: number;
+    /**
+     * Progress, never permission. Registration is completed by HR from the desk and nothing in
+     * the app waits on this — see the note on the route itself.
+     */
+    complete: boolean;
+  };
 }
 
 
@@ -87,6 +128,22 @@ export class MobileApiService {
   static currentUserName: string | null = null;
   /** Set from the profile read during `validateSession`, so a restored session knows it too. */
   static mustChangePassword = false;
+
+  /**
+   * Raised when the server answers a request with "change your password first". `AuthContext`
+   * subscribes so the gate can go up mid-session, not only at the next cold start.
+   */
+  static onPasswordChangeRequired: (() => void) | null = null;
+
+  /**
+   * Raised when the server says this session may only finish its own registration.
+   *
+   * Mirrors `mustChangePassword` above, and is reset the same way — on sign-out and on a fresh
+   * sign-in — so a second person using the same handset does not inherit it.
+   */
+  static registrationInProgress = false;
+
+  static onRegistrationInProgress: (() => void) | null = null;
 
   /** Returns the API origin URL (e.g., http://localhost:3000) for resolving relative attachment URLs */
   static getApiOrigin(): string {
@@ -177,6 +234,9 @@ export class MobileApiService {
     this.currentUserId = null;
     this.currentUserName = null;
     this.mustChangePassword = false;
+    // Cleared with the session, not left standing: a shared handset is normal here, and the next
+    // person to sign in must not inherit a gate raised for somebody else.
+    this.registrationInProgress = false;
     ALL_TOKEN_KEYS.forEach((k) => void deleteToken(k));
   }
 
@@ -436,7 +496,58 @@ export class MobileApiService {
         response = await this.fetchWithTimeout(cacheBust, { ...options, headers }, timeoutMs);
       }
     }
+    if (response.status === 403) await this.noticeGateFrom403(response);
     return response;
+  }
+
+  /**
+   * Raises the forced-password-change gate when the server says that is what a 403 meant.
+   *
+   * That 403 is neither a permissions failure nor a dead session — it means "come back after one
+   * specific action" — and it carries `code: PASSWORD_CHANGE_REQUIRED` to say exactly that.
+   * Nothing here read the code, and `mustChangePassword` was only ever re-read by
+   * `validateSession` at cold start, so a password reset issued by HR while the app was open
+   * stranded the assayer: the gate never rose, every route 403'd, and the screens that swallow a
+   * failed read into an empty collection (schedule, notifications) just showed nothing at all.
+   * The only way through was to force-quit and relaunch, which is not a thing to ask of somebody
+   * standing at a branch counter.
+   *
+   * Read through a clone so the caller still receives an untouched body. If cloning or parsing
+   * fails the detection is skipped rather than risking the response somebody is waiting on —
+   * the cold-start path still catches it, which is exactly today's behaviour.
+   */
+  private static async noticeGateFrom403(response: Response): Promise<void> {
+    let code: string | undefined;
+    try {
+      code = (await response.clone().json())?.code;
+    } catch {
+      return;
+    }
+
+    if (code === 'PASSWORD_CHANGE_REQUIRED') {
+      // Only on the transition. Every subsequent request is gated too, and re-notifying on each
+      // one would rebuild the user object — and re-render the app — once per blocked call.
+      if (this.mustChangePassword) return;
+      this.mustChangePassword = true;
+      this.onPasswordChangeRequired?.();
+      return;
+    }
+
+    /**
+     * The other gate that means "come back after one specific action".
+     *
+     * An assayer still registering can now sign in, into a session confined to finishing that
+     * registration — so every ordinary screen answers 403 with `REGISTRATION_IN_PROGRESS`. Without
+     * reading it, the app behaved exactly as it did before the forced-password gate was wired: a
+     * successful sign-in followed by an empty schedule, an empty notification list, and no route
+     * to the one screen the session exists for. Signing somebody in and then showing them nothing
+     * is worse than the refusal it replaced, because at least the refusal said why.
+     */
+    if (code === 'REGISTRATION_IN_PROGRESS') {
+      if (this.registrationInProgress) return;
+      this.registrationInProgress = true;
+      this.onRegistrationInProgress?.();
+    }
   }
 
   /**
@@ -447,7 +558,20 @@ export class MobileApiService {
    * every assayer's bcrypt hash and personal details to anyone who could reach
    * the API. The server now answers for one identifier and returns only a name.
    */
-  static async verifyAssayerIdentity(identifier: string): Promise<{ verified: boolean; assayer?: any; error?: string }> {
+  static async verifyAssayerIdentity(identifier: string): Promise<{
+    /**
+     * Whether this identifier can go on to the password step — not whether the person exists.
+     *
+     * The distinction matters for the one case below: somebody recognised, on the roster, who has
+     * never been issued a sign-in. They are not unknown, but there is no password for them to
+     * type, so the screen must stop here rather than wave them at a field that can only fail.
+     */
+    verified: boolean;
+    /** Recognised, but no credential has ever been issued. `error` says who can fix that. */
+    needsAppAccess?: boolean;
+    assayer?: any;
+    error?: string;
+  }> {
     try {
       const response = await this.fetchWithTimeout(`${API_BASE_URL}/auth/verify-assayer`, {
         method: 'POST',
@@ -456,14 +580,31 @@ export class MobileApiService {
       }, 20_000);
       const data = await response.json().catch(() => ({}));
       if (!response.ok || !data?.success) {
-        return { verified: false, error: data?.message || 'Unable to reach the server.' };
+        return { verified: false, error: serverErrorText(data?.message, 'errors.serverUnreachable') };
       }
       if (!data.data?.verified) {
-        return { verified: false, error: 'That identifier was not recognised.' };
+        return { verified: false, error: t('login.identifierNotRecognised') };
+      }
+      /**
+       * Recognised, but with no sign-in issued — its own answer, not the not-recognised one.
+       *
+       * The old code reached the return below for these people: the screen confirmed their
+       * identifier, showed their real name, and the password step then always answered "Invalid
+       * credentials", because the login endpoint cannot tell a missing password hash from a wrong
+       * password and returns the same message for both. The name is still handed back so the screen
+       * can address them by it while explaining that access has not been issued yet.
+       */
+      if (data.data?.needsAppAccess) {
+        return {
+          verified: false,
+          needsAppAccess: true,
+          assayer: data.data,
+          error: t('login.needsAppAccess'),
+        };
       }
       return { verified: true, assayer: data.data };
     } catch (err: any) {
-      return { verified: false, error: err?.message || 'Network error.' };
+      return { verified: false, error: serverErrorText(err?.message, 'errors.network') };
     }
   }
 
@@ -665,10 +806,20 @@ export class MobileApiService {
   /**
    * The assayer confirms their base location on the map from their device GPS.
    *
-   * Distinct from `updateAssayerProfile` on purpose: this hits the base-location route, which
-   * stores the fix as a MANUAL pin the nightly geocoder never overwrites. Saving the same
-   * coordinate through the generic profile update would leave it re-geocodable — the next sweep
-   * would move the person back to the wrong place the roster had put them.
+   * Distinct from `updateAssayerProfile` because of WHERE it is offered, not because the other
+   * route would store the pin differently. Both produce a manual pin the nightly geocoder leaves
+   * alone: `updateAssayer` passes `suppliedIsManual` whenever a request carries a coordinate pair,
+   * and `resolveCoordinates` turns that into `geoSource: 'manual'` — so the Profile → Address
+   * editor is exactly as durable as this banner.
+   *
+   * This comment used to claim the opposite, that the generic update left the pin re-geocodable
+   * and the next sweep would move the person back. That was never true — the wiring predates the
+   * comment by two weeks — and it cost real time: an audit of this app reported the asymmetry as
+   * a live defect on the strength of these lines alone. `assayer-manual-pin.spec.ts` now holds
+   * the claim down on the backend side so it cannot drift back into being a guess.
+   *
+   * What IS specific to this route: it is the one an assayer reaches from the home screen when
+   * the server flags their coordinate, taking the fix straight from device GPS.
    */
   static async confirmBaseLocation(
     assayerId: string,
@@ -1518,18 +1669,88 @@ export class MobileApiService {
     }
   }
 
-  /*
-   * `uploadGovernmentDocument` was removed here.
+  // ── Registration paperwork ──────────────────────────────────────────────
+  //
+  // This replaces `uploadGovernmentDocument`, which used to sit here and POST to
+  // `/assayers/:id/government-document` — a route that has never existed on the API. It had no
+  // callers, so it was dead code aimed at a 404, and its presence made identity upload look
+  // implemented when no screen did it. The two methods below use the routes that are actually
+  // there. Keep them pointed at those paths.
+
+  /**
+   * What paperwork this person still owes HR.
    *
-   * It POSTed to `/assayers/:id/government-document`, which has never existed on the API — the
-   * real routes are `PUT /assayers/:assayerId/document/:requirement` and
-   * `POST /assayers/:assayerId/document/:requirement/file`. It also had no callers anywhere in
-   * the app, so it was dead code aimed at a 404: it could only ever have failed, and its
-   * presence suggested identity upload was implemented when nothing on any screen did it.
+   * Reads `assayers/:id/registration-checklist`, which exists because every other route over
+   * these rows is staff-only: the app could post a scan and then had no way to ask whether it
+   * had landed. A requirement counts as satisfied only when a file is attached — the server
+   * deliberately does not return the legacy `softCopyReceived` flag, which is true on thousands
+   * of rows with nothing behind them.
    *
-   * Uploading identity documents from the phone is a real gap, not a solved one. Adding it means
-   * wiring the two routes above, not restoring this.
+   * Returns `null` rather than throwing on any failure. This screen is an optional convenience;
+   * a person whose checklist will not load must still be able to use the rest of the app, and
+   * HR can complete their registration from the desk regardless.
    */
+  static async getRegistrationChecklist(): Promise<RegistrationChecklist | null> {
+    const id = this.currentUserId;
+    if (!id) return null;
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/${id}/registration-checklist`);
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data?.success) return null;
+      return data.data as RegistrationChecklist;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Attach one scan to one requirement on this person's own record.
+   *
+   * Multipart with the part named `file`, because that is the field the server's
+   * `FileInterceptor('file', ...)` reads; anything else arrives as "no file was uploaded". The
+   * server derives the storage key itself and appends it to `file_paths`, which is what makes
+   * the requirement count as met.
+   *
+   * The path carries the assayer id and the server checks it against the caller, so this can
+   * only ever write to the signed-in person's own file.
+   */
+  static async uploadRegistrationDocument(
+    requirement: string,
+    file: { uri?: string; name?: string; type?: string; blob?: any },
+  ): Promise<{ success: boolean; error?: string }> {
+    const id = this.currentUserId;
+    if (!id) return { success: false, error: 'You are not signed in.' };
+    try {
+      const formData = new FormData();
+      const name = file.name || `${requirement}_${Date.now()}.jpg`;
+      if (Platform.OS === 'web') {
+        formData.append('file', file.blob ?? (file as any));
+      } else {
+        formData.append('file', {
+          uri: file.uri,
+          name,
+          type: file.type || 'image/jpeg',
+        } as any);
+      }
+
+      const headers: Record<string, string> = {};
+      if (this.authToken) headers['Authorization'] = `Bearer ${this.authToken}`;
+
+      const response = await this.fetchWithTimeout(
+        `${API_BASE_URL}/assayers/${id}/document/${encodeURIComponent(requirement)}/file`,
+        { method: 'POST', headers, body: formData },
+        120_000,
+      );
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data?.success) return { success: true };
+      // The server's own words where it has any — it explains the size ceiling and the accepted
+      // file types far better than a generic failure, and a worker who photographed a document
+      // in bad light needs to be told that, not "upload failed".
+      return { success: false, error: data?.message || 'The document did not reach the office.' };
+    } catch (err: any) {
+      return { success: false, error: err?.message || 'No connection. It will be sent again later.' };
+    }
+  }
 
   /**
    * Uploads the assayer's completed audit PDF as raw binary.
@@ -1685,6 +1906,11 @@ export class MobileApiService {
       const response = await this.fetchWithAuth(`${API_BASE_URL}/documents/${documentId}/download-token`);
       const data = await response.json().catch(() => ({}));
       if (response.status === 401) {
+        // English on purpose, here and in the NETWORK branch below. These are transport
+        // sentinels: `src/i18n/server-errors.ts` recognises them by their normalised English
+        // text and hands the call site a translated sentence, so translating them at source
+        // would break the only thing that makes them translatable at all. The `reason` beside
+        // each is the durable contract — a call site keying off that needs no string matching.
         return { ok: false, reason: 'SESSION_EXPIRED', message: 'Your session has expired. Please log out and sign in again.' };
       }
       if (!response.ok || !data?.success || !data?.data?.token) {

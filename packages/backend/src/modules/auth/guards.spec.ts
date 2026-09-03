@@ -100,6 +100,10 @@ describe('Authorization guards — deny by default', () => {
     beforeEach(() => { spy = jest.spyOn(parentProto, 'canActivate').mockResolvedValue(true); });
     afterEach(() => spy.mockRestore());
 
+    // The shape validateJwtPayload builds for a field account — the flag rides the principal.
+    const assayerPrincipal = (mustChangePassword: boolean) =>
+      ({ id: 'a-1', roles: [{ name: 'ASSAYER' }], mustChangePassword });
+
     it('blocks an ordinary route when a staff user still owes a password change', async () => {
       const guard = new JwtAuthGuard(reflectorReturning({}) as any);
       await expect(
@@ -107,16 +111,50 @@ describe('Authorization guards — deny by default', () => {
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('allows an exempt route (change-password, logout, get-me) even while pending', async () => {
+    /**
+     * The field-workforce half of the rule. The assayer principal used to carry no flag at all,
+     * so the entire mobile population was exempt — the group the rule matters most for, since
+     * the bulk import seeded one shared default password (`assayer123`) onto every account it
+     * created and every HR reset issues a temporary password that HR knows. Restoring the old
+     * flag-less principal in validateJwtPayload would make this fail.
+     */
+    it('blocks an ordinary route when an ASSAYER principal still owes a password change', async () => {
+      const guard = new JwtAuthGuard(reflectorReturning({}) as any);
+      await expect(guard.canActivate(ctx(assayerPrincipal(true)))).rejects.toThrow(ForbiddenException);
+    });
+
+    it('allows an exempt route (change-password, own profile, logout) even while pending', async () => {
       const guard = new JwtAuthGuard(reflectorReturning({ [PASSWORD_CHANGE_EXEMPT_KEY]: true }) as any);
       await expect(
         guard.canActivate(ctx({ id: 'u-1', mustChangePassword: true })),
       ).resolves.toBe(true);
+      // The same escape hatch must hold for the assayer, or enforcement becomes a lockout loop:
+      // every route 403s, including the only route that clears the 403.
+      await expect(guard.canActivate(ctx(assayerPrincipal(true)))).resolves.toBe(true);
     });
 
-    it('does not touch a user who need not change, nor an assayer (no flag)', async () => {
+    /**
+     * The refusal must be tellable apart from "no permission" and from a dead session. The
+     * mobile client signs the user out on auth failures during session validation; a client
+     * that can read `code` routes to the change-password screen instead. The message stays
+     * what the web already displays.
+     */
+    it('names itself: the 403 body carries code PASSWORD_CHANGE_REQUIRED', async () => {
+      const guard = new JwtAuthGuard(reflectorReturning({}) as any);
+      try {
+        await guard.canActivate(ctx(assayerPrincipal(true)));
+        fail('expected a ForbiddenException');
+      } catch (e: any) {
+        expect(e.getResponse().code).toBe('PASSWORD_CHANGE_REQUIRED');
+        expect(e.message).toMatch(/change your password/i);
+      }
+    });
+
+    it('does not touch a principal whose flag is false or absent (staff or assayer)', async () => {
       const guard = new JwtAuthGuard(reflectorReturning({}) as any);
       await expect(guard.canActivate(ctx({ id: 'u-2' }))).resolves.toBe(true);
+      await expect(guard.canActivate(ctx(assayerPrincipal(false)))).resolves.toBe(true);
+      // A principal cached before the flag existed carries no key at all; it must pass, not 403.
       await expect(guard.canActivate(ctx({ id: 'a-1', roles: [{ name: 'ASSAYER' }] }))).resolves.toBe(true);
     });
   });

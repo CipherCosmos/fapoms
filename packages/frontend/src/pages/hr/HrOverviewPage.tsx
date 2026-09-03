@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, CheckCircle2 } from 'lucide-react';
-import { card, label, Stat, Bar, SEVERITY, actionAreaLabel } from './hr-ui';
+import { card, label, Stat, Bar, SEVERITY, actionAreaLabel, attritionExplainer } from './hr-ui';
 import type { HrAction, HrWorkforceOverview } from '../../hooks/useHrWorkforce';
 import { useHr, resolveHrDestination } from './HrLayout';
 
@@ -19,6 +19,7 @@ const OverviewTabBody = ({ d, onJump }: { d: HrWorkforceOverview; onJump: (to: s
   const neverWorked =
     d.utilisation.performance.totalAssignments === 0 &&
     d.utilisation.idleCount === d.utilisation.neverAssigned;
+  const attrition = attritionExplainer(d.attrition);
   return (
   <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
     <section>
@@ -47,8 +48,8 @@ const OverviewTabBody = ({ d, onJump }: { d: HrWorkforceOverview; onJump: (to: s
                 <AlertTriangle size={15} style={{ color: s.fg, flexShrink: 0, marginTop: '2px' }} />
                 <div style={{ minWidth: 0 }}>
                   <div style={{ display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '3px' }}>
-                    <span style={{ fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: s.bg, color: s.fg }}>{s.label}</span>
-                    <span style={{ ...label, fontSize: '10px' }}>{actionAreaLabel(a.area)}</span>
+                    <span style={{ fontSize: '12px', fontWeight: 700, padding: '1px 6px', borderRadius: '4px', background: s.bg, color: s.fg }}>{s.label}</span>
+                    <span style={{ ...label, fontSize: '12px' }}>{actionAreaLabel(a.area)}</span>
                   </div>
                   <div style={{ fontSize: '13px', fontWeight: 600 }}>{a.title}</div>
                   <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px' }}>{a.detail}</div>
@@ -103,12 +104,26 @@ const OverviewTabBody = ({ d, onJump }: { d: HrWorkforceOverview; onJump: (to: s
       <Stat
         value={`${d.attrition.attritionRate12m}%`}
         caption="Left in the past year"
-        // The denominator the rate was actually divided by. This used to quote
-        // `headcount.total`, a different population — so a tile reading 25% was explained
-        // underneath by two numbers that work out to 20%.
-        hint={`${d.attrition.exits12m} ${d.attrition.exits12m === 1 ? 'person has' : 'people have'} left in the last 12 months, out of ${d.attrition.averageHeadcount12m} on the roster over that period`}
+        // The denominator the rate was actually divided by, and the leavers it cannot account
+        // for. Both sentences come from hr-ui so the Workload screen, which prints the same
+        // percentage, cannot explain it differently — see attritionExplainer.
+        hint={attrition.hint}
       />
     </section>
+
+    {/*
+      Said on the page, not only on hover.
+
+      A percentage with 25 people missing from underneath it is not a footnote: it is the first
+      question anyone will ask when the exit count on the Workload screen does not reconcile with
+      it. A tooltip is a fine place for the arithmetic and a poor place for a caveat that changes
+      what the number means.
+    */}
+    {attrition.unaccounted && (
+      <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.5, marginTop: '-6px' }}>
+        {attrition.unaccounted}
+      </div>
+    )}
 
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '14px' }}>
       <section style={card}>
@@ -137,7 +152,7 @@ const OverviewTabBody = ({ d, onJump }: { d: HrWorkforceOverview; onJump: (to: s
                 <Bar pct={f.pct} tone={f.pct === 100 ? 'var(--success)' : f.critical ? 'var(--danger)' : 'var(--warning)'} />
           </div>
         ))}
-        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '10px' }}>
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '10px' }}>
           <span style={{ color: 'var(--danger)' }}>*</span> blocks payroll, statutory filing or duty-of-care
         </div>
       </section>

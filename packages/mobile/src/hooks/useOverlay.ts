@@ -42,7 +42,9 @@ export type Overlay =
   | { name: 'feedback' }
   | { name: 'notifications' }
   /** The durable upload outbox — carries no subject; it lists every packet, across branches. */
-  | { name: 'uploads' };
+  | { name: 'uploads' }
+  /** The assayer's own registration paperwork. No subject: it is always about themselves. */
+  | { name: 'registration' };
 
 export type OverlayName = Overlay['name'];
 

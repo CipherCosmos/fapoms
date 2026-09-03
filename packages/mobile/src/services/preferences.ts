@@ -1,4 +1,9 @@
 import { readPreference, writePreference } from './token-store';
+import {
+  DEFAULT_LANGUAGE_PREFERENCE,
+  isLanguagePreference,
+  type LanguagePreference,
+} from '../i18n/locale-resolution';
 
 /**
  * Device-level settings an assayer controls from the Profile screen.
@@ -13,6 +18,7 @@ import { readPreference, writePreference } from './token-store';
  *   soundAlerts   — notification.service, before playing the alert chime
  *   biometrics    — LoginScreen, before offering biometric sign-in
  *   haptics       — reserved for tactile feedback on field actions
+ *   language      — i18n, on every launch, before the first screen renders
  *
  * Push notifications are deliberately NOT here: that switch has a server-side effect
  * (registering or removing this handset's FCM token), so it is handled in the API layer
@@ -34,6 +40,16 @@ export interface DevicePreferences {
    * and keeps it correct offline. Written only after the server accepts the change.
    */
   pushEnabled: boolean;
+  /**
+   * Which language the app renders in: `system`, or an explicit choice.
+   *
+   * The one preference here that is not a boolean, and it is here rather than alongside the
+   * theme in `ThemeProvider` because it has to be readable *synchronously* from non-React code
+   * — the same reason the chime and the biometric switch live here. A sentence produced by the
+   * upload outbox or the notification service needs the active language without awaiting a
+   * file read.
+   */
+  language: LanguagePreference;
 }
 
 export const DEFAULT_PREFERENCES: DevicePreferences = {
@@ -55,6 +71,14 @@ export const DEFAULT_PREFERENCES: DevicePreferences = {
   biometrics: false,
   haptics: true,
   pushEnabled: true,
+  /**
+   * Follow the handset, rather than defaulting to English.
+   *
+   * A phone already set to Hindi is the clearest statement of preference this app will ever
+   * get, and it arrives before the assayer has seen a single screen — which matters most for
+   * exactly the person who would struggle to find a language setting written in English.
+   */
+  language: DEFAULT_LANGUAGE_PREFERENCE,
 };
 
 const KEY_PREFIX = 'fapoms_pref_';
@@ -64,6 +88,24 @@ const KEYS: Record<keyof DevicePreferences, string> = {
   biometrics: `${KEY_PREFIX}biometrics`,
   haptics: `${KEY_PREFIX}haptics`,
   pushEnabled: `${KEY_PREFIX}push_enabled`,
+  language: `${KEY_PREFIX}language`,
+};
+
+/**
+ * How each stored string becomes a value.
+ *
+ * Everything here used to be a boolean and one `parseBool` covered the lot. `language` is a
+ * small enum, and it is parsed through the same validity check the rest of the app uses, so a
+ * preferences file hand-edited to `language: "ta"` — or written by a future build that shipped
+ * a locale this one does not have — falls back to the default instead of pointing the
+ * translator at a catalogue that is not there.
+ */
+const PARSERS: { [K in keyof DevicePreferences]: (raw: string | null) => DevicePreferences[K] } = {
+  soundAlerts: (raw) => parseBool(raw, DEFAULT_PREFERENCES.soundAlerts),
+  biometrics: (raw) => parseBool(raw, DEFAULT_PREFERENCES.biometrics),
+  haptics: (raw) => parseBool(raw, DEFAULT_PREFERENCES.haptics),
+  pushEnabled: (raw) => parseBool(raw, DEFAULT_PREFERENCES.pushEnabled),
+  language: (raw) => (isLanguagePreference(raw) ? raw : DEFAULT_PREFERENCES.language),
 };
 
 /**
@@ -86,7 +128,7 @@ export async function loadPreferences(): Promise<DevicePreferences> {
   const entries = await Promise.all(
     (Object.keys(KEYS) as (keyof DevicePreferences)[]).map(async (k) => {
       const raw = await readPreference(KEYS[k]).catch(() => null);
-      return [k, parseBool(raw, DEFAULT_PREFERENCES[k])] as const;
+      return [k, PARSERS[k](raw)] as const;
     }),
   );
   cache = entries.reduce((acc, [k, v]) => ({ ...acc, [k]: v }), { ...DEFAULT_PREFERENCES });

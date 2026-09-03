@@ -5,11 +5,13 @@ import { AppText, Badge, Button, Card, EmptyState, FadeIn, GroupedRow, GroupedSe
 import { AssignmentStatus, assignmentStatusLabel, formatRupees as money, formatDateOnly } from '@fapoms/shared';
 import { assignmentStatusTone } from '../utils/statusTone';
 import { relativeDay, RelativeDay } from '../utils/dates';
+import { useT, t } from '../i18n';
 import { StatsScreen } from './StatsScreen';
 import { countOpenQueries, countResolvedQueries } from '../utils/queries';
 import { assignmentFeeValue } from '../utils/fees';
 import type { AssayerAssignment, AssayerStatement, ExpenseSummary } from '../types/mobile-app';
 import { LocationConfirmBanner } from '../components/LocationConfirmBanner';
+import { RegistrationPapersBanner } from '../components/RegistrationPapersBanner';
 
 export interface HomeScreenProps {
   assignments: AssayerAssignment[];
@@ -40,6 +42,14 @@ export interface HomeScreenProps {
   assayerId?: string;
   locationNeedsConfirmation?: boolean;
   onLocationConfirmed?: () => void;
+  /**
+   * Registration paperwork the office is still waiting for, and any scan whose upload failed.
+   * Both default to zero, so a checklist that did not load simply shows no banner — this is an
+   * optional shortcut and must never be in anybody's way.
+   */
+  papersOutstanding?: number;
+  papersFailed?: number;
+  onOpenRegistration?: () => void;
 }
 
 const isSameDay = (iso: string, day: Date): boolean => {
@@ -53,9 +63,9 @@ const isSameDay = (iso: string, day: Date): boolean => {
 
 const greeting = (): string => {
   const h = new Date().getHours();
-  if (h < 12) return 'Good morning';
-  if (h < 17) return 'Good afternoon';
-  return 'Good evening';
+  if (h < 12) return t('home.greetingMorning');
+  if (h < 17) return t('home.greetingAfternoon');
+  return t('home.greetingEvening');
 };
 
 /**
@@ -89,8 +99,12 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   assayerId,
   locationNeedsConfirmation,
   onLocationConfirmed,
+  papersOutstanding = 0,
+  papersFailed = 0,
+  onOpenRegistration,
 }) => {
   const t = useTheme();
+  const tr = useT();
 
   const { current, offers, todays, openQueries, resolvedQueries } = useMemo(() => {
     const today = new Date();
@@ -152,6 +166,19 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       )}
 
       {/*
+        Registration paperwork. Below the location banner rather than above it: a missing map pin
+        stops work being sent to this person at all, while missing papers are handled at the desk
+        either way — so if both are showing, the one that actually costs them jobs is on top.
+      */}
+      {onOpenRegistration && (
+        <RegistrationPapersBanner
+          outstanding={papersOutstanding}
+          failed={papersFailed}
+          onOpen={onOpenRegistration}
+        />
+      )}
+
+      {/*
         Says plainly that the screen is not live. Without this an assayer in a vault cannot
         tell "no work today" apart from "the app could not reach the server" — and those two
         call for opposite actions.
@@ -169,11 +196,13 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         >
           <Icon name="cloud-offline-outline" size={16} color={t.colors.warning} />
           <AppText variant="small" tone="warning" style={{ flex: 1 }}>
-            Showing your last synced schedule
-            {lastSyncedAt
-              ? ` from ${new Date(lastSyncedAt).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' })}`
-              : ''}
-            . Pull down to retry.
+            {tr('home.stale', {
+              since: lastSyncedAt
+                ? tr('home.staleSince', {
+                    time: new Date(lastSyncedAt).toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' }),
+                  })
+                : '',
+            })}
           </AppText>
         </View>
       )}
@@ -192,14 +221,14 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
         <Card level={1}>
           <EmptyState
             icon="checkmark-done-circle-outline"
-            title="Nothing scheduled"
-            body="You have no open assignments. New work will appear here as soon as it is assigned."
+            title={tr('home.emptyTitle')}
+            body={tr('home.emptyBody')}
           />
         </Card>
       ) : null}
 
       {offers.length > 0 && (
-        <Section title={offers.length === 1 ? 'New offer' : `New offers (${offers.length})`}>
+        <Section title={offers.length === 1 ? tr('home.oneOffer') : tr('home.manyOffers', { count: offers.length })}>
           <View style={{ gap: t.space.md }}>
             {/* Staggered entrance, matching ScheduleScreen's assignment list — this was the one
                 list of rows in the app with a hard cut while its sibling screen crossfades in,
@@ -218,11 +247,11 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
               <Tappable
                 onPress={onSeeSchedule}
                 accessibilityRole="button"
-                accessibilityLabel={`See all ${offers.length} offers`}
+                accessibilityLabel={tr('home.seeAllOffers', { count: offers.length })}
               >
                 <View style={{ alignItems: 'center', paddingVertical: t.space.sm }}>
                   <AppText variant="caption" tone="primary">
-                    See all {offers.length} offers
+                    {tr('home.seeAllOffers', { count: offers.length })}
                   </AppText>
                 </View>
               </Tappable>
@@ -232,20 +261,20 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
       )}
 
       <Section
-        title="Today"
+        title={tr('home.today')}
         action={
           todays.length > 0 ? (
             <Tappable
               onPress={onSeeSchedule}
               accessibilityRole="button"
-              accessibilityLabel={`See all ${todays.length} assignments scheduled today`}
+              accessibilityLabel={tr('home.seeAllToday', { count: todays.length })}
               // The default 8px Tappable hitSlop is fine on a big card, but this is a bare
               // caption sitting in a section header — padding gives it a real touch target
               // instead of relying entirely on hitSlop for a one-handed outdoor tap.
               style={{ paddingVertical: t.space.xs, paddingHorizontal: t.space.xs }}
             >
               <AppText variant="caption" tone="primary">
-                See all
+                {tr('home.seeAll')}
               </AppText>
             </Tappable>
           ) : undefined
@@ -263,32 +292,32 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
           <GroupedRow
             icon="calendar-outline"
             tone="primary"
-            label="Scheduled today"
+            label={tr('home.scheduledToday')}
             value={String(todays.length)}
             onPress={onSeeSchedule}
             chevron
-            accessibilityLabel={`Scheduled today: ${todays.length}`}
+            accessibilityLabel={tr('home.scheduledTodayValue', { count: todays.length })}
           />
           <GroupedRow
             icon="help-circle-outline"
             tone={openQueries > 0 ? 'warning' : 'neutral'}
-            label="Open queries"
+            label={tr('home.openQueries')}
             value={String(openQueries)}
             onPress={onSeeQueries}
             chevron
-            accessibilityLabel={`Open queries: ${openQueries}`}
+            accessibilityLabel={tr('home.openQueriesValue', { count: openQueries })}
           />
           <GroupedRow
             icon="wallet-outline"
             tone="accent"
-            label="Balance due to you"
+            label={tr('home.balance')}
             value={statement ? money(statement.totals.outstanding) : statementError ? '—' : '…'}
           />
           {expenseSummary.pending > 0 && (
             <GroupedRow
               icon="receipt-outline"
               tone="info"
-              label="Claims awaiting approval"
+              label={tr('home.claimsPending')}
               value={money(expenseSummary.pending)}
             />
           )}
@@ -329,6 +358,7 @@ const AssignmentMeta: React.FC<{
   fee?: number;
 }> = ({ assignment, when, fee }) => {
   const t = useTheme();
+  const tr = useT();
   return (
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: t.space.sm }}>
       {/* Urgency first: overdue reads danger, today accent, tomorrow warning. */}
@@ -339,10 +369,10 @@ const AssignmentMeta: React.FC<{
         <Meta icon="calendar-outline" label={formatDateOnly(assignment.scheduledDate, { day: 'numeric', month: 'short' })} />
       )}
       {assignment.distanceKm != null && (
-        <Meta icon="navigate-outline" label={`${assignment.distanceKm.toFixed(1)} km`} />
+        <Meta icon="navigate-outline" label={tr('home.distanceKm', { km: assignment.distanceKm.toFixed(1) })} />
       )}
       {assignment.estimatedCustomerCount > 0 && (
-        <Meta icon="people-outline" label={`${assignment.estimatedCustomerCount} customers`} />
+        <Meta icon="people-outline" label={tr('home.customers', { count: assignment.estimatedCustomerCount })} />
       )}
       {fee != null && fee > 0 && <Meta icon="wallet-outline" label={money(fee)} />}
     </View>
@@ -364,6 +394,7 @@ const OfferCard: React.FC<{
   onDecline: () => void;
 }> = ({ assignment, busy, onAccept, onDecline }) => {
   const t = useTheme();
+  const tr = useT();
   const fee = assignmentFeeValue(assignment);
   const subtitle = [assignment.bankName, assignment.solId].filter(Boolean).join(' · ');
   // Accepting an offer is a commitment to a date; "Tomorrow" and "In 3 days" are different
@@ -385,8 +416,8 @@ const OfferCard: React.FC<{
       <AssignmentMeta assignment={assignment} when={when} fee={fee} />
 
       <View style={{ flexDirection: 'row', gap: t.space.sm }}>
-        <Button label="Accept" icon="checkmark" loading={busy} disabled={busy} onPress={onAccept} style={{ flex: 1 }} />
-        <Button label="Decline" icon="close" variant="neutral" disabled={busy} onPress={onDecline} style={{ flex: 1 }} />
+        <Button label={tr('home.accept')} icon="checkmark" loading={busy} disabled={busy} onPress={onAccept} style={{ flex: 1 }} />
+        <Button label={tr('home.decline')} icon="close" variant="neutral" disabled={busy} onPress={onDecline} style={{ flex: 1 }} />
       </View>
     </Card>
   );
@@ -403,6 +434,7 @@ const CurrentJobCard: React.FC<{
   onNavigate: () => void;
 }> = ({ assignment, busy, onOpen, onCheckIn, onCheckOut, onScan, onNavigate }) => {
   const t = useTheme();
+  const tr = useT();
   const checkedIn = assignment.status === 'CHECKED_IN' || assignment.status === 'IN_PROGRESS';
   const subtitle = [assignment.bankName, assignment.solId].filter(Boolean).join(' · ');
   // "Today" / "In 8 days" / "3 days overdue" — the calendar arithmetic done for the assayer.
@@ -442,9 +474,9 @@ const CurrentJobCard: React.FC<{
       <View style={{ gap: t.space.sm }}>
         {/* The one glowing CTA on the screen — the next real-world step for the current job. */}
         {checkedIn ? (
-          <Button label="Scan audited return" icon="scan-outline" onPress={onScan} glow full />
+          <Button label={tr('home.scanReturn')} icon="scan-outline" onPress={onScan} glow full />
         ) : (
-          <Button label="Check in at branch" icon="location-outline" onPress={onCheckIn} glow full />
+          <Button label={tr('home.checkIn')} icon="location-outline" onPress={onCheckIn} glow full />
         )}
         {/*
           Directions disappear once the assayer is checked in — they are standing in the
@@ -454,7 +486,7 @@ const CurrentJobCard: React.FC<{
         */}
         <View style={{ flexDirection: 'row', gap: t.space.sm }}>
           {!checkedIn && (
-            <Button label="Navigate" icon="navigate" variant="neutral" onPress={onNavigate} style={{ flex: 1 }} />
+            <Button label={tr('home.navigate')} icon="navigate" variant="neutral" onPress={onNavigate} style={{ flex: 1 }} />
           )}
           {/*
             Check-out takes the slot Navigate vacates once the assayer is on site — the row is
@@ -462,9 +494,9 @@ const CurrentJobCard: React.FC<{
             still the primary action, because leaving the branch is not what finishes the job.
           */}
           {checkedIn && onCheckOut && (
-            <Button label="Check out" icon="log-out-outline" variant="neutral" onPress={onCheckOut} style={{ flex: 1 }} />
+            <Button label={tr('home.checkOut')} icon="log-out-outline" variant="neutral" onPress={onCheckOut} style={{ flex: 1 }} />
           )}
-          <Button label="Details" icon="chevron-forward" variant="neutral" onPress={onOpen} style={{ flex: 1 }} />
+          <Button label={tr('home.details')} icon="chevron-forward" variant="neutral" onPress={onOpen} style={{ flex: 1 }} />
         </View>
       </View>
     </Card>

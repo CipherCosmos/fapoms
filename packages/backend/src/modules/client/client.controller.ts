@@ -225,6 +225,7 @@ export class ClientController {
    */
   @Get(':clientId/qualified-assayers')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'Every plannable assayer scored for this partner, best first' })
   async qualifiedAssayers(
     @Param('clientId', ParseUUIDPipe) clientId: string,

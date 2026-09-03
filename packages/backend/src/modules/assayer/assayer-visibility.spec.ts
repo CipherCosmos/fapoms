@@ -25,15 +25,42 @@ describe('assayer field visibility', () => {
     expect(out).not.toHaveProperty('passwordHash');
   });
 
+  /**
+   * These roles KEEP the fields — that is what separates them from the desk, which has the keys
+   * deleted outright — but they receive the last four digits rather than the whole number.
+   *
+   * The change this test records: the numbers used to arrive whole, so a single
+   * `GET /assayers?limit=1000` handed one session every appraiser's PAN and bank account, with
+   * nothing anywhere recording that it happened. `GET /assayers/:id/sensitive/:field` is now the
+   * only way to the whole value and it writes an audit row naming who asked.
+   *
+   * Note what is NOT masked: `emergencyContactPhone` and the rest of the identity block. There is
+   * no last-4 of a next-of-kin number that is any use to somebody who has to ring it.
+   */
   it.each([SystemRole.ADMIN, SystemRole.OPERATIONS])(
-    '%s sees identity and banking — they onboard assayers and pay them',
+    '%s sees identity and banking, masked to the last four — they onboard assayers and pay them',
     (role) => {
       const out = scopeAssayerForRoles(record, [role]) as any;
-      expect(out.panNumber).toBe('ABCDE1234F');
-      expect(out.bankAccountNumber).toBe('123456789');
+      expect(out.panNumber).toBe('******234F');
+      expect(out.bankAccountNumber).toBe('*****6789');
+      expect(out.aadhaarNumber).toBe('**********3333');
       expect(out.emergencyContactPhone).toBe('9999999999');
     },
   );
+
+  /**
+   * The subject is not masked from themselves.
+   *
+   * Masking exists because a staff session can pull a thousand people's numbers in one request.
+   * A principal that can only fetch its own row is not that risk, and there is no reveal route
+   * for it to fall back on — `sensitive/:field` is ADMIN/OPERATIONS only. Masking here would
+   * point the control at the one person the numbers belong to.
+   */
+  it('an assayer reading their own record sees their own numbers whole', () => {
+    const out = scopeAssayerForRoles(record, [SystemRole.ASSAYER], true) as any;
+    expect(out.panNumber).toBe('ABCDE1234F');
+    expect(out.bankAccountNumber).toBe('123456789');
+  });
 
   /**
    * The widening this consolidation cost, stated as a test rather than left implicit.

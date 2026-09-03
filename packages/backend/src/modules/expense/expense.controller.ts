@@ -14,7 +14,7 @@ import { IsString, IsOptional, IsNumber, IsEnum, IsBoolean, Min } from 'class-va
 
 import { ExpenseService } from './expense.service';
 import { ExpenseCategory, ExpenseStatus } from './expense.entity';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
@@ -58,6 +58,10 @@ export class ExpenseController {
 
   @Post('assignments/:assignmentId/expenses')
   @Roles(SystemRole.ASSAYER, ...STAFF_ROLES)
+  // This route and the three that follow carry no @RequirePermissions on purpose: they admit
+  // SystemRole.ASSAYER, who authenticates from the `assayers` table and holds no permission rows,
+  // so any declaration would be checked against an empty set and lock the mobile app out of
+  // raising and reading its own claims.
   @ApiOperation({ summary: 'Raise a reimbursement claim against an assignment' })
   async create(
     @Param('assignmentId', ParseUUIDPipe) assignmentId: string,
@@ -106,6 +110,11 @@ export class ExpenseController {
 
   @Get('expenses/pending')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  // There is no EXPENSE resource, and inventing one is not on offer. A claim is a billing object:
+  // `ExpenseService.review` writes an `assayer_payables` row in the same transaction as the
+  // approval, and `GET billing-engine/payouts` lists it alongside fee payables. So the money
+  // vocabulary is the honest one — reads take `billing:view`, the decision takes `billing:approve`.
+  @RequirePermissions('billing:view:organization')
   @ApiOperation({ summary: 'Claims awaiting a decision' })
   async findPending(@GlobalScopeFilter() scope?: GlobalScope) {
     return { success: true, data: await this.expenseService.findPending(scope) };
@@ -113,6 +122,7 @@ export class ExpenseController {
 
   @Get('assayers/:assayerId/expenses')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR)
+  @RequirePermissions('billing:view:organization')
   @ApiOperation({ summary: "One assayer's claim history" })
   async findForAssayer(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
@@ -125,6 +135,7 @@ export class ExpenseController {
   // Approving reimbursement commits money, so this is narrower than the read routes above.
   @Post('expenses/:expenseId/review')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('billing:approve:organization')
   @ApiOperation({ summary: 'Approve or reject a claim' })
   async review(
     @Param('expenseId', ParseUUIDPipe) expenseId: string,

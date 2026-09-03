@@ -90,6 +90,25 @@ class ClarificationWorklistQuery {
   limit?: number;
 }
 
+/**
+ * Clarification threads between the desk and the field.
+ *
+ * Not one route here declares `@RequirePermissions`, and that is a finding rather than an
+ * oversight: with the grant table as it stands, every one of them would have to name a permission
+ * one of its own roles does not hold.
+ *
+ * Fourteen routes admit `SystemRole.ASSAYER`, who authenticates from the `assayers` table and
+ * holds no permission rows at all — the whole point of the mobile clarification screen. Two more
+ * (`worklist`, `worklist/by-assayer`) spread `STAFF_ROLES`, which carries PRODUCT_SUPPORT with no
+ * grants and OPERATIONS and AUDITOR with no VALIDATION grants. The last three — raise, resolve and
+ * reopen a clarification — admit DESK_OPERATOR, the validator whose job this is, who holds
+ * VALIDATION VIEW and REVIEW but neither CREATE nor EDIT.
+ *
+ * So a custom role reaches none of this until either an assayer principal can hold a grant or
+ * DESK_OPERATOR is granted the write it already exercises here by name. Declaring `validation:view`
+ * on the three write routes would clear the scanner and hand a read-only custom role the ability to
+ * resolve clarifications, which is worse than the gap.
+ */
 @ApiTags('Validation Queries')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)

@@ -1,20 +1,24 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Edit2, ArrowRightLeft, AlertTriangle, CheckCircle2,
-  User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, MapPin, KeyRound, ShieldCheck, FileCheck, Gauge,
+  User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, MapPin, KeyRound, ShieldCheck, FileCheck, Gauge, Info,
 } from 'lucide-react';
-import { nextAssayerLifecycleStates, AssayerLifecycleStatus, assayerLifecycleLabel, activityEventLabel, employmentTypeLabel, AssayerEngagementType, AssayerUnavailableReason, ASSAYER_RECORD_FIELDS } from '@fapoms/shared';
+import { nextAssayerLifecycleStates, nextOnboardingStep, AssayerLifecycleStatus, assayerLifecycleLabel, activityEventLabel, employmentTypeLabel, AssayerEngagementType, AssayerUnavailableReason, ASSAYER_RECORD_FIELDS } from '@fapoms/shared';
 
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../../services/api';
-import { Select, useConfirm } from '../../components/ui';
+import { useConfirm, AlertBanner, SkeletonList } from '../../components/ui';
 import { useToast } from '../../components/ui/Toast';
+import { GeoPrecisionBadge, geoNeedsFixing } from '../../components/GeoPrecisionBadge';
+import { PinCoordinateControl } from '../../components/PinCoordinateControl';
 import type { Assayer } from './assayer-shared';
 import {
   STATUS_COLORS, money, missingCriticalFields,
   fieldLabelStyle as label,
-  buildAssayerEditBody, changedFormKeys,
+  buildAssayerEditBody, changedFormKeys, onboardingNextStep,
+  isSensitiveKey, maskedIdentifier, type SensitiveRecordKey,
 } from './assayer-shared';
+import { SensitiveValue } from './SensitiveValue';
 import { EDIT_FIELDS, useManagerOptions, type FieldDef } from './AssayerForms';
 import { fmtDate, fmtWhen } from '../../utils/dates';
 import { userMessage } from '../../services/errors';
@@ -38,6 +42,34 @@ const ENGAGEMENT_LABELS: Record<string, string> = {
   [AssayerEngagementType.MYSTERY_AUDIT]: 'Mystery audits',
 };
 
+/**
+ * Why a freshly issued credential will not work, in words that fit the actual reason.
+ *
+ * This card used to carry one sentence for every case — "they can sign in once their stage is
+ * moved to Active" — which was written when the four onboarding stages were the ones locked out.
+ * They are not any more: onboarding can sign in, into a session confined to their own
+ * registration. The stages that genuinely cannot sign in today are the ones below, and none of
+ * them is waiting on onboarding to finish. Telling a suspended person's manager to "move them to
+ * Active" is advice about the wrong problem, and telling it about somebody who has resigned is
+ * advice about a person who is not coming back.
+ *
+ * Anything not listed here can sign in, so a missing key means the fallback beneath is being
+ * asked a question the server has already answered `canSignInNow: false` to — say the plain
+ * thing and let the reader look at the stage.
+ */
+const SIGN_IN_CLOSED_REASON: Partial<Record<AssayerLifecycleStatus, string>> = {
+  [AssayerLifecycleStatus.SUSPENDED]:
+    'It will not work while they are suspended. Sign-in opens again when their record goes back to Active.',
+  [AssayerLifecycleStatus.INACTIVE]:
+    'It will not work while their record is on hold. Sign-in opens again when they go back to Active.',
+  [AssayerLifecycleStatus.RESIGNED]:
+    'It will not work — they have left, and sign-in is closed on their record.',
+  [AssayerLifecycleStatus.TERMINATED]:
+    'It will not work — their employment has ended, and sign-in is closed on their record.',
+  [AssayerLifecycleStatus.ARCHIVED]:
+    'It will not work — their record has been closed and archived, and sign-in closed with it.',
+};
+
 const UNAVAILABLE_LABELS: Record<string, string> = {
   [AssayerUnavailableReason.REJECTED_BY_US]: 'We rejected them',
   [AssayerUnavailableReason.NOT_INTERESTED]: 'Not interested',
@@ -50,16 +82,14 @@ const UNAVAILABLE_LABELS: Record<string, string> = {
 };
 
 /**
- * Aadhaar shown as the last four digits only.
+ * Who this record belongs to, and whether the reader may uncover a KYC identifier on it.
  *
- * Enough to confirm which document is on file, which is the only reason this screen shows it.
- * The whole number is a KYC identifier and is reachable through the edit form by the two roles
- * entitled to it — printing it on a summary anyone with the record open can read over is not.
+ * A context rather than a prop threaded through `FactGroup` into `Facts`: which fields are
+ * sensitive is decided by `isSensitiveKey`, so a row moved from one group to another must keep
+ * its treatment. Passing the permission per group would have made that a per-group decision, and
+ * the failure mode of getting it wrong is a whole Aadhaar printed on screen.
  */
-const maskAadhaar = (v?: string | null): string | null => {
-  const digits = String(v ?? '').replace(/\D/g, '');
-  return digits.length >= 4 ? `•••• •••• ${digits.slice(-4)}` : null;
-};
+const SensitiveCtx = React.createContext<{ assayerId: string; canReveal: boolean } | null>(null);
 
 /**
  * Everything about one person, on its own page.
@@ -79,7 +109,14 @@ const maskAadhaar = (v?: string | null): string | null => {
 
 const TABS = [
   { key: 'summary', label: 'Summary', icon: User },
-  { key: 'commercial', label: 'Pay', icon: CreditCard },
+  /*
+    ONE NAME FOR ONE THING. This tab was "Pay" here, "Pay & terms" on the section's own tab strip
+    (HrLayout), and its contents were called "pay structures" — three names for the same screen,
+    and a clerk told to "check their pay terms" had to work out that all three were it. The
+    destination is "Pay & terms" everywhere it is named; the rows in it are "pay structures"
+    everywhere they are named. The `commercial` key is internal and never shown.
+  */
+  { key: 'commercial', label: 'Pay & terms', icon: CreditCard },
   { key: 'skills', label: 'Skills', icon: Award },
   // Two tabs over one fetch. They answer one question together — may we send this person out,
   // and to whom — but they are looked for by different names: somebody chasing a missing NDA
@@ -195,8 +232,6 @@ export const AssayerRecord: React.FC<{
   assayerId: string;
   canManage: boolean;
   onClose: () => void;
-  /** @deprecated editing is now inline on the record; kept optional for callers not yet updated. */
-  onEdit?: (a: Assayer) => void;
   onChanged: () => void;
   /**
    * Bumped by the roster whenever this record has been changed anywhere — an edit saved, a
@@ -234,6 +269,16 @@ export const AssayerRecord: React.FC<{
   const [busy, setBusy] = useState(false);
   const [target, setTarget] = useState('');
   const [reason, setReason] = useState('');
+  /**
+   * The ONE place this page reports something the reader has to act on.
+   *
+   * It was two places on one screen: a failed save arrived as a toast in the corner, while a
+   * failed stage move and a failed password reset arrived as a red strip above the tabs. Same
+   * screen, same person, same kind of failure, two different things to look at — and the toast
+   * takes itself away after a few seconds, so a save that did not happen could vanish before it
+   * was read. Everything that needs a decision now lands here and stays until dismissed;
+   * `toast()` keeps only the transient confirmations ("3 changes saved").
+   */
   const [err, setErr] = useState<string | null>(null);
   const [payModal, setPayModal] = useState<{ open: boolean; profile: CommercialProfile | null }>({ open: false, profile: null });
   const { confirm, confirmDialog } = useConfirm();
@@ -255,12 +300,33 @@ export const AssayerRecord: React.FC<{
   const snapshotEdit = (rec: Assayer): Record<string, string> => {
     const f: Record<string, string> = {};
     for (const key of SUMMARY_EDIT_KEYS) {
+      /**
+       * A masked identifier never enters the form.
+       *
+       * PAN, Aadhaar and bank account arrive from the server as `••••••234F`. Seeding a box with
+       * that would make the mask the starting point of an edit, and a clerk correcting one digit
+       * would save the mask plus a digit over a real KYC number. Empty here, filled by the reveal
+       * — see `revealSensitive`, and `SensitiveValue` for the control that does it.
+       */
+      if (isSensitiveKey(key)) { f[key] = ''; continue; }
       let val = (rec as any)[key];
       if (key === 'dateOfBirth' || key === 'joiningDate') val = val ? new Date(val).toISOString().split('T')[0] : '';
       else val = val !== null && val !== undefined ? String(val) : '';
       f[key] = val;
     }
     return f;
+  };
+
+  /**
+   * The real value arriving from a deliberate reveal, seeded into BOTH the box and the baseline.
+   *
+   * Both, because the diff in `changedFormKeys` decides what a save sends: seeding only the box
+   * would make the act of looking at somebody's PAN count as a change to it, and every reveal
+   * would re-write the column it revealed. Uncovering a number is not editing it.
+   */
+  const revealSensitive = (key: string, full: string) => {
+    setEditForm((f) => ({ ...f, [key]: full }));
+    setEditInitial((f) => ({ ...f, [key]: full }));
   };
 
   const startEdit = () => {
@@ -272,24 +338,29 @@ export const AssayerRecord: React.FC<{
   const saveEdit = async () => {
     if (!a) return;
     setSavingEdit(true);
+    setErr(null);
     try {
       const changed = changedFormKeys(editForm, editInitial);
       if (changed.length === 0) { setEditing(false); return; }
       const touched: Record<string, string | undefined> = {};
       for (const key of changed) touched[key] = editForm[key];
       const { body, problems } = buildAssayerEditBody(EDIT_FIELDS, touched, a);
-      if (problems.length) { toast({ type: 'error', title: 'Could not save', message: problems.join(' ') }); return; }
+      // Both failure paths go to the banner, not a toast: the form is still open with the
+      // operator's unsaved typing in it, and a message that removes itself after four seconds is
+      // the wrong way to tell somebody their work has not been stored.
+      if (problems.length) { setErr(`Could not save. ${problems.join(' ')}`); return; }
       await api.request(`/assayers/${a.id}`, { method: 'PUT', body: JSON.stringify(body) });
       toast({ type: 'success', title: 'Saved', message: `${counted(changed.length, 'change')} saved.` });
       setEditing(false);
       onChanged();
-    } catch (e) { toast({ type: 'error', title: 'Could not save', message: userMessage(e) }); }
+    } catch (e) { setErr(`Could not save. ${userMessage(e)}`); }
     finally { setSavingEdit(false); }
   };
   const editCtx: EditCtx | undefined = editing
     ? {
         form: editForm,
         set: (key, val) => setEditForm((f) => ({ ...f, [key]: val })),
+        reveal: revealSensitive,
         managers: managerOpts.people ? managerOpts.people.map((p) => ({ id: p.value, name: p.label })) : null,
       }
     : undefined;
@@ -386,36 +457,53 @@ export const AssayerRecord: React.FC<{
   const transitions = a ? nextAssayerLifecycleStates(a.lifecycleStatus) : [];
 
   /**
+   * The one step that carries a joiner forward, singled out from the legal moves around it.
+   *
+   * Everything else in `transitions` is a side road — deactivating somebody mid-onboarding, parking
+   * an active person on leave. This is the move the planner has been asking for on the other screen.
+   */
+  const forwardStep = a ? nextOnboardingStep(a.lifecycleStatus) : null;
+
+  /**
    * Suspension, deactivation, resignation and termination go on an employment record and are
    * what a later dispute or reference check is judged on, so the server refuses them without a
-   * reason. Say so here rather than letting someone press Move and be told no.
+   * reason. Ask for it in front of the button rather than letting someone press it and be told no.
    */
-  const reasonRequired = LIFECYCLE_MOVES_NEEDING_A_REASON.includes(target);
+  const needsReason = (to: string) => LIFECYCLE_MOVES_NEEDING_A_REASON.includes(to);
 
   /**
    * Moving someone's stage, with the consequence stated before it happens.
    *
-   * This used to fire on one click of a button labelled "Move". Suspending, dismissing or
-   * archiving a person are all one dropdown pick away from each other, they all take effect on the
-   * live roster the moment the button is pressed, and none of them can be taken back by picking
-   * the previous stage again — the state machine does not run backwards. So the moves that end
-   * someone's work now ask first, in a dialog that names the person and says what happens to them.
-   * Routine moves (Active, On Leave, the joining steps) are still one click, because making a
-   * clerk confirm every ordinary step is how people learn to click through dialogs unread.
+   * This used to be a dropdown of filing states and a button labelled "Move", which meant walking a
+   * new joiner from INVITED to ACTIVE was four separate picks — and each pick required the clerk to
+   * already know which of eleven stages came next. It is now a button per legal move, so the step
+   * is named rather than looked up.
+   *
+   * WHAT DID NOT CHANGE, deliberately: nothing advances on its own, and there is no button that
+   * walks the whole chain. Each stage is a judgement somebody in HR makes about a real person —
+   * their papers were checked, their background came back, they finished training — and software
+   * that makes four of those at once has made three of them up. The button is a shortcut for a
+   * decision, not a replacement for it.
+   *
+   * Suspending, dismissing or archiving all take effect on the live roster the moment they are
+   * pressed and none can be taken back by choosing the previous stage again — the state machine
+   * does not run backwards — so those ask first, in a dialog naming the person. Routine moves stay
+   * one click, because making a clerk confirm every ordinary step is how people learn to click
+   * through dialogs unread.
    */
-  const move = async () => {
-    if (!target) return;
-    if (a && HARD_TO_REVERSE_STAGES.includes(target)) {
+  const move = async (to: string, why: string) => {
+    if (!to || !a) return;
+    if (HARD_TO_REVERSE_STAGES.includes(to)) {
       const ok = await confirm({
-        title: `Move ${a.displayName} to ${assayerLifecycleLabel(target)}?`,
+        title: `Move ${a.displayName} to ${assayerLifecycleLabel(to)}?`,
         message: (
           <>
-            {STAGE_CONSEQUENCE[target] ?? ''}{' '}
+            {STAGE_CONSEQUENCE[to] ?? ''}{' '}
             {a.displayName} ({a.assayerCode}) is currently {assayerLifecycleLabel(a.lifecycleStatus)}.
             Any work already assigned to them is not cancelled by this — check their assignments separately.
           </>
         ),
-        confirmLabel: `Move to ${assayerLifecycleLabel(target)}`,
+        confirmLabel: `Move to ${assayerLifecycleLabel(to)}`,
         reversible: false,
         reversibleNote: 'The stages only run forwards, so this cannot be put back by choosing the old stage again.',
         tone: 'danger',
@@ -426,7 +514,7 @@ export const AssayerRecord: React.FC<{
     try {
       await api.request(`/assayers/${assayerId}/lifecycle`, {
         method: 'POST',
-        body: JSON.stringify({ targetStatus: target, reason: reason || `Moved to ${target}` }),
+        body: JSON.stringify({ targetStatus: to, reason: why || `Moved to ${to}` }),
       });
       const fresh = await api.request<Assayer>(`/assayers/${assayerId}`);
       setA(fresh);
@@ -437,8 +525,76 @@ export const AssayerRecord: React.FC<{
     setBusy(false);
   };
 
-  const [tempPassword, setTempPassword] = useState<string | null>(null);
-  const [resetting, setResetting] = useState(false);
+  /**
+   * A move that needs a reason opens its own box instead of firing.
+   *
+   * One reason box for a dropdown was fine; one shared box under a row of buttons is not — it
+   * would sit there empty beside four buttons, three of which do not want it, and the clerk would
+   * have to work out which. Pressing "Move to Inactive" asks why, and nothing else on the panel
+   * changes.
+   */
+  const startMove = (to: string) => {
+    if (needsReason(to)) { setTarget(to); setReason(''); return; }
+    void move(to, '');
+  };
+
+  /**
+   * A credential shown exactly once, from either of the two things that produce one.
+   *
+   * `username`, `canSignInNow` and `accessScope` come from the invitation route and are absent on
+   * a reset; the card renders what it was given, and the undefined case is the reset, which says
+   * nothing about reach because nothing about the person's stage changed. One piece of state
+   * because there is one card, and a screen that could show two different one-time passwords at
+   * once would be a screen where somebody reads out the wrong one.
+   */
+  const [credential, setCredential] = useState<{
+    kind: 'invite' | 'reset';
+    password: string;
+    username?: string;
+    canSignInNow?: boolean;
+    accessScope?: 'FULL' | 'REGISTRATION_ONLY';
+  } | null>(null);
+  const [issuing, setIssuing] = useState<'invite' | 'reset' | null>(null);
+
+  /**
+   * FIRST-TIME APP ACCESS, which was being handed out as a password reset.
+   *
+   * The only route to a credential from this screen was "Reset password" — the recovery path, and
+   * it says so in its own dialog — so giving somebody the app for the first time meant resetting a
+   * password that had never existed. `POST /assayers/:id/app-access` is the invitation.
+   *
+   * It answers two separate questions and the card must read both. `canSignInNow` is whether the
+   * credential works at all; `accessScope` is how far it goes. These were one field meaning
+   * "fully usable", back when the four onboarding stages could not sign in — they can now, into a
+   * session confined to finishing their own registration. So a card reading `canSignInNow` alone
+   * fell silent for exactly the people it existed to warn: the password worked, every ordinary
+   * screen answered 403, and HR heard about it from the assayer's phone call three days later.
+   * Issuing access mid-onboarding is deliberately allowed, because the handover happens while the
+   * person is standing at the desk; the card says what they will and will not be able to do.
+   */
+  const issueAppAccess = async () => {
+    if (issuing) return;
+    setIssuing('invite'); setErr(null); setCredential(null);
+    try {
+      const res = await api.request<{
+        username: string;
+        temporaryPassword: string;
+        canSignInNow: boolean;
+        accessScope: 'FULL' | 'REGISTRATION_ONLY';
+      }>(
+        `/assayers/${assayerId}/app-access`,
+        { method: 'POST', body: JSON.stringify({}) },
+      );
+      setCredential({
+        kind: 'invite',
+        password: res.temporaryPassword,
+        username: res.username,
+        canSignInNow: res.canSignInNow,
+        accessScope: res.accessScope,
+      });
+    } catch (e) { setErr(userMessage(e)); }
+    finally { setIssuing(null); }
+  };
 
   /**
    * Recovery for a field worker who is locked out — they enter client bank vaults on a
@@ -446,7 +602,7 @@ export const AssayerRecord: React.FC<{
    * server returns exactly once; it is read to the assayer and forces a change at next sign-in.
    */
   const resetPassword = async () => {
-    if (resetting) return;
+    if (issuing) return;
     // The old password stops working the instant this runs, and the replacement is shown once and
     // never again. A clerk exploring the drawer could lock a field worker out of the app mid-shift
     // by pressing a button whose label ("Reset password") did not say that anything was destroyed.
@@ -457,25 +613,36 @@ export const AssayerRecord: React.FC<{
       reversible: false,
     });
     if (!ok) return;
-    setResetting(true); setErr(null); setTempPassword(null);
+    setIssuing('reset'); setErr(null); setCredential(null);
     try {
       // The endpoint returns a pre-enveloped body ({ success, temporaryPassword, message }) with no
       // `data` key, so it must be read with withMeta — otherwise api.request unwraps `.data` (undefined)
-      // and the one-time password, which the server never stores readably, is lost.
+      // and the one-time password, which the server never stores readably, is lost. The invitation
+      // route beside it is a normal envelope, which is why only this one carries the flag.
       const res = await api.request<{ temporaryPassword?: string }>(`/assayers/${assayerId}/reset-password`, {
         method: 'POST',
         body: JSON.stringify({}),
         withMeta: true,
       } as any);
-      setTempPassword(res.temporaryPassword ?? '(set, but not returned)');
+      setCredential({ kind: 'reset', password: res.temporaryPassword ?? '(set, but not returned)' });
     } catch (e) { setErr(userMessage(e)); }
-    setResetting(false);
+    finally { setIssuing(null); }
   };
 
   const tone = a ? STATUS_COLORS[a.lifecycleStatus] ?? 'var(--text-muted)' : 'var(--text-muted)';
 
+  /**
+   * Who may uncover a KYC identifier here. `canManage` is ADMIN and OPERATIONS, which is exactly
+   * the pair `GET /assayers/:id/sensitive/:field` admits — so a reader who is shown the button can
+   * always use it, and a reader who cannot is told why rather than being handed a guaranteed 403.
+   */
+  const sensitiveCtx = useMemo(
+    () => ({ assayerId, canReveal: canManage }),
+    [assayerId, canManage],
+  );
+
   return (
-    <>
+    <SensitiveCtx.Provider value={sensitiveCtx}>
       {confirmDialog}
       {/*
         A PAGE, NOT A SLIDE-OVER.
@@ -491,7 +658,16 @@ export const AssayerRecord: React.FC<{
       */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
         {!a ? (
-          <div style={{ padding: '28px' }}>{err ?? 'Loading…'}</div>
+          /*
+            "Loading…" on an otherwise blank page says nothing about what is coming, and the same
+            slot printed the load failure in the same grey, so a record that could not be fetched
+            looked exactly like one that was still fetching. Skeleton for the wait, the shared
+            error banner for the failure.
+          */
+          <div style={{ padding: '20px 18px' }}>
+            <AlertBanner type="error" message={err} onClose={() => setErr(null)} style={{ marginBottom: '14px' }} />
+            {!err && <SkeletonList rows={4} height={70} />}
+          </div>
         ) : (
           <>
             <header style={{ padding: '16px 18px', borderBottom: '1px solid var(--border-color)' }}>
@@ -500,7 +676,7 @@ export const AssayerRecord: React.FC<{
                   <Photograph assayerId={assayerId} name={a.displayName} />
                 <div style={{ minWidth: 0 }}>
                   <h2 style={{ fontSize: '17px', fontWeight: 700, margin: 0 }}>{a.displayName}</h2>
-                  <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '5px', fontSize: '11.5px', color: 'var(--text-muted)' }}>
+                  <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '5px', fontSize: '12px', color: 'var(--text-muted)' }}>
                     <span style={{ fontFamily: 'monospace' }}>{a.assayerCode}</span>
                     <span style={{ color: tone, fontWeight: 700 }}>{assayerLifecycleLabel(a.lifecycleStatus)}</span>
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><MapPin size={10} /> {[a.city, a.state].filter(Boolean).join(', ') || '—'}</span>
@@ -512,25 +688,25 @@ export const AssayerRecord: React.FC<{
               <div style={{ display: 'flex', gap: '6px', marginTop: '12px', flexWrap: 'wrap' }}>
                 {canManage && (editing ? (
                   <>
-                    <button onClick={saveEdit} disabled={savingEdit} className="btn btn-primary" style={{ fontSize: '11.5px', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                    <button onClick={saveEdit} disabled={savingEdit} className="btn btn-primary" style={{ fontSize: '12px', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px' }}>
                       <CheckCircle2 size={12} /> {savingEdit ? 'Saving…' : 'Save changes'}
                     </button>
-                    <button onClick={cancelEdit} disabled={savingEdit} className="btn btn-secondary" style={{ fontSize: '11.5px', padding: '6px 10px' }}>
+                    <button onClick={cancelEdit} disabled={savingEdit} className="btn btn-secondary" style={{ fontSize: '12px', padding: '6px 10px' }}>
                       Cancel
                     </button>
                   </>
                 ) : (
-                  <button onClick={startEdit} className="btn btn-secondary" style={{ fontSize: '11.5px', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px' }}>
+                  <button onClick={startEdit} className="btn btn-secondary" style={{ fontSize: '12px', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px' }}>
                     <Edit2 size={12} /> Edit
                   </button>
                 ))}
                 {a.phone && (
-                  <a href={`tel:${a.phone}`} className="btn btn-secondary" style={{ fontSize: '11.5px', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px', textDecoration: 'none' }}>
+                  <a href={`tel:${a.phone}`} className="btn btn-secondary" style={{ fontSize: '12px', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px', textDecoration: 'none' }}>
                     <Phone size={12} /> Call
                   </a>
                 )}
                 {a.email && (
-                  <a href={`mailto:${a.email}`} className="btn btn-secondary" style={{ fontSize: '11.5px', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px', textDecoration: 'none' }}>
+                  <a href={`mailto:${a.email}`} className="btn btn-secondary" style={{ fontSize: '12px', padding: '6px 10px', display: 'flex', alignItems: 'center', gap: '5px', textDecoration: 'none' }}>
                     <Mail size={12} /> Email
                   </a>
                 )}
@@ -557,11 +733,8 @@ export const AssayerRecord: React.FC<{
             </nav>
 
             <div style={{ flex: 1, overflowY: 'auto', padding: '16px 18px' }}>
-              {err && (
-                <div style={{ padding: '9px 12px', borderRadius: '7px', background: 'var(--status-cancelled-bg)', color: 'var(--danger)', fontSize: '12px', marginBottom: '12px' }}>
-                  {err}
-                </div>
-              )}
+              {/* The single failure channel for this page — see `err` above. */}
+              <AlertBanner type="error" message={err} onClose={() => setErr(null)} style={{ marginBottom: '12px' }} />
 
               {tab === 'summary' && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -575,7 +748,7 @@ export const AssayerRecord: React.FC<{
                     field; it is the reason to stop.
                   */}
                   {a.workDoneBySomeoneElse && (
-                    <div style={{ padding: '11px 13px', borderRadius: '8px', background: 'var(--status-cancelled-bg, rgba(220,80,80,0.10))', border: '1px solid var(--danger)' }}>
+                    <div style={{ padding: '11px 13px', borderRadius: '8px', background: 'var(--status-cancelled-bg)', border: '1px solid var(--danger)' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '7px', color: 'var(--danger)', fontWeight: 700, fontSize: '12.5px' }}>
                         <AlertTriangle size={14} /> Their work is being done by somebody else
                       </div>
@@ -589,7 +762,7 @@ export const AssayerRecord: React.FC<{
                   )}
 
                   {missing.length > 0 && (
-                    <div style={{ padding: '11px 13px', borderRadius: '8px', background: 'var(--status-pending-bg)', border: '1px solid rgba(216,174,71,0.25)' }}>
+                    <div style={{ padding: '11px 13px', borderRadius: '8px', background: 'var(--status-pending-bg)', border: '1px solid color-mix(in srgb, var(--warning) 30%, transparent)' }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '7px', color: 'var(--warning)', fontWeight: 700, fontSize: '12.5px' }}>
                         <AlertTriangle size={14} /> {counted(missing.length, 'required field')} missing
                       </div>
@@ -604,14 +777,14 @@ export const AssayerRecord: React.FC<{
                         is the whole reason there are two.
                       */}
                       {alsoIncomplete.length > 0 && (
-                        <div style={{ marginTop: '7px', fontSize: '11.5px', color: 'var(--text-muted)' }}>
+                        <div style={{ marginTop: '7px', fontSize: '12px', color: 'var(--text-muted)' }}>
                           {counted(alsoIncomplete.length, 'other field is', 'other fields are')} also
                           empty — {alsoIncomplete.map((f) => f.label.toLowerCase()).join(', ')}. Nothing is
                           blocked by them; each is marked where it belongs on this record.
                         </div>
                       )}
                       {canManage && (
-                        <button onClick={startEdit} className="btn btn-secondary" style={{ fontSize: '11.5px', padding: '5px 10px', marginTop: '9px' }}>
+                        <button onClick={startEdit} className="btn btn-secondary" style={{ fontSize: '12px', padding: '5px 10px', marginTop: '9px' }}>
                           Fill them in
                         </button>
                       )}
@@ -626,30 +799,81 @@ export const AssayerRecord: React.FC<{
                     </div>
                   )}
 
+                  {/*
+                    NEXT STEPS, NOT A LIST OF FILING STATES.
+
+                    This was a dropdown of eleven lifecycle names and a button called "Move". Taking
+                    a new joiner from invited to active meant four separate visits to it, and each
+                    one asked the clerk a question the software already knew the answer to: which of
+                    these comes next? Meanwhile the planning screen was printing that answer at them
+                    — "in training, mark training complete on the HR roster to activate" — and the
+                    roster it named said nothing back.
+
+                    So the legal moves are buttons, and the one that carries a joiner forward is the
+                    primary one. Both halves come from rules that already existed and are not
+                    restated here: `nextAssayerLifecycleStates` decides what may be offered at all,
+                    `nextOnboardingStep` picks the forward one out of that set, and STAGE_CONSEQUENCE
+                    says what each does to the person. Nothing advances by itself and no button takes
+                    more than one step — each stage is a judgement about a real human being, and four
+                    of them at once is three that nobody made.
+                  */}
                   {canManage && transitions.length > 0 && (
                     <section>
                       <div style={{ ...label, marginBottom: '7px', display: 'flex', alignItems: 'center', gap: '5px' }}>
-                        <ArrowRightLeft size={11} /> Move to next stage
+                        <ArrowRightLeft size={11} /> What happens next
                       </div>
-                      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-                        <Select
-                          value={target}
-                          onChange={setTarget}
-                          options={transitions.map((t) => ({ value: t, label: assayerLifecycleLabel(t) }))}
-                          placeholder="Choose…"
+                      {/*
+                        What is actually wanted from this person, in the words the rest of the
+                        platform already uses — one map in `@fapoms/shared`, read by the planner's
+                        refusal and by this sentence. A coordinator told on the planning screen that
+                        somebody is "in training — mark training complete on the HR roster to
+                        activate" arrives here and reads it back, above the button that does it.
+                      */}
+                      {onboardingNextStep(a) && (
+                        <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)', marginBottom: '10px', lineHeight: 1.5 }}>
+                          Onboarding is not finished — they are {onboardingNextStep(a)}.
+                        </div>
+                      )}
+
+                      {forwardStep && (
+                        <StageStep
+                          to={forwardStep}
+                          primary
+                          busy={busy}
+                          asking={target === forwardStep}
+                          reason={reason}
+                          onReason={setReason}
+                          onPress={() => startMove(forwardStep)}
+                          onConfirm={() => void move(forwardStep, reason)}
+                          onCancel={() => { setTarget(''); setReason(''); }}
                         />
-                        <input value={reason} onChange={(e) => setReason(e.target.value)}
-                          placeholder={reasonRequired ? 'Why? — goes on their record' : 'Reason (optional)'}
-                          style={{ flex: 1, minWidth: '160px', padding: '7px 10px', fontSize: '12px', borderRadius: '6px', background: 'var(--bg-page)', color: 'inherit', border: `1px solid ${reasonRequired && !reason.trim() ? 'var(--warning)' : 'var(--border-color)'}` }} />
-                        <button onClick={move} disabled={!target || busy || (reasonRequired && !reason.trim())} className="btn btn-primary" style={{ fontSize: '12px', padding: '7px 13px' }}>
-                          {busy ? 'Moving…' : target ? `Move to ${assayerLifecycleLabel(target)}` : 'Move'}
-                        </button>
-                      </div>
-                      {/* The picked stage explained before the button is pressed, not after. */}
-                      {target && STAGE_CONSEQUENCE[target] && (
-                        <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)', marginTop: '7px', lineHeight: 1.5 }}>
-                          {STAGE_CONSEQUENCE[target]}
-                          {reasonRequired && ' A reason is required and is kept on their employment record.'}
+                      )}
+
+                      {/*
+                        The side roads. Kept plainly available and plainly secondary: parking
+                        somebody or ending their engagement is a real thing HR does from this screen,
+                        and it is not what the screen is for.
+                      */}
+                      {transitions.filter((t) => t !== forwardStep).length > 0 && (
+                        <div style={{ marginTop: forwardStep ? '12px' : 0 }}>
+                          {forwardStep && (
+                            <div style={{ ...label, marginBottom: '6px' }}>Or, instead</div>
+                          )}
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                            {transitions.filter((t) => t !== forwardStep).map((t) => (
+                              <StageStep
+                                key={t}
+                                to={t}
+                                busy={busy}
+                                asking={target === t}
+                                reason={reason}
+                                onReason={setReason}
+                                onPress={() => startMove(t)}
+                                onConfirm={() => void move(t, reason)}
+                                onCancel={() => { setTarget(''); setReason(''); }}
+                              />
+                            ))}
+                          </div>
                         </div>
                       )}
                     </section>
@@ -660,20 +884,85 @@ export const AssayerRecord: React.FC<{
                       <div style={{ ...label, marginBottom: '7px', display: 'flex', alignItems: 'center', gap: '5px' }}>
                         <KeyRound size={11} /> Account access
                       </div>
-                      {tempPassword ? (
+                      {credential ? (
                         <div style={{ padding: '10px 12px', borderRadius: '8px', background: 'var(--status-active-bg)', border: '1px solid var(--success)' }}>
-                          <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
+                          {credential.username && (
+                            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '6px' }}>
+                              They sign in as{' '}
+                              <code style={{ fontWeight: 700, userSelect: 'all' }}>{credential.username}</code>
+                            </div>
+                          )}
+                          <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '4px' }}>
                             Temporary password — read it to the assayer now, it will not be shown again:
                           </div>
-                          <code style={{ fontSize: '16px', fontWeight: 700, letterSpacing: '0.02em', color: 'var(--success)', userSelect: 'all' }}>{tempPassword}</code>
-                          <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '5px' }}>
+                          <code style={{ fontSize: '16px', fontWeight: 700, letterSpacing: '0.02em', color: 'var(--success)', userSelect: 'all' }}>{credential.password}</code>
+                          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '5px' }}>
                             They will be asked to choose their own at next sign-in.
                           </div>
+                          {/*
+                            THE ONE THING THIS CARD EXISTS TO SAY, when it applies — and it is two
+                            different things, which is why there are two blocks.
+
+                            This was a single warning gated on `canSignInNow`, written when the
+                            four onboarding stages could not sign in at all. They can now, into a
+                            session that only lets them finish their own registration, so the flag
+                            went true for them and the card fell silent for precisely the people
+                            it existed to warn: HR handed over a password that signs in and then
+                            refuses every screen, and said nothing. The scope is not a warning —
+                            being able to upload your own papers before you start is the point of
+                            it — so it is stated plainly rather than in amber. The warning is kept
+                            for the credential that genuinely does not work, with the reason that
+                            actually applies (see SIGN_IN_CLOSED_REASON).
+                          */}
+                          {credential.canSignInNow === false && (
+                            <div style={{ marginTop: '8px', display: 'flex', gap: '6px', alignItems: 'flex-start', fontSize: '12px', color: 'var(--warning)', lineHeight: 1.5 }}>
+                              <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: '1px' }} />
+                              <span>
+                                {(a && SIGN_IN_CLOSED_REASON[a.lifecycleStatus as AssayerLifecycleStatus])
+                                  ?? 'It will not work at the moment — sign-in is closed on their record. Check their stage before handing this over.'}
+                              </span>
+                            </div>
+                          )}
+                          {credential.canSignInNow !== false && credential.accessScope === 'REGISTRATION_ONLY' && (
+                            <div style={{ marginTop: '8px', display: 'flex', gap: '6px', alignItems: 'flex-start', fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                              <Info size={13} style={{ flexShrink: 0, marginTop: '1px' }} />
+                              <span>
+                                They can sign in with this straight away, but only to finish their
+                                own registration — uploading their papers and their own details.
+                                The rest of the app opens once their joining checks are signed off.
+                              </span>
+                            </div>
+                          )}
+                          <button
+                            onClick={() => setCredential(null)}
+                            className="btn btn-secondary"
+                            style={{ fontSize: '12px', padding: '5px 10px', marginTop: '9px' }}
+                          >
+                            I have read it out
+                          </button>
                         </div>
                       ) : (
-                        <button onClick={resetPassword} disabled={resetting} className="btn btn-secondary" style={{ fontSize: '12px', padding: '7px 13px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                          <KeyRound size={13} /> {resetting ? 'Resetting…' : 'Reset password'}
-                        </button>
+                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+                          {/*
+                            Two buttons for two different jobs, which used to be one.
+
+                            "Reset password" was the only way to get a credential out of this
+                            screen, so first-time access was handed out by resetting a password
+                            that had never existed — and its own dialog says the current password
+                            stops working, which is untrue and alarming for somebody who has never
+                            had one.
+                          */}
+                          <button onClick={issueAppAccess} disabled={!!issuing} className="btn btn-secondary" style={{ fontSize: '12px', padding: '7px 13px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                            <KeyRound size={13} /> {issuing === 'invite' ? 'Creating…' : 'Give them app access'}
+                          </button>
+                          <button onClick={resetPassword} disabled={!!issuing} className="btn btn-secondary" style={{ fontSize: '12px', padding: '7px 13px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                            <KeyRound size={13} /> {issuing === 'reset' ? 'Resetting…' : 'Reset password'}
+                          </button>
+                          <span style={{ fontSize: '12px', color: 'var(--text-muted)', flex: '1 1 220px', lineHeight: 1.5 }}>
+                            The first is for somebody getting the app for the first time; the second
+                            is for somebody locked out of it.
+                          </span>
+                        </div>
                       )}
                     </section>
                   )}
@@ -698,8 +987,8 @@ export const AssayerRecord: React.FC<{
                   {dossierGlance && (
                     <section style={{ background: 'var(--bg-card)', border: '1px solid var(--border-color)', borderRadius: '10px', padding: '12px 16px', marginBottom: '12px' }}>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px', marginBottom: '8px' }}>
-                        <span style={{ fontSize: '11px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)' }}>Banks &amp; standing</span>
-                        <button type="button" onClick={() => setTab('vetting')} style={{ background: 'none', border: 'none', color: 'var(--accent-primary)', fontSize: '11px', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>
+                        <span style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)' }}>Banks &amp; standing</span>
+                        <button type="button" onClick={() => setTab('vetting')} style={{ background: 'none', border: 'none', color: 'var(--accent-primary)', fontSize: '12px', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}>
                           Manage standings
                         </button>
                       </div>
@@ -715,7 +1004,7 @@ export const AssayerRecord: React.FC<{
                           return (
                             <span key={e.id} title={e.statusReason ?? undefined} style={{
                               display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '3px 9px',
-                              borderRadius: '999px', fontSize: '11.5px', fontWeight: 600,
+                              borderRadius: '999px', fontSize: '12px', fontWeight: 600,
                               background: blocking ? 'var(--status-cancelled-bg)' : positive ? 'var(--status-active-bg)' : 'var(--status-pending-bg)',
                               color: 'var(--text-primary)', border: '1px solid var(--border-color)',
                             }}>
@@ -726,13 +1015,24 @@ export const AssayerRecord: React.FC<{
                             </span>
                           );
                         })}
-                        <span style={{ fontSize: '11.5px', color: 'var(--text-secondary)', marginLeft: 'auto', display: 'inline-flex', gap: '12px' }}>
-                          <span>VSTS: <b>{a.vstsCode || 'none'}</b></span>
+                        {/*
+                          Two abbreviations nothing on this screen expanded.
+
+                          "VSTS: none" is the person's code in the vault system (the edit form's
+                          own placeholder says so, and nothing else in the app ever did) — read
+                          cold it looks like a failed check. "Credit: GOOD (742)" is a CIBIL
+                          score, the Indian credit bureau's; a three-digit number beside a word
+                          means nothing unless you know which scale it is on.
+                        */}
+                        <span style={{ fontSize: '12px', color: 'var(--text-secondary)', marginLeft: 'auto', display: 'inline-flex', gap: '12px', flexWrap: 'wrap' }}>
+                          <span title="Their code in the vault system. Blank simply means they have not been given one.">
+                            Vault system code: <b>{a.vstsCode || 'none'}</b>
+                          </span>
                           {dossierGlance.currentCheck && (dossierGlance.currentCheck.cibilScore != null || dossierGlance.currentCheck.cibilBand) && (
-                            <span>
-                              Credit: <b>{dossierGlance.currentCheck.cibilBand ?? '—'}</b>
+                            <span title="Their CIBIL credit score, from the background check. Recorded, not scored by us.">
+                              CIBIL credit score: <b>{dossierGlance.currentCheck.cibilBand ?? '—'}</b>
                               {dossierGlance.currentCheck.cibilScore != null ? ` (${dossierGlance.currentCheck.cibilScore})` : ''}
-                              {dossierGlance.currentCheck.checkedOn ? `, ${fmtDate(dossierGlance.currentCheck.checkedOn)}` : ''}
+                              {dossierGlance.currentCheck.checkedOn ? `, checked ${fmtDate(dossierGlance.currentCheck.checkedOn)}` : ''}
                             </span>
                           )}
                         </span>
@@ -748,59 +1048,148 @@ export const AssayerRecord: React.FC<{
                     ['Emergency phone', a.emergencyContactPhone, 'emergencyContactPhone'],
                     ['Emergency relation', a.emergencyContactRelation, 'emergencyContactRelation'],
                   ]} />
-                  <FactGroup edit={editCtx} title="Where they are" rows={[
-                    ['Address', a.address, 'address'],
-                    ['City or town', a.city, 'city'],
-                    ['District', a.district, 'district'],
-                    ['State', a.state, 'state'],
-                    ['Pincode', a.pincode, 'pincode'],
-                    // Region is derived from the state — it follows automatically, so it stays a
-                    // read-only readout even while the rest of the group is being edited.
-                    ['Region', a.region],
-                    /*
-                      The banner said "Map location — blocks distance filtering" and no field on
-                      this screen showed one, so the reader was told something was missing and
-                      sent to look for it among forty facts that never mentioned it. It is not
-                      inline-editable — a raw lat/lng box is worse than the map/GPS that sets it.
-                    */
-                    ['Map location', coordinates(a)],
-                  ]} />
+                  <FactGroup
+                    edit={editCtx}
+                    title="Where they are"
+                    rows={[
+                      ['Address', a.address, 'address'],
+                      ['City or town', a.city, 'city'],
+                      ['District', a.district, 'district'],
+                      ['State', a.state, 'state'],
+                      ['Pincode', a.pincode, 'pincode'],
+                      // Region is derived from the state — it follows automatically, so it stays a
+                      // read-only readout even while the rest of the group is being edited.
+                      ['Region', a.region],
+                      /*
+                        The banner said "Map location — blocks distance filtering" and no field on
+                        this screen showed one, so the reader was told something was missing and
+                        sent to look for it among forty facts that never mentioned it. Now it shows
+                        the coordinate, says how much to trust it, and — below — lets somebody set
+                        it. Still not an inline text box: a bare lat/lng field invites a typed
+                        guess, where the control underneath takes a coordinate copied off a map and
+                        has the server check it falls inside the state this person claims.
+                      */
+                      ['Map location', coordinates(a)
+                        ? (
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '7px', flexWrap: 'wrap' }}>
+                            <span style={{ fontFamily: 'monospace' }}>{coordinates(a)}</span>
+                            <GeoPrecisionBadge source={a.geoSource} matchedName={a.geoMatchedName} compact />
+                          </span>
+                        )
+                        : null],
+                    ]}
+                    footer={canManage && (editing || geoNeedsFixing(a.geoSource)) ? (
+                      /*
+                        THE FIX FOR 98 PEOPLE WITH NO HOME PIN, 76 OF THEM ACTIVE.
+
+                        The completeness banner at the top of this page calls "Map location" a
+                        critical gap and says it blocks distance filtering — and until now there
+                        was no control anywhere in the web app that could close it. The same
+                        component has been mounted on Branches since the precision work; it posts
+                        to `/geo/precision/assayer/:id/pin`, which already accepts `assayer` as a
+                        target and rejects a coordinate that falls outside the state on the record
+                        (the transposed lat/lng mistake, caught here rather than by whoever reads
+                        the map three weeks later). A pin set this way is marked `manual` and is
+                        never overwritten by a re-geocode, an import or the backfill.
+
+                        Shown while editing — the deliberate act of correcting this record — and,
+                        exactly as on Branches, whenever the stored coordinate is a placeholder
+                        rather than a location, which includes having none at all.
+                      */
+                      <>
+                        {geoNeedsFixing(a.geoSource) && (
+                          <div style={{ fontSize: '12px', color: 'var(--warning)', lineHeight: 1.5 }}>
+                            {coordinates(a)
+                              ? 'This pin is a stand-in, not their home — it can be tens of kilometres out, so '
+                                + 'distance filtering and travel costs based on it will be wrong.'
+                              : 'No home location has been recorded, so this person is left out of every '
+                                + 'distance-based search.'}
+                          </div>
+                        )}
+                        <PinCoordinateControl
+                          target="assayer"
+                          id={a.id}
+                          onPinned={() => {
+                            api.request<Assayer>(`/assayers/${assayerId}`)
+                              .then(setA)
+                              .catch((e) => setErr(`The pin was saved, but the record could not be re-read. ${userMessage(e)}`));
+                            onChanged();
+                          }}
+                        />
+                      </>
+                    ) : undefined}
+                  />
+                  {/*
+                    EVERY VALUE BELOW IS THE READ-MODE ONE, and that is not a regression.
+
+                    Each of these rows used to read `editing ? a.rawColumn : label(a.rawColumn)`,
+                    which looks like "show the raw enum while editing so the input has something
+                    to hold". It never did: a row whose `recordKey` is in EDIT_FIELDS renders an
+                    `<InlineField>` and ignores the value entirely (see `Facts`), and all of
+                    employmentType, joiningDate, dateOfBirth, engagementType, unavailableReason
+                    and experienceYears are in that list. So the raw branch was dead code that
+                    read as a deliberate decision to show `INTERNAL` and `2019-04-01T00:00:00Z`
+                    to a clerk — the next person to add a row here would have copied it.
+                  */}
                   <FactGroup edit={editCtx} title="Their job" rows={[
-                    ['Employment', editing ? a.employmentType : employmentTypeLabel(a.employmentType), 'employmentType'],
+                    ['Employment', employmentTypeLabel(a.employmentType), 'employmentType'],
                     ['Employee ID', a.employeeId, 'employeeId'],
                     ['Department', a.department, 'department'],
-                    ['Joined', editing ? a.joiningDate : fmtDate(a.joiningDate), 'joiningDate'],
+                    ['Joined', fmtDate(a.joiningDate), 'joiningDate'],
                     // Shown only when there IS one — a permanent "Left —" row on serving people
                     // would read as forty more dashes of noise.
                     ...(a.exitDate ? ([['Left', fmtDate(a.exitDate)]] as [string, any][]) : []),
-                    ['Experience', editing ? a.experienceYears : `${a.experienceYears ?? 0} years`, 'experienceYears'],
-                    ['Engaged as', editing ? a.engagementType : (a.engagementType ? (ENGAGEMENT_LABELS[a.engagementType] ?? a.engagementType) : null), 'engagementType'],
+                    ['Experience', `${a.experienceYears ?? 0} years`, 'experienceYears'],
+                    ['Engaged as', a.engagementType ? (ENGAGEMENT_LABELS[a.engagementType] ?? a.engagementType) : null, 'engagementType'],
                     /*
                       Said "Not available because —" when the person was perfectly available, in
                       the same grey as every real gap. It is the one blank on this screen that is
                       good news, so it says so.
                     */
-                    ['Availability', editing
-                      ? a.unavailableReason
-                      : (a.unavailableReason ? (UNAVAILABLE_LABELS[a.unavailableReason] ?? a.unavailableReason) : 'Available for work'),
+                    ['Availability',
+                      a.unavailableReason ? (UNAVAILABLE_LABELS[a.unavailableReason] ?? a.unavailableReason) : 'Available for work',
                       'unavailableReason'],
                     ['Reporting manager', a.managerId, 'managerId'],
                     ['HR owner', a.hrOwnerName, 'hrOwnerName'],
                   ]} />
-                  <FactGroup edit={editCtx} title="Who they are" rows={[
-                    ['Date of birth', editing ? a.dateOfBirth : fmtDate(a.dateOfBirth), 'dateOfBirth'],
+                  <FactGroup
+                    edit={editCtx}
+                    title="Who they are"
+                    /*
+                      THE PRODUCT DECISION, WRITTEN WHERE THE FIELDS ARE.
+                      An Aadhaar is held complete and encrypted — the mask is a display rule, not a
+                      statement about storage — and a clerk who reads "•••••••1234" with nothing
+                      beside it reasonably concludes the company only kept four digits and stops
+                      asking for the card. Both halves have to be said in the same place: all of it
+                      is on file, and seeing all of it is a recorded act.
+                    */
+                    footer={(
+                      <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                        Aadhaar and PAN are kept in full and encrypted. Screens show the last few
+                        digits only; showing the whole number is a deliberate click, and each one
+                        goes into the audit log with your name and the time.
+                      </div>
+                    )}
+                    rows={[
+                    ['Date of birth', fmtDate(a.dateOfBirth), 'dateOfBirth'],
                     ['Qualification', a.qualification, 'qualification'],
-                    // In edit mode the full Aadhaar is shown for correcting; read mode masks to last 4.
-                    ['Aadhaar', editing ? a.aadhaarNumber : maskAadhaar(a.aadhaarNumber), 'aadhaarNumber'],
-                    ['PAN', a.panNumber, 'panNumber'],
-                    ['VSTS code', a.vstsCode, 'vstsCode'],
+                    // Masked by the server and masked again on the way to the screen — see
+                    // `maskedIdentifier`. Uncovering either is `SensitiveValue`'s job, in read mode
+                    // and in edit mode alike.
+                    ['Aadhaar', maskedIdentifier(a.aadhaarNumber), 'aadhaarNumber'],
+                    ['PAN', maskedIdentifier(a.panNumber), 'panNumber'],
+                    // Expanded for the same reason as the strip above: "VSTS" appears nowhere else
+                    // in the product, so the abbreviation names nothing the reader can look up.
+                    ['Vault system code', a.vstsCode, 'vstsCode'],
                     ['Documents folder', a.documentsLink
                       ? <a href={a.documentsLink} target="_blank" rel="noreferrer" style={{ color: 'var(--accent-primary)' }}>Open folder</a>
                       : null],
                   ]} />
                   <FactGroup edit={editCtx} title="How they are paid" rows={[
                     ['Bank', a.bankName, 'bankName'],
-                    ['Account', a.bankAccountNumber, 'bankAccountNumber'],
+                    ['Account', maskedIdentifier(a.bankAccountNumber), 'bankAccountNumber'],
+                    // Not masked, and deliberately so: an IFSC identifies a bank branch, not a
+                    // person or an account. Covering it would say something untrue about what it is.
                     ['IFSC', a.ifscCode, 'ifscCode'],
                   ]} />
                   <FactGroup edit={editCtx} title="How much work they can take" rows={[
@@ -824,19 +1213,19 @@ export const AssayerRecord: React.FC<{
                   <div style={{
                     padding: '11px 13px', borderRadius: '8px', marginBottom: '12px',
                     background: bankMissing ? 'var(--status-pending-bg)' : 'var(--bg-surface-2)',
-                    border: `1px solid ${bankMissing ? 'rgba(216,174,71,0.25)' : 'var(--border-color)'}`,
+                    border: `1px solid ${bankMissing ? 'color-mix(in srgb, var(--warning) 30%, transparent)' : 'var(--border-color)'}`,
                   }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '7px', fontWeight: 700, fontSize: '12.5px', color: bankMissing ? 'var(--warning)' : 'var(--success)' }}>
                       {bankMissing ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />}
                       {bankMissing ? 'No bank details — cannot be paid' : 'Bank details on file'}
                     </div>
-                    <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
                       {bankMissing
                         ? 'The rates below decide what this assayer earns; the account they are paid into is on their record, under Financial.'
-                        : `Account ending ${String(a.bankAccountNumber).slice(-4)} · IFSC ${a.ifscCode}`}
+                        : `Account ${maskedIdentifier(a.bankAccountNumber)} · IFSC ${a.ifscCode}`}
                     </div>
                     {canManage && bankMissing && (
-                      <button onClick={startEdit} className="btn btn-secondary" style={{ fontSize: '11.5px', padding: '5px 10px', marginTop: '9px' }}>
+                      <button onClick={startEdit} className="btn btn-secondary" style={{ fontSize: '12px', padding: '5px 10px', marginTop: '9px' }}>
                         Add bank details
                       </button>
                     )}
@@ -857,7 +1246,7 @@ export const AssayerRecord: React.FC<{
                             <strong>{money(c.baseFee)} base</strong>
                             {c.currency && <span style={{ color: 'var(--text-muted)', marginLeft: '5px' }}>{c.currency}</span>}
                             <span style={{
-                              marginLeft: '7px', fontSize: '10px', fontWeight: 700, padding: '2px 7px', borderRadius: '999px',
+                              marginLeft: '7px', fontSize: '12px', fontWeight: 700, padding: '2px 7px', borderRadius: '999px',
                               background: c.__state === 'current' ? 'var(--status-active-bg)' : 'var(--bg-surface-2)',
                               color: c.__state === 'current' ? 'var(--success)' : c.__state === 'future' ? 'var(--accent)' : 'var(--text-muted)',
                             }}>
@@ -865,18 +1254,24 @@ export const AssayerRecord: React.FC<{
                             </span>
                           </div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                            <span style={{ color: 'var(--text-muted)', fontSize: '11.5px' }}>
+                            <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
                               {fmtDate(c.effectiveStartDate || c.startDate)} → {c.effectiveEndDate ? fmtDate(c.effectiveEndDate) : 'open'}
                             </span>
                             {canManage && (
-                              <button onClick={() => setPayModal({ open: true, profile: c })}
-                                style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}>
+                              // Was a bare pencil with no title and no aria-label: to anyone not
+                              // using a mouse, an unnamed button next to a row of money.
+                              <button
+                                onClick={() => setPayModal({ open: true, profile: c })}
+                                aria-label={`Change the pay structure starting ${fmtDate(c.effectiveStartDate || c.startDate)}`}
+                                title="Change this pay structure"
+                                style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
+                              >
                                 <Edit2 size={13} />
                               </button>
                             )}
                           </div>
                         </div>
-                        <div style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginTop: '3px' }}>
+                        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px' }}>
                           {money(c.hourlyRate)}/hr · {money(c.dailyRate)}/day · travel {money(c.travelReimbursement)}
                           {Number(c.accommodationAllowance) > 0 && <> · stay {money(c.accommodationAllowance)}</>}
                           {Number(c.mealAllowance) > 0 && <> · meals {money(c.mealAllowance)}</>}
@@ -923,7 +1318,7 @@ export const AssayerRecord: React.FC<{
                       <div style={{ ...label, marginTop: '4px' }}>
                         {h.performedByName ?? 'system'} · {fmtWhen(h.occurredAt)}
                       </div>
-                      {h.remarks && <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)', marginTop: '3px' }}>{h.remarks}</div>}
+                      {h.remarks && <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '3px' }}>{h.remarks}</div>}
                     </div>
                   )}
                 />
@@ -944,7 +1339,81 @@ export const AssayerRecord: React.FC<{
             .catch(() => setLoaded((p) => ({ ...p, commercial: [] })));
         }}
       />
-    </>
+    </SensitiveCtx.Provider>
+  );
+};
+
+/**
+ * One legal move, as a button that says what it does to the person.
+ *
+ * The consequence is beside the button rather than revealed after choosing, which is what the
+ * dropdown did — "Inactive" told a clerk parking somebody for a fortnight nothing about having
+ * just removed them from every planning list. It is `STAGE_CONSEQUENCE`, unchanged, in its own
+ * words; this component adds no copy of its own beyond the label the stage already has.
+ *
+ * A move the server will not accept without a reason opens the box here instead of firing, and the
+ * button becomes the confirmation. Two clicks for those, one for the ordinary steps.
+ */
+const StageStep: React.FC<{
+  to: string;
+  primary?: boolean;
+  busy: boolean;
+  /** True while this is the move waiting for its reason. */
+  asking: boolean;
+  reason: string;
+  onReason: (v: string) => void;
+  onPress: () => void;
+  onConfirm: () => void;
+  onCancel: () => void;
+}> = ({ to, primary, busy, asking, reason, onReason, onPress, onConfirm, onCancel }) => {
+  const stage = assayerLifecycleLabel(to);
+  return (
+    <div
+      style={{
+        padding: primary ? '12px 14px' : '10px 12px',
+        borderRadius: '8px',
+        border: `1px solid ${primary ? 'var(--accent)' : 'var(--border-color)'}`,
+        background: primary ? 'color-mix(in srgb, var(--accent) 7%, transparent)' : 'var(--bg-surface-2)',
+      }}
+    >
+      <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+        <button
+          onClick={asking ? onConfirm : onPress}
+          disabled={busy || (asking && !reason.trim())}
+          className={primary ? 'btn btn-primary' : 'btn btn-secondary'}
+          style={{ fontSize: '12px', padding: primary ? '8px 14px' : '6px 12px', whiteSpace: 'nowrap' }}
+        >
+          {busy ? 'Moving…' : `Move to ${stage}`}
+        </button>
+        <span style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.5, flex: '1 1 220px' }}>
+          {STAGE_CONSEQUENCE[to] ?? `They are moved to ${stage}.`}
+        </span>
+      </div>
+      {asking && (
+        <div style={{ marginTop: '9px' }}>
+          <label style={{ ...label, display: 'block', marginBottom: '4px' }} htmlFor={`reason-${to}`}>
+            Why? This is kept on their employment record
+          </label>
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+            <input
+              id={`reason-${to}`}
+              autoFocus
+              value={reason}
+              onChange={(e) => onReason(e.target.value)}
+              placeholder="e.g. no longer available for work in their area"
+              style={{
+                flex: '1 1 220px', padding: '7px 10px', fontSize: '12px', borderRadius: '6px',
+                background: 'var(--bg-page)', color: 'inherit',
+                border: `1px solid ${reason.trim() ? 'var(--border-color)' : 'var(--warning)'}`,
+              }}
+            />
+            <button onClick={onCancel} disabled={busy} className="btn btn-secondary" style={{ fontSize: '12px', padding: '6px 12px' }}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 };
 
@@ -992,6 +1461,8 @@ const SUMMARY_EDIT_KEYS = [
 interface EditCtx {
   form: Record<string, string>;
   set: (key: string, val: string) => void;
+  /** A KYC identifier uncovered on purpose. Seeds the box and the baseline — see `revealSensitive`. */
+  reveal: (key: string, full: string) => void;
   managers: { id: string; name: string }[] | null;
 }
 
@@ -1001,8 +1472,34 @@ const inlineControl: React.CSSProperties = {
   border: '1px solid var(--border-color)', borderRadius: '6px', outline: 'none',
 };
 
-/** One fact, turned into the right control for its field — select, date, number or text. */
-const InlineField: React.FC<{ fieldKey: string; ctx: EditCtx }> = ({ fieldKey, ctx }) => {
+/**
+ * One fact, turned into the right control for its field — select, date, number or text.
+ *
+ * A KYC identifier is wrapped: EDITING IT REQUIRES UNCOVERING IT FIRST. The box cannot open on a
+ * mask, because a mask is what the record hands this form and one corrected digit on top of
+ * `••••••234F` is a destroyed PAN that looks fine on every screen afterwards. A field with nothing
+ * on file has no mask to uncover and is typed straight in.
+ */
+const InlineField: React.FC<{ fieldKey: string; ctx: EditCtx; masked?: string | null }> = ({
+  fieldKey, ctx, masked,
+}) => {
+  const sensitive = React.useContext(SensitiveCtx);
+  const control = <InlineControl fieldKey={fieldKey} ctx={ctx} />;
+  if (!isSensitiveKey(fieldKey) || !sensitive) return control;
+  return (
+    <SensitiveValue
+      assayerId={sensitive.assayerId}
+      fieldKey={fieldKey as SensitiveRecordKey}
+      masked={masked}
+      canReveal={sensitive.canReveal}
+      onRevealed={(full) => ctx.reveal(fieldKey, full)}
+      renderRevealed={() => control}
+      emptyState={control}
+    />
+  );
+};
+
+const InlineControl: React.FC<{ fieldKey: string; ctx: EditCtx }> = ({ fieldKey, ctx }) => {
   const def = EDIT_FIELD_BY_KEY.get(fieldKey);
   if (!def) return null;
   const val = ctx.form[fieldKey] ?? '';
@@ -1039,7 +1536,15 @@ const InlineField: React.FC<{ fieldKey: string; ctx: EditCtx }> = ({ fieldKey, c
 
 const FIELD_MONO_KEYS = new Set(['panNumber', 'aadhaarNumber', 'bankAccountNumber', 'ifscCode', 'employeeId']);
 
-const FactGroup: React.FC<{ title: string; rows: Fact[]; edit?: EditCtx }> = ({ title, rows, edit }) => (
+/**
+ * `footer` is for a control that belongs to the whole group rather than to one fact — the map-pin
+ * control under "Where they are". It sits below the grid rather than inside a cell because it
+ * opens into a two-input panel, and a cell in a `minmax(150px, 1fr)` grid is not a place to put
+ * one.
+ */
+const FactGroup: React.FC<{ title: string; rows: Fact[]; edit?: EditCtx; footer?: React.ReactNode }> = ({
+  title, rows, edit, footer,
+}) => (
   <section
     style={{
       background: 'var(--bg-card)', border: '1px solid var(--border-color)',
@@ -1048,10 +1553,13 @@ const FactGroup: React.FC<{ title: string; rows: Fact[]; edit?: EditCtx }> = ({ 
   >
     <div style={{ ...label, marginBottom: '10px' }}>{title}</div>
     <Facts rows={rows} edit={edit} />
+    {footer && <div style={{ marginTop: '10px' }}>{footer}</div>}
   </section>
 );
 
-const Facts: React.FC<{ rows: Fact[]; edit?: EditCtx }> = ({ rows, edit }) => (
+const Facts: React.FC<{ rows: Fact[]; edit?: EditCtx }> = ({ rows, edit }) => {
+  const sensitive = React.useContext(SensitiveCtx);
+  return (
   <dl style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '11px', margin: 0 }}>
     {rows.map(([k, v, recordKey]) => {
       const editable = !!(edit && recordKey && EDIT_FIELD_BY_KEY.has(recordKey));
@@ -1076,7 +1584,23 @@ const Facts: React.FC<{ rows: Fact[]; edit?: EditCtx }> = ({ rows, edit }) => (
           <dt style={label}>{k}</dt>
           <dd style={{ margin: '2px 0 0', fontSize: '12.5px' }}>
             {editable ? (
-              <InlineField fieldKey={recordKey as string} ctx={edit as EditCtx} />
+              <InlineField
+                fieldKey={recordKey as string}
+                ctx={edit as EditCtx}
+                masked={typeof v === 'string' ? v : null}
+              />
+            ) : recordKey && isSensitiveKey(recordKey) && sensitive && !blank ? (
+              /*
+                Covered by default, uncovered on purpose, and the uncovering recorded. See
+                SensitiveValue — the warning is printed beside the button rather than hidden in a
+                tooltip, because an audit trail nobody is told about is a trap, not a control.
+              */
+              <SensitiveValue
+                assayerId={sensitive.assayerId}
+                fieldKey={recordKey as SensitiveRecordKey}
+                masked={String(v)}
+                canReveal={sensitive.canReveal}
+              />
             ) : gap ? (
               <span
                 title={`Blocks ${gap.blocks.toLowerCase()}`}
@@ -1096,13 +1620,16 @@ const Facts: React.FC<{ rows: Fact[]; edit?: EditCtx }> = ({ rows, edit }) => (
       );
     })}
   </dl>
-);
+  );
+};
 
 /** Shared loading/empty handling so each tab does not reinvent it. */
 const List: React.FC<{ rows: any[] | undefined; empty: string; render: (r: any) => React.ReactNode }> = ({
   rows, empty, render,
 }) => {
-  if (rows === undefined) return <div style={{ color: 'var(--text-muted)', fontSize: '12.5px' }}>Loading…</div>;
+  // A skeleton in the shape of the rows that are coming, rather than the word "Loading…" — the
+  // same treatment HrPayPage and Branches already use, so a tab switch does not read as a stall.
+  if (rows === undefined) return <SkeletonList rows={3} height={52} />;
   if (rows.length === 0) return <div style={{ color: 'var(--text-muted)', fontSize: '12.5px', padding: '18px 0' }}>{empty}</div>;
   return <>{rows.map(render)}</>;
 };

@@ -2,7 +2,7 @@ import React from 'react';
 import { Printer, RotateCcw, SlidersHorizontal } from 'lucide-react';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
-import { useConfirm, StatusBadge } from '../../components/ui';
+import { useConfirm, StatusBadge, AlertBanner, SkeletonList } from '../../components/ui';
 import { card, label, Bar, Empty } from './hr-ui';
 import { openAssayerProfilePrintWindow } from './assayerProfilePrint';
 import type { AssayerQualificationView, PartnerQualificationView, DimensionScoreView } from '@fapoms/shared';
@@ -121,15 +121,18 @@ export const AssayerQualificationTab: React.FC<{
     } catch (e) { setErr(userMessage(e)); }
   };
 
-  if (err && !data) return <Empty>{err}</Empty>;
-  if (!data || !partners) return <Empty>Working out the scores…</Empty>;
+  if (err && !data) return <AlertBanner type="error" message={err} />;
+  // The scores are computed on read, so this wait is real; hold the shape rather than
+  // replacing the tab with one line of prose.
+  if (!data || !partners) return <SkeletonList rows={4} height={58} />;
 
   const overall = data.overall;
 
   return (
     <div style={{ display: 'grid', gap: '14px' }}>
       {confirmDialog}
-      {err && <div style={{ color: 'var(--danger)', fontSize: '12px' }}>{err}</div>}
+      {/* One failure channel per screen — see AssayerRecord.tsx. */}
+      <AlertBanner type="error" message={err} onClose={() => setErr(null)} />
 
       {/* ── Overall ── */}
       <div style={{ ...card, display: 'flex', alignItems: 'center', gap: '20px', flexWrap: 'wrap' }}>
@@ -144,7 +147,7 @@ export const AssayerQualificationTab: React.FC<{
             ? 'Not yet assessed — nothing scoreable is on file. Scores appear as vetting, documents and work history are recorded.'
             : overall.override
               ? <>Adjusted from a computed {overall.computed ?? '—'} by {overall.override.setByName ?? 'staff'}: “{overall.override.reason}”
-                  {canManage && <button className="btn btn-secondary" disabled={busy} onClick={() => clearOverride(overall.override!.id, 'overall')} style={{ marginLeft: '8px', fontSize: '11px', padding: '2px 8px' }}><RotateCcw size={11} /> Clear</button>}
+                  {canManage && <button className="btn btn-secondary" disabled={busy} onClick={() => clearOverride(overall.override!.id, 'overall')} style={{ marginLeft: '8px', fontSize: '12px', padding: '2px 8px' }}><RotateCcw size={11} /> Clear</button>}
                 </>
               : 'Computed live from identity verification, record completeness, background checks, references, credentials and work history. Weights are set under Administration → Platform Settings → Assayer qualification.'}
         </div>
@@ -172,21 +175,21 @@ export const AssayerQualificationTab: React.FC<{
                 <div style={{ fontSize: '13px', fontWeight: 600, flex: 1 }}>{d.label}</div>
                 {d.override && (
                   <span title={`Computed ${d.computed ?? '—'} · adjusted by ${d.override.setByName ?? 'staff'}: ${d.override.reason}`}
-                        style={{ fontSize: '10px', fontWeight: 700, color: 'var(--warning)', textTransform: 'uppercase', letterSpacing: '.04em' }}>
+                        style={{ fontSize: '12px', fontWeight: 700, color: 'var(--warning)', textTransform: 'uppercase', letterSpacing: '.04em' }}>
                     adjusted
-                    {canManage && <button onClick={() => clearOverride(d.override!.id, d.label)} disabled={busy} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--warning)', marginLeft: '4px', padding: 0 }} title="Clear override"><RotateCcw size={10} /></button>}
+                    {canManage && <button onClick={() => clearOverride(d.override!.id, d.label)} disabled={busy} style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--warning)', marginLeft: '4px', padding: 0 }} aria-label={`Clear the override on ${d.label}`} title={`Clear the override on ${d.label}`}><RotateCcw size={10} /></button>}
                   </span>
                 )}
                 <ScoreChip value={d.effective} small />
                 {canManage && (
-                  <button onClick={() => setOverride(d.key)} disabled={busy} title={`Override ${d.label}`}
+                  <button onClick={() => setOverride(d.key)} disabled={busy} aria-label={`Override the ${d.label} score`} title={`Override ${d.label}`}
                           style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '0 2px' }}>
                     <SlidersHorizontal size={12} />
                   </button>
                 )}
               </div>
               <div style={{ margin: '5px 0 3px' }}><Bar pct={d.effective ?? 0} tone={toneFor(d.effective)} /></div>
-              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
                 {d.effective == null ? 'Not yet assessed — ' : ''}{d.basis.join(' · ')}
               </div>
             </div>
@@ -206,17 +209,18 @@ export const AssayerQualificationTab: React.FC<{
                 <div style={{ display: 'flex', alignItems: 'center', gap: '10px', cursor: 'pointer' }}
                      onClick={() => setOpenPartner(openPartner === pt.client.id ? null : pt.client.id)}>
                   <div style={{ flex: 1, fontSize: '13px', fontWeight: 600 }}>{pt.client.name}</div>
-                  {pt.barred && <StatusBadge label="Barred by client" color="var(--danger)" bg="var(--status-cancelled-bg, rgba(220,53,69,.12))" variant="pill" />}
+                  {pt.barred && <StatusBadge label="Barred by client" color="var(--danger)" bg="var(--status-cancelled-bg)" variant="pill" />}
                   {!pt.barred && pt.standing && (
-                    <StatusBadge label={pt.standing.replace(/_/g, ' ').toLowerCase()} color={pt.standingCap != null ? 'var(--warning)' : 'var(--success)'} bg={pt.standingCap != null ? 'var(--status-pending-bg, rgba(255,193,7,.12))' : 'var(--status-active-bg, rgba(40,167,69,.12))'} variant="tag" />
+                    <StatusBadge label={pt.standing.replace(/_/g, ' ').toLowerCase()} color={pt.standingCap != null ? 'var(--warning)' : 'var(--success)'} bg={pt.standingCap != null ? 'var(--status-pending-bg)' : 'var(--status-active-bg)'} variant="tag" />
                   )}
                   {pt.standingCap != null && !pt.barred && (
-                    <span style={{ fontSize: '10px', color: 'var(--warning)' }} title={pt.standingReason ?? undefined}>capped at {pt.standingCap}</span>
+                    <span style={{ fontSize: '12px', color: 'var(--warning)' }} title={pt.standingReason ?? undefined}>capped at {pt.standingCap}</span>
                   )}
-                  {pt.override && <span style={{ fontSize: '10px', color: 'var(--warning)', fontWeight: 700 }}>ADJUSTED</span>}
+                  {pt.override && <span style={{ fontSize: '12px', color: 'var(--warning)', fontWeight: 700 }}>ADJUSTED</span>}
                   <ScoreChip value={pt.effective} small />
                   {canManage && (
                     <button onClick={(e) => { e.stopPropagation(); setOverride('overall', pt.client.id); }} disabled={busy}
+                            aria-label={`Override the overall score for ${pt.client.name}`}
                             title={`Override for ${pt.client.name}`}
                             style={{ border: 'none', background: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '0 2px' }}>
                       <SlidersHorizontal size={12} />
@@ -224,7 +228,7 @@ export const AssayerQualificationTab: React.FC<{
                   )}
                 </div>
                 {openPartner === pt.client.id && (
-                  <div style={{ padding: '8px 0 4px', fontSize: '11.5px', color: 'var(--text-secondary)' }}>
+                  <div style={{ padding: '8px 0 4px', fontSize: '12px', color: 'var(--text-secondary)' }}>
                     {pt.gaps.length === 0
                       ? 'Nothing outstanding for this partner.'
                       : (<>
@@ -236,7 +240,7 @@ export const AssayerQualificationTab: React.FC<{
                     {pt.override && (
                       <div style={{ marginTop: '6px', color: 'var(--warning)' }}>
                         Adjusted to {pt.override.value} by {pt.override.setByName ?? 'staff'}: “{pt.override.reason}”
-                        {canManage && <button className="btn btn-secondary" disabled={busy} onClick={() => clearOverride(pt.override!.id, pt.client.name)} style={{ marginLeft: '8px', fontSize: '11px', padding: '2px 8px' }}>Clear</button>}
+                        {canManage && <button className="btn btn-secondary" disabled={busy} onClick={() => clearOverride(pt.override!.id, pt.client.name)} style={{ marginLeft: '8px', fontSize: '12px', padding: '2px 8px' }}>Clear</button>}
                       </div>
                     )}
                   </div>

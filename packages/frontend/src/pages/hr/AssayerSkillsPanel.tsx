@@ -3,7 +3,7 @@ import { AlertTriangle, Plus, Trash2 } from 'lucide-react';
 import { daysUntilExpiry } from '@fapoms/shared';
 
 import { api } from '../../services/api';
-import { useConfirm, useToast } from '../../components/ui';
+import { useConfirm, useToast, AlertBanner, SkeletonList } from '../../components/ui';
 import { label, Empty } from './hr-ui';
 import { fmtDate } from '../../utils/dates';
 import { userMessage } from '../../services/errors';
@@ -162,15 +162,16 @@ export const AssayerSkillsPanel: React.FC<{
     } catch (e) { setErr(userMessage(e)); } finally { setBusy(false); }
   };
 
-  if (rows === null) return <Empty>Loading…</Empty>;
+  // A skeleton the shape of the rows that are coming, rather than the word "Loading…" in the
+  // middle of an empty card — the same treatment the rest of the section now uses.
+  if (rows === null) return <SkeletonList rows={3} height={46} />;
 
   return (
     <div style={{ opacity: busy ? 0.6 : 1, transition: 'opacity .15s' }}>
       {confirmDialog}
 
-      {err && (
-        <div style={{ color: 'var(--danger)', fontSize: '12.5px', marginBottom: '10px' }}>{err}</div>
-      )}
+      {/* The section's one failure channel, not a hand-rolled red line of its own. */}
+      <AlertBanner type="error" message={err} onClose={() => setErr(null)} style={{ marginBottom: '10px' }} />
 
       {/*
         An expired certification is refused by the eligibility gate, so the person is quietly
@@ -178,7 +179,7 @@ export const AssayerSkillsPanel: React.FC<{
         a list — and the renewal is now in this panel rather than a page away.
       */}
       {lapsed.length > 0 && (
-        <div style={{ padding: '11px 13px', borderRadius: '8px', marginBottom: '12px', background: 'var(--status-cancelled-bg)', border: '1px solid rgba(220,80,80,0.3)' }}>
+        <div style={{ padding: '11px 13px', borderRadius: '8px', marginBottom: '12px', background: 'var(--status-cancelled-bg)', border: '1px solid color-mix(in srgb, var(--danger) 35%, transparent)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '7px', color: 'var(--danger)', fontWeight: 700, fontSize: '12.5px' }}>
             <AlertTriangle size={14} /> {counted(lapsed.length, 'certificate')} expired
           </div>
@@ -222,7 +223,7 @@ export const AssayerSkillsPanel: React.FC<{
               />
             )}
             <button onClick={add} disabled={busy || !draft.name.trim()} style={{
-              background: 'var(--primary)', color: '#fff', border: 'none', borderRadius: '7px',
+              background: 'var(--primary)', color: 'var(--on-accent)', border: 'none', borderRadius: '7px',
               padding: '7px 13px', fontSize: '12.5px', fontWeight: 600,
               cursor: busy || !draft.name.trim() ? 'default' : 'pointer',
             }}>Add</button>
@@ -256,7 +257,7 @@ export const AssayerSkillsPanel: React.FC<{
               <span style={{ ...label, marginLeft: '6px' }}>{attributeTypeLabel(w.type)}</span>
             </span>
             <span style={{ display: 'flex', alignItems: 'center', gap: '10px', whiteSpace: 'nowrap' }}>
-              <span style={{ color: tone, fontSize: '11.5px' }}>
+              <span style={{ color: tone, fontSize: '12px' }}>
                 {w.level ?? ''}
                 {w.expiryDate && (days !== null && days < 0
                   ? ` · expired ${fmtDate(w.expiryDate)}`
@@ -268,11 +269,16 @@ export const AssayerSkillsPanel: React.FC<{
                   defaultValue={w.expiryDate ? String(w.expiryDate).slice(0, 10) : ''}
                   onChange={(e) => renew(w, e.target.value)}
                   title={w.expiryDate ? 'Record a renewal' : 'Record when it stops working'}
-                  style={{ ...input, padding: '4px 7px', fontSize: '11.5px' }}
+                  style={{ ...input, padding: '4px 7px', fontSize: '12px' }}
                 />
               )}
               {canManage && (
-                <button onClick={() => remove(w)} title="Remove" style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '2px' }}>
+                <button
+                  onClick={() => remove(w)}
+                  aria-label={`Remove ${w.name}`}
+                  title={`Remove ${w.name}`}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '2px' }}
+                >
                   <Trash2 size={13} />
                 </button>
               )}

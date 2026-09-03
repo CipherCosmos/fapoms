@@ -248,6 +248,7 @@ export class UserController {
 
   @Get()
   @Roles(SystemRole.ADMIN)
+  @RequirePermissions('user:view:organization')
   @ApiOperation({ summary: 'List all users' })
   async findAll(
     @Query('page') page = 1,
@@ -270,8 +271,17 @@ export class UserController {
     };
   }
 
+  /**
+   * The role editor reads and writes under the USER permissions, because there is no ROLE one.
+   *
+   * `user:create` means creating an account, not a role, so every write in this block — create,
+   * rename, re-permission, delete — takes `user:edit`, the same permission `PUT /users/:id/roles`
+   * already requires to change who holds which role. Granting one half without the other would
+   * describe an access model nobody can actually administer.
+   */
   @Get('roles')
   @Roles(SystemRole.ADMIN)
+  @RequirePermissions('user:view:organization')
   @ApiOperation({ summary: 'List all available roles' })
   async findAllRoles() {
     const roles = await this.userService.findAllRoles();
@@ -284,6 +294,7 @@ export class UserController {
   /** The permission catalogue the role editor renders as a matrix. */
   @Get('permissions')
   @Roles(SystemRole.ADMIN)
+  @RequirePermissions('user:view:organization')
   @ApiOperation({ summary: 'List every permission that can be granted to a role' })
   async findAllPermissions() {
     const permissions = await this.userService.findAllPermissions();
@@ -302,6 +313,7 @@ export class UserController {
    */
   @Post('roles')
   @Roles(SystemRole.ADMIN)
+  @RequirePermissions('user:edit:organization')
   @ApiOperation({ summary: 'Create a custom role' })
   async createRole(@Body() dto: CreateRoleRequestDto, @Req() req: any) {
     const role = await this.userService.createRole(dto, req.user.id);
@@ -310,6 +322,7 @@ export class UserController {
 
   @Put('roles/:id')
   @Roles(SystemRole.ADMIN)
+  @RequirePermissions('user:edit:organization')
   @ApiOperation({ summary: 'Update a role display name or description' })
   async updateRole(
     @Param('id', ParseUUIDPipe) id: string,
@@ -327,6 +340,7 @@ export class UserController {
    */
   @Put('roles/:id/permissions')
   @Roles(SystemRole.ADMIN)
+  @RequirePermissions('user:edit:organization')
   @ApiOperation({ summary: "Replace a role's permission set" })
   async setRolePermissions(
     @Param('id', ParseUUIDPipe) id: string,
@@ -339,6 +353,7 @@ export class UserController {
 
   @Delete('roles/:id')
   @Roles(SystemRole.ADMIN)
+  @RequirePermissions('user:edit:organization')
   @ApiOperation({ summary: 'Delete a custom (non-built-in) role that nobody holds' })
   async deleteRole(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     await this.userService.deleteRole(id, req.user.id);

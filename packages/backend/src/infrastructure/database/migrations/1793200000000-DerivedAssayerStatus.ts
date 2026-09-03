@@ -13,6 +13,12 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * offered as candidates for audits. Nothing failed. The two columns simply said different
  * things, and only one of them was read.
  *
+ * That 536 counts those four statuses. The UPDATE below is wider, and deliberately so: it
+ * rewrites `status` for EVERY lifecycle that is not ACTIVE, which on this roster is 615 people —
+ * the extra 79 are INVITED, candidates who had not finished onboarding and were being offered
+ * audit work. `derived-status.spec.ts` states it from that end. Both numbers are right for the
+ * population each names; neither is a correction of the other.
+ *
  * `AssayerEntity.deriveOperationalStatus` now applies the rule on every save, so this is the
  * one-off correction of what the drift already produced.
  */

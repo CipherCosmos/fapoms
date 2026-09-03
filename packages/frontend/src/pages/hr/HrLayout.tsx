@@ -1,12 +1,14 @@
 import React from 'react';
 import { NavLink, Navigate, Outlet, useOutletContext, useSearchParams } from 'react-router-dom';
 import {
-  Users, MapPin, ClipboardList, Wallet,
+  Users, MapPin, ClipboardList, Wallet, AlertTriangle,
 } from 'lucide-react';
 
 import { useHrWorkforce } from '../../hooks/useHrWorkforce';
 import type { HrWorkforceOverview } from '../../hooks/useHrWorkforce';
 import { useCurrentRoles, canManageAssayers } from '../../hooks/useCurrentRoles';
+import { AlertBanner } from '../../components/ui';
+import { useImportIssues } from './useImportIssues';
 import { HrHeader } from './hr-ui';
 import { LEGACY_TABS, LEGACY_PATHS, resolveHrDestination } from './hr-destinations';
 import { userMessage } from '../../services/errors';
@@ -81,8 +83,8 @@ export function useHr(): HrContext {
 const PAGES: readonly {
   to: string; end?: boolean; label: string; icon: React.ElementType;
   tone: 'count' | 'alert';
-  badge: (d: HrWorkforceOverview) => number | null;
-  hint: (d: HrWorkforceOverview) => string;
+  badge: (d: HrWorkforceOverview, openIssues: number | null) => number | null;
+  hint: (d: HrWorkforceOverview, openIssues: number | null) => string;
 }[] = [
   { to: '/hr', end: true, label: 'Overview', icon: ClipboardList, badge: () => null, tone: 'count', hint: () => 'Everything that needs attention today, in one list' },
   {
@@ -92,6 +94,29 @@ const PAGES: readonly {
   },
   { to: '/hr/pay', label: 'Pay & terms', icon: Wallet, badge: () => null, tone: 'count', hint: () => 'What each person is paid, and on what terms, side by side' },
   { to: '/hr/where', label: 'Where people are', icon: MapPin, badge: () => null, tone: 'count', hint: () => 'Who is busy, which states are covered, and what changed recently' },
+  /*
+    A FIFTH TAB, AND IT EARNS ITS BADGE.
+
+    The badge rule above says a number appears on exactly one tab — the one that can resolve it —
+    and `alert` means "there is work here", not "this number is large". This is the first
+    destination in the section that qualifies: 431 record problems are open right now, every one
+    of them is cleared from this screen, and until this tab existed the only way to find out was
+    to scroll to the bottom of the roster and hope the collapsed panel was not returning null.
+
+    The badge is null, not 0, while the count is unknown — loading, or refused to a role that
+    cannot read the queue — so a tab never shows "0" for a question it has not asked.
+  */
+  {
+    to: '/hr/issues', label: 'Review queue', icon: AlertTriangle, tone: 'alert',
+    badge: (_d: HrWorkforceOverview, openIssues: number | null) => openIssues,
+    hint: (_d: HrWorkforceOverview, openIssues: number | null) => (
+      openIssues === null
+        ? 'Cells the import could not read, and checks failing on live records'
+        : openIssues === 0
+          ? 'Nothing outstanding — every import problem and failed check has been decided'
+          : `${openIssues} record problems the system would not decide for you — unreadable import cells and failing data checks`
+    ),
+  },
 ];
 
 /**
@@ -108,6 +133,13 @@ export const HrLayout: React.FC = () => {
   const [params] = useSearchParams();
   const roles = useCurrentRoles();
   const canManage = canManageAssayers(roles);
+  /*
+    Read here so the badge is present on every screen in the section, not only on the queue's own
+    page. One query key, so the panel below shares this response rather than fetching it again —
+    a badge and a list that disagree is worse than no badge.
+  */
+  const issues = useImportIssues();
+  const openIssues = issues.loading || issues.failed ? null : issues.openCount;
 
   // Links to ?tab=compliance are in notification payloads and people's bookmarks; forward them
   // to the page that concern now lives on rather than dropping them on the overview.
@@ -133,15 +165,19 @@ export const HrLayout: React.FC = () => {
 
   if (error || !data) {
     return (
-      <div style={{ padding: '24px', color: 'var(--danger)' }}>
-        <div style={{ fontWeight: 600 }}>The workforce figures could not be loaded just now.</div>
-        <div style={{ fontSize: 12, marginTop: 4 }}>{userMessage(error)}</div>
-        <div style={{ fontSize: 12, marginTop: 6, color: 'var(--text-muted)' }}>
-          Nothing has been lost — try again, and tell IT if it keeps happening.
-        </div>
-        <button onClick={() => refetch()} className="btn btn-primary" style={{ marginTop: 14, padding: '8px 16px', fontSize: 12 }}>
-          Retry
-        </button>
+      // The same banner every other failure in this section now uses, rather than a fifth
+      // hand-rolled red block with its own spacing and its own three type sizes.
+      <div style={{ padding: '24px' }}>
+        <AlertBanner type="error" style={{ alignItems: 'flex-start' }}>
+          <div style={{ fontWeight: 600 }}>The workforce figures could not be loaded just now.</div>
+          <div style={{ fontSize: 12, marginTop: 4 }}>{userMessage(error)}</div>
+          <div style={{ fontSize: 12, marginTop: 6 }}>
+            Nothing has been lost — try again, and tell IT if it keeps happening.
+          </div>
+          <button onClick={() => refetch()} className="btn btn-primary" style={{ marginTop: 14, padding: '8px 16px', fontSize: 12 }}>
+            Retry
+          </button>
+        </AlertBanner>
       </div>
     );
   }
@@ -176,13 +212,13 @@ export const HrLayout: React.FC = () => {
       >
         {PAGES.map((p) => {
           const Icon = p.icon;
-          const badge = p.badge(d);
+          const badge = p.badge(d, openIssues);
           /*
            * A bare red number beside a tab name is a puzzle: "Paperwork 34" says a quantity but
            * not of what, and not whether 34 is a workload or a warning. The hint spells the
            * number out in a sentence on hover, in the same words the destination screen uses.
            */
-          const hint = p.hint(d);
+          const hint = p.hint(d, openIssues);
           // Red means "there is something here for you to do", never "this number is large" —
           // see the badge rule above.
           const alarming = p.tone === 'alert' && badge !== null && badge > 0;
@@ -207,7 +243,7 @@ export const HrLayout: React.FC = () => {
               <Icon size={14} /> {p.label}
               {badge !== null && (
                 <span style={{
-                  fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '9px',
+                  fontSize: '12px', fontWeight: 700, padding: '1px 6px', borderRadius: '9px',
                   background: alarming ? 'var(--status-cancelled-bg)' : 'var(--bg-surface-2)',
                   color: alarming ? 'var(--danger)' : 'var(--text-muted)',
                 }}>{badge}</span>

@@ -3,6 +3,7 @@ import { View, Animated } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Icon, Tappable } from '../components/ui/primitives';
 import * as haptics from '../lib/haptics';
+import { useT, serverErrorText } from '../i18n';
 
 export interface LockScreenProps {
   /** Shown so the assayer can tell whose session this handset is holding before unlocking. */
@@ -34,6 +35,7 @@ const STUCK_SENSOR_MS = 4000;
 
 export const LockScreen: React.FC<LockScreenProps> = ({ name, onUnlock, onSignOut, onSkip }) => {
   const t = useTheme();
+  const tr = useT();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [stuck, setStuck] = useState(false);
@@ -54,7 +56,7 @@ export const LockScreen: React.FC<LockScreenProps> = ({ name, onUnlock, onSignOu
     // A cancel is a deliberate choice, not a failure — the button below is the retry.
     if (!result.success && result.error) {
       haptics.error();
-      setError(result.error);
+      setError(serverErrorText(result.error, 'login.biometricFailed'));
     } else if (result.success) {
       haptics.success();
     }
@@ -117,9 +119,9 @@ export const LockScreen: React.FC<LockScreenProps> = ({ name, onUnlock, onSignOu
         {/* Large-title weight, matching the hero treatment ProfileScreen and
             ChangePasswordScreen give their own headers — a lock gate is the first thing an
             assayer sees on every cold open, and deserves the same presence as those. */}
-        <AppText variant="largeTitle" style={{ letterSpacing: -0.5 }}>Locked</AppText>
+        <AppText variant="largeTitle" style={{ letterSpacing: -0.5 }}>{tr('lock.title')}</AppText>
         <AppText variant="small" tone="muted" style={{ textAlign: 'center' }}>
-          Signed in as {name}
+          {tr('lock.signedInAs', { name })}
         </AppText>
       </View>
 
@@ -137,16 +139,16 @@ export const LockScreen: React.FC<LockScreenProps> = ({ name, onUnlock, onSignOu
       {stuck && busy && (
         <View accessibilityRole="alert" accessibilityLiveRegion="polite" style={{ alignItems: 'center', gap: 2 }}>
           <AppText variant="small" tone="muted" style={{ textAlign: 'center' }}>
-            Sensor not responding?
+            {tr('lock.sensorStuck')}
           </AppText>
           <Tappable
             onPress={() => { haptics.select(); onSkip(); }}
             hitSlop={{ top: 8, bottom: 8, left: 12, right: 12 }}
             accessibilityRole="button"
-            accessibilityLabel="Continue without fingerprint check"
+            accessibilityLabel={tr('lock.continueWithoutAccessibility')}
           >
             <AppText variant="small" style={{ color: t.colors.primary, fontWeight: '700' }}>
-              Continue without it
+              {tr('lock.continueWithout')}
             </AppText>
           </Tappable>
         </View>
@@ -154,7 +156,7 @@ export const LockScreen: React.FC<LockScreenProps> = ({ name, onUnlock, onSignOu
 
       <View style={{ width: '100%', gap: t.space.md }}>
         <Button
-          label={busy ? 'Waiting…' : 'Unlock'}
+          label={busy ? tr('lock.waiting') : tr('lock.unlock')}
           icon="finger-print"
           onPress={attempt}
           loading={busy}
@@ -167,11 +169,11 @@ export const LockScreen: React.FC<LockScreenProps> = ({ name, onUnlock, onSignOu
           onPress={onSignOut}
           hitSlop={{ top: 10, bottom: 10, left: 20, right: 20 }}
           accessibilityRole="button"
-          accessibilityLabel="Sign out and sign in as someone else"
+          accessibilityLabel={tr('lock.switchAccountAccessibility')}
         >
           <View style={{ alignItems: 'center', paddingVertical: t.space.sm }}>
             <AppText variant="small" tone="muted">
-              Sign in as someone else
+              {tr('lock.switchAccount')}
             </AppText>
           </View>
         </Tappable>

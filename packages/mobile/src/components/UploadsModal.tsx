@@ -1,8 +1,9 @@
 import React from 'react';
 import { Modal, ScrollView, View, Platform } from 'react-native';
-import type { OutboxUpload, OutboxStatus } from '../services/upload-outbox';
+import { outboxTitle, type OutboxUpload, type OutboxStatus } from '../services/upload-outbox';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Badge, Button, Card, EmptyState, Icon, IconButton, ProgressBar, Tappable } from './ui/primitives';
+import { useT, serverErrorText, type TranslationKey } from '../i18n';
 
 interface UploadsModalProps {
   visible: boolean;
@@ -12,12 +13,17 @@ interface UploadsModalProps {
   onDismiss: (id: string) => void;
 }
 
-/** How each status looks and reads to a non-technical field worker. */
-const STATUS: Record<OutboxStatus, { label: string; tone: 'success' | 'info' | 'warning' | 'danger'; icon: string }> = {
-  SENT: { label: 'Sent', tone: 'success', icon: 'checkmark-circle' },
-  SENDING: { label: 'Sending', tone: 'info', icon: 'cloud-upload-outline' },
-  PENDING: { label: 'Waiting to send', tone: 'info', icon: 'time-outline' },
-  FAILED: { label: 'Not sent', tone: 'danger', icon: 'alert-circle-outline' },
+/**
+ * How each status looks and reads to a non-technical field worker.
+ *
+ * Catalogue keys, not sentences: this is module-scope and evaluated once at import, before any
+ * language has been resolved.
+ */
+const STATUS: Record<OutboxStatus, { labelKey: TranslationKey; tone: 'success' | 'info' | 'warning' | 'danger'; icon: string }> = {
+  SENT: { labelKey: 'uploads.status.sent', tone: 'success', icon: 'checkmark-circle' },
+  SENDING: { labelKey: 'uploads.status.sending', tone: 'info', icon: 'cloud-upload-outline' },
+  PENDING: { labelKey: 'uploads.status.pending', tone: 'info', icon: 'time-outline' },
+  FAILED: { labelKey: 'uploads.status.failed', tone: 'danger', icon: 'alert-circle-outline' },
 };
 
 const timeOf = (iso: string) => {
@@ -33,10 +39,16 @@ const UploadRow: React.FC<{
   onDismiss: (id: string) => void;
 }> = ({ upload, onRetry, onDismiss }) => {
   const t = useTheme();
+  const tr = useT();
   const s = STATUS[upload.status];
   const sending = upload.status === 'SENDING';
   const failed = upload.status === 'FAILED';
   const done = upload.status === 'SENT';
+  const title = outboxTitle(upload);
+  // "Packet" is the audit-return word and means nothing on a photograph of a PAN card. The list
+  // now carries both, so each row says what it actually holds.
+  const failedKey: TranslationKey =
+    upload.target.kind === 'REGISTRATION_DOCUMENT' ? 'uploads.failedDocument' : 'uploads.failedPacket';
 
   return (
     <Card level={1} style={{ gap: t.space.md }}>
@@ -61,17 +73,19 @@ const UploadRow: React.FC<{
           />
         </View>
         <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
-          <AppText variant="bodyStrong" numberOfLines={1}>{upload.branchName || 'Audit packet'}</AppText>
+          <AppText variant="bodyStrong" numberOfLines={1}>{title}</AppText>
           <AppText variant="caption" tone="faint" numberOfLines={1}>{upload.fileName}</AppText>
         </View>
-        <Badge label={s.label} tone={s.tone} dot />
+        <Badge label={tr(s.labelKey)} tone={s.tone} dot />
       </View>
 
       {sending && (
         <View style={{ gap: 6 }}>
           <ProgressBar value={upload.progress / 100} tone="primary" />
           <AppText variant="caption" tone="muted">
-            {upload.progress > 0 ? `${upload.progress}% sent` : 'Starting…'} — you can leave this screen, it keeps going.
+            {tr('uploads.keepsGoing', {
+              progress: upload.progress > 0 ? tr('uploads.progressSent', { percent: upload.progress }) : tr('uploads.starting'),
+            })}
           </AppText>
         </View>
       )}
@@ -79,25 +93,25 @@ const UploadRow: React.FC<{
       {failed && (
         <View style={{ gap: t.space.sm }}>
           <AppText variant="small" tone="muted">
-            {upload.error || 'This packet did not reach the desk.'} Tap Retry to send it again — the parts already sent are kept.
+            {tr('uploads.tapRetry', { reason: serverErrorText(upload.error, failedKey) })}
           </AppText>
           <View style={{ flexDirection: 'row', gap: t.space.sm }}>
-            <Button label="Retry" icon="refresh" onPress={() => onRetry(upload.id)} style={{ flex: 1 }} />
-            <Button label="Remove" icon="trash-outline" variant="ghost" onPress={() => onDismiss(upload.id)} />
+            <Button label={tr('common.retry')} icon="refresh" onPress={() => onRetry(upload.id)} style={{ flex: 1 }} />
+            <Button label={tr('uploads.remove')} icon="trash-outline" variant="ghost" onPress={() => onDismiss(upload.id)} />
           </View>
         </View>
       )}
 
       {done && (
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-          <AppText variant="caption" tone="faint">Delivered {timeOf(upload.updatedAt)}</AppText>
+          <AppText variant="caption" tone="faint">{tr('uploads.delivered', { time: timeOf(upload.updatedAt) })}</AppText>
           <Tappable
             onPress={() => onDismiss(upload.id)}
             accessibilityRole="button"
-            accessibilityLabel={`Clear ${upload.branchName || 'packet'} from the list`}
+            accessibilityLabel={tr('uploads.clearAccessibility', { title })}
             hitSlop={10}
           >
-            <AppText variant="caption" tone="primary">Clear</AppText>
+            <AppText variant="caption" tone="primary">{tr('uploads.clear')}</AppText>
           </Tappable>
         </View>
       )}
@@ -115,6 +129,7 @@ const UploadRow: React.FC<{
  */
 export const UploadsModal: React.FC<UploadsModalProps> = ({ visible, uploads, onClose, onRetry, onDismiss }) => {
   const t = useTheme();
+  const tr = useT();
 
   // Newest first — the packet the assayer just captured is the one they came here to check on.
   const ordered = [...uploads].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -136,13 +151,15 @@ export const UploadsModal: React.FC<UploadsModalProps> = ({ visible, uploads, on
             borderColor: t.colors.border,
           }}
         >
-          <IconButton icon="arrow-back" onPress={onClose} accessibilityLabel="Back" />
+          <IconButton icon="arrow-back" onPress={onClose} accessibilityLabel={tr('common.back')} />
           <View style={{ flex: 1, minWidth: 0 }}>
-            <AppText variant="h3" numberOfLines={1}>Uploads</AppText>
+            <AppText variant="h3" numberOfLines={1}>{tr('uploads.title')}</AppText>
             <AppText variant="caption" tone="muted" numberOfLines={1}>
-              {failed > 0
-                ? `${failed} packet${failed === 1 ? '' : 's'} need${failed === 1 ? 's' : ''} retrying`
-                : 'Your audit packets on their way to the desk'}
+              {failed === 0
+                ? tr('uploads.subtitle')
+                : failed === 1
+                  ? tr('uploads.oneFailed')
+                  : tr('uploads.manyFailed', { count: failed })}
             </AppText>
           </View>
         </View>
@@ -150,8 +167,8 @@ export const UploadsModal: React.FC<UploadsModalProps> = ({ visible, uploads, on
         {ordered.length === 0 ? (
           <EmptyState
             icon="cloud-done-outline"
-            title="Nothing to send"
-            body="Packets you scan or attach show here until they reach the desk. If one fails, you can retry it from here."
+            title={tr('uploads.emptyTitle')}
+            body={tr('uploads.emptyBody')}
           />
         ) : (
           <ScrollView contentContainerStyle={{ padding: t.space.lg, gap: t.space.md }}>

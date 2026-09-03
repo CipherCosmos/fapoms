@@ -8,6 +8,10 @@ import {
 import { Injectable } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { JwtService } from '@nestjs/jwt';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Repository } from 'typeorm';
+import { AssayerEntity } from '../assayer/assayer.entity';
+import { isOnboardingStage } from '../auth/auth.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { RegionGuardService, RoomVerdict } from '../../infrastructure/scope/region-guard.service';
 import { REGION_ORDER } from '@fapoms/shared';
@@ -57,6 +61,8 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly jwtService: JwtService,
     private readonly eventPublisher: DomainEventPublisher,
     private readonly regionGuard: RegionGuardService,
+    @InjectRepository(AssayerEntity)
+    private readonly assayers: Repository<AssayerEntity>,
   ) {
     this.eventPublisher.onPublish((eventName, payload) => {
       this.broadcastEvent(eventName, payload);
@@ -89,6 +95,42 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const userId = payload.id || payload.sub || payload.userId;
       if (!userId) {
         client.emit('error', { message: 'Invalid token payload' });
+        client.disconnect();
+        return;
+      }
+
+      /**
+       * A restricted session gets no socket either.
+       *
+       * `JwtAuthGuard` refuses an onboarding principal on every HTTP route outside registration,
+       * and refuses anybody still holding an issued password on every route but the one that
+       * changes it. Neither check runs here: this handler verifies the token's signature and joins
+       * rooms straight from its payload, so both gates stopped at the HTTP boundary and the socket
+       * was a way round them.
+       *
+       * There is no live exposure today — 1,155 of 1,163 assayers have no `organization_id`, so an
+       * onboarding session's `org:` room is empty, and the only `role:` broadcast goes to
+       * super-admins. That is a property of this deployment's data, not of the design: the day such
+       * a person is given an organisation they would receive that org's assignment changes,
+       * counter-offers and fee updates over the socket, with the HTTP guard none the wiser.
+       *
+       * Read from the row rather than the token because the token is minted for fifteen minutes
+       * and a person activated in that window would otherwise stay locked out of live updates for
+       * the remainder of it. One indexed read per CONNECT, not per message.
+       */
+      const assayer = await this.assayers.findOne({
+        where: { id: userId },
+        select: { id: true, lifecycleStatus: true, mustChangePassword: true },
+      });
+      if (assayer && (isOnboardingStage(assayer.lifecycleStatus) || assayer.mustChangePassword)) {
+        // Same discriminators the HTTP 403s carry, so a client can tell this apart from a dead
+        // session and route to the screen that clears it rather than retrying for ever.
+        client.emit('error', {
+          message: assayer.mustChangePassword
+            ? 'Change your password before continuing.'
+            : 'Finish your registration before continuing.',
+          code: assayer.mustChangePassword ? 'PASSWORD_CHANGE_REQUIRED' : 'REGISTRATION_IN_PROGRESS',
+        });
         client.disconnect();
         return;
       }

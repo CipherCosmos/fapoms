@@ -1,7 +1,7 @@
 import React from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Users, ExternalLink } from 'lucide-react';
-import type { HrWorkforceOverview, HrAction } from '../../hooks/useHrWorkforce';
+import type { HrWorkforceOverview } from '../../hooks/useHrWorkforce';
 
 /**
  * Presentation shared by every HR page.
@@ -57,40 +57,28 @@ export const card: React.CSSProperties = {
   padding: '16px',
 };
 
+/**
+ * The caption above a fact. 12px is the floor, not a preference.
+ *
+ * These captions were 11px (and the record's own copy of them 10.5px), which is the size a
+ * design system uses for a footnote. The people reading these screens are non-technical clerks
+ * working from an office desk, and the caption is frequently the ONLY thing naming a value —
+ * "Verdict", "Checked", "Emergency relation". An unreadable caption over a readable value is a
+ * value with no name. Uppercase at 11px is worse again: capitals lose the word-shape the eye
+ * reads by, so the size has to make up for it.
+ */
 export const label: React.CSSProperties = {
-  fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.06em',
+  fontSize: '12px', textTransform: 'uppercase', letterSpacing: '0.06em',
   color: 'var(--text-muted)', fontWeight: 700,
 };
-
-/**
- * How an identity document's verification state is said out loud.
- *
- * The document register spelled these three states as "Verified / Pending / Rejected" while the
- * expiry list on the sibling chip printed the raw column straight from the API — the same
- * document read "Verified" on one chip and `PENDING` on another, and HR had no way to know those
- * were the same vocabulary. One map, imported by both, so they cannot drift again. It lives here
- * rather than in @fapoms/shared because that package labels *audit* document types
- * (hrDocumentTypeLabel) but carries no map for this column.
- */
-export const GOV_DOC_STATUS_LABELS: Record<string, string> = {
-  VERIFIED: 'Verified',
-  PENDING: 'Pending',
-  REJECTED: 'Rejected',
-};
-
-export const govDocStatusLabel = (status?: string | null): string =>
-  GOV_DOC_STATUS_LABELS[status ?? 'PENDING'] ?? 'Pending';
-
-// Lives in assayer-shared.ts, which is plain data rather than presentation; re-exported here so
-// the pages already importing it from this module do not need touching.
-export { FIELD_LABELS } from './assayer-shared';
 
 // Imported (rather than a pure re-export) because this file also uses fmtWhen itself below;
 // re-exported so the 5 pages already importing these from here don't need touching — the one
 // definition now lives in utils/dates.ts, same treatment utils/money.ts already got (see
 // assayer-shared.ts, which does the same for `money`).
-import { fmtDate, fmtWhen } from '../../utils/dates';
-export { fmtDate, fmtWhen };
+import { fmtWhen } from '../../utils/dates';
+export { fmtDate, fmtWhen } from '../../utils/dates';
+import { counted } from '../../utils/plural';
 
 /** A number with a caption, and optionally a tone when it represents a problem. */
 export const Stat: React.FC<{ value: React.ReactNode; caption: string; tone?: string; hint?: string }> = ({
@@ -132,15 +120,37 @@ export const HrHeader: React.FC<{ data: HrWorkforceOverview; canManage: boolean 
   </div>
 );
 
-/** Severity chip for a worklist row. */
-export const SeverityChip: React.FC<{ severity: HrAction['severity'] }> = ({ severity }) => {
-  const s = SEVERITY[severity] ?? SEVERITY.low;
-  return (
-    <span style={{ fontSize: '10px', fontWeight: 700, padding: '2px 8px', borderRadius: '999px', background: s.bg, color: s.fg }}>
-      {s.label}
-    </span>
-  );
-};
+/**
+ * The words under the attrition percentage — written once, because two screens print that number.
+ *
+ * Both of them explained it differently and one of them explained it wrongly: the Overview tile
+ * quoted `headcount.total`, a population that includes everybody who left before the window, so a
+ * tile reading 25% was explained underneath by two numbers that work out to 20%. The rate divides
+ * by `averageHeadcount12m` — still on the roster plus those who left during the window — and the
+ * server sends that denominator so the screen does not have to guess at it. Taking only the
+ * attrition block as an argument is the point: there is no other population in reach to quote.
+ *
+ * `unaccounted` is the part neither number can hold. 25 people left with no leaving date on their
+ * record; they are off the roster and cannot be placed inside a twelve-month window, so the rate
+ * is computed without them. The server has published that count all along for this reason. Saying
+ * it out loud is the difference between a percentage a clerk can defend in a meeting and one that
+ * quietly disagrees with the exit count on the same screen.
+ */
+export const attritionExplainer = (a: HrWorkforceOverview['attrition']): {
+  hint: string;
+  unaccounted: string | null;
+} => ({
+  hint: `${counted(a.exits12m, 'person', 'people')} left in the last 12 months, out of `
+    + `${a.averageHeadcount12m} on the roster over that period`
+    + (a.undatedExits > 0
+      ? `. A further ${a.undatedExits} left with no leaving date, so they are in neither number.`
+      : ''),
+  unaccounted: a.undatedExits > 0
+    ? `${counted(a.undatedExits, 'more person', 'more people')} left without a leaving date on `
+      + 'their record. There is no way to tell whether they went in the last 12 months, so this '
+      + 'percentage is worked out without them — add their leaving dates and it will change.'
+    : null,
+});
 
 export const OpenLink: React.FC<{ onClick: () => void; label?: string }> = ({ onClick, label: text = 'Open' }) => (
   <button onClick={onClick} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '12px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px', padding: 0 }}>
@@ -148,70 +158,19 @@ export const OpenLink: React.FC<{ onClick: () => void; label?: string }> = ({ on
   </button>
 );
 
-export const Table: React.FC<{ head: string[]; rows: React.ReactNode[][] }> = ({ head, rows }) => (
-  <div style={{ overflowX: 'auto' }}>
-    <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12.5px' }}>
-      <thead>
-        <tr>
-          {head.map((h) => (
-            <th key={h} style={{ ...label, textAlign: 'left', padding: '8px 10px', borderBottom: '1px solid var(--border-color)', whiteSpace: 'nowrap' }}>{h}</th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((r, i) => (
-          <tr key={i} style={{ borderBottom: '1px solid var(--border-hair)' }}>
-            {r.map((c, j) => (
-              <td key={j} style={{ padding: '9px 10px', color: 'var(--text-secondary)', verticalAlign: 'middle' }}>{c}</td>
-            ))}
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  </div>
-);
+/*
+  THERE IS NO `Table` HERE ANY MORE. Use `DataTable` from components/ui, with
+  `density="compact"` — that is what this one was, and it is what these pages still look like.
 
-/**
- * How long something has left before it lapses — the one sentence every HR screen uses.
- *
- * EXTENDED, NOT FORKED. `days` was `number` and both extra props are optional, so the existing
- * `<ExpiryChip days={n} />` calls (HrCapabilityPage among them, which this file cannot edit)
- * render byte-identically to before. What was added:
- *
- *   `days: number | null` — a certificate or identity paper with no expiry date recorded used
- *   to render *nothing at all*: the caller guarded on `days !== null` and skipped the chip. On
- *   screen that is indistinguishable from a row that is still loading, or from one that is
- *   comfortably in date. "No expiry date" is a fact about the record and it deserves to be
- *   said, in the same chip, in the same place the countdown would have been. Callers that
- *   still guard on null keep their old behaviour; callers that pass null get the new chip.
- *
- *   `date` — the expiry date itself, shown only as the chip's hover title. "12d left" does not
- *   tell you *which day*, and the two paperwork tables print that date in different shapes
- *   (Compliance in its own column, Documents inline as "exp …"). Carrying it on the chip means
- *   the answer is reachable from the chip wherever the chip appears.
- */
-export const ExpiryChip: React.FC<{ days: number | null; date?: string | null }> = ({ days, date }) => {
-  const tone = days === null
-    ? { bg: 'var(--bg-surface-2)', fg: 'var(--text-muted)' }
-    : days < 0
-      ? { bg: 'var(--status-cancelled-bg)', fg: 'var(--danger)' }
-      : days <= 30
-        ? { bg: 'var(--status-pending-bg)', fg: 'var(--warning)' }
-        : { bg: 'var(--bg-surface-2)', fg: 'var(--text-muted)' };
-  const text = days === null
-    ? 'No expiry date'
-    : days < 0 ? `${Math.abs(days)}d overdue` : `${days}d left`;
-  const title = days === null
-    ? 'No expiry date has been recorded against this record.'
-    : date
-      ? `Expires ${fmtDate(date)}`
-      : undefined;
-  return (
-    <span title={title} style={{ fontSize: '10.5px', fontWeight: 700, padding: '2px 7px', borderRadius: '999px', background: tone.bg, color: tone.fg }}>
-      {text}
-    </span>
-  );
-};
+  It took `head: string[]` and `rows: ReactNode[][]`, which is a shorter thing to write and a
+  worse thing to own. A conditional column meant writing
+  `head={canManage ? ['Client', 'Standing', ''] : ['Client', 'Standing']}` and then pushing the
+  matching cell onto an array twenty lines further down the same function: the header and the
+  cell beneath it held in the same order by nothing but attention, in five places on the vetting
+  tab alone. There was also no key on a row, no sortable header, no empty state and no loading
+  state, so every caller that needed one of those either went without or wrote its own — which is
+  where the roster's hand-rolled `<table>` came from.
+*/
 
 /**
  * Plain-language filter chips for the merged HR pages.
@@ -246,14 +205,18 @@ export const ViewChips = <K extends string>({ options, value, onChange }: {
             padding: '7px 14px', fontSize: '12.5px', fontWeight: 600, cursor: 'pointer',
             borderRadius: '999px',
             border: `1px solid ${active ? 'var(--accent)' : 'var(--border-color)'}`,
-            background: active ? 'rgba(216,174,71,0.12)' : 'var(--bg-surface-2)',
+            // Mixed from the theme's own accent rather than written out as the gold one theme
+            // happens to use: rgba(216,174,71,…) is the dark-gold palette's accent, so on the
+            // light and flame themes the selected chip was tinted a colour nothing else on the
+            // page used. There are eight themes; only one of them was right.
+            background: active ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'var(--bg-surface-2)',
             color: active ? 'var(--accent)' : 'var(--text-secondary)',
           }}
         >
           {o.label}
           {o.count !== null && o.count !== undefined && (
             <span style={{
-              fontSize: '10px', fontWeight: 700, padding: '1px 6px', borderRadius: '9px',
+              fontSize: '12px', fontWeight: 700, padding: '1px 7px', borderRadius: '9px',
               background: o.count > 0 ? 'var(--status-cancelled-bg)' : 'var(--bg-surface-2)',
               color: o.count > 0 ? 'var(--danger)' : 'var(--text-muted)',
             }}>{o.count}</span>

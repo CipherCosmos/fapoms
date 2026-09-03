@@ -7,6 +7,7 @@ import { NotificationDispatchService } from '../../modules/notifications/notific
 import { DeskEscalationService } from '../../modules/validation/desk-escalation.service';
 import { FeedbackEscalationService } from '../../modules/feedback/feedback-escalation.service';
 import { LocationTrailService } from '../../modules/assayer/location-trail.service';
+import { DataIntegrityService } from '../../modules/assayer/data-integrity.service';
 import { EmailDigestService } from './email-digest.service';
 import { BillingEngineService } from '../../modules/billing-engine/billing-engine.service';
 import { businessTodayDateKey } from '@fapoms/shared';
@@ -39,6 +40,7 @@ export class SlaScannerWorker {
     private readonly deskEscalation: DeskEscalationService,
     private readonly feedbackEscalation: FeedbackEscalationService,
     private readonly locationTrail: LocationTrailService,
+    private readonly dataIntegrity: DataIntegrityService,
     private readonly emailDigest: EmailDigestService,
     private readonly billingEngine: BillingEngineService,
   ) {}
@@ -54,7 +56,7 @@ export class SlaScannerWorker {
   }
 
   /**
-   * Six independent scans behind one 15-minute tick. Each is idempotent (its notifications carry
+   * Independent scans behind one 15-minute tick. Each is idempotent (its notifications carry
    * dedupe keys, its state changes are guarded), so they are run as siblings, not a chain.
    *
    * They used to run sequentially with every catch re-throwing, so a failure in the first phase
@@ -238,12 +240,30 @@ export class SlaScannerWorker {
       if (removed > 0) this.logger.log(`Location trail retention removed ${removed} fix(es).`);
     });
 
+    /**
+     * The roster's standing data-integrity scan — corrupt dates, lifecycle contradictions,
+     * duplicate identity numbers — writing into the same review queue the import panel reads.
+     * Every 15-minute tick, not the hourly gate the reconcile uses: ten small reads over 1,163
+     * rows plus ~150 keyed lookups is cheap, and it means a corrected record's finding closes
+     * within 15 minutes instead of an hour. Idempotent by key: two ticks over unchanged data
+     * write nothing (data-integrity.spec.ts pins it), so repetition costs only the reads.
+     */
+    await runPhase('data integrity scan', async () => {
+      const result = await this.dataIntegrity.scan();
+      if (result.inserted + result.reopened + result.autoClosed > 0) {
+        this.logger.log(
+          `Data integrity scan: ${result.findings} finding(s) — ${result.inserted} new, `
+          + `${result.reopened} reopened, ${result.autoClosed} auto-closed as corrected.`,
+        );
+      }
+    });
+
     if (failures.length > 0) {
       // Surface the tick as failed (so Bull records and retries it) while preserving that every
       // phase was attempted. AggregateError keeps each underlying cause for the logs.
       throw new AggregateError(
         failures.map((f) => f.error),
-        `SLA scanner: ${failures.length} of 9 phases failed (${failures.map((f) => f.phase).join(', ')}).`,
+        `SLA scanner: ${failures.length} of 10 phases failed (${failures.map((f) => f.phase).join(', ')}).`,
       );
     }
   }

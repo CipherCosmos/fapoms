@@ -4,6 +4,7 @@ import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Card, Icon, Tappable } from '../components/ui/primitives';
 import { MobileApiService } from '../services/api.service';
 import * as haptics from '../lib/haptics';
+import { useT, serverErrorText } from '../i18n';
 
 /**
  * Forced password change.
@@ -48,6 +49,7 @@ const RuleRow: React.FC<{ ok: boolean; label: string }> = ({ ok, label }) => {
 
 export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onCancel }) => {
   const t = useTheme();
+  const tr = useT();
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -94,22 +96,22 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
     // than after a round trip on a weak field connection.
     if (!currentPassword || !newPassword) {
       haptics.error();
-      setError('Enter your current password and choose a new one.');
+      setError(tr('password.errMissing'));
       return;
     }
     if (newPassword.length < MIN_LENGTH) {
       haptics.error();
-      setError(`Your new password must be at least ${MIN_LENGTH} characters.`);
+      setError(tr('password.errTooShort', { count: MIN_LENGTH }));
       return;
     }
     if (newPassword !== confirmPassword) {
       haptics.error();
-      setError('The two new passwords do not match.');
+      setError(tr('password.errMismatch'));
       return;
     }
     if (newPassword === currentPassword) {
       haptics.error();
-      setError('Your new password must be different from the current one.');
+      setError(tr('password.errSameAsCurrent'));
       return;
     }
 
@@ -118,7 +120,7 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
       const res = await MobileApiService.changeOwnPassword(currentPassword, newPassword);
       if (!res.success) {
         haptics.error();
-        setError(res.error || 'Could not change your password. Please try again.');
+        setError(serverErrorText(res.error, 'password.errFailed'));
         return;
       }
       haptics.success();
@@ -150,18 +152,16 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
           {/* Large-title weight — the same scale ProfileScreen gives its own name header —
               rather than h2, so a one-task form gets the same hero treatment a full screen does. */}
           <AppText variant="largeTitle" style={{ textAlign: 'center', letterSpacing: -0.5 }}>
-            {onCancel ? 'Change your password' : 'Choose your own password'}
+            {onCancel ? tr('password.titleVoluntary') : tr('password.titleForced')}
           </AppText>
           <AppText variant="small" tone="muted" style={{ textAlign: 'center' }}>
-            {onCancel
-              ? 'Enter your current password, then the new one you want to use.'
-              : 'Your account is still using a password that was issued to you. Set one only you know before continuing.'}
+            {onCancel ? tr('password.subtitleVoluntary') : tr('password.subtitleForced')}
           </AppText>
         </View>
 
         <Card level={2} style={{ gap: t.space.lg, padding: t.space.xl, borderRadius: t.radius['2xl'] }}>
           <View style={{ gap: t.space.sm }}>
-            <AppText variant="overline" tone="faint">CURRENT PASSWORD</AppText>
+            <AppText variant="overline" tone="faint">{tr('password.currentLabel')}</AppText>
             <View style={inputWrap(focused === 'cur')}>
               <Icon name="key-outline" size={18} color={focused === 'cur' ? t.colors.primary : t.colors.textFaint} />
               <TextInput
@@ -173,7 +173,7 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
                 autoCapitalize="none"
                 autoCorrect={false}
                 style={inputStyle}
-                accessibilityLabel="Current password"
+                accessibilityLabel={tr('password.currentAccessibility')}
                 returnKeyType="next"
                 blurOnSubmit={false}
                 onSubmitEditing={() => newRef.current?.focus()}
@@ -182,7 +182,7 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
           </View>
 
           <View style={{ gap: t.space.sm }}>
-            <AppText variant="overline" tone="faint">NEW PASSWORD</AppText>
+            <AppText variant="overline" tone="faint">{tr('password.newLabel')}</AppText>
             <View style={inputWrap(focused === 'new')}>
               <Icon name="lock-closed-outline" size={18} color={focused === 'new' ? t.colors.primary : t.colors.textFaint} />
               <TextInput
@@ -195,7 +195,7 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
                 autoCapitalize="none"
                 autoCorrect={false}
                 style={inputStyle}
-                accessibilityLabel="New password"
+                accessibilityLabel={tr('password.newAccessibility')}
                 returnKeyType="next"
                 blurOnSubmit={false}
                 onSubmitEditing={() => confirmRef.current?.focus()}
@@ -207,7 +207,7 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
                 onPress={() => setShowNew((v) => !v)}
                 hitSlop={14}
                 accessibilityRole="button"
-                accessibilityLabel={showNew ? 'Hide new password' : 'Show new password'}
+                accessibilityLabel={showNew ? tr('password.hideNew') : tr('password.showNew')}
               >
                 <Icon name={showNew ? 'eye-off-outline' : 'eye-outline'} size={18} color={t.colors.textFaint} />
               </Tappable>
@@ -216,13 +216,13 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
                 connection every round trip costs time, so a typo is worth catching before "Set
                 password" is even tapped. */}
             <View style={{ gap: 4 }}>
-              <RuleRow ok={lengthOk} label={`At least ${MIN_LENGTH} characters`} />
-              <RuleRow ok={differsFromCurrent} label="Different from your current password" />
+              <RuleRow ok={lengthOk} label={tr('password.ruleLength', { count: MIN_LENGTH })} />
+              <RuleRow ok={differsFromCurrent} label={tr('password.ruleDiffers')} />
             </View>
           </View>
 
           <View style={{ gap: t.space.sm }}>
-            <AppText variant="overline" tone="faint">CONFIRM NEW PASSWORD</AppText>
+            <AppText variant="overline" tone="faint">{tr('password.confirmLabel')}</AppText>
             <View style={inputWrap(focused === 'conf')}>
               <Icon name="checkmark-circle-outline" size={18} color={focused === 'conf' ? t.colors.primary : t.colors.textFaint} />
               <TextInput
@@ -235,7 +235,7 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
                 autoCapitalize="none"
                 autoCorrect={false}
                 style={inputStyle}
-                accessibilityLabel="Confirm new password"
+                accessibilityLabel={tr('password.confirmAccessibility')}
                 returnKeyType="go"
                 onSubmitEditing={submit}
               />
@@ -243,12 +243,12 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
                 onPress={() => setShowConfirm((v) => !v)}
                 hitSlop={14}
                 accessibilityRole="button"
-                accessibilityLabel={showConfirm ? 'Hide confirmed password' : 'Show confirmed password'}
+                accessibilityLabel={showConfirm ? tr('password.hideConfirm') : tr('password.showConfirm')}
               >
                 <Icon name={showConfirm ? 'eye-off-outline' : 'eye-outline'} size={18} color={t.colors.textFaint} />
               </Tappable>
             </View>
-            <RuleRow ok={matches} label="Matches the new password" />
+            <RuleRow ok={matches} label={tr('password.ruleMatches')} />
           </View>
 
           {error ? (
@@ -265,15 +265,15 @@ export const ChangePasswordScreen: React.FC<Props> = ({ onChanged, onLogout, onC
             </View>
           ) : null}
 
-          <Button label={busy ? 'Saving…' : 'Set password'} onPress={submit} loading={busy} size="lg" full />
+          <Button label={busy ? tr('common.saving') : tr('password.submit')} onPress={submit} loading={busy} size="lg" full />
         </Card>
 
         {/* The secondary exit stays a plain ghost button — quiet relative to the primary
             "Set password" action above, never competing with it for the eye. */}
         {onCancel ? (
-          <Button label="Cancel" variant="ghost" onPress={onCancel} full />
+          <Button label={tr('common.cancel')} variant="ghost" onPress={onCancel} full />
         ) : (
-          <Button label="Sign out" variant="ghost" onPress={onLogout} full />
+          <Button label={tr('common.signOut')} variant="ghost" onPress={onLogout} full />
         )}
       </ScrollView>
     </KeyboardAvoidingView>

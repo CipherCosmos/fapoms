@@ -4,6 +4,7 @@ import { AppNotification } from '../types/mobile-app';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Card, EmptyState, Icon, IconButton, Divider, Tappable } from './ui/primitives';
 import { SwipeableRow } from './ui/SwipeableRow';
+import { useT } from '../i18n';
 
 interface NotificationsModalProps {
   visible: boolean;
@@ -84,6 +85,7 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
   onMarkAllRead,
 }) => {
   const t = useTheme();
+  const tr = useT();
 
   return (
     <Modal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
@@ -96,9 +98,11 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
         <Card level={1} style={{ gap: t.space.sm, padding: t.space.lg, maxHeight: '82%' }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
             <AppText variant="h3">
-              Notifications{unreadCount > 0 ? ` (${unreadCount})` : ''}
+              {unreadCount > 0
+                ? tr('notifications.titleWithCount', { count: unreadCount })
+                : tr('notifications.title')}
             </AppText>
-            <IconButton icon="close" onPress={onClose} accessibilityLabel="Close notifications" />
+            <IconButton icon="close" onPress={onClose} accessibilityLabel={tr('notifications.close')} />
           </View>
 
           {/* Clearing the badge was previously one tap per item. An assayer back from a week in
@@ -106,11 +110,11 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
               and the number stopped meaning anything. Shown only when there is something to
               clear, so it does not sit there as a dead control. */}
           {unreadCount > 0 && onMarkAllRead ? (
-            <Tappable accessibilityLabel="Mark all notifications as read" onPress={onMarkAllRead}>
+            <Tappable accessibilityLabel={tr('notifications.markAllReadAccessibility')} onPress={onMarkAllRead}>
               <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 6, paddingVertical: t.space.xs }}>
                 <Icon name="checkmark-done-outline" size={15} color={t.colors.accent} />
                 <AppText variant="small" style={{ color: t.colors.accent, fontWeight: '600' }}>
-                  Mark all read
+                  {tr('notifications.markAllRead')}
                 </AppText>
               </View>
             </Tappable>
@@ -122,8 +126,8 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
             <View style={{ paddingVertical: t.space.xl }}>
               <EmptyState
                 icon="notifications-off-outline"
-                title="Nothing new"
-                body="Assignment offers, clarification requests and payment updates land here."
+                title={tr('notifications.emptyTitle')}
+                body={tr('notifications.emptyBody')}
               />
             </View>
           ) : (
@@ -195,12 +199,12 @@ export const NotificationsModal: React.FC<NotificationsModalProps> = ({
                       style={{ borderRadius: 0 }}
                       leftAction={
                         n.isRead && onMarkUnread
-                          ? { icon: 'mail-unread-outline', label: 'Unread', color: t.colors.accent, onTrigger: () => onMarkUnread(n.id) }
+                          ? { icon: 'mail-unread-outline', label: tr('notifications.swipeUnread'), color: t.colors.accent, onTrigger: () => onMarkUnread(n.id) }
                           : undefined
                       }
                       rightAction={
                         !n.isRead
-                          ? { icon: 'checkmark-done-outline', label: 'Read', color: t.colors.success ?? t.colors.primary, onTrigger: () => onMarkRead(n.id) }
+                          ? { icon: 'checkmark-done-outline', label: tr('notifications.swipeRead'), color: t.colors.success ?? t.colors.primary, onTrigger: () => onMarkRead(n.id) }
                           : undefined
                       }
                     >

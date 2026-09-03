@@ -29,6 +29,12 @@ export interface UploadOutbox {
 /**
  * Turn one outbox entry into an actual transfer.
  *
+ * The destination decides the endpoint. An audit packet goes to the assignment's document store;
+ * a registration scan goes onto the person's own HR record. They share this queue because they
+ * share the problem it solves — a big file, captured in the field, on a connection that may not
+ * be there — and nothing about durability, retry or "the assayer can see it failed" differs
+ * between them.
+ *
  * Native streams the packet off disk with the resumable uploader — the one that asks the server
  * which chunks survived and resends only the gaps. Web has no file path to stream, so it keeps
  * the single-shot path (which retries the whole file on its own).
@@ -37,21 +43,36 @@ async function sendOne(
   entry: OutboxUpload,
   onProgress: (percent: number) => void,
 ): Promise<{ success: boolean; error?: string }> {
+  if (entry.target.kind === 'REGISTRATION_DOCUMENT') {
+    // Not chunked. These are single photographs of a card or a signed form — a few hundred
+    // kilobytes against an audit packet's tens of megabytes — so the session handshake the
+    // resumable uploader needs would cost more round trips than the file itself. A failure
+    // re-sends the whole thing, which at this size is what a retry means anyway.
+    onProgress(10);
+    const res = await MobileApiService.uploadRegistrationDocument(entry.target.requirement, {
+      uri: entry.fileUri,
+      name: entry.fileName,
+    });
+    if (res.success) onProgress(100);
+    return res;
+  }
+
+  const { assignmentId } = entry.target;
   if (entry.fileUri && Platform.OS !== 'web') {
     const res = await MobileApiService.uploadAuditPdfResumable(
-      entry.assignmentId,
+      assignmentId,
       entry.fileName,
       entry.fileUri,
-      entry.assignmentId,
+      assignmentId,
       onProgress,
     );
     return { success: !!res?.success, error: res?.error };
   }
   const res = await MobileApiService.uploadCompletedAuditPdf(
-    entry.assignmentId,
+    assignmentId,
     entry.fileName,
     { uri: entry.fileUri, base64: entry.base64 },
-    entry.assignmentId,
+    assignmentId,
   );
   return { success: !!res?.success, error: res?.error };
 }

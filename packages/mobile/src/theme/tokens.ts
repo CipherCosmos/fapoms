@@ -79,7 +79,21 @@ const dark: Palette = {
 
   text: '#F0F2F7',
   textMuted: '#9CA3B4',
-  textFaint: '#6B7080',
+  /**
+   * Lightened from `#6B7080`, which failed WCAG AA everywhere it was used.
+   *
+   * Measured against the three grounds this app paints on — bg `#0E1016`, surface `#191C24`,
+   * surfaceAlt `#232733` — the old value scored 3.85, 3.45 and 3.02 against a 4.5 requirement.
+   * That would be defensible for decoration, and it is not what this tone does: `overline` +
+   * `tone="faint"` is the FIELD LABEL style, used at 38 sites including every label on the
+   * profile form and all three on the change-password screen. Uppercase, letter-spaced, 12px and
+   * below the contrast floor is the least legible combination available, applied to the words a
+   * low-literacy field worker most needs to get right.
+   *
+   * `#8A91A0` scores 6.01, 5.38 and 4.71 — passing on all three — while staying a clear step
+   * below `textMuted` (1.25:1 between them), so the three-tier scale still reads as three tiers.
+   */
+  textFaint: '#8A91A0',
 
   /* Electric violet — the brand signal. Bright enough that near-black text sits on
      it (see onPrimary), which is the modern neon-button look. Reserved for the
@@ -125,7 +139,13 @@ const light: Palette = {
 
   text: '#16151F',
   textMuted: '#5B5A6B',
-  textFaint: '#8A8898',
+  /**
+   * Darkened from `#8A8898` for the same reason as the dark theme's `textFaint` above, and this
+   * side was the worse of the two: 3.19, 3.47 and 3.36 against its own bg / surface / surfaceAlt,
+   * where 4.5 is the floor for text this size. `#706E80` scores 4.57, 4.96 and 4.81 and keeps a
+   * 1.36:1 step below `textMuted`.
+   */
+  textFaint: '#706E80',
 
   /* Deepened violet. The neon #8B7CFF is only ~2.5:1 on white — fine as a glow on
      dark, unreadable as a label or a link on light — so light mode carries the same
@@ -199,8 +219,18 @@ export const type = {
   bodyStrong: { fontSize: 15, lineHeight: 21, fontWeight: '700' as const },
   small: { fontSize: 13, lineHeight: 18, fontWeight: '500' as const },
   caption: { fontSize: 12, lineHeight: 16, fontWeight: '600' as const },
-  /** Section headers and metadata — the only place we shout. */
-  overline: { fontSize: 11, lineHeight: 14, fontWeight: '800' as const, letterSpacing: 0.7 },
+  /**
+   * Section headers and metadata — the only place we shout.
+   *
+   * 12, not 11, and it is the same 12 as `caption` on purpose: this is the scale's floor, and
+   * `overline` had been sitting below it. That mattered more than the number suggests, because
+   * this is not only decoration — it is the field-label style, used at 38 sites including every
+   * label on the profile form and all three on the change-password screen. Uppercase, letter-
+   * spaced, `tone="faint"` and below the floor is the least legible combination the app can
+   * produce, aimed at the labels a low-literacy field worker most needs to read correctly.
+   * Weight and tracking still separate it from `caption`; size no longer does.
+   */
+  overline: { fontSize: 12, lineHeight: 16, fontWeight: '800' as const, letterSpacing: 0.7 },
   mono: {
     fontSize: 13,
     lineHeight: 18,

@@ -16,8 +16,9 @@ import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { CacheService } from '../../infrastructure/cache/cache.service';
-import { rbacPrincipalCacheKey } from '../auth/auth.service';
-import { EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey } from '@fapoms/shared';
+import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service';
+import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, DocumentVerification } from '@fapoms/shared';
+import { withCode } from '../../infrastructure/http/api-error';
 import { COMMITTED_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { geocodeIndia, pincodeAuthority } from '../geo/india-geocoder';
@@ -98,9 +99,14 @@ async function assertAddressConsistent(dto: {
     // list of state names is exactly how the first two drifted apart.
     const known = canonicalStateName(dto.state) ?? canonicalStateName(canonicalState(dto.state));
     if (!known) {
-      throw new BadRequestException(
-        `"${dto.state}" is not a state we recognise. It sets this assayer's region, zone and ` +
-        'holiday calendar, so it has to match a real state or union territory.',
+      // The rejected name is interpolated, so this message can never be matched as a literal by
+      // a translating client — it is the composed-message case the code contract exists for.
+      throw withCode(
+        new BadRequestException(
+          `"${dto.state}" is not a state we recognise. It sets this assayer's region, zone and ` +
+          'holiday calendar, so it has to match a real state or union territory.',
+        ),
+        ASSAYER_ERROR_CODES.UNKNOWN_STATE,
       );
     }
   }
@@ -160,11 +166,13 @@ function calendarDay(value: Date | string | null | undefined): string | null {
 /**
  * Nobody leaves before they arrive.
  *
- * 36 of the 1,163 people on the live roster have a joining date later than their exit date — one
- * joined in January 2024 and left in December 2023 — because no write path has ever compared the
- * pair. (Most of those are a corrupt imported date rather than a mistyped one; around seven are
- * genuine ordering errors with both years plausible, and those are the ones only a check at write
- * time can stop.) The pair is read as a length of service — HR's attrition figures, the tenure
+ * The roster import brought in 36 of these — one person joined in January 2024 and left in
+ * December 2023 — because no write path has ever compared the pair. Most were a corrupt imported
+ * date rather than a mistyped one, and `scripts/repair-corrupt-dates.js` has since blanked those.
+ * The 7 that remain on the live roster are genuine ordering errors with both years plausible, and
+ * they are exactly the ones only a check at write time can stop: no repair script can tell which
+ * of the two plausible dates is the wrong one. The pair is read as a length of service — HR's
+ * attrition figures, the tenure
  * input to the qualification score — and as a window of employment, and an inverted pair makes
  * both nonsense: negative service, or somebody who was never employed at all.
  *
@@ -198,6 +206,67 @@ function assertEmploymentDatesArePossible(record: {
 }
 
 
+
+/**
+ * The three identifiers a caller may ask to see whole, keyed by the URL segment that names them.
+ *
+ * The masking itself is not here — it belongs to the field policy in `assayer-visibility.ts`
+ * (`MASKED_IN_TRANSIT_FIELDS`), applied once for every route by `AssayerRedactionInterceptor`.
+ * This map is the reveal route's vocabulary: segment in, entity property out, and the same
+ * property name in the audit metadata. `sensitive-field-reveal.spec.ts` pins its values against
+ * the policy's list so a field can never become revealable without being masked, or masked with
+ * no way to read it.
+ */
+export const SENSITIVE_ASSAYER_FIELDS = {
+  pan: 'panNumber',
+  aadhaar: 'aadhaarNumber',
+  bank: 'bankAccountNumber',
+} as const;
+
+export type SensitiveAssayerField = keyof typeof SENSITIVE_ASSAYER_FIELDS;
+
+/** What a caller may ask to reveal, in the order the record shows them. */
+export const SENSITIVE_FIELD_NAMES = Object.keys(SENSITIVE_ASSAYER_FIELDS) as SensitiveAssayerField[];
+
+/** Human labels for the audit remark and the refusal messages — one place, one spelling. */
+const SENSITIVE_FIELD_LABELS: Record<SensitiveAssayerField, string> = {
+  pan: 'PAN number',
+  aadhaar: 'Aadhaar number',
+  bank: 'bank account number',
+};
+
+/**
+ * Refuse a write that is carrying a masked display value back to the database.
+ *
+ * The web edit form posts only the keys that changed (`buildAssayerEditBody`), but "changed" is
+ * decided against what the form was rendered with — and since the read is now masked, any
+ * client that touches a neighbouring field and re-serialises the form can send `******234F` as
+ * the PAN. That save would replace a real, encrypted number with six asterisks and four digits,
+ * and there is no copy of the original anywhere to restore from.
+ *
+ * The message names the way out rather than just refusing: the value came from a masked read, so
+ * the fix is to fetch the real one from the reveal route (which records who looked) and edit
+ * that. `panNumber` and `aadhaarNumber` also have format validators on the request DTOs, but
+ * `bankAccountNumber` has none and never could — bank account numbers have no checkable shape —
+ * so the DTO layer alone left exactly the field a payroll-diversion attempt would aim at
+ * unguarded. This guard sits in the service so every write path is covered, including the
+ * importer and any internal caller passing the interface a wider object.
+ */
+export function assertNoMaskedPii(dto: Record<string, any> | null | undefined): void {
+  if (!dto) return;
+  for (const [name, property] of Object.entries(SENSITIVE_ASSAYER_FIELDS) as [SensitiveAssayerField, string][]) {
+    const incoming = dto[property];
+    if (typeof incoming === 'string' && looksMasked(incoming)) {
+      throw withCode(
+        new BadRequestException(
+          `The ${SENSITIVE_FIELD_LABELS[name]} you sent is the masked version shown on screen, not the `
+          + 'real number, and saving it would overwrite the real one. Reveal the field first, then edit it.',
+        ),
+        ASSAYER_ERROR_CODES.MASKED_VALUE_REJECTED,
+      );
+    }
+  }
+}
 
 export interface CreateAssayerDto {
   /** Omit to have the server allocate the next free code. */
@@ -250,6 +319,17 @@ export interface CreateAssayerDto {
   maxDailyWorkload?: number;
   maxWeeklyWorkload?: number;
   eligibleClients?: string[];
+  /**
+   * How offers reach this person — see the column comment on `AssayerEntity`.
+   *
+   * The column has existed since the channel work and was in neither DTO, so it could be neither
+   * set nor corrected through the API: every one of the 1,163 roster rows sits on the `AUTO`
+   * default. AUTO derives the channel from whether a device token exists, which for somebody with
+   * no smartphone AND no phone number resolves to PHONE and produces a call task with nothing to
+   * call. Making it settable is what lets HR state "this person is reached by phone" as a fact
+   * about them rather than leaving it to be inferred from an absent device.
+   */
+  preferredContactChannel?: 'AUTO' | 'APP' | 'PHONE';
 
   /**
    * Facts the appraiser roster carries. They arrived through the importer, which writes the
@@ -324,6 +404,8 @@ export interface UpdateAssayerDto {
   maxDailyWorkload?: number;
   maxWeeklyWorkload?: number;
   eligibleClients?: string[];
+  /** See `CreateAssayerDto.preferredContactChannel` — why the column needed a way in. */
+  preferredContactChannel?: 'AUTO' | 'APP' | 'PHONE';
   /**
    * Facts the appraiser roster carries. They arrived through the importer, which writes the
    * entity directly, so an operator opening somebody imported from the spreadsheet saw a date of
@@ -532,7 +614,66 @@ export class AssayerService implements OnModuleInit {
       order: { createdAt: 'DESC' },
     });
     await this.hydrateAllWorkforceAttributes(assayers);
+    await this.hydrateDocumentSummaries(assayers);
     return { assayers, total };
+  }
+
+  /**
+   * The size of the paperwork checklist, and therefore the denominator on every roster row.
+   *
+   * Read from `ONBOARDING_DOCUMENT_COLUMNS` rather than written down, because that is the same
+   * list `RosterRecordsService.paperworkChecklist` renders on the record itself. A row saying
+   * "4 of 12" that opens onto a checklist of a different length is a bug nobody reports and
+   * everybody distrusts.
+   */
+  private static readonly DOCUMENT_REQUIREMENT_COUNT = Object.keys(ONBOARDING_DOCUMENT_COLUMNS).length;
+
+  /**
+   * Attach a per-person paperwork tally to a page of roster rows, in one query.
+   *
+   * The roster queue wants to offer "Documents to check" as a real queue, and until now the list
+   * endpoint returned no document rows at all — so the only thing that phrase could mean was
+   * "is at the DOCUMENT_VERIFICATION lifecycle stage", which says nothing about whether there is
+   * anything to look at.
+   *
+   * `withScan` counts requirements with a file attached, NOT `soft_copy_received`. That column was
+   * seeded from the spreadsheet's tick boxes and is currently true on 10,977 of the 11,160 active
+   * document rows while exactly 0 of them have a file behind them — a queue built on it would put
+   * essentially the whole roster in front of a reviewer with nothing to review. `awaitingVerdict`
+   * is the queue proper: a scan is on file and nobody has yet said verified or rejected.
+   *
+   * One grouped query over the page's ids, not one per row: the list serves up to 1,000 people.
+   */
+  private async hydrateDocumentSummaries(assayers: AssayerEntity[]): Promise<void> {
+    if (assayers.length === 0) return;
+    const ids = assayers.map((a) => a.id);
+
+    const rows: Array<{ assayer_id: string; with_scan: number; verified: number; awaiting_verdict: number }> =
+      await this.assayerRepository.manager.query(
+        `SELECT assayer_id,
+                COUNT(*) FILTER (WHERE jsonb_array_length(file_paths) > 0)::int AS with_scan,
+                COUNT(*) FILTER (WHERE verification_status = $2)::int AS verified,
+                COUNT(*) FILTER (WHERE jsonb_array_length(file_paths) > 0
+                                   AND (verification_status IS NULL OR verification_status = $3))::int
+                  AS awaiting_verdict
+           FROM assayer_documents
+          WHERE is_active = true AND assayer_id = ANY($1)
+          GROUP BY assayer_id`,
+        [ids, DocumentVerification.VERIFIED, DocumentVerification.PENDING],
+      );
+    const byAssayer = new Map(rows.map((r) => [r.assayer_id, r]));
+
+    for (const assayer of assayers) {
+      const tally = byAssayer.get(assayer.id);
+      // Someone with no document rows at all is not missing from the queue — they are the
+      // emptiest case of it, so they get zeros rather than an absent key the client must handle.
+      (assayer as any).documents = {
+        required: AssayerService.DOCUMENT_REQUIREMENT_COUNT,
+        withScan: tally?.with_scan ?? 0,
+        verified: tally?.verified ?? 0,
+        awaitingVerdict: tally?.awaiting_verdict ?? 0,
+      };
+    }
   }
 
   /**
@@ -664,6 +805,10 @@ export class AssayerService implements OnModuleInit {
    * one on screen would be worse than the error.
    */
   async create(dto: CreateAssayerDto, userId: string, organizationId?: string | null): Promise<AssayerEntity> {
+    // A create carrying a masked value is rarer than an edit — it happens when a form is cloned
+    // from a record that was read masked — but it stores the same asterisks, so it is refused the
+    // same way rather than left as the one door the guard does not cover.
+    assertNoMaskedPii(dto as Record<string, any>);
     const supplied = dto.assayerCode?.trim();
     if (supplied) {
       const existing = await this.assayerRepository.findOne({ where: { assayerCode: supplied } });
@@ -781,6 +926,9 @@ export class AssayerService implements OnModuleInit {
   }
 
   async update(id: string, dto: UpdateAssayerDto, userId: string): Promise<AssayerEntity> {
+    // Before anything is merged onto the entity: see `assertNoMaskedPii`. This has to run ahead
+    // of the copy loop below, which writes any key of the payload that matches a column.
+    assertNoMaskedPii(dto as Record<string, any>);
     const assayer = await this.findOne(id);
     const orig = {
       address: assayer.address,
@@ -987,8 +1135,11 @@ export class AssayerService implements OnModuleInit {
   async confirmBaseLocation(id: string, latitude: number, longitude: number, userId?: string): Promise<AssayerEntity> {
     await this.findOne(id);
     if (!isPlausibleIndianCoord(latitude, longitude)) {
-      throw new BadRequestException(
-        `${latitude}, ${longitude} is not a location in India. Check that location access is on and try again.`,
+      throw withCode(
+        new BadRequestException(
+          `${latitude}, ${longitude} is not a location in India. Check that location access is on and try again.`,
+        ),
+        ASSAYER_ERROR_CODES.INVALID_COORDINATES,
       );
     }
 
@@ -1291,7 +1442,27 @@ export class AssayerService implements OnModuleInit {
     AssayerLifecycleStatus.TERMINATED,
   ]);
 
+  /**
+   * Every lifecycle move goes through here, so the cached principal is dropped in one place.
+   *
+   * A signed-in assayer's roles and flags are resolved once and held in Redis for
+   * `RBAC_CACHE_TTL_SECONDS` (30 by default). One of those flags is `onboarding`, which decides
+   * whether the guard confines them to finishing their registration — so the moment HR activates
+   * somebody, a cached principal would keep telling them their joining checks are outstanding.
+   * Thirty seconds of that is survivable and it self-heals, but it is a confusing thirty seconds
+   * at exactly the moment somebody has been told they can start, and the fix costs one call.
+   *
+   * Deliberately not narrowed to the ACTIVE transition: a suspension should stop being cached as
+   * a working session just as promptly, and a rule that fires on every move cannot be wrong about
+   * which move mattered.
+   */
   async transitionLifecycle(id: string, targetStatus: string, userId: string, reason?: string): Promise<AssayerEntity> {
+    const result = await this.dispatchLifecycleTransition(id, targetStatus, userId, reason);
+    await this.cache.del(rbacPrincipalCacheKey(id));
+    return result;
+  }
+
+  private async dispatchLifecycleTransition(id: string, targetStatus: string, userId: string, reason?: string): Promise<AssayerEntity> {
     if (AssayerService.LIFECYCLE_MOVES_NEEDING_A_REASON.has(targetStatus) && !reason?.trim()) {
       throw new BadRequestException(
         `Say why this assayer is being moved to ${targetStatus.toLowerCase().replace(/_/g, ' ')}. ` +
@@ -1494,22 +1665,28 @@ export class AssayerService implements OnModuleInit {
    * Brings the departure dates into line with the state the assayer is being moved to, and
    * returns a sentence describing any correction so it can be written onto the record.
    *
-   * Leaving. 5 of the 1,163 people on the roster are RESIGNED or TERMINATED with no departure
-   * date at all, so nothing that counts departures can see that they went: HR's attrition rate,
-   * the roster's "Exited" chip and the workforce header's exit count all read a date, and all
-   * three report zero for those five. The date is *recorded* rather than *demanded* deliberately.
-   * Refusing the transition until somebody types one leaves the person ACTIVE — still passing the
-   * planner's deployability gate, still being offered audits — and a departure dated the day it
-   * was processed instead of the day they actually left is a far smaller error than a departure
-   * that never got recorded because the form would not accept it. A date HR has already entered is
-   * never overwritten: that is the real last working day, and it beats today's.
+   * Leaving. 24 of the 1,163 people the roster import brought in are RESIGNED or TERMINATED with
+   * no departure date at all, so nothing that counts departures can see that they went: HR's
+   * attrition rate, the roster's "Exited" chip and the workforce header's exit count all read a
+   * date, and all three report zero for those 24. It was 5 until `scripts/repair-corrupt-dates.js`
+   * blanked 19 more — their leaving dates were importer garbage in years 5295–6362, which read as
+   * departures only because nothing checked the year. The class did not grow; it was always this
+   * size and three quarters of it was hidden behind dates that looked filled in. The date is
+   * *recorded* rather than *demanded* deliberately. Refusing the transition until somebody types
+   * one leaves the person ACTIVE — still passing the planner's deployability gate, still offered
+   * audits — and a departure dated the day it was processed instead of the day they actually left
+   * is a far smaller error than a departure that never got recorded because the form would not
+   * accept it. A date HR has already entered is never overwritten: that is the real last working
+   * day, and it beats today's.
    *
-   * `exit_date` is the column that carries it, for both kinds of leaving. All 447 recorded
-   * departures on the live roster use it and not one uses `termination_date`, and HR's own
-   * queries read `COALESCE(exit_date, termination_date)`. A termination stamps `termination_date`
-   * as well, because "they were dismissed" is a fact the exit date alone does not carry — but a
-   * termination with only that column set is invisible to every reader above, which is what the
-   * two TERMINATED people with no exit date are.
+   * `exit_date` is the column that carries it, for both kinds of leaving. All 421 recorded
+   * departures on the live roster use it and not one uses `termination_date` — the column is
+   * empty on every row — and HR's own queries read `COALESCE(exit_date, termination_date)`.
+   * (447 before the repair; the 26 it blanked are the difference.) A termination stamps
+   * `termination_date` as well, because "they were dismissed" is a fact the exit date alone does
+   * not carry — but a termination with only that column set would be invisible to every reader
+   * above, which is the failure this arm exists to avoid rather than one the data currently
+   * shows.
    *
    * Coming back. 2 people are lifecycle ACTIVE with an exit date behind them: the record says both
    * that they work here and that they left, and the departure counts include somebody who is on
@@ -1564,11 +1741,15 @@ export class AssayerService implements OnModuleInit {
   /**
    * Ends the client standings that keep someone who has left selectable, and reports how many.
    *
-   * 7 people who have left still hold an ACTIVE empanelment, so each remains an eligible candidate
-   * for that bank's branches: the planner's per-client gate admits an ACTIVE or RECOMMENDED
-   * standing and asks nothing whatsoever about whether the person still works here. Both standings
-   * are closed, not just ACTIVE — RECOMMENDED means "put forward, awaiting the client's decision",
-   * and somebody who has resigned is not a candidate we are still putting forward.
+   * 7 people who had left still held an ACTIVE empanelment when this was written, so each
+   * remained an eligible candidate for that bank's branches: the planner's per-client gate admits
+   * an ACTIVE or RECOMMENDED standing and asks nothing whatsoever about whether the person still
+   * works here. Those 7 have since been closed by the empanelment repair (originals in
+   * `_fix_backup_empanelments`) and the live count is zero, which `DataIntegrityService`'s check 5
+   * asserts on every scan — that check is the standing alarm, this method is what stops the
+   * backlog re-forming one departure at a time. Both standings are closed, not just ACTIVE —
+   * RECOMMENDED means "put forward, awaiting the client's decision", and somebody who has resigned
+   * is not a candidate we are still putting forward.
    *
    * They become INACTIVE — "empanelled once, dormant now" — rather than RESIGNED or TERMINATED.
    * Those two record the *client's* decision about this person, and the client has not made one;
@@ -2266,11 +2447,11 @@ export class AssayerService implements OnModuleInit {
    * Until now there was no route anywhere that wrote `assayers.password_hash` outside bulk
    * import, and that write is guarded by `if (!existing)`. `POST /users/me/change-password`
    * queries the `users` repository, and assayers have no `users` row, so it 404s for them.
-   * The practical effect: a field worker could never change the password they were issued,
-   * and 24 of 25 live accounts were still on the importer's documented default.
+   * The practical effect: a field worker could never change the password they were issued, so
+   * every imported account sat on the importer's documented default with no route off it.
    *
    * This is also the precondition for rotating that default — without a way for people to set
-   * a new password, rotating it just locks 25 workers out of their jobs.
+   * a new password, rotating it just locks the whole field workforce out of their jobs.
    */
   async changeOwnPassword(assayerId: string, currentPassword: string, newPassword: string): Promise<void> {
     const assayer = await this.assayerRepository.findOne({
@@ -2279,11 +2460,19 @@ export class AssayerService implements OnModuleInit {
     });
     if (!assayer) throw new NotFoundException('Assayer not found.');
     if (!assayer.passwordHash) {
-      throw new BadRequestException('This account has no password set. Ask your HR contact to set one for you.');
+      throw withCode(
+        new BadRequestException('This account has no password set. Ask your HR contact to set one for you.'),
+        AUTH_ERROR_CODES.NO_PASSWORD_SET,
+      );
     }
 
     const ok = await bcrypt.compare(currentPassword, assayer.passwordHash);
-    if (!ok) throw new UnauthorizedException('Your current password is not correct.');
+    if (!ok) {
+      throw withCode(
+        new UnauthorizedException('Your current password is not correct.'),
+        AUTH_ERROR_CODES.CURRENT_PASSWORD_WRONG,
+      );
+    }
 
     this.assertPasswordAcceptable(newPassword);
 
@@ -2291,6 +2480,10 @@ export class AssayerService implements OnModuleInit {
       passwordHash: await bcrypt.hash(newPassword, 12),
       // The holder has now chosen their own credential, so the forced-rotation flag clears.
       mustChangePassword: false,
+      // And with it the temporary password's expiry. A date somebody else's credential was good
+      // until has no meaning against one this person chose, and leaving it set would arm a
+      // deadline over an account that no longer has anything expiring.
+      tempPasswordExpiresAt: null,
       failedLoginAttempts: 0,
       lockedUntil: null,
       updatedBy: assayerId,
@@ -2324,6 +2517,199 @@ export class AssayerService implements OnModuleInit {
     await this.recordActivity(assayerId, 'ASSAYER_PASSWORD_CHANGED', null, null, assayerId, 'Password changed by the assayer');
   }
 
+  /**
+   * Hand back one sensitive identifier in clear, and record that it happened.
+   *
+   * The reads are masked, so this is the single route by which a PAN, an Aadhaar number or a
+   * bank account leaves the system whole — which is the point: one place to watch, one row in
+   * `audit_events` per look, naming who looked at which field of whose record and when.
+   *
+   * Two decisions worth stating.
+   *
+   * The audit write is `recordEvent`, not `recordEventSafe`, and it is awaited BEFORE the value
+   * is returned. Everywhere else in this service the reasoning runs the other way — a completed
+   * state change must not be undone because its trail entry failed. Here there is no state
+   * change to protect, and an unrecorded reveal is precisely the event this endpoint exists to
+   * prevent, so a failed audit must fail the reveal.
+   *
+   * The lookup does not filter on `isActive`. A departed assayer still has a final settlement to
+   * pay, and the bank account it is paid into is on a row this system marks inactive the moment
+   * they leave; refusing to show it would leave finance reading it out of the spreadsheet the
+   * encryption was meant to replace. The audit row is what makes that safe.
+   */
+  async revealSensitiveField(
+    assayerId: string,
+    field: string,
+    actor: { id: string; displayName?: string | null; ipAddress?: string | null },
+  ): Promise<{ value: string }> {
+    // Named fields only, and an unknown one is the caller's mistake rather than ours. Reaching
+    // straight into the entity with whatever string arrived would 500 on a bad segment, and a
+    // 500 that only happens for some segments tells an attacker which columns exist.
+    if (!Object.prototype.hasOwnProperty.call(SENSITIVE_ASSAYER_FIELDS, field)) {
+      throw new BadRequestException(
+        `"${field}" is not a field that can be revealed. Ask for one of: ${SENSITIVE_FIELD_NAMES.join(', ')}.`,
+      );
+    }
+    const name = field as SensitiveAssayerField;
+    const property = SENSITIVE_ASSAYER_FIELDS[name];
+
+    // Through the repository, so the `encryptedColumn` transformer decrypts on read — a raw
+    // query here would hand back the `enc:v1:` ciphertext and look like it had worked.
+    const assayer = await this.assayerRepository.findOne({
+      where: { id: assayerId },
+      select: { id: true, assayerCode: true, displayName: true, [property]: true } as any,
+    });
+    if (!assayer) throw new NotFoundException('Assayer not found.');
+
+    await this.auditService.recordEvent({
+      category: EventCategory.USER,
+      eventType: 'ASSAYER_SENSITIVE_FIELD_REVEALED',
+      entityType: 'ASSAYER',
+      entityId: assayerId,
+      userId: actor.id,
+      userDisplayName: actor.displayName ?? undefined,
+      ipAddress: actor.ipAddress ?? undefined,
+      remarks:
+        `Revealed the ${SENSITIVE_FIELD_LABELS[name]} of ${assayer.displayName ?? assayer.assayerCode ?? assayerId}.`,
+      // The field name, never the value. An audit trail that quotes what it was protecting is a
+      // second copy of it, in a table more people can read than the one it came from.
+      metadata: { field: name, property, assayerCode: assayer.assayerCode ?? null },
+    });
+
+    // Empty string, not null, for "nothing on file": the caller asked to see a value and the
+    // answer is that there isn't one, which is a successful read of an empty field.
+    return { value: (assayer as any)[property] ?? '' };
+  }
+
+  /**
+   * How long HR should tell an assayer the temporary password is good for.
+   *
+   * Seven days is the window a phone-first handover actually needs: HR issues access while the
+   * person is in front of them or on the call, and a field worker who is mid-assignment may not
+   * install the app until the weekend.
+   *
+   * This is enforced. It was not at first — the date was computed for display only, with no
+   * column to hold it, so the response told HR a credential expired while nothing at sign-in ever
+   * compared against it. `assayers.temp_password_expires_at` now carries it and
+   * `AuthService.login` refuses a password past it, but only while `mustChangePassword` is still
+   * true: once the assayer chooses their own password the expiry is cleared, so this can never
+   * shut somebody out of a credential they picked themselves.
+   */
+  private static readonly APP_ACCESS_VALID_DAYS = 7;
+
+  /** The moment a temporary password issued right now stops working. */
+  private static tempPasswordExpiry(): Date {
+    return new Date(Date.now() + AssayerService.APP_ACCESS_VALID_DAYS * 24 * 60 * 60 * 1000);
+  }
+
+  /**
+   * Issue app access to an assayer as a one-time invitation.
+   *
+   * The existing route out of this is `resetPasswordByStaff` — a *reset*, which is the recovery
+   * path for somebody locked out and reads that way on screen. There was no way to say "this
+   * person is joining, give them the app", so first-time access was being handed out as a
+   * password reset for a password that had never existed, and `INVITED` was a lifecycle label
+   * nothing ever sent.
+   *
+   * The word-based generator is kept deliberately: these are field workers reading a credential
+   * off a phone call in bad light, and "tiger-mango-river-stone4" survives that trip where a hex
+   * blob does not. `mustChangePassword` is set, so the words are spent at first sign-in.
+   *
+   * ## Issuing access does not make anyone assignable, and is not gated on activation
+   *
+   * The credential works from onboarding: `maySignIn` admits the four onboarding stages as well
+   * as ACTIVE and ON_LEAVE (`ONBOARDING_SIGN_IN` in auth.service.ts), into a session
+   * `JwtAuthGuard` confines to finishing that person's own registration — which is what the two
+   * fields returned below have to tell HR apart. Signing in is still not being on duty:
+   * deployability is `isActive && status === ACTIVE`, so nothing issued here puts anybody in
+   * front of a planner.
+   *
+   * Issuing before activation is deliberate — the handover happens when the person is present,
+   * which is usually during onboarding, not on the day activation is clicked. The reverse is the
+   * rule that matters more: activation must NEVER require app access to have been issued. Not
+   * every appraiser has a smartphone, and making the invitation a precondition would quietly bar
+   * the phone-only half of the workforce from being activated at all.
+   */
+  async issueAppAccess(
+    assayerId: string,
+    actorId: string,
+  ): Promise<{ username: string; temporaryPassword: string; expiresAt: string; canSignInNow: boolean; accessScope: 'FULL' | 'REGISTRATION_ONLY' }> {
+    const assayer = await this.assayerRepository.findOne({
+      where: { id: assayerId },
+      select: { id: true, assayerCode: true, displayName: true, phone: true, email: true, lifecycleStatus: true },
+    });
+    if (!assayer) throw new NotFoundException('Assayer not found.');
+
+    const password = this.generateTemporaryPassword();
+    this.assertPasswordAcceptable(password);
+
+    await this.assayerRepository.update(assayerId, {
+      passwordHash: await bcrypt.hash(password, 12),
+      // Whatever they held before is now void — issuing access replaces a credential, it does not
+      // add a second one, and a re-issue is usually a response to the first one going astray.
+      mustChangePassword: true,
+      // Stored, not merely computed for the card. The date below used to be display-only, so the
+      // response told HR a credential expired while nothing ever compared against it.
+      tempPasswordExpiresAt: AssayerService.tempPasswordExpiry(),
+      failedLoginAttempts: 0,
+      lockedUntil: null,
+      updatedBy: actorId,
+    });
+
+    // Same reasoning as resetPasswordByStaff: the cached RBAC principal and every live session
+    // built on the old credential have to go, or a re-issue leaves the previous holder signed in.
+    await this.cache.del(rbacPrincipalCacheKey(assayerId));
+    this.eventPublisher.publish('user:password-changed', { userId: assayerId });
+
+    await this.auditService.recordEventSafe({
+      category: EventCategory.USER,
+      eventType: 'ASSAYER_APP_ACCESS_ISSUED',
+      entityType: 'ASSAYER',
+      entityId: assayerId,
+      userId: actorId,
+      remarks:
+        `App access issued to ${assayer.displayName ?? assayer.assayerCode ?? assayerId}. `
+        + 'They must choose their own password at first sign-in.',
+      // Never the password, generated or otherwise — see the note on the reveal audit above.
+      metadata: {
+        assayerCode: assayer.assayerCode ?? null,
+        lifecycleStatus: assayer.lifecycleStatus ?? null,
+      },
+    });
+
+    await this.recordActivity(
+      assayerId, 'ASSAYER_APP_ACCESS_ISSUED', null, null, actorId, 'App access issued by staff',
+    );
+
+    // Recomputed rather than read back: a second call to `tempPasswordExpiry()` lands a few
+    // milliseconds after the stored one, which is immaterial against a seven-day window and
+    // avoids a re-select purely to echo a value this method just wrote.
+    const expiry = AssayerService.tempPasswordExpiry();
+
+
+    return {
+      // The assayer code, because it is the one identifier every roster row has: phone is
+      // optional on admission and email more so. Sign-in accepts any of the three.
+      username: assayer.assayerCode,
+      temporaryPassword: password,
+      expiresAt: expiry.toISOString(),
+      /**
+       * Whether the credential works at all, and how far it goes — two different questions, so
+       * two fields.
+       *
+       * This was one field meaning "fully usable", and it returned false for somebody mid-
+       * onboarding because those stages could not sign in. They can now, into a session confined
+       * to finishing their own registration, so a single false would state the opposite of what
+       * happens: HR would read "they cannot sign in yet" onto a card whose password works.
+       *
+       * `accessScope` is what the card should actually say out loud. REGISTRATION_ONLY means they
+       * can upload their papers and nothing else until their joining checks are signed off.
+       */
+      canSignInNow: maySignIn(assayer.lifecycleStatus as AssayerLifecycleStatus),
+      accessScope: isOnboardingStage(assayer.lifecycleStatus) ? 'REGISTRATION_ONLY' : 'FULL',
+    };
+  }
+
   /** HR/admin resets an assayer's password — the only recovery path for someone locked out. */
   async resetPasswordByStaff(
     assayerId: string,
@@ -2349,6 +2735,9 @@ export class AssayerService implements OnModuleInit {
       // A password chosen by HR is a temporary credential, not the assayer's own. Forcing a
       // change at next sign-in keeps a staff-known password from becoming the permanent one.
       mustChangePassword: true,
+      // And it expires on the same clock as an issued invite: both are a credential somebody
+      // else chose and spoke aloud, so there is no reason one should outlive the other.
+      tempPasswordExpiresAt: AssayerService.tempPasswordExpiry(),
       updatedBy: actorId,
     });
 
@@ -2400,11 +2789,17 @@ export class AssayerService implements OnModuleInit {
   private assertPasswordAcceptable(password: string): void {
     const pw = (password ?? '').trim();
     if (pw.length < 8) {
-      throw new BadRequestException('Please choose a password of at least 8 characters.');
+      throw withCode(
+        new BadRequestException('Please choose a password of at least 8 characters.'),
+        AUTH_ERROR_CODES.PASSWORD_TOO_SHORT,
+      );
     }
     const BANNED = ['assayer123', 'password@123', 'password', '12345678'];
     if (BANNED.includes(pw.toLowerCase())) {
-      throw new BadRequestException('That password is too easy to guess. Please choose a different one.');
+      throw withCode(
+        new BadRequestException('That password is too easy to guess. Please choose a different one.'),
+        AUTH_ERROR_CODES.PASSWORD_TOO_WEAK,
+      );
     }
   }
 

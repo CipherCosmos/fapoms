@@ -47,7 +47,22 @@ function resolveKey(): Buffer | null {
     key = Buffer.from(raw, 'hex');
   } else {
     const b = Buffer.from(raw, 'base64');
-    key = b.length === 32 ? b : createHash('sha256').update(raw).digest();
+    if (b.length === 32) {
+      key = b;
+    } else {
+      /**
+       * A key that is neither 64 hex chars nor 32 base64 bytes is stretched to 32 bytes so dev
+       * keeps working — but silently, this let `PII_ENCRYPTION_KEY=hello` masquerade as
+       * encryption. Production refuses this shape at boot (`assertProductionSafeConfig`); here it
+       * is named out loud so nobody mistakes a passphrase for a key.
+       */
+      logger.warn(
+        'PII_ENCRYPTION_KEY is not a canonical 32-byte key (64 hex chars or 32-byte base64) — ' +
+          'deriving one from it via SHA-256. Fine for development; production requires the real ' +
+          'format and will refuse to boot with this value.',
+      );
+      key = createHash('sha256').update(raw).digest();
+    }
   }
   keyCache = key;
   return key;

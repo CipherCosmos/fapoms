@@ -1,5 +1,7 @@
 import { Injectable, Logger, BadRequestException, ServiceUnavailableException } from '@nestjs/common';
 import { Socket } from 'net';
+import { ASSAYER_ERROR_CODES } from '@fapoms/shared';
+import { withCode } from '../http/api-error';
 
 export interface ScanResult {
   clean: boolean;
@@ -68,9 +70,12 @@ export class FileScanService {
     const result = await this.scanBuffer(buffer, filename);
     if (!result.clean) {
       this.logger.warn(`Rejected infected upload "${filename ?? 'upload'}": ${result.signature}`);
-      throw new BadRequestException(
-        `This file was rejected by malware scanning${result.signature ? ` (${result.signature})` : ''}. ` +
-          'If you believe this is a mistake, contact your administrator.',
+      throw withCode(
+        new BadRequestException(
+          `This file was rejected by malware scanning${result.signature ? ` (${result.signature})` : ''}. ` +
+            'If you believe this is a mistake, contact your administrator.',
+        ),
+        ASSAYER_ERROR_CODES.UPLOAD_REJECTED,
       );
     }
   }

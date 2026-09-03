@@ -3,6 +3,7 @@ import { Modal, View, TextInput, TextStyle, KeyboardAvoidingView, Platform } fro
 import { travelModeLabel, formatRupees, describeAssignmentFee, previewFeeChange } from '@fapoms/shared';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Card } from './ui/primitives';
+import { useT } from '../i18n';
 
 interface NegotiateModalProps {
   visible: boolean;
@@ -37,6 +38,7 @@ export const NegotiateModal: React.FC<NegotiateModalProps> = ({
   onCancel,
 }) => {
   const t = useTheme();
+  const tr = useT();
 
   /**
    * Seeded from the TRAVEL component, because travel is what this box asks for.
@@ -103,7 +105,7 @@ export const NegotiateModal: React.FC<NegotiateModalProps> = ({
       feeText,
     );
     if (preview.travel === null) {
-      setErrorMsg(preview.error ?? 'Enter the travel amount you are asking for.');
+      setErrorMsg(preview.error ?? tr('negotiate.amountRequired'));
       return;
     }
     const parsedFee = preview.travel;
@@ -111,7 +113,7 @@ export const NegotiateModal: React.FC<NegotiateModalProps> = ({
     try {
       await onSubmit(parsedFee, remarks);
     } catch (e: any) {
-      setErrorMsg(e?.message || 'Could not send your travel request.');
+      setErrorMsg(e?.message || tr('negotiate.submitFailed'));
     } finally {
       setLoading(false);
     }
@@ -140,37 +142,43 @@ export const NegotiateModal: React.FC<NegotiateModalProps> = ({
           padding: t.space.xl,
         }}>
         <Card level={2} style={{ gap: t.space.lg, padding: t.space.xl }}>
-          <AppText variant="h2">Ask for a different travel amount</AppText>
+          <AppText variant="h2">{tr('negotiate.title')}</AppText>
           <AppText variant="caption" tone="muted">
-            Current Offered Fee: {formatRupees(currentFee || 0)}
+            {tr('negotiate.currentFee', { amount: formatRupees(currentFee || 0) })}
           </AppText>
           {quotedTravelFee != null && quotedTravelFee > 0 && (
             <AppText variant="caption" tone="muted">
-              Includes {formatRupees(quotedTravelFee)} for travel
-              {quotedTransportMode ? ` by ${travelModeLabel(quotedTransportMode).toLowerCase()}` : ''}
-              {quotedDistanceKm ? ` (~${Math.round(Number(quotedDistanceKm))} km each way)` : ''}
+              {quotedTransportMode
+                ? tr('negotiate.includesTravelByMode', {
+                    amount: formatRupees(quotedTravelFee),
+                    mode: travelModeLabel(quotedTransportMode).toLowerCase(),
+                  })
+                : tr('negotiate.includesTravel', { amount: formatRupees(quotedTravelFee) })}
+              {quotedDistanceKm
+                ? ` ${tr('negotiate.aboutDistance', { km: Math.round(Number(quotedDistanceKm)) })}`
+                : ''}
             </AppText>
           )}
 
           <View style={{ gap: t.space.xs }}>
-            <AppText variant="overline" tone="faint">TRAVEL YOU ARE ASKING FOR (₹)</AppText>
+            <AppText variant="overline" tone="faint">{tr('negotiate.amountLabel')}</AppText>
             <TextInput
               style={inputStyle}
               keyboardType="number-pad"
               value={feeText}
               onChangeText={setFeeText}
-              placeholder="e.g. 2200"
+              placeholder={tr('negotiate.amountPlaceholder')}
               placeholderTextColor={t.colors.textFaint}
             />
           </View>
 
           <View style={{ gap: t.space.xs }}>
-            <AppText variant="overline" tone="faint">REASON / REMARKS (OPTIONAL)</AppText>
+            <AppText variant="overline" tone="faint">{tr('negotiate.remarksLabel')}</AppText>
             <TextInput
               style={[inputStyle, { height: 80, paddingVertical: t.space.md, textAlignVertical: 'top' }]}
               value={remarks}
               onChangeText={setRemarks}
-              placeholder="e.g. Long-distance travel allowance required"
+              placeholder={tr('negotiate.remarksPlaceholder')}
               placeholderTextColor={t.colors.textFaint}
               multiline
             />
@@ -181,8 +189,8 @@ export const NegotiateModal: React.FC<NegotiateModalProps> = ({
           ) : null}
 
           <View style={{ flexDirection: 'row', gap: t.space.md, marginTop: t.space.sm }}>
-            <Button label={loading ? 'Submitting…' : 'Submit Counter'} icon="cash-outline" onPress={handleSubmit} loading={loading} style={{ flex: 1 }} />
-            <Button label="Cancel" variant="neutral" onPress={onCancel} style={{ flex: 1 }} />
+            <Button label={loading ? tr('negotiate.submitting') : tr('negotiate.submit')} icon="cash-outline" onPress={handleSubmit} loading={loading} style={{ flex: 1 }} />
+            <Button label={tr('common.cancel')} variant="neutral" onPress={onCancel} style={{ flex: 1 }} />
           </View>
         </Card>
         </View>

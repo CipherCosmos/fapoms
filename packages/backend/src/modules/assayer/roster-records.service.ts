@@ -2,9 +2,7 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
 import {
-  EmpanelmentStatus, BackgroundCheckVerdict, RiskGrade, CibilBand,
-  OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS,
-  DocumentVerification, isIdentityDocument,
+  EmpanelmentStatus, BackgroundCheckVerdict, RiskGrade, CibilBand, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, DocumentVerification, isIdentityDocument, maskTail, looksMasked, isValidPan, isValidAadhaar, isPlaceholderAadhaar,
 } from '@fapoms/shared';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerReferenceEntity } from './assayer-reference.entity';
@@ -12,6 +10,8 @@ import { AssayerClientEmpanelmentEntity } from './assayer-client-empanelment.ent
 import { AssayerBackgroundCheckEntity } from './assayer-background-check.entity';
 import { AssayerDocumentEntity } from './assayer-document.entity';
 import { AssayerImportIssueEntity } from './assayer-import-issue.entity';
+import { ASSAYER_ERROR_CODES } from '@fapoms/shared';
+import { withCode } from '../../infrastructure/http/api-error';
 
 /**
  * The workforce records the roster spreadsheet was holding sideways.
@@ -120,9 +120,16 @@ export class RosterRecordsService {
         receivedAt: row?.receivedAt ?? null,
         // Read back from the person where that is where it lives — see
         // NUMBER_LIVES_ON_THE_PERSON. One value, two places to see it, no way for them to differ.
-        documentNumber: NUMBER_LIVES_ON_THE_PERSON[requirement]
-          ? (assayer[NUMBER_LIVES_ON_THE_PERSON[requirement]!] ?? null)
-          : (row?.documentNumber ?? null),
+        // Masked on the way out, wherever it lives. The dossier is the screen a clerk works the
+        // paperwork from, and it needs the last four digits to tell one card from another —
+        // never the whole number, which is what `GET /assayers/:id/sensitive/:field` is for and
+        // records a reader for. A number that is absent stays null: "no PAN on file" is the
+        // thing the checklist exists to show, and a row of stars would hide it.
+        documentNumber: maskTail(
+          NUMBER_LIVES_ON_THE_PERSON[requirement]
+            ? (assayer[NUMBER_LIVES_ON_THE_PERSON[requirement]!] ?? null)
+            : (row?.documentNumber ?? null),
+        ) || null,
         expiryDate: row?.expiryDate ?? null,
         verificationStatus: row?.verificationStatus ?? null,
         verifiedAt: row?.verifiedAt ?? null,
@@ -236,6 +243,29 @@ export class RosterRecordsService {
 
   // ── Onboarding paperwork ──────────────────────────────────────────────
 
+  /**
+   * Is this a requirement the checklist knows?
+   *
+   * Membership, NOT truthiness. `ONBOARDING_DOCUMENT_COLUMNS` maps each requirement to the
+   * spreadsheet column it was read from, and three of them — driving licence, voter ID, passport —
+   * map to `''` because the roster file has no column for them; they came from the identity
+   * register. `setDocument` tested the mapped VALUE, so those three read as unknown and every
+   * `PUT` against them was refused. A clerk could upload a passport scan through `attachFile`,
+   * which accepted it, and then record nothing whatsoever about the document they had just filed.
+   *
+   * `attachFile` had the opposite fault: no check at all, so any string at all created a document
+   * row. That is how a typo or a renamed enum value grows a parallel set of rows that no
+   * checklist counts and no queue ever shows. Both go through this now.
+   */
+  private assertKnownRequirement(requirement: OnboardingDocument): void {
+    if (!Object.prototype.hasOwnProperty.call(ONBOARDING_DOCUMENT_COLUMNS, requirement)) {
+      throw withCode(
+        new BadRequestException(`"${requirement}" is not a paperwork requirement this system knows.`),
+        ASSAYER_ERROR_CODES.DOCUMENT_REQUIREMENT_UNKNOWN,
+      );
+    }
+  }
+
   async setDocument(
     assayerId: string,
     requirement: OnboardingDocument,
@@ -244,9 +274,7 @@ export class RosterRecordsService {
            documentNumber?: string; expiryDate?: string | null },
     actorId: string,
   ) {
-    if (!ONBOARDING_DOCUMENT_COLUMNS[requirement]) {
-      throw new BadRequestException(`"${requirement}" is not a paperwork requirement this system knows.`);
-    }
+    this.assertKnownRequirement(requirement);
     const existing = await this.onboarding.findOne({ where: { assayerId, requirement } });
     const row = existing ?? this.onboarding.create({ assayerId, requirement, createdBy: actorId });
 
@@ -259,6 +287,22 @@ export class RosterRecordsService {
 
     // A number and an expiry belong to an identity document and to nothing else. Accepting them
     // on a joining form would put a field on screen that can never be filled in correctly.
+    // The document screen reads its number from `dossier()`, which now masks it, so the same
+    // round trip the profile form has is open here — and this one writes THROUGH to
+    // `assayers.pan_number` for the three requirements in NUMBER_LIVES_ON_THE_PERSON. Saving the
+    // asterisks would replace the person's real PAN from the paperwork screen, one step further
+    // from anywhere anybody would think to look for it. Same rule and same way out as
+    // `assertNoMaskedPii` in AssayerService.
+    if (typeof dto.documentNumber === 'string' && looksMasked(dto.documentNumber)) {
+      throw withCode(
+        new BadRequestException(
+          'The document number you sent is the masked version shown on screen, not the real number, '
+          + 'and saving it would overwrite the real one. Reveal the field first, then edit it.',
+        ),
+        ASSAYER_ERROR_CODES.MASKED_VALUE_REJECTED,
+      );
+    }
+
     if (dto.documentNumber !== undefined || dto.expiryDate !== undefined) {
       if (!isIdentityDocument(requirement)) {
         throw new BadRequestException(
@@ -268,6 +312,44 @@ export class RosterRecordsService {
       }
       const column = NUMBER_LIVES_ON_THE_PERSON[requirement];
       if (dto.documentNumber !== undefined) {
+        /**
+         * The same format rule the create and update DTOs apply, enforced here because only this
+         * layer knows which document is being recorded.
+         *
+         * `@IsPanFormat()` and `@IsAadhaarNumber()` sit on the assayer DTOs, but which of them
+         * applies depends on the `:requirement` route parameter, which class-validator cannot
+         * see — so this route reached `assayers.pan_number` and `assayers.aadhaar_number` with no
+         * format check at all while its two siblings refused a malformed value. The point of
+         * `@fapoms/shared/identity-validation` is that every path to these columns asks the same
+         * question; this was the path that did not.
+         *
+         * Verhoeff matters here rather than being pedantry: a mistyped Aadhaar that passes
+         * `\d{12}` is indistinguishable from a real one later, and this number is what a human is
+         * meant to check the scan against.
+         */
+        const shaped = (dto.documentNumber ?? '').trim().toUpperCase();
+        if (shaped) {
+          if (column === 'panNumber' && !isValidPan(shaped)) {
+            throw withCode(
+              new BadRequestException(
+                'That is not a valid PAN. It should be ten characters, like ABCDE1234F.',
+              ),
+              ASSAYER_ERROR_CODES.DOCUMENT_NUMBER_INVALID,
+            );
+          }
+          if (column === 'aadhaarNumber' && !isValidAadhaar(shaped)) {
+            throw withCode(
+              new BadRequestException(
+                isPlaceholderAadhaar(shaped)
+                  ? 'That Aadhaar number is a placeholder, not a real one. Leave it blank rather '
+                    + 'than recording a stand-in.'
+                  : 'That is not a valid Aadhaar number. It should be twelve digits, and the check '
+                    + 'digit did not match — please re-read it from the document.',
+              ),
+              ASSAYER_ERROR_CODES.DOCUMENT_NUMBER_INVALID,
+            );
+          }
+        }
         if (column) {
           const person = await this.assayers.findOne({ where: { id: assayerId } });
           if (person) {
@@ -306,6 +388,7 @@ export class RosterRecordsService {
    * state something the system can see for itself.
    */
   async attachFile(assayerId: string, requirement: OnboardingDocument, key: string, actorId: string) {
+    this.assertKnownRequirement(requirement);
     const existing = await this.onboarding.findOne({ where: { assayerId, requirement } });
     const row = existing ?? this.onboarding.create({ assayerId, requirement, createdBy: actorId });
     row.filePaths = [...(row.filePaths ?? []), key];
@@ -384,7 +467,26 @@ export class RosterRecordsService {
         + 'Record whether it arrived instead.',
       );
     }
-    if (verdict !== DocumentVerification.PENDING && !row.documentNumber) {
+    /**
+     * The number is read from wherever it actually lives, which for the three that matter most is
+     * NOT this row.
+     *
+     * `setDocument` stores a PAN or Aadhaar on the PERSON (`NUMBER_LIVES_ON_THE_PERSON`) so one
+     * value cannot disagree with itself, and the dossier already reads it back that way. This
+     * check did not: it tested `row.documentNumber`, which stays NULL for exactly PAN_CARD,
+     * AADHAAR_FRONT and AADHAAR_BACK — so the three identity documents every bank actually asks
+     * for could never be marked verified. Entering the number, uploading the scan and pressing
+     * verify returned "there is no document number on this record" every time, with the number
+     * plainly visible on the same screen. That blocks the DOCUMENT_VERIFICATION stage, and with
+     * it activation, for every appraiser.
+     */
+    const numberOnPerson = NUMBER_LIVES_ON_THE_PERSON[row.requirement];
+    let effectiveNumber: string | null = row.documentNumber ?? null;
+    if (numberOnPerson) {
+      const person = await this.assayers.findOne({ where: { id: row.assayerId } });
+      effectiveNumber = (person?.[numberOnPerson] as string | null) ?? null;
+    }
+    if (verdict !== DocumentVerification.PENDING && !effectiveNumber) {
       throw new BadRequestException(
         'There is no document number on this record, so there is nothing to have checked against '
         + 'the original.',
@@ -401,17 +503,24 @@ export class RosterRecordsService {
   // ── The import review queue ───────────────────────────────────────────
 
   /**
-   * What the import could not read, oldest first.
+   * The review queue — what the import could not read and what the data-integrity scan found —
+   * newest first.
+   *
+   * Newest first and a 500 default, where this used to be oldest-first with a default of 200:
+   * that combination silently hid 83 of the 283 open findings from the panel (`openCount` said
+   * 283; the body could only ever show the oldest 200), and every row the standing scanner adds
+   * sorts LAST under `ASC` — the freshest defect would have been the least visible. The 500
+   * ceiling stands so one request cannot balloon; the panel says "showing X of Y" when it is hit.
    *
    * Open by default: a resolved issue is a decision somebody already made, and showing it
    * alongside the outstanding ones is how a review queue stops being read.
    */
   async listIssues(options: { includeResolved?: boolean; limit?: number } = {}) {
-    const limit = Math.min(options.limit ?? 200, 500);
+    const limit = Math.min(options.limit ?? 500, 500);
     const qb = this.issues.createQueryBuilder('issue')
       .leftJoin('issue.assayer', 'assayer')
       .addSelect(['assayer.id', 'assayer.assayerCode', 'assayer.firstName', 'assayer.lastName'])
-      .orderBy('issue.createdAt', 'ASC')
+      .orderBy('issue.createdAt', 'DESC')
       .take(limit);
     if (!options.includeResolved) qb.where('issue.resolvedAt IS NULL');
 
@@ -436,5 +545,61 @@ export class RosterRecordsService {
     row.resolution = stated;
     row.updatedBy = actorId;
     return this.issues.save(row);
+  }
+
+  /**
+   * Close a group of issues under one account of what was decided.
+   *
+   * One import problem produces one issue per affected row — a mis-spelled state column across a
+   * 68-person branch is 68 entries and ONE decision. Closing them through the per-row route meant
+   * 68 requests, and a failure partway through left the group half closed with nothing in the
+   * queue to say where it stopped.
+   *
+   * Every id gets an outcome and the request never fails as a whole. An id that is unknown or
+   * already resolved is reported against itself and the remaining rows still close: somebody else
+   * having touched one row of a group is not a reason to abandon the other sixty-seven, and it is
+   * the commonest way two people working the same queue collide.
+   *
+   * Sequential rather than `Promise.all`: these are writes to one table and the batch is bounded
+   * at 500 by the request DTO, so there is nothing to win by making the database do them at once
+   * beyond a lock contention this does not need.
+   */
+  async resolveIssues(ids: string[], resolution: string, actorId: string) {
+    const stated = (resolution ?? '').trim();
+    if (!stated) {
+      throw new BadRequestException('Say what was decided about these cells before closing them.');
+    }
+
+    // Duplicates in the payload would otherwise produce two outcomes for one id, the second of
+    // them a spurious "already resolved" caused by the first.
+    const unique = [...new Set(ids ?? [])];
+    const results: Array<{ id: string; resolved: boolean; reason?: string }> = [];
+
+    for (const id of unique) {
+      const row = await this.issues.findOne({ where: { id } });
+      if (!row) {
+        results.push({ id, resolved: false, reason: 'No such import issue.' });
+        continue;
+      }
+      if (row.resolvedAt) {
+        results.push({ id, resolved: false, reason: 'Already closed by somebody else.' });
+        continue;
+      }
+      row.resolvedAt = new Date();
+      row.resolvedBy = actorId;
+      row.resolution = stated;
+      row.updatedBy = actorId;
+      await this.issues.save(row);
+      results.push({ id, resolved: true });
+    }
+
+    return {
+      results,
+      resolved: results.filter((r) => r.resolved).length,
+      failed: results.filter((r) => !r.resolved).length,
+      // What the queue should show next, read after the writes — so a panel that refreshes from
+      // this response cannot briefly display a count the batch has already changed.
+      openCount: await this.issues.count({ where: { resolvedAt: IsNull() } }),
+    };
   }
 }

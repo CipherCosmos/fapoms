@@ -5,6 +5,7 @@ import { useFeedback } from '../components/ui/Feedback';
 import { assetToBase64 } from '../utils/pickDocument';
 import type { OutboxInput } from '../services/upload-outbox';
 import type { AssayerAssignment } from '../types/mobile-app';
+import { useT, serverErrorText } from '../i18n';
 
 /**
  * A completed audit packet waiting to be submitted.
@@ -42,6 +43,7 @@ export interface ReturnPaperwork {
 export function useReturnPaperwork(options: { onEnqueue: (input: OutboxInput) => void | Promise<void> }): ReturnPaperwork {
   const { onEnqueue } = options;
   const feedback = useFeedback();
+  const tr = useT();
 
   const [assignment, setAssignment] = useState<AssayerAssignment | null>(null);
   const [staged, setStaged] = useState<StagedPdf | null>(null);
@@ -85,16 +87,19 @@ export function useReturnPaperwork(options: { onEnqueue: (input: OutboxInput) =>
           ? { name, base64: await assetToBase64(asset) }
           : { name, uri: asset.uri },
       );
-      feedback.success('PDF attached', `${name} is ready to submit.`);
+      feedback.success(tr('paperwork.attachedTitle'), tr('paperwork.attachedBody', { file: name }));
     } catch (err: any) {
-      feedback.error('File Picker Error', err?.message || 'Failed to select a PDF file.');
+      feedback.error(
+        tr('paperwork.pickFailedTitle'),
+        serverErrorText(err?.message, 'paperwork.pickFailedBody'),
+      );
     }
-  }, [feedback]);
+  }, [feedback, tr]);
 
   const submit = useCallback(async () => {
     if (!assignment) return false;
     if (!staged) {
-      feedback.warning('Nothing to submit', 'Attach a PDF or scan the pages first.');
+      feedback.warning(tr('paperwork.nothingToSubmitTitle'), tr('paperwork.nothingToSubmitBody'));
       return false;
     }
 
@@ -105,21 +110,24 @@ export function useReturnPaperwork(options: { onEnqueue: (input: OutboxInput) =>
       // the decoded content. Either way it is written down durably and sent in the background —
       // the assayer can leave this screen and watch it in Uploads.
       await onEnqueue({
-        assignmentId: assignment.id,
-        branchName: assignment.branchName,
+        target: {
+          kind: 'ASSIGNMENT_PACKET',
+          assignmentId: assignment.id,
+          branchName: assignment.branchName,
+        },
         fileName: staged.name,
         fileUri: Platform.OS !== 'web' ? staged.uri : undefined,
         base64: Platform.OS === 'web' ? staged.base64 : undefined,
       });
-      feedback.success('Added to uploads', `${staged.name} is sending in the background. You can leave this screen.`);
+      feedback.success(tr('paperwork.queuedTitle'), tr('paperwork.queuedBody', { file: staged.name }));
       return true;
     } catch {
-      feedback.error('Could not queue upload', 'The packet could not be saved for sending. Please try again.');
+      feedback.error(tr('paperwork.queueFailedTitle'), tr('paperwork.queueFailedBody'));
       return false;
     } finally {
       setUploading(false);
     }
-  }, [assignment, staged, feedback, onEnqueue]);
+  }, [assignment, staged, feedback, onEnqueue, tr]);
 
   return { assignment, staged, uploading, open, close, selectFile, submit };
 }

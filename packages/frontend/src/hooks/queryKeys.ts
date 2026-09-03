@@ -142,6 +142,16 @@ export const queryKeys = {
   hr: {
     all: ['hr'] as const,
     workforce: ['hr', 'workforce'] as const,
+    /**
+     * The review queue — cells the roster import could not read, plus the standing
+     * data-integrity scan's findings.
+     *
+     * Shared because two places read the same list: the panel that shows it and the nav badge
+     * that counts it. Under one key that is one request for both; under two hand-typed literals
+     * it would be two requests whose counts drift apart between refetches, which is exactly the
+     * failure the badge exists to prevent.
+     */
+    importIssues: ['hr', 'import-issues'] as const,
   },
   documents: {
     all: ['documents'] as const,

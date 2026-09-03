@@ -15,7 +15,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsOptional, IsBoolean, IsArray, IsInt, IsEmail, Min, Max, IsObject } from 'class-validator';
 import { SystemRole, NotificationChannel, NotificationPriority, NotificationCategory } from '@fapoms/shared';
 
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { NotificationSettingsService, EffectiveNotificationType } from './notification-settings.service';
 import { NOTIFICATION_CATALOG } from './notification-catalog';
@@ -202,6 +202,7 @@ export class NotificationAdminController {
 
   @Put('catalog/:type')
   @Roles(...NOTIFICATION_ADMIN_ROLES)
+  @RequirePermissions('configuration:edit:platform')
   @ApiOperation({ summary: 'Override one notification type — channels, roles, wording, on/off' })
   async update(
     @Param('type') type: string,
@@ -222,6 +223,7 @@ export class NotificationAdminController {
   /** Drops the override row entirely, so the type follows the shipped default again. */
   @Delete('catalog/:type')
   @Roles(...NOTIFICATION_ADMIN_ROLES)
+  @RequirePermissions('configuration:edit:platform')
   @ApiOperation({ summary: 'Reset one notification type to its shipped default' })
   async reset(@Param('type') type: string, @Req() req: any): Promise<{ success: boolean; data: EffectiveNotificationType }> {
     const data = await this.settings.reset(type);
@@ -322,6 +324,9 @@ export class NotificationAdminController {
    */
   @Post('email/test')
   @Roles(...NOTIFICATION_ADMIN_ROLES)
+  // `edit` rather than `view`, on both this and the digest run below: neither changes a setting,
+  // but both send real mail to real people, which is not something a read-only holder should fire.
+  @RequirePermissions('configuration:edit:platform')
   @ApiOperation({ summary: 'Send a test email through the configured transport' })
   async testEmail(@Body() dto: TestEmailRequestDto, @Req() req: any): Promise<{ success: boolean; data: any }> {
     if (!this.email.isEnabled()) {
@@ -357,6 +362,7 @@ export class NotificationAdminController {
    */
   @Post('digest/run')
   @Roles(...NOTIFICATION_ADMIN_ROLES)
+  @RequirePermissions('configuration:edit:platform')
   @ApiOperation({ summary: 'Assemble and send the morning digest immediately' })
   async runDigest(): Promise<{ success: boolean; data: { queued: boolean } }> {
     try {

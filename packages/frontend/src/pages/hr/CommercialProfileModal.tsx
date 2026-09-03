@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { formatRupees } from '@fapoms/shared';
-import { Modal, Select, useToast } from '../../components/ui';
+import { Modal, Select, useToast, AlertBanner } from '../../components/ui';
 import { useConfirm } from '../../components/ui/ConfirmDialog';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
@@ -105,6 +105,14 @@ export const CommercialProfileModal: React.FC<{
   onSaved: () => void;
 }> = ({ open, onClose, assayerId, profile, onSaved }) => {
   const { toast } = useToast();
+  /**
+   * Anything that stopped these pay terms being stored, said inside the dialog.
+   *
+   * Both failures used to be toasts fired from a modal — they appear in the page's corner,
+   * behind the dialog the reader is looking at, and take themselves away. The success stays a
+   * toast, because the dialog closes on it and there is nothing left to decide.
+   */
+  const [err, setErr] = React.useState<string | null>(null);
   const { confirm, confirmDialog } = useConfirm();
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState<Record<string, string>>(() => buildForm(profile));
@@ -131,13 +139,14 @@ export const CommercialProfileModal: React.FC<{
   React.useEffect(() => {
     if (!open) return;
     setForm(buildForm(profile));
+    setErr(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, profileId]);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form.effectiveStartDate) {
-      toast({ type: 'error', title: 'Start date required', message: 'Pick the date these pay terms start applying.' });
+      setErr('Pick the date these pay terms start applying.');
       return;
     }
     /**
@@ -206,23 +215,27 @@ export const CommercialProfileModal: React.FC<{
       onSaved();
       onClose();
     } catch (err) {
-      toast({ type: 'error', title: 'Pay terms not saved', message: userMessage(err) });
+      // A banner in the dialog, not a toast behind it: the form is still open with the
+      // operator's figures in it, and a message that removes itself after four seconds is the
+      // wrong way to say a rate was not stored.
+      setErr(`These pay terms were not saved. ${userMessage(err)}`);
     } finally {
       setBusy(false);
     }
   };
 
-  const label: React.CSSProperties = { display: 'block', fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px' };
+  const label: React.CSSProperties = { display: 'block', fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px' };
   const input: React.CSSProperties = { padding: '9px 11px', background: 'var(--bg-page)', border: '1px solid var(--border-color)', borderRadius: '8px', color: 'var(--text-primary)', width: '100%', boxSizing: 'border-box' as const, outline: 'none', fontSize: '13px' };
 
   return (
     <Modal open={open} onClose={onClose} title={profile ? 'Change what this person is paid' : 'Set what this person is paid'} asForm onSubmit={submit} width={520}>
+      <AlertBanner type="error" message={err} onClose={() => setErr(null)} style={{ marginBottom: '12px' }} />
       {/*
         Which of these six numbers actually reaches a payout, said before the boxes rather than
         after the mistake. Filling in an hourly rate and expecting it to be paid is the error this
         dialog invited, and there is nothing further down the system that would ever correct it.
       */}
-      <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '9px 11px', marginBottom: '12px', lineHeight: 1.5 }}>
+      <div style={{ fontSize: '12px', color: 'var(--text-secondary)', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '9px 11px', marginBottom: '12px', lineHeight: 1.5 }}>
         Assignments are priced and paid on the <strong>base fee</strong> only. The other figures are
         kept on this person's record as their agreed terms, but no invoice or payout is calculated
         from them.
@@ -231,7 +244,7 @@ export const CommercialProfileModal: React.FC<{
         {NUMERIC_FIELDS.map((f) => (
           <div key={f.key} style={f.key === 'baseFee' ? { gridColumn: '1 / -1' } : undefined}>
             <label style={label}>{f.label}</label>
-            {f.hint && <div style={{ fontSize: '10.5px', color: 'var(--text-muted)', marginBottom: '3px' }}>{f.hint}</div>}
+            {f.hint && <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '3px' }}>{f.hint}</div>}
             <input type="number" min={0} step="0.01" value={form[f.key] || ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} style={input} placeholder="0.00" />
           </div>
         ))}

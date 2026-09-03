@@ -32,7 +32,7 @@ import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import * as xlsx from 'xlsx';
 // One implementation of "read a spreadsheet column", shared with the assayer roster upload —
 // the exact-header bug that dropped every row has now been hit by both importers.
-import { parseSheet, rowReader, identifyTemplate, ParsedSheet, RowReader } from '../../core/excel/sheet-reader';
+import { parseSheet, rowReader, identifyTemplate, normaliseHeader, BLANK_HEADER, ParsedSheet, RowReader } from '../../core/excel/sheet-reader';
 import { BranchEntity } from '../branch/branch.entity';
 import { geocodeIndiaRobust, GeocodeResult } from '../geo/india-geocoder';
 import { needsBetterFix } from '../geo/coordinate-resolution';
@@ -894,6 +894,17 @@ export class ProjectService implements OnModuleInit {
      */
     const revived: { row: number; solId?: string; reason: string }[] = [];
     /**
+     * Every column heading this import actually reads, recorded as it reads them.
+     *
+     * A heading the importer does not recognise is dropped in silence and the run still reports
+     * success. The roster importer proved the cost: a sheet headed `Aadhaar Number` rather than
+     * `Aadhar Card Number` imported all its rows, said "created 6, skipped 0", and discarded every
+     * Aadhaar number. This file carries 3,759 branches, so the same slip loses a column of them.
+     * Collected from the real `get(...)` call sites so it cannot drift from the aliases in use.
+     */
+    const askedFor = new Set<string>();
+    const notes: string[] = [];
+    /**
      * Rows that imported but landed on a fallback coordinate — a warning list, not a skip list.
      * Kept separate from `skipped` because these branches DID import; they simply cannot be
      * planned or checked into until someone corrects where they are.
@@ -938,7 +949,7 @@ export class ProjectService implements OnModuleInit {
       const row = rows[index];
       // The header row itself, plus however many rows preceded it.
       const rowNumber = index + sheet.headerRow + 1;
-      const get = rowReader(row);
+      const get = rowReader(row, askedFor);
 
       // Every column is read through the alias list rather than one exact header, so the
       // client's own export, our template, and a hand-edited copy of either all import.
@@ -1443,11 +1454,31 @@ export class ProjectService implements OnModuleInit {
      * "afterwards". Fire-and-forget: a Redis hiccup must not fail an import that has already
      * landed, and the nightly sweep selects by precision, so nothing is lost if the enqueue is.
      */
+    /**
+     * Name any column nobody read, so a renamed heading cannot cost a field in silence.
+     *
+     * Only columns carrying data are reported — a spreadsheet's trailing empty columns are normal,
+     * and naming them would bury the one that matters. The column is NAMED, never guessed into a
+     * field: guessing is how the wrong column lands in the right-looking place.
+     */
+    for (const header of sheet.headers) {
+      if (!header || BLANK_HEADER.test(header)) continue;
+      if (askedFor.has(normaliseHeader(header))) continue;
+      const carrying = rows.filter((r) => String(r?.[header] ?? '').trim() !== '').length;
+      if (carrying === 0) continue;
+      notes.push(
+        `Column "${header}" was not recognised, so ${carrying} row(s) of data in it were not imported. `
+        + 'If that column holds something this system stores, rename its heading to the one the '
+        + 'template uses and import again — nothing was guessed.',
+      );
+    }
+
     void this.geoPrecision.enqueueBackfill('branch', impreciseBranchIds, `import into ${target.label}`);
 
     return {
       // The project's resulting branch list, for the endpoint whose `data` field is that list.
       // A client-scoped import has none; its caller reads the branch master back on its own.
+      notes,
       branches: target.projectId ? await this.findProjectBranches(target.projectId) : [],
       totalRows: rows.length,
       created: createdCount,

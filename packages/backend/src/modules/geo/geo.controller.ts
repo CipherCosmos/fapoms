@@ -187,6 +187,9 @@ export class GeoController {
 
   @Post('route/optimize')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  // There is no GEO permission. This is the routing calculation behind day-plan building and the
+  // planning screen is its only caller, so it is gated as the planning read it serves.
+  @RequirePermissions('planning:view:organization')
   @ApiOperation({ summary: 'Calculate optimized route sequence (TSP solver) for multiple destinations' })
   async optimizeRoute(@Body() dto: OptimizeRouteDto) {
     if (dto.destinations.length > 20) {
@@ -205,6 +208,9 @@ export class GeoController {
 
   @Get('precision/:target')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  // `:target` is branch OR assayer and a decorator cannot see which, so the routes that take it
+  // require BOTH permissions rather than guessing at which one a given call meant.
+  @RequirePermissions('branch:view:organization', 'assayer:view:organization')
   @ApiOperation({ summary: 'How precise the stored coordinates are, by tier' })
   async precisionSummary(@Param('target') target: string) {
     return { success: true, data: await this.geoPrecision.summary(assertTarget(target)) };
@@ -212,6 +218,7 @@ export class GeoController {
 
   @Get('precision/:target/imprecise')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('branch:view:organization', 'assayer:view:organization')
   @ApiOperation({ summary: 'Records still on a district/state centroid — the manual-pin worklist' })
   async impreciseRecords(@Param('target') target: string, @Query('limit') limit = 100) {
     return { success: true, data: await this.geoPrecision.imprecise(assertTarget(target), Number(limit) || 100) };
@@ -219,6 +226,7 @@ export class GeoController {
 
   @Post('precision/:target/backfill')
   @Roles(SystemRole.ADMIN)
+  @RequirePermissions('branch:edit:organization', 'assayer:edit:organization')
   @ApiOperation({ summary: 'Re-resolve coarse coordinates through the free geocoders' })
   async backfillPrecision(@Param('target') target: string, @Body() dto: BackfillDto) {
     // Bounded, and deliberately not "all". The free providers allow about one lookup a second,
@@ -229,6 +237,7 @@ export class GeoController {
 
   @Post('branches/enrich-addresses')
   @Roles(SystemRole.ADMIN)
+  @RequirePermissions('branch:edit:organization')
   @ApiOperation({ summary: 'Fill branch district/pincode/city (self-hosted reverse-geocode) + zone/territory/tier' })
   async enrichBranchAddresses(@Body() dto: BackfillDto) {
     // The reverse-geocode is the self-hosted India Nominatim (free, ~200 ms), so this can take a
@@ -240,6 +249,7 @@ export class GeoController {
 
   @Post('precision/:target/:id/pin')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('branch:edit:organization', 'assayer:edit:organization')
   @ApiOperation({ summary: 'Pin a record to an exact coordinate by hand (5-10 m, and never re-geocoded)' })
   async pin(
     @Param('target') target: string,

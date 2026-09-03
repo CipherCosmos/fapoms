@@ -17,7 +17,7 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsNotEmpty } from 'class-validator';
 import { AuthService } from './auth.service';
-import { JwtAuthGuard, PasswordChangeExempt } from './guards';
+import { JwtAuthGuard, PasswordChangeExempt, OnboardingAllowed } from './guards';
 import { Throttle } from '@nestjs/throttler';
 
 class LoginDto {
@@ -76,7 +76,21 @@ export class AuthController {
       success: true,
       // Deliberately minimal: existence plus a display name. No contact details,
       // no banking, no identifiers beyond the one already supplied by the caller.
-      data: found ? { verified: true, displayName: found.displayName, assayerCode: found.assayerCode } : { verified: false },
+      //
+      // `needsAppAccess` is the one addition, and it is a flag rather than a fact about the
+      // person: it says the account exists but has never been given a password. 540 assayers are
+      // in that state — imported from the roster, never invited — and without this the app
+      // greeted them by name and then said their password was wrong for an account that has
+      // never had one. Passing it through is the whole point of computing it; it was being
+      // dropped here while the service worked it out.
+      data: found
+        ? {
+          verified: true,
+          displayName: found.displayName,
+          assayerCode: found.assayerCode,
+          ...(found.needsAppAccess ? { needsAppAccess: true } : {}),
+        }
+        : { verified: false },
     };
   }
 
@@ -167,6 +181,15 @@ export class AuthController {
           email: result.user.email,
           phone: result.user.phone,
           status: result.user.status,
+          /**
+           * Biometric resume happens with no password typed, so this response is the only
+           * moment the app can learn a forced change is pending and open the change-password
+           * screen. It was omitted here while `/auth/login` returned it — which made the
+           * biometric path a silent walk past the rotation requirement: the guard now refuses
+           * such a session everywhere except the change-password flow, and without this field
+           * the app could not say why.
+           */
+          mustChangePassword: !!result.user.mustChangePassword,
         },
       },
     };
@@ -195,6 +218,7 @@ export class AuthController {
   }
 
   @Post('logout')
+  @OnboardingAllowed()
   // Signing out must stay available even with a forced password change pending.
   @PasswordChangeExempt()
   @HttpCode(HttpStatus.OK)

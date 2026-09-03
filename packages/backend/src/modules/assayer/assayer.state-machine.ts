@@ -51,22 +51,21 @@ export class AssayerStateMachine {
     if (targetStatus === AssayerLifecycleStatus.ARCHIVED) assayer.isActive = false;
 
     /**
-     * Record the day someone left, on the way out.
+     * Departure dates are deliberately NOT stamped here any more.
      *
-     * Leaving was recorded only in `lifecycleStatus`, while every count and filter of departures
-     * reads `exitDate`/`terminationDate` — which nothing set. So the roster's "Exited" chip and
-     * the workforce header's "0 exited" stayed at zero however many people left, and a resigned
-     * assayer was counted in neither Active nor Exited while plainly showing RESIGNED on screen.
+     * They used to be — RESIGNED set `exitDate`, TERMINATED set `terminationDate` — and the
+     * service's `reconcileDepartureDates` then stamped whatever was still missing. Two writers
+     * for one column, and the split defeated the service's own guard: by the time reconcile ran,
+     * this method had already filled `exitDate`, so reconcile recorded no correction, skipped
+     * `assertEmploymentDatesArePossible`, and a resignation stamped onto somebody whose joining
+     * date lies in the future sailed through — the exact impossible pair the guard exists to
+     * refuse. It also silenced the audit remark ("exit date recorded as …"), because the remark
+     * only names corrections reconcile itself made.
      *
-     * An existing date is never overwritten: HR may already have entered the real last working
-     * day, and that is better information than the day the record was updated.
+     * `reconcileDepartureDates` (assayer.service.ts) is now the single writer: it stamps BOTH
+     * dates on the way out, asserts the result is a possible pair, and puts what it did on the
+     * record. This method changes status only.
      */
-    if (targetStatus === AssayerLifecycleStatus.RESIGNED && !assayer.exitDate) {
-      assayer.exitDate = new Date();
-    }
-    if (targetStatus === AssayerLifecycleStatus.TERMINATED && !assayer.terminationDate) {
-      assayer.terminationDate = new Date();
-    }
   }
 
   static verifyDocuments(assayer: AssayerEntity, userId: string): AssayerDocumentVerificationStartedEvent {

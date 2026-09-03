@@ -723,6 +723,15 @@ describe('RosterImportService — dates that are not dates', () => {
     return { value, issues };
   };
 
+  /** The same, read as a date of birth — which gets no future allowance at all. */
+  const readBirth = (raw: unknown) => {
+    const issues: any[] = [];
+    const value = (service() as any).readDate(
+      raw, { issues, sourceRow: 2, sheet: 'Assayers', column: 'D.O.B' }, 'birth',
+    );
+    return { value, issues };
+  };
+
   it.each(['4200', '5484', '6299', '3009', '9952'])(
     'refuses %s — a bare number JavaScript would read as a year',
     (raw) => {
@@ -776,5 +785,235 @@ describe('RosterImportService — dates that are not dates', () => {
     const { value, issues } = read('sanjayk');
     expect(value).toBeNull();
     expect(issues[0].reason).toMatch(/Could not be read as a date/);
+  });
+
+  /**
+   * The bound covers every shape, not only the bare number that prompted it.
+   *
+   * It was written for `new Date("5484")` and applied at that one call site, so the two shapes
+   * matched earlier — `01-01-5484` and `02-Nov-5484` — returned year 5484 unchecked. Nothing
+   * caught it because the rule's own comment said the result was bounded, and the corruption in
+   * the roster we have happens to arrive as bare numbers. A re-import is allowed to bring a
+   * differently-broken sheet, and this is the whole point of a guard: it has to hold for the
+   * input nobody predicted, not only the one that was already found.
+   */
+  it.each([
+    ['01-01-5484', 'day-first with an impossible year'],
+    ['02-Nov-5484', 'month-as-a-word with an impossible year'],
+    ['15/06/9952', 'slash-separated with an impossible year'],
+  ])('refuses %s (%s), not only a bare number', (raw) => {
+    const { value, issues } = read(raw);
+    expect(value).toBeNull();
+    expect(issues[0].reason).toMatch(/not a real date for a person/);
+  });
+
+  it('bounds a Date handed straight over by the spreadsheet reader too', () => {
+    // xlsx hands back a real Date for a date-formatted cell, and that path returned it untouched.
+    const { value, issues } = read(new Date(Date.UTC(5484, 0, 1)) as any);
+    expect(value).toBeNull();
+    expect(issues[0].reason).toMatch(/not a real date for a person/);
+  });
+
+  it('still passes an ordinary Date from the spreadsheet reader through', () => {
+    const ordinary = new Date(1997, 0, 11);
+    const { value, issues } = read(ordinary as any);
+    expect(value).toBe(ordinary);
+    expect(issues).toHaveLength(0);
+  });
+
+  /**
+   * How far ahead a date may sit depends on what it is for, and one window for both was wrong at
+   * both ends.
+   *
+   * Employment dates were bounded at two years while the data-integrity scan treats anything
+   * within five as plausible — so a fixed-term engagement ending in four years was refused here
+   * and would have been waved through there, with the operator told a real date was "not a real
+   * date for a person". Birth dates shared that two-year allowance, which is two years of dates
+   * nobody can have been born on being accepted without a murmur.
+   */
+  it('accepts an employment date years ahead, matching what the integrity scan calls plausible', () => {
+    const inFourYears = new Date().getFullYear() + 4;
+    const { value, issues } = read(`30-06-${inFourYears}`);
+    expect(value?.getFullYear()).toBe(inFourYears);
+    expect(issues).toHaveLength(0);
+  });
+
+  it('refuses an employment date beyond that window', () => {
+    const wayOut = new Date().getFullYear() + 9;
+    expect(read(`30-06-${wayOut}`).value).toBeNull();
+  });
+
+  it('refuses a date of birth in the future, however near', () => {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const { value, issues } = readBirth(tomorrow as any);
+
+    expect(value).toBeNull();
+    expect(issues[0].reason).toMatch(/nobody is born on a date that has not happened yet/);
+  });
+
+  it('accepts a date of birth of today, and of long ago', () => {
+    expect(readBirth(new Date() as any).value).not.toBeNull();
+    expect(readBirth('11-01-1997').value?.getFullYear()).toBe(1997);
+  });
+
+  it('still refuses an impossible year as a birth date, with the parse-failure wording', () => {
+    const { value, issues } = readBirth('9952');
+    expect(value).toBeNull();
+    expect(issues[0].reason).toMatch(/not a real date for a person/);
+  });
+});
+
+/**
+ * Aadhaar leaves the length-only era.
+ *
+ * `/^\d{12}$/` accepted any twelve digits, so a mistyped Aadhaar was stored as confidently as a
+ * real one and surfaced later as a KYC record matching nobody. The rule now lives in
+ * `@fapoms/shared` (same one the API DTOs enforce) and carries the Verhoeff checksum a genuine
+ * Aadhaar always satisfies. The importer's posture is unchanged: report, never throw — a bad
+ * cell files an issue naming its row while the person is still imported.
+ */
+describe('roster import — Aadhaar checksum', () => {
+  const HEADERS = ['Appraiser Name', 'Appraiser code', 'Aadhar Card Number', 'Residence Address', 'Location', 'District', 'State'];
+
+  const person = (name: string, code: string, aadhaar = '') =>
+    [name, code, aadhaar, 'Main Road, Kunnamangalam', 'Kunnamangalam', 'Calicut', 'Kerala'];
+
+  const book = (rows: any[][]): Buffer => {
+    const wb = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(wb, xlsx.utils.aoa_to_sheet([HEADERS, ...rows]), 'Assayer');
+    return Buffer.from(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+  };
+
+  const harness = (existing: Array<Record<string, any>> = []) => {
+    const savedAssayers: any[] = [];
+    const savedIssues: any[] = [];
+    let n = 1;
+    const manager: any = {
+      find: async () => [],
+      createQueryBuilder: () => {
+        let codes: string[] = [];
+        const qb: any = {
+          where: (_sql: string, params?: any) => { codes = params?.codes ?? codes; return qb; },
+          getMany: async () => existing.filter((a) => codes.includes(a.assayerCode)),
+        };
+        qb.andWhere = qb.where;
+        return qb;
+      },
+      findOne: async () => undefined,
+      query: async () => undefined,
+      create: (_entity: any, obj: any) => ({ ...obj }),
+      save: async (entity: any, obj: any) => {
+        if (obj && obj.id == null) obj.id = `id-${n++}`;
+        if (entity?.name === 'AssayerEntity') savedAssayers.push(obj);
+        if (entity?.name === 'AssayerImportIssueEntity') savedIssues.push(obj);
+        return obj;
+      },
+    };
+    const service = new RosterImportService(
+      { run: (work: any) => work(manager, () => {}) } as any,
+      { enqueueBackfill: jest.fn().mockResolvedValue(undefined) } as any,
+      { get: jest.fn().mockResolvedValue(false) } as any,
+    );
+    return { service, savedAssayers, savedIssues };
+  };
+
+  // 999941057058: payload 99994105705 carries Verhoeff check digit 8 (also UIDAI's test range).
+  const VALID_AADHAAR = '999941057058';
+  // Same digits, last one bumped — the shape check passes, the checksum must not.
+  const MISTYPED_AADHAAR = '999941057059';
+
+  it('stores a checksum-valid Aadhaar exactly as before', async () => {
+    const h = harness();
+    const summary = await h.service.importAssayerSheet(
+      book([person('Shinil T', 'AS0643', VALID_AADHAAR)]), 'user-1', { dryRun: true },
+    );
+    expect(h.savedAssayers[0].aadhaarNumber).toBe(VALID_AADHAAR);
+    expect(summary.issues).toBe(0);
+  });
+
+  it('sends a twelve-digit number that fails the checksum to review, naming its row, and stores nothing', async () => {
+    const h = harness();
+    const summary = await h.service.importAssayerSheet(
+      book([person('Shinil T', 'AS0643', MISTYPED_AADHAAR)]), 'user-1', { dryRun: true },
+    );
+
+    // The person is still imported — a bad cell must not cost the row.
+    expect(h.savedAssayers).toHaveLength(1);
+    expect(h.savedAssayers[0].aadhaarNumber).toBeNull();
+
+    const issue = h.savedIssues.find((i) => i.sourceColumn === 'Aadhar Card Number');
+    expect(issue).toBeDefined();
+    expect(issue.sourceRow).toBe(2); // header is row 1; the operator finds the cell by this
+    expect(issue.rawValue).toBe(MISTYPED_AADHAAR);
+    expect(issue.reason).toMatch(/checksum fails/);
+    expect(summary.issues).toBeGreaterThan(0);
+  });
+
+  it('keeps an existing stored Aadhaar when a re-import row carries a failing one', async () => {
+    const h = harness([{ id: 'a-1', assayerCode: 'AS0643', aadhaarNumber: VALID_AADHAAR }]);
+    await h.service.importAssayerSheet(
+      book([person('Shinil T', 'AS0643', MISTYPED_AADHAAR)]), 'user-1', { dryRun: true },
+    );
+    // Same keep-what-we-had rule an unreadable cell gets: review the cell, do not blank the record.
+    expect(h.savedAssayers[0].aadhaarNumber).toBe(VALID_AADHAAR);
+    expect(h.savedIssues.some((i) => i.sourceColumn === 'Aadhar Card Number')).toBe(true);
+  });
+
+  it('still refuses the words the column is known to hold, with the shape message', async () => {
+    const h = harness();
+    await h.service.importAssayerSheet(
+      book([person('R Jeganathan', 'AS0361', 'Inactive')]), 'user-1', { dryRun: true },
+    );
+    const issue = h.savedIssues.find((i) => i.sourceColumn === 'Aadhar Card Number');
+    expect(issue.reason).toMatch(/expected 12 digits/);
+    expect(h.savedAssayers[0].aadhaarNumber).toBeNull();
+  });
+
+  /**
+   * The placeholder message. `999999999999` PASSES Verhoeff — `isValidAadhaar` refuses it on the
+   * all-same-digit rule, before the checksum runs — so reporting it as a checksum failure told
+   * the clerk to re-read a card looking for a mistyped digit in a number that has none. That is
+   * a wasted trip to a filing cabinet for the single likeliest junk value in this column.
+   */
+  const PLACEHOLDER_AADHAAR = '999999999999';
+
+  it('names a twelve-identical-digit cell a placeholder, not a checksum failure', async () => {
+    const h = harness();
+    await h.service.importAssayerSheet(
+      book([person('Shinil T', 'AS0643', PLACEHOLDER_AADHAAR)]), 'user-1', { dryRun: true },
+    );
+
+    const issue = h.savedIssues.find((i) => i.sourceColumn === 'Aadhar Card Number');
+    expect(issue).toBeDefined();
+    expect(issue.rawValue).toBe(PLACEHOLDER_AADHAAR);
+    expect(issue.reason).toMatch(/placeholder/i);
+    // The wrong advice must be absent, not merely outweighed: nothing here is mistyped.
+    expect(issue.reason).not.toMatch(/checksum/i);
+    expect(issue.reason).not.toMatch(/mistyped or swapped/i);
+    // Same posture as any other bad cell: the person is imported, the number is not stored.
+    expect(h.savedAssayers).toHaveLength(1);
+    expect(h.savedAssayers[0].aadhaarNumber).toBeNull();
+  });
+
+  it('keeps the checksum message for a genuine typo, so the two stay told apart', async () => {
+    const h = harness();
+    await h.service.importAssayerSheet(
+      book([person('Shinil T', 'AS0643', MISTYPED_AADHAAR)]), 'user-1', { dryRun: true },
+    );
+    const issue = h.savedIssues.find((i) => i.sourceColumn === 'Aadhar Card Number');
+    expect(issue.reason).toMatch(/checksum fails/);
+    expect(issue.reason).not.toMatch(/placeholder/i);
+  });
+
+  it('reports every all-same-digit value as a placeholder, not just the nines', async () => {
+    for (let d = 0; d <= 9; d++) {
+      const h = harness();
+      await h.service.importAssayerSheet(
+        book([person('Shinil T', 'AS0643', String(d).repeat(12))]), 'user-1', { dryRun: true },
+      );
+      const issue = h.savedIssues.find((i) => i.sourceColumn === 'Aadhar Card Number');
+      expect(issue.reason).toMatch(/placeholder/i);
+    }
   });
 });

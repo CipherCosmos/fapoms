@@ -135,4 +135,103 @@ describe('the assayer edit body', () => {
     // `undefined` is "not on this form", which is different from "the operator cleared it".
     expect(build([{ key: 'notes' }], { notes: undefined })).toEqual({});
   });
+
+  /**
+   * A masked identifier must never be written over the real one.
+   *
+   * `GET /assayers/:id` returns the PAN, the Aadhaar and the bank account last-4 masked, and the
+   * server refuses any write carrying an asterisk. Saving one would replace a real KYC identifier
+   * with something that looks plausible on every screen afterwards — data loss with no symptom.
+   *
+   * The two masked cases are not the same and must not be treated alike, which is what these
+   * pin. A mask identical to what the record holds is a field nobody touched: refusing it would
+   * fail an unrelated save on a field the clerk never went near. A mask that differs is somebody
+   * typing on top of one, and that is refused in words that say what to do about it.
+   */
+  describe('a masked identifier', () => {
+    const onFile = { workingHours: null, certifications: [], panNumber: '******234F' };
+    const pan = [{ key: 'panNumber', label: 'PAN Number' }];
+
+    it('is dropped, not refused, when it is exactly what the record already holds', () => {
+      const out = buildAssayerEditBody(pan, { panNumber: '******234F' }, onFile as any);
+      expect(out.body).not.toHaveProperty('panNumber');
+      expect(out.problems).toEqual([]);
+    });
+
+    it('lets an unrelated edit through in the same save', () => {
+      const out = buildAssayerEditBody(
+        [...pan, { key: 'city' }],
+        { panNumber: '******234F', city: 'Nashik' },
+        onFile as any,
+      );
+      expect(out.body).toEqual({ city: 'Nashik' });
+      expect(out.problems).toEqual([]);
+    });
+
+    it('is refused, by name, when somebody has typed on top of it', () => {
+      const out = buildAssayerEditBody(pan, { panNumber: '******234G' }, onFile as any);
+      expect(out.body).not.toHaveProperty('panNumber');
+      expect(out.problems).toHaveLength(1);
+      expect(out.problems[0]).toContain('pan number');
+      expect(out.problems[0]).toContain('Show it in full first');
+    });
+
+    it('lets a real revealed value through untouched', () => {
+      const out = buildAssayerEditBody(pan, { panNumber: 'ABCDE1234F' }, onFile as any);
+      expect(out.body).toEqual({ panNumber: 'ABCDE1234F' });
+      expect(out.problems).toEqual([]);
+    });
+
+    it('still lets the field be cleared', () => {
+      // Emptying a box is a deliberate act and has nothing to do with masking.
+      const out = buildAssayerEditBody(pan, { panNumber: '' }, onFile as any);
+      expect(out.body).toEqual({ panNumber: '' });
+      expect(out.problems).toEqual([]);
+    });
+
+    /**
+     * A short value's mask is still a mask.
+     *
+     * `maskTail` keeps the last four characters, so a five- or six-character bank account comes
+     * back as `*2345` or `**3456` — one or two stars, not a run of them. This side used to want
+     * three before it called something a mask, so those two went out with the save, the server
+     * refused them, and the clerk was shown a 400 naming a field they never opened. Both ends read
+     * one function now; this is the case that told them apart.
+     */
+    it('drops the mask of a short value, which used to be sent and refused', () => {
+      const short = { workingHours: null, certifications: [], bankAccountNumber: '*2345' };
+      const account = [{ key: 'bankAccountNumber', label: 'Bank Account' }];
+
+      const out = buildAssayerEditBody(account, { bankAccountNumber: '*2345' }, short as any);
+
+      expect(out.body).not.toHaveProperty('bankAccountNumber');
+      expect(out.problems).toEqual([]);
+    });
+
+    it('refuses a short mask somebody has typed on top of', () => {
+      const short = { workingHours: null, certifications: [], bankAccountNumber: '**3456' };
+      const out = buildAssayerEditBody(
+        [{ key: 'bankAccountNumber', label: 'Bank Account' }],
+        { bankAccountNumber: '**3457' },
+        short as any,
+      );
+      expect(out.body).not.toHaveProperty('bankAccountNumber');
+      expect(out.problems[0]).toContain('Show it in full first');
+    });
+
+    it('never mistakes a real identifier for a mask', () => {
+      // The test is a run of mask characters. Nothing in a PAN, an Aadhaar or an account number
+      // is one — an earlier version of this also matched a run of the letter x, which a fake-
+      // looking but legitimate value could carry.
+      for (const real of ['ABCDE1234F', 'XXXXX1234X', '000111222333', '123456789012', 'HDFC0000001']) {
+        const out = buildAssayerEditBody(
+          [{ key: 'bankAccountNumber', label: 'Bank Account' }],
+          { bankAccountNumber: real },
+          onFile as any,
+        );
+        expect(out.problems).toEqual([]);
+        expect(out.body).toHaveProperty('bankAccountNumber', real);
+      }
+    });
+  });
 });

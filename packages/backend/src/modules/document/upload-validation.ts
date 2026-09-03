@@ -1,5 +1,7 @@
 import { BadRequestException } from '@nestjs/common';
 import { MAX_UPLOAD_MB, MAX_RESUMABLE_UPLOAD_MB } from '@fapoms/shared';
+import { ASSAYER_ERROR_CODES } from '@fapoms/shared';
+import { withCode } from '../../infrastructure/http/api-error';
 
 /**
  * The one place the document pipeline decides what a file is allowed to be.
@@ -153,22 +155,34 @@ export function assertUploadAllowed(input: {
     const ext = input.fileName.toLowerCase().split('.').pop() ?? '';
     const fromExtension = EXTENSION_TYPES[ext];
     if (!fromExtension) {
-      throw new BadRequestException(
-        `"${input.fileName}" is not a kind of file this accepts. Allowed: ${humanList(allowed)}.`,
+      throw withCode(
+        new BadRequestException(
+          `"${input.fileName}" is not a kind of file this accepts. Allowed: ${humanList(allowed)}.`,
+        ),
+        ASSAYER_ERROR_CODES.UPLOAD_TYPE_NOT_ALLOWED,
       );
     }
     declared = fromExtension;
   }
 
   if (!allowed.has(declared)) {
-    throw new BadRequestException(
-      `Files of type "${declared}" are not accepted. Allowed: ${humanList(allowed)}.`,
+    throw withCode(
+      new BadRequestException(
+        `Files of type "${declared}" are not accepted. Allowed: ${humanList(allowed)}.`,
+      ),
+      ASSAYER_ERROR_CODES.UPLOAD_TYPE_NOT_ALLOWED,
     );
   }
   if (input.size != null && input.size > maxBytes) {
-    throw new BadRequestException(
-      `That file is ${mb(input.size)} MB, over the ${mb(maxBytes)} MB limit.` +
-        (input.hint ? ` ${input.hint}` : ''),
+    // The size ceiling is the one upload refusal a client can act on beyond showing a sentence:
+    // knowing it was size, not type or content, is what lets the phone offer to re-take the photo
+    // at a lower resolution instead of sending the person back to the office.
+    throw withCode(
+      new BadRequestException(
+        `That file is ${mb(input.size)} MB, over the ${mb(maxBytes)} MB limit.` +
+          (input.hint ? ` ${input.hint}` : ''),
+      ),
+      ASSAYER_ERROR_CODES.UPLOAD_TOO_LARGE,
     );
   }
 }

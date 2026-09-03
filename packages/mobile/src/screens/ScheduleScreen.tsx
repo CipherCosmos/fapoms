@@ -8,6 +8,7 @@ import { AppText, Badge, Button, Card, Divider, EmptyState, FadeIn, Icon, Segmen
 import { formatRupees as money, assignmentStatusLabel, isAssignmentTerminal, formatDateOnly, travelModeLabel } from '@fapoms/shared';
 import { assignmentStatusTone } from '../utils/statusTone';
 import { dayGroupHeader, dayKey, relativeDay } from '../utils/dates';
+import { useT, useLocale, serverErrorText, t as translate } from '../i18n';
 import { useSwipeSegments } from '../hooks/useSwipeSegments';
 
 const SCHEDULE_TABS = ['ACTIVE', 'DONE'] as const;
@@ -38,7 +39,7 @@ type Tone = 'neutral' | 'primary' | 'accent' | 'success' | 'warning' | 'danger' 
 
 
 const fmtDate = (d?: string | null) =>
-  d ? formatDateOnly(d, { weekday: 'short', day: '2-digit', month: 'short' }) : 'Today';
+  d ? formatDateOnly(d, { weekday: 'short', day: '2-digit', month: 'short' }) : translate('dates.today');
 
 /**
  * The route: every branch this assayer owes work on.
@@ -77,6 +78,8 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
   }, []);
 
   const t = useTheme();
+  const tr = useT();
+  const locale = useLocale();
   const [tab, setTab] = React.useState<'ACTIVE' | 'DONE'>('ACTIVE');
   const [downloadingId, setDownloadingId] = React.useState<string | null>(null);
   const [downloadMsg, setDownloadMsg] = React.useState<{ id: string; tone: 'ok' | 'warn'; text: string } | null>(null);
@@ -102,18 +105,18 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
        */
       const doc = data.find((d: any) => d.type === 'PRE_FIELD_AUDIT_PDF');
       if (!doc) {
-        setDownloadMsg({ id: a.id, tone: 'warn', text: 'The audit packet has not been sent for this branch yet.' });
+        setDownloadMsg({ id: a.id, tone: 'warn', text: tr('schedule.packetNotSent') });
         return;
       }
       const res = await MobileApiService.getDocumentDownloadUrl(doc.id);
       if (!res.ok) {
-        setDownloadMsg({ id: a.id, tone: 'warn', text: res.message || 'This document is not available to download right now.' });
+        setDownloadMsg({ id: a.id, tone: 'warn', text: serverErrorText(res.message, 'schedule.packetUnavailable') });
         return;
       }
       await Linking.openURL(res.url);
-      setDownloadMsg({ id: a.id, tone: 'ok', text: 'Download started — check your browser/downloads.' });
+      setDownloadMsg({ id: a.id, tone: 'ok', text: tr('schedule.downloadStarted') });
     } catch (e: any) {
-      setDownloadMsg({ id: a.id, tone: 'warn', text: e?.message || 'Could not open the audit packet.' });
+      setDownloadMsg({ id: a.id, tone: 'warn', text: serverErrorText(e?.message, 'schedule.downloadFailed') });
     } finally {
       setDownloadingId(null);
     }
@@ -184,8 +187,10 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
       tone: relativeDay(items[0].scheduledDate).tone as Tone,
       items,
     }));
+    // `locale` is a dependency because `dayGroupHeader` produces a translated sentence: without
+    // it the day headers would keep the language they were built in when the assayer switches.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, assignments]);
+    }, [tab, assignments, locale]);
 
   const swipeSegments = useSwipeSegments(SCHEDULE_TABS, tab, setTab);
 
@@ -196,24 +201,22 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
           route plan opened straight onto a segmented control with nothing above it naming the
           screen. Apple's own Mail/Reminders put the big title directly above their filter
           control, which is the same shape as Segmented here. */}
-      <AppText variant="largeTitle">Schedule</AppText>
+      <AppText variant="largeTitle">{tr('schedule.title')}</AppText>
 
       <Segmented
         value={tab}
         onChange={(k) => setTab(k as 'ACTIVE' | 'DONE')}
         options={[
-          { key: 'ACTIVE', label: 'Active', count: active.length },
-          { key: 'DONE', label: 'History', count: done.length },
+          { key: 'ACTIVE', label: tr('schedule.tabActive'), count: active.length },
+          { key: 'DONE', label: tr('schedule.tabHistory'), count: done.length },
         ]}
       />
 
       {shown.length === 0 ? (
         <EmptyState
           icon={tab === 'ACTIVE' ? 'map-outline' : 'checkmark-done-outline'}
-          title={tab === 'ACTIVE' ? 'No active stops' : 'Nothing completed yet'}
-          body={tab === 'ACTIVE'
-            ? 'New branch assignments appear here as soon as operations dispatch them to you.'
-            : 'Audits you finish or decline are kept here for your records.'}
+          title={tab === 'ACTIVE' ? tr('schedule.emptyActiveTitle') : tr('schedule.emptyDoneTitle')}
+          body={tab === 'ACTIVE' ? tr('schedule.emptyActiveBody') : tr('schedule.emptyDoneBody')}
         />
       ) : (
         groups.map((g) => (
@@ -257,12 +260,12 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                 <Divider spacing={2} />
 
                 <View style={{ flexDirection: 'row', gap: t.space.lg }}>
-                  <Fact icon="calendar-outline" label="Date" value={fmtDate(a.scheduledDate)} />
-                  <Fact icon="cube-outline" label="Packets" value={a.estimatedCustomerCount > 0 ? String(a.estimatedCustomerCount) : '—'} />
+                  <Fact icon="calendar-outline" label={tr('schedule.factDate')} value={fmtDate(a.scheduledDate)} />
+                  <Fact icon="cube-outline" label={tr('schedule.factPackets')} value={a.estimatedCustomerCount > 0 ? String(a.estimatedCustomerCount) : '—'} />
                   <Fact
                     icon="cash-outline"
-                    label="Fee"
-                    value={fee > 0 ? money(fee) : 'Fee not set'}
+                    label={tr('schedule.factFee')}
+                    value={fee > 0 ? money(fee) : tr('schedule.feeNotSet')}
                     tone={fee > 0 ? 'success' : 'warning'}
                   />
                 </View>
@@ -272,9 +275,13 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                     above already includes it. */}
                 {a.quotedTravelFee != null && a.quotedTravelFee > 0 && fee > 0 && (
                   <AppText variant="small" tone="muted">
-                    Includes {money(a.quotedTravelFee)} travel
-                    {a.quotedTransportMode ? ` by ${travelModeLabel(a.quotedTransportMode).toLowerCase()}` : ''}
-                    {a.quotedDistanceKm ? ` · ~${Math.round(Number(a.quotedDistanceKm))} km each way` : ''}
+                    {tr('schedule.includesTravel', { amount: money(a.quotedTravelFee) })}
+                    {a.quotedTransportMode
+                      ? tr('schedule.includesTravelBy', { mode: travelModeLabel(a.quotedTransportMode).toLowerCase() })
+                      : ''}
+                    {a.quotedDistanceKm
+                      ? tr('schedule.includesTravelDistance', { km: Math.round(Number(a.quotedDistanceKm)) })
+                      : ''}
                   </AppText>
                 )}
 
@@ -286,18 +293,18 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                         backgroundColor: t.colors.accentSoft, gap: 3,
                       }}>
                         <AppText variant="caption" tone="accent">
-                          Counter-offer round {rounds} of {maxRounds} · proposed {money(a.proposedFee ?? 0)}
+                          {tr('schedule.counterOffer', { round: rounds, max: maxRounds, amount: money(a.proposedFee ?? 0) })}
                         </AppText>
                         {a.remarks ? <AppText variant="small" tone="muted">{a.remarks}</AppText> : null}
                       </View>
                     )}
                     <View style={{ flexDirection: 'row', gap: t.space.sm }}>
-                      <Button label="Accept" icon="checkmark" loading={busyActionId === a.id} disabled={busyActionId != null} onPress={() => onAcceptAssignment(a.id)} style={{ flex: 1 }} />
-                      <Button label="Decline" icon="close" variant="neutral" disabled={busyActionId != null} onPress={() => onOpenRejectModal(a.id)} style={{ flex: 1 }} />
+                      <Button label={tr('schedule.accept')} icon="checkmark" loading={busyActionId === a.id} disabled={busyActionId != null} onPress={() => onAcceptAssignment(a.id)} style={{ flex: 1 }} />
+                      <Button label={tr('schedule.decline')} icon="close" variant="neutral" disabled={busyActionId != null} onPress={() => onOpenRejectModal(a.id)} style={{ flex: 1 }} />
                     </View>
                     {onCounterOffer && (
                       <Button
-                        label={rounds >= maxRounds ? 'Negotiation closed' : `Propose a different fee (${rounds}/${maxRounds})`}
+                        label={rounds >= maxRounds ? tr('schedule.negotiationClosed') : tr('schedule.proposeFee', { round: rounds, max: maxRounds })}
                         icon={rounds >= maxRounds ? 'lock-closed-outline' : 'swap-horizontal'}
                         variant="neutral"
                         disabled={rounds >= maxRounds}
@@ -311,9 +318,9 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                 {a.status === 'ACCEPTED' && (
                   <View style={{ flexDirection: 'row', gap: t.space.sm }}>
                     {onOpenMap && (
-                      <Button label="Navigate" icon="navigate" variant="neutral" onPress={() => onOpenMap(a)} style={{ flex: 1 }} />
+                      <Button label={tr('schedule.navigate')} icon="navigate" variant="neutral" onPress={() => onOpenMap(a)} style={{ flex: 1 }} />
                     )}
-                    <Button label="Check in" icon="log-in-outline" loading={busyActionId === a.id} disabled={busyActionId != null} onPress={() => onCheckIn(a)} style={{ flex: 1 }} />
+                    <Button label={tr('schedule.checkIn')} icon="log-in-outline" loading={busyActionId === a.id} disabled={busyActionId != null} onPress={() => onCheckIn(a)} style={{ flex: 1 }} />
                   </View>
                 )}
 
@@ -327,7 +334,7 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                       between them with nothing to go on.
                     */}
                     <Button
-                      label="Scan & submit audited return"
+                      label={tr('schedule.scanAndSubmit')}
                       icon="scan"
                       onPress={() => (onOpenScanner ? onOpenScanner(a) : onOpenPdfDocs(a))}
                       full
@@ -346,11 +353,13 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                     */}
                     {onCheckOut && (a.checkedOutAt ? (
                       <AppText variant="caption" tone="faint" style={{ textAlign: 'center' }}>
-                        {`Left the branch at ${new Date(a.checkedOutAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}`}
+                        {tr('schedule.leftAt', {
+                          time: new Date(a.checkedOutAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' }),
+                        })}
                       </AppText>
                     ) : (
                       <Button
-                        label="Check out"
+                        label={tr('schedule.checkOut')}
                         icon="log-out-outline"
                         variant="neutral"
                         loading={busyActionId === a.id}
@@ -367,7 +376,7 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                     */}
                     {a.documentReadiness?.state === 'READY' && (
                       <Button
-                        label={downloadingId === a.id ? 'Opening…' : 'Download audit packet'}
+                        label={downloadingId === a.id ? tr('schedule.opening') : tr('schedule.downloadPacket')}
                         icon="download-outline"
                         variant="neutral"
                         disabled={downloadingId !== null}
@@ -391,7 +400,9 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
 
                 {a.status === 'COMPLETED' && a.queries && a.queries.length > 0 && (
                   <Button
-                    label={`${a.queries.length} clarification${a.queries.length > 1 ? 's' : ''} from the desk`}
+                    label={a.queries.length === 1
+                      ? tr('schedule.oneClarification')
+                      : tr('schedule.manyClarifications', { count: a.queries.length })}
                     icon="chatbubble-ellipses-outline"
                     variant="accent"
                     onPress={() => (onOpenQueryChat ? onOpenQueryChat(a) : onOpenPdfDocs(a))}
@@ -414,11 +425,11 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
       {tab === 'DONE' && onLoadOlderHistory && (
         noMoreHistory ? (
           <AppText variant="small" tone="muted" style={{ textAlign: 'center', paddingVertical: t.space.md }}>
-            That&rsquo;s your complete job history.
+            {tr('schedule.historyComplete')}
           </AppText>
         ) : (
           <Button
-            label={loadingOlder ? 'Loading older jobs…' : 'Show older jobs'}
+            label={loadingOlder ? tr('schedule.loadingOlder') : tr('schedule.showOlder')}
             icon="time-outline"
             variant="neutral"
             loading={loadingOlder}
@@ -440,6 +451,7 @@ const DayHeader: React.FC<{ header: string; tone: Tone; count: number; totalFee:
   header, tone, count, totalFee,
 }) => {
   const t = useTheme();
+  const tr = useT();
   const toneColor = {
     neutral: t.colors.textFaint, primary: t.colors.primary, accent: t.colors.accent,
     success: t.colors.success, warning: t.colors.warning, danger: t.colors.danger, info: t.colors.info,
@@ -449,7 +461,8 @@ const DayHeader: React.FC<{ header: string; tone: Tone; count: number; totalFee:
       <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: toneColor }} />
       <AppText variant="overline" style={{ color: toneColor, flex: 1 }}>{header.toUpperCase()}</AppText>
       <AppText variant="caption" tone="faint">
-        {count} {count === 1 ? 'stop' : 'stops'}{totalFee > 0 ? ` · ${money(totalFee)}` : ''}
+        {count === 1 ? tr('schedule.oneStop') : tr('schedule.manyStops', { count })}
+        {totalFee > 0 ? tr('schedule.dayTotal', { amount: money(totalFee) }) : ''}
       </AppText>
     </View>
   );

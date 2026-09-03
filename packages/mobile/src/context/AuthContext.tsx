@@ -60,6 +60,12 @@ interface AuthUser {
    * will not show audit work until it is cleared.
    */
   mustChangePassword?: boolean;
+  /**
+   * Set when this session may only finish the person's own registration — the server says so with
+   * `code: REGISTRATION_IN_PROGRESS` on every route outside that. The app routes to the
+   * registration checklist rather than to a Home screen that can load nothing.
+   */
+  registrationInProgress?: boolean;
 }
 
 interface AuthContextType {
@@ -69,11 +75,32 @@ interface AuthContextType {
   authenticating: boolean;
   login: (u: string, p: string) => Promise<{ success: boolean; error?: string }>;
   biometricLogin: () => Promise<{ success: boolean; error?: string }>;
-  verifyIdentity: (identifier: string) => Promise<{ verified: boolean; assayer?: any; error?: string }>;
+  verifyIdentity: (identifier: string) => Promise<{
+    verified: boolean;
+    /** Recognised, but no sign-in has ever been issued for them. See `verifyAssayerIdentity`. */
+    needsAppAccess?: boolean;
+    assayer?: any;
+    error?: string;
+  }>;
   logout: () => void;
   /** Called after a successful password change so the app can leave the forced-change screen. */
   clearMustChangePassword: () => void;
-  refreshUserSession: () => Promise<void>;
+  /**
+   * There is deliberately no `refreshUserSession` here.
+   *
+   * One used to be exported — a bare `await initSession()` — with no caller anywhere in the app,
+   * which made it read like a safety net for re-learning server-side session facts mid-session.
+   * It would not have worked as one. `initSession` raises `authenticating`, and App.tsx swaps the
+   * entire tree for a spinner while that is true, so any caller would have blanked whatever
+   * screen the assayer was on and thrown away what they had typed — the same defect the comment
+   * on `login` below describes. Worse, it re-raises the biometric lock, so a routine "refresh"
+   * would have demanded a fingerprint from somebody standing at a branch counter.
+   *
+   * The one fact it was imagined for is `mustChangePassword`, and that now arrives on its own:
+   * the API service detects the server's `PASSWORD_CHANGE_REQUIRED` code on a 403 and calls
+   * `onPasswordChangeRequired`, subscribed below. Screen-level data has its own refreshers
+   * (`useAssayerProfile().load` and friends). Nothing needs the whole session rebuilt.
+   */
   /**
    * A restored session that has not been unlocked yet.
    *
@@ -169,6 +196,36 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   useEffect(() => {
     initSession();
   }, [initSession]);
+
+  /**
+   * Let the gate go up mid-session.
+   *
+   * Until this existed, `mustChangePassword` was learned once, at cold start, from the profile
+   * read inside `validateSession`. An HR-issued password reset lands while the app is running,
+   * so the flag stayed false, the gate stayed down, and every subsequent request came back 403.
+   * The assayer saw an empty schedule and an empty notification list with no explanation and no
+   * route to the screen that fixes it. The service now tells us the moment the server says so.
+   */
+  useEffect(() => {
+    MobileApiService.onPasswordChangeRequired = () => {
+      setUser((prev) => (prev ? { ...prev, mustChangePassword: true } : prev));
+    };
+    /**
+     * The same treatment for a session that may only finish its own registration.
+     *
+     * Without it, an assayer who signs in mid-registration lands on Home, every read answers 403,
+     * and the screens that swallow a failed read into an empty collection show nothing — the exact
+     * dead end the forced-password gate above was written to remove, reappearing through a
+     * different door.
+     */
+    MobileApiService.onRegistrationInProgress = () => {
+      setUser((prev) => (prev ? { ...prev, registrationInProgress: true } : prev));
+    };
+    return () => {
+      MobileApiService.onPasswordChangeRequired = null;
+      MobileApiService.onRegistrationInProgress = null;
+    };
+  }, []);
 
   const unlock = useCallback(async (): Promise<{ success: boolean; error?: string }> => {
     try {
@@ -355,10 +412,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     setLocked(false);
   };
 
-  const refreshUserSession = async () => {
-    await initSession();
-  };
-
   const assayerName = user?.name || 'Field Assayer';
 
   return (
@@ -376,7 +429,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         verifyIdentity,
         logout,
         clearMustChangePassword,
-        refreshUserSession,
       }}
     >
       {children}

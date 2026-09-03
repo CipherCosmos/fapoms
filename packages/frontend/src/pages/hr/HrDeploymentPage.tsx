@@ -1,5 +1,6 @@
 import React from 'react';
-import { card, label, Stat, Empty, Table, POSTURE } from './hr-ui';
+import { card, label, Stat, Empty, POSTURE } from './hr-ui';
+import { DataTable } from '../../components/ui';
 import type { HrWorkforceOverview } from '../../hooks/useHrWorkforce';
 import { useHr } from './HrLayout';
 
@@ -39,21 +40,28 @@ const DeploymentTabBody = ({ d }: { d: HrWorkforceOverview }) => (
           assayer on the roster; branches arrive with a project import, people arrive from Roster.
         </Empty>
       ) : (
-      <Table
-        // "Posture" is the backend's word for this column and means nothing to a clerk; the values
-        // under it ("No coverage", "Stretched") already say it plainly.
-        head={['State', 'Branches', 'Assayers', 'Active', 'Branches per assayer', 'Position']}
-        rows={d.deployment.territories.map((t) => {
-          const p = POSTURE[t.posture] ?? POSTURE.BALANCED;
-          return [
-            <strong>{t.state}</strong>,
-            t.branches,
-            t.assayers,
-            t.active,
-            t.branchesPerAssayer ?? '—',
-            <span title={p.hint} style={{ fontSize: '11px', fontWeight: 700, color: p.fg }}>{p.label}</span>,
-          ];
-        })}
+      <DataTable
+        density="compact"
+        minWidth={false}
+        rows={d.deployment.territories}
+        rowKey={(t) => t.state}
+        columns={[
+          { key: 'state', header: 'State', render: (t) => <strong>{t.state}</strong> },
+          { key: 'branches', header: 'Branches', render: (t) => <>{t.branches}</> },
+          { key: 'assayers', header: 'Assayers', render: (t) => <>{t.assayers}</> },
+          { key: 'active', header: 'Active', render: (t) => <>{t.active}</> },
+          { key: 'per', header: 'Branches per assayer', render: (t) => <>{t.branchesPerAssayer ?? '—'}</> },
+          {
+            key: 'posture',
+            // "Posture" is the backend's word for this column and means nothing to a clerk; the
+            // values under it ("No coverage", "Stretched") already say it plainly.
+            header: 'Position',
+            render: (t) => {
+              const p = POSTURE[t.posture] ?? POSTURE.BALANCED;
+              return <span title={p.hint} style={{ fontSize: '12px', fontWeight: 700, color: p.fg }}>{p.label}</span>;
+            },
+          },
+        ]}
       />
       )}
     </section>

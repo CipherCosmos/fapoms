@@ -2,6 +2,7 @@ import React from 'react';
 import { Modal, View, TextInput, TextStyle, KeyboardAvoidingView, Platform } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Card } from './ui/primitives';
+import { useT } from '../i18n';
 
 interface RejectionModalProps {
   visible: boolean;
@@ -22,6 +23,7 @@ export const RejectionModal: React.FC<RejectionModalProps> = ({
   onCancel,
 }) => {
   const t = useTheme();
+  const tr = useT();
 
   if (!visible) return null;
 
@@ -49,13 +51,13 @@ export const RejectionModal: React.FC<RejectionModalProps> = ({
           padding: t.space.xl,
         }}>
         <Card level={2} style={{ gap: t.space.lg, padding: t.space.xl }}>
-          <AppText variant="h2">Decline Assignment</AppText>
+          <AppText variant="h2">{tr('decline.title')}</AppText>
 
           <View style={{ gap: t.space.xs }}>
-            <AppText variant="overline" tone="faint">REASON FOR DECLINING</AppText>
+            <AppText variant="overline" tone="faint">{tr('decline.reasonLabel')}</AppText>
             <TextInput
               style={inputStyle}
-              placeholder="Provide context for operations..."
+              placeholder={tr('decline.reasonPlaceholder')}
               placeholderTextColor={t.colors.textFaint}
               multiline
               value={rejectReason}
@@ -64,8 +66,8 @@ export const RejectionModal: React.FC<RejectionModalProps> = ({
           </View>
 
           <View style={{ flexDirection: 'row', gap: t.space.md, marginTop: t.space.sm }}>
-            <Button label="Decline Assignment" variant="danger" icon="close" loading={submitting} disabled={submitting} onPress={onConfirm} style={{ flex: 1 }} />
-            <Button label="Cancel" variant="neutral" disabled={submitting} onPress={onCancel} style={{ flex: 1 }} />
+            <Button label={tr('decline.confirm')} variant="danger" icon="close" loading={submitting} disabled={submitting} onPress={onConfirm} style={{ flex: 1 }} />
+            <Button label={tr('common.cancel')} variant="neutral" disabled={submitting} onPress={onCancel} style={{ flex: 1 }} />
           </View>
         </Card>
         </View>

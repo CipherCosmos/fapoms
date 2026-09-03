@@ -71,34 +71,36 @@ describe('AssayerStateMachine', () => {
     });
   });
 
-  describe('recording the day someone left', () => {
+  /**
+   * The state machine deliberately does NOT stamp departure dates.
+   *
+   * It used to, and the behaviour tests for that stamping lived here — they have moved to
+   * `assayer.service.spec.ts` ("a departure the rest of the system can see"), because the single
+   * writer is now the service's `reconcileDepartureDates`. Two writers for one column meant the
+   * machine filled `exitDate` before the service could, so the service's impossible-pair guard
+   * never ran and its audit remark never named the stamp. What this suite still owns is the
+   * machine's contract: status changes only, dates untouched.
+   */
+  describe("recording the day someone left is not this machine's job", () => {
     const activeAssayer = () => ({ lifecycleStatus: 'ACTIVE', isActive: true }) as any;
 
-    it('stamps an exit date when a resignation is accepted', () => {
+    it('accepts a resignation without touching the dates', () => {
       const a = activeAssayer();
 
       AssayerStateMachine.acceptResignation(a, 'user-1');
 
       expect(a.lifecycleStatus).toBe('RESIGNED');
-      expect(a.exitDate).toBeInstanceOf(Date);
+      expect(a.exitDate).toBeUndefined();
+      expect(a.terminationDate).toBeUndefined();
     });
 
-    it('stamps a termination date on termination', () => {
+    it('terminates without touching the dates', () => {
       const a = { lifecycleStatus: 'SUSPENDED', isActive: true } as any;
 
       AssayerStateMachine.terminate(a, 'user-1');
 
-      expect(a.terminationDate).toBeInstanceOf(Date);
-    });
-
-    /** HR may already have entered the real last working day; that beats "when the record was updated". */
-    it('never overwrites a date already recorded', () => {
-      const realLastDay = new Date('2026-03-31');
-      const a = { lifecycleStatus: 'ACTIVE', isActive: true, exitDate: realLastDay } as any;
-
-      AssayerStateMachine.acceptResignation(a, 'user-1');
-
-      expect(a.exitDate).toBe(realLastDay);
+      expect(a.lifecycleStatus).toBe('TERMINATED');
+      expect(a.terminationDate).toBeUndefined();
     });
 
     it('leaves the dates alone for a move that is not a departure', () => {

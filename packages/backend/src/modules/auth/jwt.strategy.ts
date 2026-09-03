@@ -9,6 +9,8 @@ import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import { ConfigService } from '@nestjs/config';
 import { AuthService, JwtPayload } from './auth.service';
+import { AUTH_ERROR_CODES } from '@fapoms/shared';
+import { withCode } from '../../infrastructure/http/api-error';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -44,7 +46,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   async validate(payload: JwtPayload) {
     const user = await this.authService.validateJwtPayload(payload);
     if (!user) {
-      throw new UnauthorizedException('User not found or inactive');
+      throw withCode(
+        new UnauthorizedException('User not found or inactive'),
+        AUTH_ERROR_CODES.ACCOUNT_INACTIVE,
+      );
     }
     return user;
   }

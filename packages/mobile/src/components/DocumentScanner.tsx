@@ -11,6 +11,7 @@ import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Button, Icon, IconButton, Badge } from './ui/primitives';
 import { useFeedback } from './ui/Feedback';
 import { assetToBase64 } from '../utils/pickDocument';
+import { useT, serverErrorText } from '../i18n';
 
 export interface ScannedDocument {
   /** Filename the user confirmed, including extension. */
@@ -53,6 +54,7 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
   purpose,
 }) => {
   const t = useTheme();
+  const tr = useT();
   const feedback = useFeedback();
   const [pages, setPages] = useState<ScannedPage[]>([]);
   const [pdfUri, setPdfUri] = useState<string | null>(null);
@@ -105,12 +107,15 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
       setPages(result.pages);
       setPdfUri(result.pdf?.uri ?? null);
     } catch (err: any) {
-      feedback.error('Scanner unavailable', err?.message || 'The document scanner could not be opened.');
+      feedback.error(
+        tr('scanner.unavailableTitle'),
+        serverErrorText(err?.message, 'scanner.unavailableBody'),
+      );
       dismiss();
     } finally {
       setScanning(false);
     }
-  }, [dismiss, feedback, pages.length]);
+  }, [dismiss, feedback, pages.length, tr]);
 
   useEffect(() => {
     if (!visible || launchedRef.current) return;
@@ -137,14 +142,14 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
       if (pdf) setPdfUri(pdf.uri);
       if (result.assets[0]?.name) setFileName(result.assets[0].name.replace(/\.[^.]+$/, ''));
     } catch (err: any) {
-      feedback.error('Could not open files', err?.message || 'File selection failed.');
+      feedback.error(tr('scanner.pickFailedTitle'), serverErrorText(err?.message, 'scanner.pickFailedBody'));
     }
-  }, [feedback, pages.length]);
+  }, [feedback, pages.length, tr]);
 
   const save = useCallback(() => {
     const trimmed = fileName.trim();
     if (!trimmed) {
-      feedback.warning('Name required', 'Give the document a name before saving.');
+      feedback.warning(tr('scanner.nameRequiredTitle'), tr('scanner.nameRequiredBody'));
       return;
     }
     if (pages.length === 0) return;
@@ -189,23 +194,28 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
             borderColor: t.colors.border,
           }}
         >
-          <IconButton icon="close" onPress={dismiss} accessibilityLabel="Close scanner" />
+          <IconButton icon="close" onPress={dismiss} accessibilityLabel={tr('scanner.close')} />
           <View style={{ flex: 1 }}>
-            <AppText variant="h3">{hasScan ? 'Save document' : 'Scan document'}</AppText>
+            <AppText variant="h3">{hasScan ? tr('scanner.saveTitle') : tr('scanner.scanTitle')}</AppText>
             {purpose ? (
               <AppText variant="caption" tone="muted" style={{ marginTop: 2 }}>
                 {purpose}
               </AppText>
             ) : null}
           </View>
-          {hasScan ? <Badge label={`${pages.length} page${pages.length === 1 ? '' : 's'}`} tone="primary" /> : null}
+          {hasScan ? (
+            <Badge
+              label={pages.length === 1 ? tr('scanner.onePage') : tr('scanner.manyPages', { count: pages.length })}
+              tone="primary"
+            />
+          ) : null}
         </View>
 
         {scanning ? (
           <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', gap: t.space.md }}>
             <ActivityIndicator size="large" color={t.colors.primary} />
             <AppText variant="body" tone="muted">
-              Opening scanner…
+              {tr('scanner.opening')}
             </AppText>
           </View>
         ) : hasScan ? (
@@ -213,7 +223,7 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
             {/* File name — Drive lets you rename before the document is filed. */}
             <View style={{ gap: t.space.xs }}>
               <AppText variant="caption" tone="muted">
-                FILE NAME
+                {tr('scanner.fileNameLabel')}
               </AppText>
               <View
                 style={{
@@ -232,7 +242,7 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
                   value={fileName}
                   onChangeText={setFileName}
                   selectTextOnFocus
-                  placeholder="Document name"
+                  placeholder={tr('scanner.fileNamePlaceholder')}
                   placeholderTextColor={t.colors.textMuted}
                   style={{ flex: 1, paddingVertical: t.space.md, color: t.colors.text, fontSize: 15 }}
                 />
@@ -245,7 +255,7 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
             {/* Page previews */}
             <View style={{ gap: t.space.sm }}>
               <AppText variant="caption" tone="muted">
-                PAGES
+                {tr('scanner.pagesLabel')}
               </AppText>
               <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.md }}>
                 {pages.map((page) => (
@@ -281,9 +291,7 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
                 ))}
               </View>
               <AppText variant="caption" tone="muted">
-                {pdfUri
-                  ? 'Saved as a single PDF. Reorder, crop, rotate and filter pages from the scanner screen.'
-                  : 'Pages will be saved as images.'}
+                {pdfUri ? tr('scanner.savedAsPdf') : tr('scanner.savedAsImages')}
               </AppText>
             </View>
           </ScrollView>
@@ -291,12 +299,10 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
           <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: t.space.xl, gap: t.space.md }}>
             <Icon name="scan-outline" size={48} color={t.colors.textMuted} />
             <AppText variant="h3" style={{ textAlign: 'center' }}>
-              {unavailable ? 'Scanner not available here' : 'Ready to scan'}
+              {unavailable ? tr('scanner.notHereTitle') : tr('scanner.readyTitle')}
             </AppText>
             <AppText variant="body" tone="muted" style={{ textAlign: 'center' }}>
-              {unavailable
-                ? 'On-device document scanning needs the Android app. Attach an existing file instead.'
-                : 'Position the document in the frame. Edges are detected automatically.'}
+              {unavailable ? tr('scanner.notHereBody') : tr('scanner.readyBody')}
             </AppText>
           </View>
         )}
@@ -315,7 +321,7 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
             <View style={{ flexDirection: 'row', gap: t.space.md }}>
               {!unavailable && (
                 <Button
-                  label={hasScan ? 'Rescan' : 'Open scanner'}
+                  label={hasScan ? tr('scanner.rescan') : tr('scanner.openScanner')}
                   icon="camera"
                   variant={hasScan ? 'neutral' : undefined}
                   onPress={launchScanner}
@@ -324,7 +330,7 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
                 />
               )}
               <Button
-                label="Attach file"
+                label={tr('scanner.attachFile')}
                 icon="document-attach"
                 variant="neutral"
                 onPress={pickFile}
@@ -335,7 +341,7 @@ export const DocumentScanner: React.FC<DocumentScannerProps> = ({
 
             {hasScan && (
               <Button
-                label={`Save ${pages.length} page${pages.length === 1 ? '' : 's'}`}
+                label={pages.length === 1 ? tr('scanner.saveOne') : tr('scanner.saveMany', { count: pages.length })}
                 icon="checkmark"
                 variant="accent"
                 onPress={save}

@@ -20,6 +20,7 @@ import { DocumentScanner, readAsBase64 } from './DocumentScanner';
 import { QueryThread } from './QueryThread';
 import { useTheme } from '../theme/ThemeProvider';
 import { useFeedback } from './ui/Feedback';
+import { useT, serverErrorText } from '../i18n';
 import { AppText, Icon, IconButton, Tappable } from './ui/primitives';
 import { callingAvailable, startCall } from '../services/calls';
 
@@ -35,6 +36,7 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
   assignment,
 }) => {
   const t = useTheme();
+  const tr = useT();
   const feedback = useFeedback();
   const [queries, setQueries] = useState<any[]>([]);
   const [activeQueryId, setActiveQueryId] = useState<string | null>(null);
@@ -157,7 +159,7 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
             for (const file of files) {
               const uploaded = await MobileApiService.uploadChatAttachment(file);
               if (uploaded && uploaded.length > 0) out.push(...uploaded);
-              else feedback.error('Upload failed', `${file.name} was not attached.`);
+              else feedback.error(tr('queries.uploadFailedTitle'), tr('queries.uploadFailedBody', { file: file.name }));
             }
             resolve(out);
           };
@@ -176,14 +178,14 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
       for (const asset of result.assets) {
         const uploaded = await MobileApiService.uploadChatAttachment(asset);
         if (uploaded && uploaded.length > 0) out.push(...uploaded);
-        else feedback.error('Upload failed', `${asset.name} was not attached.`);
+        else feedback.error(tr('queries.uploadFailedTitle'), tr('queries.uploadFailedBody', { file: asset.name }));
       }
       return out;
     } catch (err: any) {
-      feedback.error('Attachment failed', err?.message || 'The file could not be selected.');
+      feedback.error(tr('queries.attachFailedTitle'), serverErrorText(err?.message, 'queries.attachPickFailed'));
       return [];
     }
-  }, [feedback]);
+  }, [feedback, tr]);
 
 
   /**
@@ -200,7 +202,7 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
   const handleOpenPacketPage = useCallback(
     async (page: number) => {
       if (!assignment?.projectBranchId) {
-        feedback.info('Packet not open here', 'Ask the desk to resend the mark from a newer message.');
+        feedback.info(tr('queries.packetNotHereTitle'), tr('queries.packetNotHereBody'));
         return;
       }
       try {
@@ -212,20 +214,23 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
           docs.find((d: any) => d.type === 'PRE_FIELD_AUDIT_PDF') ||
           docs[0];
         if (!doc?.id) {
-          feedback.info('Packet not available yet', 'The packet for this branch has not been sent yet.');
+          feedback.info(tr('queries.packetMissingTitle'), tr('queries.packetMissingBody'));
           return;
         }
         const res = await MobileApiService.getDocumentDownloadUrl(doc.id);
         if (!res.ok) {
-          feedback.info('Cannot open the packet', res.message || 'This document is not available to open right now.');
+          feedback.info(
+            tr('queries.packetOpenFailedTitle'),
+            serverErrorText(res.message, 'queries.packetOpenFailedBody'),
+          );
           return;
         }
         await Linking.openURL(`${res.url}#page=${page}`);
       } catch (err: any) {
-        feedback.info('Cannot open the packet', 'This document could not be opened just now — please try again.');
+        feedback.info(tr('queries.packetOpenFailedTitle'), tr('queries.packetOpenErrorBody'));
       }
     },
-    [assignment, feedback],
+    [assignment, feedback, tr],
   );
 
   const activeQuery = queries.find((q: any) => q.id === activeQueryId) ?? null;
@@ -249,16 +254,16 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
           borderBottomWidth: 1,
           borderColor: t.colors.border,
         }}>
-          <IconButton icon="arrow-back" onPress={onClose} accessibilityLabel="Back" />
+          <IconButton icon="arrow-back" onPress={onClose} accessibilityLabel={tr('common.back')} />
           <View style={{
             width: 40, height: 40, borderRadius: 20,
             backgroundColor: t.colors.primarySoft,
             alignItems: 'center', justifyContent: 'center',
           }}>
-            <AppText variant="bodyStrong" tone="primary">DE</AppText>
+            <AppText variant="bodyStrong" tone="primary">{tr('queries.deskInitials')}</AppText>
           </View>
           <View style={{ flex: 1, minWidth: 0 }}>
-            <AppText variant="h3" numberOfLines={1}>Data Entry Team</AppText>
+            <AppText variant="h3" numberOfLines={1}>{tr('queries.deskName')}</AppText>
             <AppText variant="caption" tone="muted" numberOfLines={1}>{assignment.branchName}</AppText>
           </View>
           {/* Voice call to the desk about the open clarification. Only offered when the
@@ -268,14 +273,14 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
             <IconButton
               icon="call"
               tone="primary"
-              accessibilityLabel="Call the data entry team about this query"
+              accessibilityLabel={tr('queries.callDesk')}
               onPress={() => {
                 startCall({
                   queryId: activeQuery.id,
-                  peerName: 'Data Entry Team',
+                  peerName: tr('queries.deskName'),
                   queryText: activeQuery.queryText || '',
                 }).catch((err: any) => {
-                  feedback.error('Call not started', err?.message || 'The call could not be placed.');
+                  feedback.error(tr('queries.callFailedTitle'), serverErrorText(err?.message, 'queries.callFailedBody'));
                 });
               }}
             />
@@ -323,7 +328,7 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
                       <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: t.colors.warning }} />
                     )}
                     <AppText variant="caption" tone={active ? 'primary' : 'muted'} numberOfLines={1}>
-                      {q.customerName || q.accountNumber || `Query ${i + 1}`}
+                      {q.customerName || q.accountNumber || tr('queries.tabFallback', { number: i + 1 })}
                     </AppText>
                   </View>
                 </Tappable>
@@ -343,7 +348,7 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
         ) : (
           <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: t.space.xl }}>
             <AppText variant="body" tone="muted" style={{ textAlign: 'center' }}>
-              No clarifications have been raised for this branch.
+              {tr('queries.noneForBranch')}
             </AppText>
           </View>
         )}
@@ -351,7 +356,7 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
         {/* Camera capture modal overlay for scanning/attaching photos directly inside chat */}
         <DocumentScanner
           visible={isCameraActive}
-          purpose="Attach to this clarification"
+          purpose={tr('queries.scanPurpose')}
           onClose={() => setIsCameraActive(false)}
           onSaved={async (doc) => {
             setIsCameraActive(false);
@@ -385,19 +390,24 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
                   ).flat();
 
               if (!uploaded || uploaded.length === 0) {
-                feedback.error('Not attached', 'The scan could not be uploaded. Please retry.');
+                feedback.error(tr('queries.scanNotAttachedTitle'), tr('queries.scanNotAttachedBody'));
                 return;
               }
 
               const res = await MobileApiService.postQueryMessage(activeQueryId, '', uploaded);
               if (!res.success) {
-                feedback.error('Not sent', res.error || 'The scan could not be sent.');
+                feedback.error(tr('queries.scanNotSentTitle'), serverErrorText(res.error, 'queries.scanNotSentBody'));
                 return;
               }
               setThreadVersion((v) => v + 1);
-              feedback.success('Sent', `${doc.pageCount} page${doc.pageCount === 1 ? '' : 's'} sent to the desk.`);
+              feedback.success(
+                tr('queries.scanSentTitle'),
+                doc.pageCount === 1
+                  ? tr('queries.scanSentOne')
+                  : tr('queries.scanSentMany', { count: doc.pageCount }),
+              );
             } catch (err: any) {
-              feedback.error('Attachment failed', err?.message || 'The scanned document could not be sent.');
+              feedback.error(tr('queries.attachFailedTitle'), serverErrorText(err?.message, 'queries.scanSendFailed'));
             }
           }}
         />

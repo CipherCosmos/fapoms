@@ -30,6 +30,7 @@ import * as LocalAuthentication from 'expo-local-authentication';
 // The version/build/bundle line is one shared helper (utils/appVersion.ts) so this screen and
 // the login screen can never disagree about what is installed.
 import { versionLine } from '../utils/appVersion';
+import { useT, useLanguage, type TranslationKey, type LanguagePreference } from '../i18n';
 
 /**
  * The assayer's record as the app holds it.
@@ -76,21 +77,27 @@ export function assayerRecordFromProfile(p: {
  *
  * Returns `undefined` for anything the assayer may edit, which is what `FieldInput` wants.
  */
-export function lockReasonFor(key: string): string | undefined {
+export function lockReasonFor(key: string): TranslationKey | undefined {
   if (!HR_MAINTAINED_ASSAYER_FIELDS.includes(key)) return undefined;
-  return HR_LOCK_REASONS[key] ?? 'Held by the back office — ask HR to change it.';
+  return HR_LOCK_REASONS[key] ?? 'profile.lockReasons.fallback';
 }
 
-/** The wording per field. Only the sentence lives here; whether it locks does not. */
-const HR_LOCK_REASONS: Record<string, string> = {
-  maxDailyWorkload: 'Set by operations — it decides how much work you can be offered.',
-  maxWeeklyWorkload: 'Set by operations, alongside your daily limit.',
-  panNumber: 'Held by HR. Contact your HR coordinator to correct this.',
-  bankAccountNumber: 'Payment details are changed by HR only, so a payout cannot be redirected from a handset.',
-  ifscCode: 'Changed by HR alongside your bank account.',
-  joiningDate: 'Set by HR — it drives tenure, leave and settlement.',
-  employmentType: 'Set by HR as part of your contract terms.',
-  performanceRating: 'Recorded by operations from completed work.',
+/**
+ * Which sentence explains each locked field. Only the wording is decided here; whether a field
+ * locks at all is the shared policy's call.
+ *
+ * Catalogue keys rather than sentences because this map is module-scope and evaluated once at
+ * import, before any language has been chosen.
+ */
+const HR_LOCK_REASONS: Record<string, TranslationKey> = {
+  maxDailyWorkload: 'profile.lockReasons.maxDailyWorkload',
+  maxWeeklyWorkload: 'profile.lockReasons.maxWeeklyWorkload',
+  panNumber: 'profile.lockReasons.panNumber',
+  bankAccountNumber: 'profile.lockReasons.bankAccountNumber',
+  ifscCode: 'profile.lockReasons.ifscCode',
+  joiningDate: 'profile.lockReasons.joiningDate',
+  employmentType: 'profile.lockReasons.employmentType',
+  performanceRating: 'profile.lockReasons.performanceRating',
 };
 
 /** Which sub-screen fixes a given gap, so "Complete it" lands somewhere useful. */
@@ -116,7 +123,6 @@ export interface ProfileDataState {
   latitude: number;
   longitude: number;
   preferredRegions: string;
-  preferredRadius: number;
   languages: string;
   licenseNo: string;
   emergencyName: string;
@@ -163,17 +169,20 @@ interface ProfileScreenProps {
 }
 
 /**
- * Plain-language names for the notification categories. The API returns enum values
- * (ASSIGNMENT, BILLING…), which are not what a field assayer should be reading.
+ * Plain-language names for the notification categories, as catalogue keys.
+ *
+ * The API returns enum values (ASSIGNMENT, BILLING…), which are not what a field assayer
+ * should be reading. Keys rather than sentences: this is module-scope and evaluated at import,
+ * where a translated string would freeze at whatever language happened to be active then.
  */
-const CATEGORY_LABELS: Record<string, { label: string; hint: string }> = {
-  ASSIGNMENT: { label: 'Assignments', hint: 'New offers, acceptances and cancellations' },
-  VALIDATION: { label: 'Clarifications', hint: 'Questions raised on your submitted reports' },
-  DOCUMENT: { label: 'Documents', hint: 'Paperwork dispatched to you, or sent back for re-upload' },
-  PLANNING: { label: 'Planning', hint: 'Coverage and scheduling changes affecting your branches' },
-  WORKFORCE: { label: 'Your record', hint: 'Certification expiry and profile changes' },
-  BILLING: { label: 'Payments', hint: 'Expense decisions and payouts' },
-  SYSTEM: { label: 'System', hint: 'Service notices and app updates' },
+const CATEGORY_KEYS: Record<string, { label: TranslationKey; hint: TranslationKey }> = {
+  ASSIGNMENT: { label: 'profile.notifications.categories.ASSIGNMENT', hint: 'profile.notifications.categoryHints.ASSIGNMENT' },
+  VALIDATION: { label: 'profile.notifications.categories.VALIDATION', hint: 'profile.notifications.categoryHints.VALIDATION' },
+  DOCUMENT: { label: 'profile.notifications.categories.DOCUMENT', hint: 'profile.notifications.categoryHints.DOCUMENT' },
+  PLANNING: { label: 'profile.notifications.categories.PLANNING', hint: 'profile.notifications.categoryHints.PLANNING' },
+  WORKFORCE: { label: 'profile.notifications.categories.WORKFORCE', hint: 'profile.notifications.categoryHints.WORKFORCE' },
+  BILLING: { label: 'profile.notifications.categories.BILLING', hint: 'profile.notifications.categoryHints.BILLING' },
+  SYSTEM: { label: 'profile.notifications.categories.SYSTEM', hint: 'profile.notifications.categoryHints.SYSTEM' },
 };
 
 // ─────────────────────────────────────────────────────────── Row building blocks
@@ -244,16 +253,17 @@ const SubToggle: React.FC<{ label: string; hint?: string; value: boolean; onChan
  */
 const EditToggle: React.FC<{ editing: boolean; onToggle: () => void }> = ({ editing, onToggle }) => {
   const t = useTheme();
+  const tr = useT();
   return (
     <Tappable
       onPress={onToggle}
       accessibilityRole="button"
-      accessibilityLabel={editing ? 'Done editing' : 'Edit'}
+      accessibilityLabel={editing ? tr('profile.editing.done') : tr('profile.editing.edit')}
       hitSlop={8}
     >
       <View style={{ paddingHorizontal: t.space.sm, paddingVertical: t.space.xs }}>
         <AppText variant="bodyStrong" style={{ color: t.colors.primary }}>
-          {editing ? 'Done' : 'Edit'}
+          {editing ? tr('common.done') : tr('common.edit')}
         </AppText>
       </View>
     </Tappable>
@@ -274,7 +284,7 @@ const FieldInput: React.FC<{
    * reason instead of as an input: an editable box that always fails is worse than no box,
    * because the worker types, saves, and only then learns it was never theirs to change.
    */
-  lockedReason?: string;
+  lockedReason?: TranslationKey;
   /**
    * Not permanently locked — just not currently in this section's edit mode (see each editable
    * SubScreen's "Edit" toggle below). Same flat display treatment as `lockedReason`, minus the
@@ -287,6 +297,7 @@ const FieldInput: React.FC<{
   readOnly?: boolean;
 }> = ({ label, value, onChange, placeholder, keyboardType = 'default', autoCapitalize = 'none', lockedReason, readOnly }) => {
   const t = useTheme();
+  const tr = useT();
   const [focus, setFocus] = useState(false);
 
   if (lockedReason || readOnly) {
@@ -305,10 +316,10 @@ const FieldInput: React.FC<{
           paddingVertical: t.space.md,
         }}>
           <AppText variant="small" tone={value ? 'default' : 'faint'}>
-            {value ? String(value) : 'Not on file'}
+            {value ? String(value) : tr('common.notOnFile')}
           </AppText>
         </View>
-        {lockedReason && <AppText variant="caption" tone="faint">{lockedReason}</AppText>}
+        {lockedReason && <AppText variant="caption" tone="faint">{tr(lockedReason)}</AppText>}
       </View>
     );
   }
@@ -359,16 +370,17 @@ const StatePicker: React.FC<{ value: string; onChange: (v: string) => void; read
   value, onChange, readOnly,
 }) => {
   const t = useTheme();
+  const tr = useT();
   const [open, setOpen] = useState(false);
 
   if (readOnly) {
-    return <FieldInput label="State" value={value} onChange={() => {}} readOnly />;
+    return <FieldInput label={tr('profile.fields.state')} value={value} onChange={() => {}} readOnly />;
   }
 
   return (
     <View style={{ gap: t.space.sm }}>
-      <AppText variant="overline" tone="faint">STATE</AppText>
-      <Tappable onPress={() => setOpen(true)} accessibilityRole="button" accessibilityLabel="Choose state">
+      <AppText variant="overline" tone="faint">{tr('profile.fields.stateLabel')}</AppText>
+      <Tappable onPress={() => setOpen(true)} accessibilityRole="button" accessibilityLabel={tr('profile.address.chooseStateAccessibility')}>
         <View style={{
           backgroundColor: t.colors.bg,
           borderRadius: t.radius.md,
@@ -378,7 +390,7 @@ const StatePicker: React.FC<{ value: string; onChange: (v: string) => void; read
           height: 50,
           flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
         }}>
-          <AppText variant="small" tone={value ? 'default' : 'faint'}>{value || 'Choose a state'}</AppText>
+          <AppText variant="small" tone={value ? 'default' : 'faint'}>{value || tr('profile.address.chooseState')}</AppText>
           <Icon name="chevron-down" size={14} color={t.colors.textFaint} />
         </View>
       </Tappable>
@@ -394,9 +406,9 @@ const StatePicker: React.FC<{ value: string; onChange: (v: string) => void; read
               flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
               paddingHorizontal: t.space.lg, paddingBottom: t.space.md,
             }}>
-              <AppText variant="h3">State</AppText>
-              <Tappable onPress={() => setOpen(false)} accessibilityRole="button" accessibilityLabel="Close">
-                <AppText variant="bodyStrong" style={{ color: t.colors.primary }}>Done</AppText>
+              <AppText variant="h3">{tr('profile.fields.state')}</AppText>
+              <Tappable onPress={() => setOpen(false)} accessibilityRole="button" accessibilityLabel={tr('common.close')}>
+                <AppText variant="bodyStrong" style={{ color: t.colors.primary }}>{tr('common.done')}</AppText>
               </Tappable>
             </View>
             <ScrollView>
@@ -455,6 +467,7 @@ const AddressEditor: React.FC<{
   editing: boolean;
 }> = ({ profile, onUpdateProfileField, editing }) => {
   const t = useTheme();
+  const tr = useT();
 
   const [busy, setBusy] = useState<null | 'gps' | 'pin' | 'pincode'>(null);
   const [error, setError] = useState<string | null>(null);
@@ -504,7 +517,7 @@ const AddressEditor: React.FC<{
     }
 
     if (!state && place.region) {
-      setNote(`Your device reported the state as “${place.region}”, which isn't one we recognise — please pick it below.`);
+      setNote(tr('profile.address.unrecognisedState', { state: place.region }));
     }
   }, [onUpdateProfileField, profile.address]);
 
@@ -520,19 +533,19 @@ const AddressEditor: React.FC<{
     try {
       const places = await Location.reverseGeocodeAsync({ latitude, longitude });
       if (!places || places.length === 0) {
-        setNote('Pin saved. This phone could not look up the address for it — please fill the fields below yourself.');
+        setNote(tr('profile.address.pinSavedNoLookup'));
         return;
       }
       applyPlace(places[0]);
     } catch {
-      setNote('Pin saved. The address lookup did not respond — please fill the fields below yourself.');
+      setNote(tr('profile.address.pinSavedLookupFailed'));
     }
   }, [applyPlace]);
 
   /** Write a coordinate to the profile, refusing anything the server would drop anyway. */
   const commitPin = useCallback(async (latitude: number, longitude: number, reverse: boolean) => {
     if (!isPlausibleIndianCoord(latitude, longitude)) {
-      setError('That point is outside India. Move the pin to your home address before saving.');
+      setError(tr('profile.address.pinOutsideIndia'));
       return;
     }
     setError(null);
@@ -553,13 +566,13 @@ const AddressEditor: React.FC<{
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') {
-        setError('Location permission is off. Allow location for Orbit in your phone settings, or place the pin on the map instead.');
+        setError(tr('profile.address.permissionOff'));
         return;
       }
       const fix = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
       const { latitude, longitude } = fix.coords;
       if (!isPlausibleIndianCoord(latitude, longitude)) {
-        setError('Your phone reported a position outside India. Place the pin on the map instead.');
+        setError(tr('profile.address.fixOutsideIndia'));
         return;
       }
       setDraft(null);
@@ -567,7 +580,7 @@ const AddressEditor: React.FC<{
       onUpdateProfileField('longitude', longitude);
       await fillFromCoord(latitude, longitude);
     } catch {
-      setError('Could not get a location fix. Step outside or near a window and try again, or place the pin on the map.');
+      setError(tr('profile.address.noFix'));
     } finally {
       setBusy(null);
     }
@@ -590,7 +603,7 @@ const AddressEditor: React.FC<{
       const hits = await Location.geocodeAsync(`${value}, India`);
       const hit = hits?.[0];
       if (!hit || !isPlausibleIndianCoord(hit.latitude, hit.longitude)) {
-        setNote('Could not look that pincode up on this phone — fill the district and state yourself.');
+        setNote(tr('profile.address.pincodeNotFound'));
         return;
       }
       onUpdateProfileField('latitude', hit.latitude);
@@ -607,9 +620,9 @@ const AddressEditor: React.FC<{
         if (district) onUpdateProfileField('district', district);
         if (state) onUpdateProfileField('state', state);
       }
-      setNote('Pin moved to the centre of that pincode — drag the map to your exact home.');
+      setNote(tr('profile.address.pincodeMovedPin'));
     } catch {
-      setNote('Pincode lookup failed on this phone — fill the district and state yourself.');
+      setNote(tr('profile.address.pincodeLookupFailed'));
     } finally {
       setBusy(null);
     }
@@ -622,11 +635,11 @@ const AddressEditor: React.FC<{
   return (
     <View style={{ padding: t.space.lg, gap: t.space.lg }}>
       <Card level={1} style={{ gap: t.space.md }}>
-        <AppText variant="overline" tone="faint">HOME LOCATION</AppText>
+        <AppText variant="overline" tone="faint">{tr('profile.address.homeLocation')}</AppText>
 
         {editing && (
           <Button
-            label={busy === 'gps' ? 'Finding you…' : 'Use my current location'}
+            label={busy === 'gps' ? tr('profile.address.finding') : tr('profile.address.useCurrent')}
             icon="navigate"
             onPress={useCurrentLocation}
             loading={busy === 'gps'}
@@ -662,11 +675,11 @@ const AddressEditor: React.FC<{
             />
             <View style={{ flexDirection: 'row', gap: t.space.sm }}>
               <View style={{ flex: 1 }}>
-                <Button label="Cancel" variant="neutral" onPress={() => { setDraft(null); setError(null); }} full />
+                <Button label={tr('common.cancel')} variant="neutral" onPress={() => { setDraft(null); setError(null); }} full />
               </View>
               <View style={{ flex: 1 }}>
                 <Button
-                  label="Use this pin"
+                  label={tr('profile.address.useThisPin')}
                   onPress={() => { void commitPin(draft.latitude, draft.longitude, true); }}
                   disabled={busy !== null}
                   full
@@ -687,10 +700,10 @@ const AddressEditor: React.FC<{
           }}>
             <Icon name="location-outline" size={22} color={t.colors.textFaint} />
             <AppText variant="small" tone="muted" style={{ textAlign: 'center' }}>
-              No home location on file yet.
+              {tr('profile.address.noPin')}
             </AppText>
             {editing && (
-              <Button label="Place the pin on a map" variant="neutral" icon="map" onPress={() => setDraft({ ...INDIA_CENTRE })} />
+              <Button label={tr('profile.address.placePin')} variant="neutral" icon="map" onPress={() => setDraft({ ...INDIA_CENTRE })} />
             )}
           </View>
         )}
@@ -698,39 +711,36 @@ const AddressEditor: React.FC<{
         {error && <AppText variant="caption" style={{ color: t.colors.danger }}>{error}</AppText>}
         {!error && note && <AppText variant="caption" tone="muted">{note}</AppText>}
 
-        <AppText variant="caption" tone="faint">
-          Your travel distance and travel claims are measured from this pin, so it decides which
-          audits you are offered and what you are paid to reach them.
-        </AppText>
+        <AppText variant="caption" tone="faint">{tr('profile.address.pinExplainer')}</AppText>
       </Card>
 
       <Card level={1} style={{ gap: t.space.lg }}>
         <FieldInput
-          label="Address"
+          label={tr('profile.fields.address')}
           value={profile.address}
           onChange={(v) => onUpdateProfileField('address', v)}
-          placeholder="Flat / house, building, street"
+          placeholder={tr('profile.fields.addressPlaceholder')}
           autoCapitalize="words"
           readOnly={!editing}
         />
         <View style={{ flexDirection: 'row', gap: t.space.md }}>
           <View style={{ flex: 1 }}>
-            <FieldInput label="City" value={profile.city} onChange={(v) => onUpdateProfileField('city', v)} autoCapitalize="words" readOnly={!editing} />
+            <FieldInput label={tr('profile.fields.city')} value={profile.city} onChange={(v) => onUpdateProfileField('city', v)} autoCapitalize="words" readOnly={!editing} />
           </View>
           <View style={{ flex: 1 }}>
             <FieldInput
-              label="Pincode"
+              label={tr('profile.fields.pincode')}
               value={profile.pincode}
               onChange={(v) => { void onPincodeChange(v); }}
               keyboardType="numeric"
-              placeholder="6 digits"
+              placeholder={tr('profile.fields.pincodePlaceholder')}
               readOnly={!editing}
             />
           </View>
         </View>
         <View style={{ flexDirection: 'row', gap: t.space.md }}>
           <View style={{ flex: 1 }}>
-            <FieldInput label="District" value={profile.district} onChange={(v) => onUpdateProfileField('district', v)} autoCapitalize="words" readOnly={!editing} />
+            <FieldInput label={tr('profile.fields.district')} value={profile.district} onChange={(v) => onUpdateProfileField('district', v)} autoCapitalize="words" readOnly={!editing} />
           </View>
           <View style={{ flex: 1 }}>
             <StatePicker value={profile.state} onChange={(v) => onUpdateProfileField('state', v)} readOnly={!editing} />
@@ -739,7 +749,7 @@ const AddressEditor: React.FC<{
         {busy === 'pincode' && (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm }}>
             <ActivityIndicator size="small" color={t.colors.primary} />
-            <AppText variant="caption" tone="muted">Looking up that pincode…</AppText>
+            <AppText variant="caption" tone="muted">{tr('profile.address.pincodeLookup')}</AppText>
           </View>
         )}
       </Card>
@@ -774,6 +784,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
 }) => {
   const [changePasswordVisible, setChangePasswordVisible] = useState(false);
   const t = useTheme();
+  const tr = useT();
+  const language = useLanguage();
 
   // Every settings group used to expand in place (CollapsibleSection). Zerodha/Apple-style
   // professional apps instead push each group to its own screen — a row on the list, a full
@@ -902,9 +914,22 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   const recordComplete = missingYours.length === 0 && missingHr.length === 0;
 
   const THEME_OPTIONS: { key: ThemePreference; label: string; icon: 'contrast-outline' | 'sunny-outline' | 'moon-outline' }[] = [
-    { key: 'system', label: 'System', icon: 'contrast-outline' },
-    { key: 'light', label: 'Light', icon: 'sunny-outline' },
-    { key: 'dark', label: 'Dark', icon: 'moon-outline' },
+    { key: 'system', label: tr('profile.theme.system'), icon: 'contrast-outline' },
+    { key: 'light', label: tr('profile.theme.light'), icon: 'sunny-outline' },
+    { key: 'dark', label: tr('profile.theme.dark'), icon: 'moon-outline' },
+  ];
+
+  /**
+   * The language options, in the order a stuck reader can use them.
+   *
+   * Each language's name is written in that language, in both catalogues — somebody who cannot
+   * read the interface they are looking at has to be able to recognise their own language in
+   * this list, which is the entire point of the setting.
+   */
+  const LANGUAGE_OPTIONS: { key: LanguagePreference; label: string; icon: 'phone-portrait-outline' | 'language-outline' }[] = [
+    { key: 'system', label: tr('language.system'), icon: 'phone-portrait-outline' },
+    { key: 'en', label: tr('language.en'), icon: 'language-outline' },
+    { key: 'hi', label: tr('language.hi'), icon: 'language-outline' },
   ];
 
   const serverHost = getApiBaseUrl().replace(/^https?:\/\//, '').replace(/\/api\/v1$/, '');
@@ -926,23 +951,23 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       */}
       <Card level={2} style={{ gap: t.space.lg }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.lg }}>
-          <Avatar name={assayerName || 'Assayer'} size={72} />
+          <Avatar name={assayerName || tr('profile.identity.avatarFallback')} size={72} />
           <View style={{ flex: 1, minWidth: 0, gap: 6 }}>
             {/* Large-title weight, not h1 — Apple's Settings/Contacts headers show your name at
                 the same scale as a screen's own title, not as a subordinate label under the
                 avatar. */}
-            <AppText variant="largeTitle" numberOfLines={1} style={{ letterSpacing: -0.5 }}>{assayerName || 'Field Assayer'}</AppText>
+            <AppText variant="largeTitle" numberOfLines={1} style={{ letterSpacing: -0.5 }}>{assayerName || tr('profile.identity.fallbackName')}</AppText>
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.xs, alignItems: 'center' }}>
               {(assayerCode || profile.assayerCode) ? (
                 <Badge label={assayerCode || profile.assayerCode} tone="primary" icon="id-card-outline" />
               ) : null}
               <Badge
-                label={recordComplete ? 'ACTIVE' : 'INCOMPLETE'}
+                label={recordComplete ? tr('profile.status.active') : tr('profile.status.incomplete')}
                 tone={recordComplete ? 'success' : 'warning'}
                 dot
               />
               {profile.employmentType ? (
-                <Badge label={profile.employmentType === 'INTERNAL' ? 'In-house' : 'Contract'} tone="neutral" />
+                <Badge label={profile.employmentType === 'INTERNAL' ? tr('profile.employment.inHouse') : tr('profile.employment.contract')} tone="neutral" />
               ) : null}
             </View>
           </View>
@@ -952,7 +977,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           <Tappable
             onPress={() => stackNav.push(missingFields[0].target)}
             accessibilityRole="button"
-            accessibilityLabel={`${missingFields.length} profile details missing — open the section to fix them`}
+            accessibilityLabel={tr('profile.gaps.accessibility', { count: missingFields.length })}
           >
             <View style={{
               flexDirection: 'row', alignItems: 'center', gap: t.space.sm,
@@ -961,9 +986,12 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
               <Icon name="alert-circle-outline" size={18} color={t.colors.warning} />
               <AppText variant="small" tone="warning" style={{ flex: 1 }}>
                 {missingFields.length === 1
-                  ? `${missingFields[0].label} is missing.`
-                  : `${missingFields.length} details missing, including ${missingFields[0].label.toLowerCase()}.`}
-                {' '}Payments and assignments can be held up without these.
+                  ? tr('profile.gaps.oneMissing', { field: missingFields[0].label })
+                  : tr('profile.gaps.manyMissing', {
+                      count: missingFields.length,
+                      field: missingFields[0].label.toLowerCase(),
+                    })}
+                {' '}{tr('profile.gaps.heldUp')}
               </AppText>
               <Icon name="chevron-forward" size={16} color={t.colors.warning} />
             </View>
@@ -986,8 +1014,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           }}>
             <Icon name="time-outline" size={18} color={t.colors.textMuted} />
             <AppText variant="small" tone="muted" style={{ flex: 1 }}>
-              {`Waiting on HR: ${missingHr.map((f) => f.label.toLowerCase()).join(', ')}.`}
-              {' '}They are held by the back office, so you cannot change them here.
+              {tr('profile.gaps.waitingOnHr', { fields: missingHr.map((f) => f.label.toLowerCase()).join(', ') })}
+              {' '}{tr('profile.gaps.backOffice')}
             </AppText>
           </View>
         ) : null}
@@ -999,7 +1027,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                 reserves filled glyphs for the active state; a filled checkmark here read as
                 inconsistent next to QueriesScreen's outline "resolved" icon for the same concept. */}
             <Icon name="checkmark-circle-outline" size={18} color={t.colors.success} />
-            <AppText variant="small" tone="muted">Your record is complete.</AppText>
+            <AppText variant="small" tone="muted">{tr('profile.gaps.complete')}</AppText>
           </View>
         ) : null}
       </Card>
@@ -1017,13 +1045,13 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
         useful for a glanceable summary than one that hides a card off-screen.
       */}
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.md }}>
-        <StatTile label="Completed" value={profile.completedAssignments ?? 0} icon="checkmark-done" tone="success" />
-        <StatTile label="Assigned" value={profile.totalAssignments ?? 0} icon="clipboard-outline" />
+        <StatTile label={tr('profile.stats.completed')} value={profile.completedAssignments ?? 0} icon="checkmark-done" tone="success" />
+        <StatTile label={tr('profile.stats.assigned')} value={profile.totalAssignments ?? 0} icon="clipboard-outline" />
         {/* What you are owed has one source — the statement — so this tile shows what the
             statement says, or an em dash when it could not be read. Never a second figure. */}
-        <StatTile label="Balance" value={statement ? money(statement.totals.outstanding) : '—'} icon="wallet-outline" tone="accent" />
+        <StatTile label={tr('profile.stats.balance')} value={statement ? money(statement.totals.outstanding) : '—'} icon="wallet-outline" tone="accent" />
         {Number(profile.averageRating) > 0 && (
-          <StatTile label="Rating" value={Number(profile.averageRating).toFixed(1)} icon="star" tone="warning" hint="out of 5" />
+          <StatTile label={tr('profile.stats.rating')} value={Number(profile.averageRating).toFixed(1)} icon="star" tone="warning" hint={tr('profile.stats.ratingHint')} />
         )}
       </View>
 
@@ -1034,45 +1062,48 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
         as four separate screens wearing one title. A single scroll, in order of what an
         assayer needs most often, does the same job without the extra navigation layer.
       */}
-      <GroupedSection title="Profile">
+      <GroupedSection title={tr('profile.sections.profile')}>
         <GroupedRow
-          icon="call-outline" tone="primary" label="Contact"
-          hint={profile.phone || 'Add your phone number'}
+          icon="call-outline" tone="primary" label={tr('profile.rows.contact')}
+          hint={profile.phone || tr('profile.rows.contactHint')}
           onPress={() => stackNav.push('contact')} chevron
         />
         <GroupedRow
-          icon="home-outline" tone="accent" label="Address"
-          hint={[profile.city, profile.state].filter(Boolean).join(', ') || 'Where you are based'}
+          icon="home-outline" tone="accent" label={tr('profile.rows.address')}
+          hint={[profile.city, profile.state].filter(Boolean).join(', ') || tr('profile.rows.addressHint')}
           onPress={() => stackNav.push('address')} chevron
         />
         <GroupedRow
-          icon="medkit-outline" tone="danger" label="Emergency contact"
-          hint={profile.emergencyName ? `${profile.emergencyName}${profile.emergencyPhone ? ` · ${profile.emergencyPhone}` : ''}` : 'Who to call if something happens on site'}
+          icon="medkit-outline" tone="danger" label={tr('profile.rows.emergency')}
+          hint={profile.emergencyName ? `${profile.emergencyName}${profile.emergencyPhone ? ` · ${profile.emergencyPhone}` : ''}` : tr('profile.rows.emergencyHint')}
           onPress={() => stackNav.push('emergency')} chevron
         />
       </GroupedSection>
 
-      <GroupedSection title="Work">
+      <GroupedSection title={tr('profile.sections.work')}>
         {/* Self-service time off opens straight into the calendar overlay — there's nothing
             else to show behind this row, so it stays a direct action rather than a push. */}
         <GroupedRow
-          icon="calendar-outline" tone="primary" label="Availability"
-          hint="Mark days you're unavailable — you won't be offered audits then."
-          onPress={onOpenAvailability} accessibilityLabel="Set your time off" chevron
+          icon="calendar-outline" tone="primary" label={tr('profile.rows.availability')}
+          hint={tr('profile.rows.availabilityHint')}
+          onPress={onOpenAvailability} accessibilityLabel={tr('profile.rows.availabilityAccessibility')} chevron
         />
         <GroupedRow
-          icon="ribbon-outline" tone="accent" label="Capability"
-          hint={`${profile.skills ? profile.skills.split(',').filter((s) => s.trim()).length : 0} skills · ${profile.languages ? profile.languages.split(',').filter((s) => s.trim()).length : 0} languages`}
+          icon="ribbon-outline" tone="accent" label={tr('profile.rows.capability')}
+          hint={tr('profile.rows.capabilityHint', {
+            skills: profile.skills ? profile.skills.split(',').filter((s) => s.trim()).length : 0,
+            languages: profile.languages ? profile.languages.split(',').filter((s) => s.trim()).length : 0,
+          })}
           onPress={() => stackNav.push('capability')} chevron
         />
         <GroupedRow
-          icon="speedometer-outline" tone="info" label="Capacity"
-          hint="How much work you can take"
+          icon="speedometer-outline" tone="info" label={tr('profile.rows.capacity')}
+          hint={tr('profile.rows.capacityHint')}
           onPress={() => stackNav.push('capacity')} chevron
         />
         <GroupedRow
-          icon="card-outline" tone="success" label="Payment details"
-          hint="Bank account and PAN"
+          icon="card-outline" tone="success" label={tr('profile.rows.payment')}
+          hint={tr('profile.rows.paymentHint')}
           onPress={() => stackNav.push('payment')} chevron
         />
       </GroupedSection>
@@ -1092,7 +1123,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       */}
       {profileDirty && (
         <Button
-          label={savingProfile ? 'Saving…' : 'Save changes'}
+          label={savingProfile ? tr('common.saving') : tr('profile.saveChanges')}
           icon="save-outline"
           onPress={onSaveProfile}
           loading={savingProfile}
@@ -1106,50 +1137,57 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           being fixed here. It's now one row like everything else, with a live completion-rate
           hint so the number that matters most doesn't require a tap to see, and StatsScreen's
           full breakdown (unchanged) lives behind it as a pushed sub-screen. */}
-      <GroupedSection title="Performance">
+      <GroupedSection title={tr('profile.sections.performance')}>
         <GroupedRow
-          icon="stats-chart-outline" tone="primary" label="Performance"
+          icon="stats-chart-outline" tone="primary" label={tr('profile.rows.performance')}
           hint={
             Number(profile.totalAssignments) > 0
-              ? `${Math.round((Number(profile.completedAssignments) / Number(profile.totalAssignments)) * 100)}% completion rate`
-              : 'Your assignment history and ratings'
+              ? tr('profile.rows.performanceHint', {
+                  rate: Math.round((Number(profile.completedAssignments) / Number(profile.totalAssignments)) * 100),
+                })
+              : tr('profile.rows.performanceHintEmpty')
           }
           onPress={() => stackNav.push('stats')} chevron
         />
       </GroupedSection>
 
-      <GroupedSection title="App">
+      <GroupedSection title={tr('profile.sections.app')}>
         <GroupedRow
-          icon="color-palette-outline" tone="primary" label="Appearance"
-          hint={THEME_OPTIONS.find((o) => o.key === t.preference)?.label ?? 'Theme'}
+          icon="language-outline" tone="primary" label={tr('language.title')}
+          hint={LANGUAGE_OPTIONS.find((o) => o.key === language.preference)?.label ?? tr('language.en')}
+          onPress={() => stackNav.push('language')} chevron
+          />
+          <GroupedRow
+          icon="color-palette-outline" tone="primary" label={tr('profile.rows.appearance')}
+          hint={THEME_OPTIONS.find((o) => o.key === t.preference)?.label ?? tr('profile.rows.appearanceFallback')}
           onPress={() => stackNav.push('appearance')} chevron
-        />
+          />
         <GroupedRow
-          icon="notifications-outline" tone="accent" label="Notifications"
-          hint={pushBusy ? 'Updating this device with the server…' : pushEnabled ? 'Push notifications on' : 'Push notifications off'}
+          icon="notifications-outline" tone="accent" label={tr('profile.rows.notifications')}
+          hint={pushBusy ? tr('profile.rows.pushUpdating') : pushEnabled ? tr('profile.rows.pushOn') : tr('profile.rows.pushOff')}
           onPress={() => stackNav.push('notifications')} chevron
         />
         <GroupedRow
-          icon="navigate-outline" tone="info" label="Location & Recommendations"
-          hint={liveTrackingEnabled ? 'Live location sharing on' : 'Live location sharing off'}
+          icon="navigate-outline" tone="info" label={tr('profile.rows.location')}
+          hint={liveTrackingEnabled ? tr('profile.rows.liveOn') : tr('profile.rows.liveOff')}
           onPress={() => stackNav.push('location')} chevron
         />
         <GroupedRow
-          icon="server-outline" tone="neutral" label="Connection"
+          icon="server-outline" tone="neutral" label={tr('profile.rows.connection')}
           hint={serverHost}
           onPress={() => stackNav.push('connection')} chevron
         />
       </GroupedSection>
 
-      <GroupedSection title="Account">
+      <GroupedSection title={tr('profile.sections.account')}>
         <GroupedRow
-          icon="finger-print-outline" tone="success" label="Security & Biometrics"
-          hint={biometrics ? 'Biometric lock on' : 'Password and biometric lock'}
+          icon="finger-print-outline" tone="success" label={tr('profile.rows.security')}
+          hint={biometrics ? tr('profile.rows.biometricOn') : tr('profile.rows.biometricOff')}
           onPress={() => stackNav.push('security')} chevron
         />
         <GroupedRow
-          icon="ribbon-outline" tone="primary" label="Accreditation & License"
-          hint={profile.licenseNo ? `License No: ${profile.licenseNo}` : 'No licence number on file'}
+          icon="ribbon-outline" tone="primary" label={tr('profile.rows.accreditation')}
+          hint={profile.licenseNo ? tr('profile.rows.licenceNumber', { number: profile.licenseNo }) : tr('profile.rows.noLicence')}
           onPress={() => stackNav.push('accreditation')} chevron
         />
       </GroupedSection>
@@ -1157,14 +1195,14 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       {/* Help & Feedback: the assayer's two-way channel to the product team — report a
           bug, ask for something, or ask a question, and follow the replies in thread. */}
       {onOpenFeedback && (
-        <GroupedSection title="Help & Feedback">
+        <GroupedSection title={tr('profile.sections.help')}>
           <SettingRow
             icon="chatbox-ellipses-outline"
             tone="primary"
-            label="Send feedback"
-            hint="Report a bug, suggest an improvement, or ask the product team a question"
+            label={tr('profile.rows.feedback')}
+            hint={tr('profile.rows.feedbackHint')}
             onPress={onOpenFeedback}
-            accessibilityLabel="Open feedback and support"
+            accessibilityLabel={tr('profile.rows.feedbackAccessibility')}
             chevron
           />
         </GroupedSection>
@@ -1176,23 +1214,23 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           mis-tap on a moving handset (or a thumb sliding past the row above it) threw an
           assayer out mid-audit with no way back except re-entering their password. */}
       {onLogout && (
-        <GroupedSection title="Session">
+        <GroupedSection title={tr('profile.sections.session')}>
           <SettingRow
             icon="log-out-outline"
             tone="danger"
-            label="Sign out"
-            hint="You'll need your password to sign back in"
+            label={tr('profile.rows.signOut')}
+            hint={tr('profile.rows.signOutHint')}
             onPress={() => {
               Alert.alert(
-                'Sign out of Orbit?',
-                "You'll need your password to sign back in.",
+                tr('profile.signOutConfirm.title'),
+                tr('profile.signOutConfirm.body'),
                 [
-                  { text: 'Cancel', style: 'cancel' },
-                  { text: 'Sign out', style: 'destructive', onPress: onLogout },
+                  { text: tr('common.cancel'), style: 'cancel' },
+                  { text: tr('common.signOut'), style: 'destructive', onPress: onLogout },
                 ],
               );
             }}
-            accessibilityLabel="Sign out of Orbit"
+            accessibilityLabel={tr('profile.signOutConfirm.accessibility')}
             chevron
           />
         </GroupedSection>
@@ -1210,7 +1248,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
           session token. A false security claim in a bank audit tool is worse than no claim.
         */}
         <AppText variant="caption" tone="faint">
-          Orbit Field Assayer • {versionLine()}
+          {tr('profile.footer')} {versionLine()}
         </AppText>
       </View>
 
@@ -1223,38 +1261,38 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
         SubScreen's own slide animation rather than by this list.
       */}
       <SubScreen
-        active={stackNav.current === 'contact'} title="Contact" onBack={stackNav.pop}
+        active={stackNav.current === 'contact'} title={tr('profile.rows.contact')} onBack={stackNav.pop}
         trailing={<EditToggle editing={editing} onToggle={() => setEditing((e) => !e)} />}
       >
         <View style={{ padding: t.space.lg, gap: t.space.lg }}>
           <Card level={1} style={{ gap: t.space.lg }}>
-            <FieldInput label="Phone" value={profile.phone} onChange={(v) => onUpdateProfileField('phone', v)} keyboardType="phone-pad" placeholder="+91…" readOnly={!editing} />
-            <FieldInput label="Alternate phone" value={profile.alternatePhone} onChange={(v) => onUpdateProfileField('alternatePhone', v)} keyboardType="phone-pad" readOnly={!editing} />
-            <FieldInput label="Email" value={profile.email} onChange={(v) => onUpdateProfileField('email', v)} keyboardType="email-address" autoCapitalize="none" placeholder="you@example.com" readOnly={!editing} />
+            <FieldInput label={tr('profile.fields.phone')} value={profile.phone} onChange={(v) => onUpdateProfileField('phone', v)} keyboardType="phone-pad" placeholder="+91…" readOnly={!editing} />
+            <FieldInput label={tr('profile.fields.alternatePhone')} value={profile.alternatePhone} onChange={(v) => onUpdateProfileField('alternatePhone', v)} keyboardType="phone-pad" readOnly={!editing} />
+            <FieldInput label={tr('profile.fields.email')} value={profile.email} onChange={(v) => onUpdateProfileField('email', v)} keyboardType="email-address" autoCapitalize="none" placeholder={tr('profile.fields.emailPlaceholder')} readOnly={!editing} />
           </Card>
         </View>
       </SubScreen>
 
       <SubScreen
-        active={stackNav.current === 'address'} title="Address" onBack={stackNav.pop}
+        active={stackNav.current === 'address'} title={tr('profile.rows.address')} onBack={stackNav.pop}
         trailing={<EditToggle editing={editing} onToggle={() => setEditing((e) => !e)} />}
       >
         <AddressEditor profile={profile} onUpdateProfileField={onUpdateProfileField} editing={editing} />
       </SubScreen>
 
       <SubScreen
-        active={stackNav.current === 'emergency'} title="Emergency contact" onBack={stackNav.pop}
+        active={stackNav.current === 'emergency'} title={tr('profile.rows.emergency')} onBack={stackNav.pop}
         trailing={<EditToggle editing={editing} onToggle={() => setEditing((e) => !e)} />}
       >
         <View style={{ padding: t.space.lg, gap: t.space.lg }}>
           <Card level={1} style={{ gap: t.space.lg }}>
-            <FieldInput label="Name" value={profile.emergencyName} onChange={(v) => onUpdateProfileField('emergencyName', v)} autoCapitalize="words" readOnly={!editing} />
+            <FieldInput label={tr('profile.fields.name')} value={profile.emergencyName} onChange={(v) => onUpdateProfileField('emergencyName', v)} autoCapitalize="words" readOnly={!editing} />
             <View style={{ flexDirection: 'row', gap: t.space.md }}>
               <View style={{ flex: 1 }}>
-                <FieldInput label="Phone" value={profile.emergencyPhone} onChange={(v) => onUpdateProfileField('emergencyPhone', v)} keyboardType="phone-pad" readOnly={!editing} />
+                <FieldInput label={tr('profile.fields.phone')} value={profile.emergencyPhone} onChange={(v) => onUpdateProfileField('emergencyPhone', v)} keyboardType="phone-pad" readOnly={!editing} />
               </View>
               <View style={{ flex: 1 }}>
-                <FieldInput label="Relation" value={profile.emergencyRelation} onChange={(v) => onUpdateProfileField('emergencyRelation', v)} autoCapitalize="words" readOnly={!editing} />
+                <FieldInput label={tr('profile.fields.relation')} value={profile.emergencyRelation} onChange={(v) => onUpdateProfileField('emergencyRelation', v)} autoCapitalize="words" readOnly={!editing} />
               </View>
             </View>
           </Card>
@@ -1262,30 +1300,30 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       </SubScreen>
 
       <SubScreen
-        active={stackNav.current === 'capability'} title="Capability" onBack={stackNav.pop}
+        active={stackNav.current === 'capability'} title={tr('profile.rows.capability')} onBack={stackNav.pop}
         trailing={<EditToggle editing={editing} onToggle={() => setEditing((e) => !e)} />}
       >
         <View style={{ padding: t.space.lg, gap: t.space.lg }}>
           <Card level={1} style={{ gap: t.space.lg }}>
-            <FieldInput label="Skills" value={profile.skills} onChange={(v) => onUpdateProfileField('skills', v)} placeholder="Gold assaying, purity testing" readOnly={!editing} />
-            <FieldInput label="Languages" value={profile.languages} onChange={(v) => onUpdateProfileField('languages', v)} placeholder="English, Hindi" readOnly={!editing} />
-            <FieldInput label="Experience (years)" value={String(profile.experienceYears ?? '')} onChange={(v) => onUpdateProfileField('experienceYears', Number(v) || 0)} keyboardType="numeric" readOnly={!editing} />
+            <FieldInput label={tr('profile.fields.skills')} value={profile.skills} onChange={(v) => onUpdateProfileField('skills', v)} placeholder={tr('profile.fields.skillsPlaceholder')} readOnly={!editing} />
+            <FieldInput label={tr('profile.fields.languages')} value={profile.languages} onChange={(v) => onUpdateProfileField('languages', v)} placeholder={tr('profile.fields.languagesPlaceholder')} readOnly={!editing} />
+            <FieldInput label={tr('profile.fields.experienceYears')} value={String(profile.experienceYears ?? '')} onChange={(v) => onUpdateProfileField('experienceYears', Number(v) || 0)} keyboardType="numeric" readOnly={!editing} />
           </Card>
         </View>
       </SubScreen>
 
       <SubScreen
-        active={stackNav.current === 'capacity'} title="Capacity" onBack={stackNav.pop}
+        active={stackNav.current === 'capacity'} title={tr('profile.rows.capacity')} onBack={stackNav.pop}
         trailing={<EditToggle editing={editing} onToggle={() => setEditing((e) => !e)} />}
       >
         <View style={{ padding: t.space.lg, gap: t.space.lg }}>
           <Card level={1} style={{ gap: t.space.lg }}>
             <View style={{ flexDirection: 'row', gap: t.space.md }}>
               <View style={{ flex: 1 }}>
-                <FieldInput label="Max per day" value={String(profile.maxDailyWorkload ?? '')} onChange={() => {}} lockedReason={lockReasonFor('maxDailyWorkload')} />
+                <FieldInput label={tr('profile.fields.maxPerDay')} value={String(profile.maxDailyWorkload ?? '')} onChange={() => {}} lockedReason={lockReasonFor('maxDailyWorkload')} />
               </View>
               <View style={{ flex: 1 }}>
-                <FieldInput label="Max per week" value={String(profile.maxWeeklyWorkload ?? '')} onChange={() => {}} lockedReason={lockReasonFor('maxWeeklyWorkload')} />
+                <FieldInput label={tr('profile.fields.maxPerWeek')} value={String(profile.maxWeeklyWorkload ?? '')} onChange={() => {}} lockedReason={lockReasonFor('maxWeeklyWorkload')} />
               </View>
             </View>
             {/*
@@ -1299,25 +1337,25 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
               Removed rather than locked, because there is nothing behind it to explain. Making it
               real means a column, a DTO field, and a distance check in the recommendation engine.
             */}
-            <FieldInput label="Preferred regions" value={profile.preferredRegions} onChange={(v) => onUpdateProfileField('preferredRegions', v)} autoCapitalize="words" readOnly={!editing} />
+            <FieldInput label={tr('profile.fields.preferredRegions')} value={profile.preferredRegions} onChange={(v) => onUpdateProfileField('preferredRegions', v)} autoCapitalize="words" readOnly={!editing} />
           </Card>
         </View>
       </SubScreen>
 
-      <SubScreen active={stackNav.current === 'payment'} title="Payment details" onBack={stackNav.pop}>
+      <SubScreen active={stackNav.current === 'payment'} title={tr('profile.rows.payment')} onBack={stackNav.pop}>
         <View style={{ padding: t.space.lg, gap: t.space.lg }}>
           <Card level={1} style={{ gap: t.space.lg }}>
-            <AppText variant="caption" tone="faint">
-              Held by HR for payouts and statutory filing. Changes are reviewed before they take effect.
-            </AppText>
+            <AppText variant="caption" tone="faint">{tr('profile.lockReasons.paymentHeader')}</AppText>
+            {/* "PAN" and "IFSC" are not translated in any locale: they are the names printed on the
+                card and the passbook the assayer is copying from. See the note in locales/hi.ts. */}
             <FieldInput label="PAN" value={profile.panNumber} onChange={() => {}} lockedReason={lockReasonFor('panNumber')} />
-            <FieldInput label="Bank account" value={profile.bankAccountNumber} onChange={() => {}} lockedReason={lockReasonFor('bankAccountNumber')} />
-            <FieldInput label="IFSC" value={profile.ifscCode} onChange={() => {}} lockedReason={lockReasonFor('ifscCode')} />
+            <FieldInput label={tr('profile.fields.bankAccount')} value={profile.bankAccountNumber} onChange={() => {}} lockedReason={lockReasonFor('bankAccountNumber')} />
+            <FieldInput label={tr('profile.fields.ifsc')} value={profile.ifscCode} onChange={() => {}} lockedReason={lockReasonFor('ifscCode')} />
           </Card>
         </View>
       </SubScreen>
 
-      <SubScreen active={stackNav.current === 'stats'} title="Performance" onBack={stackNav.pop}>
+      <SubScreen active={stackNav.current === 'stats'} title={tr('profile.rows.performance')} onBack={stackNav.pop}>
         <StatsScreen
           totalAssignments={profile.totalAssignments}
           completedAssignments={profile.completedAssignments}
@@ -1327,14 +1365,59 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
         />
       </SubScreen>
 
-      <SubScreen active={stackNav.current === 'appearance'} title="Appearance" onBack={stackNav.pop}>
+      {/*
+        Language.
+        Placed above Appearance, and its row above Appearance's too, because for this workforce it
+        is the more consequential of the two by a wide margin. Laid out as one option per row
+        rather than as the three side-by-side tiles the theme picker uses: a language name is a
+        word, not a glyph, and Devanagari at tile width would have to be shrunk below the 12px
+        type floor `theme/contrast.spec.ts` pins.
+      */}
+      <SubScreen active={stackNav.current === 'language'} title={tr('language.title')} onBack={stackNav.pop}>
+        <View style={{ padding: t.space.lg, gap: t.space.lg }}>
+          <Card level={1} style={{ gap: t.space.md }}>
+            <SettingRow icon="language-outline" tone="primary" label={tr('language.title')} hint={tr('language.hint')} />
+            <View style={{ gap: t.space.sm }}>
+              {LANGUAGE_OPTIONS.map((o) => {
+                const active = language.preference === o.key;
+                return (
+                  <Tappable
+                    key={o.key}
+                    accessibilityRole="button"
+                    accessibilityLabel={o.label}
+                    accessibilityState={{ selected: active }}
+                    onPress={() => language.setLanguage(o.key)}
+                  >
+                    <View style={{
+                      flexDirection: 'row', alignItems: 'center', gap: t.space.md,
+                      paddingVertical: t.space.md, paddingHorizontal: t.space.lg, borderRadius: t.radius.md,
+                      backgroundColor: active ? t.colors.primarySoft : t.colors.bg,
+                      borderWidth: 1.5, borderColor: active ? t.colors.primary : t.colors.border,
+                    }}>
+                      <Icon name={o.icon} size={20} color={active ? t.colors.primary : t.colors.textFaint} />
+                      <AppText variant="body" tone={active ? 'primary' : 'default'} style={{ flex: 1 }}>{o.label}</AppText>
+                      {active && <Icon name="checkmark-circle" size={18} color={t.colors.primary} />}
+                    </View>
+                  </Tappable>
+                );
+              })}
+            </View>
+            {/* Said on the screen, not only in a comment: the Hindi is machine-drafted and not yet
+                reviewed, and somebody choosing it deserves to know why parts of the app will still
+                be in English. */}
+            <AppText variant="caption" tone="muted">{tr('language.hiDraftNote')}</AppText>
+          </Card>
+        </View>
+      </SubScreen>
+
+      <SubScreen active={stackNav.current === 'appearance'} title={tr('profile.rows.appearance')} onBack={stackNav.pop}>
         <View style={{ padding: t.space.lg, gap: t.space.lg }}>
           <Card level={1} style={{ gap: t.space.md }}>
             <SettingRow
               icon="color-palette-outline"
               tone="primary"
-              label="Theme"
-              hint="Follow your phone's setting, or pin the app to one mode."
+              label={tr('profile.theme.label')}
+              hint={tr('profile.theme.hint')}
             />
             <View style={{ flexDirection: 'row', gap: t.space.sm }}>
               {THEME_OPTIONS.map((o) => {
@@ -1344,7 +1427,9 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                     key={o.key}
                     style={{ flex: 1 }}
                     accessibilityRole="button"
-                    accessibilityLabel={`${o.label} theme${active ? ', selected' : ''}`}
+                    accessibilityLabel={active
+                      ? tr('profile.theme.accessibilitySelected', { name: o.label })
+                      : tr('profile.theme.accessibility', { name: o.label })}
                     onPress={() => t.setPreference(o.key)}
                   >
                     <View style={{
@@ -1363,14 +1448,14 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
         </View>
       </SubScreen>
 
-      <SubScreen active={stackNav.current === 'notifications'} title="Notifications" onBack={stackNav.pop}>
+      <SubScreen active={stackNav.current === 'notifications'} title={tr('profile.rows.notifications')} onBack={stackNav.pop}>
         <View style={{ padding: t.space.lg, gap: t.space.lg }}>
           <GroupedSection>
             <ToggleRow
               icon="notifications-outline"
               tone="primary"
-              label="Push notifications"
-              hint={pushBusy ? 'Updating this device with the server…' : 'New assignments, clarifications and payment updates'}
+              label={tr('profile.notifications.push')}
+              hint={pushBusy ? tr('profile.rows.pushUpdating') : tr('profile.notifications.pushHint')}
               value={pushEnabled}
               onChange={async (v) => {
                 setPushBusy(true);
@@ -1384,17 +1469,21 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             />
             {pushEnabled && (
               <View style={{ paddingTop: t.space.xs, paddingBottom: t.space.xs, paddingLeft: t.space.lg }}>
-                <AppText variant="overline" tone="faint" style={{ paddingLeft: 29 + t.space.md, marginBottom: t.space.xs }}>WHICH ALERTS</AppText>
+                <AppText variant="overline" tone="faint" style={{ paddingLeft: 29 + t.space.md, marginBottom: t.space.xs }}>{tr('profile.notifications.whichAlerts')}</AppText>
                 {notifPrefsLoading ? (
-                  <AppText variant="caption" tone="faint" style={{ paddingLeft: 29 + t.space.md }}>Loading your alert preferences…</AppText>
+                  <AppText variant="caption" tone="faint" style={{ paddingLeft: 29 + t.space.md }}>{tr('profile.notifications.loading')}</AppText>
                 ) : notifPrefs.length === 0 ? (
-                  <AppText variant="caption" tone="faint" style={{ paddingLeft: 29 + t.space.md }}>Alert preferences unavailable offline.</AppText>
+                  <AppText variant="caption" tone="faint" style={{ paddingLeft: 29 + t.space.md }}>{tr('profile.notifications.unavailable')}</AppText>
                 ) : (
                   notifPrefs.map((pref) => (
                     <SubToggle
                       key={pref.category}
-                      label={CATEGORY_LABELS[pref.category]?.label ?? pref.category}
-                      hint={savingCategory === pref.category ? 'Saving…' : CATEGORY_LABELS[pref.category]?.hint}
+                      label={CATEGORY_KEYS[pref.category] ? tr(CATEGORY_KEYS[pref.category].label) : pref.category}
+                      hint={
+                        savingCategory === pref.category
+                          ? tr('common.saving')
+                          : CATEGORY_KEYS[pref.category] && tr(CATEGORY_KEYS[pref.category].hint)
+                      }
                       value={pref.push}
                       onChange={(v) => toggleCategory(pref.category, v)}
                     />
@@ -1405,8 +1494,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
             <ToggleRow
               icon="volume-medium-outline"
               tone="accent"
-              label="Sound alerts"
-              hint="Play a chime when a notification arrives"
+              label={tr('profile.notifications.sound')}
+              hint={tr('profile.notifications.soundHint')}
               value={soundAlerts}
               onChange={async (v) => { setSoundAlerts(v); await setDevicePreference('soundAlerts', v); }}
             />
@@ -1414,65 +1503,65 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
         </View>
       </SubScreen>
 
-      <SubScreen active={stackNav.current === 'location'} title="Location & Recommendations" onBack={stackNav.pop}>
+      <SubScreen active={stackNav.current === 'location'} title={tr('profile.rows.location')} onBack={stackNav.pop}>
         <View style={{ padding: t.space.lg, gap: t.space.lg }}>
           <GroupedSection>
             <ToggleRow
               icon="navigate-outline"
               tone="info"
-              label="Share live location"
-              hint="Off by default. When on, your current position — not your home address — is used to rank you for nearby audits, like ride-hailing apps."
+              label={tr('profile.location.share')}
+              hint={tr('profile.location.shareHint')}
               value={liveTrackingEnabled}
               onChange={async (v) => { await setLiveTrackingEnabled(v); }}
             />
           </GroupedSection>
           {!liveTrackingReady && (
-            <AppText variant="caption" tone="faint" style={{ marginLeft: t.space.lg }}>Syncing your sharing preference…</AppText>
+            <AppText variant="caption" tone="faint" style={{ marginLeft: t.space.lg }}>{tr('profile.location.syncing')}</AppText>
           )}
           {liveTrackingEnabled && (
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginLeft: t.space.lg }}>
               <Icon name="radio" size={13} color={t.colors.success} />
-              <AppText variant="caption" tone="success">Live position active — recommendations use where you are now</AppText>
+              <AppText variant="caption" tone="success">{tr('profile.location.active')}</AppText>
             </View>
           )}
         </View>
       </SubScreen>
 
-      <SubScreen active={stackNav.current === 'security'} title="Security & Biometrics" onBack={stackNav.pop}>
+      <SubScreen active={stackNav.current === 'security'} title={tr('profile.rows.security')} onBack={stackNav.pop}>
         <View style={{ padding: t.space.lg, gap: t.space.lg }}>
           <GroupedSection>
             <SettingRow
               icon="key-outline"
               tone="neutral"
-              label="Change password"
-              hint="Update the password you sign in with"
+              label={tr('profile.security.changePassword')}
+              hint={tr('profile.security.changePasswordHint')}
               chevron
               onPress={() => setChangePasswordVisible(true)}
             />
             <ToggleRow
               icon="finger-print-outline"
               tone="success"
-              label="Biometric Lock"
-              hint="Require your fingerprint or face to open Orbit, and after two minutes away from the app"
+              label={tr('profile.security.biometricLock')}
+              hint={tr('profile.security.biometricLockHint')}
               value={biometrics}
               onChange={async (v) => { setBiometrics(v); await setDevicePreference('biometrics', v); }}
             />
             <SettingRow
               icon="hardware-chip-outline"
               tone={sensor === 'ready' ? 'success' : 'neutral'}
-              label="Hardware sensor"
+              label={tr('profile.security.sensor')}
               hint={
                 sensor === 'ready'
-                  ? 'Fingerprint or face recognition enrolled on this device'
+                  ? tr('profile.security.sensorEnrolled')
                   : sensor === 'not-enrolled'
-                    ? 'Sensor present, but no fingerprint or face is enrolled. Add one in your phone settings.'
+                    ? tr('profile.security.sensorNotEnrolled')
                     : sensor === 'none'
-                      ? 'This device has no biometric sensor. Sign in with your password.'
-                      : 'Checking…'
+                      ? tr('profile.security.sensorNone')
+                      : tr('profile.security.sensorChecking')
               }
               trailing={
                 <Badge
-                  label={sensor === 'ready' ? 'READY' : sensor === 'checking' ? '…' : 'UNAVAILABLE'}
+                  label={sensor === 'ready' ? tr('profile.security.ready') : sensor === 'checking' ? '…' : tr('profile.security.unavailable')}
                   tone={sensor === 'ready' ? 'success' : 'neutral'}
                   icon={sensor === 'ready' ? 'shield-checkmark-outline' : 'alert-circle-outline'}
                 />
@@ -1482,43 +1571,45 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
         </View>
       </SubScreen>
 
-      <SubScreen active={stackNav.current === 'accreditation'} title="Accreditation & License" onBack={stackNav.pop}>
+      <SubScreen active={stackNav.current === 'accreditation'} title={tr('profile.rows.accreditation')} onBack={stackNav.pop}>
         <View style={{ padding: t.space.lg, gap: t.space.lg }}>
           <GroupedSection
-            footnote="Authorised for precious metal purity testing, gold ornament packet sealing, and bank collateral audits."
+            footnote={tr('profile.accreditation.footnote')}
           >
             <SettingRow
               icon="ribbon-outline"
               tone="primary"
-              label="BIS / NABL Certified Assayer"
-              hint={profile.licenseNo ? `License No: ${profile.licenseNo}` : 'No licence number on file'}
-              trailing={profile.licenseNo ? <Badge label="VERIFIED" tone="success" /> : <Badge label="NOT ON FILE" tone="warning" />}
+              label={tr('profile.accreditation.certified')}
+              hint={profile.licenseNo ? tr('profile.rows.licenceNumber', { number: profile.licenseNo }) : tr('profile.rows.noLicence')}
+              trailing={profile.licenseNo
+                ? <Badge label={tr('profile.accreditation.verified')} tone="success" />
+                : <Badge label={tr('profile.accreditation.notOnFile')} tone="warning" />}
             />
           </GroupedSection>
         </View>
       </SubScreen>
 
-      <SubScreen active={stackNav.current === 'connection'} title="Connection" onBack={stackNav.pop}>
+      <SubScreen active={stackNav.current === 'connection'} title={tr('profile.rows.connection')} onBack={stackNav.pop}>
         <View style={{ padding: t.space.lg, gap: t.space.lg }}>
           <GroupedSection>
             <SettingRow
               icon="server-outline"
               tone="accent"
-              label="Server"
+              label={tr('profile.connection.server')}
               hint={serverHost}
               trailing={
                 conn === 'checking' ? (
-                  <Badge label="CHECKING" tone="neutral" icon="sync-outline" />
+                  <Badge label={tr('profile.connection.checking')} tone="neutral" icon="sync-outline" />
                 ) : conn === 'online' ? (
-                  <Badge label="ONLINE" tone="success" icon="cloud-done-outline" />
+                  <Badge label={tr('profile.connection.online')} tone="success" icon="cloud-done-outline" />
                 ) : (
-                  <Badge label="OFFLINE" tone="danger" icon="cloud-offline-outline" />
+                  <Badge label={tr('profile.connection.offline')} tone="danger" icon="cloud-offline-outline" />
                 )
               }
             />
           </GroupedSection>
           <Button
-            label={conn === 'checking' ? 'Checking…' : 'Check connection'}
+            label={conn === 'checking' ? tr('profile.connection.checkInProgress') : tr('profile.connection.check')}
             icon="refresh-outline"
             variant="neutral"
             size="sm"

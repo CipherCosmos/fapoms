@@ -48,6 +48,7 @@ export class SchedulingController {
 
   @Post()
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('scheduling:create:organization')
   @ApiOperation({ summary: 'Create a confirmed schedule from an accepted assignment' })
   async create(@Body() dto: CreateScheduleRequestDto, @Req() req: any) {
     const userId = req?.user?.id || '00000000-0000-0000-0000-000000000000';
@@ -60,6 +61,7 @@ export class SchedulingController {
 
   @Get()
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.AUDITOR)
+  @RequirePermissions('scheduling:view:organization')
   @ApiOperation({ summary: 'List all active schedules' })
   async findAll(
     @Query('page') page = 1,
@@ -117,6 +119,7 @@ export class SchedulingController {
 
   @Get(':id')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.AUDITOR)
+  @RequirePermissions('scheduling:view:organization')
   @ApiOperation({ summary: 'Get details for a single schedule by ID' })
   async findOne(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
     await this.regionGuard.assertScheduleInScope(id, scope);
@@ -129,6 +132,7 @@ export class SchedulingController {
 
   @Post(':id/transition')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('scheduling:modify:organization')
   @ApiOperation({ summary: 'Transition schedule state' })
   async transition(
     @Param('id', ParseUUIDPipe) id: string,

@@ -26,7 +26,17 @@ export function normaliseHeader(header: string): string {
 /** Reads one row's cells by any of several column names. Returns '' for missing or blank. */
 export type RowReader = (...aliases: string[]) => string;
 
-export function rowReader(row: Record<string, any>): RowReader {
+/**
+ * @param askedFor When given, every alias this reader is ever asked for is recorded here
+ *   (normalised). It lets a caller answer the question a spreadsheet importer otherwise cannot:
+ *   *which columns in this file did I never look at?* A column the importer does not recognise is
+ *   silently dropped — proved on the live stack, where a sheet headed `Aadhaar Number` instead of
+ *   `Aadhar Card Number` imported every row, reported "created 6, skipped 0", and discarded every
+ *   Aadhaar number without a word. Recording the aliases at the point they are used means the
+ *   check can never drift from the 39 `read(...)` call sites the way a hand-maintained second list
+ *   would.
+ */
+export function rowReader(row: Record<string, any>, askedFor?: Set<string>): RowReader {
   const byHeader = new Map<string, any>();
   for (const [key, value] of Object.entries(row ?? {})) {
     const normalised = normaliseHeader(key);
@@ -34,6 +44,9 @@ export function rowReader(row: Record<string, any>): RowReader {
     if (!byHeader.has(normalised)) byHeader.set(normalised, value);
   }
   return (...aliases: string[]) => {
+    // Recorded before the lookup, not inside it: the loop below returns on the first alias that
+    // has a value, so recording there would miss every later spelling of the same column.
+    if (askedFor) for (const alias of aliases) askedFor.add(normaliseHeader(alias));
     for (const alias of aliases) {
       const value = byHeader.get(normaliseHeader(alias));
       if (value !== undefined && value !== null && String(value).trim() !== '') {
@@ -57,7 +70,8 @@ export interface ParsedSheet {
  * Excel's own placeholder for a column with no header text. A sheet full of these means the
  * header row was not where we looked.
  */
-const BLANK_HEADER = /^__EMPTY(_\d+)?$/;
+/** xlsx names an unheaded column `__EMPTY`, `__EMPTY_1`… — placeholders, not real columns. */
+export const BLANK_HEADER = /^__EMPTY(_\d+)?$/;
 
 /** How well a candidate header row matches what the caller asked for. Higher is better. */
 function scoreHeaders(headers: string[], expected: Set<string>): number {
@@ -104,7 +118,17 @@ export function parseSheet(fileBuffer: Buffer, expectedColumns: string[] = []): 
       const rows = xlsx.utils.sheet_to_json<Record<string, any>>(worksheet, { range: offset });
       if (rows.length === 0) continue;
 
-      const headers = Object.keys(rows[0] ?? {});
+      /**
+       * The union across every row, not just the first one's keys.
+       *
+       * `sheet_to_json` omits a column entirely from a row object when that row's cell is blank,
+       * so `Object.keys(rows[0])` describes row 1 rather than the sheet. On the real roster only
+       * 578 of 1,155 rows carry an Aadhaar, so a mis-headed `Aadhaar Number` column had roughly
+       * even odds of being absent from row 1 — invisible both to header scoring and, worse, to the
+       * unrecognised-column report that exists precisely to catch that heading. One blank cell
+       * should not hide a column.
+       */
+      const headers = [...new Set(rows.flatMap((r) => Object.keys(r ?? {})))];
       const score = scoreHeaders(headers, expected);
       if (score > bestScore) {
         bestScore = score;

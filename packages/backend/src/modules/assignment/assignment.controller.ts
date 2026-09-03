@@ -288,6 +288,7 @@ export class AssignmentController {
 
   @Post()
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assignment:create:organization')
   // Read `data.status` rather than assuming: with `acceptOnBehalf` the response is ACCEPTED, and
   // if the confirmation could not be applied it comes back PENDING as a live offer instead.
   @ApiOperation({ summary: 'Create an assignment — a PENDING offer, or ACCEPTED when the desk confirms on the assayer behalf' })
@@ -429,10 +430,37 @@ export class AssignmentController {
   @Get(':id')
   @Roles(...STAFF_ROLES, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Get details for a single assignment by ID' })
-  async findOne(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
+  async findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
     // No-op for the mobile app: an ASSAYER principal carries no region assignment.
     await this.regionGuard.assertAssignmentInScope(id, scope);
     const assignment = await this.assignmentService.findOne(id);
+
+    /**
+     * An assayer may read their own assignment and no one else's.
+     *
+     * The region guard above is the only other gate on this route, and its own comment records
+     * that it does nothing for an assayer principal — they carry no region. So this route
+     * answered any assignment id for any signed-in assayer, and it eager-loads
+     * `projectBranch.branch` and `assayer`: the branch a customer's gold is held at, and the name
+     * of the colleague sent to value it. Nothing enumerable was exposed, since the id is a v4
+     * UUID, but an unguessable identifier is not an authorisation check.
+     *
+     * The same test already guards `POST :id/comments` and the transition route; this read was
+     * simply missed. Staff roles are unaffected — they are scoped by region, which is the control
+     * that applies to them.
+     */
+    const roles: string[] = (req.user?.roles ?? [])
+      .map((r: any) => (typeof r === 'string' ? r : r?.name))
+      .filter(Boolean);
+    if (roles.includes(SystemRole.ASSAYER) && !roles.some((r) => STAFF_ROLES.includes(r as SystemRole))
+      && assignment.assayerId !== req.user?.id) {
+      throw new ForbiddenException('You can only open an assignment of your own.');
+    }
+
     return {
       success: true,
       data: assignment,

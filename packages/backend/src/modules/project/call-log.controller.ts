@@ -3,7 +3,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsOptional, IsNumber, IsUUID, IsEnum, Min } from 'class-validator';
 
 import { CallLogService, CallOutcome } from './call-log.service';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole } from '@fapoms/shared';
 
@@ -35,6 +35,7 @@ export class CallLogController {
   // Recording a call is part of doing the planning, so it sits with the roles that plan.
   @Post()
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Record a call made to an assayer about a branch' })
   async create(@Body() dto: CreateCallLogRequestDto, @Req() req: any) {
     return { success: true, data: await this.callLogService.create(dto, req.user.userId ?? req.user.id) };

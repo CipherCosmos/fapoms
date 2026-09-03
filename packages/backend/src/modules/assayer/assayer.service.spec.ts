@@ -468,6 +468,59 @@ describe('AssayerService', () => {
     });
   });
 
+  /**
+   * A coordinate somebody placed by hand must survive the nightly geocoder.
+   *
+   * The sweep skips `geo_source = 'manual'`, so everything turns on the ordinary profile update
+   * marking a supplied pair that way. It does — `suppliedIsManual: coordsSupplied` — but nothing
+   * held the wiring down, and in the gap a comment in the mobile client came to claim the
+   * opposite: that saving a coordinate through this route left it re-geocodable and the next
+   * sweep would move the person back to the wrong place. That comment was written two weeks
+   * AFTER the code that contradicts it, and an audit of the app later reported the phantom
+   * asymmetry as a live defect on the strength of it.
+   *
+   * The behaviour was right the whole time. These tests exist so the next person reads a fact
+   * instead of a guess — the assayer who drags their pin to their actual house on the Profile →
+   * Address screen keeps it, exactly like the one who taps the home-screen banner.
+   */
+  describe('a coordinate placed by hand', () => {
+    const existing = () => ({
+      id: 'as-9', assayerCode: 'AS0009', displayName: 'Meera Iyer',
+      address: 'Kothrud', city: 'Pune', district: 'Pune', state: 'Maharashtra',
+      pincode: '411038', isActive: true,
+      latitude: 18.9, longitude: 73.1, geoSource: 'pincode', geoAccuracyMeters: 3000,
+    });
+
+    beforeEach(() => {
+      mockAssayerRepo.findOne.mockResolvedValue(existing());
+      mockAssayerRepo.save.mockImplementation(async (a: any) => a);
+    });
+
+    it('is stored as manual when the profile update carries a coordinate pair', async () => {
+      const saved: any = await service.update(
+        'as-9', { latitude: 18.5074, longitude: 73.8077 } as any, 'u-1',
+      );
+
+      expect(saved.geoSource).toBe('manual');
+      expect(Number(saved.latitude)).toBeCloseTo(18.5074, 4);
+      expect(Number(saved.longitude)).toBeCloseTo(73.8077, 4);
+    });
+
+    it('is not re-geocoded when a later edit changes only the address text', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue({ ...existing(), geoSource: 'manual' });
+
+      const saved: any = await service.update(
+        'as-9', { address: 'Flat 4, Kothrud' } as any, 'u-1',
+      );
+
+      // resolveCoordinates returns null for a manual pin with no new pair, so the geo columns
+      // are left exactly as they were — the address text moves, the pin does not.
+      expect(saved.geoSource).toBe('manual');
+      expect(Number(saved.latitude)).toBeCloseTo(18.9, 4);
+      expect(saved.address).toBe('Flat 4, Kothrud');
+    });
+  });
+
   describe('workforce attributes are replaced per kind, not wholesale', () => {
     const existing = { id: 'asr-1', assayerCode: 'AS-01', displayName: 'John Doe' };
 
@@ -1126,9 +1179,23 @@ describe('AssayerService', () => {
     });
 
     /**
+     * Moved here from assayer.state-machine.spec.ts when the machine stopped stamping dates and
+     * `reconcileDepartureDates` became the single writer. HR may already have entered the real
+     * last working day; that beats "when the record was updated".
+     */
+    it('never overwrites a leaving date HR already entered', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(working({ exitDate: '2026-03-31' }));
+
+      const saved = await service.acceptResignation('as-1', 'u-1', 'Relocating');
+
+      expect(dayOf(saved.exitDate)).toBe('2026-03-31');
+    });
+
+    /**
      * A termination stamps both. `termination_date` records that they were dismissed; `exit_date`
-     * is the column every reader of departures actually uses — all 447 recorded departures on the
-     * live roster set it and none set `termination_date`, and HR's own queries read
+     * is the column every reader of departures actually uses — all 421 recorded departures on the
+     * live roster set it and none set `termination_date` (447 before `repair-corrupt-dates.js`
+     * blanked 26 whose years were importer garbage), and HR's own queries read
      * COALESCE(exit_date, termination_date). A termination with only the former is invisible.
      */
     it('records both dates on a termination, so the departure is not invisible', async () => {

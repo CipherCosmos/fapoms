@@ -4,7 +4,7 @@
 
 import * as net from 'net';
 import { NestFactory } from '@nestjs/core';
-import { INestApplication, Logger, ValidationPipe } from '@nestjs/common';
+import { INestApplication, Logger } from '@nestjs/common';
 import { getQueueToken } from '@nestjs/bull';
 import type { Queue } from 'bull';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
@@ -14,6 +14,7 @@ import { RedisIoAdapter } from './infrastructure/realtime/redis-io.adapter';
 import { realtimeHealth } from './infrastructure/realtime/realtime-health';
 import { correlationIdMiddleware } from './infrastructure/http/correlation-id.middleware';
 import { GlobalExceptionFilter } from './infrastructure/http/global-exception.filter';
+import { CodedValidationPipe } from './infrastructure/http/coded-validation.pipe';
 import { ResponseInterceptor } from './infrastructure/http/response.interceptor';
 import { AssayerRedactionInterceptor } from './infrastructure/http/assayer-redaction.interceptor';
 import { TrimStringsPipe } from './infrastructure/http/trim-strings.pipe';
@@ -40,6 +41,8 @@ import {
   assertConcurrencyWithinPool,
   DEFAULT_DB_POOL_MAX,
 } from './infrastructure/queue/worker-concurrency';
+import { DataSource } from 'typeorm';
+import { ROLE_PERMISSIONS } from './modules/auth/role-permissions';
 
 /**
  * Configuration that must never reach production, checked before anything connects.
@@ -91,9 +94,16 @@ export function assertProductionSafeConfig(): void {
    * the same as the secrets above: a missing or too-short key is a one-line fix at deploy time.
    */
   const piiKey = process.env.PII_ENCRYPTION_KEY;
-  const piiKeyOk = piiKey && (/^[0-9a-fA-F]{64}$/.test(piiKey) || Buffer.from(piiKey, 'base64').length >= 32);
+  // Exactly the two canonical forms resolveKey() uses verbatim. The previous test accepted any
+  // string whose lossy base64 decode reached 32 bytes, which then took the SHA-256 stretch path —
+  // so a pasted sentence could pass this gate while the encryption layer quietly derived a key
+  // from it. Generate a real one: `openssl rand -hex 32`.
+  const piiKeyOk =
+    !!piiKey &&
+    (/^[0-9a-fA-F]{64}$/.test(piiKey) ||
+      (/^[A-Za-z0-9+/=]+$/.test(piiKey) && Buffer.from(piiKey, 'base64').length === 32));
   if (!piiKeyOk) {
-    fatal.push('PII_ENCRYPTION_KEY is unset or too weak. Without a 32-byte key (64 hex chars, or a 32-byte base64 value) sensitive fields (PAN, bank account, government IDs) are stored UNENCRYPTED.');
+    fatal.push('PII_ENCRYPTION_KEY is unset or not a canonical 32-byte key (64 hex chars, or 32-byte base64). Without it, sensitive fields (PAN, bank account, government IDs) are stored UNENCRYPTED. Generate one with: openssl rand -hex 32');
   }
 
   // A production database reachable with the development password is not a production database.
@@ -116,7 +126,9 @@ export function assertProductionSafeConfig(): void {
     fatal.push('STORAGE_DRIVER must be "s3" in production. Local-disk storage loses audit evidence on every container replacement and 404s across replicas.');
   }
 
-  /**
+
+
+/**
    * MinIO's root credential creates the account the backend then signs every S3 request with —
    * a compose-level default here is not a placeholder waiting to be overridden, it is the actual
    * password on the actual account holding every audit document, KYC scan and government ID in
@@ -142,6 +154,62 @@ export function assertProductionSafeConfig(): void {
     throw new Error(
       `Refusing to start in production with unsafe configuration:\n  - ${fatal.join('\n  - ')}`,
     );
+  }
+}
+
+/**
+ * Say so when a role holds fewer permissions in the database than the code grants it.
+ *
+ * `ROLE_PERMISSIONS` is the grant table; the seed unions it into each role, so re-running the seed
+ * reconciles any difference. Nothing announced that a re-run was owed, and the application reads
+ * the database while `route-permission-parity.spec.ts` reads the code table — so the two could
+ * disagree with every test green.
+ *
+ * They did. PRODUCT_SUPPORT was given three grants in code and never seeded here, so at runtime it
+ * held none at all. That was invisible while `@Roles(...)` was the only gate — the role's NAME
+ * opened its routes and the permission table was never consulted — and became load-bearing the
+ * moment permissions turned authoritative, because a role with no grants can be granted nothing.
+ *
+ * A warning, not a refusal: the union is safe to apply and the fix is one command, but a
+ * deployment that is merely behind on its seed should not fail to boot over it.
+ */
+async function warnOnRoleGrantDrift(app: any, logger: Logger): Promise<void> {
+  try {
+    const dataSource = app.get(DataSource, { strict: false });
+    if (!dataSource?.isInitialized) return;
+
+    const rows: Array<{ name: string; held: string }> = await dataSource.query(`
+      SELECT r.name, coalesce(string_agg(p.resource || ':' || p.action, ','), '') AS held
+        FROM roles r
+        LEFT JOIN role_permissions rp ON rp.role_id = r.id
+        LEFT JOIN permissions p ON p.id = rp.permission_id
+       GROUP BY r.name
+    `);
+
+    const behind: string[] = [];
+    for (const [role, granted] of Object.entries(ROLE_PERMISSIONS)) {
+      const row = rows.find((r) => r.name === role);
+      if (!row) continue;
+      const held = new Set(row.held ? row.held.split(',') : []);
+      // Compared on resource:action — the stored rows carry a scope column the code key repeats,
+      // and a scope mismatch is a different fault from a missing grant.
+      const missing = (granted as string[])
+        .map((key) => key.split(':').slice(0, 2).join(':'))
+        .filter((key) => !held.has(key));
+      if (missing.length) behind.push(`${role} is missing ${missing.length} (${missing.slice(0, 4).join(', ')}${missing.length > 4 ? ', …' : ''})`);
+    }
+
+    if (behind.length) {
+      logger.warn(
+        `Role grants in this database are behind ROLE_PERMISSIONS: ${behind.join('; ')}. `
+        + 'Routes are authorised from the DATABASE, so these roles can reach less than the code '
+        + 'says they should. Run the seed to reconcile — it only ever adds grants, never removes '
+        + 'them.',
+      );
+    }
+  } catch (err: any) {
+    // Never let a diagnostic stop the API booting.
+    logger.warn(`Could not check role grants against ROLE_PERMISSIONS: ${err?.message ?? err}`);
   }
 }
 
@@ -289,9 +357,13 @@ async function bootstrap() {
   // TrimStringsPipe runs FIRST, so `@IsNotEmpty()` sees `""` rather than `"   "` and refuses it.
   // Without it a field of spaces passed both the browser's `required` attribute and every
   // non-empty check, and was stored as-is — see the pipe for the records that produced.
+  // CodedValidationPipe is the stock ValidationPipe with the same options; it adds
+  // `code: VALIDATION_FAILED` and a per-field `fields` array to the 400 body. The `message`
+  // array is produced by Nest's own flattening and is unchanged — see the pipe for why that
+  // matters to the mobile app.
   app.useGlobalPipes(
     new TrimStringsPipe(),
-    new ValidationPipe({
+    new CodedValidationPipe({
       whitelist: true,
       forbidNonWhitelisted: true,
       transform: true,
@@ -383,6 +455,8 @@ async function bootstrap() {
     await pauseLocalQueues(app, logger);
     logger.log('PROCESS_ROLE=api — serving HTTP; background jobs deferred to worker replicas.');
   }
+
+  await warnOnRoleGrantDrift(app, logger);
 
   const port = process.env.PORT || 3000;
   await app.listen(port);

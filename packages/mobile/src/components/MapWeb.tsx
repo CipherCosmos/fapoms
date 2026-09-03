@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { View, Text } from 'react-native';
 import { Icon } from './ui/primitives';
 import { useTheme } from '../theme/ThemeProvider';
+import { useT } from '../i18n';
 
 // Web implementation of the in-app map. Uses Leaflet + OpenStreetMap tiles with an
 // optional OSRM route polyline. Kept free with no API key. Native uses react-native-maps.
@@ -19,6 +20,7 @@ export interface MapRenderProps {
 
 export const InteractiveMapWeb: React.FC<MapRenderProps> = ({ origin, destination, routeCoords, fitKey, passedIndex }) => {
   const t = useTheme();
+  const tr = useT();
   const containerRef = useRef<any>(null);
   const mapRef = useRef<any>(null);
   const routeRef = useRef<any>(null);
@@ -155,8 +157,9 @@ export const InteractiveMapWeb: React.FC<MapRenderProps> = ({ origin, destinatio
           zIndex: 1000,
         }}
       >
-        <Icon name="navigate" size={12} color="#38bdf8" />
-        <Text style={{ fontSize: 10, color: '#94a3b8' }}>OpenStreetMap</Text>
+        <Icon name="navigate" size={14} color="#38bdf8" />
+        {/* 12 is the readable floor for this app — see the tab dock in AppShell. */}
+        <Text style={{ fontSize: 12, color: '#94a3b8' }}>{tr('nav.openStreetMap')}</Text>
       </View>
     </View>
   );

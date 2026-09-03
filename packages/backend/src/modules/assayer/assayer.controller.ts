@@ -45,7 +45,7 @@ const assayerUploadMulterOptions = {
   limits: { fileSize: MAX_UPLOAD_BYTES },
 };
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsEmail, IsArray, IsInt, IsObject, IsEnum, IsDateString, IsUUID, IsBoolean, MinLength, MaxLength, ValidateNested, ArrayMaxSize, Matches } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsEmail, IsArray, IsInt, IsObject, IsEnum, IsDateString, IsUUID, IsBoolean, IsIn, MinLength, MaxLength, ArrayMinSize, ValidateNested, ArrayMaxSize, Matches, ValidateBy, ValidationOptions } from 'class-validator';
 import { Type } from 'class-transformer';
 
 /**
@@ -74,7 +74,7 @@ class WorkingHoursDto {
 import { AssayerService, CreateAssayerDto, UpdateAssayerDto } from './assayer.service';
 import { LocationTrailService } from './location-trail.service';
 import { LocationPingSource } from './assayer-location-ping.entity';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public, AnyAuthenticated } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public, AnyAuthenticated, PasswordChangeExempt, OnboardingAllowed } from '../auth/guards';
 import {
   SystemRole,
   AssayerLifecycleStatus,
@@ -82,7 +82,16 @@ import {
   AssayerUnavailableReason,
   SELF_EDITABLE_ASSAYER_FIELDS,
   HR_MAINTAINED_ASSAYER_FIELDS,
+  isValidPan,
+  isValidIfsc,
+  isValidAadhaar,
+  isPlaceholderAadhaar,
+  normalisePhone,
+  AADHAAR_PATTERN,
+  ASSAYER_ERROR_CODES,
+  AUTH_ERROR_CODES,
 } from '@fapoms/shared';
+import { withCode } from '../../infrastructure/http/api-error';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { scopeAssayerForRoles, scopeAssayerListForRoles, rolesOf, assertSelfOrPrivileged } from './assayer-visibility';
@@ -127,6 +136,125 @@ const STAFF_ASSAYER_EDITORS: string[] = [
 const SELF_EDITABLE_FIELDS = SELF_EDITABLE_ASSAYER_FIELDS;
 const HR_MAINTAINED_FIELDS = HR_MAINTAINED_ASSAYER_FIELDS;
 
+/**
+ * The three values `assayers.preferred_contact_channel` accepts. A `varchar(10)` with no check
+ * constraint behind it, so this list is the only thing standing between the column and a typo
+ * that the dispatcher would silently read as "not APP, therefore PHONE".
+ */
+const CONTACT_CHANNELS = ['AUTO', 'APP', 'PHONE'] as const;
+
+// ---------------------------------------------------------------------------
+// Identity-field format gates (PAN / Aadhaar / IFSC / mobile)
+// ---------------------------------------------------------------------------
+
+/**
+ * What may be recorded against one document requirement.
+ *
+ * This route took `@Body() body: any`, which means class-validator had nothing to attach to and
+ * every field went through unchecked — on a route that writes `assayers.pan_number` and
+ * `assayers.aadhaar_number` directly, because for PAN and Aadhaar the number deliberately lives on
+ * the person rather than the document row. Create and update both carry `@IsPanFormat()` and
+ * `@IsAadhaarNumber()`; this was a fourth path to the same two columns that validated nothing.
+ *
+ * The format rule for `documentNumber` cannot live here: which rule applies depends on the
+ * `:requirement` route parameter, which a DTO cannot see. It is enforced in `setDocument` on the
+ * service, using the same `@fapoms/shared` validators the DTOs use, so the two cannot disagree.
+ */
+class SetDocumentRequestDto {
+  @IsOptional() @IsString() @MaxLength(50)
+  documentNumber?: string;
+
+  @IsOptional() @IsDateString()
+  expiryDate?: string;
+
+  @IsOptional() @IsBoolean()
+  softCopyReceived?: boolean;
+
+  @IsOptional() @IsBoolean()
+  hardCopyReceived?: boolean;
+
+  @IsOptional() @IsDateString()
+  receivedAt?: string;
+
+  @IsOptional() @IsString() @MaxLength(200)
+  hardCopyLocation?: string;
+
+  @IsOptional() @IsString() @MaxLength(200)
+  courierReference?: string;
+
+  @IsOptional() @IsString() @MaxLength(2000)
+  remarks?: string;
+}
+
+
+/**
+ * These call the shared rulebook in `@fapoms/shared` (identity-validation.ts) — the same
+ * functions the roster importer applies — so the form and the spreadsheet can never disagree
+ * about what a valid number looks like. Until these existed, `POST/PUT /assayers` accepted any
+ * string into these fields; the importer was the only gate, which is how 1,128 PANs and 578
+ * Aadhaars are stored unvalidated today.
+ *
+ * Two behaviours are deliberate:
+ *  - An EMPTY string passes. The web edit form sends `""` to clear a field (see
+ *    `buildAssayerEditBody`), and erasing a junk legacy value must never be refused by the very
+ *    rule that exists to keep junk out.
+ *  - Absent and null fields are skipped entirely (`@IsOptional()` on every use). That is what
+ *    protects records imported before validation existed: an update that corrects a phone
+ *    number is not blocked by the invalid PAN already sitting on the row — only keys actually
+ *    present in the request body are judged.
+ *
+ * A side effect worth naming: masked display values (`******234F`) fail every one of these, so
+ * a client that round-trips a masked read back into an edit body is refused here instead of
+ * overwriting the real number with asterisks.
+ *
+ * These are not the whole of that protection, though, and were never enough on their own:
+ * `bankAccountNumber` has no format rule here and never could — bank account numbers have no
+ * checkable shape — so the one field a payroll-diversion attempt would actually aim at fell
+ * through. `assertNoMaskedPii` in AssayerService covers all three, and covers the write paths
+ * that do not pass through this class at all.
+ */
+const identityFormatRule = (
+  name: string,
+  ok: (value: string) => boolean,
+  message: string | ((value: unknown) => string),
+) =>
+  (options?: ValidationOptions): PropertyDecorator =>
+    ValidateBy({
+      name,
+      validator: {
+        validate: (value: unknown) =>
+          typeof value === 'string' && (value.trim() === '' || ok(value)),
+        defaultMessage: (args) =>
+          typeof message === 'function' ? message(args?.value) : message,
+      },
+    }, options);
+
+const IsPanFormat = identityFormatRule('isPanFormat', isValidPan,
+  "This PAN doesn't look right — it should be 5 letters, 4 digits, 1 letter, like ABCDE1234F.");
+
+const IsIfscFormat = identityFormatRule('isIfscFormat', isValidIfsc,
+  "This IFSC code doesn't look right — it should be 4 letters, then a zero, then 6 letters or digits, like SBIN0001234.");
+
+// Three failure modes, three messages: "wrong shape" sends the clerk to re-type, "checksum
+// fails" sends them back to the card — a 12-digit slip LOOKS right on screen, so the message
+// must say the number itself is off, not the format — and "all one digit" sends them to find a
+// number that was never entered. That third branch is not cosmetic: `999999999999` PASSES
+// Verhoeff and is refused by the all-same-digit rule ahead of the checksum, so without it the
+// likeliest placeholder anyone types is reported as a mistyped digit and the clerk is sent to
+// re-read a card against a number in which nothing is mistyped.
+const IsAadhaarNumber = identityFormatRule('isAadhaarNumber', isValidAadhaar,
+  (value) => {
+    if (typeof value !== 'string' || !AADHAAR_PATTERN.test(value.trim())) {
+      return 'An Aadhaar number is 12 digits — please enter all 12, without spaces.';
+    }
+    return isPlaceholderAadhaar(value)
+      ? 'That looks like a placeholder rather than a real Aadhaar number — 12 identical digits. Please enter the number from the card, or leave the field empty until you have it.'
+      : 'This doesn\'t match a real Aadhaar number — one digit looks mistyped or swapped. Please re-check it against the card.';
+  });
+
+const IsIndianMobile = identityFormatRule('isIndianMobile', (value) => normalisePhone(value) !== null,
+  "This phone number doesn't look right — please enter a 10-digit Indian mobile number, like 98765 43210 (with or without +91).");
+
 class CreateAssayerRequestDto implements CreateAssayerDto {
   /**
    * Optional: leave it out and the server allocates the next free code.
@@ -150,10 +278,12 @@ class CreateAssayerRequestDto implements CreateAssayerDto {
 
   // Optional on admission: rosters arrive without a phone column, and a missing number blocks
   // ringing this person, not recording them. See the column comment on AssayerEntity.phone.
-  @IsOptional() @IsString()
+  @IsOptional() @IsString() @IsIndianMobile()
   phone?: string;
 
-  @IsOptional() @IsString()
+  // Same rule as `phone`. It carried a bare @IsString(), so the second number on a record — the
+  // one used when the first does not answer — could be saved in any shape at all.
+  @IsOptional() @IsString() @IsIndianMobile()
   alternatePhone?: string;
 
   // Address, district and city complete a record; state is what makes it plannable (it drives
@@ -180,13 +310,13 @@ class CreateAssayerRequestDto implements CreateAssayerDto {
   @IsOptional() @IsNumber()
   longitude?: number;
 
-  @IsOptional() @IsString()
+  @IsOptional() @IsString() @IsPanFormat()
   panNumber?: string;
 
   @IsOptional() @IsString()
   bankAccountNumber?: string;
 
-  @IsOptional() @IsString()
+  @IsOptional() @IsString() @IsIfscFormat()
   ifscCode?: string;
 
   @IsOptional() @IsString()
@@ -210,7 +340,10 @@ class CreateAssayerRequestDto implements CreateAssayerDto {
   @IsOptional() @IsString()
   emergencyContactName?: string;
 
-  @IsOptional() @IsString()
+  // Validated like the others, and this is the one it matters most for: the record marks it
+  // `critical` because it is what duty-of-care for a field worker rests on, and an unusable
+  // number there is discovered at the exact moment nobody can afford to discover it.
+  @IsOptional() @IsString() @IsIndianMobile()
   emergencyContactPhone?: string;
 
   @IsOptional() @IsString()
@@ -270,6 +403,14 @@ class CreateAssayerRequestDto implements CreateAssayerDto {
   eligibleClients?: string[];
 
   /**
+   * How offers reach this person. The column has existed since the channel work and was in
+   * neither request DTO, so every one of the 1,163 roster rows still sits on the `AUTO` default
+   * and HR had no way to say otherwise — see `CreateAssayerDto.preferredContactChannel`.
+   */
+  @IsOptional() @IsIn(CONTACT_CHANNELS)
+  preferredContactChannel?: 'AUTO' | 'APP' | 'PHONE';
+
+  /**
    * Facts the appraiser roster carries.
    *
    * The service interface and this class have to be extended together: the global validation
@@ -277,7 +418,7 @@ class CreateAssayerRequestDto implements CreateAssayerDto {
    * before the service ever sees it — the request succeeds, the value is silently dropped, and
    * the form reports a save that did not happen.
    */
-  @IsOptional() @IsString()
+  @IsOptional() @IsString() @IsAadhaarNumber()
   aadhaarNumber?: string;
 
   @IsOptional() @IsString()
@@ -312,10 +453,12 @@ class UpdateAssayerRequestDto implements UpdateAssayerDto {
   @IsOptional() @IsEmail()
   email?: string;
 
-  @IsOptional() @IsString()
+  @IsOptional() @IsString() @IsIndianMobile()
   phone?: string;
 
-  @IsOptional() @IsString()
+  // Same rule as `phone`. It carried a bare @IsString(), so the second number on a record — the
+  // one used when the first does not answer — could be saved in any shape at all.
+  @IsOptional() @IsString() @IsIndianMobile()
   alternatePhone?: string;
 
   @IsOptional() @IsString()
@@ -339,13 +482,13 @@ class UpdateAssayerRequestDto implements UpdateAssayerDto {
   @IsOptional() @IsNumber()
   longitude?: number;
 
-  @IsOptional() @IsString()
+  @IsOptional() @IsString() @IsPanFormat()
   panNumber?: string;
 
   @IsOptional() @IsString()
   bankAccountNumber?: string;
 
-  @IsOptional() @IsString()
+  @IsOptional() @IsString() @IsIfscFormat()
   ifscCode?: string;
 
   @IsOptional() @IsString()
@@ -375,7 +518,10 @@ class UpdateAssayerRequestDto implements UpdateAssayerDto {
   @IsOptional() @IsString()
   emergencyContactName?: string;
 
-  @IsOptional() @IsString()
+  // Validated like the others, and this is the one it matters most for: the record marks it
+  // `critical` because it is what duty-of-care for a field worker rests on, and an unusable
+  // number there is discovered at the exact moment nobody can afford to discover it.
+  @IsOptional() @IsString() @IsIndianMobile()
   emergencyContactPhone?: string;
 
   @IsOptional() @IsString()
@@ -434,12 +580,16 @@ class UpdateAssayerRequestDto implements UpdateAssayerDto {
   @IsOptional() @IsArray()
   eligibleClients?: string[];
 
+  /** See the same field on the create DTO — the column had no way in through either of them. */
+  @IsOptional() @IsIn(CONTACT_CHANNELS)
+  preferredContactChannel?: 'AUTO' | 'APP' | 'PHONE';
+
   /**
    * The service interface and this class must be extended together: the global validation pipe
    * whitelists against *this*, so a field added only to `UpdateAssayerDto` is stripped before the
    * service sees it. `update-dto-parity.spec.ts` fails the build when they drift.
    */
-  @IsOptional() @IsString()
+  @IsOptional() @IsString() @IsAadhaarNumber()
   aadhaarNumber?: string;
 
   @IsOptional() @IsString()
@@ -734,6 +884,28 @@ class ChangeOwnPasswordRequestDto {
   newPassword: string;
 }
 
+/**
+ * A group of import issues closed under one account of what was decided.
+ *
+ * The 500 ceiling is the same one `RosterRecordsService.listIssues` serves at, so a batch can
+ * close exactly what one screenful of the queue shows and no more. `@ArrayMinSize(1)` because an
+ * empty batch is a request nobody meant to send — a "select all" over a filtered-to-nothing
+ * queue — and answering it with a cheerful "0 resolved" reads as success.
+ */
+class BatchResolveImportIssuesDto {
+  @IsArray()
+  @ArrayMinSize(1, { message: 'Choose at least one issue to close.' })
+  @ArrayMaxSize(500, { message: 'Close at most 500 issues at a time.' })
+  @IsUUID('4', { each: true, message: 'One of the issue ids is not a valid identifier.' })
+  ids: string[];
+
+  // One resolution for the whole group, and required for the same reason the single route
+  // requires one: the queue exists because nothing was guessed, and closing a row with no account
+  // of what was decided puts the guess back without a record of it.
+  @IsString() @IsNotEmpty({ message: 'Say what was decided about these cells before closing them.' })
+  resolution: string;
+}
+
 class ResetAssayerPasswordRequestDto {
   // Optional: when omitted, the server generates a temporary password and returns it once, so
   // HR can read it to a locked-out field worker over the phone without inventing one.
@@ -816,6 +988,11 @@ export class AssayerController {
     const { assayers, total } = await this.assayerService.findAll(page, limit, scope);
     return {
       success: true,
+      // Stripping for the roles that may not see identity or banking at all. The MASKING that
+      // now applies to the roles that may — ADMIN, OPERATIONS — is not called here on purpose:
+      // it lives in the same policy (`assayer-visibility.ts`) and is applied once for every
+      // route by `AssayerRedactionInterceptor`. A mask call per service is the arrangement that
+      // produced the original leak, and adding one back would recreate it.
       data: scopeAssayerListForRoles(assayers as any[], rolesOf(req.user), req.user?.id),
       meta: {
         pagination: {
@@ -855,6 +1032,7 @@ export class AssayerController {
    */
   @Get('roster/import-issues')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'List cells the roster import could not read' })
   async listImportIssues(
     @Query('includeResolved') includeResolved?: string,
@@ -877,6 +1055,27 @@ export class AssayerController {
     @Req() req: any,
   ) {
     const data = await this.rosterRecords.resolveIssue(id, body?.resolution, req.user.id);
+    return { success: true, data };
+  }
+
+  /**
+   * Close a group of import issues in one request.
+   *
+   * The per-row route above is what the panel had, so closing the 68 rows one import problem
+   * produced meant 68 requests — and a failure at row 40 left the group half closed, with no way
+   * to tell from the queue which half. One decision was being recorded as sixty-eight, and
+   * partially.
+   *
+   * The outcome is per id and the request never fails as a whole: an id that is already resolved
+   * or does not exist is reported against that id and the rest still close. A group where one row
+   * has been touched by somebody else must not be a reason to reopen the other sixty-seven.
+   */
+  @Post('roster/import-issues/resolve')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: 'Close several import issues at once, with a per-id outcome for each' })
+  async resolveImportIssues(@Body() dto: BatchResolveImportIssuesDto, @Req() req: any) {
+    const data = await this.rosterRecords.resolveIssues(dto.ids, dto.resolution, req.user.id);
     return { success: true, data };
   }
 
@@ -904,6 +1103,47 @@ export class AssayerController {
   }
 
   /**
+   * One sensitive identifier, in clear, with a row in the audit trail saying who looked.
+   *
+   * The reads above are masked, so this is the only way a PAN, an Aadhaar number or a bank
+   * account leaves whole — which is what makes "who has seen this person's bank details" a
+   * question with an answer. See `AssayerService.revealSensitiveField` for why the audit write
+   * is awaited before the value is returned, and why the lookup ignores `isActive`.
+   *
+   * ADMIN and OPERATIONS only, matching `FULL_ACCESS` in assayer-visibility.ts: a role that
+   * cannot see the masked field on the record has no business asking for the whole of it. Note
+   * that this excludes the assayer themselves — an assayer cannot reveal their own PAN through
+   * the API. They are holding the card.
+   *
+   * Declared next to `@Get(':id')` for readability, not for routing: three path segments cannot
+   * be matched by the one-segment route above it.
+   */
+  @Get(':id/sensitive/:field')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  // The vocabulary has one read action per resource, so the unmasked value asks for the same
+  // permission as the masked record. What actually holds the line here is the narrow @Roles list
+  // above and the audit row the service writes — not a permission of its own.
+  @RequirePermissions('assayer:view:organization')
+  @ApiOperation({ summary: 'Reveal one masked identifier (pan | aadhaar | bank), recording who asked' })
+  async revealSensitiveField(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('field') field: string,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    // The same door check the record itself gets. Without it a region-scoped operator who may
+    // not open an assayer's page could still read that assayer's bank account one field at a
+    // time, which is the whole of what the page was hiding.
+    await this.regionGuard.assertAssayerInScope(id, scope);
+    const data = await this.assayerService.revealSensitiveField(id, field, {
+      id: req.user?.id,
+      displayName: req.user?.displayName ?? req.user?.username ?? null,
+      ipAddress: req.ip ?? null,
+    });
+    return { success: true, data };
+  }
+
+  /**
    * Which profile fields the caller may edit.
    *
    * The mobile app previously had no way to know, so it rendered every field as editable and
@@ -912,6 +1152,7 @@ export class AssayerController {
    */
   @Roles(SystemRole.ASSAYER, ...STAFF_ROLES)
   @Get('profile/editable-fields')
+  @OnboardingAllowed()
   @ApiOperation({ summary: 'Fields the current caller may self-edit, and those HR maintains' })
   async getEditableFields(@Req() req: any) {
     const isStaff = rolesOf(req.user).some((r) => STAFF_ASSAYER_EDITORS.includes(r));
@@ -929,6 +1170,18 @@ export class AssayerController {
   // The assayer app reads this for the signed-in user; it authenticates already.
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
   @Get(':assayerId/profile')
+  @OnboardingAllowed()
+  /**
+   * Reachable while a forced password change is pending — the assayer-principal counterpart of
+   * `GET /users/me`. Two reasons, both from the mobile app's real behaviour (AuthContext /
+   * MobileApiService.validateSession): this is where a restored session LEARNS it owes a
+   * password change (the flag rides the profile response), and validateSession treats a 401/403
+   * from this exact route as "credentials finished" and destroys the stored session — so
+   * blocking it would sign the user out instead of walking them to the change screen. Access is
+   * still authenticated and self-scoped (`assertSelfOrPrivileged` below); the exemption only
+   * bypasses the rotation gate, no role or ownership check.
+   */
+  @PasswordChangeExempt()
   @ApiOperation({ summary: 'Get detailed profile with stats for an assayer (by UUID or assayer code)' })
   async getProfile(@Param('assayerId') assayerId: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
     // `isSelf` below only controlled REDACTION, never access — so an assayer could pull any
@@ -948,6 +1201,7 @@ export class AssayerController {
   // details, contact information and workload limits.
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
   @Put(':id')
+  @OnboardingAllowed()
   @ApiOperation({ summary: 'Update assayer contact, banking, or operational details' })
   async update(
     @Param('id', ParseUUIDPipe) id: string,
@@ -962,7 +1216,10 @@ export class AssayerController {
     const isStaff = roles.some((r) => STAFF_ASSAYER_EDITORS.includes(r));
     if (!isStaff) {
       if (req.user?.id !== id) {
-        throw new ForbiddenException('You may only update your own profile');
+        throw withCode(
+          new ForbiddenException('You may only update your own profile'),
+          ASSAYER_ERROR_CODES.NOT_YOUR_RECORD,
+        );
       }
       // The DTO class declares every optional field, so they all exist as own
       // properties set to undefined — only the ones actually sent count.
@@ -971,8 +1228,14 @@ export class AssayerController {
         .map(([k]) => k);
       const forbidden = attempted.filter((f) => !SELF_EDITABLE_FIELDS.includes(f));
       if (forbidden.length) {
-        throw new ForbiddenException(
-          `These fields are maintained by HR and cannot be self-edited: ${forbidden.join(', ')}`,
+        // Not a permissions failure, and the difference is the whole point of coding it: the
+        // answer is "ask your HR contact", not "you should not be here". The field list is
+        // interpolated, so the sentence is unmatchable by a translating client.
+        throw withCode(
+          new ForbiddenException(
+            `These fields are maintained by HR and cannot be self-edited: ${forbidden.join(', ')}`,
+          ),
+          ASSAYER_ERROR_CODES.HR_MAINTAINED_FIELD,
         );
       }
     }
@@ -981,6 +1244,10 @@ export class AssayerController {
     const assayer = await this.assayerService.update(id, dto, updatedBy);
     return {
       success: true,
+      // Unscoped by role, which is a pre-existing gap this change does not widen: the redaction
+      // interceptor walks this response like any other, so the save echo is masked for staff and
+      // stripped for anyone who may not read the fields at all. Without that it would be the
+      // easiest unaudited way to obtain a PAN — PUT the record back unchanged and read the reply.
       data: assayer,
     };
   }
@@ -997,6 +1264,7 @@ export class AssayerController {
    * (never re-geocoded). Self-only for an assayer; staff may set it for anyone.
    */
   @Put(':id/base-location')
+  @OnboardingAllowed()
   @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'Confirm the authenticated assayer\'s base location from their device GPS' })
   async confirmBaseLocation(
@@ -1006,7 +1274,10 @@ export class AssayerController {
   ) {
     const isStaff = rolesOf(req.user).some((r) => STAFF_ASSAYER_EDITORS.includes(r));
     if (!isStaff && req.user?.id !== id) {
-      throw new ForbiddenException('You may only set your own location');
+      throw withCode(
+        new ForbiddenException('You may only set your own location'),
+        ASSAYER_ERROR_CODES.NOT_YOUR_RECORD,
+      );
     }
     const assayer = await this.assayerService.confirmBaseLocation(
       id, dto.latitude, dto.longitude, req.user?.id ?? id,
@@ -1023,7 +1294,10 @@ export class AssayerController {
     @Req() req: any,
   ) {
     if (req.user?.id !== id) {
-      throw new ForbiddenException('You may only update your own live location');
+      throw withCode(
+        new ForbiddenException('You may only update your own live location'),
+        ASSAYER_ERROR_CODES.NOT_YOUR_RECORD,
+      );
     }
     const assayer = await this.assayerService.updateLiveLocation(
       id, dto.latitude, dto.longitude, req.user?.id ?? id,
@@ -1094,7 +1368,10 @@ export class AssayerController {
     @Req() req: any,
   ) {
     if (req.user?.id !== id) {
-      throw new ForbiddenException('You may only change your own live-location sharing');
+      throw withCode(
+        new ForbiddenException('You may only change your own live-location sharing'),
+        ASSAYER_ERROR_CODES.NOT_YOUR_RECORD,
+      );
     }
     const assayer = await this.assayerService.setLiveTracking(
       id, dto.enabled, req.user?.id ?? id,
@@ -1114,6 +1391,7 @@ export class AssayerController {
   // Commercial Profile CRUD APIs
   @Get('commercial/roster')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: "Every assayer's commercial terms in force today, in one call" })
   async getRosterCommercialProfiles() {
     return { success: true, data: await this.assayerService.getRosterCommercialProfiles() };
@@ -1155,6 +1433,7 @@ export class AssayerController {
   // Fee rates are commercially sensitive — staff only.
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @Get(':assayerId/commercial')
+  @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'Get all commercial profiles for an assayer' })
   async getCommercials(@Param('assayerId', ParseUUIDPipe) assayerId: string) {
     const profiles = await this.assayerService.getCommercialProfiles(assayerId);
@@ -1166,6 +1445,7 @@ export class AssayerController {
 
   @Get(':assayerId/commercial/active')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'Get currently active commercial profile for an assayer' })
   async getActiveCommercial(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
@@ -1182,6 +1462,9 @@ export class AssayerController {
   // Workforce Attribute CRUD APIs
   @Get('workforce-attribute/vocabulary')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  // Reads the values off the roster rather than a reference table, so it moves with the roster:
+  // `assayer:view`, not `reference_data:view`.
+  @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'Distinct skills, languages and certifications already in use across the roster' })
   async getWorkforceAttributeVocabulary() {
     return { success: true, data: await this.assayerService.getWorkforceAttributeVocabulary() };
@@ -1234,6 +1517,7 @@ export class AssayerController {
 
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @Get(':assayerId/workforce-attribute')
+  @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'Get workforce attributes for an assayer' })
   async getWorkforceAttributes(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
@@ -1291,6 +1575,7 @@ export class AssayerController {
    */
   @Get(':assayerId/dossier')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'Everything the roster holds about one person beyond their own row' })
   async getDossier(@Param('assayerId', ParseUUIDPipe) assayerId: string) {
     const data = await this.rosterRecords.dossier(assayerId);
@@ -1305,6 +1590,7 @@ export class AssayerController {
 
   @Get(':assayerId/qualification')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'The qualification profile: 0–100 dimensions, overall score, weights, print summary' })
   async getQualification(@Param('assayerId', ParseUUIDPipe) assayerId: string) {
     const data = await this.qualificationScores.qualification(assayerId);
@@ -1313,6 +1599,7 @@ export class AssayerController {
 
   @Get(':assayerId/qualification/partners')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'How qualified this person is for each partner, with standing and gaps' })
   async getPartnerQualifications(@Param('assayerId', ParseUUIDPipe) assayerId: string) {
     const data = await this.qualificationScores.partnerQualifications(assayerId);
@@ -1447,15 +1734,45 @@ export class AssayerController {
    * choose between.
    */
   @Put(':assayerId/document/:requirement')
+  @OnboardingAllowed()
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
   @ApiOperation({ summary: 'Record progress on one document' })
   async setDocument(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
     @Param('requirement') requirement: string,
-    @Body() body: any,
+    @Body() body: SetDocumentRequestDto,
     @Req() req: any,
   ) {
     assertSelfOrPrivileged(req.user, assayerId, 'update documents');
+
+    /**
+     * An assayer may not set their own PAN or Aadhaar here.
+     *
+     * For PAN_CARD and the two AADHAAR requirements the number is deliberately stored on the
+     * PERSON, not the document row — so this route writes `assayers.pan_number` and
+     * `assayers.aadhaar_number` directly. Both fields are in `HR_MAINTAINED_ASSAYER_FIELDS`, and
+     * `PUT /assayers/:id` refuses a non-staff caller who touches them; `assertSelfOrPrivileged`
+     * above only stops an assayer editing SOMEBODY ELSE, so without this a person could set their
+     * own PAN through the paperwork screen — the field this codebase elsewhere calls the classic
+     * payroll-diversion route — while the front door refuses exactly that write.
+     *
+     * They may still upload the scan and record that it arrived. It is the number a human has to
+     * check against the document that stays HR's to enter.
+     */
+    const numberIsOnThePerson = ['PAN_CARD', 'AADHAAR_FRONT', 'AADHAAR_BACK'].includes(requirement);
+    if (body?.documentNumber !== undefined && numberIsOnThePerson) {
+      const roles = rolesOf(req.user);
+      if (!roles.some((r) => STAFF_ASSAYER_EDITORS.includes(r))) {
+        throw withCode(
+          new ForbiddenException(
+            'Your PAN and Aadhaar numbers are recorded by HR from the document itself. '
+            + 'Upload the scan here and your HR contact will enter the number.',
+          ),
+          ASSAYER_ERROR_CODES.HR_MAINTAINED_FIELD,
+        );
+      }
+    }
+
     const data = await this.rosterRecords.setDocument(assayerId, requirement as any, body, req.user.id);
     return { success: true, data };
   }
@@ -1471,6 +1788,7 @@ export class AssayerController {
    * second set of rules that would drift from those.
    */
   @Post(':assayerId/document/:requirement/file')
+  @OnboardingAllowed()
   @HttpCode(201)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
   @UseInterceptors(FileInterceptor('file', assayerUploadMulterOptions), FileScanInterceptor)
@@ -1486,7 +1804,10 @@ export class AssayerController {
     // A submitted form with no file reaches here as `undefined`; reading `.buffer` off it is a
     // TypeError the caller sees as "Internal server error" instead of "choose a file".
     if (!file?.buffer?.length) {
-      throw new BadRequestException('No file was uploaded. Choose a file and try again.');
+      throw withCode(
+        new BadRequestException('No file was uploaded. Choose a file and try again.'),
+        ASSAYER_ERROR_CODES.UPLOAD_NO_FILE,
+      );
     }
     // Narrower than the general allow-list: an identity document is a picture or a PDF, never a
     // spreadsheet and never an unknown blob. `fileName` is passed so an octet-stream upload is
@@ -1512,6 +1833,10 @@ export class AssayerController {
    */
   @Get('document/:id/file/:index')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  // A file download, but not `document:download`: that resource is the audit packet pipeline, and
+  // a role granted it would then also read staff Aadhaar and PAN scans. This is one page of a
+  // personnel record, so it follows the record.
+  @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'Fetch one attached scan' })
   async getDocumentFile(
     @Param('id', ParseUUIDPipe) id: string,
@@ -1598,6 +1923,9 @@ export class AssayerController {
   // Activity Timeline
   @Get(':assayerId/activity')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  // One person's timeline, assembled from their own record — not the platform audit trail, which
+  // `audit_log:view` gates and OPERATIONS does not hold.
+  @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'Get activity timeline for an assayer' })
   async getActivityTimeline(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
@@ -1624,6 +1952,10 @@ export class AssayerController {
   // HR run workforce imports now, so they need the template they are importing against.
   @Get('/template/download')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  // The workbook is blank — column headings only — so this is a read of the roster's shape, not
+  // of anyone in it, and `assayer:create` would refuse the template to whoever is preparing an
+  // import for someone else to run.
+  @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'Download Excel template for assayer data entry' })
   async downloadTemplate(@Res() res: any) {
     const buffer = await this.assayerService.generateTemplate();
@@ -1754,19 +2086,69 @@ export class AssayerController {
    * synthetic ASSAYER role; the service verifies the current password before changing it.
    */
   @Post('me/change-password')
+  @OnboardingAllowed()
   @AnyAuthenticated()
+  // The one action a principal with a pending forced change MUST be able to take (the assayer
+  // counterpart of POST /users/me/change-password). Without this, enforcing mustChangePassword
+  // on assayer principals would lock the account into a loop: every route 403s, including the
+  // only route that clears the 403.
+  @PasswordChangeExempt()
   @ApiOperation({ summary: 'Change your own password (assayer)' })
   async changeMyPassword(@Body() dto: ChangeOwnPasswordRequestDto, @Req() req: any) {
     if (!dto?.currentPassword || !dto?.newPassword) {
-      throw new BadRequestException('Please enter your current password and your new password.');
+      throw withCode(
+        new BadRequestException('Please enter your current password and your new password.'),
+        AUTH_ERROR_CODES.PASSWORD_FIELDS_MISSING,
+      );
     }
     await this.assayerService.changeOwnPassword(req.user.id, dto.currentPassword, dto.newPassword);
     return { success: true, message: 'Your password has been changed.' };
   }
 
+  /**
+   * Issue app access to an assayer — a one-time invitation, not a recovery.
+   *
+   * The only route to a credential before this was `reset-password`, which is the path for
+   * somebody locked out and says so on screen; first-time access was being handed out as a reset
+   * of a password that had never existed. The response is a shown-once card: the temporary
+   * password is returned here and nowhere else, ever, and only its hash is stored.
+   *
+   * `canSignInNow` says whether the password works at all and `accessScope` how far it reaches,
+   * because those are two questions. The four onboarding stages do sign in (`ONBOARDING_SIGN_IN`
+   * in auth.service.ts), into a session confined to finishing their own registration, so
+   * mid-onboarding the card reports true and REGISTRATION_ONLY rather than "not yet". False is
+   * left for the statuses no session is issued to at all — suspended, inactive, departed — where
+   * the card has to say the credential will not work instead of letting HR find out from the
+   * assayer's phone call. Issuing access mid-onboarding is deliberately allowed, because the
+   * handover happens when the person is in front of you. What must never happen is the reverse:
+   * nothing in activation may require app access to have been issued — see the note on
+   * `AssayerService.issueAppAccess`.
+   */
+  @Post(':assayerId/app-access')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  // `assayer:edit`, not `user:create`: an assayer signs in from the `assayers` table and has no
+  // row in `users`, so this writes a credential onto the personnel record. Same for the reset
+  // below.
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: 'Issue app access: a shown-once username and temporary password' })
+  async issueAppAccess(
+    @Param('assayerId', ParseUUIDPipe) assayerId: string,
+    @Req() req: any,
+  ) {
+    const data = await this.assayerService.issueAppAccess(assayerId, req.user.id);
+    return {
+      success: true,
+      data,
+      message: data.canSignInNow
+        ? 'App access issued. Read the password to them now — it will not be shown again, and they will be asked to choose their own at first sign-in.'
+        : 'App access issued. Read the password to them now — it will not be shown again. They will not be able to sign in until their record is activated.',
+    };
+  }
+
   /** HR/admin recovery path for an assayer who cannot sign in. */
   @Post(':assayerId/reset-password')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
   @ApiOperation({ summary: "Reset an assayer's password (HR/admin)" })
   async resetAssayerPassword(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,

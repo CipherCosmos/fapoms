@@ -35,9 +35,15 @@ CORS + default-encryption applied and **no** "PII_ENCRYPTION_KEY is not set" war
 | Check | How | Pass |
 |---|---|---|
 | **PII encrypted at rest** | Create/edit an assayer with a PAN + bank account. Then query the DB directly: `select pan_number, bank_account_number from assayers where …`. | The stored values are `enc:v1:…` ciphertext, **not** the plaintext. The app UI still shows the real value (transformer decrypts). |
-| **Gov-ID encrypted** | Add a government document number; check `assayer_government_documents.document_number`. | Ciphertext at rest. |
+| **Gov-ID encrypted** | Add a document number through the registration flow, then check `assayer_documents.document_number`. | Ciphertext at rest (`enc:v1:…`). The table named here used to be `assayer_government_documents`, which no longer exists — the query returned an error rather than a finding, so this row could never fail honestly. |
+| **PII masked in transit** | As an ADMIN or OPERATIONS user, `GET /assayers` and `GET /assayers/:id`. | `panNumber`, `aadhaarNumber`, `bankAccountNumber` come back last-4 masked (`******234F`). Field names unchanged. As DESK_OPERATOR the keys are **absent entirely**, not masked — a different rule, and both are correct. |
+| **Reveal is audited** | `GET /assayers/:id/sensitive/pan` as ADMIN. Then `SELECT * FROM audit_events WHERE event_type='ASSAYER_SENSITIVE_FIELD_REVEALED' ORDER BY occurred_at DESC LIMIT 1`. | Full plaintext returned (not `enc:v1:…`), and exactly one audit row naming who, which field, which assayer. The audit write is awaited **before** the value returns, so a failed audit fails the read. As DESK_OPERATOR: 403. |
+| **A masked value cannot be written back** | `PUT /assayers/:id` with `bankAccountNumber: "******4321"`. | Refused, telling the caller to reveal the field first. Bank account is the one to test: PAN and Aadhaar are also caught by their format rules, so this guard is the *only* thing protecting the field a payroll-diversion attempt would aim at. |
+| **Temporary passwords expire** | Issue app access, then backdate `assayers.temp_password_expires_at` and sign in. | 403, "The temporary password you were given has expired." An account with `temp_password_expires_at IS NULL` still signs in — null means no expiry applies, which is the honest state for credentials predating the column, and they must not be locked out. |
+| **A registration-only session cannot roam** | Sign in as an assayer whose lifecycle is INVITED (issue app access from HR first). Then call `GET /assayers`, `GET /assayers/:id/dossier` and `GET /assignments/assayer/:id`. | All three: **403 with `code: REGISTRATION_IN_PROGRESS`**. `GET /assayers/:id/registration-checklist` and the document upload must succeed — that is the whole point of the session. Activate the person and the same token stops being restricted within the principal cache TTL (30s). |
+| **An assayer cannot set their own PAN or Aadhaar** | As that assayer, `PUT /assayers/:id/document/PAN_CARD` with a `documentNumber`. | 403. Those numbers are HR-maintained and are entered from the document by staff. Uploading the *scan* must still succeed. |
 | **Malware scanning — every path** | Upload the **EICAR test file** (harmless AV test string) through: a chat attachment, a document upload, an Excel import, the presigned upload, and a chunked upload. | Each is **rejected** with the malware message; nothing is stored/registered. A clean file uploads normally. |
-| **Object encryption at rest** | After any upload, check the object in MinIO/S3. | `x-amz-server-side-encryption` present (or MinIO bucket encryption enabled). |
+| **Object encryption at rest** | After any upload, check the object in MinIO/S3, and read the `S3StorageService` line in the boot log. | **On AWS S3:** `x-amz-server-side-encryption` present. **On community MinIO this cannot pass** — MinIO needs a separate KMS (Vault or KES) for SSE-S3, so the backend logs a warning and carries on by design. There, the check is instead: confirm the *host volume* has full-disk encryption, and record the answer. Do not tick this row because a warning was present and looked familiar. |
 | **Upload type/size limits** | Try uploading a `.exe` (rejected at presign) and a file over `DOCUMENT_MAX_UPLOAD_MB` (rejected + object deleted). | Both rejected with clear messages. |
 
 ## 2. Resilience on flaky / failing dependencies
@@ -98,6 +104,11 @@ npm run lint  --workspace=packages/frontend      # 0 errors (react hook-rules)
 - Dependency-maintenance pass for the residual dev/build/mobile-tooling vulns (`--force` + Expo device
   regression) — see the npm-audit note.
 - Image EXIF-strip / thumbnail pipeline (native `sharp`).
-- Mobile auth lifecycle (`mustChangePassword` on restore/biometric, logout token revocation) — see
-  `docs/integration-audit-handoff.md`.
+- Logout token revocation — see `docs/integration-audit-handoff.md`.
+  (The `mustChangePassword` half of that item is **done**, verified on the live stack on
+  2026-09-02: the guard now covers assayer principals rather than exempting them, a gated
+  principal gets 403 on an ordinary route and 201 on `POST /assayers/me/change-password`, the
+  biometric path is throttled and rotation-gated, the flag is carried through a restored session,
+  and the 403 carries `code: PASSWORD_CHANGE_REQUIRED` so the app raises the change-password
+  screen mid-session instead of showing empty lists until the next cold start.)
 - ADR-007 (assessment→project_branch fold) — a scheduled, coordinated migration.

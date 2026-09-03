@@ -10,6 +10,8 @@ import type { Request, Response } from 'express';
 import { QueryFailedError } from 'typeorm';
 import { CORRELATION_ID_HEADER } from './correlation-id.middleware';
 import { errorAlerter, ErrorAlerter } from '../observability/error-alerter';
+import { GENERAL_ERROR_CODES } from '@fapoms/shared';
+import { codeForResponse } from './api-error';
 
 /**
  * The single HTTP error boundary for the API. There was none — Nest's default handler let
@@ -17,13 +19,20 @@ import { errorAlerter, ErrorAlerter } from '../observability/error-alerter';
  * the client as a 500 carrying the failing SQL and the constraint name, and ioredis/S3 errors
  * leaked their internals the same way.
  *
- * Two responsibilities:
+ * Three responsibilities:
  *  1. **Preserve the contract for deliberate HttpExceptions.** Same status, and the same body
  *     Nest already sends (the `class-validator` message array included), plus a `correlationId`.
  *     Nothing the frontend already parses changes shape.
  *  2. **Redact everything else.** A non-HttpException is unexpected/infrastructure. The full
  *     detail is logged server-side against the request's correlation id; the client gets a
  *     generic 500 that reveals nothing about the database, cache or storage internals.
+ *  3. **Guarantee a machine-readable `code`.** Every error body leaves here with one, so a
+ *     translated client never has to match an English sentence to know what happened. A route
+ *     that named a code keeps it; one that named none gets a coarse code derived from the
+ *     status. Doing it at the boundary rather than at each throw site is what makes that a
+ *     guarantee: the codes are chosen by hand and one will always be forgotten, but a client
+ *     that must handle a missing `code` is back to reading prose for every error in the system.
+ *     See `@fapoms/shared/error-codes` for the vocabulary and `api-error.ts` for the mechanics.
  */
 /**
  * Whether this failure is the client going away rather than the server going wrong.
@@ -62,10 +71,11 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     if (exception instanceof HttpException) {
       const status = exception.getStatus();
       const body = exception.getResponse();
+      const code = codeForResponse(body, status);
       const payload =
         typeof body === 'object' && body !== null
-          ? { ...(body as Record<string, unknown>), correlationId }
-          : { statusCode: status, message: body, correlationId };
+          ? { ...(body as Record<string, unknown>), code, correlationId }
+          : { statusCode: status, message: body, code, correlationId };
 
       // 4xx are ordinary client errors and would only be noise; 5xx HttpExceptions are worth a line.
       if (status >= HttpStatus.INTERNAL_SERVER_ERROR) {
@@ -126,6 +136,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     res.status(HttpStatus.INTERNAL_SERVER_ERROR).json({
       statusCode: HttpStatus.INTERNAL_SERVER_ERROR,
       message: 'Internal server error',
+      code: GENERAL_ERROR_CODES.INTERNAL_ERROR,
       correlationId,
     });
   }

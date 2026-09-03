@@ -7,7 +7,7 @@ import { BranchEntity } from '../branch/branch.entity';
 import { RoutingService, RouteSource } from '../geo/routing.provider';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { BusinessRuleEntity } from '../platform/rules/business-rule.entity';
-import { AssignmentStatus, AssayerStatus, AssayerLifecycleStatus, EmpanelmentStatus, calculateHaversineDistance, businessDateKey, BypassableRule } from '@fapoms/shared';
+import { AssignmentStatus, AssayerStatus, AssayerLifecycleStatus, EmpanelmentStatus, calculateHaversineDistance, businessDateKey, BypassableRule, ONBOARDING_STAGES, onboardingNextStep } from '@fapoms/shared';
 import { RuleBypassService } from '../platform/rule-bypass/rule-bypass.service';
 import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
 import { ClientEntity } from '../client/client.entity';
@@ -64,32 +64,23 @@ const EXCLUSION_KINDS: Record<string, 'DATE' | 'ROTATION' | 'DISTANCE' | 'POLICY
 };
 
 /**
- * Lifecycle stages an assayer passes through before they are assignable.
+ * Lifecycle stages an assayer passes through before they are assignable, and the sentence that
+ * says what each one is waiting for.
  *
- * `AssayerService.create` opens every new profile at INVITED / status INACTIVE, and each
- * planning query then asked for `status = ACTIVE` — so a just-added assayer was not merely
- * ineligible, they never entered the candidate pool at all and no exclusion reason was recorded
- * for them. Ops saw "No assayers found in range for this date" for someone they had added
- * minutes earlier and who was plainly visible on the HR roster.
+ * Both come from `@fapoms/shared`. They used to be declared here and hand-copied into the
+ * frontend's `assayer-shared.ts`, with a frontend spec pinning the strings to keep the copies in
+ * step — which catches drift only after somebody has already written it. The planner's refusal
+ * ("Onboarding not finished: in training — mark training complete on the HR roster to activate")
+ * and the instruction the HR roster gives when the coordinator arrives there are now literally
+ * the same string, not two strings a test says should match.
  *
- * Candidates in these stages are pulled into the pool deliberately, so the engine can say what
- * is actually wrong and where to fix it. They are still excluded from the eligible list —
- * dispatching unverified, untrained people is the control this lifecycle exists to enforce.
+ * Candidates in these stages are pulled into the pool deliberately, so the engine can say what is
+ * actually wrong and where to fix it — `AssayerService.create` opens every profile at INVITED, and
+ * a planning query filtered to ACTIVE reported "No assayers found in range" for somebody added
+ * minutes earlier and plainly visible on the HR roster. They remain excluded from the eligible
+ * list: dispatching unverified, untrained people is the control this lifecycle exists to enforce.
  */
-const ONBOARDING_LIFECYCLE_STATES: string[] = [
-  AssayerLifecycleStatus.INVITED,
-  AssayerLifecycleStatus.DOCUMENT_VERIFICATION,
-  AssayerLifecycleStatus.BACKGROUND_VERIFICATION,
-  AssayerLifecycleStatus.TRAINING,
-];
-
-/** Human-readable next step per onboarding stage, so the exclusion is actionable. */
-const ONBOARDING_NEXT_STEP: Record<string, string> = {
-  [AssayerLifecycleStatus.INVITED]: 'invited — start document verification on the HR roster',
-  [AssayerLifecycleStatus.DOCUMENT_VERIFICATION]: 'in document verification — complete it on the HR roster',
-  [AssayerLifecycleStatus.BACKGROUND_VERIFICATION]: 'in background verification — complete it on the HR roster',
-  [AssayerLifecycleStatus.TRAINING]: 'in training — mark training complete on the HR roster to activate',
-};
+const ONBOARDING_LIFECYCLE_STATES: string[] = ONBOARDING_STAGES;
 
 export interface PlanningContext {
   branch: BranchEntity;
@@ -270,7 +261,7 @@ export class DeployabilityFilter implements CandidateFilter {
     if (!assayer.isActive) {
       return 'Profile has been deleted from the workforce — restore it on the HR roster to use them.';
     }
-    const step = ONBOARDING_NEXT_STEP[assayer.lifecycleStatus];
+    const step = onboardingNextStep(assayer.lifecycleStatus);
     if (step) return `Onboarding not finished: ${step}.`;
     return `Not assignable — profile status is ${assayer.status} (${assayer.lifecycleStatus}).`;
   }

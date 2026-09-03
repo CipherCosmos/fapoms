@@ -6,11 +6,15 @@ import { MobileApiService, initApiBaseUrl } from './src/services/api.service';
 import { uploadScannedAuditPacket } from './src/services/audit-packet-upload';
 import { useOverlay } from './src/hooks/useOverlay';
 import { loadPreferences } from './src/services/preferences';
+import { initI18nFromPreferences, useT, t as translate, serverErrorText } from './src/i18n';
 import { useAssayerNotifications, type NotificationTapData } from './src/hooks/useAssayerNotifications';
 import { useAssayerProfile } from './src/hooks/useAssayerProfile';
 import { useReturnPaperwork } from './src/hooks/useReturnPaperwork';
 import { useUploadOutbox } from './src/hooks/useUploadOutbox';
+import { useRegistrationChecklist } from './src/hooks/useRegistrationChecklist';
+import { buildChecklistRows, checklistProgress } from './src/services/registration-checklist';
 import { connectMobileSocket } from './src/services/socket';
+import { registerAndroidNotificationChannels } from './src/services/notification.service';
 import { handleIncomingCall, handleCallAnswered, handleCallEnded } from './src/services/calls';
 import { countOpenQueries, countResolvedQueries } from './src/utils/queries';
 import { parseRupeeInput, formatRupees } from '@fapoms/shared';
@@ -44,10 +48,11 @@ import { NotificationsModal } from './src/components/NotificationsModal';
 import { DocumentScanner } from './src/components/DocumentScanner';
 import { AssayerQueryChatModal } from './src/components/AssayerQueryChatModal';
 import { UploadsModal } from './src/components/UploadsModal';
+import { RegistrationChecklistModal } from './src/components/RegistrationChecklistModal';
 import { InAppNavigationModal } from './src/components/InAppNavigationModal';
 import { CallModal } from './src/components/CallModal';
 import { RejectionModal } from './src/components/RejectionModal';
-import { ExpenseModal } from './src/components/ExpenseModal';
+import { ExpenseModal, CAT_LABEL_KEYS } from './src/components/ExpenseModal';
 import { NegotiateModal } from './src/components/NegotiateModal';
 import { ReportIssueModal } from './src/components/ReportIssueModal';
 import { FeedbackModal } from './src/components/FeedbackModal';
@@ -55,6 +60,7 @@ import { AvailabilityModal } from './src/components/AvailabilityModal';
 
 function AppMain() {
   const theme = useTheme();
+  const tr = useT();
   const { isAuthenticated, user, assayerName, authenticating, login, biometricLogin, verifyIdentity, logout, clearMustChangePassword, locked, unlock, skipUnlock } = useAuth();
   const { location, refreshLocation } = useLocation();
   const { assignments, loadAssignments, updateAssignmentStatus, rejectAssignment, submitExpense, stale, lastSyncedAt } = useAssignments();
@@ -102,6 +108,31 @@ function AppMain() {
    * open on top of it. Filing hands the packet to the outbox rather than uploading inline.
    */
   const paperwork = useReturnPaperwork({ onEnqueue: outbox.enqueue });
+
+  /**
+   * The assayer's own registration paperwork.
+   *
+   * An optional accelerator, never a gate: HR completes registrations from the desk for people
+   * with no smartphone, so everything here is allowed to be absent. If the checklist will not
+   * load, `checklist` stays null, the banner does not appear, and the rest of the app is
+   * unaffected. Registration scans share the audit packet's outbox because they share its
+   * problem — a photograph taken where there is no signal, which has to send itself later.
+   */
+  const registration = useRegistrationChecklist(isAuthenticated);
+  const registrationProgress = checklistProgress(
+    buildChecklistRows(registration.checklist?.items ?? [], outbox.uploads),
+  );
+
+  const captureRegistrationDocument = useCallback(
+    async (requirement: string, documentLabel: string, fileName: string, fileUri: string) => {
+      await outbox.enqueue({
+        target: { kind: 'REGISTRATION_DOCUMENT', assayerId: user?.id ?? '', requirement, documentLabel },
+        fileName,
+        fileUri,
+      });
+    },
+    [outbox, user?.id],
+  );
 
   // A tapped notification's target, held until `assignments` has actually loaded — a cold
   // start races the deep link against the assignment list fetch, so the target is queued
@@ -321,10 +352,10 @@ function AppMain() {
       // No cursor back means the server has nothing older; an empty page says the same thing.
       return nextCursor === null && items.length === 0 ? [] : items;
     } catch (err) {
-      feedback.error('Could not load older jobs', 'The connection dropped. Try again in a moment.');
+      feedback.error(tr('assignment.historyFailedTitle'), tr('assignment.historyFailedBody'));
       return [];
     }
-  }, [user?.id, feedback]);
+  }, [user?.id, feedback, tr]);
 
   const handleRefresh = async () => {
     setRefreshing(true);
@@ -344,7 +375,10 @@ function AppMain() {
     try {
       const res = await updateAssignmentStatus(id, 'ACCEPTED');
       if (!res.success) {
-        feedback.error('Not accepted', res.error || 'The assignment could not be accepted.');
+        feedback.error(
+          tr('assignment.acceptFailedTitle'),
+          serverErrorText(res.error, 'assignment.acceptFailedBody'),
+        );
       }
     } finally {
       setBusyActionId(null);
@@ -369,10 +403,7 @@ function AppMain() {
      */
     const reason = (pending.reason ?? '').trim();
     if (!reason) {
-      feedback.error(
-        'Add a reason',
-        'Tell the desk why you are declining — too far, fee too low, date impossible. They need it to re-plan the branch.',
-      );
+      feedback.error(tr('assignment.reasonRequiredTitle'), tr('assignment.reasonRequiredBody'));
       return;
     }
 
@@ -382,7 +413,10 @@ function AppMain() {
       if (res.success) {
         overlay.close();
       } else {
-        feedback.error('Not declined', res.error || 'The assignment could not be declined.');
+        feedback.error(
+          tr('assignment.declineFailedTitle'),
+          serverErrorText(res.error, 'assignment.declineFailedBody'),
+        );
       }
     } finally {
       setRejectSubmitting(false);
@@ -412,9 +446,12 @@ function AppMain() {
 
     if (!fix) {
       Alert.alert(
-        'Location needed to check in',
-        'We could not get your location. Turn on location for this app, step outside if you are indoors, then try again.',
-        [{ text: 'Try again', onPress: () => handleCheckIn(assignment) }, { text: 'Cancel', style: 'cancel' }],
+        tr('assignment.locationNeededCheckIn'),
+        tr('assignment.locationNeededBody'),
+        [
+          { text: tr('common.tryAgain'), onPress: () => handleCheckIn(assignment) },
+          { text: tr('common.cancel'), style: 'cancel' },
+        ],
       );
       return;
     }
@@ -424,9 +461,15 @@ function AppMain() {
       const res = await MobileApiService.checkInBranch(assignment.id, fix.latitude, fix.longitude, fix.accuracy ?? undefined);
       if (res.success) {
         await loadAssignments();
-        feedback.success('Checked In', `Checked in at ${assignment.branchName}`);
+        feedback.success(
+          tr('assignment.checkedInTitle'),
+          tr('assignment.checkedInBody', { branch: assignment.branchName }),
+        );
       } else {
-        feedback.error('Could not check in', res.error || 'Check-in failed. Please try again.');
+        feedback.error(
+          tr('assignment.checkInFailedTitle'),
+          serverErrorText(res.error, 'assignment.checkInFailedBody'),
+        );
       }
     } catch (err) {
       // There was no catch here: a timeout became an unhandled rejection — the spinner stopped
@@ -434,10 +477,10 @@ function AppMain() {
       // tell. Say what happened; the assignment reload will show the true status either way.
       const transport = MobileApiService.isTransportError(err);
       feedback.error(
-        'Could not reach the server',
+        tr('assignment.serverUnreachableTitle'),
         transport
-          ? 'Your check-in was not confirmed — the connection dropped. Move to better signal and tap Check in again; if it already went through, it will show as checked in.'
-          : (err as Error)?.message || 'Check-in failed. Please try again.',
+          ? tr('assignment.checkInUnconfirmed')
+          : serverErrorText((err as Error)?.message, 'assignment.checkInFailedBody'),
       );
       loadAssignments().catch(() => {});
     } finally {
@@ -460,11 +503,11 @@ function AppMain() {
 
     const confirmed = await new Promise<boolean>((resolve) => {
       Alert.alert(
-        'Check out of this branch?',
-        `This records that you have left ${assignment.branchName}. It does not submit your audit — you can still upload paperwork afterwards. The time cannot be changed once recorded.`,
+        tr('assignment.checkOutConfirmTitle'),
+        tr('assignment.checkOutConfirmBody', { branch: assignment.branchName }),
         [
-          { text: 'Not yet', style: 'cancel', onPress: () => resolve(false) },
-          { text: 'Check out', style: 'destructive', onPress: () => resolve(true) },
+          { text: tr('assignment.checkOutConfirmCancel'), style: 'cancel', onPress: () => resolve(false) },
+          { text: tr('assignment.checkOutConfirmAccept'), style: 'destructive', onPress: () => resolve(true) },
         ],
         { cancelable: true, onDismiss: () => resolve(false) },
       );
@@ -475,9 +518,12 @@ function AppMain() {
     if (!fix) fix = await refreshLocation();
     if (!fix) {
       Alert.alert(
-        'Location needed to check out',
-        'We could not get your location. Turn on location for this app, step outside if you are indoors, then try again.',
-        [{ text: 'Try again', onPress: () => handleCheckOut(assignment) }, { text: 'Cancel', style: 'cancel' }],
+        tr('assignment.locationNeededCheckOut'),
+        tr('assignment.locationNeededBody'),
+        [
+          { text: tr('common.tryAgain'), onPress: () => handleCheckOut(assignment) },
+          { text: tr('common.cancel'), style: 'cancel' },
+        ],
       );
       return;
     }
@@ -487,17 +533,23 @@ function AppMain() {
       const res = await MobileApiService.checkOutBranch(assignment.id, fix.latitude, fix.longitude, fix.accuracy ?? undefined);
       if (res.success) {
         await loadAssignments();
-        feedback.success('Checked out', `You have left ${assignment.branchName}. Upload your paperwork when it is ready.`);
+        feedback.success(
+          tr('assignment.checkedOutTitle'),
+          tr('assignment.checkedOutBody', { branch: assignment.branchName }),
+        );
       } else {
-        feedback.error('Could not check out', res.error || 'Check-out failed. Please try again.');
+        feedback.error(
+          tr('assignment.checkOutFailedTitle'),
+          serverErrorText(res.error, 'assignment.checkOutFailedBody'),
+        );
       }
     } catch (err) {
       const transport = MobileApiService.isTransportError(err);
       feedback.error(
-        'Could not reach the server',
+        tr('assignment.serverUnreachableTitle'),
         transport
-          ? 'Your check-out was not confirmed — the connection dropped. Move to better signal and tap Check out again; if it already went through, it will show as checked out.'
-          : (err as Error)?.message || 'Check-out failed. Please try again.',
+          ? tr('assignment.checkOutUnconfirmed')
+          : serverErrorText((err as Error)?.message, 'assignment.checkOutFailedBody'),
       );
       loadAssignments().catch(() => {});
     } finally {
@@ -710,10 +762,17 @@ function AppMain() {
       {/* Header */}
       <TopBar
         name={assayerName}
-        subtitle={profile.assayerCode ? `Code: ${profile.assayerCode}` : (user?.assayerCode ? `Code: ${user.assayerCode}` : 'Field Assayer')}
+        subtitle={
+          profile.assayerCode || user?.assayerCode
+            ? tr('shell.codeLabel', { code: profile.assayerCode || user?.assayerCode || '' })
+            : tr('shell.roleFallback')
+        }
         unreadCount={unreadNotifCount}
         onNotifications={() => { loadNotifications(); overlay.open({ name: 'notifications' }); }}
         onOpenProfile={() => handleSelectTab('MY_PROFILE')}
+        onOpenUploads={() => overlay.open({ name: 'uploads' })}
+        activeUploads={outbox.counts.active}
+        failedUploads={outbox.counts.failed}
       />
 
       {/* Main Content Area — keyboard-avoiding so the Profile/Work form fields below the
@@ -804,6 +863,9 @@ function AppMain() {
             assayerId={user?.id}
             locationNeedsConfirmation={profile.locationNeedsConfirmation}
             onLocationConfirmed={loadAssayerProfile}
+            papersOutstanding={registrationProgress.outstanding}
+            papersFailed={registrationProgress.failed}
+            onOpenRegistration={() => overlay.open({ name: 'registration' })}
           />
         )}
 
@@ -900,7 +962,7 @@ function AppMain() {
       {scanner && (
         <DocumentScanner
           visible
-          purpose="Audited return for this assignment"
+          purpose={tr('scan.purpose')}
           onClose={overlay.close}
           onSaved={async (doc) => {
             // Captured before the overlay closes — `scanner` is this render's narrowed value, so
@@ -915,19 +977,24 @@ function AppMain() {
             // fallback (no PDF could be built — iOS/web) still uploads inline below.
             if (doc.pdfUri) {
               await outbox.enqueue({
-                assignmentId: assignment.id,
-                branchName: assignment.branchName,
+                target: {
+                  kind: 'ASSIGNMENT_PACKET',
+                  assignmentId: assignment.id,
+                  branchName: assignment.branchName,
+                },
                 fileName: doc.fileName,
                 fileUri: doc.pdfUri,
               });
               feedback.success(
-                'Added to uploads',
-                `${doc.pageCount} page${doc.pageCount === 1 ? '' : 's'} sending in the background. Check Uploads for progress.`,
+                tr('scan.queuedTitle'),
+                doc.pageCount === 1
+                  ? tr('scan.queuedOne')
+                  : tr('scan.queuedMany', { count: doc.pageCount }),
               );
               return;
             }
 
-            feedback.info('Uploading', `Sending ${doc.fileName}…`);
+            feedback.info(tr('scan.uploadingTitle'), tr('scan.uploadingBody', { file: doc.fileName }));
             const outcome = await uploadScannedAuditPacket(assignment.id, doc);
 
             // Filing the return moves the assignment on server-side (see
@@ -938,26 +1005,36 @@ function AppMain() {
             switch (outcome.kind) {
               case 'uploaded':
                 feedback.success(
-                  'Upload complete',
-                  `${outcome.pageCount} page${outcome.pageCount === 1 ? '' : 's'} uploaded as ${outcome.fileName}.`,
+                  tr('scan.uploadedTitle'),
+                  outcome.pageCount === 1
+                    ? tr('scan.uploadedOne', { file: outcome.fileName })
+                    : tr('scan.uploadedMany', { count: outcome.pageCount, file: outcome.fileName }),
                 );
                 break;
               case 'failed':
                 feedback.error(
-                  'Upload failed',
-                  `${outcome.fileName} was not uploaded${outcome.error ? `: ${outcome.error}` : ''}. Please retry before leaving the branch.`,
+                  tr('scan.failedTitle'),
+                  outcome.error
+                    ? tr('scan.failedBodyReason', { file: outcome.fileName, reason: outcome.error })
+                    : tr('scan.failedBody', { file: outcome.fileName }),
                 );
                 break;
               case 'pages-uploaded':
                 feedback.success(
-                  'Upload complete',
-                  `All ${outcome.total} page${outcome.total === 1 ? '' : 's'} were uploaded.`,
+                  tr('scan.uploadedTitle'),
+                  outcome.total === 1
+                    ? tr('scan.allUploadedOne')
+                    : tr('scan.allUploadedMany', { count: outcome.total }),
                 );
                 break;
               case 'pages-partial':
                 feedback.warning(
-                  'Some pages did not upload',
-                  `${outcome.uploaded} of ${outcome.total} uploaded. Page${outcome.failed.length === 1 ? '' : 's'} ${outcome.failed.join(', ')} failed — please scan ${outcome.failed.length === 1 ? 'it' : 'them'} again before leaving the branch.`,
+                  tr('scan.partialTitle'),
+                  tr(outcome.failed.length === 1 ? 'scan.partialOne' : 'scan.partialMany', {
+                    uploaded: outcome.uploaded,
+                    total: outcome.total,
+                    pages: outcome.failed.join(', '),
+                  }),
                 );
                 break;
             }
@@ -975,6 +1052,30 @@ function AppMain() {
         onClose={overlay.close}
         onRetry={outbox.retry}
         onDismiss={outbox.dismiss}
+      />
+
+      {/*
+        Open on demand for anybody, and unavoidable for a session that exists only to finish
+        registering.
+
+        An assayer still in one of the joining stages can sign in now, but the server answers 403
+        on every route outside registration. Left to the ordinary tabs they would land on Home,
+        watch every read fail, and see empty lists with no route to the one screen the session is
+        for — the same dead end the forced-password gate was written to remove, arriving through a
+        different door. `onClose` is a no-op in that state because there is nothing behind this to
+        return to; signing out is the other way out, and the screen offers it.
+      */}
+      <RegistrationChecklistModal
+        visible={Boolean(overlay.current('registration')) || Boolean(user?.registrationInProgress)}
+        onClose={user?.registrationInProgress ? () => {} : overlay.close}
+        checklist={registration.checklist}
+        uploads={outbox.uploads}
+        onCapture={captureRegistrationDocument}
+        onRetry={outbox.retry}
+        onReload={() => { void registration.reload(); }}
+        assayerId={user?.id ?? ''}
+        locationNeedsConfirmation={Boolean(profile.locationNeedsConfirmation)}
+        onLocationConfirmed={loadAssayerProfile}
       />
 
       {/* Voice-call UI, mounted once at root like the navigation modal. Renders nothing
@@ -1013,10 +1114,7 @@ function AppMain() {
             // travel claim for today's branch could land on a completed job from weeks ago, and
             // with an empty list it was silently dropped with no error.
             if (!expense.assignment?.id) {
-              feedback.error(
-                'No assignment selected',
-                'Open the assignment you are claiming for and file the expense from there.',
-              );
+              feedback.error(tr('expense.noAssignmentTitle'), tr('expense.noAssignmentBody'));
               return;
             }
             /**
@@ -1030,10 +1128,7 @@ function AppMain() {
              */
             const parsedAmount = parseRupeeInput(amount);
             if (parsedAmount === null) {
-              feedback.error(
-                'Enter a valid amount',
-                'Use digits only, for example 1000 or 1,000.',
-              );
+              feedback.error(tr('expense.invalidAmountTitle'), tr('expense.invalidAmountBody'));
               return;
             }
             const res = await submitExpense(expense.assignment.id, {
@@ -1042,13 +1137,22 @@ function AppMain() {
               description,
             });
             if (res.success) {
-              feedback.success('Claim filed', `${formatRupees(parsedAmount)} for ${category} is awaiting approval.`);
+              feedback.success(
+                tr('expense.filedTitle'),
+                tr('expense.filedBody', {
+                  amount: formatRupees(parsedAmount),
+                  category: tr(CAT_LABEL_KEYS[category]),
+                }),
+              );
               overlay.close();
               // Pull the totals back so the new claim shows on Home immediately rather
               // than only after the next manual pull-to-refresh.
               loadExpenseSummary();
             } else {
-              feedback.error('Claim not filed', res.error || 'The expense could not be submitted.');
+              feedback.error(
+                tr('expense.failedTitle'),
+                serverErrorText(res.error, 'expense.failedBody'),
+              );
             }
           }}
         />
@@ -1064,10 +1168,10 @@ function AppMain() {
           onSubmit={async (category, note) => {
             const res = await MobileApiService.reportAssignmentIssue(issue.assignment.id, category, note);
             if (res.success) {
-              feedback.success('Reported to desk', 'The operations team has been notified and will follow up.');
+              feedback.success(tr('issue.sentTitle'), tr('issue.sentBody'));
               return true;
             }
-            feedback.error('Not sent', res.error || 'The issue could not be reported. Please try again.');
+            feedback.error(tr('issue.failedTitle'), serverErrorText(res.error, 'issue.failedBody'));
             return false;
           }}
         />
@@ -1083,11 +1187,14 @@ function AppMain() {
             const res = await MobileApiService.updateAvailability(user.id, { leaves });
             if (res.success) {
               setAvailabilityLeaves(leaves);
-              feedback.success('Availability saved', 'You won\u2019t be offered audits on your days off.');
+              feedback.success(tr('availability.savedTitle'), tr('availability.savedBody'));
               void loadAssayerProfile();
               return true;
             }
-            feedback.error('Not saved', res.error || 'Your availability could not be saved.');
+            feedback.error(
+              tr('availability.failedTitle'),
+              serverErrorText(res.error, 'availability.failedBody'),
+            );
             return false;
           }}
         />
@@ -1117,12 +1224,15 @@ function AppMain() {
               // and is not the assayer's to change — telling them "your fee of ₹650" when 650 is
               // the travel would have them expecting a fee they never asked for.
               feedback.success(
-                'Travel request sent',
-                `You asked for ${formatRupees(counterTravelFee)} of travel. Operations will reply.`
+                tr('negotiate.sentTitle'),
+                tr('negotiate.sentBody', { amount: formatRupees(counterTravelFee) }),
               );
               overlay.close();
             } else {
-              feedback.error('Not sent', res.error || 'Your travel request could not be submitted.');
+              feedback.error(
+                tr('negotiate.failedTitle'),
+                serverErrorText(res.error, 'negotiate.failedBody'),
+              );
             }
           }}
         />
@@ -1168,9 +1278,9 @@ class AppErrorBoundary extends React.Component<
           <StatusBar barStyle={dark ? 'light-content' : 'dark-content'} />
           <View style={{ gap: 12, alignItems: 'center' }}>
             <ActivityIndicator size="large" color={c.primary} />
-            <Text style={{ color: c.text, fontSize: 20, fontWeight: '700' }}>Orbit</Text>
+            <Text style={{ color: c.text, fontSize: 20, fontWeight: '700' }}>{translate('login.appName')}</Text>
             <Text style={{ color: c.danger, textAlign: 'center', marginVertical: 10 }}>
-              {String(this.state.error?.message || this.state.error || 'App encountered an error')}
+              {String(this.state.error?.message || this.state.error || translate('shell.crashFallback'))}
             </Text>
           </View>
         </SafeAreaView>
@@ -1196,7 +1306,17 @@ export default function App() {
     // chime, the sign-in screen's biometric option), so neither can be awaited later.
     Promise.all([
       initApiBaseUrl().catch(() => { /* falls back to the built-in default */ }),
-      loadPreferences().catch(() => { /* falls back to defaults */ }),
+      loadPreferences()
+        // The language is applied here, inside the gate, rather than by a provider inside the
+        // tree. Every screen past this point renders in the right language on its first paint —
+        // there is no English frame that flips to Hindi a moment later, which on a cheap handset
+        // is long enough to read and confusing enough to make somebody tap the wrong thing.
+        //
+        // Android's notification channels are registered straight after, because their names and
+        // descriptions are copy the assayer reads in the phone's own settings and they can only
+        // be written in a language the app has already resolved.
+        .then(() => { initI18nFromPreferences(); registerAndroidNotificationChannels(); })
+        .catch(() => { /* falls back to defaults, and to English */ }),
     ]).finally(() => setApiReady(true));
   }, []);
 

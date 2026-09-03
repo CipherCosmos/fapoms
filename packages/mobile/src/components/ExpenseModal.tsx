@@ -1,19 +1,25 @@
 import React, { useEffect, useState } from 'react';
 import { Modal, View, TextInput, TextStyle, KeyboardAvoidingView, Platform } from 'react-native';
-import { travelModeLabel, parseRupeeInput } from '@fapoms/shared';
+import { travelModeLabel, parseRupeeInput, formatRupees } from '@fapoms/shared';
 import { useTheme } from '../theme/ThemeProvider';
 import { MobileApiService } from '../services/api.service';
 import { AppText, Button, Card, Tappable } from './ui/primitives';
+import { useT, type TranslationKey } from '../i18n';
 
-type ExpenseCategory = 'TRAVEL_KM' | 'TOLL' | 'FOOD' | 'OTHER';
+export type ExpenseCategory = 'TRAVEL_KM' | 'TOLL' | 'FOOD' | 'OTHER';
 
-/** Human-readable labels — the raw enum values were being shown to field users. */
-export const CAT_LABELS: Record<ExpenseCategory, string> = {
-  TRAVEL_KM: 'Travel (km)',
-  TOLL: 'Toll',
-  FOOD: 'Food',
-  OTHER: 'Other',
-};
+/**
+ * Catalogue keys rather than finished labels, so the four categories read the same wherever
+ * they surface — this picker, the claim-filed toast, and the Earnings list — in whichever
+ * language is active. A `Record` of plain strings could not do that: it is built once, at
+ * module load, before the assayer has chosen a language.
+ */
+export const CAT_LABEL_KEYS = {
+  TRAVEL_KM: 'expense.categories.travelKm',
+  TOLL: 'expense.categories.toll',
+  FOOD: 'expense.categories.food',
+  OTHER: 'expense.categories.other',
+} as const satisfies Record<ExpenseCategory, TranslationKey>;
 
 export interface ExpenseModalProps {
   visible: boolean;
@@ -53,6 +59,7 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
   onAddExpense,
 }) => {
   const t = useTheme();
+  const tr = useT();
 
   const [internalCat, setInternalCat] = useState<ExpenseCategory>('TRAVEL_KM');
   const [internalAmt, setInternalAmt] = useState('');
@@ -180,10 +187,10 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
           padding: t.space.xl,
         }}>
         <Card level={2} style={{ gap: t.space.lg, padding: t.space.xl }}>
-          <AppText variant="h2">Log an expense</AppText>
+          <AppText variant="h2">{tr('expense.title')}</AppText>
 
           <View style={{ gap: t.space.xs }}>
-            <AppText variant="overline" tone="faint">EXPENSE CATEGORY</AppText>
+            <AppText variant="overline" tone="faint">{tr('expense.categoryLabel')}</AppText>
             <View style={{ flexDirection: 'row', gap: t.space.xs, flexWrap: 'wrap' }}>
               {(['TRAVEL_KM', 'TOLL', 'FOOD', 'OTHER'] as const).map((c) => {
                 const active = cat === c;
@@ -199,7 +206,7 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
                       borderWidth: 1.5,
                       borderColor: active ? t.colors.primary : t.colors.border,
                     }}>
-                      <AppText variant="caption" tone={active ? 'primary' : 'faint'}>{CAT_LABELS[c]}</AppText>
+                      <AppText variant="caption" tone={active ? 'primary' : 'faint'}>{tr(CAT_LABEL_KEYS[c])}</AppText>
                     </View>
                   </Tappable>
                 );
@@ -209,20 +216,23 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
 
           {cat === 'TRAVEL_KM' && quotedTravelFee != null && quotedTravelFee > 0 && (
             <AppText variant="small" tone="muted">
-              Your fee for this assignment already includes ₹{Number(quotedTravelFee).toLocaleString('en-IN')} for travel
-              {quotedTransportMode ? ` by ${travelModeLabel(quotedTransportMode).toLowerCase()}` : ''}.
-              Claim here only what that did not cover.
+              {quotedTransportMode
+                ? tr('expense.quotedIncludedByMode', {
+                    amount: formatRupees(Number(quotedTravelFee)),
+                    mode: travelModeLabel(quotedTransportMode).toLowerCase(),
+                  })
+                : tr('expense.quotedIncluded', { amount: formatRupees(Number(quotedTravelFee)) })}
             </AppText>
           )}
 
           <View style={{ gap: t.space.xs }}>
-            <AppText variant="overline" tone="faint">AMOUNT (₹)</AppText>
+            <AppText variant="overline" tone="faint">{tr('expense.amountLabel')}</AppText>
             <TextInput
               style={inputStyle}
               keyboardType="number-pad"
               value={amt}
               onChangeText={handleAmtChange}
-              placeholder="e.g. 250"
+              placeholder={tr('expense.amountPlaceholder')}
               placeholderTextColor={t.colors.textFaint}
             />
             {/*
@@ -232,30 +242,29 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
             */}
             {overLimit ? (
               <AppText variant="small" tone="danger">
-                Over the ₹{Number(maxClaim).toLocaleString('en-IN')} limit for a single claim.
-                Split it across claims, or ask operations to approve it separately.
+                {tr('expense.overLimit', { limit: formatRupees(Number(maxClaim)) })}
               </AppText>
             ) : maxClaim !== null ? (
               <AppText variant="small" tone="faint">
-                Up to ₹{Number(maxClaim).toLocaleString('en-IN')} per claim.
+                {tr('expense.limitHint', { limit: formatRupees(Number(maxClaim)) })}
               </AppText>
             ) : null}
           </View>
 
           <View style={{ gap: t.space.xs }}>
-            <AppText variant="overline" tone="faint">DESCRIPTION</AppText>
+            <AppText variant="overline" tone="faint">{tr('expense.descriptionLabel')}</AppText>
             <TextInput
               style={inputStyle}
               value={desc}
               onChangeText={handleDescChange}
-              placeholder="Reason / notes"
+              placeholder={tr('expense.descriptionPlaceholder')}
               placeholderTextColor={t.colors.textFaint}
             />
           </View>
 
           <View style={{ flexDirection: 'row', gap: t.space.md, marginTop: t.space.sm }}>
-            <Button label="Submit Expense" icon="checkmark" onPress={handleSubmit} loading={busy} disabled={!amountValid || busy} style={{ flex: 1 }} />
-            <Button label="Cancel" variant="neutral" onPress={handleClose} style={{ flex: 1 }} />
+            <Button label={tr('expense.submit')} icon="checkmark" onPress={handleSubmit} loading={busy} disabled={!amountValid || busy} style={{ flex: 1 }} />
+            <Button label={tr('common.cancel')} variant="neutral" onPress={handleClose} style={{ flex: 1 }} />
           </View>
         </Card>
         </View>

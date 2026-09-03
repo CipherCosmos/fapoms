@@ -230,6 +230,29 @@ describe('summariseImport', () => {
     expect(s.text).not.toMatch(/restored/i);
   });
 
+  /**
+   * A dropped column must not read as a clean import.
+   *
+   * The branch importer silently discarded any column whose heading it did not recognise — the
+   * same defect the roster importer had, on a file of 3,759 branches. The run reported created and
+   * updated counts and nothing else, so the loss was invisible on the one screen the operator
+   * looks at.
+   */
+  it('turns a successful-looking import into a warning when a column was dropped', () => {
+    const s = summariseImport({
+      totalRows: 3759, created: 3759, updated: 0, skipped: [], imprecise: [],
+      notes: ['Column "Manager Mobile" was not recognised, so 3759 row(s) of data in it were not imported.'],
+    });
+
+    expect(s.tone).toBe('warning');
+    expect(s.notes?.[0]).toMatch(/Manager Mobile/);
+  });
+
+  it('stays a plain success when nothing was dropped', () => {
+    const s = summariseImport({ totalRows: 10, created: 10, updated: 0, skipped: [], imprecise: [] });
+    expect(s.tone).toBe('success');
+  });
+
   it('mentions project linking only when there is a project', () => {
     expect(summariseImport({ ...REPORT, linked: 3 }).text).toContain('newly linked');
     expect(summariseImport({ ...REPORT, linked: 0 }).text).not.toContain('newly linked');

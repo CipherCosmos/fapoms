@@ -55,6 +55,7 @@ const HrOverviewPage = React.lazy(() => import('./pages/hr/HrOverviewPage').then
 const HrRosterPage = React.lazy(() => import('./pages/hr/HrRosterPage').then((m) => ({ default: m.HrRosterPage })));
 const AssayerRecordPage = React.lazy(() => import('./pages/hr/AssayerRecordPage').then((m) => ({ default: m.AssayerRecordPage })));
 const HrPayPage = React.lazy(() => import('./pages/hr/HrPayPage').then((m) => ({ default: m.HrPayPage })));
+const HrIssuesPage = React.lazy(() => import('./pages/hr/HrIssuesPage').then((m) => ({ default: m.HrIssuesPage })));
 const HrWherePeopleArePage = React.lazy(() => import('./pages/hr/HrWherePeopleArePage').then((m) => ({ default: m.HrWherePeopleArePage })));
 const DataEntryOverview = React.lazy(() => import('./pages/dataentry/DataEntryOverview'));
 const PacketsQueue = React.lazy(() => import('./pages/dataentry/PacketsQueue'));
@@ -386,6 +387,16 @@ export const App: React.FC = () => {
             <Route path="roster" element={<HrRosterPage />} />
             <Route path="roster/:assayerId" element={<AssayerRecordPage />} />
             <Route path="pay" element={<HrPayPage />} />
+            {/*
+              The review queue is a destination now.
+
+              It used to render only inside the roster page, collapsed and below the fold, and to
+              disappear entirely when the count was zero — so 431 open findings had no URL, no
+              badge and no way to be linked to. It needs no entry in route-permissions: matching
+              is longest-prefix, so `/hr/issues` inherits `/hr` (ADMIN, OPERATIONS), which is the
+              same pair the underlying endpoint requires.
+            */}
+            <Route path="issues" element={<HrIssuesPage />} />
             <Route path="where" element={<HrWherePeopleArePage />} />
 
             {/* Retired URLs, from one list — see hr-destinations.ts. This used to be a

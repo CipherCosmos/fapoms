@@ -5,6 +5,7 @@ import { BlurView } from 'expo-blur';
 import { useTheme } from '../../theme/ThemeProvider';
 import { AppText, Avatar, Icon, IconButton, Tappable } from './primitives';
 import * as haptics from '../../lib/haptics';
+import { useT } from '../../i18n';
 
 /**
  * App chrome: the top bar and the bottom navigation.
@@ -31,8 +32,21 @@ export const TopBar: React.FC<{
   onNotifications: () => void;
   /** Opens the profile. The avatar is the control — the tab that used to do this is gone. */
   onOpenProfile?: () => void;
-}> = ({ name, subtitle, unreadCount, onNotifications, onOpenProfile }) => {
+  /**
+   * Opens the upload outbox. Shown only while something is actually in it.
+   *
+   * The outbox had exactly one way in: a button inside an assignment's paperwork screen. An
+   * assayer who captured a packet, left that assignment, and only then lost signal had no route
+   * to the Retry button from anywhere in the app — their evidence sat on the phone, marked
+   * failed, on a screen they could not reach. Here it is reachable from every tab, and it
+   * disappears again when the queue is empty so it costs nothing the rest of the time.
+   */
+  onOpenUploads?: () => void;
+  activeUploads?: number;
+  failedUploads?: number;
+}> = ({ name, subtitle, unreadCount, onNotifications, onOpenProfile, onOpenUploads, activeUploads = 0, failedUploads = 0 }) => {
   const t = useTheme();
+  const tr = useT();
 
   return (
     <View style={{
@@ -50,13 +64,13 @@ export const TopBar: React.FC<{
       */}
       <Tappable
         onPress={onOpenProfile}
-        accessibilityLabel="Open your profile"
+        accessibilityLabel={tr('shell.openProfile')}
         style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md, flexShrink: 1, minWidth: 0, marginRight: t.space.lg }}
       >
         <Avatar name={name} size={44} />
         <View style={{ flexShrink: 1, minWidth: 0 }}>
-          <AppText variant="h3" numberOfLines={1}>{name || 'Field Assayer'}</AppText>
-          <AppText variant="caption" tone="muted" numberOfLines={1}>{subtitle ?? 'Field Assayer'}</AppText>
+          <AppText variant="h3" numberOfLines={1}>{name || tr('profile.identity.fallbackName')}</AppText>
+          <AppText variant="caption" tone="muted" numberOfLines={1}>{subtitle ?? tr('profile.identity.fallbackName')}</AppText>
         </View>
       </Tappable>
 
@@ -68,12 +82,30 @@ export const TopBar: React.FC<{
         The theme toggle that also lived here has moved to Profile > App > Appearance, where
         the rest of the app's settings are.
       */}
-      <IconButton
-        icon="notifications-outline"
-        onPress={onNotifications}
-        badge={unreadCount}
-        accessibilityLabel={unreadCount > 0 ? `Notifications, ${unreadCount} unread` : 'Notifications'}
-      />
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm }}>
+        {onOpenUploads && (activeUploads > 0 || failedUploads > 0) && (
+          <IconButton
+            // A failure is the case worth interrupting for, so it gets the danger tone and the
+            // count; work merely in progress is shown without a number, because "3 sending" is
+            // not something a field worker needs to act on.
+            icon={failedUploads > 0 ? 'alert-circle-outline' : 'cloud-upload-outline'}
+            tone={failedUploads > 0 ? 'danger' : 'default'}
+            onPress={onOpenUploads}
+            badge={failedUploads}
+            accessibilityLabel={
+              failedUploads > 0
+                ? tr('shell.uploadsFailed', { count: failedUploads })
+                : tr('shell.uploadsSending', { count: activeUploads })
+            }
+          />
+        )}
+        <IconButton
+          icon="notifications-outline"
+          onPress={onNotifications}
+          badge={unreadCount}
+          accessibilityLabel={unreadCount > 0 ? tr('shell.notificationsUnread', { count: unreadCount }) : tr('shell.notifications')}
+        />
+      </View>
     </View>
   );
 };
@@ -91,11 +123,12 @@ export const TabDock: React.FC<{
   queryCount?: number;
 }> = ({ selected, onSelect, queryCount }) => {
   const t = useTheme();
+  const tr = useT();
   const tabs: TabSpec[] = [
-    { key: 'HOME', label: 'Home', icon: 'home-outline', iconActive: 'home' },
-    { key: 'SCHEDULE', label: 'Route', icon: 'map-outline', iconActive: 'map' },
-    { key: 'QUERIES', label: 'Queries', icon: 'chatbubble-ellipses-outline', iconActive: 'chatbubble-ellipses', badge: queryCount },
-    { key: 'EARNINGS', label: 'Earnings', icon: 'wallet-outline', iconActive: 'wallet' },
+    { key: 'HOME', label: tr('shell.tabs.home'), icon: 'home-outline', iconActive: 'home' },
+    { key: 'SCHEDULE', label: tr('shell.tabs.route'), icon: 'map-outline', iconActive: 'map' },
+    { key: 'QUERIES', label: tr('shell.tabs.queries'), icon: 'chatbubble-ellipses-outline', iconActive: 'chatbubble-ellipses', badge: queryCount },
+    { key: 'EARNINGS', label: tr('shell.tabs.earnings'), icon: 'wallet-outline', iconActive: 'wallet' },
     // Profile is deliberately absent: it is reached by tapping your own avatar in the header.
     // Four slots give the tabs an assayer actually works in room to breathe.
   ];
@@ -165,25 +198,34 @@ export const TabDock: React.FC<{
                 />
                 {tab.badge != null && tab.badge > 0 && (
                   <View style={{
-                    // 18px, not 16: the count inside was 9pt, below every size in the type scale
-                    // (overline is the floor at 11). 10pt with `onDanger` ink matches the
-                    // IconButton badge in primitives, so the two badges are one badge.
-                    position: 'absolute', top: -5, right: -9, minWidth: 18, height: 18, borderRadius: 9,
-                    paddingHorizontal: 4, backgroundColor: t.colors.danger,
+                    // 20px, not 18: the count is `caption` (12) now, and the badge has to be a
+                    // circle around it. This started at 9pt and was raised to 10 — both below
+                    // anything in the type scale. The people reading it are field workers, often
+                    // in sunlight, and a count of waiting queries is not decoration. 12 is the
+                    // readable floor for this app; the IconButton badge in primitives matches, so
+                    // the two badges stay one badge.
+                    position: 'absolute', top: -6, right: -10, minWidth: 20, height: 20, borderRadius: 10,
+                    paddingHorizontal: 5, backgroundColor: t.colors.danger,
                     alignItems: 'center', justifyContent: 'center',
                     borderWidth: 2, borderColor: t.colors.surface,
                   }}>
-                    <Text style={{ color: t.colors.onDanger, fontSize: 10, fontWeight: '800' }}>
+                    <Text style={{ color: t.colors.onDanger, fontSize: 12, fontWeight: '800' }}>
                       {tab.badge > 9 ? '9+' : tab.badge}
                     </Text>
                   </View>
                 )}
               </View>
-              <Text style={[
-                t.type.caption as TextStyle,
-                // 11 is the smallest size in the scale (overline); 10.5 sat below it.
-                { fontSize: 11, color: active ? t.colors.primary : t.colors.textFaint },
-              ]}>
+              <Text
+                numberOfLines={1}
+                style={[
+                  t.type.caption as TextStyle,
+                  // The token, with no size override. These are the app's primary navigation
+                  // labels for an audience that may read slowly, and they had been shrunk twice
+                  // (10.5, then 11) to buy dock width. Width is the cheaper thing to give up:
+                  // four tabs at 12pt still fit, and a label nobody can read costs more.
+                  { color: active ? t.colors.primary : t.colors.textFaint },
+                ]}
+              >
                 {tab.label}
               </Text>
             </Pressable>

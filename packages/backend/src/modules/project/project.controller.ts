@@ -264,6 +264,7 @@ export class ProjectController {
   // so it sits with the roles that own coverage — not with everyone who can read the book.
   @Post('branches/:projectBranchId/unable-to-cover')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('project:edit:organization')
   @ApiOperation({ summary: 'Record that a branch cannot be staffed, with a reason' })
   async markBranchUnableToCover(
     @Param('projectBranchId', ParseUUIDPipe) projectBranchId: string,
@@ -278,6 +279,7 @@ export class ProjectController {
 
   @Post('branches/:projectBranchId/reopen-coverage')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('project:edit:organization')
   @ApiOperation({ summary: 'Return an uncoverable branch to the planning pool' })
   async reopenBranchCoverage(
     @Param('projectBranchId', ParseUUIDPipe) projectBranchId: string,
@@ -509,6 +511,9 @@ export class ProjectController {
         imprecise: report.imprecise,
         // Archived branches this file restored — see `BranchImportOutcome.revived`.
         revived: report.revived,
+        // Facts about the FILE, not a row — chiefly a heading nobody read, whose data was
+        // therefore dropped in silence. See `BranchImportOutcome.notes`.
+        notes: report.notes,
       },
     };
   }
@@ -542,6 +547,7 @@ export class ProjectController {
 
   @Get(':id/branches/template')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('branch:import:organization')
   @ApiOperation({ summary: 'Download Excel template for branch data entry' })
   async downloadTemplate(@Param('id', ParseUUIDPipe) id: string, @Res() res: Response) {
     const buffer = await this.projectService.generateBranchTemplate(id);

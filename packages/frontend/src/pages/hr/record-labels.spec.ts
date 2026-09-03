@@ -54,46 +54,43 @@ describe('the workforce record, across screens', () => {
     expect(missingCriticalFields(noCoordinates as any).map((f) => f.key)).toEqual(['latitude']);
   });
 
-  it('gives each field a reason a person can read', () => {
+  /**
+   * The screens print this after the word "blocks", so an ordinary word is de-capitalised — but
+   * an acronym is a name, not a first letter.
+   *
+   * This test used to require a lower-case first character of EVERY reason, which is the rule
+   * that produced "blocks tDS deduction and statutory filing" on the record summary and the
+   * roster drawer. The assertion was not catching the defect; it was the reason the defect
+   * survived four rewrites of the code around it.
+   */
+  it('gives each field a reason a person can read, with acronyms left intact', () => {
     for (const f of CRITICAL_FIELDS) {
       expect(f.why.length).toBeGreaterThan(0);
-      // Sentence-cased in the shared list, lower-cased where the screen says "blocks …".
-      expect(f.why[0]).toBe(f.why[0].toLowerCase());
+      const startsWithAcronym = /^[A-Z]{2}/.test(f.why);
+      if (!startsWithAcronym) expect(f.why[0]).toBe(f.why[0].toLowerCase());
     }
   });
-});
 
-/**
- * The attrition tile explains itself with the numbers it used.
- *
- * The percentage is `exits / (still on the roster + exits)` — you cannot leave a population you
- * were never in. The hover used to quote `headcount.total` instead, which counts every live
- * record including people who left before the window, so a tile reading 25% was explained
- * underneath by two numbers that work out to 20%. The denominator is sent now rather than
- * guessed at by the screen.
- */
-describe('the attrition rate', () => {
-  const rate = (exits12m: number, onRoster: number) => ({
-    attritionRate12m: onRoster ? Math.round((exits12m / (onRoster + exits12m)) * 1000) / 10 : 0,
-    averageHeadcount12m: onRoster + exits12m,
-    exits12m,
-  });
+  it('never mangles TDS into tDS, on either route to the reason', () => {
+    const tds = CRITICAL_FIELDS.find((f) => /TDS/i.test(f.why));
+    // If this ever goes undefined the shared list stopped naming TDS and the guard is dead.
+    expect(tds).toBeDefined();
+    expect(tds!.why).toMatch(/^TDS/);
 
-  it('divides by the population it names', () => {
-    const a = rate(2, 6);
-    expect(a.averageHeadcount12m).toBe(8);
-    expect(a.attritionRate12m).toBe(25);
-    // The hover's own arithmetic has to land on the tile's number.
-    expect(Math.round((a.exits12m / a.averageHeadcount12m) * 1000) / 10).toBe(a.attritionRate12m);
-  });
-
-  it('holds for a roster with no leavers', () => {
-    const a = rate(0, 8);
-    expect(a.attritionRate12m).toBe(0);
-    expect(a.averageHeadcount12m).toBe(8);
-  });
-
-  it('reports zero rather than dividing by nothing when the roster is empty', () => {
-    expect(rate(0, 0).attritionRate12m).toBe(0);
+    // `missingCriticalFields` builds the same sentence by a second path; both must agree.
+    const missing = missingCriticalFields({} as any).find((f) => f.key === tds!.key);
+    expect(missing!.why).toBe(tds!.why);
   });
 });
+
+/*
+  The attrition-rate block that used to sit here has moved to hr-attrition.spec.tsx, and was
+  rewritten on the way rather than relocated.
+
+  It declared a local helper that applied the attrition formula and then asserted that helper
+  against the same formula — one assertion was the identical expression on both sides. It imported
+  neither the screens nor the service, so a change of denominator on either side would have left
+  it green, while its docblock claimed to pin "the denominator is sent now rather than guessed at
+  by the screen". The replacement renders the two screens that print the percentage. It also does
+  not belong in a file about field labels, which is half of why nobody noticed.
+*/

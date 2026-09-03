@@ -1,7 +1,8 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Clock } from 'lucide-react';
-import { card, label, Empty, Table, OpenLink, fmtWhen } from './hr-ui';
+import { card, label, Empty, OpenLink, fmtWhen } from './hr-ui';
+import { DataTable } from '../../components/ui';
 import type { HrWorkforceOverview } from '../../hooks/useHrWorkforce';
 import { useHr } from './HrLayout';
 import { activityEventLabel, assayerLifecycleLabel } from '@fapoms/shared';
@@ -27,19 +28,34 @@ const ActivityTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate: (p
         fill in on this screen.
       </Empty>
     ) : (
-      <Table
-        head={['When', 'Assayer', 'Event', 'Change', 'By', '']}
-        rows={d.activity.map((a) => [
-          <span style={{ whiteSpace: 'nowrap', color: 'var(--text-muted)', fontSize: '11px' }}><Clock size={11} /> {fmtWhen(a.occurredAt)}</span>,
-          <strong>{a.displayName}</strong>,
-          <span style={{ fontSize: '11px' }}>{activityEventLabel(a.eventType)}</span>,
-          // The Change column is a lifecycle move: both ends are stored statuses.
-          a.previousState || a.newState
-            ? <span style={{ fontSize: '11px' }}>{assayerLifecycleLabel(a.previousState)} → <strong>{assayerLifecycleLabel(a.newState)}</strong></span>
-            : (a.remarks ?? '—'),
-          a.performedBy ?? 'system',
-          <OpenLink onClick={() => navigate(`/assayers/${a.assayerId}`)} />,
-        ])}
+      <DataTable
+        density="compact"
+        minWidth={false}
+        rows={d.activity}
+        rowKey={(a) => a.id}
+        columns={[
+          {
+            key: 'when',
+            header: 'When',
+            render: (a) => (
+              <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}><Clock size={11} /> {fmtWhen(a.occurredAt)}</span>
+            ),
+          },
+          { key: 'who', header: 'Assayer', render: (a) => <strong>{a.displayName}</strong> },
+          { key: 'event', header: 'Event', render: (a) => <span style={{ fontSize: '12px' }}>{activityEventLabel(a.eventType)}</span> },
+          {
+            key: 'change',
+            header: 'Change',
+            // The Change column is a lifecycle move: both ends are stored statuses. Wrapped
+            // because the fallback is a free-text remark, which is a sentence rather than a value.
+            wrap: true,
+            render: (a) => (a.previousState || a.newState
+              ? <span style={{ fontSize: '12px' }}>{assayerLifecycleLabel(a.previousState)} → <strong>{assayerLifecycleLabel(a.newState)}</strong></span>
+              : <>{a.remarks ?? '—'}</>),
+          },
+          { key: 'by', header: 'By', render: (a) => <>{a.performedBy ?? 'system'}</> },
+          { key: 'open', header: '', render: (a) => <OpenLink onClick={() => navigate(`/assayers/${a.assayerId}`)} /> },
+        ]}
       />
     )}
   </section>

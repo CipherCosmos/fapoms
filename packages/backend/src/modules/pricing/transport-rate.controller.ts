@@ -12,7 +12,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean, Min, Max, Matches } from 'class-validator';
 import { SystemRole } from '@fapoms/shared';
 
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { TransportRateService, TransportEstimate, RoadLeg } from './transport-rate.service';
 import { TransportRateEntity } from './transport-rate.entity';
@@ -138,6 +138,7 @@ export class TransportRateController {
 
   @Post()
   @Roles(...RATE_MANAGER_ROLES)
+  @RequirePermissions('reference_data:create:organization')
   @ApiOperation({ summary: 'Create a transport rate' })
   async create(
     @Body() dto: CreateTransportRateRequestDto,
@@ -149,6 +150,7 @@ export class TransportRateController {
 
   @Put(':id')
   @Roles(...RATE_MANAGER_ROLES)
+  @RequirePermissions('reference_data:edit:organization')
   @ApiOperation({ summary: 'Update a transport rate' })
   async update(
     @Param('id', ParseUUIDPipe) id: string,
@@ -165,6 +167,7 @@ export class TransportRateController {
    */
   @Delete(':id')
   @Roles(...RATE_MANAGER_ROLES)
+  @RequirePermissions('reference_data:delete:organization')
   @ApiOperation({ summary: 'Retire a transport rate (soft delete)' })
   async deactivate(
     @Param('id', ParseUUIDPipe) id: string,

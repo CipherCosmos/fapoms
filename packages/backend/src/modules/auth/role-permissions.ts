@@ -16,6 +16,20 @@ import { SystemRole } from '@fapoms/shared';
  *
  * A grant with scope PLATFORM implies every narrower scope — see PermissionsGuard.
  */
+/**
+ * Seven read grants added on 2026-09-03, after the roles screen was made to actually work.
+ *
+ * Each was a role that could WRITE a resource it could not READ: OPERATIONS could create, edit and
+ * delete an assayer without holding ASSAYER:VIEW; DESK could create and edit a validation it could
+ * not view; and so on for documents and reference data. That was invisible while `@Roles(...)` was
+ * the only gate, because the role's NAME opened the route and the permission table was never
+ * consulted. It stopped being invisible the moment permissions became authoritative: annotating a
+ * list endpoint with `resource:view:*` would have locked out the very roles that own the screen.
+ *
+ * These grants are strictly weaker than the write grants each role already held on the same
+ * resource, and every one of those routes was already reachable by name, so nothing gained access
+ * it did not have. What changed is that the table now says so.
+ */
 export const ROLE_PERMISSIONS: Record<SystemRole, string[]> = {
   /**
    * Everything. ADMIN is the union of what SUPER_ADMINISTRATOR and ADMINISTRATOR held —
@@ -98,6 +112,7 @@ export const ROLE_PERMISSIONS: Record<SystemRole, string[]> = {
     'ASSAYER:CREATE:ORGANIZATION',
     'ASSAYER:DELETE:ORGANIZATION',
     'ASSAYER:EDIT:ORGANIZATION',
+    'ASSAYER:VIEW:ORGANIZATION',
     'ASSIGNMENT:CANCEL:ORGANIZATION',
     'ASSIGNMENT:CREATE:ORGANIZATION',
     'ASSIGNMENT:NEGOTIATE:ORGANIZATION',
@@ -117,6 +132,7 @@ export const ROLE_PERMISSIONS: Record<SystemRole, string[]> = {
     'DOCUMENT:DOWNLOAD:PLATFORM',
     'DOCUMENT:GENERATE:ORGANIZATION',
     'DOCUMENT:UPLOAD:ORGANIZATION',
+    'DOCUMENT:VIEW:ORGANIZATION',
     'PLANNING:CREATE:ORGANIZATION',
     'PLANNING:EDIT:ORGANIZATION',
     'PLANNING:VIEW:PLATFORM',
@@ -129,6 +145,7 @@ export const ROLE_PERMISSIONS: Record<SystemRole, string[]> = {
     'REFERENCE_DATA:CREATE:ORGANIZATION',
     'REFERENCE_DATA:DELETE:ORGANIZATION',
     'REFERENCE_DATA:EDIT:ORGANIZATION',
+    'REFERENCE_DATA:VIEW:ORGANIZATION',
     'SCHEDULING:CREATE:ORGANIZATION',
     'SCHEDULING:MODIFY:ORGANIZATION',
     'SCHEDULING:VIEW:PLATFORM',
@@ -147,11 +164,13 @@ export const ROLE_PERMISSIONS: Record<SystemRole, string[]> = {
     'DOCUMENT:EDIT:ORGANIZATION',
     'DOCUMENT:GENERATE:ORGANIZATION',
     'DOCUMENT:UPLOAD:ORGANIZATION',
+    'DOCUMENT:VIEW:ORGANIZATION',
     'OCR:EDIT:ORGANIZATION',
     'PROJECT:VIEW:PLATFORM',
     'SCHEDULING:VIEW:PLATFORM',
     'VALIDATION:CREATE:ORGANIZATION',
     'VALIDATION:EDIT:ORGANIZATION',
+    'VALIDATION:VIEW:ORGANIZATION',
   ],
 
   /**
@@ -160,8 +179,10 @@ export const ROLE_PERMISSIONS: Record<SystemRole, string[]> = {
    */
   [SystemRole.DESK_OPERATOR]: [
     'DOCUMENT:DOWNLOAD:PLATFORM',
+    'DOCUMENT:VIEW:ORGANIZATION',
     'PROJECT:VIEW:PLATFORM',
     'VALIDATION:REVIEW:ASSIGNED_RECORDS',
+    'VALIDATION:VIEW:ORGANIZATION',
   ],
 
   /**

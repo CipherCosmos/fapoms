@@ -11,22 +11,24 @@ runtime environment to change safely (timezone). Each entry is precise enough to
 
 All in `packages/mobile` (`AuthContext.tsx`, `App.tsx`, `services/api.service.ts`) + one backend change.
 
-**Still open:**
+**Still open: nothing in this section.** All three items below were re-checked against the code on
+2026-09-02 and are closed. They are kept, struck through, rather than deleted — this document was
+written because a previous audit note recorded holes as fixed and pointed the next reader away from
+live ones, and a note that reports *closed* holes as open costs the same reader the same afternoon
+in the other direction.
 
-- **Biometric login still omits `mustChangePassword` server-side.** The client half is done —
-  `AuthContext.tsx:145,159` now carries the flag through session-restore — but
-  `auth.controller.ts` `biometricLogin` returns a user of
-  `{id, username, name, email, phone, status}` with no `mustChangePassword`, while password-login
-  includes it. So the flag survives a restore and is lost on a biometric unlock.
-  **Fix:** add `mustChangePassword: result.user.mustChangePassword` to the biometric-login payload.
-- **Logout never revokes the server refresh token.** `AuthContext.logout` only wipes local state;
-  there is still no `POST /auth/logout` call anywhere in mobile. **Fix:** add
-  `MobileApiService.logout()` → `POST /auth/logout` (best-effort, before clearing local state), await
-  it from `AuthContext.logout`. Matters on shared handsets / "sign in as someone else".
-- **Two dead controls remain.** `ProfileScreen.tsx:1168` edits `preferredRadius`, which is **not** in
-  the backend `SELF_EDITABLE_FIELDS` (`assayer.controller.ts:98`) — the save is rejected, so the field
-  looks editable and silently is not. `uploadGovernmentDocument` (`api.service.ts:1443`) still has no
-  caller. Either wire them or make them read-only / remove.
+- ~~**Biometric login omits `mustChangePassword` server-side.**~~ Present at
+  `auth.controller.ts:178` (`mustChangePassword: !!result.user.mustChangePassword`), with a comment
+  recording that biometric resume is the only moment the app can learn a forced change is pending.
+  Verified live: the guard now covers assayer principals, and the biometric route is `@Throttle`d.
+- ~~**Logout never revokes the server refresh token.**~~ `api.service.ts:207` calls
+  `POST /auth/logout` before clearing local state.
+- ~~**Two dead controls.**~~ Both fully closed on 2026-09-02. Phone-side document upload now
+  exists — a registration checklist plus per-requirement capture, going through the durable upload
+  outbox to `POST /assayers/:id/document/:requirement/file`, with a new assayer-readable read side
+  (`assayer-self-service.controller.ts`) because every existing read route for those rows was
+  staff-only. The `uploadGovernmentDocument` tombstone that recorded this as an open gap is gone
+  with it. `preferredRadius` is deleted, vestigial type field and `10` default included.
 
 **Fixed since the audit** (verified 2026-09-01, no action needed):
 
@@ -37,7 +39,7 @@ All in `packages/mobile` (`AuthContext.tsx`, `App.tsx`, `services/api.service.ts
   `App.tsx:1037` documents why the `|| 1800` fallback had to go.
 - ~~`verifyAssayerIdentity` wired but never called~~ — now called from `AuthContext.tsx:330`.
 
-## 2. Date-only convention off-by-one (HIGH) — WEB + BACKEND FIXED; mobile remains
+## 2. Date-only convention off-by-one (HIGH) — FIXED on web, backend and mobile
 
 Added to `@fapoms/shared`: `formatDateOnly` (renders a `YYYY-MM-DD` at local midnight, no UTC-parse
 shift) and `businessDateKey`/`businessTodayDateKey` (`Asia/Kolkata`, independent of server TZ).

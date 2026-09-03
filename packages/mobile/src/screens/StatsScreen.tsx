@@ -2,6 +2,7 @@ import React from 'react';
 import { View } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Card, Divider, EmptyState, ProgressBar, Section, StatStrip, StatTile } from '../components/ui/primitives';
+import { useT } from '../i18n';
 
 export interface StatsScreenProps {
   totalAssignments: number;
@@ -28,6 +29,7 @@ export const StatsScreen: React.FC<StatsScreenProps> = ({
   resolvedQueries,
 }) => {
   const t = useTheme();
+  const tr = useT();
 
   const pct = (part: number, whole: number) => (whole > 0 ? Math.round((part / whole) * 100) : 0);
   const completionRate = pct(completedAssignments, totalAssignments);
@@ -43,10 +45,10 @@ export const StatsScreen: React.FC<StatsScreenProps> = ({
     ...(totalQueries > 0
       ? [
           {
-            label: 'Queries resolved',
+            label: tr('stats.queriesResolved'),
             value: queryRate,
             tone: 'primary' as const,
-            caption: `${resolvedQueries} of ${totalQueries}`,
+            caption: tr('stats.ratio', { done: resolvedQueries, total: totalQueries }),
           },
         ]
       : []),
@@ -58,8 +60,8 @@ export const StatsScreen: React.FC<StatsScreenProps> = ({
     return (
       <EmptyState
         icon="stats-chart-outline"
-        title="No performance data yet"
-        body="Once you're offered and complete your first audit, your completion rate and query stats will show up here."
+        title={tr('stats.emptyTitle')}
+        body={tr('stats.emptyBody')}
       />
     );
   }
@@ -68,10 +70,10 @@ export const StatsScreen: React.FC<StatsScreenProps> = ({
     <View style={{ gap: t.space.xl }}>
       {/* ── Completion hero: the number this screen exists to answer ──────────── */}
       <Card level={2} style={{ gap: t.space.md }}>
-        <AppText variant="overline" tone="faint">ASSIGNMENTS COMPLETED</AppText>
+        <AppText variant="overline" tone="faint">{tr('stats.completedLabel')}</AppText>
         <AppText variant="display" tone="success">{completionRate}%</AppText>
         <AppText variant="caption" tone="muted">
-          {completedAssignments} of {totalAssignments} offered assignments finished.
+          {tr('stats.completedOf', { done: completedAssignments, total: totalAssignments })}
         </AppText>
 
         <Divider spacing={2} />
@@ -85,18 +87,18 @@ export const StatsScreen: React.FC<StatsScreenProps> = ({
       </Card>
 
       <StatStrip>
-        <StatTile label="Completed" value={completedAssignments} icon="checkmark-done" tone="success" />
-        <StatTile label="Assigned" value={totalAssignments} icon="clipboard-outline" />
+        <StatTile label={tr('stats.completed')} value={completedAssignments} icon="checkmark-done" tone="success" />
+        <StatTile label={tr('stats.assigned')} value={totalAssignments} icon="clipboard-outline" />
         {openQueries > 0 && (
-          <StatTile label="Open queries" value={openQueries} icon="help-circle-outline" tone="warning" />
+          <StatTile label={tr('stats.openQueries')} value={openQueries} icon="help-circle-outline" tone="warning" />
         )}
         {averageRating != null && averageRating > 0 && (
-          <StatTile label="Rating" value={averageRating.toFixed(1)} icon="star" tone="accent" hint="out of 5" />
+          <StatTile label={tr('stats.rating')} value={averageRating.toFixed(1)} icon="star" tone="accent" hint={tr('stats.ratingHint')} />
         )}
       </StatStrip>
 
       {bars.length > 0 && (
-        <Section title="Performance">
+        <Section title={tr('stats.performance')}>
           <Card level={1} style={{ gap: t.space.lg }}>
             {bars.map((b) => (
               <View key={b.label} style={{ gap: t.space.sm }}>

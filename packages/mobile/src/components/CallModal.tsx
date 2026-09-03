@@ -3,6 +3,7 @@ import { Modal, View, Vibration, Platform } from 'react-native';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Avatar, GlowBlob, Icon, Tappable } from './ui/primitives';
 import { useFeedback } from './ui/Feedback';
+import { useT, serverErrorText } from '../i18n';
 import {
   CallState,
   acceptCall,
@@ -105,6 +106,7 @@ const CallControl: React.FC<{
 
 export const CallModal: React.FC = () => {
   const t = useTheme();
+  const tr = useT();
   const feedback = useFeedback();
   const call = useCallState();
   const [now, setNow] = useState(Date.now());
@@ -130,11 +132,11 @@ export const CallModal: React.FC = () => {
   if (!visible) return null;
 
   const statusLine = incoming
-    ? 'Incoming call'
+    ? tr('call.incoming')
     : call.phase === 'connecting'
-      ? 'Connecting…'
+      ? tr('call.connecting')
       : call.phase === 'outgoing'
-        ? 'Ringing…'
+        ? tr('call.ringing')
         : formatElapsed(call.connectedAt, now);
 
   return (
@@ -153,8 +155,8 @@ export const CallModal: React.FC = () => {
 
         {/* Identity + status */}
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: t.space['2xl'], gap: t.space.md }}>
-          <Avatar name={call.peerName || 'Desk'} size={104} />
-          <AppText variant="h1" style={{ textAlign: 'center' }}>{call.peerName || 'Data Entry Team'}</AppText>
+          <Avatar name={call.peerName || tr('call.avatarFallback')} size={104} />
+          <AppText variant="h1" style={{ textAlign: 'center' }}>{call.peerName || tr('call.peerFallback')}</AppText>
           <AppText
             variant={active ? 'h2' : 'body'}
             tone={active ? 'accent' : 'muted'}
@@ -176,7 +178,7 @@ export const CallModal: React.FC = () => {
                 maxWidth: 340,
               }}
             >
-              <AppText variant="overline" tone="faint" style={{ marginBottom: 4 }}>ABOUT THIS QUERY</AppText>
+              <AppText variant="overline" tone="faint" style={{ marginBottom: 4 }}>{tr('call.aboutQuery')}</AppText>
               <AppText variant="small" tone="muted" numberOfLines={3}>{call.queryText}</AppText>
             </View>
           )}
@@ -186,27 +188,27 @@ export const CallModal: React.FC = () => {
         <View style={{ paddingBottom: t.space['4xl'] + t.space.lg, paddingHorizontal: t.space['2xl'] }}>
           {incoming ? (
             <View style={{ flexDirection: 'row', justifyContent: 'space-evenly' }}>
-              <CallControl icon="close" label="Decline" tone="danger" size={72}
+              <CallControl icon="close" label={tr('call.decline')} tone="danger" size={72}
                 onPress={() => { void declineCall(); }} />
-              <CallControl icon="call" label="Accept" tone="success" glow size={72}
+              <CallControl icon="call" label={tr('call.accept')} tone="success" glow size={72}
                 onPress={() => {
                   acceptCall().catch((err) =>
-                    feedback.error('Could not answer', err?.message || 'The call could not be connected.'));
+                    feedback.error(tr('call.answerFailedTitle'), serverErrorText(err?.message, 'call.answerFailedBody')));
                 }} />
             </View>
           ) : (
             <View style={{ flexDirection: 'row', justifyContent: 'space-evenly', alignItems: 'flex-end' }}>
               <CallControl
                 icon={call.muted ? 'mic-off' : 'mic'}
-                label={call.muted ? 'Unmute' : 'Mute'}
+                label={call.muted ? tr('call.unmute') : tr('call.mute')}
                 active={call.muted}
                 onPress={() => { void toggleMute(); }}
               />
-              <CallControl icon="call" label="End" tone="danger" glow size={76}
+              <CallControl icon="call" label={tr('call.end')} tone="danger" glow size={76}
                 onPress={() => { void hangupCall(); }} />
               <CallControl
                 icon={call.speakerOn ? 'volume-high' : 'volume-medium'}
-                label="Speaker"
+                label={tr('call.speaker')}
                 active={call.speakerOn}
                 onPress={() => { void toggleSpeaker(); }}
               />
