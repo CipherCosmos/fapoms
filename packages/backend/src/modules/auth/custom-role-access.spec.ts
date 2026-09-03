@@ -1,6 +1,6 @@
 import { ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { RolesGuard, ROLES_KEY, PERMISSIONS_KEY, ANY_AUTHENTICATED_KEY } from './guards';
+import { RolesGuard, ROLES_KEY, PERMISSIONS_KEY, ANY_AUTHENTICATED_KEY, ROLE_ONLY_KEY } from './guards';
 
 /**
  * A role built in Admin → Roles can reach what its permissions say it can.
@@ -87,6 +87,46 @@ describe('a role the route has never heard of', () => {
     const platform = withPermissions('HR_OPERATOR', [['ASSAYER', 'VIEW', 'PLATFORM']]);
 
     expect(guard.canActivate(ctx(platform))).toBe(true);
+  });
+
+  /**
+   * A route may keep its role list as the whole gate.
+   *
+   * The audited PII reveal returns a full PAN, Aadhaar or bank account and declares
+   * `assayer:view:organization` — the SAME permission as reading the masked record, chosen so the
+   * two cannot drift. While names were the only gate its narrow `@Roles(ADMIN, OPERATIONS)` list
+   * held that line. Making permissions authoritative broke it silently: granting three roles the
+   * ordinary roster read also handed them the reveal, and nothing failed to say so.
+   */
+  describe('a route that opts out of the fall-through', () => {
+    const REVEAL = {
+      [ROLES_KEY]: ['ADMIN', 'OPERATIONS'],
+      [PERMISSIONS_KEY]: ['assayer:view:organization'],
+      [ROLE_ONLY_KEY]: true,
+    };
+
+    it('refuses a custom role holding the permission', () => {
+      const guard = new RolesGuard(reflectorReturning(REVEAL));
+      const hr = withPermissions('HR_OPERATOR', [['ASSAYER', 'VIEW', 'ORGANIZATION']]);
+
+      expect(() => guard.canActivate(ctx(hr))).toThrow(ForbiddenException);
+    });
+
+    it('refuses a built-in role that holds the permission but is not named', () => {
+      // AUDITOR, DESK and DESK_OPERATOR were granted ASSAYER:VIEW so they could read the roster
+      // they are named on. None of them is named here, and none may reveal a number.
+      const guard = new RolesGuard(reflectorReturning(REVEAL));
+      const auditor = withPermissions('AUDITOR', [['ASSAYER', 'VIEW', 'ORGANIZATION']]);
+
+      expect(() => guard.canActivate(ctx(auditor))).toThrow(ForbiddenException);
+    });
+
+    it('still admits the roles it names', () => {
+      const guard = new RolesGuard(reflectorReturning(REVEAL));
+      const ops = { id: 'u-2', roles: [{ name: 'OPERATIONS', permissions: [] }] };
+
+      expect(guard.canActivate(ctx(ops))).toBe(true);
+    });
   });
 
   describe('nothing was loosened', () => {

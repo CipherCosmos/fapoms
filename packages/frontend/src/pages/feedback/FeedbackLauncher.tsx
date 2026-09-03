@@ -12,7 +12,7 @@ import {
 import { MAX_FEEDBACK_ATTACHMENT_MB } from '@fapoms/shared';
 import { userMessage } from '../../services/errors';
 import { CATEGORY, areaFromPath } from './feedbackUi';
-import { useCurrentRoles } from '../../hooks/useCurrentRoles';
+import { useCurrentPermissions, useCurrentRoles } from '../../hooks/useCurrentRoles';
 import { canAccessRoute } from '../../config/route-permissions';
 
 /**
@@ -58,7 +58,8 @@ export const FeedbackLauncher: React.FC = () => {
    * available to everyone — only *browsing the channel* is restricted.
    */
   const roles = useCurrentRoles();
-  const canOpenChannel = canAccessRoute(roles, '/feedback');
+  const permissions = useCurrentPermissions();
+  const canOpenChannel = canAccessRoute(roles, permissions, '/feedback');
   const [open, setOpen] = useState(false);
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');

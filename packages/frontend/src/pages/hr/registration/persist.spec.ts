@@ -1,6 +1,6 @@
 import { REGISTRATION_FIELDS } from './steps';
 import {
-  buildCreateBody, buildUpdatePlan, finaliseAssayerBody, ratePayload, ratesChanged,
+  buildCreateBody, buildUpdatePlan, ratePayload, ratesChanged,
 } from './persist';
 
 // `services/api` pulls in the socket client, which reads `import.meta.env` and cannot be
@@ -55,12 +55,16 @@ describe('creating the record', () => {
     expect(body).not.toHaveProperty('email');
   });
 
-  it('sends the regions they will travel to as an array, not the JSON string the box holds', () => {
+  it('does not carry a box the flow no longer offers, however it arrives in form state', () => {
+    // The regions somebody will travel to are theirs to keep up to date from the app, so no box
+    // here writes them. Asserted rather than assumed because the create body is built from the
+    // whole form: a key that crept back into form state would be sent, and `text[]` columns are
+    // where a stray JSON string turns into a 400 nobody can read.
     const body = buildCreateBody(REGISTRATION_FIELDS, {
       firstName: 'A', lastName: 'B', state: 'Kerala',
       preferredRegions: JSON.stringify(['SOUTH', 'WEST']),
     });
-    expect(body.preferredRegions).toEqual(['SOUTH', 'WEST']);
+    expect(body).not.toHaveProperty('preferredRegions');
   });
 });
 
@@ -91,17 +95,6 @@ describe('saving a step onto an existing record', () => {
     const plan = buildUpdatePlan(REGISTRATION_FIELDS, { ...saved, workingHoursStart: '09:00' }, saved, nothing);
     expect(plan.body).toBeNull();
     expect(plan.problems[0]).toContain('end time');
-  });
-});
-
-describe('the regions array', () => {
-  it('parses the box, and leaves a cleared one as an empty array the API accepts', () => {
-    expect(finaliseAssayerBody({ preferredRegions: '["NORTH"]' }).preferredRegions).toEqual(['NORTH']);
-    expect(finaliseAssayerBody({ preferredRegions: '' }).preferredRegions).toEqual([]);
-  });
-
-  it('leaves a body without the field untouched', () => {
-    expect(finaliseAssayerBody({ phone: '+919876543210' })).toEqual({ phone: '+919876543210' });
   });
 });
 

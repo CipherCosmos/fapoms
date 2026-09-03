@@ -6,6 +6,7 @@ import { AssayerLifecycleStatus } from '@fapoms/shared';
 import { AssayerRoster } from './AssayerRoster';
 import { stillWorkable, type Assayer } from './assayer-shared';
 import { api } from '../../services/api';
+import { downloadCsv } from '../../utils/csv';
 
 /**
  * The roster's joining queues.
@@ -21,6 +22,9 @@ jest.mock('../../services/socket', () => ({ connectSocket: () => null }));
 jest.mock('../../hooks/useCurrentRoles', () => ({
   useCurrentRoles: () => ['ADMIN'],
   canManageAssayers: () => true,
+  // Added when the roster began distinguishing creating from editing: the Add button and the
+  // roster import are gated on create, everything else on edit.
+  canCreateAssayers: () => true,
 }));
 jest.mock('../../hooks/useExcelExport', () => ({ useExcelExport: () => ({ download: jest.fn(), busy: false }) }));
 // The panel reads the review queue through react-query; the roster's own tests are not about it.
@@ -34,6 +38,13 @@ jest.mock('../../components/import/useImportJob', () => ({
 }));
 jest.mock('../../components/import/ImportProgressPanel', () => ({ ImportProgressPanel: () => null }));
 jest.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({ invalidateQueries: jest.fn() }) }));
+// The CSV writer is the app's one export path (utils/csv). Mocked so the export tests can read
+// the headers and rows a clerk's choice of columns actually produces.
+jest.mock('../../utils/csv', () => ({
+  downloadCsv: jest.fn(),
+  datedFilename: (stem: string) => stem,
+  toCsv: jest.fn(),
+}));
 
 const mockRequest = api.request as jest.Mock;
 
@@ -250,5 +261,240 @@ describe('still on the roster', () => {
     expect(at(AssayerLifecycleStatus.ON_LEAVE)).toBe(true);
     expect(at(AssayerLifecycleStatus.SUSPENDED)).toBe(true);
     expect(at(AssayerLifecycleStatus.ACTIVE)).toBe(true);
+  });
+});
+
+/**
+ * Filtering by more than three things, and being able to see what you filtered by.
+ *
+ * The screen offered a search box, a stage dropdown and a state dropdown — behind a collapsed
+ * panel, with a segment chip above it that could contradict them. Four controls could narrow the
+ * list at once and none of them was visible from the empty table they produced. These tests hold
+ * the two halves of the fix: the axes exist, and everything applied is on screen and removable.
+ */
+describe('AssayerRoster — filtering by anything', () => {
+  const roster = [
+    person({ id: 'k1', assayerCode: 'AS0101', displayName: 'Kerala One', state: 'Kerala', district: 'Ernakulam', region: 'South' }),
+    person({ id: 'k2', assayerCode: 'AS0102', displayName: 'Kerala Two', state: 'Kerala', district: 'Kollam', region: 'South', bankAccountNumber: null }),
+    person({ id: 'g1', assayerCode: 'AS0103', displayName: 'Goa One', state: 'Goa', district: 'North Goa', region: null }),
+  ];
+
+  const openFilters = () => fireEvent.click(screen.getByRole('button', { name: /^Filters/ }));
+
+  it('offers the axes this screen never had, grouped so they can be found', async () => {
+    serve(roster);
+    renderRoster();
+    await waitFor(() => expect(screen.getByText('Goa One')).toBeInTheDocument());
+
+    openFilters();
+
+    // Four headings rather than nineteen labels in a row.
+    expect(screen.getByRole('button', { name: /The person/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Where they are/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Paperwork and money/ })).toBeInTheDocument();
+    // A sample of what was simply unaskable before: region, qualification, home-pin quality.
+    expect(screen.getByText('Region')).toBeInTheDocument();
+    expect(screen.getByText('Qualification')).toBeInTheDocument();
+    expect(screen.getByText('Home location on the map')).toBeInTheDocument();
+  });
+
+  it('counts each option, so a clerk can see where the work is before ticking', async () => {
+    serve(roster);
+    renderRoster();
+    await waitFor(() => expect(screen.getByText('Goa One')).toBeInTheDocument());
+    openFilters();
+
+    expect(screen.getByRole('checkbox', { name: /^Kerala/ })).toBeInTheDocument();
+    expect(screen.getByRole('checkbox', { name: /^Kerala/ }).closest('label')).toHaveTextContent('Kerala2');
+    expect(screen.getByRole('checkbox', { name: /^No region set/ }).closest('label')).toHaveTextContent('No region set1');
+  });
+
+  it('narrows the table, says what it did, and undoes it from the same pill', async () => {
+    serve(roster);
+    renderRoster();
+    await waitFor(() => expect(screen.getByText('Goa One')).toBeInTheDocument());
+    openFilters();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /^Kerala/ }));
+
+    expect(screen.queryByText('Goa One')).not.toBeInTheDocument();
+    expect(screen.getByText('Kerala One')).toBeInTheDocument();
+    // The pill is the criterion in the words of the control that set it.
+    const pill = screen.getByRole('button', { name: 'Remove filter State they live in: Kerala' });
+    expect(screen.getByRole('button', { name: /^Filters/ })).toHaveTextContent('1');
+
+    fireEvent.click(pill);
+    expect(screen.getByText('Goa One')).toBeInTheDocument();
+  });
+
+  it('combines a queue with a filter, which the chips alone could never do', async () => {
+    serve(roster);
+    renderRoster();
+    await waitFor(() => expect(screen.getByText('Goa One')).toBeInTheDocument());
+
+    fireEvent.click(chip('Cannot be paid'));
+    openFilters();
+    fireEvent.click(screen.getByRole('checkbox', { name: /^Kerala/ }));
+
+    expect(screen.getByText('Kerala Two')).toBeInTheDocument();
+    expect(screen.queryByText('Kerala One')).not.toBeInTheDocument();
+    // Both criteria are on screen, and one link takes them both off.
+    expect(screen.getByRole('button', { name: 'Remove filter Cannot be paid' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear all' }));
+    expect(screen.getByText('Goa One')).toBeInTheDocument();
+  });
+
+  it('hides a queue with nobody in it, and keeps the one a link asked for', async () => {
+    serve(roster);
+    renderRoster();
+    await waitFor(() => expect(screen.getByText('Goa One')).toBeInTheDocument());
+
+    // Nobody's certificate has lapsed, so the chip is not a question worth putting on screen.
+    expect(screen.queryByRole('tab', { name: /^Certificate lapsed/ })).not.toBeInTheDocument();
+    // The populations are always shown — "Exited 0" is an answer, not a queue.
+    expect(screen.getByRole('tab', { name: /^Exited/ })).toBeInTheDocument();
+  });
+});
+
+/**
+ * The custom export.
+ *
+ * Two fixed exports became one dialog: choose the columns, choose the scope. The masked three
+ * are the reason the dialog exists at all — an export of `••••234F` looks like data — so the
+ * tests below are mostly about them.
+ */
+describe('AssayerRoster — exporting what you need', () => {
+  const roster = [
+    person({ id: 'k1', assayerCode: 'AS0101', displayName: 'Kerala One', state: 'Kerala' }),
+    person({ id: 'g1', assayerCode: 'AS0103', displayName: 'Goa One', state: 'Goa' }),
+  ];
+
+  const openExport = async () => {
+    fireEvent.click(screen.getByRole('button', { name: /^Export/ }));
+    fireEvent.click(await screen.findByRole('menuitem', { name: /Choose columns/ }));
+  };
+
+  beforeEach(() => {
+    (downloadCsv as jest.Mock).mockClear();
+    // The dialog remembers the last set of columns, so each test has to start from the preset
+    // rather than from whatever the previous one downloaded.
+    window.localStorage.clear();
+  });
+
+  it('leaves one export control on the toolbar instead of two unexplained ones', async () => {
+    serve(roster);
+    renderRoster();
+    await waitFor(() => expect(screen.getByText('Goa One')).toBeInTheDocument());
+
+    expect(screen.queryByRole('button', { name: /Export this view/ })).not.toBeInTheDocument();
+    // The server workbook is still offered — inside the menu, beside the thing it differs from.
+    fireEvent.click(screen.getByRole('button', { name: /^Export/ }));
+    expect(await screen.findByRole('menuitem', { name: /Full roster \+ pay rates/ })).toBeInTheDocument();
+  });
+
+  it('downloads the chosen columns for the rows currently on screen', async () => {
+    serve(roster);
+    renderRoster();
+    await waitFor(() => expect(screen.getByText('Goa One')).toBeInTheDocument());
+    await openExport();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Untick everything' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Name' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'State' }));
+    fireEvent.click(screen.getByRole('button', { name: /Download CSV/ }));
+
+    expect(downloadCsv).toHaveBeenCalledWith(
+      'workforce-selection',
+      ['Name', 'State'],
+      [['Goa One', 'Goa'], ['Kerala One', 'Kerala']],
+    );
+  });
+
+  it('says on the face of it that PAN and bank account cannot leave in full', async () => {
+    serve(roster);
+    renderRoster();
+    await waitFor(() => expect(screen.getByText('Goa One')).toBeInTheDocument());
+    await openExport();
+
+    expect(screen.getByText(/cannot be exported in full/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('checkbox', { name: /^PAN \(last 4 only/ }));
+    expect(screen.getByText(/1 masked column ticked/)).toBeInTheDocument();
+  });
+
+  it('exports the covered value under a heading that admits what it is', async () => {
+    serve([person({ id: 'k1', displayName: 'Kerala One', panNumber: '••••234F' })]);
+    renderRoster();
+    await waitFor(() => expect(screen.getByText('Kerala One')).toBeInTheDocument());
+    await openExport();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Untick everything' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /^PAN \(last 4 only/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Download CSV/ }));
+
+    expect(downloadCsv).toHaveBeenCalledWith(
+      'workforce-selection',
+      ['PAN (last 4 only — not the full number)'],
+      [['••••234F']],
+    );
+  });
+
+  it('can ignore the filters and take everyone the page has loaded', async () => {
+    serve(roster);
+    renderRoster();
+    await waitFor(() => expect(screen.getByText('Goa One')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /^Filters/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /^Kerala/ }));
+    await openExport();
+
+    fireEvent.click(screen.getByRole('radio', { name: /Everyone loaded/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Untick everything' }));
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Name' }));
+    fireEvent.click(screen.getByRole('button', { name: /Download CSV/ }));
+
+    expect(downloadCsv).toHaveBeenCalledWith('workforce-roster', ['Name'], [['Kerala One'], ['Goa One']]);
+  });
+});
+
+/**
+ * There has to be a way back into a half-finished registration.
+ *
+ * The wizard writes to the person's own row as the clerk goes — no draft store, deliberately — so
+ * closing it half-way leaves a real record rather than losing the typing. But resuming it was
+ * reachable only by typing `?register=<id>` into the address bar: nothing in the application ever
+ * set that parameter. A clerk who stopped partway had no route back, and "Add assayer" opened a
+ * blank wizard that would create a SECOND record for the same person.
+ *
+ * The live roster shows the shape of it: 80 people in a joining stage, every one with no document
+ * and 79 with no client standing.
+ */
+describe('finishing a registration somebody abandoned', () => {
+  beforeEach(() => {
+    (api.request as jest.Mock).mockReset();
+    (api.request as jest.Mock).mockResolvedValue({
+      data: [
+        person({ id: 'a-1', assayerCode: 'AS0001', displayName: 'Half Done', lifecycleStatus: AssayerLifecycleStatus.INVITED }),
+        person({ id: 'a-2', assayerCode: 'AS0002', displayName: 'Fully Active', lifecycleStatus: AssayerLifecycleStatus.ACTIVE }),
+      ],
+    });
+  });
+
+  it('offers a way back on somebody still joining', async () => {
+    renderRoster();
+    expect(await screen.findByLabelText('Finish registering Half Done')).toBeInTheDocument();
+  });
+
+  it('does not offer it on somebody already active', async () => {
+    renderRoster();
+    await screen.findByLabelText('Finish registering Half Done');
+    // Nothing left for the wizard to ask, so the control would only be noise on 548 rows.
+    expect(screen.queryByLabelText('Finish registering Fully Active')).not.toBeInTheDocument();
+  });
+
+  it('names the person, so the control is not one of many identical icons', async () => {
+    // A screen-reader user on a 1,163-row table needs to know whose registration this resumes.
+    renderRoster();
+    const btn = await screen.findByLabelText('Finish registering Half Done');
+    expect(btn.getAttribute('aria-label')).toContain('Half Done');
   });
 });

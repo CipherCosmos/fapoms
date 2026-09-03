@@ -5,7 +5,7 @@ import { Inbox, Map as MapIcon, CalendarDays, ClipboardList } from 'lucide-react
 
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
-import { useCurrentRoles } from '../../hooks/useCurrentRoles';
+import { useCurrentPermissions, useCurrentRoles } from '../../hooks/useCurrentRoles';
 import { canAccessRoute } from '../../config/route-permissions';
 import {
   WORK_TABS,
@@ -125,6 +125,7 @@ export const AuditWork: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const roles = useCurrentRoles();
+  const permissions = useCurrentPermissions();
 
   /**
    * A role sees exactly the tabs it could already open as pages, read from the one place that
@@ -133,8 +134,8 @@ export const AuditWork: React.FC = () => {
    * off a denied page.
    */
   const visibleTabs = useMemo(
-    () => WORK_TABS.filter((tab) => canAccessRoute(roles, tab.path)),
-    [roles],
+    () => WORK_TABS.filter((tab) => canAccessRoute(roles, permissions, tab.path)),
+    [roles, permissions],
   );
 
   const activeTab: WorkTabPath = isWorkTabPath(location.pathname) ? location.pathname : '/inbox';

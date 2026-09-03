@@ -1,4 +1,3 @@
-import { parseList } from '../AssayerForms';
 import type { FieldDef } from '../AssayerForms';
 import { buildAssayerEditBody, changedFormKeys, type Assayer } from '../assayer-shared';
 import { RATE_KEYS } from './steps';
@@ -9,7 +8,7 @@ import { RATE_KEYS } from './steps';
  * Every step of the registration writes to the real record, so all of this is the record page's
  * own machinery — `buildAssayerEditBody` for the shapes each column wants, `changedFormKeys` for
  * the dirty diff that stops one clerk's save overwriting another's. What this module adds is only
- * the three things a *create* needs that an edit does not, and the one thing the pay rates need.
+ * what a *create* needs that an edit does not, and what the pay rates need.
  */
 
 /** The empty-ish shape a brand-new record starts from, for `buildAssayerEditBody`'s pair rules. */
@@ -17,20 +16,6 @@ const NOTHING_ON_FILE: Pick<Assayer, 'workingHours' | 'certifications'> = {
   workingHours: null,
   certifications: null,
 };
-
-/**
- * `preferred_regions` is a `text[]`, and it rides in form state as a JSON array string.
- *
- * `buildAssayerEditBody` has no idea about the field — it is not a `vocab` field and there was no
- * box for it on any form before this one — so it would hand the API the literal string
- * `["NORTH","WEST"]`, which `@IsArray()` refuses. Parsed here rather than by teaching the shared
- * builder a new field type, because this is the only writer of the column.
- */
-export function finaliseAssayerBody(body: Record<string, unknown>): Record<string, unknown> {
-  if (!('preferredRegions' in body)) return body;
-  const raw = body.preferredRegions;
-  return { ...body, preferredRegions: typeof raw === 'string' ? parseList(raw) : (raw ?? []) };
-}
 
 /**
  * The body of `POST /assayers`.
@@ -56,7 +41,7 @@ export function buildCreateBody(
   }
   const { body } = buildAssayerEditBody(fields, everything, NOTHING_ON_FILE);
   const stripped: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(finaliseAssayerBody(body))) {
+  for (const [key, value] of Object.entries(body)) {
     if (value === null || value === undefined || value === '') continue;
     if (Array.isArray(value) && value.length === 0) continue;
     stripped[key] = value;
@@ -99,7 +84,7 @@ export function buildUpdatePlan(
   for (const key of changed) touched[key] = form[key];
   const { body, problems } = buildAssayerEditBody(fields, touched, current);
   if (problems.length > 0) return { body: null, problems, changedCount: changed.length };
-  return { body: finaliseAssayerBody(body), problems: [], changedCount: changed.length };
+  return { body, problems: [], changedCount: changed.length };
 }
 
 export interface RatePayload {

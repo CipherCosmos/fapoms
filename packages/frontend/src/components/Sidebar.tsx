@@ -18,6 +18,7 @@ import {
   ScrollText, AlertTriangle } from 'lucide-react';
 import { GlobalSearch } from './GlobalSearch';
 import { canAccessRoute } from '../config/route-permissions';
+import { permissionKeysFrom } from '../hooks/useCurrentRoles';
 import { WORK_TABS } from '../pages/work/workTabs';
 import { BrandLogo } from './BrandLogo';
 
@@ -29,6 +30,11 @@ interface SidebarProps {
 export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
   const location = useLocation();
   const userRoles = (user?.roles ?? []).map((r) => r.name);
+  /**
+   * Derived from the same object the roles come from rather than re-read from the cache, so the
+   * navigation can never disagree with the gate that decides what happens when you click it.
+   */
+  const userPermissions = permissionKeysFrom(user);
 
   /**
    * ONE ENTRY FOR ONE JOB.
@@ -44,7 +50,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
    * the first tab this particular role can access. `activePaths` then keeps the row highlighted
    * across all four, since the visitor never leaves the destination by switching tab.
    */
-  const auditWorkTabs = WORK_TABS.filter((tab) => canAccessRoute(userRoles, tab.path));
+  const auditWorkTabs = WORK_TABS.filter((tab) => canAccessRoute(userRoles, userPermissions, tab.path));
 
   const allMenuGroups: { category: string; items: { name: string; path: string; icon: React.ComponentType<any>; activePaths?: readonly string[] }[] }[] = [
     {
@@ -123,7 +129,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
   const menuGroups = allMenuGroups
     .map((group) => ({
       ...group,
-      items: group.items.filter((item) => canAccessRoute(userRoles, item.path)),
+      items: group.items.filter((item) => canAccessRoute(userRoles, userPermissions, item.path)),
     }))
     .filter((group) => group.items.length > 0);
 

@@ -26,6 +26,11 @@ const REQUIREMENTS = [
   { requirement: 'JOINING_FORM', label: 'Joining form', identity: false, id: null, softCopyReceived: null, hardCopyReceived: null, documentNumber: null, expiryDate: null, verificationStatus: null, filePaths: [] },
 ];
 
+const CLIENTS = [
+  { id: 'cli-1', name: 'ICICI Bank' },
+  { id: 'cli-2', name: 'AU Small Finance' },
+];
+
 const CREATED = {
   id: 'asr-1', assayerCode: 'WIZ-0001', firstName: 'Ramesh', lastName: 'Iyer', displayName: 'Ramesh Iyer',
   state: 'Kerala', phone: null, email: null, address: '', city: '', district: '', pincode: null,
@@ -44,7 +49,8 @@ const wireApi = (overrides: Record<string, unknown> = {}) => {
       }
     }
     if (url.includes('workforce-attribute/vocabulary')) return Promise.resolve({ skills: [], certifications: [], languages: [] });
-    if (url.includes('/dossier')) return Promise.resolve({ onboarding: REQUIREMENTS, references: [] });
+    if (url.startsWith('/clients')) return Promise.resolve({ items: CLIENTS });
+    if (url.includes('/dossier')) return Promise.resolve({ onboarding: REQUIREMENTS, references: [], empanelments: [] });
     if (method === 'POST' && url === '/assayers') return Promise.resolve({ ...CREATED });
     if (method === 'PUT' && url.startsWith('/assayers/')) return Promise.resolve({ ...CREATED });
     if (method === 'GET' && /^\/assayers\/[^/]+$/.test(url)) return Promise.resolve({ ...CREATED });
@@ -136,8 +142,10 @@ describe('a person with no phone, no email and no device', () => {
     expect(body).not.toHaveProperty('phone');
     expect(body).not.toHaveProperty('email');
 
-    // Address → ID → papers → contacts and pay → review, with nothing typed on any of them.
+    // Address → ID → papers → contacts and pay → who they can work for → review, with nothing
+    // typed on any of them.
     expect(await screen.findByText('The exact spot on the map')).toBeInTheDocument();
+    await click(/^Continue/);
     await click(/^Continue/);
     await click(/^Continue/);
     await click(/^Continue/);
@@ -145,6 +153,85 @@ describe('a person with no phone, no email and no device', () => {
 
     expect(await screen.findByText(/is on the roster/i)).toBeInTheDocument();
     expect(screen.getByText(/They do not need a phone or the app/i)).toBeInTheDocument();
+    await click(/Finish/);
+    expect(onCreated).toHaveBeenCalled();
+  });
+});
+
+/**
+ * The step that did not exist, and the 45% of the roster it explains.
+ *
+ * `ClientEligibilityFilter` admits only an ACTIVE or RECOMMENDED standing, and
+ * `planning.eligibility.noEmpanelmentRow` defaults to BLOCK — so somebody with no standing at all
+ * is dropped from every client's planning run without a word reaching the desk. 245 of the 548
+ * people currently ACTIVE are in exactly that state, and this flow produced every one of them:
+ * complete, ACTIVE, and unable to be offered a single assignment.
+ */
+describe('which banks will take them', () => {
+  const openClients = async () => {
+    await mount();
+    type(/^First Name/, 'Ramesh');
+    type(/^Last Name/, 'Iyer');
+    await choose(/^State they work in/, 'Kerala');
+    await click(/Save and continue/);
+    await click(/Who they can work for/);
+    await screen.findByText('ICICI Bank');
+  };
+
+  it('offers every client, and says what having no standing costs', async () => {
+    await openClients();
+    expect(screen.getByText('ICICI Bank')).toBeInTheDocument();
+    expect(screen.getByText('AU Small Finance')).toBeInTheDocument();
+    expect(screen.getAllByText(/Nothing recorded. This client will never be offered this person/i))
+      .toHaveLength(2);
+  });
+
+  it('records a standing against the client the moment it is chosen', async () => {
+    await openClients();
+    await choose(/Standing with ICICI Bank/, 'Accepted — they are on this client’s panel');
+
+    const puts = callsTo('PUT', (u) => u === '/assayers/asr-1/empanelment/cli-1');
+    expect(puts).toHaveLength(1);
+    expect(bodyOf(puts[0])).toEqual({ status: 'ACTIVE' });
+  });
+
+  it('does not let a clerk file the standing that ends an empanelment', async () => {
+    // Resigned, terminated and dormant describe an empanelment that has ended, which cannot be
+    // true of somebody being enrolled today — the same argument that keeps `exitDate` off page one.
+    await openClients();
+    await act(async () => { fireEvent.click(screen.getByLabelText(/Standing with ICICI Bank/)); });
+    const listbox = await screen.findByRole('listbox');
+    expect(within(listbox).queryByText(/resigned/i)).toBeNull();
+    expect(within(listbox).queryByText(/terminated/i)).toBeNull();
+  });
+
+  it('asks why only when the answer is that they are not going forward', async () => {
+    // A standing that means "no" is the one whose reason somebody will need months later, and the
+    // vetting screen is where the answer would otherwise have to be reconstructed from memory.
+    wireApi({
+      'GET /assayers/asr-1/dossier': {
+        onboarding: REQUIREMENTS,
+        references: [],
+        empanelments: [{
+          id: 'emp-1', clientId: 'cli-1', status: 'NOT_RECOMMENDED', statusReason: null,
+          client: { id: 'cli-1', name: 'ICICI Bank' },
+        }],
+      },
+    });
+    await openClients();
+    expect(screen.getByLabelText(/Why this standing with ICICI Bank/i)).toBeInTheDocument();
+    // AU Small has no standing at all, so there is nothing to explain yet.
+    expect(screen.queryByLabelText(/Why this standing with AU Small/i)).toBeNull();
+  });
+
+  it('never blocks finishing, because a bank may not have decided yet', async () => {
+    const onCreated = jest.fn();
+    await mount({ onCreated });
+    type(/^First Name/, 'Ramesh');
+    type(/^Last Name/, 'Iyer');
+    await choose(/^State they work in/, 'Kerala');
+    await click(/Save and continue/);
+    await click(/Check and finish/);
     await click(/Finish/);
     expect(onCreated).toHaveBeenCalled();
   });
@@ -314,10 +401,52 @@ describe('resuming an interrupted registration', () => {
   });
 });
 
-describe('the progress rail', () => {
-  it('names all six steps and locks the later ones until the record exists', async () => {
+describe('the last page', () => {
+  const openReview = async (overrides: Record<string, unknown> = {}) => {
+    wireApi(overrides);
     await mount();
-    for (const title of ['The person', 'Where they live', 'ID and bank', 'Papers and scans', 'Contacts and pay', 'Check and finish']) {
+    type(/^First Name/, 'Ramesh');
+    type(/^Last Name/, 'Iyer');
+    await choose(/^State they work in/, 'Kerala');
+    await click(/Save and continue/);
+    await click(/Check and finish/);
+  };
+
+  it('says in plain words that nobody can be given work, rather than flagging it', async () => {
+    await openReview();
+    // The sentence, not a warning icon beside "no client standing". A complete record that
+    // cannot be offered a single job is the surprising half, and only saying it works.
+    expect(await screen.findByText(/cannot be given work for any client until a client standing is set/i))
+      .toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Set it now/i })).toBeInTheDocument();
+  });
+
+  it('sends the clerk to the step that fixes it', async () => {
+    await openReview();
+    await click(/Set it now/i);
+    expect(await screen.findByText('ICICI Bank')).toBeInTheDocument();
+  });
+
+  it('stops saying it once one client has accepted them', async () => {
+    await openReview({
+      'GET /assayers/asr-1/dossier': {
+        onboarding: REQUIREMENTS,
+        references: [],
+        empanelments: [{
+          id: 'emp-1', clientId: 'cli-1', status: 'ACTIVE', statusReason: null,
+          client: { id: 'cli-1', name: 'ICICI Bank' },
+        }],
+      },
+    });
+    expect(await screen.findByText(/Accepted by ICICI Bank/i)).toBeInTheDocument();
+    expect(screen.queryByText(/cannot be given work for any client/i)).toBeNull();
+  });
+});
+
+describe('the progress rail', () => {
+  it('names all seven steps and locks the later ones until the record exists', async () => {
+    await mount();
+    for (const title of ['The person', 'Where they live', 'ID and bank', 'Papers and scans', 'Contacts and pay', 'Who they can work for', 'Check and finish']) {
       expect(screen.getByRole('button', { name: new RegExp(title) })).toBeInTheDocument();
     }
     expect(screen.getByRole('button', { name: /Where they live/ })).toBeDisabled();

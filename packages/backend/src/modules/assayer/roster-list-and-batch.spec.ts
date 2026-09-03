@@ -127,14 +127,30 @@ describe('GET /assayers — the per-row document summary', () => {
     expect(params).toEqual([['a-1'], DocumentVerification.VERIFIED, DocumentVerification.PENDING]);
   });
 
-  /** The list serves up to 1,000 people; a query per row would be 1,000 round trips. */
-  it('runs one grouped query for the whole page, not one per row', async () => {
+  /**
+   * The list serves up to 1,000 people; a query per row would be 1,000 round trips.
+   *
+   * Asserted as "the same number of queries whatever the page size" rather than a fixed count.
+   * This originally pinned exactly one, and adding the empanelment tally — a second grouped query,
+   * still O(1) for the page — failed it while the property it exists to protect was untouched. A
+   * test that has to be edited every time a legitimate summary is added is one people learn to
+   * edit without reading, which is how the N+1 it guards against would eventually slip past.
+   */
+  it('runs a fixed number of grouped queries however many rows the page holds', async () => {
+    page([{ id: 'a-1' }]);
+    await service.findAll(1, 20);
+    const forOne = query.mock.calls.length;
+
+    query.mockClear();
     page([{ id: 'a-1' }, { id: 'a-2' }, { id: 'a-3' }, { id: 'a-4' }]);
     await service.findAll(1, 20);
 
-    expect(query).toHaveBeenCalledTimes(1);
-    expect(query.mock.calls[0][0]).toContain('GROUP BY assayer_id');
-    expect(query.mock.calls[0][1][0]).toEqual(['a-1', 'a-2', 'a-3', 'a-4']);
+    expect(query.mock.calls.length).toBe(forOne);
+    // Every one of them groups, and takes the whole page's ids as one parameter.
+    for (const [sql, params] of query.mock.calls) {
+      expect(sql).toContain('GROUP BY');
+      expect(params[0]).toEqual(['a-1', 'a-2', 'a-3', 'a-4']);
+    }
   });
 
   it('asks nothing at all for an empty page', async () => {

@@ -2,12 +2,15 @@ import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import {
-  AlertTriangle, ArrowRight, Map, RefreshCw,
+  AlertTriangle, ArrowRight, Lock, Map, RefreshCw,
   CheckCircle2, Inbox, Layers, CalendarClock, Users, ClipboardCheck,
   Send, IndianRupee, Activity as ActivityIcon, FolderKanban, Wallet,
   FileText, GitMerge,
 } from 'lucide-react';
 import { api } from '../services/api';
+import { AppError } from '../services/errors';
+import { canAccessRoute, defaultRouteFor } from '../config/route-permissions';
+import { useCurrentPermissions, useCurrentRoles } from '../hooks/useCurrentRoles';
 import { queryClient } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
 import { useScope, withScope } from '../context/ScopeContext';
@@ -91,6 +94,8 @@ export const Dashboard: React.FC = () => {
   // The territorial sections (funnel, due, capacity, projects) follow the header's global
   // scope; documents/validation/money stay national — see OperationsSnapshotService.
   const { scopeParams, scopeKey } = useScope();
+  const roles = useCurrentRoles();
+  const permissions = useCurrentPermissions();
 
   const { data, isLoading, isFetching, error, refetch } = useQuery({
     queryKey: [...queryKeys.dashboard.all, 'operations', scopeKey],
@@ -98,11 +103,21 @@ export const Dashboard: React.FC = () => {
     staleTime: 30_000,
   });
 
+  /**
+   * A 403 here is an answer, not a fault: the snapshot spans every project, and a role scoped to
+   * one desk is refused it by design. Told apart from a real outage so the page can say which.
+   */
+  const isNotEntitled = error instanceof AppError && error.status === 403;
+  const landing = defaultRouteFor(roles, permissions);
+
   const dueSoon = (data?.due ?? []).filter((d) => d.daysAway >= 0).slice(0, 8);
-  // Only the roles that /executive-map actually admits (see config/route-permissions.ts) get the
-  // button — linking anyone else there just round-trips them back here through ProtectedRoute.
-  const canSeeCommandCenter = !!data?.roles.some((r) =>
-    ['ADMIN', 'ADMIN', 'OPERATIONS', 'AUDITOR'].includes(r));
+  /**
+   * Asked of the route table rather than answered again here. The hand-kept copy of the role list
+   * had drifted — it named ADMIN twice, a leftover of the consolidation that merged two admin
+   * roles into one — and being a second copy it could not see a role built in Admin → Roles at
+   * all, so a coordinator on a database role was denied a button to a page they could open.
+   */
+  const canSeeCommandCenter = canAccessRoute(roles, permissions, '/executive-map');
 
   // ── The headline strip: at most five numbers that decide the day ───────────
   // Each tile is pushed only when the server sent the section behind it, so the strip
@@ -255,12 +270,34 @@ export const Dashboard: React.FC = () => {
 
       {isLoading && <DashboardSkeleton />}
 
-      {error && (
+      {error && (isNotEntitled ? (
+        /**
+         * Refused, not broken — and they are different things to the person reading the screen.
+         *
+         * Every failure used to render "Could not load the operational snapshot" with a Retry
+         * button. For someone whose role simply does not include these figures, that button could
+         * only ever fail in exactly the same way, so the page read as an outage and generated a
+         * support call for a decision somebody had made on purpose. This says what is true, and
+         * offers the one thing that does help: the page they can use.
+         */
+        <div style={{ padding: 14, background: 'var(--bg-secondary)', border: '1px solid var(--border-hair)', borderRadius: 'var(--radius-md)', color: 'var(--text-secondary)', fontSize: 13, display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between', flexWrap: 'wrap' }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8, lineHeight: 1.5 }}>
+            <Lock size={15} style={{ flexShrink: 0 }} />
+            These figures are not part of your access. They cover work across every project, and
+            your account has not been given that. Ask an administrator if you need it.
+          </span>
+          {landing !== '/dashboard' && (
+            <button onClick={() => navigate(landing)} className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: 12, whiteSpace: 'nowrap' }}>
+              Go to my start page
+            </button>
+          )}
+        </div>
+      ) : (
         <div style={{ padding: 14, background: 'var(--status-cancelled-bg)', border: '1px solid var(--danger)', borderRadius: 'var(--radius-md)', color: 'var(--danger)', fontSize: 13, display: 'flex', alignItems: 'center', gap: 10, justifyContent: 'space-between', flexWrap: 'wrap' }}>
           <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}><AlertTriangle size={15} /> Could not load the operational snapshot.</span>
           <button onClick={() => refetch()} className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: 12 }}>Retry</button>
         </div>
-      )}
+      ))}
 
       {data && (
         <>

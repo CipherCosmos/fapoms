@@ -4,7 +4,7 @@ import { AlertTriangle, ChevronDown, ChevronRight, Check, ExternalLink } from 'l
 
 import { api } from '../../services/api';
 import { useToast, AlertBanner } from '../../components/ui';
-import { label, Empty } from './hr-ui';
+import { label, Empty, Notice, LinkButton, fieldInput } from './hr-ui';
 import { userMessage } from '../../services/errors';
 import { counted } from '../../utils/plural';
 import { useImportIssues, useRefreshImportIssues, type ImportIssue as Issue } from './useImportIssues';
@@ -241,11 +241,13 @@ export const ImportIssuesPanel: React.FC<{
 
       {show && openCount > 0 && (
         <div style={{ borderTop: '1px solid var(--border-hair)' }}>
-          <div style={{ padding: '8px 14px', fontSize: '12px', color: 'var(--text-muted)', borderBottom: '1px solid var(--border-hair)', background: 'var(--bg-surface)' }}>
+          {/* The same "read this before you act on the list" block the rest of the section uses,
+              rather than a tinted strip of this panel's own. */}
+          <Notice tone="info" flush>
             Two ways to clear one: <strong style={{ color: 'var(--text-secondary)' }}>click a person</strong> to open their
             record and correct the field, then close it — or, when the same cell is wrong for everyone
             listed (a note that landed in the wrong column), <strong style={{ color: 'var(--text-secondary)' }}>decide the whole group at once</strong>.
-          </div>
+          </Notice>
           {groups.length === 0 ? (
             <Empty>Nothing outstanding.</Empty>
           ) : groups.map((g) => (
@@ -318,27 +320,27 @@ export const ImportIssuesPanel: React.FC<{
                       onKeyDown={(e) => { if (e.key === 'Enter') void resolveGroup(g); if (e.key === 'Escape') setExpanded(null); }}
                       placeholder="What was decided? e.g. “Availability note in the wrong column — ignore.”"
                       aria-label={`What was decided about the ${g.column} cells reading “${g.rawValue}”`}
-                      style={{
-                        flex: 1, minWidth: '260px', padding: '7px 10px', fontSize: '12.5px',
-                        background: 'var(--bg-surface)', color: 'var(--text-primary)',
-                        border: '1px solid var(--border-color)', borderRadius: '7px',
-                      }}
+                      style={{ ...fieldInput, flex: 1, minWidth: '260px', width: 'auto' }}
                     />
+                    {/*
+                      The app's own primary button. This was a fourth hand-written one — its own
+                      padding, its own radius, its own disabled cursor — sitting a few pixels off
+                      the primary buttons on every other HR screen.
+                    */}
                     <button
                       onClick={() => void resolveGroup(g)}
                       disabled={busy}
-                      style={{
-                        background: 'var(--primary)', color: 'var(--on-accent)', border: 'none', borderRadius: '7px',
-                        padding: '7px 13px', fontSize: '12.5px', fontWeight: 600, cursor: busy ? 'default' : 'pointer',
-                        display: 'flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap',
-                      }}
+                      className="btn btn-primary"
+                      style={{ fontSize: '12px', padding: '8px 14px', display: 'flex', alignItems: 'center', gap: '5px', whiteSpace: 'nowrap' }}
                     >
                       <Check size={13} /> {busy ? 'Closing…' : `Close ${counted(g.issues.length, 'cell')}`}
                     </button>
-                    <button onClick={() => { setExpanded(null); setResolution(''); setOutcome(null); }}
-                      style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '12.5px', cursor: 'pointer', padding: '7px 0' }}>
+                    <LinkButton
+                      tone="muted"
+                      onClick={() => { setExpanded(null); setResolution(''); setOutcome(null); }}
+                    >
                       Cancel
-                    </button>
+                    </LinkButton>
                   </div>
                   {/*
                     A part-closed group, named cell by cell.
@@ -371,12 +373,12 @@ export const ImportIssuesPanel: React.FC<{
                   )}
                 </>
               ) : (
-                <button
-                  onClick={() => { setExpanded(g.key); setResolution(''); }}
-                  style={{ background: 'none', border: 'none', padding: '6px 0 0', cursor: 'pointer', color: 'var(--primary)', fontSize: '12px', fontWeight: 600 }}
+                <LinkButton
+                  onClick={() => { setExpanded(g.key); setResolution(''); setOutcome(null); }}
+                  style={{ paddingTop: '6px' }}
                 >
                   Decide this
-                </button>
+                </LinkButton>
               ))}
             </div>
           ))}

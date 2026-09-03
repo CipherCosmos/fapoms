@@ -6,7 +6,7 @@ import { api, WebNotification, NotificationCategory } from '../services/api';
 import { activityEventLabel } from '@fapoms/shared';
 import { useToast } from './ui';
 import { connectSocket } from '../services/socket';
-import { useCurrentRoles } from '../hooks/useCurrentRoles';
+import { useCurrentPermissions, useCurrentRoles } from '../hooks/useCurrentRoles';
 import { canAccessRoute } from '../config/route-permissions';
 
 const CATEGORY_META: Record<NotificationCategory, { icon: React.ElementType; tone: string }> = {
@@ -158,6 +158,7 @@ export const NotificationDropdown: React.FC = () => {
   const panelRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
   const roles = useCurrentRoles();
+  const permissions = useCurrentPermissions();
   const { toast } = useToast();
 
   /**
@@ -357,7 +358,7 @@ export const NotificationDropdown: React.FC = () => {
     // A link the reader may not open (a feedback reply delivered before the desk narrowed to
     // super administrators, say) must not land them on a denied page from their own inbox;
     // the notifications list still shows them the message itself.
-    const mayOpen = (path: string) => canAccessRoute(roles, path.split('?')[0]);
+    const mayOpen = (path: string) => canAccessRoute(roles, permissions, path.split('?')[0]);
 
     if (targetPath && targetPath !== '/dashboard' && mayOpen(targetPath)) {
       navigate(targetPath);

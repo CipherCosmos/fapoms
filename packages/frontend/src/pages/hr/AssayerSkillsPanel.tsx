@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2 } from 'lucide-react';
 import { daysUntilExpiry } from '@fapoms/shared';
 
 import { api } from '../../services/api';
 import { useConfirm, useToast, AlertBanner, SkeletonList } from '../../components/ui';
-import { label, Empty } from './hr-ui';
+import { label, Empty, Notice, Lede, LinkButton, Field, fieldInput, Editor } from './hr-ui';
 import { fmtDate } from '../../utils/dates';
 import { userMessage } from '../../services/errors';
 import { counted } from '../../utils/plural';
@@ -48,11 +48,8 @@ interface Attribute {
  */
 const daysUntil = (iso?: string | null): number | null => daysUntilExpiry(iso ?? null);
 
-const input: React.CSSProperties = {
-  padding: '6px 9px', fontSize: '12.5px', background: 'var(--bg-surface)',
-  color: 'var(--text-primary)', border: '1px solid var(--border-color)', borderRadius: '7px',
-  fontFamily: 'inherit', minWidth: 0,
-};
+/** The date box that sits in a row rather than on a form — narrower, same skin. */
+const inlineDate: React.CSSProperties = { ...fieldInput, width: 'auto', padding: '4px 7px', fontSize: '12px' };
 
 export const AssayerSkillsPanel: React.FC<{
   assayerId: string;
@@ -173,72 +170,80 @@ export const AssayerSkillsPanel: React.FC<{
       {/* The section's one failure channel, not a hand-rolled red line of its own. */}
       <AlertBanner type="error" message={err} onClose={() => setErr(null)} style={{ marginBottom: '10px' }} />
 
+      <Lede>
+        What {who} can be matched on when work is planned. A branch that requires a certificate is
+        never offered to somebody whose copy of it has lapsed.
+      </Lede>
+
       {/*
         An expired certification is refused by the eligibility gate, so the person is quietly
         unassignable. Said at the top rather than left to be worked out from a date halfway down
         a list — and the renewal is now in this panel rather than a page away.
       */}
       {lapsed.length > 0 && (
-        <div style={{ padding: '11px 13px', borderRadius: '8px', marginBottom: '12px', background: 'var(--status-cancelled-bg)', border: '1px solid color-mix(in srgb, var(--danger) 35%, transparent)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '7px', color: 'var(--danger)', fontWeight: 700, fontSize: '12.5px' }}>
-            <AlertTriangle size={14} /> {counted(lapsed.length, 'certificate')} expired
-          </div>
-          <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '5px' }}>
-            {lapsed.map((c) => c.name).join(', ')} — any branch that requires these will refuse
-            this assayer until a renewal date is recorded below.
-          </div>
-        </div>
+        <Notice
+          tone="danger"
+          style={{ marginBottom: '12px' }}
+          title={`${counted(lapsed.length, 'certificate')} expired`}
+        >
+          {lapsed.map((c) => c.name).join(', ')} — any branch that requires these will refuse
+          this assayer until a renewal date is recorded below.
+        </Notice>
       )}
 
       {canManage && (
-        draft ? (
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '12px', paddingBottom: '12px', borderBottom: '1px solid var(--border-hair)' }}>
+        <LinkButton
+          icon={<Plus size={12} />}
+          onClick={() => setDraft({ type: 'CERTIFICATION', name: '', expiryDate: '' })}
+          style={{ fontSize: '12.5px', paddingBottom: '12px' }}
+        >
+          Add a skill, language or certificate
+        </LinkButton>
+      )}
+
+      {draft && (
+        <Editor
+          title="Add a skill, language or certificate"
+          onCancel={() => setDraft(null)}
+          onSave={add}
+          saveLabel="Add"
+          busy={busy}
+          saveDisabled={!draft.name.trim()}
+        >
+          <Field title="What kind">
             <select
               value={draft.type}
               onChange={(e) => setDraft({ ...draft, type: e.target.value as AttrType })}
-              style={{ ...input, flex: '0 0 auto' }}
+              style={fieldInput}
             >
               {TYPES.map((t) => <option key={t} value={t}>{ATTRIBUTE_TYPE_LABEL[t]}</option>)}
             </select>
+          </Field>
+          <Field title="Name">
             <input
               autoFocus
               list={`vocab-${draft.type}`}
               value={draft.name}
               onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-              onKeyDown={(e) => { if (e.key === 'Enter') add(); if (e.key === 'Escape') setDraft(null); }}
               placeholder={`Name of the ${attributeTypeLabel(draft.type).toLowerCase()}`}
-              style={{ ...input, flex: '1 1 160px' }}
+              style={fieldInput}
             />
             {/* Existing names offered, not enforced: a new certification has to be typeable. */}
             <datalist id={`vocab-${draft.type}`}>
               {(vocab[draft.type] ?? []).map((v) => <option key={v.name} value={v.name} />)}
             </datalist>
-            {EXPIRES[draft.type] && (
+          </Field>
+          {EXPIRES[draft.type] && (
+            <Field title="When it stops working">
               <input
                 type="date"
                 value={draft.expiryDate}
                 onChange={(e) => setDraft({ ...draft, expiryDate: e.target.value })}
-                title="When it stops working"
-                style={{ ...input, flex: '0 0 auto' }}
+                style={fieldInput}
               />
-            )}
-            <button onClick={add} disabled={busy || !draft.name.trim()} style={{
-              background: 'var(--primary)', color: 'var(--on-accent)', border: 'none', borderRadius: '7px',
-              padding: '7px 13px', fontSize: '12.5px', fontWeight: 600,
-              cursor: busy || !draft.name.trim() ? 'default' : 'pointer',
-            }}>Add</button>
-            <button onClick={() => setDraft(null)} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', fontSize: '12.5px', cursor: 'pointer' }}>
-              Cancel
-            </button>
-          </div>
-        ) : (
-          <button
-            onClick={() => setDraft({ type: 'CERTIFICATION', name: '', expiryDate: '' })}
-            style={{ background: 'none', border: 'none', padding: '0 0 12px', cursor: 'pointer', color: 'var(--primary)', fontSize: '12.5px', fontWeight: 600 }}
-          >
-            <Plus size={12} style={{ verticalAlign: '-2px' }} /> Add a skill, language or certificate
-          </button>
-        )
+            </Field>
+          )}
+        </Editor>
       )}
 
       {sorted!.length === 0 ? (
@@ -268,19 +273,21 @@ export const AssayerSkillsPanel: React.FC<{
                   type="date"
                   defaultValue={w.expiryDate ? String(w.expiryDate).slice(0, 10) : ''}
                   onChange={(e) => renew(w, e.target.value)}
+                  // Named, not just titled: a bare date box beside a certificate name is the same
+                  // problem an unlabelled icon button is — the control is reachable and says
+                  // nothing about which of the rows it belongs to.
+                  aria-label={w.expiryDate ? `Record a renewal for ${w.name}` : `Record when ${w.name} stops working`}
                   title={w.expiryDate ? 'Record a renewal' : 'Record when it stops working'}
-                  style={{ ...input, padding: '4px 7px', fontSize: '12px' }}
+                  style={inlineDate}
                 />
               )}
               {canManage && (
-                <button
+                <LinkButton
                   onClick={() => remove(w)}
-                  aria-label={`Remove ${w.name}`}
-                  title={`Remove ${w.name}`}
-                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: '2px' }}
-                >
-                  <Trash2 size={13} />
-                </button>
+                  tone="muted"
+                  label={`Remove ${w.name}`}
+                  icon={<Trash2 size={13} />}
+                />
               )}
             </span>
           </div>

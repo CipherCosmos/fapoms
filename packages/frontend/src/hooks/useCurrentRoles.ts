@@ -90,11 +90,54 @@ export function useCurrentPermissions(): string[] {
   }, []);
 }
 
+/**
+ * The permission keys of the signed-in user, for a capability check that was given only roles.
+ *
+ * The twelve `can…` helpers below take `SystemRole[]` and are called from 162 places. Threading a
+ * second argument through all of them would be a large, mechanical, error-prone edit for no
+ * reader's benefit — and every one of those call sites is already reading the same cache one line
+ * earlier, via `useCurrentRoles()`. So a caller may pass permissions explicitly (tests do), and
+ * when it does not, the helper asks the cache itself.
+ *
+ * Not a hook: these are plain predicates called inside render, sometimes conditionally, and giving
+ * them hook semantics would break the rules of hooks at call sites that already exist.
+ */
+function heldPermissions(explicit?: string[]): string[] {
+  if (explicit) return explicit;
+  try {
+    const raw = localStorage.getItem('fapoms_user_cache');
+    return raw ? permissionKeysFrom(JSON.parse(raw)) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Role name OR permission — the same rule the API applies, and the reason this file changed.
+ *
+ * Every helper below listed built-in role NAMES. A role built in Admin → Roles is a database row
+ * that matches none of them, so an HR role granted `ASSAYER:CREATE` and `ASSAYER:EDIT` saw the
+ * workforce console load and then had no "Add assayer" button, no import control, no row
+ * selection — the screen it was created to operate, in read-only. The backend had already been
+ * taught to authorise by permission; these buttons were the last place still asking only for a
+ * name.
+ *
+ * Fails closed like the route gate: a capability with no permission named here stays role-only.
+ */
+function allowed(
+  roles: SystemRole[],
+  named: SystemRole[],
+  permission: string | null,
+  permissions?: string[],
+): boolean {
+  if (roles.some((r) => named.includes(r))) return true;
+  if (!permission) return false;
+  return heldPermissions(permissions).includes(permission);
+}
+
 /** HR own the assayer workforce record; admins retain override. */
-export function canManageAssayers(roles: SystemRole[]): boolean {
-  return roles.some((r) =>
-    [SystemRole.ADMIN, SystemRole.OPERATIONS].includes(r),
-  );
+export function canManageAssayers(roles: SystemRole[], permissions?: string[]): boolean {
+  return allowed(roles, [SystemRole.ADMIN, SystemRole.OPERATIONS], 'ASSAYER:EDIT:ORGANIZATION', permissions);
 }
 
 export function hasAnyRole(roles: SystemRole[], allowed: SystemRole[]): boolean {
@@ -102,10 +145,8 @@ export function hasAnyRole(roles: SystemRole[], allowed: SystemRole[]): boolean 
 }
 
 /** Branch records are operations' to maintain; audit and finance only read them. */
-export function canManageBranches(roles: SystemRole[]): boolean {
-  return roles.some((r) =>
-    [SystemRole.ADMIN, SystemRole.OPERATIONS].includes(r),
-  );
+export function canManageBranches(roles: SystemRole[], permissions?: string[]): boolean {
+  return allowed(roles, [SystemRole.ADMIN, SystemRole.OPERATIONS], 'BRANCH:EDIT:ORGANIZATION', permissions);
 }
 
 /**
@@ -113,15 +154,13 @@ export function canManageBranches(roles: SystemRole[]): boolean {
  * they need the portfolio view — but hold no project:edit grant, so showing them
  * Create/Edit/Delete or transition buttons only produces a 403 on click.
  */
-export function canManageProjects(roles: SystemRole[]): boolean {
-  return roles.some((r) =>
-    [SystemRole.ADMIN, SystemRole.OPERATIONS].includes(r),
-  );
+export function canManageProjects(roles: SystemRole[], permissions?: string[]): boolean {
+  return allowed(roles, [SystemRole.ADMIN, SystemRole.OPERATIONS], 'PROJECT:EDIT:ORGANIZATION', permissions);
 }
 
 /** Deleting a project is admin-only on the backend. */
-export function canDeleteProjects(roles: SystemRole[]): boolean {
-  return roles.some((r) => [SystemRole.ADMIN].includes(r));
+export function canDeleteProjects(roles: SystemRole[], permissions?: string[]): boolean {
+  return allowed(roles, [SystemRole.ADMIN], 'PROJECT:DELETE:ORGANIZATION', permissions);
 }
 
 /**
@@ -129,20 +168,18 @@ export function canDeleteProjects(roles: SystemRole[]): boolean {
  * Gating the button on canManageBranches showed it to operations managers, whose click could
  * only ever return 403.
  */
-export function canDeleteBranches(roles: SystemRole[]): boolean {
-  return roles.some((r) => [SystemRole.ADMIN].includes(r));
+export function canDeleteBranches(roles: SystemRole[], permissions?: string[]): boolean {
+  return allowed(roles, [SystemRole.ADMIN], 'BRANCH:DELETE:ORGANIZATION', permissions);
 }
 
 /** Deleting a planning rule is admin-only on the backend, as above. */
-export function canDeleteRules(roles: SystemRole[]): boolean {
-  return roles.some((r) => [SystemRole.ADMIN].includes(r));
+export function canDeleteRules(roles: SystemRole[], permissions?: string[]): boolean {
+  return allowed(roles, [SystemRole.ADMIN], 'PLANNING:DELETE:ORGANIZATION', permissions);
 }
 
 /** Holidays: operations own audit scheduling, so they can maintain the calendar too. */
-export function canManageHolidays(roles: SystemRole[]): boolean {
-  return roles.some((r) =>
-    [SystemRole.ADMIN, SystemRole.OPERATIONS].includes(r),
-  );
+export function canManageHolidays(roles: SystemRole[], permissions?: string[]): boolean {
+  return allowed(roles, [SystemRole.ADMIN, SystemRole.OPERATIONS], 'REFERENCE_DATA:EDIT:ORGANIZATION', permissions);
 }
 
 /**
@@ -153,9 +190,8 @@ export function canManageHolidays(roles: SystemRole[]): boolean {
  * a page whose permission check is named after a different feature is a trap for whoever
  * changes either list next.
  */
-export function canAdministerPlatformSettings(roles: SystemRole[]): boolean {
-  // Super administrators only, by decision (2026-08-17) — mirrors SETTINGS_ADMIN_ROLES.
-  return roles.includes(SystemRole.ADMIN);
+export function canAdministerPlatformSettings(roles: SystemRole[], permissions?: string[]): boolean {
+  return allowed(roles, [SystemRole.ADMIN], 'CONFIGURATION:EDIT:ORGANIZATION', permissions);
 }
 
 /**
@@ -165,8 +201,30 @@ export function canAdministerPlatformSettings(roles: SystemRole[]): boolean {
  * with whatever platform-settings decides next. Mirrors the controller-level
  * `@Roles(SystemRole.ADMIN)` on `DataResetController`.
  */
+/**
+ * Deliberately NOT permission-aware, unlike every other helper here.
+ *
+ * This one wipes operational data. There is no permission in the vocabulary that means "may
+ * destroy the database", and inventing one — or accepting `CONFIGURATION:EDIT` as a proxy — would
+ * let an administrator hand out an ordinary-looking settings grant that turns out to include it.
+ * A capability whose blast radius is the whole system should be reachable only by being the
+ * built-in administrator, which is also what `@Roles(SystemRole.ADMIN)` on `DataResetController`
+ * already says.
+ */
 export function canAdministerDataReset(roles: SystemRole[]): boolean {
   return roles.includes(SystemRole.ADMIN);
+}
+
+/**
+ * Registering a NEW assayer, as distinct from editing the ones already on the roster.
+ *
+ * `canManageAssayers` maps to `ASSAYER:EDIT` because that is what most of what it guards actually
+ * does — bulk actions, row selection, the issues panel. The "Add assayer" button and the roster
+ * import are creations, and a role granted edit but not create would otherwise be offered both.
+ * The API makes the same distinction: `POST /assayers` requires `assayer:create:organization`.
+ */
+export function canCreateAssayers(roles: SystemRole[], permissions?: string[]): boolean {
+  return allowed(roles, [SystemRole.ADMIN, SystemRole.OPERATIONS], 'ASSAYER:CREATE:ORGANIZATION', permissions);
 }
 
 /**
@@ -178,8 +236,8 @@ export function canAdministerDataReset(roles: SystemRole[]): boolean {
  * `canAdministerPlatformSettings`: folding a page into another screen must not hand out that
  * screen's mailbox passwords and tax details along with it.
  */
-export function canManagePlanningRules(roles: SystemRole[]): boolean {
-  return roles.includes(SystemRole.ADMIN) || roles.includes(SystemRole.OPERATIONS);
+export function canManagePlanningRules(roles: SystemRole[], permissions?: string[]): boolean {
+  return allowed(roles, [SystemRole.ADMIN, SystemRole.OPERATIONS], 'PLANNING:EDIT:ORGANIZATION', permissions);
 }
 
 /**
@@ -190,23 +248,16 @@ export function canManagePlanningRules(roles: SystemRole[]): boolean {
  * away, so they reach this section and nothing else on the screen. Managing the rates is still
  * `canManageTransportRates`, which the section applies itself.
  */
-export function canReadTravelSettings(roles: SystemRole[]): boolean {
-  return roles.includes(SystemRole.ADMIN)
-    || roles.includes(SystemRole.OPERATIONS)
-    || roles.includes(SystemRole.AUDITOR);
+export function canReadTravelSettings(roles: SystemRole[], permissions?: string[]): boolean {
+  return allowed(roles, [SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR], 'CONFIGURATION:VIEW:ORGANIZATION', permissions);
 }
 
 /**
  * Transport rates price the travel in every offer. Operations own them — the finance role that
  * used to share this folded into OPERATIONS. Mirrors RATE_MANAGER_ROLES on the backend.
  */
-export function canManageTransportRates(roles: SystemRole[]): boolean {
-  return roles.some((r) =>
-    [
-      SystemRole.ADMIN,
-      SystemRole.OPERATIONS,
-    ].includes(r),
-  );
+export function canManageTransportRates(roles: SystemRole[], permissions?: string[]): boolean {
+  return allowed(roles, [SystemRole.ADMIN, SystemRole.OPERATIONS], 'CONFIGURATION:EDIT:ORGANIZATION', permissions);
 }
 
 /**

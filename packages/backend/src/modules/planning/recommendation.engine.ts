@@ -7,7 +7,7 @@ import { BranchEntity } from '../branch/branch.entity';
 import { RoutingService, RouteSource } from '../geo/routing.provider';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { BusinessRuleEntity } from '../platform/rules/business-rule.entity';
-import { AssignmentStatus, AssayerStatus, AssayerLifecycleStatus, EmpanelmentStatus, calculateHaversineDistance, businessDateKey, BypassableRule, ONBOARDING_STAGES, onboardingNextStep } from '@fapoms/shared';
+import { AssignmentStatus, AssayerStatus, AssayerLifecycleStatus, EmpanelmentStatus, PLANNABLE_EMPANELMENT_STANDINGS, calculateHaversineDistance, businessDateKey, BypassableRule, ONBOARDING_STAGES, onboardingNextStep } from '@fapoms/shared';
 import { RuleBypassService } from '../platform/rule-bypass/rule-bypass.service';
 import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
 import { ClientEntity } from '../client/client.entity';
@@ -460,14 +460,13 @@ export const NO_EMPANELMENT_ROW_SETTING = 'planning.eligibility.noEmpanelmentRow
 
 /**
  * The standings that qualify a person to be planned for a client. Everything else — including
- * having no recorded standing at all, under the default policy — excludes. This set is
- * deliberately NOT configurable: a bank's empanelment list is a compliance fact, and
- * "recommended someone the bank never empanelled" is the failure this gate exists to prevent.
+ * having no recorded standing at all, under the default policy — excludes.
+ *
+ * The list itself now lives in `@fapoms/shared`, because the registration desk has to tell a
+ * clerk which standings actually make somebody plannable and a second copy of this rule would
+ * eventually say something different from the gate that enforces it.
  */
-const QUALIFYING_STANDINGS: ReadonlySet<string> = new Set([
-  EmpanelmentStatus.ACTIVE,
-  EmpanelmentStatus.RECOMMENDED,
-]);
+const QUALIFYING_STANDINGS: ReadonlySet<string> = new Set(PLANNABLE_EMPANELMENT_STANDINGS);
 
 /** How each disqualifying standing reads on the excluded panel — the standing, named. */
 const STANDING_EXCLUSION_DETAIL: Record<string, (client: string) => string> = {

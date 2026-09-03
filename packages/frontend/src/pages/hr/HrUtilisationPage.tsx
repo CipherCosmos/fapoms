@@ -1,7 +1,8 @@
 import React from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { card, label, Stat, Empty, OpenLink, fmtDate, attritionExplainer } from './hr-ui';
+import { Stat, Empty, OpenLink, fmtDate, attritionExplainer, Section, Notice, Lede } from './hr-ui';
 import { DataTable } from '../../components/ui';
+import { counted } from '../../utils/plural';
 import type { HrWorkforceOverview } from '../../hooks/useHrWorkforce';
 import { useHr } from './HrLayout';
 import { assayerLifecycleLabel } from '@fapoms/shared';
@@ -68,13 +69,23 @@ const UtilisationTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate:
   const attrition = attritionExplainer(d.attrition);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      <Lede>
+        {noWorkYet
+          ? 'Who is busy, who is idle and who has left — none of it measurable yet, because no work has been assigned to anybody.'
+          : `Who is carrying too much, who is carrying nothing, and who has gone. ${
+            d.utilisation.utilizationCounts.overUtilized > 0
+              ? `${counted(d.utilisation.utilizationCounts.overUtilized, 'person is', 'people are')} over capacity — move work off them before the next planning run.`
+              : d.utilisation.idleCount > 0
+                ? `${counted(d.utilisation.idleCount, 'person has', 'people have')} had no work in ${d.utilisation.idleAfterDays} days.`
+                : 'Nobody is over capacity and nobody is sitting idle.'}`}
+      </Lede>
+
       {noWorkYet && (
-        <div style={{ ...card, fontSize: '13px', color: 'var(--text-secondary)' }}>
-          <strong style={{ color: 'var(--text-primary)' }}>No work has been assigned to anyone yet.</strong>{' '}
+        <Notice tone="info" title="No work has been assigned to anyone yet.">
           Everything below is zero because there are no assignments in the system — not because the team is
           sitting idle. Workload figures start filling in once branches are offered to assayers in{' '}
           <Link to="/planning" style={{ color: 'var(--accent)', fontWeight: 600 }}>Planning</Link>.
-        </div>
+        </Notice>
       )}
       <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
         <Stat
@@ -90,10 +101,11 @@ const UtilisationTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate:
         <Stat value={p.belowPar} caption="Rated below 3" tone={p.belowPar ? 'var(--warning)' : undefined} />
       </div>
 
-      <section style={card}>
-        {/* The chip that got you here says "Workload", so this section says workload too — it used to
-            say "under or over-utilised", which is a third word for the same thing on the same click. */}
-        <div style={{ ...label, marginBottom: '10px' }}>Workload, person by person ({d.utilisation.utilizationCounts.total})</div>
+      {/* The chip that got you here says "Workload", so this section says workload too — it used to
+          say "under or over-utilised", which is a third word for the same thing on the same click.
+          The count is the Section's, not written into the title in brackets: two of the three
+          headings on this page did it that way and the third had no count at all. */}
+      <Section title="Workload, person by person" count={d.utilisation.utilizationCounts.total}>
         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '12px' }}>
           <Stat value={d.utilisation.utilizationCounts.overUtilized} caption="Over capacity" tone={d.utilisation.utilizationCounts.overUtilized ? 'var(--danger)' : undefined} />
           <Stat value={d.utilisation.utilizationCounts.balanced} caption="Balanced" tone='var(--success)' />
@@ -137,12 +149,12 @@ const UtilisationTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate:
             ]}
           />
         )}
-      </section>
+      </Section>
 
-      <section style={card}>
-        <div style={{ ...label, marginBottom: '10px' }}>
-          {noWorkYet ? 'Waiting for their first job' : 'Idle and never-deployed'} ({d.utilisation.idle.length})
-        </div>
+      <Section
+        title={noWorkYet ? 'Waiting for their first job' : 'Idle and never-deployed'}
+        count={d.utilisation.idle.length}
+      >
         {d.utilisation.idle.length === 0 ? (
           <Empty>Everyone on the active roster has had work in the last {d.utilisation.idleAfterDays} days.</Empty>
         ) : (
@@ -167,10 +179,9 @@ const UtilisationTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate:
             ]}
           />
         )}
-      </section>
+      </Section>
 
-      <section style={card}>
-        <div style={{ ...label, marginBottom: '10px' }}>People who have left</div>
+      <Section title="People who have left" count={d.attrition.recent.length}>
         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '12px' }}>
           <Stat value={d.attrition.exits90d} caption="Exits (90 days)" />
           <Stat value={d.attrition.exits12m} caption="Exits (12 months)" />
@@ -240,7 +251,7 @@ const UtilisationTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate:
             ]}
           />
         )}
-      </section>
+      </Section>
     </div>
   );
 };

@@ -785,6 +785,7 @@ export class DocumentController {
 
   @Get(':id')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
+  @RequirePermissions('document:view:organization')
   @ApiOperation({ summary: 'Get document metadata' })
   async findOne(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
     const doc = await this.documentService.findOne(id);
@@ -953,6 +954,7 @@ export class DocumentController {
    */
   @Get(':id/trail')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
+  @RequirePermissions('document:view:organization')
   @ApiOperation({ summary: 'Full transport/chain-of-custody trail for a document' })
   async getTransportTrail(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
     const doc = await this.documentService.findOne(id);
@@ -1111,6 +1113,7 @@ export class DocumentController {
   // page's first call 403s and renders only an error banner for validation/audit viewers.
   @Get('operations/overview')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
+  @RequirePermissions('document:view:organization')
   @ApiOperation({ summary: 'Document control console: branch context, transport trail, pipeline and action queues' })
   @ApiQuery({ name: 'page', required: false, description: 'Branch list page (1-based).' })
   @ApiQuery({ name: 'limit', required: false, description: 'Branch rows per page; clamped server-side.' })
@@ -1229,6 +1232,7 @@ export class DocumentController {
 
   @Get('assessment/:assessmentId')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
+  @RequirePermissions('document:view:organization')
   @ApiOperation({ summary: 'Get documents for an assessment' })
   async findByAssessment(@Param('assessmentId', ParseUUIDPipe) assessmentId: string, @GlobalScopeFilter() scope?: GlobalScope) {
     // Every document under one assessment belongs to that assessment's single branch, so this
@@ -1252,6 +1256,7 @@ export class DocumentController {
 
   @Get()
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
+  @RequirePermissions('document:view:organization')
   @ApiOperation({ summary: 'Get all system documents' })
   async findAll(@GlobalScopeFilter() scope?: GlobalScope) {
     const list = await this.documentService.findAll(scope);
@@ -1260,6 +1265,7 @@ export class DocumentController {
 
   @Get('stats/summary')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
+  @RequirePermissions('document:view:organization')
   @ApiOperation({ summary: 'Get document statistics' })
   async getStats(@GlobalScopeFilter() scope?: GlobalScope) {
     const stats = await this.documentService.getDocumentStats(scope);
@@ -1326,6 +1332,7 @@ export class DocumentController {
 
   @Get('data-entry/queue')
   @Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.OPERATIONS, SystemRole.AUDITOR)
+  @RequirePermissions('document:view:organization')
   @ApiOperation({ summary: "Returned packets at the data entry desk and who owns each" })
   async dataEntryQueue(
     @Query('assignedTo') assignedTo?: string,

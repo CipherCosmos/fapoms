@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Wallet, Search, Pencil, Plus, AlertTriangle, Clock } from 'lucide-react';
+import { Wallet, Pencil, Plus, AlertTriangle, Clock } from 'lucide-react';
 import { Link } from 'react-router-dom';
+import { onboardingNextStep } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { fetchWholeAssayerRoster } from '../../services/assayer-roster';
 import { userMessage } from '../../services/errors';
-import { AlertBanner, DataTable } from '../../components/ui';
+import { AlertBanner, DataTable, SearchInput } from '../../components/ui';
 import { listPhase } from '../../components/ui/list-phase';
-import { card, label, Empty, fmtDate } from './hr-ui';
+import { card, label, Empty, Notice, Lede, fmtDate } from './hr-ui';
+import { counted } from '../../utils/plural';
 import { useHr } from './HrLayout';
 import { CommercialProfileModal, formatMoney, type CommercialProfile } from './CommercialProfileModal';
 
@@ -165,15 +167,18 @@ export const HrPayPage: React.FC = () => {
         read as a right one.
       */}
       {shortfall && (
-        <div style={{ ...card, borderLeft: '3px solid var(--warning)', display: 'flex', gap: '9px', alignItems: 'flex-start', fontSize: '12.5px' }}>
-          <AlertTriangle size={15} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: '1px' }} />
-          <span style={{ color: 'var(--text-secondary)' }}>
-            Only {shortfall.shown} of the {shortfall.total} people on the roster could be loaded, so
-            the counts and the table below leave {shortfall.total - shortfall.shown} out. Reload the
-            page to try again.
-          </span>
-        </div>
+        <Notice tone="warning">
+          Only {shortfall.shown} of the {shortfall.total} people on the roster could be loaded, so
+          the counts and the table below leave {shortfall.total - shortfall.shown} out. Reload the
+          page to try again.
+        </Notice>
       )}
+
+      <Lede>
+        What each person is paid, side by side. {unpricedCount > 0
+          ? `${counted(unpricedCount, 'person', 'people')} have no agreed base fee of their own, so every audit they do is paid at the client’s contracted default — set their terms from the row.`
+          : 'Everybody has their own agreed base fee; nothing here is falling back to a client default.'}
+      </Lede>
       <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
         <button onClick={() => setFilter('all')} style={tile(filter === 'all')}>
           <div style={statValue}>{roster.length}</div>
@@ -199,36 +204,35 @@ export const HrPayPage: React.FC = () => {
       </div>
 
       {unbankedCount > 0 && (
-        <div style={{ ...card, borderLeft: '3px solid var(--danger)', display: 'flex', gap: '9px', alignItems: 'flex-start', fontSize: '12.5px' }}>
-          <AlertTriangle size={15} style={{ color: 'var(--danger)', flexShrink: 0, marginTop: '1px' }} />
-          <span style={{ color: 'var(--text-secondary)' }}>
-            Account number and IFSC are part of the assayer's own record, not their rate card. Use
-            the “Add bank details” link on any row below — it opens that person's record with the
-            Financial section ready to fill in.
-          </span>
-        </div>
+        <Notice tone="danger">
+          Account number and IFSC are part of the assayer's own record, not their rate card. Use
+          the “Add bank details” link on any row below — it opens that person's record with the
+          Financial section ready to fill in.
+        </Notice>
       )}
 
       {filter === 'unpriced' && unpricedCount > 0 && (
-        <div style={{ ...card, borderLeft: '3px solid var(--warning)', display: 'flex', gap: '9px', alignItems: 'flex-start', fontSize: '12.5px' }}>
-          <AlertTriangle size={15} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: '1px' }} />
-          <span style={{ color: 'var(--text-secondary)' }}>
-            These people have no base fee of their own in force today — either no pay terms at all, or
-            pay terms saved with the base fee left at zero. Either way every audit they do is paid at
-            the client's contracted default fee. Use “Set pay terms” on a row to agree their own.
-          </span>
-        </div>
+        <Notice tone="warning">
+          These people have no base fee of their own in force today — either no pay terms at all, or
+          pay terms saved with the base fee left at zero. Either way every audit they do is paid at
+          the client's contracted default fee. Use “Set pay terms” on a row to agree their own.
+        </Notice>
       )}
 
       <div style={card}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px', flexWrap: 'wrap' }}>
           <Wallet size={15} style={{ color: 'var(--accent)' }} />
           <span style={{ ...label, fontSize: '12px' }}>What each person is paid today</span>
-          <div style={{ position: 'relative', marginLeft: 'auto' }}>
-            <Search size={13} style={{ position: 'absolute', left: '9px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
-            <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Find an assayer…"
-              style={{ padding: '7px 10px 7px 28px', fontSize: '12.5px', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: '8px', color: 'var(--text-primary)', minWidth: '200px' }} />
-          </div>
+          {/* The shared one. This was the magnifier-in-a-relative-wrapper written out by hand for
+              the ninth time, a pixel or two off the eight others. */}
+          <SearchInput
+            value={search}
+            onChange={setSearch}
+            placeholder="Find an assayer…"
+            flex={false}
+            compact
+            style={{ marginLeft: 'auto', minWidth: '200px' }}
+          />
         </div>
 
         {/*
@@ -264,6 +268,22 @@ export const HrPayPage: React.FC = () => {
                 <>
                   <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{a.displayName}</div>
                   <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{a.assayerCode}{a.district ? ` · ${a.district}` : ''}</div>
+                  {/*
+                    Somebody still joining is not a pricing omission, and this page had no way of
+                    saying so: `lifecycleStatus` was fetched, typed, and then read by nothing, so a
+                    trainee sat in the table beside working assayers with the same amber "paid the
+                    client default" against them and no hint that they cannot be sent anywhere yet.
+
+                    The words are `ONBOARDING_NEXT_STEP` from @fapoms/shared — the same sentence the
+                    planner prints when it refuses this person work, so a clerk who arrives here
+                    from that refusal reads the instruction they were already given rather than a
+                    second wording of it.
+                  */}
+                  {onboardingNextStep(a.lifecycleStatus) && (
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px' }}>
+                      Still joining — {onboardingNextStep(a.lifecycleStatus)}
+                    </div>
+                  )}
                   {bankMissing(a) && (
                     <Link
                       /**

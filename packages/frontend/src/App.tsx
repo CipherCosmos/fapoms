@@ -1,6 +1,7 @@
 import React, { useState, useEffect, Suspense } from 'react';
 import { Routes, Route, Navigate, Outlet, useNavigate, useLocation, useParams } from 'react-router-dom';
-import { defaultRouteForRoles } from './config/route-permissions';
+import { defaultRouteFor } from './config/route-permissions';
+import { permissionKeysFrom } from './hooks/useCurrentRoles';
 import { SystemRole } from '@fapoms/shared';
 import { Login } from './pages/Login';
 import { Layout } from './components/Layout';
@@ -236,6 +237,12 @@ export const App: React.FC = () => {
   }
 
   const userRoles = currentUser?.roles?.map((r) => r.name) ?? [];
+  /**
+   * Read off the live profile rather than the cache the hooks use, because this is the object the
+   * cache is written FROM — taking it from here means the gate is right on the very first render
+   * after sign-in instead of one write behind.
+   */
+  const userPermissions = permissionKeysFrom(currentUser);
 
   const handleLoginSuccess = (jwtToken: string, refreshToken: string) => {
     // Belt and braces: a sign-in that follows a crash, a back-button return, or any path that
@@ -343,7 +350,7 @@ export const App: React.FC = () => {
           element={
             isLoadingUser && userRoles.length === 0
               ? <RouteFallback />
-              : <PostLoginRedirect fallback={defaultRouteForRoles(userRoles)} />
+              : <PostLoginRedirect fallback={defaultRouteFor(userRoles, userPermissions)} />
           }
         />
         {/*
@@ -354,7 +361,7 @@ export const App: React.FC = () => {
           pasted onto all 27 routes individually, which meant every new route had to remember
           to add it by hand.
         */}
-        <Route element={<ProtectedRoute userRoles={userRoles} isLoading={isLoadingUser}><Outlet /></ProtectedRoute>}>
+        <Route element={<ProtectedRoute userRoles={userRoles} userPermissions={userPermissions} isLoading={isLoadingUser}><Outlet /></ProtectedRoute>}>
           <Route path="/dashboard" element={<Dashboard />} />
           <Route path="/executive-map" element={<ExecutiveMap />} />
           <Route path="/falling-behind" element={<FallingBehind />} />

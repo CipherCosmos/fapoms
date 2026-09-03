@@ -26,7 +26,14 @@ jest.mock('react-router-dom', () => ({
   useSearchParams: () => [new URLSearchParams(), jest.fn()],
 }));
 jest.mock('./AssayerVettingTab', () => ({
-  AssayerVettingTab: () => null, STANDING_LABELS: {}, BLOCKING_STANDINGS: new Set(),
+  AssayerVettingTab: () => null,
+  STANDING_LABELS: {},
+  // The real rule, not a stub of it: `standingStance` is what decides whether a standing chip on
+  // the record reads as refused, not-ready or fine, and it now answers that from the same
+  // `standingAllowsPlanning` the planner's gate uses. A stub that always says "fine" would let
+  // the exact drift this replaced come back unnoticed.
+  standingStance: jest.requireActual('./AssayerVettingTab').standingStance,
+  STANDING_STANCE_TONE: jest.requireActual('./AssayerVettingTab').STANDING_STANCE_TONE,
 }));
 jest.mock('./AssayerQualificationTab', () => ({ AssayerQualificationTab: () => null }));
 jest.mock('./AssayerSkillsPanel', () => ({ AssayerSkillsPanel: () => null }));

@@ -1,13 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ShieldCheck, ShieldAlert, Building2, Phone, FileCheck, AlertTriangle, Plus, Check, Paperclip, Trash2, Lock } from 'lucide-react';
+import { ShieldCheck, ShieldAlert, Building2, Phone, FileCheck, Plus, Check, Paperclip, Trash2, Lock } from 'lucide-react';
 import {
   EmpanelmentStatus, BackgroundCheckVerdict, RiskGrade, CibilBand, HARD_COPY_LOCATIONS,
+  onboardingNextStep, standingAllowsPlanning,
 } from '@fapoms/shared';
 
 import { api } from '../../services/api';
-import { Select, Modal, useConfirm, useToast, AlertBanner, SkeletonList } from '../../components/ui';
-import { card, label, Empty } from './hr-ui';
-import { DataTable } from '../../components/ui';
+import { Select, useConfirm, useToast, AlertBanner, SkeletonList, DataTable } from '../../components/ui';
+import {
+  label, Empty, Section, Notice, Lede, LinkButton, RowActions, Field, fieldInput, Editor,
+} from './hr-ui';
 import { looksLikeMask } from './assayer-shared';
 import { fmtDate } from '../../utils/dates';
 import { userMessage } from '../../services/errors';
@@ -67,13 +69,61 @@ export const STANDING_LABELS: Record<string, string> = {
   [EmpanelmentStatus.REJECTED]: 'Rejected',
   [EmpanelmentStatus.RESIGNED]: 'Resigned',
   [EmpanelmentStatus.TERMINATED]: 'Terminated',
+  /*
+    The eighth value. This map had seven entries for an eight-value enum, and every render site
+    reads `STANDING_LABELS[status] ?? status` — so the one standing nobody had written a word for
+    printed the literal `INACTIVE` at an HR clerk. `assayer.service.ts` writes it, so the row was
+    always reachable; there simply are none today.
+  */
+  [EmpanelmentStatus.INACTIVE]: 'Empanelled before, dormant now',
 };
 
-/** Which standings mean "do not plan them for this client". */
-export const BLOCKING_STANDINGS = new Set<string>([
+/**
+ * A standing that is somebody's decision not to send this person.
+ *
+ * This is NOT the same question as "can the planner offer them work" — that one is
+ * `standingAllowsPlanning`, and it lives in @fapoms/shared beside the gate that enforces it.
+ * This set exists for the second question the first cannot answer: *why* not, and therefore what
+ * the operator does next. A refusal needs a conversation with the client; documents pending needs
+ * paperwork; dormant needs reactivating. Same outcome for planning, three different next moves.
+ */
+const REFUSED_STANDINGS = new Set<string>([
   EmpanelmentStatus.NOT_RECOMMENDED, EmpanelmentStatus.REJECTED,
   EmpanelmentStatus.RESIGNED, EmpanelmentStatus.TERMINATED,
 ]);
+
+export type StandingStance = 'plannable' | 'refused' | 'notReady';
+
+/**
+ * Where a standing leaves this person for one client, in the three states an operator acts on.
+ *
+ * There used to be a `BLOCKING_STANDINGS` set here — the four obvious negatives — and both this
+ * tab and the record read it. It disagreed with the planner. `ClientEligibilityFilter` admits
+ * **only** ACTIVE and RECOMMENDED, so DOCUMENTS_PENDING and INACTIVE are passed over on every
+ * planning run; this screen rendered them in ordinary text and left them out of its "not to be
+ * planned for" line, telling a vetting operator that somebody waiting on paperwork was fine while
+ * the planner silently skipped them.
+ *
+ * The plannable/not-plannable half is now `standingAllowsPlanning` from @fapoms/shared — the same
+ * function the engine calls, so the desk and the gate cannot drift apart again. Only the
+ * refused/not-ready distinction is decided here, because only the screens need it.
+ *
+ * Three states and not five: the tab argues elsewhere against a colour scale that invites reading
+ * one verdict as merely worse than another, and this is not that. These three are different
+ * *actions*, and the record's standing chips have distinguished them by colour all along — the
+ * bug was that two of the states were being sorted into the wrong one of the three.
+ */
+export const standingStance = (status?: string | null): StandingStance => {
+  if (standingAllowsPlanning(status)) return 'plannable';
+  return REFUSED_STANDINGS.has(status ?? '') ? 'refused' : 'notReady';
+};
+
+/** One tone per stance, so the record's chips and this tab's table cannot come out differently. */
+export const STANDING_STANCE_TONE: Record<StandingStance, { fg: string; bg: string }> = {
+  plannable: { fg: 'var(--success)', bg: 'var(--status-active-bg)' },
+  refused: { fg: 'var(--danger)', bg: 'var(--status-cancelled-bg)' },
+  notReady: { fg: 'var(--warning)', bg: 'var(--status-pending-bg)' },
+};
 
 interface Dossier {
   references: any[];
@@ -84,33 +134,61 @@ interface Dossier {
   openIssues: any[];
 }
 
-const Section: React.FC<{
-  title: string; icon: React.ElementType; hint?: string; action?: React.ReactNode;
-  children: React.ReactNode;
-}> = ({ title, icon: Icon, hint, action, children }) => (
-  <div style={{ ...card, marginBottom: '14px' }}>
-    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: hint ? '4px' : '10px' }}>
-      <Icon size={15} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />
-      <div style={{ ...label, flex: 1 }}>{title}</div>
-      {action}
-    </div>
-    {hint && <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '10px' }}>{hint}</div>}
-    {children}
-  </div>
-);
+/**
+ * The one line at the top of each half of this tab: what it is, and what it wants doing.
+ *
+ * Both halves used to open on a card headed "Vetting" or "Documents" — nouns, naming a filing
+ * cabinet rather than asking for anything — with the state of the file scattered as a hint under
+ * one section, a red line under another, and a count nowhere. A clerk had to read the whole tab
+ * to find out whether there was anything to do on it.
+ *
+ * Only the FIRST outstanding thing is named. The list is ordered the way the question is actually
+ * asked (see the file's opening note), so naming the first one names the thing that blocks the
+ * rest; naming all of them produces a paragraph, which is the clutter this replaces.
+ *
+ * `nextStep` comes from `ONBOARDING_NEXT_STEP` in @fapoms/shared and wins outright when present.
+ * The planner prints that same sentence when it refuses somebody work — "in background
+ * verification — complete it on the HR roster" — and this tab is where that instruction lands, so
+ * it must be the same words. It is a lookup, never a second copy.
+ *
+ * Exported for its own test: it is the only prose on the tab that is assembled rather than
+ * written, which is where wording goes wrong silently.
+ */
+export const vettingLede = (facts: {
+  section: 'checks' | 'documents';
+  hasCheck: boolean;
+  referencesTotal: number;
+  referencesUnrung: number;
+  documentsTotal: number;
+  documentsWithoutScan: number;
+  originalsNotInOffice: number;
+  lifecycleStatus?: string | null;
+}): string => {
+  const {
+    section, hasCheck, referencesTotal, referencesUnrung,
+    documentsTotal, documentsWithoutScan, originalsNotInOffice, lifecycleStatus,
+  } = facts;
+  const joining = onboardingNextStep(lifecycleStatus);
 
-const inputStyle: React.CSSProperties = {
-  width: '100%', padding: '7px 9px', fontSize: '12.5px',
-  background: 'var(--bg-surface)', color: 'var(--text-primary)',
-  border: '1px solid var(--border-color)', borderRadius: '7px', fontFamily: 'inherit',
+  if (section === 'checks') {
+    const opening = 'Whether this person may be sent to a client’s branch, and to which of them.';
+    if (joining) return `${opening} They are ${joining}.`;
+    if (!hasCheck) return `${opening} No background check has been recorded — do that before they are planned for work.`;
+    if (referencesTotal === 0) return `${opening} Nobody is on file as having vouched for them.`;
+    if (referencesUnrung > 0) return `${opening} ${counted(referencesUnrung, 'reference')} still to ring.`;
+    return `${opening} Nothing is outstanding here.`;
+  }
+
+  const opening = 'The paperwork a client’s branch asks for before letting this person near a vault.';
+  if (documentsTotal === 0) return `${opening} Nothing is on their record to collect yet.`;
+  if (documentsWithoutScan > 0) {
+    return `${opening} ${counted(documentsWithoutScan, 'document')} still need a scan on file.`;
+  }
+  if (originalsNotInOffice > 0) {
+    return `${opening} Every scan is in; ${counted(originalsNotInOffice, 'signed original is', 'signed originals are')} still not in the office.`;
+  }
+  return `${opening} Everything is collected.`;
 };
-
-const Field: React.FC<{ title: string; children: React.ReactNode; wide?: boolean }> = ({ title, children, wide }) => (
-  <div style={{ flex: wide ? '1 1 100%' : '1 1 150px', minWidth: 0 }}>
-    <div style={{ ...label, marginBottom: '5px' }}>{title}</div>
-    {children}
-  </div>
-);
 
 /** A yes/no cell where "we have not asked" and "no" are different answers. */
 const yesNo = (v: boolean | null | undefined) =>
@@ -227,14 +305,12 @@ const Attachments: React.FC<{
               )}
             </a>
             {canManage && (
-              <button
+              <LinkButton
                 onClick={() => remove(i)}
-                aria-label={`Remove this scan of ${documentLabel}`}
-                title={`Remove this scan of ${documentLabel}`}
-                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--text-muted)', padding: 0 }}
-              >
-                <Trash2 size={11} />
-              </button>
+                tone="muted"
+                label={`Remove this scan of ${documentLabel}`}
+                icon={<Trash2 size={11} />}
+              />
             )}
           </span>
         );
@@ -294,10 +370,13 @@ const RELATIONSHIPS = [
 ] as const;
 
 /** The office a signed original sits in, chosen rather than typed. */
-const LocationPicker: React.FC<{ value: string | null; onChange: (v: string) => void }> = ({ value, onChange }) => (
+const LocationPicker: React.FC<{ value: string | null; onChange: (v: string) => void; documentLabel: string }> = ({
+  value, onChange, documentLabel,
+}) => (
   <select
     value={value ?? ''}
     onChange={(e) => onChange(e.target.value)}
+    aria-label={`Which office holds the signed ${documentLabel}`}
     style={{
       padding: '4px 7px', fontSize: '12px', background: 'var(--bg-surface)',
       color: value ? 'var(--text-primary)' : 'var(--text-muted)',
@@ -309,10 +388,19 @@ const LocationPicker: React.FC<{ value: string | null; onChange: (v: string) => 
   </select>
 );
 
-const linkButton: React.CSSProperties = {
-  background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-  color: 'var(--primary)', fontSize: '12px', fontWeight: 600,
-};
+/**
+ * The one thing being edited, whichever of the four it is.
+ *
+ * Four separate `useState`s held these before — `checkDraft`, `refDraft`, `idDraft` and
+ * `standing` — with three rendering an inline panel that expanded inside its card and the fourth
+ * a dialog. Nothing prevented two being open at once, and each carried its own Cancel and its own
+ * hand-styled Save. One nullable union cannot hold two, and it renders through one `Editor`.
+ */
+type EditorState =
+  | { kind: 'check'; verdict: string; riskGrade: string; cibilScore: string; cibilBand: string; checkedOn: string; findings: string }
+  | { kind: 'reference'; id?: string; fullName: string; relationship: string; phone: string }
+  | { kind: 'identity'; requirement: string; label: string; documentNumber: string; expiryDate: string }
+  | { kind: 'standing'; clientId: string; clientName: string; status: string; statusReason: string; adding: boolean };
 
 export const AssayerVettingTab: React.FC<{
   assayerId: string;
@@ -326,7 +414,16 @@ export const AssayerVettingTab: React.FC<{
    * one fetch rather than two fetches or one buried tab.
    */
   section: 'checks' | 'documents';
-}> = ({ assayerId, canManage, section }) => {
+  /**
+   * Where this person is in joining, when the caller knows it.
+   *
+   * Optional because the dossier does not carry it — it is on the assayer record, which is what
+   * renders this tab. Given it, the opening line leads with `ONBOARDING_NEXT_STEP`'s sentence,
+   * which is the same one the planner shows when it refuses this person work and which names an
+   * action on this very tab.
+   */
+  lifecycleStatus?: string | null;
+}> = ({ assayerId, canManage, section, lifecycleStatus }) => {
   const [data, setData] = useState<Dossier | null>(null);
   /**
    * Everything on this tab that failed and wants a decision, in one strip at the top.
@@ -343,27 +440,7 @@ export const AssayerVettingTab: React.FC<{
   const [clients, setClients] = useState<{ id: string; name: string }[]>([]);
   const [busy, setBusy] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
-  const [checkDraft, setCheckDraft] = useState<
-    { verdict: string; riskGrade: string; cibilScore: string; cibilBand: string; checkedOn: string; findings: string } | null
-  >(null);
-  /**
-   * The reference being added or corrected. `id` present = correcting an existing one.
-   *
-   * The tab could add a reference and stamp it as spoken-to, and nothing else — while
-   * `PUT /assayers/:assayerId/reference/:id` and `DELETE /assayers/reference/:id` have existed
-   * all along. So a name typed wrong, a phone number that turned out to be someone else's, or a
-   * referee entered against the wrong person could only be added to, never fixed: the roster
-   * import brought in 1,983 of these rows.
-   */
-  const [refDraft, setRefDraft] = useState<
-    { id?: string; fullName: string; relationship: string; phone: string } | null
-  >(null);
-  const [idDraft, setIdDraft] = useState<
-    { requirement: string; label: string; documentNumber: string; expiryDate: string } | null
-  >(null);
-  const [standing, setStandingModal] = useState<
-    { clientId: string; clientName: string; status: string; statusReason: string } | null
-  >(null);
+  const [editor, setEditor] = useState<EditorState | null>(null);
   const { confirm, confirmDialog } = useConfirm();
   const { toast } = useToast();
 
@@ -390,6 +467,7 @@ export const AssayerVettingTab: React.FC<{
   }, []);
 
   const reload = () => setReloadKey((k) => k + 1);
+  const closeEditor = () => setEditor(null);
 
   const paperwork = useMemo(() => {
     const rows = data?.onboarding ?? [];
@@ -422,74 +500,88 @@ export const AssayerVettingTab: React.FC<{
     };
   }, [data]);
 
-  const blocking = useMemo(
-    () => (data?.empanelments ?? []).filter((e) => BLOCKING_STANDINGS.has(e.status)),
-    [data],
-  );
+  /**
+   * The clients this person cannot be sent to, split by what has to happen about it.
+   *
+   * One list before, and it was the wrong list: it held the four refusals and missed the two
+   * standings that stop planning without refusing anything. A clerk reading "Not to be planned
+   * for Second Bank" while First Bank sat in plain black text — on a DOCUMENTS_PENDING row the
+   * planner would never offer — had no way to know the screen was not telling them everything.
+   */
+  const unplannable = useMemo(() => {
+    const rows = (data?.empanelments ?? []).filter((e) => !standingAllowsPlanning(e.status));
+    const names = (stance: StandingStance) => rows
+      .filter((e) => standingStance(e.status) === stance)
+      .map((e) => e.client?.name)
+      .filter(Boolean)
+      .join(', ');
+    return { refused: names('refused'), notReady: names('notReady') };
+  }, [data]);
 
-  const saveStanding = async () => {
-    if (!standing) return;
+  const saveStanding = async (draft: Extract<EditorState, { kind: 'standing' }>) => {
+    if (!draft.clientId) {
+      setErr('Choose the client this standing is about.');
+      return;
+    }
     setBusy(true);
     try {
-      await api.request(`/assayers/${assayerId}/empanelment/${standing.clientId}`, {
+      await api.request(`/assayers/${assayerId}/empanelment/${draft.clientId}`, {
         method: 'PUT',
-        body: JSON.stringify({ status: standing.status, statusReason: standing.statusReason || undefined }),
+        body: JSON.stringify({ status: draft.status, statusReason: draft.statusReason || undefined }),
       });
       toast({
         type: 'success',
         title: 'Standing recorded',
-        message: `${standing.clientName} — ${STANDING_LABELS[standing.status] ?? standing.status}.`,
+        message: `${draft.clientName || 'This client'} — ${STANDING_LABELS[draft.status] ?? draft.status}.`,
       });
-      setStandingModal(null);
+      closeEditor();
       reload();
     } catch (e) { setErr(userMessage(e)); } finally { setBusy(false); }
   };
 
-  const saveCheck = async () => {
-    if (!checkDraft) return;
+  const saveCheck = async (draft: Extract<EditorState, { kind: 'check' }>) => {
     setBusy(true);
     try {
-      const score = Number(checkDraft.cibilScore.replace(/[^\d]/g, ''));
+      const score = Number(draft.cibilScore.replace(/[^\d]/g, ''));
       await api.request(`/assayers/${assayerId}/background-check`, {
         method: 'POST',
         body: JSON.stringify({
-          verdict: checkDraft.verdict,
-          riskGrade: checkDraft.riskGrade || undefined,
-          cibilBand: checkDraft.cibilBand || undefined,
+          verdict: draft.verdict,
+          riskGrade: draft.riskGrade || undefined,
+          cibilBand: draft.cibilBand || undefined,
           cibilScore: Number.isFinite(score) && score > 0 ? score : undefined,
-          checkedOn: checkDraft.checkedOn || undefined,
-          findings: checkDraft.findings || undefined,
+          checkedOn: draft.checkedOn || undefined,
+          findings: draft.findings || undefined,
         }),
       });
       toast({ type: 'success', title: 'Check recorded', message: 'It is now the operative one; the previous check is kept below it.' });
-      setCheckDraft(null);
+      closeEditor();
       reload();
     } catch (e) { setErr(userMessage(e)); } finally { setBusy(false); }
   };
 
-  const saveReference = async () => {
-    if (!refDraft) return;
-    if (!refDraft.fullName.trim()) {
+  const saveReference = async (draft: Extract<EditorState, { kind: 'reference' }>) => {
+    if (!draft.fullName.trim()) {
       setErr('A reference needs a name.');
       return;
     }
-    const editingExisting = !!refDraft.id;
+    const editingExisting = !!draft.id;
     setBusy(true);
     setErr(null);
     try {
       await api.request(
         editingExisting
-          ? `/assayers/${assayerId}/reference/${refDraft.id}`
+          ? `/assayers/${assayerId}/reference/${draft.id}`
           : `/assayers/${assayerId}/reference`,
         {
           method: editingExisting ? 'PUT' : 'POST',
           body: JSON.stringify({
-            fullName: refDraft.fullName.trim(),
+            fullName: draft.fullName.trim(),
             // `null`, not `undefined`: the server keeps the stored value when a key is absent
             // (`dto.phone ?? row.phone`), so an emptied box would silently put the old number
             // back — which is exactly the correction somebody opens this form to make.
-            relationship: refDraft.relationship || null,
-            phone: refDraft.phone.trim() || null,
+            relationship: draft.relationship || null,
+            phone: draft.phone.trim() || null,
           }),
         },
       );
@@ -497,12 +589,52 @@ export const AssayerVettingTab: React.FC<{
         type: 'success',
         title: editingExisting ? 'Reference updated' : 'Reference added',
         message: editingExisting
-          ? `${refDraft.fullName.trim()} corrected.`
-          : `${refDraft.fullName.trim()} is on file. Nobody has rung them yet.`,
+          ? `${draft.fullName.trim()} corrected.`
+          : `${draft.fullName.trim()} is on file. Nobody has rung them yet.`,
       });
-      setRefDraft(null);
+      closeEditor();
       reload();
     } catch (e) { setErr(userMessage(e)); } finally { setBusy(false); }
+  };
+
+  const saveIdentity = async (draft: Extract<EditorState, { kind: 'identity' }>) => {
+    /**
+     * A document number that is still the mask is not an edit.
+     *
+     * The dossier masks `documentNumber` the same way the record masks the PAN and Aadhaar it
+     * writes through to (`NUMBER_LIVES_ON_THE_PERSON` in the backend), so anything filled from
+     * the row rather than typed from the card is `******234F`. The box is opened empty for that
+     * reason; this catches the case where somebody pastes a mask back in, which the server would
+     * refuse in language about revealing a field they never saw a reveal control for.
+     */
+    if (looksLikeMask(draft.documentNumber)) {
+      setErr(`That is the covered form of the ${draft.label.toLowerCase()} number, not the number. `
+        + 'Type it from the document itself, or press Cancel to leave the stored one alone.');
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.request(`/assayers/${assayerId}/document/${draft.requirement}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          documentNumber: draft.documentNumber.trim(),
+          expiryDate: draft.expiryDate || null,
+        }),
+      });
+      closeEditor();
+      reload();
+    } catch (e) { setErr(userMessage(e)); } finally { setBusy(false); }
+  };
+
+  /** One entry point, because there is one Save button. Which endpoint it is stays per kind. */
+  const saveEditor = () => {
+    if (!editor) return;
+    switch (editor.kind) {
+      case 'check': void saveCheck(editor); break;
+      case 'reference': void saveReference(editor); break;
+      case 'identity': void saveIdentity(editor); break;
+      case 'standing': void saveStanding(editor); break;
+    }
   };
 
   /**
@@ -533,41 +665,11 @@ export const AssayerVettingTab: React.FC<{
     } catch (e) { setErr(userMessage(e)); } finally { setBusy(false); }
   };
 
-  const saveIdentity = async () => {
-    if (!idDraft) return;
-    /**
-     * A document number that is still the mask is not an edit.
-     *
-     * The dossier masks `documentNumber` the same way the record masks the PAN and Aadhaar it
-     * writes through to (`NUMBER_LIVES_ON_THE_PERSON` in the backend), so anything filled from
-     * the row rather than typed from the card is `******234F`. The box is opened empty for that
-     * reason; this catches the case where somebody pastes a mask back in, which the server would
-     * refuse in language about revealing a field they never saw a reveal control for.
-     */
-    if (looksLikeMask(idDraft.documentNumber)) {
-      setErr(`That is the covered form of the ${idDraft.label.toLowerCase()} number, not the number. `
-        + 'Type it from the document itself, or press Cancel to leave the stored one alone.');
-      return;
-    }
-    setBusy(true);
-    try {
-      await api.request(`/assayers/${assayerId}/document/${idDraft.requirement}`, {
-        method: 'PUT',
-        body: JSON.stringify({
-          documentNumber: idDraft.documentNumber.trim(),
-          expiryDate: idDraft.expiryDate || null,
-        }),
-      });
-      setIdDraft(null);
-      reload();
-    } catch (e) { setErr(userMessage(e)); } finally { setBusy(false); }
-  };
-
   const verify = async (doc: any, verdict: string) => {
     const ok = await confirm({
       title: `Confirm ${doc.label} against the original?`,
       message: `This records that you checked ${doc.documentNumber} against the document itself. `
-        + 'A client\u2019s branch relies on it to admit this person to a vault.',
+        + 'A client’s branch relies on it to admit this person to a vault.',
       confirmLabel: 'Yes, I checked it',
     });
     if (!ok) return;
@@ -653,88 +755,198 @@ export const AssayerVettingTab: React.FC<{
 
   const check = data.currentCheck;
   const unstanded = clients.filter((c) => !data.empanelments.some((e) => e.clientId === c.id));
+  const referencesUnrung = data.references.filter((r) => !r.checkedAt).length;
+
+  const lede = vettingLede({
+    section,
+    hasCheck: !!check,
+    referencesTotal: data.references.length,
+    referencesUnrung,
+    documentsTotal: paperwork.total,
+    documentsWithoutScan: paperwork.total - paperwork.withScan,
+    originalsNotInOffice: paperwork.total - paperwork.inHand,
+    lifecycleStatus,
+  });
 
   return (
     <div style={{ opacity: busy ? 0.6 : 1, transition: 'opacity .15s' }}>
       {confirmDialog}
       {errorBanner}
 
-      {standing && (
-        <Modal
-          open
-          onClose={() => setStandingModal(null)}
-          title={`Standing with ${standing.clientName}`}
-          width={480}
+      <Lede>{lede}</Lede>
+
+      {editor?.kind === 'standing' && (
+        <Editor
+          title={editor.adding ? 'Add a client standing' : `Standing with ${editor.clientName}`}
+          intro={`This decides whether ${editor.adding ? 'that client' : editor.clientName} will accept this person on their branches. It says nothing about any other client.`}
+          onCancel={closeEditor}
+          onSave={saveEditor}
+          saveLabel="Save standing"
+          busy={busy}
         >
-          <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <div style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>
-              This decides whether {standing.clientName} will accept this person on their branches.
-              It says nothing about any other client.
-            </div>
-            <div>
-              <div style={{ ...label, marginBottom: '6px' }}>Standing</div>
+          {/*
+            One control where there were up to two hundred buttons.
+
+            "No standing recorded for:" was followed by a chip per client — fine against the
+            three clients in a demo, and a wall of buttons wrapping across the card on a tenant
+            with a real client list, all of them opening the same dialog with one field
+            pre-filled. Adding a standing and changing one are now the same act on the same
+            surface; the client is simply the first thing you pick.
+          */}
+          {editor.adding && (
+            <Field title="Client" wide>
               <Select
-                value={standing.status}
-                onChange={(v) => setStandingModal({ ...standing, status: String(v) })}
-                options={Object.values(EmpanelmentStatus).map((v) => ({
-                  value: v, label: STANDING_LABELS[v] ?? v,
-                }))}
+                value={editor.clientId}
+                onChange={(v) => setEditor({
+                  ...editor,
+                  clientId: String(v),
+                  clientName: unstanded.find((c) => c.id === String(v))?.name ?? '',
+                })}
+                options={[
+                  { value: '', label: 'Choose a client…' },
+                  ...unstanded.map((c) => ({ value: c.id, label: c.name })),
+                ]}
               />
-            </div>
-            <div>
-              <div style={{ ...label, marginBottom: '6px' }}>Why (optional)</div>
-              <textarea
-                value={standing.statusReason}
-                onChange={(e) => setStandingModal({ ...standing, statusReason: e.target.value })}
-                rows={3}
-                placeholder={BLOCKING_STANDINGS.has(standing.status)
-                  ? 'What was the reason? This is the record of why they are not being sent.'
-                  : 'Anything worth recording alongside this decision.'}
-                style={{
-                  width: '100%', padding: '8px 10px', fontSize: '13px', resize: 'vertical',
-                  background: 'var(--bg-surface)', color: 'var(--text-primary)',
-                  border: '1px solid var(--border-color)', borderRadius: '8px', fontFamily: 'inherit',
-                }}
-              />
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-              <button onClick={() => setStandingModal(null)} style={{ ...linkButton, color: 'var(--text-muted)' }}>
-                Cancel
-              </button>
-              <button
-                onClick={saveStanding}
-                disabled={busy}
-                style={{
-                  background: 'var(--primary)', color: 'var(--on-accent)', border: 'none', borderRadius: '8px',
-                  padding: '8px 16px', fontSize: '13px', fontWeight: 600, cursor: busy ? 'default' : 'pointer',
-                }}
-              >
-                Save standing
-              </button>
-            </div>
-          </div>
-        </Modal>
+            </Field>
+          )}
+          <Field title="Standing" wide>
+            <Select
+              value={editor.status}
+              onChange={(v) => setEditor({ ...editor, status: String(v) })}
+              options={Object.values(EmpanelmentStatus).map((v) => ({
+                value: v, label: STANDING_LABELS[v] ?? v,
+              }))}
+            />
+          </Field>
+          <Field title="Why (optional)" wide>
+            <textarea
+              value={editor.statusReason}
+              onChange={(e) => setEditor({ ...editor, statusReason: e.target.value })}
+              rows={3}
+              placeholder={standingAllowsPlanning(editor.status)
+                ? 'Anything worth recording alongside this decision.'
+                : 'What was the reason? This is the record of why they are not being sent.'}
+              style={{ ...fieldInput, resize: 'vertical' }}
+            />
+          </Field>
+        </Editor>
+      )}
+
+      {editor?.kind === 'check' && (
+        <Editor
+          title="Record a background check"
+          intro="This becomes the operative check. The one it replaces is kept below it — a picture that changed is the reason to look at a second one."
+          onCancel={closeEditor}
+          onSave={saveEditor}
+          saveLabel="Record check"
+          busy={busy}
+          width={560}
+        >
+          <Field title="Verdict">
+            <Select
+              value={editor.verdict}
+              onChange={(v) => setEditor({ ...editor, verdict: String(v) })}
+              options={Object.values(BackgroundCheckVerdict).map((v) => ({ value: v, label: VERDICT_LABELS[v] ?? v }))}
+            />
+          </Field>
+          <Field title="Risk">
+            <Select
+              value={editor.riskGrade}
+              onChange={(v) => setEditor({ ...editor, riskGrade: String(v) })}
+              options={[{ value: '', label: 'Not graded' }, ...Object.values(RiskGrade).map((v) => ({ value: v, label: RISK_LABELS[v] ?? v }))]}
+            />
+          </Field>
+          <Field title="Credit band">
+            <Select
+              value={editor.cibilBand}
+              onChange={(v) => setEditor({ ...editor, cibilBand: String(v) })}
+              options={[{ value: '', label: 'Not recorded' }, ...Object.values(CibilBand).map((v) => ({ value: v, label: CIBIL_LABELS[v] ?? v }))]}
+            />
+          </Field>
+          <Field title="Credit score">
+            <input style={fieldInput} inputMode="numeric" placeholder="e.g. 747"
+              value={editor.cibilScore}
+              onChange={(e) => setEditor({ ...editor, cibilScore: e.target.value })} />
+          </Field>
+          <Field title="Checked on">
+            <input style={fieldInput} type="date"
+              value={editor.checkedOn}
+              onChange={(e) => setEditor({ ...editor, checkedOn: e.target.value })} />
+          </Field>
+          <Field title="Findings" wide>
+            <input style={fieldInput}
+              placeholder="What the check actually turned up. Leave empty if it turned up nothing."
+              value={editor.findings}
+              onChange={(e) => setEditor({ ...editor, findings: e.target.value })} />
+          </Field>
+        </Editor>
+      )}
+
+      {editor?.kind === 'reference' && (
+        <Editor
+          title={editor.id ? `Correct ${editor.fullName || 'this reference'}` : 'Add a reference'}
+          onCancel={closeEditor}
+          onSave={saveEditor}
+          saveLabel={editor.id ? 'Save changes' : 'Add reference'}
+          busy={busy}
+        >
+          <Field title="Name" wide>
+            <input style={fieldInput} autoFocus value={editor.fullName}
+              onChange={(e) => setEditor({ ...editor, fullName: e.target.value })} />
+          </Field>
+          <Field title="Relationship">
+            <Select
+              value={editor.relationship}
+              onChange={(v) => setEditor({ ...editor, relationship: String(v) })}
+              options={[{ value: '', label: 'Not recorded' }, ...RELATIONSHIPS.map((r) => ({ value: r, label: r }))]}
+            />
+          </Field>
+          <Field title="Phone">
+            <input style={fieldInput} inputMode="tel" value={editor.phone}
+              onChange={(e) => setEditor({ ...editor, phone: e.target.value })} />
+          </Field>
+        </Editor>
+      )}
+
+      {editor?.kind === 'identity' && (
+        <Editor
+          title={`${editor.label} number`}
+          note="Saving replaces the stored number and clears any verification, because somebody checked the old number against the original."
+          onCancel={closeEditor}
+          onSave={saveEditor}
+          saveLabel="Save"
+          busy={busy}
+        >
+          <Field
+            title={`${editor.label} number`}
+            hint="Type it from the document itself — the stored one is covered on screen, so this box starts empty."
+            wide
+          >
+            <input style={fieldInput} autoFocus value={editor.documentNumber}
+              onChange={(e) => setEditor({ ...editor, documentNumber: e.target.value })} />
+          </Field>
+          <Field title="Expires">
+            <input style={fieldInput} type="date" value={editor.expiryDate}
+              onChange={(e) => setEditor({ ...editor, expiryDate: e.target.value })} />
+          </Field>
+        </Editor>
       )}
 
       {data.openIssues.length > 0 && (
-        <div style={{ ...card, marginBottom: '14px', borderColor: 'var(--warning)' }}>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
-            <AlertTriangle size={15} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: '2px' }} />
-            <div style={{ fontSize: '12.5px', color: 'var(--text-secondary)' }}>
-              <strong style={{ color: 'var(--text-primary)' }}>
-                {counted(data.openIssues.length, 'cell')} from the roster import could not be read for this person.
-              </strong>
-              <div style={{ marginTop: '6px' }}>
-                {data.openIssues.map((i) => (
-                  <div key={i.id} style={{ marginBottom: '3px' }}>
-                    <code style={{ fontSize: '12px' }}>{i.sourceColumn}</code>{' — '}
-                    {i.reason} Original text: “{i.rawValue}”.
-                  </div>
-                ))}
+        <Notice
+          tone="warning"
+          style={{ marginBottom: '14px' }}
+          title={`${counted(data.openIssues.length, 'cell')} from the roster import could not be read for this person.`}
+        >
+          <div style={{ marginTop: '6px' }}>
+            {data.openIssues.map((i) => (
+              <div key={i.id} style={{ marginBottom: '3px' }}>
+                <code style={{ fontSize: '12px' }}>{i.sourceColumn}</code>{' — '}
+                {i.reason} Original text: “{i.rawValue}”.
               </div>
-            </div>
+            ))}
           </div>
-        </div>
+        </Notice>
       )}
 
       {section === 'checks' && (
@@ -742,64 +954,20 @@ export const AssayerVettingTab: React.FC<{
       <Section
         title="Vetting"
         icon={check && verdictTone(check.verdict) === 'var(--danger)' ? ShieldAlert : ShieldCheck}
-        hint="The most recent check is the operative one. Earlier checks are kept below it, because a picture that changed is the reason to look at a second one."
-        action={canManage && !checkDraft ? (
-          <button style={linkButton} onClick={() => setCheckDraft({
-            verdict: BackgroundCheckVerdict.CLEAR, riskGrade: '', cibilScore: '',
-            cibilBand: '', checkedOn: '', findings: '',
-          })}>
-            <Plus size={11} style={{ verticalAlign: '-1px' }} /> Record a check
-          </button>
+        style={{ marginBottom: '14px' }}
+        action={canManage ? (
+          <LinkButton
+            icon={<Plus size={11} />}
+            onClick={() => setEditor({
+              kind: 'check',
+              verdict: BackgroundCheckVerdict.CLEAR, riskGrade: '', cibilScore: '',
+              cibilBand: '', checkedOn: '', findings: '',
+            })}
+          >
+            Record a check
+          </LinkButton>
         ) : undefined}
       >
-        {checkDraft && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginBottom: '14px', paddingBottom: '14px', borderBottom: '1px solid var(--border-hair)' }}>
-            <Field title="Verdict">
-              <Select
-                value={checkDraft.verdict}
-                onChange={(v) => setCheckDraft({ ...checkDraft, verdict: String(v) })}
-                options={Object.values(BackgroundCheckVerdict).map((v) => ({ value: v, label: VERDICT_LABELS[v] ?? v }))}
-              />
-            </Field>
-            <Field title="Risk">
-              <Select
-                value={checkDraft.riskGrade}
-                onChange={(v) => setCheckDraft({ ...checkDraft, riskGrade: String(v) })}
-                options={[{ value: '', label: 'Not graded' }, ...Object.values(RiskGrade).map((v) => ({ value: v, label: RISK_LABELS[v] ?? v }))]}
-              />
-            </Field>
-            <Field title="Credit band">
-              <Select
-                value={checkDraft.cibilBand}
-                onChange={(v) => setCheckDraft({ ...checkDraft, cibilBand: String(v) })}
-                options={[{ value: '', label: 'Not recorded' }, ...Object.values(CibilBand).map((v) => ({ value: v, label: CIBIL_LABELS[v] ?? v }))]}
-              />
-            </Field>
-            <Field title="Credit score">
-              <input style={inputStyle} inputMode="numeric" placeholder="e.g. 747"
-                value={checkDraft.cibilScore}
-                onChange={(e) => setCheckDraft({ ...checkDraft, cibilScore: e.target.value })} />
-            </Field>
-            <Field title="Checked on">
-              <input style={inputStyle} type="date"
-                value={checkDraft.checkedOn}
-                onChange={(e) => setCheckDraft({ ...checkDraft, checkedOn: e.target.value })} />
-            </Field>
-            <Field title="Findings" wide>
-              <input style={inputStyle}
-                placeholder="What the check actually turned up. Leave empty if it turned up nothing."
-                value={checkDraft.findings}
-                onChange={(e) => setCheckDraft({ ...checkDraft, findings: e.target.value })} />
-            </Field>
-            <div style={{ flexBasis: '100%', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-              <button style={{ ...linkButton, color: 'var(--text-muted)' }} onClick={() => setCheckDraft(null)}>Cancel</button>
-              <button onClick={saveCheck} disabled={busy} style={{
-                background: 'var(--primary)', color: 'var(--on-accent)', border: 'none', borderRadius: '7px',
-                padding: '7px 14px', fontSize: '12.5px', fontWeight: 600, cursor: busy ? 'default' : 'pointer',
-              }}>Record check</button>
-            </div>
-          </div>
-        )}
         {!check ? (
           <Empty>No background check has been recorded.</Empty>
         ) : (
@@ -858,9 +1026,9 @@ export const AssayerVettingTab: React.FC<{
           deliberately does not: a background check is a dated statement of what somebody found
           when they looked, and a file where the finding can be quietly rewritten afterwards is
           worth nothing to the client whose vault this person walks into. Correcting one means
-          recording a newer check, which is what the section's own first line describes. Without
-          this sentence the absence reads as a missing feature, and somebody eventually builds
-          it.
+          recording a newer check, which is what the Record-a-check dialog says on opening.
+          Without this sentence the absence reads as a missing feature, and somebody eventually
+          builds it.
         */}
         {check && (
           <div style={{
@@ -880,7 +1048,21 @@ export const AssayerVettingTab: React.FC<{
       <Section
         title="Client standing"
         icon={Building2}
+        count={data.empanelments.length}
         hint="Whether each bank accepts this person. One answer per client — being active for one says nothing about another."
+        style={{ marginBottom: '14px' }}
+        action={canManage && unstanded.length > 0 ? (
+          <LinkButton
+            icon={<Plus size={11} />}
+            onClick={() => setEditor({
+              kind: 'standing', adding: true,
+              clientId: '', clientName: '',
+              status: EmpanelmentStatus.RECOMMENDED, statusReason: '',
+            })}
+          >
+            Add a client standing
+          </LinkButton>
+        ) : undefined}
       >
         {data.empanelments.length === 0 ? (
           <Empty>No client standing has been recorded.</Empty>
@@ -901,7 +1083,7 @@ export const AssayerVettingTab: React.FC<{
                 key: 'standing',
                 header: 'Standing',
                 render: (e) => (
-                  <span style={{ fontWeight: 600, color: BLOCKING_STANDINGS.has(e.status) ? 'var(--danger)' : 'var(--text-primary)' }}>
+                  <span style={{ fontWeight: 600, color: STANDING_STANCE_TONE[standingStance(e.status)].fg }}>
                     {STANDING_LABELS[e.status] ?? e.status}
                   </span>
                 ),
@@ -912,27 +1094,35 @@ export const AssayerVettingTab: React.FC<{
                 key: 'act',
                 header: '',
                 render: (e: typeof data.empanelments[number]) => (
-                  <button style={linkButton} onClick={() => setStandingModal({ clientId: e.clientId, clientName: e.client?.name ?? 'this client', status: e.status, statusReason: e.statusReason ?? '' })}>
-                    Change
-                  </button>
+                  <RowActions>
+                    <LinkButton onClick={() => setEditor({
+                      kind: 'standing', adding: false,
+                      clientId: e.clientId, clientName: e.client?.name ?? 'this client',
+                      status: e.status, statusReason: e.statusReason ?? '',
+                    })}>
+                      Change
+                    </LinkButton>
+                  </RowActions>
                 ),
               }] : []),
             ]}
           />
         )}
-        {canManage && unstanded.length > 0 && (
-          <div style={{ marginTop: '10px', display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
-            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>No standing recorded for:</span>
-            {unstanded.map((c) => (
-              <button key={c.id} style={linkButton} onClick={() => setStandingModal({ clientId: c.id, clientName: c.name, status: EmpanelmentStatus.RECOMMENDED, statusReason: '' })}>
-                <Plus size={11} style={{ verticalAlign: '-1px' }} /> {c.name}
-              </button>
-            ))}
+        {/*
+          Both reasons a person is passed over, said separately because they ask for different
+          things. "Documents pending" used to sit in this table in plain black with no line under
+          it at all, which read as no obstacle whatsoever.
+        */}
+        {unplannable.refused && (
+          <div style={{ marginTop: '10px', fontSize: '12px', color: STANDING_STANCE_TONE.refused.fg }}>
+            Not to be planned for {unplannable.refused} — that decision has been taken.
           </div>
         )}
-        {blocking.length > 0 && (
-          <div style={{ marginTop: '10px', fontSize: '12px', color: 'var(--danger)' }}>
-            Not to be planned for {blocking.map((e) => e.client?.name).filter(Boolean).join(', ')}.
+        {unplannable.notReady && (
+          <div style={{ marginTop: '10px', fontSize: '12px', color: STANDING_STANCE_TONE.notReady.fg }}>
+            Not plannable for {unplannable.notReady} yet either. Nobody has refused them; planning
+            offers work only where the standing is Active or Recommended, so they are passed over
+            until this one is.
           </div>
         )}
       </Section>
@@ -940,39 +1130,17 @@ export const AssayerVettingTab: React.FC<{
       <Section
         title="References"
         icon={Phone}
+        count={data.references.length}
         hint="Who vouched for them, and whether anybody actually rang."
-        action={canManage && !refDraft ? (
-          <button style={linkButton} onClick={() => setRefDraft({ fullName: '', relationship: '', phone: '' })}>
-            <Plus size={11} style={{ verticalAlign: '-1px' }} /> Add reference
-          </button>
+        action={canManage ? (
+          <LinkButton
+            icon={<Plus size={11} />}
+            onClick={() => setEditor({ kind: 'reference', fullName: '', relationship: '', phone: '' })}
+          >
+            Add reference
+          </LinkButton>
         ) : undefined}
       >
-        {refDraft && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginBottom: '14px', paddingBottom: '14px', borderBottom: '1px solid var(--border-hair)' }}>
-            <Field title="Name">
-              <input style={inputStyle} autoFocus value={refDraft.fullName}
-                onChange={(e) => setRefDraft({ ...refDraft, fullName: e.target.value })} />
-            </Field>
-            <Field title="Relationship">
-              <Select
-                value={refDraft.relationship}
-                onChange={(v) => setRefDraft({ ...refDraft, relationship: String(v) })}
-                options={[{ value: '', label: 'Not recorded' }, ...RELATIONSHIPS.map((r) => ({ value: r, label: r }))]}
-              />
-            </Field>
-            <Field title="Phone">
-              <input style={inputStyle} inputMode="tel" value={refDraft.phone}
-                onChange={(e) => setRefDraft({ ...refDraft, phone: e.target.value })} />
-            </Field>
-            <div style={{ flexBasis: '100%', display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-              <button style={{ ...linkButton, color: 'var(--text-muted)' }} onClick={() => setRefDraft(null)}>Cancel</button>
-              <button onClick={saveReference} disabled={busy} style={{
-                background: 'var(--primary)', color: 'var(--on-accent)', border: 'none', borderRadius: '7px',
-                padding: '7px 14px', fontSize: '12.5px', fontWeight: 600, cursor: busy ? 'default' : 'pointer',
-              }}>{refDraft.id ? 'Save changes' : 'Add reference'}</button>
-            </div>
-          </div>
-        )}
         {data.references.length === 0 ? (
           <Empty>No references are on file.</Empty>
         ) : (
@@ -1004,13 +1172,13 @@ export const AssayerVettingTab: React.FC<{
                   on the way to it.
                 */
                 render: (r: typeof data.references[number]) => (
-                  <div style={{ display: 'flex', gap: '12px' }}>
+                  <RowActions>
                     {r.checkedAt
                       ? <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>Called</span>
-                      : <button style={linkButton} onClick={() => markChecked(r)}>Record call</button>}
-                    <button
-                      style={linkButton}
-                      onClick={() => setRefDraft({
+                      : <LinkButton onClick={() => markChecked(r)}>Record call</LinkButton>}
+                    <LinkButton
+                      onClick={() => setEditor({
+                        kind: 'reference',
                         id: r.id,
                         fullName: r.fullName ?? '',
                         relationship: r.relationship ?? '',
@@ -1018,11 +1186,9 @@ export const AssayerVettingTab: React.FC<{
                       })}
                     >
                       Change
-                    </button>
-                    <button style={{ ...linkButton, color: 'var(--danger)' }} onClick={() => removeReference(r)}>
-                      Remove
-                    </button>
-                  </div>
+                    </LinkButton>
+                    <LinkButton tone="danger" onClick={() => removeReference(r)}>Remove</LinkButton>
+                  </RowActions>
                 ),
               }] : []),
             ]}
@@ -1084,8 +1250,9 @@ export const AssayerVettingTab: React.FC<{
               key: 'act',
               header: '',
               render: (d: typeof paperwork.identity[number]) => (
-                <div style={{ display: 'flex', gap: '10px' }}>
-                  <button style={linkButton} onClick={() => setIdDraft({
+                <RowActions>
+                  <LinkButton onClick={() => setEditor({
+                    kind: 'identity',
                     requirement: d.requirement, label: d.label,
                     // Empty, never the stored value: what the row holds is a mask (see
                     // `saveIdentity`), and a box opening on `******234F` invites a one-character
@@ -1096,41 +1263,16 @@ export const AssayerVettingTab: React.FC<{
                     {/* "Edit" promised the stored number in the box. It cannot be there — it is
                         masked — so the button says what actually happens: you type a new one. */}
                     {d.documentNumber ? 'Replace number' : 'Add number'}
-                  </button>
+                  </LinkButton>
                   {d.id && d.documentNumber && d.verificationStatus !== 'VERIFIED' && (
-                    <button style={linkButton} onClick={() => verify(d, 'VERIFIED')}>Verify</button>
+                    <LinkButton onClick={() => verify(d, 'VERIFIED')}>Verify</LinkButton>
                   )}
                   <UploadButton requirement={d.requirement} onPick={attach} documentLabel={d.label} />
-                </div>
+                </RowActions>
               ),
             }] : []),
           ]}
         />
-
-        {idDraft && (
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--border-hair)' }}>
-            <Field title={`${idDraft.label} number`}>
-              <input style={inputStyle} autoFocus value={idDraft.documentNumber}
-                onChange={(e) => setIdDraft({ ...idDraft, documentNumber: e.target.value })} />
-            </Field>
-            <Field title="Expires">
-              <input style={inputStyle} type="date" value={idDraft.expiryDate}
-                onChange={(e) => setIdDraft({ ...idDraft, expiryDate: e.target.value })} />
-            </Field>
-            <div style={{ flexBasis: '100%', display: 'flex', justifyContent: 'flex-end', gap: '10px', alignItems: 'center' }}>
-              <span style={{ fontSize: '12px', color: 'var(--text-muted)', marginRight: 'auto', maxWidth: '52ch', lineHeight: 1.5 }}>
-                Type the number from the document itself — the stored one is covered on screen, so
-                the box starts empty. Saving replaces it and clears any verification, because
-                somebody checked the old number against the original.
-              </span>
-              <button style={{ ...linkButton, color: 'var(--text-muted)' }} onClick={() => setIdDraft(null)}>Cancel</button>
-              <button onClick={saveIdentity} disabled={busy} style={{
-                background: 'var(--primary)', color: 'var(--on-accent)', border: 'none', borderRadius: '7px',
-                padding: '7px 14px', fontSize: '12.5px', fontWeight: 600, cursor: busy ? 'default' : 'pointer',
-              }}>Save</button>
-            </div>
-          </div>
-        )}
 
         <div style={{ ...label, margin: '18px 0 8px' }}>Joining paperwork</div>
         <DataTable
@@ -1154,14 +1296,14 @@ export const AssayerVettingTab: React.FC<{
               key: 'where',
               header: 'Where',
               render: (d) => (canManage
-                ? <LocationPicker value={d.hardCopyLocation} onChange={(v) => setWhere(d.requirement, v)} />
+                ? <LocationPicker value={d.hardCopyLocation} onChange={(v) => setWhere(d.requirement, v)} documentLabel={d.label} />
                 : <>{d.hardCopyLocation || '—'}</>),
             },
             ...(canManage ? [{
               key: 'act',
               header: '',
               render: (d: typeof paperwork.joining[number]) => (
-                <div style={{ display: 'flex', gap: '10px' }}>
+                <RowActions>
                   <UploadButton requirement={d.requirement} onPick={attach} documentLabel={d.label} />
                   {/*
                     "Original in" / "Original out" is filing-room shorthand for a toggle: it does
@@ -1169,16 +1311,15 @@ export const AssayerVettingTab: React.FC<{
                     actions rather than as one switch. What it actually tracks is whether the
                     signed paper is in the office.
                   */}
-                  <button
-                    style={linkButton}
+                  <LinkButton
                     onClick={() => togglePaperwork(d.requirement, 'hardCopyReceived', d.hardCopyReceived !== true)}
-                    title={d.hardCopyReceived === true
+                    label={d.hardCopyReceived === true
                       ? `Record that the signed ${d.label} has left the office`
                       : `Record that the signed ${d.label} is now in the office`}
                   >
                     {d.hardCopyReceived === true ? 'Signed paper has gone out' : 'Signed paper is here'}
-                  </button>
-                </div>
+                  </LinkButton>
+                </RowActions>
               ),
             }] : []),
           ]}

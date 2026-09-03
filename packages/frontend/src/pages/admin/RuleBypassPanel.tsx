@@ -8,7 +8,7 @@ import {
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { useConfirm } from '../../components/ui';
-import { useCurrentRoles } from '../../hooks/useCurrentRoles';
+import { useCurrentPermissions, useCurrentRoles } from '../../hooks/useCurrentRoles';
 import { canAccessRoute } from '../../config/route-permissions';
 
 /**
@@ -59,7 +59,8 @@ export const RuleBypassPanel: React.FC = () => {
    * apparently broken rather than a permission boundary stated out loud.
    */
   const roles = useCurrentRoles();
-  const mayUse = canAccessRoute(roles, '/admin/rule-bypass');
+  const permissions = useCurrentPermissions();
+  const mayUse = canAccessRoute(roles, permissions, '/admin/rule-bypass');
   const [selected, setSelected] = useState<Set<BypassableRule>>(new Set());
   const [reason, setReason] = useState('');
   const [hours, setHours] = useState(DEFAULT_BYPASS_HOURS);

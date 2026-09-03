@@ -266,7 +266,12 @@ export class RolesGuard implements CanActivate {
      * `every`, not `some`: holding one of three required permissions is not holding what the route
      * asked for, and `PermissionsGuard` downstream applies the same rule to the same list.
      */
-    const requiredPermissions = this.reflector.getAllAndOverride<string[]>(
+    // A route may opt out of the fall-through entirely — see `@RoleOnly()`.
+    const roleOnly = this.reflector.getAllAndOverride<boolean>(
+      ROLE_ONLY_KEY,
+      [context.getHandler(), context.getClass()],
+    );
+    const requiredPermissions = roleOnly ? undefined : this.reflector.getAllAndOverride<string[]>(
       PERMISSIONS_KEY,
       [context.getHandler(), context.getClass()],
     );
@@ -317,6 +322,27 @@ export function permissionKeysHeldBy(user: any): Set<string> {
   }
   return held;
 }
+
+/**
+ * Marks a route whose `@Roles(...)` list is the whole gate, with no permission fall-through.
+ *
+ * `RolesGuard` normally lets an unrecognised role in when it holds what the route declares — that
+ * is what makes a role built in Admin → Roles mean anything. A few routes cannot work that way,
+ * because their permission is deliberately the SAME as a broader route's and the narrow `@Roles`
+ * list is the only thing separating them.
+ *
+ * The audited PII reveal is the case that produced this decorator. It returns a full PAN, Aadhaar
+ * or bank account, and it declares `assayer:view:organization` — the same permission as reading
+ * the masked record, chosen so the two cannot drift apart. Its own comment said "what actually
+ * holds the line here is the narrow @Roles list", which was exactly true while names were the only
+ * gate. The moment permissions became authoritative, granting three roles the ordinary roster read
+ * also handed them the reveal. This restores the line the comment describes.
+ *
+ * Use it sparingly and only where a permission genuinely cannot express the distinction. If a
+ * route needs a narrower audience, the better answer is usually a narrower permission.
+ */
+export const ROLE_ONLY_KEY = 'roleOnly';
+export const RoleOnly = () => SetMetadata(ROLE_ONLY_KEY, true);
 
 export const PERMISSIONS_KEY = 'permissions';
 

@@ -118,6 +118,29 @@ export enum EmpanelmentStatus {
 }
 
 /**
+ * The two standings that let planning offer this person work for that client.
+ *
+ * `ClientEligibilityFilter` has always held this rule, and it is narrower than the reading every
+ * screen took from the enum: RECOMMENDED qualifies even though nobody has said yes yet, while
+ * DOCUMENTS_PENDING and INACTIVE do NOT, even though neither is a refusal. So a screen that
+ * treats "blocking" as the four obvious negatives tells a clerk that a person waiting on
+ * paperwork is plannable, and they are not — the planner will silently pass them over.
+ *
+ * Hoisted out of the engine so the desk and the planner answer that question the same way. The
+ * set is deliberately not configurable: a bank's empanelment list is a compliance fact, and
+ * "recommended somebody the bank never empanelled" is the failure the gate exists to prevent.
+ */
+export const PLANNABLE_EMPANELMENT_STANDINGS: readonly EmpanelmentStatus[] = [
+  EmpanelmentStatus.ACTIVE,
+  EmpanelmentStatus.RECOMMENDED,
+];
+
+/** True when this standing lets the planner offer work for that client. */
+export function standingAllowsPlanning(status: string | null | undefined): boolean {
+  return PLANNABLE_EMPANELMENT_STANDINGS.includes(status as EmpanelmentStatus);
+}
+
+/**
  * The onboarding paperwork the roster tracks, one column per item.
  *
  * Fifteen Yes/No columns in the spreadsheet — every one of them the same question about a

@@ -11,6 +11,7 @@ import { useSocketConnection } from '../hooks/useSocketConnection';
 import { useScope } from '../context/ScopeContext';
 import { GlobalSearch } from './GlobalSearch';
 import { canAccessRoute } from '../config/route-permissions';
+import { permissionKeysFrom } from '../hooks/useCurrentRoles';
 
 interface HeaderProps {
   user?: { displayName: string; email: string; roles?: { name: SystemRole }[] };
@@ -502,7 +503,7 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
             visible to the super administrator and nobody else, and the launcher's own "View my
             feedback" navigates to /feedback, so it follows that route's permission exactly
             rather than carrying a second copy of the role list. */}
-        {canAccessRoute((user?.roles ?? []).map((r) => r.name), '/feedback') && <FeedbackLauncher />}
+        {canAccessRoute((user?.roles ?? []).map((r) => r.name), permissionKeysFrom(user), '/feedback') && <FeedbackLauncher />}
         <NotificationDropdown />
 
         {/* Profile / account menu */}

@@ -24,7 +24,7 @@ import { fmtDate, fmtWhen } from '../../utils/dates';
 import { userMessage } from '../../services/errors';
 import { CommercialProfileModal, type CommercialProfile } from './CommercialProfileModal';
 import { AssayerRemarks } from '../../components/AssayerRemarks';
-import { AssayerVettingTab, STANDING_LABELS, BLOCKING_STANDINGS } from './AssayerVettingTab';
+import { AssayerVettingTab, STANDING_LABELS, standingStance, STANDING_STANCE_TONE } from './AssayerVettingTab';
 import { AssayerQualificationTab } from './AssayerQualificationTab';
 import { AssayerSkillsPanel } from './AssayerSkillsPanel';
 import { todayDateKey, localDateKey } from '../../utils/statusLabels';
@@ -999,17 +999,25 @@ export const AssayerRecord: React.FC<{
                           </span>
                         )}
                         {dossierGlance.empanelments.map((e) => {
-                          const blocking = BLOCKING_STANDINGS.has(e.status);
-                          const positive = e.status === 'ACTIVE' || e.status === 'RECOMMENDED';
+                          /*
+                            One rule, not a pair of local booleans. `blocking` here was the vetting
+                            tab's old `BLOCKING_STANDINGS` — four refusals — while `positive` was
+                            hand-written as ACTIVE-or-RECOMMENDED, which is the planner's actual
+                            gate. So the two disagreed inside one chip: a DOCUMENTS_PENDING
+                            standing was neither, and fell through to an amber that said nothing
+                            about the person being unplannable. `standingStance` decides both from
+                            `standingAllowsPlanning` in @fapoms/shared.
+                          */
+                          const tone = STANDING_STANCE_TONE[standingStance(e.status)];
                           return (
                             <span key={e.id} title={e.statusReason ?? undefined} style={{
                               display: 'inline-flex', alignItems: 'center', gap: '5px', padding: '3px 9px',
                               borderRadius: '999px', fontSize: '12px', fontWeight: 600,
-                              background: blocking ? 'var(--status-cancelled-bg)' : positive ? 'var(--status-active-bg)' : 'var(--status-pending-bg)',
+                              background: tone.bg,
                               color: 'var(--text-primary)', border: '1px solid var(--border-color)',
                             }}>
                               <span style={{ fontWeight: 700 }}>{e.client?.name ?? 'Unknown client'}</span>
-                              <span style={{ color: blocking ? 'var(--danger)' : positive ? 'var(--success)' : 'var(--warning)' }}>
+                              <span style={{ color: tone.fg }}>
                                 {STANDING_LABELS[e.status] ?? e.status}
                               </span>
                             </span>
@@ -1292,9 +1300,9 @@ export const AssayerRecord: React.FC<{
                 from. Who may write is decided by role inside the component (the operations desk
                 can, not only HR), so it is deliberately not gated on `canManage`.
               */}
-              {tab === 'vetting' && <AssayerVettingTab assayerId={assayerId} canManage={canManage} section="checks" />}
+              {tab === 'vetting' && <AssayerVettingTab assayerId={assayerId} canManage={canManage} section="checks" lifecycleStatus={a.lifecycleStatus} />}
 
-              {tab === 'documents' && <AssayerVettingTab assayerId={assayerId} canManage={canManage} section="documents" />}
+              {tab === 'documents' && <AssayerVettingTab assayerId={assayerId} canManage={canManage} section="documents" lifecycleStatus={a.lifecycleStatus} />}
 
               {tab === 'qualification' && <AssayerQualificationTab assayerId={assayerId} canManage={canManage} />}
 

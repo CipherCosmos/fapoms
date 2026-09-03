@@ -1,11 +1,7 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useQueryClient } from '@tanstack/react-query';
 import {
-  Plus, Search, Edit2, Trash2,
-  AlertTriangle, Download, ArrowRightLeft, MapPin, CheckCircle2, Users, SlidersHorizontal, FileSpreadsheet,
-} from 'lucide-react';
-import { AssayerLifecycleStatus, assayerLifecyclePath, assayerLifecycleLabel, daysUntilExpiry } from '@fapoms/shared';
+  useNavigate } from 'react-router-dom'; import { useQueryClient } from '@tanstack/react-query'; import { Plus, Search, Edit2, Trash2, AlertTriangle, Download, ArrowRightLeft, MapPin, CheckCircle2, Users, SlidersHorizontal, Upload, FileSpreadsheet, PlayCircle } from 'lucide-react'; import { AssayerLifecycleStatus, assayerLifecyclePath, assayerLifecycleLabel, isOnboardingStage,
+} from '@fapoms/shared';
 
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
@@ -15,15 +11,20 @@ import { listPhase } from '../../components/ui/list-phase';
 import { ImportIssuesPanel } from './ImportIssuesPanel';
 import { visibleSelection, hiddenSelectionNote } from '../../utils/selection';
 import { useSearchParams } from 'react-router-dom';
-import { useCurrentRoles, canManageAssayers } from '../../hooks/useCurrentRoles';
+import { useCurrentRoles, canManageAssayers, canCreateAssayers } from '../../hooks/useCurrentRoles';
 import { useExcelExport } from '../../hooks/useExcelExport';
 import { RegistrationWizard } from './registration/RegistrationWizard';
-import type { Assayer } from './assayer-shared';
 import {
-  STATUS_COLORS, missingCriticalFields, isOnboardingStage,
-  isAwaitingDocumentCheck, isAwaitingBackgroundCheck, isReadyToActivate, onboardingNextStep,
-  stillWorkable, isRecordedDeceased,
+  STATUS_COLORS, onboardingNextStep, stillWorkable, isRecordedDeceased,
 } from './assayer-shared';
+import {
+  ROSTER_SEGMENTS, EMPTY_FILTERS, applyRosterFilters, activeFilterCount, describeFilters,
+  missingFields, payoutBlockers, tenureMonths, parseFilters, writeFilters, segmentFor,
+  type RosterFilterState, type RosterPerson,
+} from './roster-filters';
+import { RosterFilterPanel, AppliedFilterBar } from './RosterFilterPanel';
+import { RosterExportDialog } from './RosterExportDialog';
+import { ToolbarMenu, MenuAction } from './ToolbarMenu';
 import { STAGE_CONSEQUENCE, HARD_TO_REVERSE_STAGES } from './AssayerRecord';
 import { fmtDate } from '../../utils/dates';
 import { queryKeys } from '../../hooks/queryKeys';
@@ -61,131 +62,17 @@ interface RosterImportSummary {
  */
 
 /**
- * Which gaps stop a payout, as opposed to merely leaving the record untidy.
+ * WHAT NARROWS THIS LIST NO LONGER LIVES HERE.
  *
- * The roster's "Record" column used to say only "3 missing", which reads as paperwork. It is
- * not: with no bank account, IFSC or PAN, that person cannot be paid at all, and today every
- * single assayer on the books is in exactly that state while showing a green ACTIVE stage. HR
- * had no way to see from this screen that a fully "Active" roster is a roster nobody can pay,
- * so the column now names the consequence and a segment collects the people it applies to.
+ * The segments, the payout-blocking rule, the missing-field list and the tenure sum moved to
+ * `roster-filters.ts`, beside the nineteen other axes this roster can now be cut by. They moved
+ * for one reason: a segment chip and a filter option that ask the same question ("cannot be
+ * paid") must be the same function, or the chip and the panel will eventually disagree in front
+ * of a clerk. Everything about narrowing is in one file; what stays here is the screen.
  */
-const PAYOUT_BLOCKING_KEYS: (keyof Assayer)[] = ['bankAccountNumber', 'ifscCode', 'panNumber'];
-
-/** The payout-blocking gaps on one record, by their shared human labels. */
-function payoutBlockers(a: Assayer): string[] {
-  return missingCriticalFields(a)
-    .filter((f) => PAYOUT_BLOCKING_KEYS.includes(f.key))
-    .map((f) => f.label);
-}
-
-/** Legal next steps per stage, mirroring the backend state machine. */
-
-/** Ordered path from `from` to `target` walking only legal transitions; [] if
- *  already there, null if unreachable. Mirrors the backend state machine so the
- *  roster can offer the same destinations the API will accept. */
-
-/**
- * One-click views onto the questions HR ask most.
- *
- * `hint` is not decoration. Several of these chips are worklists — a queue of people somebody is
- * supposed to do something to today — and the chip label alone ("Documents to check") does not
- * say what the work is or where it is done. The hint is shown as a sentence under the chips
- * whenever that chip is the selected one, so the queue explains itself on arrival rather than
- * on hover.
- */
-const SEGMENTS: { key: string; label: string; hint?: string; match: (a: Assayer) => boolean }[] = [
-  { key: 'all', label: 'Everyone', match: () => true },
-  { key: 'active', label: 'Active', match: (a) => a.lifecycleStatus === AssayerLifecycleStatus.ACTIVE },
-  { key: 'onboarding', label: 'Onboarding', match: (a) => isOnboardingStage(a.lifecycleStatus) },
-  /*
-   * THE THREE JOINING QUEUES.
-   *
-   * "Onboarding" above lumps all four joining stages into one pile, and it is the only view this
-   * screen had of them. So the two stages the platform actually enforces — document verification
-   * and background verification — had no worklist at all: a clerk asking "whose papers am I
-   * meant to check today" had nowhere in the application to look, and people sat in a stage for
-   * months because nothing counted them. The Onboarding chip stays (worklists elsewhere link to
-   * `?segment=onboarding`, and "how many are joining" is still a real question); these three
-   * split it into the queues somebody actually works through.
-   *
-   * Each queue's rule comes from the one place that already owns it — see assayer-shared.ts —
-   * so a chip can never disagree with the button on the record page.
-   */
-  {
-    key: 'to-verify',
-    label: 'Documents to check',
-    hint: 'These people are at the document-verification stage. Open anyone, go to Documents, '
-      + 'enter each document number and confirm it against the original — then move them on to '
-      + 'the background check.',
-    match: isAwaitingDocumentCheck,
-  },
-  {
-    key: 'background-due',
-    label: 'Background check due',
-    hint: 'Their documents are done and the background check has not been recorded. Open anyone, '
-      + 'go to Vetting, and record a check — then move them on to training.',
-    match: isAwaitingBackgroundCheck,
-  },
-  {
-    key: 'ready',
-    label: 'Ready to activate',
-    hint: 'Nothing is left blocking these people: the next legal step is Active and no required '
-      + 'field is missing. Open anyone and press "Move to Active", or tick several and use the '
-      + 'bar at the top.',
-    match: isReadyToActivate,
-  },
-  { key: 'incomplete', label: 'Incomplete record', match: (a) => stillWorkable(a) && missingFields(a).length > 0 },
-  { key: 'unpayable', label: 'Cannot be paid', match: (a) => stillWorkable(a) && payoutBlockers(a).length > 0 },
-  { key: 'unprofiled', label: 'No skills', match: (a) => stillWorkable(a) && (!a.skills || a.skills.length === 0) },
-  // Exactly the people the chips above leave alone, written as the complement rather than as a
-  // second list of ways to have left. Spelled out separately, the two drifted: this one knew
-  // about RESIGNED, TERMINATED, ARCHIVED and the dates, and neither knew that a death is filed as
-  // INACTIVE with a reason — so the one person in that state was in no exit view and in both
-  // worklists at once.
-  { key: 'exited', label: 'Exited', match: (a) => !stillWorkable(a) },
-  // 21 people on the roster have audits attended by a member of staff, a relative or a friend
-  // rather than by the person empanelled. The drawer says so once the record is open; without a
-  // chip there is no way to ask who they all are, and that is the only question worth asking
-  // about a compliance flag.
-  {
-    key: 'someone-else',
-    label: 'Work done by somebody else',
-    match: (a) => stillWorkable(a) && a.workDoneBySomeoneElse === true,
-  },
-  // An expired certificate is refused by the eligibility gate, so the person is quietly
-  // unassignable. This was the one question the retired compliance page answered that nothing
-  // else did — "who has lapsed" — and it belongs with the other "who needs something" chips.
-  {
-    key: 'lapsed',
-    label: 'Certificate lapsed',
-    match: (a) => stillWorkable(a) && (a.certifications ?? []).some(
-      (c) => c.expiryDate && (daysUntilExpiry(c.expiryDate) ?? 1) < 0,
-    ),
-  },
-];
 
 type SortKey = 'displayName' | 'assayerCode' | 'lifecycleStatus' | 'state' | 'experienceYears' | 'completeness' | 'joiningDate';
 
-/**
- * The gaps in one record, by label.
- *
- * This file used to carry its own second copy of the critical-field list, and the two had
- * already drifted: the shared one counts a missing phone number and calls the field "Bank
- * account", this one ignored phone entirely and called it "Bank a/c". So the drawer and the
- * roster row disagreed about whether the same person's record was complete, and the "Incomplete
- * record" segment under-counted. One list, in `assayer-shared`, used by both.
- */
-function missingFields(a: Assayer): string[] {
-  return missingCriticalFields(a).map((f) => f.label);
-}
-
-/** Tenure in whole months, or null when the joining date was never captured. */
-function tenureMonths(a: Assayer): number | null {
-  if (!a.joiningDate) return null;
-  const start = new Date(a.joiningDate).getTime();
-  if (Number.isNaN(start)) return null;
-  return Math.max(0, Math.floor((Date.now() - start) / (1000 * 60 * 60 * 24 * 30.44)));
-}
 
 export const AssayerRoster: React.FC<{
   /**
@@ -196,10 +83,14 @@ export const AssayerRoster: React.FC<{
 }> = ({ exactCounts }) => {
 
   const navigate = useNavigate();
-  const canManage = canManageAssayers(useCurrentRoles());
+  const roles = useCurrentRoles();
+  const canManage = canManageAssayers(roles);
+  // Creating is a different grant from editing, and this screen offers both. A role holding
+  // ASSAYER:EDIT but not ASSAYER:CREATE gets the bulk actions and not the Add button.
+  const canCreate = canCreateAssayers(roles);
   const { confirm, confirmDialog } = useConfirm();
 
-  const [assayers, setAssayers] = useState<Assayer[]>([]);
+  const [assayers, setAssayers] = useState<RosterPerson[]>([]);
   const [loading, setLoading] = useState(true);
   /**
    * The one place this screen reports an outcome that needs a decision.
@@ -223,23 +114,32 @@ export const AssayerRoster: React.FC<{
   >(null);
   const [noticeExpanded, setNoticeExpanded] = useState(false);
 
-  // Worklists elsewhere link straight to a segment (`/hr/roster?segment=someone-else`), so a
-  // row that says "21 appraisers have work attended by somebody else" lands on those 21 rather
-  // than on the roster with the reader left to find the chip.
-  const [segment, setSegment] = useState(
-    () => {
-      const wanted = new URLSearchParams(window.location.search).get('segment');
-      return wanted && SEGMENTS.some((s) => s.key === wanted) ? wanted : 'all';
-    },
-  );
-  const [search, setSearch] = useState('');
-  const [stateFilter, setStateFilter] = useState('ALL');
-  const [statusFilter, setStatusFilter] = useState('ALL');
   const [showFilters, setShowFilters] = useState(false);
+  const [showExport, setShowExport] = useState(false);
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'displayName', dir: 'asc' });
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [searchParams, setSearchParams] = useSearchParams();
+
+  /**
+   * Every criterion narrowing this list, held in the query string.
+   *
+   * Worklists elsewhere already linked straight to a segment (`/hr/roster?segment=someone-else`),
+   * so a row saying "21 appraisers have work attended by somebody else" lands on those 21. The
+   * rest of the filtering now lives in the URL for the same reason and one more: "the 47 people
+   * in Kerala who cannot be paid" becomes a link a clerk can bookmark or send to a colleague,
+   * instead of a thing the next person re-derives by hand. The back button undoes a filter,
+   * which is the cheapest "reversible" there is.
+   *
+   * Parsed on every render rather than mirrored into state, because two copies of the applied
+   * filters is exactly how a screen ends up showing one thing and filtering by another.
+   */
+  const filters = useMemo(() => parseFilters(searchParams), [searchParams]);
+  const setFilters = useCallback(
+    (next: RosterFilterState) => setSearchParams(writeFilters(searchParams, next), { replace: true }),
+    [searchParams, setSearchParams],
+  );
+  const clearFilters = useCallback(() => setFilters(EMPTY_FILTERS), [setFilters]);
   /**
    * Opening somebody is navigation, not a panel.
    *
@@ -326,7 +226,7 @@ export const AssayerRoster: React.FC<{
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.request<{ data: Assayer[]; meta?: { pagination?: { total?: number } } }>(
+      const res = await api.request<{ data: RosterPerson[]; meta?: { pagination?: { total?: number } } }>(
         `/assayers?limit=${ROSTER_LIMIT}`,
         { withMeta: true },
       );
@@ -383,44 +283,23 @@ export const AssayerRoster: React.FC<{
     return () => { events.forEach((e) => socket?.off(e, load)); };
   }, [load]);
 
-  const states = useMemo(
-    () => [...new Set(assayers.map((a) => a.state).filter(Boolean))].sort(),
-    [assayers],
-  );
-  // Sorted by the label the reader sees. Sorting by the stored value put "BACKGROUND_VERIFICATION"
-  // before "DOCUMENT_VERIFICATION" before "INVITED" — an order with no meaning on a screen that
-  // never shows those words.
-  const statuses = useMemo(
-    () => [...new Set(assayers.map((a) => a.lifecycleStatus).filter(Boolean))]
-      .sort((a, b) => assayerLifecycleLabel(a).localeCompare(assayerLifecycleLabel(b))),
-    [assayers],
-  );
-
   /**
    * When the active segment's true total is bigger than what is listed, by how much.
    * Null when they agree, when there is no exact total, or when another filter is narrowing.
    */
-  const selectedSegment = useMemo(() => SEGMENTS.find((s) => s.key === segment), [segment]);
+  const selectedSegment = useMemo(() => segmentFor(filters.segment), [filters.segment]);
 
   const segmentShortfall = useMemo(() => {
-    const total = exactCounts?.[segment];
+    const total = exactCounts?.[filters.segment];
     if (total === undefined) return null;
-    const shown = assayers.filter(SEGMENTS.find((s) => s.key === segment)!.match).length;
+    const shown = assayers.filter(selectedSegment.match).length;
     return total > shown ? { total, shown } : null;
-  }, [exactCounts, segment, assayers]);
+  }, [exactCounts, filters.segment, selectedSegment, assayers]);
+
+  /** Everyone the filters leave, before the sort — what the export's "on screen" scope means. */
+  const filtered = useMemo(() => applyRosterFilters(assayers, filters), [assayers, filters]);
 
   const rows = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const seg = SEGMENTS.find((s) => s.key === segment) ?? SEGMENTS[0];
-    const filtered = assayers.filter((a) => {
-      if (!seg.match(a)) return false;
-      if (stateFilter !== 'ALL' && a.state !== stateFilter) return false;
-      if (statusFilter !== 'ALL' && a.lifecycleStatus !== statusFilter) return false;
-      if (!q) return true;
-      return `${a.displayName} ${a.assayerCode} ${a.city} ${a.district} ${a.state} ${a.phone} ${a.email ?? ''} ${(a.skills ?? []).join(' ')}`
-        .toLowerCase().includes(q);
-    });
-
     const dir = sort.dir === 'asc' ? 1 : -1;
     return [...filtered].sort((x, y) => {
       let a: any, b: any;
@@ -430,9 +309,9 @@ export const AssayerRoster: React.FC<{
       if (typeof a === 'number' && typeof b === 'number') return (a - b) * dir;
       return String(a).localeCompare(String(b)) * dir;
     });
-  }, [assayers, search, segment, stateFilter, statusFilter, sort]);
+  }, [filtered, sort]);
 
-  useEffect(() => { setVisibleCount(RENDER_CHUNK); }, [assayers, search, segment, stateFilter, statusFilter, sort]);
+  useEffect(() => { setVisibleCount(RENDER_CHUNK); }, [assayers, filters, sort]);
 
   /** Which of the four list states this table is in — see components/ui/list-phase.ts. */
   const phase = listPhase({ loading, rowCount: rows.length });
@@ -456,16 +335,19 @@ export const AssayerRoster: React.FC<{
   );
   const hiddenNote = hiddenSelectionNote(hiddenCount, 'assayer');
 
-  /** Every criterion currently narrowing the list, in the words shown on the controls. */
+  /**
+   * Every criterion currently narrowing the list, in the words shown on the controls.
+   *
+   * One list, used by the empty state ("no one matches X + Y") and by the export dialog, so the
+   * file a clerk downloads is described by the same sentence that explains an empty table.
+   */
   const activeCriteria = useMemo(() => {
-    const out: string[] = [];
-    const seg = SEGMENTS.find((s) => s.key === segment);
-    if (seg && seg.key !== 'all') out.push(`"${seg.label}"`);
-    if (statusFilter !== 'ALL') out.push(`stage "${assayerLifecycleLabel(statusFilter)}"`);
-    if (stateFilter !== 'ALL') out.push(`state "${stateFilter}"`);
-    if (search.trim()) out.push(`search "${search.trim()}"`);
-    return out.length ? out : ['the current view'];
-  }, [segment, statusFilter, stateFilter, search]);
+    const applied = describeFilters(filters).map((f) => `"${f.label}"`);
+    return applied.length ? applied : ['the current view'];
+  }, [filters]);
+
+  /** How many separate criteria are in force — the number beside the Filters button. */
+  const appliedCount = useMemo(() => activeFilterCount(filters), [filters]);
 
   /** Every target stage reachable from *any* selected row (walking forward through
    *  the state machine). Unlike a strict intersection this works for mixed-stage
@@ -566,7 +448,7 @@ export const AssayerRoster: React.FC<{
     }
   };
 
-  const remove = async (a: Assayer) => {
+  const remove = async (a: RosterPerson) => {
     // Deleting a person's whole HR record. The assayer code is what uniquely identifies
     // them on a roster full of similar names, so that is what has to be typed — it also
     // makes it impossible to delete the wrong row by clicking the wrong line's bin icon.
@@ -588,21 +470,15 @@ export const AssayerRoster: React.FC<{
     }
   };
 
-  /** Exports exactly what is on screen — same filter, same sort, same order. */
-  const exportCsv = () => {
-    const cols = ['assayerCode', 'displayName', 'phone', 'email', 'city', 'district', 'state', 'lifecycleStatus', 'employmentType', 'joiningDate', 'experienceYears'];
-    const esc = (v: any) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const csv = [
-      [...cols, 'missingFields'].join(','),
-      ...rows.map((r) => [...cols.map((c) => esc((r as any)[c])), esc(missingFields(r).join('; '))].join(',')),
-    ].join('\n');
-    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-    const el = document.createElement('a');
-    el.href = url;
-    el.download = `workforce-roster-${new Date().toISOString().slice(0, 10)}.csv`;
-    el.click();
-    URL.revokeObjectURL(url);
-  };
+  /*
+   * THE CSV THAT USED TO BE BUILT HERE IS GONE, AND SO IS ITS ESCAPING.
+   *
+   * It wrote eleven fixed columns with a hand-rolled `'"' + v.replace(...) + '"'`, which is the
+   * duplicate `utils/csv.ts` exists to stop — that one escapes quotes, prefixes a leading `=`
+   * so a spreadsheet cannot read a name as a formula, and writes the BOM without which Excel
+   * renders Indian names as mojibake. Choosing the columns lives in `RosterExportDialog`, and
+   * the file itself is written by `downloadCsv`, like every other export in the app.
+   */
 
   /**
    * A bulk import reports per-row outcomes in a successful response, not by throwing.
@@ -757,11 +633,10 @@ export const AssayerRoster: React.FC<{
       })()}
 
       {/*
-        * Segments: the questions HR ask, as one click each.
-        *
-        * These count the rows that arrived, which is the whole roster until it passes
-        * ROSTER_LIMIT. Past that the page says so rather than letting "Everyone 1,000" sit
-        * under a tab badge reading 1,400 with nothing to explain the gap.
+        * The chips below — and every option count in the Filters panel — describe the rows that
+        * arrived, which is the whole roster until it passes ROSTER_LIMIT. Past that the page says
+        * so rather than letting "Everyone 1,000" sit under a tab badge reading 1,400 with nothing
+        * to explain the gap.
         */}
       {truncated && (
         <div style={{ fontSize: '12px', color: 'var(--warning)', lineHeight: 1.5 }}>
@@ -769,28 +644,57 @@ export const AssayerRoster: React.FC<{
           these filters describe those {assayers.length}; search to find anyone not listed.
         </div>
       )}
-      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }} role="tablist">
-        {SEGMENTS.map((s) => {
-          const n = exactCounts?.[s.key] ?? assayers.filter(s.match).length;
-          const on = segment === s.key;
-          return (
-            <button
-              key={s.key}
-              role="tab"
-              aria-selected={on}
-              onClick={() => setSegment(s.key)}
-              style={{
-                padding: '5px 11px', borderRadius: '999px', fontSize: '12px', fontWeight: 600, cursor: 'pointer',
-                border: `1px solid ${on ? 'transparent' : 'var(--border-color)'}`,
-                background: on ? 'var(--accent)' : 'transparent',
-                color: on ? 'var(--on-accent)' : 'var(--text-secondary)',
-              }}
-            >
-              {s.label} <span style={{ opacity: 0.75 }}>{n}</span>
-            </button>
-          );
-        })}
-      </div>
+      {/*
+        TWO ROWS, BECAUSE THESE CHIPS WERE DOING TWO JOBS AT ONCE.
+
+        Twelve pills in one undifferentiated line: four of them answer "who am I looking at" and
+        the other eight are worklists — people somebody has to ring up today. Read as one row
+        they look like twelve ways to slice a list, and the queues, which are the reason the row
+        exists, are the hardest thing in it to find. Same chips, same keys, same deep links; a
+        heading each and a rule about what may be hidden.
+
+        A queue with nobody in it is not shown. "Certificate lapsed 0" is a question already
+        answered, and eight of those are the clutter this row was accused of. The selected one is
+        always shown, so `?segment=lapsed` still lands somewhere that explains itself.
+      */}
+      {([
+        { key: 'who', label: 'Who to show', chips: ROSTER_SEGMENTS.filter((s) => !s.queue) },
+        { key: 'chase', label: 'Needs chasing', chips: ROSTER_SEGMENTS.filter((s) => s.queue) },
+      ] as const).map((row) => {
+        const chips = row.chips
+          .map((s) => ({ s, n: exactCounts?.[s.key] ?? assayers.filter(s.match).length }))
+          .filter(({ s, n }) => !s.queue || n > 0 || filters.segment === s.key);
+        if (chips.length === 0) return null;
+        return (
+          <div key={row.key} style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }} role="tablist">
+            <span style={{
+              fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em',
+              color: 'var(--text-muted)', marginRight: '2px',
+            }}>
+              {row.label}
+            </span>
+            {chips.map(({ s, n }) => {
+              const on = filters.segment === s.key;
+              return (
+                <button
+                  key={s.key}
+                  role="tab"
+                  aria-selected={on}
+                  onClick={() => setFilters({ ...filters, segment: s.key })}
+                  style={{
+                    padding: '5px 11px', borderRadius: '999px', fontSize: '12px', fontWeight: 600, cursor: 'pointer',
+                    border: `1px solid ${on ? 'transparent' : 'var(--border-color)'}`,
+                    background: on ? 'var(--accent)' : 'transparent',
+                    color: on ? 'var(--on-accent)' : 'var(--text-secondary)',
+                  }}
+                >
+                  {s.label} <span style={{ opacity: 0.75 }}>{n}</span>
+                </button>
+              );
+            })}
+          </div>
+        );
+      })}
 
       {/*
         What the selected queue is, and what to do with the people in it.
@@ -827,64 +731,90 @@ export const AssayerRoster: React.FC<{
         </div>
       )}
 
-      {/* Toolbar */}
+      {/*
+        THE TOOLBAR: ONE PRIMARY ACTION, AND TWO DOORS.
+
+        This row held six controls — Filters, "Export this view", "Full roster + pay rates
+        (Excel)", "Upload Excel", "Download Template" and Add — none of them visibly more
+        important than the others, and a paragraph underneath explaining the difference between
+        two of them. A clerk arriving to add somebody had to read all six.
+
+        Now: search, one Filters button carrying the count of what is applied, an Export menu
+        (which is where the choice between the browser CSV and the server workbook is made, with
+        the difference explained where the choice happens), an Import menu, and the one thing
+        that is genuinely primary — Add assayer.
+      */}
       <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
         <div style={{ position: 'relative', flex: '1 1 260px', minWidth: '220px' }}>
           <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
           <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
+            value={filters.search}
+            onChange={(e) => setFilters({ ...filters, search: e.target.value })}
             placeholder="Search name, code, phone, city, skill…"
+            aria-label="Search the roster"
             style={{
               width: '100%', padding: '8px 10px 8px 30px', fontSize: '13px', borderRadius: '8px',
               border: '1px solid var(--border-color)', background: 'var(--bg-page)', color: 'inherit', outline: 'none',
             }}
           />
         </div>
-        <button onClick={() => setShowFilters((v) => !v)} className="btn btn-secondary"
-          style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 12px' }}>
-          <SlidersHorizontal size={13} /> Filters
-        </button>
-        {/*
-          * TWO EXPORTS, AND THEY REALLY ARE TWO DIFFERENT THINGS.
-          *
-          * They read "Export 43" and "Excel", and the only statement of the difference was a
-          * tooltip on one of them. Nothing on either face said which one honoured the filters
-          * you had just set, and "Excel" versus a button whose CSV also opens in Excel is not a
-          * distinction anybody can act on. What they actually produce:
-          *
-          *   This view (CSV)   — built here in the browser from `rows`: the exact rows listed
-          *                       below, in the current filter/segment/search and sort order.
-          *                       Eleven identity/contact/location columns plus the missing-field
-          *                       list. Instant, because nothing is fetched.
-          *   Full roster (XLSX)— GET /reports/assayer-roster. Ignores everything on this screen
-          *                       and walks the whole workforce, returning two sheets: Roster
-          *                       (adds region, exit date, assignment counts and average rating)
-          *                       and the payroll rate card (base fee, daily/hourly rates,
-          *                       allowances, effective dates). PII columns are scoped to the
-          *                       caller's roles server-side.
-          *
-          * Neither is a subset of the other — the CSV has the missing-field audit the workbook
-          * lacks, the workbook has pay rates and performance the CSV lacks — so folding them
-          * into one control with a format toggle would have to drop columns to be honest. Both
-          * are kept, and the difference is now on the buttons and in the hint line below the
-          * toolbar rather than hidden in a title attribute.
-          */}
-        <button onClick={exportCsv} className="btn btn-secondary"
+        <button
+          onClick={() => setShowFilters((v) => !v)}
+          className="btn btn-secondary"
+          aria-expanded={showFilters}
           style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 12px' }}
-          title={`Downloads the ${rows.length} ${rows.length === 1 ? 'person' : 'people'} listed below as a CSV, in this order, with contact and location details and what is missing from each file.`}>
-          <Download size={13} /> Export this view ({rows.length})
+        >
+          <SlidersHorizontal size={13} /> Filters
+          {appliedCount > 0 && (
+            <span style={{
+              fontSize: '12px', fontWeight: 700, padding: '0 6px', borderRadius: '9px',
+              background: 'var(--accent)', color: 'var(--on-accent)',
+            }}>
+              {appliedCount}
+            </span>
+          )}
         </button>
-        {/* The payroll-rate-card sheet is assembled over the whole roster; until it lands
-            nothing on screen moves, which is why this used to be clicked repeatedly. */}
-        <button onClick={handleExportExcel} disabled={exporting} className="btn btn-secondary"
-          style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 12px', color: 'var(--success)' }}
-          title="Downloads an Excel workbook covering everyone on the roster, whatever the filters above say: one sheet of roster details with assignment counts and ratings, one sheet of payroll rates and allowances. Built on the server, so it takes a few seconds.">
-          <FileSpreadsheet size={13} /> {exporting ? 'Preparing…' : 'Full roster + pay rates (Excel)'}
-        </button>
-        {canManage && (
+        <ToolbarMenu label="Export" icon={<Download size={13} />} panelWidth={280}>
+          {(close) => (
+            <>
+              <MenuAction
+                label={`Choose columns — ${counted(rows.length, 'person', 'people')} in this view`}
+                hint="Pick exactly the columns you need, for these rows or for everyone. Opens in Excel."
+                icon={<Download size={13} />}
+                onClick={() => { close(); setShowExport(true); }}
+              />
+              {/* The payroll-rate-card sheet is assembled over the whole roster; until it lands
+                  nothing on screen moves, which is why this used to be clicked repeatedly. */}
+              <MenuAction
+                label={exporting ? 'Preparing the workbook…' : 'Full roster + pay rates (Excel)'}
+                hint="Everyone, ignoring the filters, with the payroll rate card and assignment counts the roster screen never receives. Built on the server."
+                icon={<FileSpreadsheet size={13} />}
+                tone="var(--success)"
+                disabled={exporting}
+                onClick={() => { close(); handleExportExcel(); }}
+              />
+            </>
+          )}
+        </ToolbarMenu>
+        {canCreate && (
           <>
-            <UploadExcelControls onUpload={handleUpload} onDownloadTemplate={downloadTemplate} accept=".xlsx,.xls" busy={uploading} busyLabel="Importing roster…" />
+            <ToolbarMenu label="Import" icon={<Upload size={13} />} panelWidth={260}>
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+                Bring in a client's appraiser workbook. Every import is rehearsed first and shows
+                what it would change before anything is written.
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'stretch' }}>
+                <UploadExcelControls
+                  onUpload={handleUpload}
+                  onDownloadTemplate={downloadTemplate}
+                  accept=".xlsx,.xls"
+                  busy={uploading}
+                  busyLabel="Importing roster…"
+                  uploadLabel="Upload a filled workbook"
+                  templateLabel="Download the blank template"
+                />
+              </div>
+            </ToolbarMenu>
             <button onClick={() => setCreating(true)} className="btn btn-primary"
               style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', padding: '8px 14px' }}>
               <Plus size={14} /> Add assayer
@@ -894,48 +824,42 @@ export const AssayerRoster: React.FC<{
       </div>
 
       {/*
-        * The difference between the two export buttons, said on the page.
-        *
-        * A tooltip is not an answer for someone deciding which button to press: it needs a
-        * mouse, it needs a guess about which control to hover, and it vanishes. One quiet line
-        * under the toolbar states both, so the choice can be made by reading.
-        */}
-      <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.5, marginTop: '-2px' }}>
-        <strong style={{ fontWeight: 600 }}>Export this view</strong> saves the {rows.length}{' '}
-        {rows.length === 1 ? 'person' : 'people'} currently listed — contact and location details,
-        plus what each file is missing — as a CSV.{' '}
-        <strong style={{ fontWeight: 600 }}>Full roster + pay rates</strong> ignores the filters and
-        covers everyone, adding assignment history and the payroll rate card, as an Excel workbook.
-      </div>
+        The panel that used to hold two dropdowns — "State they live in" and "Stage with HR" —
+        and nothing else, on a screen whose owner asked to be able to "filter by anything we
+        require". Nineteen axes now, grouped and counted; see roster-filters.ts for the list and
+        RosterFilterPanel.tsx for why it is tick boxes rather than a query builder.
+      */}
+      {showFilters && (
+        <RosterFilterPanel
+          rows={assayers}
+          state={filters}
+          onChange={setFilters}
+          onClearAll={clearFilters}
+        />
+      )}
 
       {/*
-        Directly under the import controls, because that is what puts entries in it — and it also
-        has its own page now (`/hr/issues`, badged in the tab strip), because a collapsed panel
-        below a thousand-row table is not somewhere a queue can be found on purpose.
+        What is narrowing the list right now, and how to take any one of it off.
+
+        Four controls could be in force at once — a chip, two dropdowns behind a collapsed panel,
+        and the search box — so an empty table had no visible cause. Every criterion is a pill,
+        each pill comes off on its own, and one link clears the lot.
+      */}
+      <AppliedFilterBar
+        state={filters}
+        shown={rows.length}
+        total={assayers.length}
+        onChange={setFilters}
+        onClearAll={clearFilters}
+      />
+
+      {/*
+        The review queue for cells an import could not read. It kept its place near the top
+        because that is where the import that fills it is started from — and it has its own page
+        (`/hr/issues`, badged in the tab strip), because a collapsed panel below a thousand-row
+        table is not somewhere a queue can be found on purpose.
       */}
       <ImportIssuesPanel canManage={canManage} onResolved={load} />
-
-      {showFilters && (
-        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', padding: '10px 12px', borderRadius: '8px', background: 'var(--bg-surface-2)' }}>
-          {/*
-            "State" and "Status" sat side by side as two five-letter words, one meaning the part of
-            India someone lives in and the other meaning where they have got to with HR — and the
-            column they each narrow is headed "Location" and "Stage". Someone hunting for everyone
-            in Kerala read "Status" first as often as not. Both now say which question they answer,
-            and the "All" option names what it is all of.
-          */}
-          <RosterFilterSelect label="State they live in" value={stateFilter} onChange={setStateFilter} options={states} allLabel="All states" />
-          <RosterFilterSelect label="Stage with HR" value={statusFilter} onChange={setStatusFilter} options={statuses} formatOption={assayerLifecycleLabel} allLabel="All stages" />
-          {(stateFilter !== 'ALL' || statusFilter !== 'ALL' || search) && (
-            <button
-              onClick={() => { setStateFilter('ALL'); setStatusFilter('ALL'); setSearch(''); }}
-              className="btn btn-secondary" style={{ fontSize: '12px', padding: '6px 10px', alignSelf: 'flex-end' }}
-            >
-              Clear all
-            </button>
-          )}
-        </div>
-      )}
 
       {/* Bulk bar — only present when a selection exists, so it never adds noise. */}
       {canManage && selected.length > 0 && (
@@ -1028,7 +952,7 @@ export const AssayerRoster: React.FC<{
         actually about assayers.
       */}
       <div style={{ border: '1px solid var(--border-color)', borderRadius: '10px', overflow: 'hidden', background: 'var(--bg-card)' }}>
-        <DataTable<Assayer>
+        <DataTable<RosterPerson>
           density="compact"
           rows={phase === 'skeleton' ? [] : rows.slice(0, visibleCount)}
           rowKey={(a) => a.id}
@@ -1068,7 +992,7 @@ export const AssayerRoster: React.FC<{
               </div>
               {assayers.length > 0 && (
                 <button
-                  onClick={() => { setSegment('all'); setStateFilter('ALL'); setStatusFilter('ALL'); setSearch(''); }}
+                  onClick={clearFilters}
                   className="btn btn-secondary"
                   style={{ marginTop: '10px', fontSize: '12px', padding: '5px 12px' }}
                 >
@@ -1165,6 +1089,32 @@ export const AssayerRoster: React.FC<{
                 // screen-reader user which control they are on and nothing about whose record it
                 // opens.
                 <span onClick={(e) => e.stopPropagation()}>
+                  {/*
+                    The way back into an unfinished registration.
+
+                    The wizard writes to the person's own row as the clerk goes — there is no draft
+                    store, deliberately — so closing it half-way leaves a real, findable record
+                    rather than losing the typing. Resuming it, though, was reachable only by
+                    typing `?register=<id>` into the address bar: nothing in the application set
+                    that parameter. So a clerk who stopped at step three had no route back, and
+                    "Add assayer" started a second record for the same person. On this roster 80
+                    people sit in a joining stage with no document and no client standing.
+
+                    Offered only while they are still joining, because that is exactly when the
+                    wizard has anything left to ask.
+                  */}
+                  {canCreate && isOnboardingStage(a.lifecycleStatus) && (
+                    <IconBtn
+                      label={`Finish registering ${a.displayName}`}
+                      onClick={() => setSearchParams((prev) => {
+                        const next = new URLSearchParams(prev);
+                        next.set('register', a.id);
+                        return next;
+                      })}
+                    >
+                      <PlayCircle size={13} />
+                    </IconBtn>
+                  )}
                   {canManage && <IconBtn label={`Edit ${a.displayName}`} onClick={() => navigate(`/hr/roster/${a.id}?edit=1`)}><Edit2 size={13} /></IconBtn>}
                   {canManage && <IconBtn label={`Delete ${a.displayName}`} tone="var(--danger)" onClick={() => remove(a)}><Trash2 size={13} /></IconBtn>}
                 </span>
@@ -1207,6 +1157,27 @@ export const AssayerRoster: React.FC<{
           onCreated={() => { closeRegistration(); refresh(); }}
         />
       )}
+
+      {/*
+        Choosing what leaves the building. Handed `filtered` rather than `rows` because the sort
+        is the screen's, not the file's — the dialog orders columns by the catalogue and rows by
+        whatever the table is showing, so two exports of the same selection line up.
+      */}
+      <RosterExportDialog
+        open={showExport}
+        onClose={() => setShowExport(false)}
+        filtered={rows}
+        all={assayers}
+        truncated={truncated}
+        rosterTotal={rosterTotal}
+        filterSummary={
+          appliedCount === 0
+            ? 'Everyone currently listed — no filter is applied.'
+            : `Matching ${activeCriteria.join(' + ')}.`
+        }
+        onExcelExport={handleExportExcel}
+        excelBusy={exporting}
+      />
     </div>
   );
 };
@@ -1220,7 +1191,7 @@ export const AssayerRoster: React.FC<{
  * disagreed on screen. The gaps are still shown, because a past payment may yet need settling;
  * they are simply not an outstanding task.
  */
-const RecordGaps: React.FC<{ a: Assayer }> = ({ a }) => {
+const RecordGaps: React.FC<{ a: RosterPerson }> = ({ a }) => {
   const missing = missingFields(a);
   const blockers = payoutBlockers(a);
 
@@ -1286,29 +1257,11 @@ const IconBtn: React.FC<{ label: string; onClick: () => void; tone?: string; chi
   </button>
 );
 
-const RosterFilterSelect: React.FC<{
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  options: string[];
-  /** Turns a stored option value into the words shown. Defaults to the value itself. */
-  formatOption?: (value: string) => string;
-  /** Wording for "no filter" — say what it is all of, not just "All". */
-  allLabel?: string;
-}> = ({
-  label, value, onChange, options, formatOption = (v) => v, allLabel = 'All',
-}) => (
-  <label style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-    <span style={{ fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)' }}>{label}</span>
-    <Select
-      value={value}
-      onChange={onChange}
-      options={[{ value: 'ALL', label: allLabel }, ...options.map((o) => ({ value: o, label: formatOption(o) }))]}
-      compact
-      style={{ minWidth: '150px' }}
-    />
-  </label>
-);
+/*
+  `RosterFilterSelect` is gone with the two-dropdown panel it existed for. Its replacement is
+  `RosterFilterPanel`, which renders every axis in `ROSTER_FILTERS` from one definition instead
+  of one bespoke control per question — the shape that kept this screen at two filters.
+*/
 
 export default AssayerRoster;
 

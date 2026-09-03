@@ -3,6 +3,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { render, screen, waitFor } from '@testing-library/react';
 import { HrPayPage } from './HrPayPage';
 import { api } from '../../services/api';
+import { ONBOARDING_NEXT_STEP } from '@fapoms/shared';
 
 jest.mock('../../services/api', () => ({ api: { request: jest.fn() } }));
 jest.mock('./HrLayout', () => ({ useHr: () => ({ canManage: true }) }));
@@ -73,5 +74,45 @@ describe('HrPayPage', () => {
 
     await waitFor(() => expect(screen.getByText('Person 1')).toBeInTheDocument());
     expect(screen.queryByText(/could be loaded/)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Somebody still joining is not a pricing omission.
+ *
+ * `lifecycleStatus` arrived on every row of this page, was declared on the interface, and was
+ * then read by nothing — so a trainee sat in the table beside working assayers under the same
+ * amber "paid the client default", with nothing to say they cannot be sent anywhere yet.
+ */
+describe('HrPayPage — people who have not finished joining', () => {
+  const joiner = (lifecycleStatus: string) => ({
+    success: true,
+    data: [{
+      id: 'a-1', assayerCode: 'AS-1', displayName: 'New Joiner', district: 'Ernakulam',
+      lifecycleStatus, bankAccountNumber: '123', ifscCode: 'ABCD0123456',
+    }],
+    meta: { pagination: { total: 1 } },
+  });
+
+  it('says what has to happen next, in the words the planner already used', async () => {
+    serve([joiner('TRAINING') as any]);
+
+    renderPage();
+
+    // Verbatim from ONBOARDING_NEXT_STEP in @fapoms/shared — the sentence the planner prints when
+    // it refuses this person work. A second wording here would send a clerk looking for a
+    // different instruction than the one that sent them.
+    await waitFor(() => expect(
+      screen.getByText(`Still joining — ${ONBOARDING_NEXT_STEP.TRAINING}`),
+    ).toBeInTheDocument());
+  });
+
+  it('says nothing of the sort about somebody who has finished joining', async () => {
+    serve([joiner('ACTIVE') as any]);
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('New Joiner')).toBeInTheDocument());
+    expect(screen.queryByText(/Still joining/)).not.toBeInTheDocument();
   });
 });

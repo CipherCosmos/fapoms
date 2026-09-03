@@ -1,7 +1,8 @@
 import React from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Users, ExternalLink } from 'lucide-react';
+import { Users, ExternalLink, AlertTriangle, Info } from 'lucide-react';
 import type { HrWorkforceOverview } from '../../hooks/useHrWorkforce';
+import { Modal } from '../../components/ui';
 
 /**
  * Presentation shared by every HR page.
@@ -105,6 +106,253 @@ export const Empty: React.FC<{ children: React.ReactNode }> = ({ children }) => 
   </div>
 );
 
+/**
+ * The one line saying what a screen is asking of the person reading it.
+ *
+ * Every screen in this section opened on figures. A clerk arriving at Pay & terms met four tiles
+ * and a table of rupee amounts with nothing anywhere saying what they were expected to *do* about
+ * them, and the vetting tab opened straight onto a card headed "Vetting" — a noun, not a request.
+ * Numbers are the evidence for the ask; they are not the ask, and a worklist that never states
+ * one is read as a report and closed.
+ *
+ * Deliberately one sentence and deliberately at the top. Two sentences here becomes a paragraph
+ * nobody reads, and the same words further down are found only by whoever was already scrolling.
+ */
+export const Lede: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <p style={{
+    fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.55,
+    margin: '0 0 14px', maxWidth: '86ch',
+  }}>
+    {children}
+  </p>
+);
+
+/**
+ * "Here is something about this list you need to know before you act on it."
+ *
+ * There were seven of these across five screens and no two looked alike: a left border on Pay &
+ * terms, a full amber outline on the vetting tab, a tinted red panel with its own radius on the
+ * skills panel, and a plain card with no icon at all on Workload. Same job, four visual
+ * languages — so the eye had to learn each screen separately instead of learning the product
+ * once, and the one on Workload did not read as a notice at all.
+ *
+ * The left border is the pattern kept, because it was already the most-used of the four and it
+ * marks the block without boxing it in. `AlertBanner` is a different thing and stays a different
+ * thing: that one is a **failure** — something went wrong and can be dismissed. This one is a
+ * standing condition of the data that no amount of dismissing changes.
+ */
+const NOTICE_TONES = {
+  info: { colour: 'var(--accent)', Icon: Info },
+  warning: { colour: 'var(--warning)', Icon: AlertTriangle },
+  danger: { colour: 'var(--danger)', Icon: AlertTriangle },
+} as const;
+
+export const Notice: React.FC<{
+  tone?: keyof typeof NOTICE_TONES;
+  /** Bolded first line, for a notice whose point is a count or a verdict. */
+  title?: React.ReactNode;
+  /**
+   * This notice sits *inside* another card, so it drops the rounded corners and the outer border
+   * and divides with a hairline instead. Without it the review queue's banner was a rounded card
+   * floating inside a rounded card, and the call site was reaching past this component with four
+   * style overrides to stop it — which is how one component quietly becomes two.
+   */
+  flush?: boolean;
+  children?: React.ReactNode;
+  style?: React.CSSProperties;
+}> = ({ tone = 'info', title, flush, children, style }) => {
+  const { colour, Icon } = NOTICE_TONES[tone];
+  return (
+    <div style={{
+      ...card,
+      ...(flush
+        ? { borderRadius: 0, border: 'none', borderBottom: '1px solid var(--border-hair)', padding: '10px 14px' }
+        : {}),
+      borderLeft: `3px solid ${colour}`,
+      display: 'flex', gap: '9px', alignItems: 'flex-start', fontSize: '12.5px', ...style,
+    }}>
+      <Icon size={15} style={{ color: colour, flexShrink: 0, marginTop: '1px' }} />
+      <div style={{ color: 'var(--text-secondary)', lineHeight: 1.55, minWidth: 0 }}>
+        {title && <div style={{ color: 'var(--text-primary)', fontWeight: 700 }}>{title}</div>}
+        {children}
+      </div>
+    </div>
+  );
+};
+
+/**
+ * A titled block of one screen, with an optional count and one action.
+ *
+ * Lifted out of the vetting tab, where it was defined privately, because the Workload and
+ * Qualification screens were each hand-rolling `<div style={card}><div style={label}>…` to
+ * produce the same shape a few pixels differently.
+ *
+ * `count` is a prop rather than something the caller writes into `title` because the three
+ * screens all showed counts and all showed them differently: "Workload, person by person (14)",
+ * "3 record problems to review", and a bare number in a tile. One place decides, so a count
+ * always looks like a count and never like part of the heading.
+ */
+export const Section: React.FC<{
+  title: React.ReactNode;
+  icon?: React.ElementType;
+  hint?: React.ReactNode;
+  count?: number | null;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+  style?: React.CSSProperties;
+}> = ({ title, icon: Icon, hint, count, action, children, style }) => (
+  <div style={{ ...card, ...style }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: hint ? '4px' : '10px' }}>
+      {Icon && <Icon size={15} style={{ color: 'var(--text-muted)', flexShrink: 0 }} />}
+      <div style={{ ...label, flex: 1 }}>
+        {title}
+        {count !== null && count !== undefined && (
+          <span style={{ color: 'var(--text-muted)', fontWeight: 700, marginLeft: '7px' }}>{count}</span>
+        )}
+      </div>
+      {action}
+    </div>
+    {hint && <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '10px', lineHeight: 1.5 }}>{hint}</div>}
+    {children}
+  </div>
+);
+
+/**
+ * The text button used inside a card or a table row — Change, Remove, Record call, Decide this.
+ *
+ * Four files had written their own: a `linkButton` style object on the vetting tab, two inline
+ * copies on the skills panel, one on the review queue, and `OpenLink` below, which is this with
+ * an icon welded on. They disagreed about size and weight, so the same act was a slightly
+ * different control depending on which screen you were looking at.
+ *
+ * `label` is separate from `children` for the icon-only case: a button whose face is a trash can
+ * still has to say what it removes, and taking the accessible name as a required prop is how that
+ * stops being something each call site remembers or forgets.
+ */
+const LINK_TONES = {
+  accent: 'var(--primary)',
+  danger: 'var(--danger)',
+  muted: 'var(--text-muted)',
+} as const;
+
+export const LinkButton: React.FC<{
+  onClick: () => void;
+  children?: React.ReactNode;
+  tone?: keyof typeof LINK_TONES;
+  icon?: React.ReactNode;
+  /** The accessible name. Required when there is no text on the button's face. */
+  label?: string;
+  disabled?: boolean;
+  style?: React.CSSProperties;
+}> = ({ onClick, children, tone = 'accent', icon, label: name, disabled, style }) => (
+  <button
+    type="button"
+    onClick={onClick}
+    disabled={disabled}
+    aria-label={name}
+    title={name}
+    style={{
+      background: 'none', border: 'none', padding: 0,
+      cursor: disabled ? 'default' : 'pointer', opacity: disabled ? 0.5 : 1,
+      color: LINK_TONES[tone], fontSize: '12px', fontWeight: 600,
+      display: 'inline-flex', alignItems: 'center', gap: '4px', whiteSpace: 'nowrap',
+      ...style,
+    }}
+  >
+    {icon}{children}
+  </button>
+);
+
+/** The trailing action cell of a table row, spaced the same on every table in the section. */
+export const RowActions: React.FC<{ children: React.ReactNode }> = ({ children }) => (
+  <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>{children}</div>
+);
+
+/**
+ * A text box on an HR form. There were five of these — `inputStyle` on the vetting tab, `input`
+ * on the skills panel, another `input` in the pay dialog, and two written inline — differing in
+ * padding, radius and whether they set `fontFamily`, so a form assembled from two screens' worth
+ * of habits had boxes of two different heights next to each other.
+ */
+export const fieldInput: React.CSSProperties = {
+  width: '100%', padding: '7px 9px', fontSize: '12.5px',
+  background: 'var(--bg-surface)', color: 'var(--text-primary)',
+  border: '1px solid var(--border-color)', borderRadius: '7px', fontFamily: 'inherit',
+  boxSizing: 'border-box',
+};
+
+/** A caption over the control it names. `wide` takes the whole row, for a sentence-length value. */
+export const Field: React.FC<{
+  title: React.ReactNode; hint?: React.ReactNode; children: React.ReactNode; wide?: boolean;
+}> = ({ title, hint, children, wide }) => (
+  <div style={{ flex: wide ? '1 1 100%' : '1 1 150px', minWidth: 0 }}>
+    <div style={{ ...label, marginBottom: '5px' }}>{title}</div>
+    {hint && <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '5px', lineHeight: 1.5 }}>{hint}</div>}
+    {children}
+  </div>
+);
+
+/**
+ * THE small form. Filling in a few boxes and saving them is one act, so it has one surface.
+ *
+ * It had four on the vetting tab alone. Recording a background check, adding a reference and
+ * typing an identity number each opened a panel that expanded *inside* the card — pushing the
+ * table the clerk had just clicked in halfway down the page — while changing a client standing
+ * opened a dialog. Four surfaces, four hand-written footers, and between them four different
+ * primary buttons: `7px 14px` at 12.5px, `8px 16px` at 13px, `7px 13px` at 12.5px, and the
+ * app's own `.btn btn-primary`. The skills panel and the review queue had a fifth and a sixth.
+ *
+ * A dialog rather than the inline panel, for all of them, because the inline panel was the half
+ * that behaved worst: the page reflowed under the pointer on open, the form could be scrolled off
+ * screen while it was still unsaved, and nothing stopped two of them being open at once. The
+ * footer is `.btn btn-secondary` / `.btn btn-primary` — the app's global buttons, which is the one
+ * of the six that was not invented here.
+ *
+ * `onSave` is wired to the form's submit, so Enter saves from any box in it. That was true on the
+ * skills panel (which had bound Enter by hand) and nowhere else.
+ */
+export const Editor: React.FC<{
+  title: React.ReactNode;
+  /** One line saying what saving this will mean, where that is not obvious from the boxes. */
+  intro?: React.ReactNode;
+  /** Small print beside the buttons — a caveat that belongs at the moment of pressing Save. */
+  note?: React.ReactNode;
+  onCancel: () => void;
+  onSave: () => void;
+  saveLabel: string;
+  busy?: boolean;
+  saveDisabled?: boolean;
+  width?: number;
+  children: React.ReactNode;
+}> = ({ title, intro, note, onCancel, onSave, saveLabel, busy, saveDisabled, width = 480, children }) => (
+  <Modal
+    open
+    onClose={onCancel}
+    title={title}
+    width={width}
+    asForm
+    onSubmit={(e) => { e.preventDefault(); onSave(); }}
+    footer={(
+      <>
+        {note && (
+          <span style={{ fontSize: '12px', color: 'var(--text-muted)', marginRight: 'auto', maxWidth: '52ch', lineHeight: 1.5, textAlign: 'left' }}>
+            {note}
+          </span>
+        )}
+        <button type="button" onClick={onCancel} className="btn btn-secondary" style={{ fontSize: '12px', padding: '8px 14px' }}>
+          Cancel
+        </button>
+        <button type="submit" disabled={busy || saveDisabled} className="btn btn-primary" style={{ fontSize: '12px', padding: '8px 14px' }}>
+          {busy ? 'Saving…' : saveLabel}
+        </button>
+      </>
+    )}
+  >
+    {intro && <div style={{ fontSize: '12.5px', color: 'var(--text-muted)', lineHeight: 1.55 }}>{intro}</div>}
+    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>{children}</div>
+  </Modal>
+);
+
 export const HrHeader: React.FC<{ data: HrWorkforceOverview; canManage: boolean }> = ({ data, canManage }) => (
   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '16px', flexWrap: 'wrap' }}>
     <div>
@@ -153,9 +401,9 @@ export const attritionExplainer = (a: HrWorkforceOverview['attrition']): {
 });
 
 export const OpenLink: React.FC<{ onClick: () => void; label?: string }> = ({ onClick, label: text = 'Open' }) => (
-  <button onClick={onClick} style={{ background: 'none', border: 'none', color: 'var(--accent)', cursor: 'pointer', fontSize: '12px', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: '4px', padding: 0 }}>
+  <LinkButton onClick={onClick} style={{ color: 'var(--accent)' }}>
     {text} <ExternalLink size={11} />
-  </button>
+  </LinkButton>
 );
 
 /*

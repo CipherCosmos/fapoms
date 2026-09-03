@@ -1,6 +1,9 @@
 import {
-  REGISTRATION_FIELDS, RATE_KEYS, REGISTRATION_STEP_KEYS, STEP_FIELDS,
-  activationGaps, firstIncompleteStep, stepOfField, validateStep,
+  EmpanelmentStatus, SELF_EDITABLE_ASSAYER_FIELDS, standingAllowsPlanning,
+} from '@fapoms/shared';
+import {
+  REGISTRATION_FIELDS, RATE_KEYS, REGISTRATION_STEP_KEYS, STANDING_CHOICES, STEP_FIELDS,
+  activationGaps, firstIncompleteStep, isPlannableForSomeone, stepOfField, validateStep,
 } from './steps';
 
 // `services/api` pulls in the socket client, which reads `import.meta.env` and cannot be
@@ -46,9 +49,8 @@ describe('the fields a registration offers', () => {
   it.each([
     'dateOfBirth', 'qualification', 'aadhaarNumber', 'vstsCode', 'bankName',
     'emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation',
-    'managerId', 'hrOwnerName', 'engagementType',
-    'maxDailyWorkload', 'maxWeeklyWorkload', 'workingHoursStart', 'workingHoursEnd',
-    'preferredRegions',
+    'hrOwnerName', 'engagementType', 'experienceYears',
+    'maxDailyWorkload', 'maxWeeklyWorkload',
   ])('offers %s, which the old create form had no box for at all', (key) => {
     expect(REGISTRATION_FIELDS.some((f) => f.key === key) || keysOnSomeStep.has(key)).toBe(true);
     expect(keysOnSomeStep.has(key)).toBe(true);
@@ -62,6 +64,46 @@ describe('the fields a registration offers', () => {
     },
   );
 
+  it.each(['department', 'managerId', 'employeeId'])(
+    'no longer asks for %s, which is blank on all 1,163 people and read by nothing',
+    (key) => {
+      // Not a tidy-up. The owner's own words: an assayer has one job, the audit, and which audit
+      // they do is decided by planning — so a department picker is a question with no consequence.
+      // The column and the record page's box both survive, so an imported value is still visible.
+      expect(REGISTRATION_FIELDS.some((f) => f.key === key)).toBe(false);
+      expect(keysOnSomeStep.has(key)).toBe(false);
+    },
+  );
+
+  it.each([
+    'skills', 'languages', 'certifications',
+    'preferredRegions', 'workingHoursStart', 'workingHoursEnd',
+  ])('no longer asks a clerk at the counter for %s', (key) => {
+    expect(REGISTRATION_FIELDS.some((f) => f.key === key)).toBe(false);
+    expect(keysOnSomeStep.has(key)).toBe(false);
+  });
+
+  it.each([
+    // The box key and the record key differ for the hours: the form has two times, the column
+    // holds the pair, and the self-service rule is written against the column.
+    ['skills', 'skills'], ['languages', 'languages'],
+    ['preferredRegions', 'preferredRegions'],
+    ['workingHoursStart', 'workingHours'], ['workingHoursEnd', 'workingHours'],
+  ])('drops %s because the assayer maintains it themselves and can overwrite it', (_box, recordKey) => {
+    // Blank on all 1,163 people, which is what this arrangement looks like when it works: nobody
+    // at a desk knows which hours somebody will take work in on the day they enrol, and whatever
+    // was guessed is replaced the first time the person opens the app.
+    expect(SELF_EDITABLE_ASSAYER_FIELDS).toContain(recordKey);
+  });
+
+  it('drops certifications because a comma-separated box cannot hold an expiry date', () => {
+    // Not a self-editable field — this one moved for a different reason. A certificate is only
+    // useful with the date it lapses on, `daysUntilExpiry` is what withholds work from somebody
+    // whose licence has run out, and this box could only ever have filed a name with a blank
+    // expiry. The record's Skills tab takes both.
+    expect(SELF_EDITABLE_ASSAYER_FIELDS).not.toContain('certifications');
+  });
+
   it('keeps the pay rates out of the record field list, because the record PUT would 400 on them', () => {
     // `ValidationPipe({ forbidNonWhitelisted: true })` is global, and `UpdateAssayerRequestDto`
     // declares no rate — so one leaking into the record body rejects the whole save, not the field.
@@ -72,6 +114,59 @@ describe('the fields a registration offers', () => {
 
   it('marks the state mandatory here even though the record page leaves it optional', () => {
     expect(REGISTRATION_FIELDS.find((f) => f.key === 'state')?.required).toBe(true);
+  });
+});
+
+/**
+ * The gate the desk has to tell the truth about.
+ *
+ * `ClientEligibilityFilter` admits an ACTIVE or RECOMMENDED standing and nothing else, and
+ * `planning.eligibility.noEmpanelmentRow` defaults to BLOCK — so somebody with no standing at all
+ * is dropped from every client's planning run. These assertions exist because the copy on the
+ * screen makes a promise about work being offered, and a copy of the rule that drifted from the
+ * engine's would turn that promise into a lie a clerk cannot check.
+ */
+describe('who they can be given work for', () => {
+  it('counts only the two standings the planner actually admits', () => {
+    expect(standingAllowsPlanning(EmpanelmentStatus.ACTIVE)).toBe(true);
+    expect(standingAllowsPlanning(EmpanelmentStatus.RECOMMENDED)).toBe(true);
+    // The one that reads like progress and is not: papers outstanding excludes exactly as hard
+    // as a refusal does, and a clerk told otherwise files it and believes the job is done.
+    expect(standingAllowsPlanning(EmpanelmentStatus.DOCUMENTS_PENDING)).toBe(false);
+    expect(standingAllowsPlanning(EmpanelmentStatus.INACTIVE)).toBe(false);
+    expect(standingAllowsPlanning(EmpanelmentStatus.NOT_RECOMMENDED)).toBe(false);
+    expect(standingAllowsPlanning(null)).toBe(false);
+  });
+
+  it('says a person with no standing anywhere cannot be given work', () => {
+    // The 245-of-548 case: a complete, ACTIVE record that no planning run will ever surface.
+    expect(isPlannableForSomeone([])).toBe(false);
+    expect(isPlannableForSomeone(null)).toBe(false);
+    expect(isPlannableForSomeone([{ clientId: 'c1', status: EmpanelmentStatus.DOCUMENTS_PENDING }])).toBe(false);
+  });
+
+  it('needs only one client to say yes', () => {
+    expect(isPlannableForSomeone([
+      { clientId: 'c1', status: EmpanelmentStatus.NOT_RECOMMENDED },
+      { clientId: 'c2', status: EmpanelmentStatus.RECOMMENDED },
+    ])).toBe(true);
+  });
+
+  it('offers only standings a person being enrolled today could actually be in', () => {
+    const offered = STANDING_CHOICES.map((c) => c.value);
+    // Resigned, terminated and dormant all describe an empanelment that has ended, which cannot
+    // be true of somebody joining today — the same argument that keeps `exitDate` off the form.
+    expect(offered).not.toContain(EmpanelmentStatus.RESIGNED);
+    expect(offered).not.toContain(EmpanelmentStatus.TERMINATED);
+    expect(offered).not.toContain(EmpanelmentStatus.INACTIVE);
+  });
+
+  it('labels every choice without showing anybody an enum name', () => {
+    for (const choice of STANDING_CHOICES) {
+      expect(choice.label).not.toMatch(/_|^[A-Z]+$/);
+      expect(choice.consequence.length).toBeGreaterThan(0);
+      expect(choice.plannable).toBe(standingAllowsPlanning(choice.value));
+    }
   });
 });
 

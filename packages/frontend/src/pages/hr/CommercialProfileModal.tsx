@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { formatRupees } from '@fapoms/shared';
-import { Modal, Select, useToast, AlertBanner } from '../../components/ui';
+import { Select, useToast, AlertBanner } from '../../components/ui';
 import { useConfirm } from '../../components/ui/ConfirmDialog';
+import { Field, fieldInput, Editor } from './hr-ui';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { todayDateKey } from '../../utils/statusLabels';
@@ -143,8 +144,8 @@ export const CommercialProfileModal: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, profileId]);
 
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // The Editor owns the form and has already stopped the default submit before calling this.
+  const submit = async () => {
     if (!form.effectiveStartDate) {
       setErr('Pick the date these pay terms start applying.');
       return;
@@ -224,58 +225,59 @@ export const CommercialProfileModal: React.FC<{
     }
   };
 
-  const label: React.CSSProperties = { display: 'block', fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px' };
-  const input: React.CSSProperties = { padding: '9px 11px', background: 'var(--bg-page)', border: '1px solid var(--border-color)', borderRadius: '8px', color: 'var(--text-primary)', width: '100%', boxSizing: 'border-box' as const, outline: 'none', fontSize: '13px' };
+  if (!open) return null;
 
   return (
-    <Modal open={open} onClose={onClose} title={profile ? 'Change what this person is paid' : 'Set what this person is paid'} asForm onSubmit={submit} width={520}>
-      <AlertBanner type="error" message={err} onClose={() => setErr(null)} style={{ marginBottom: '12px' }} />
-      {/*
+    /*
+      The section's one small-form surface, rather than this file's own arrangement of a Modal, a
+      grid, a hand-written label style, a hand-written input style and a footer. Every one of
+      those five now comes from `hr-ui`, so this dialog and the four on the vetting tab are the
+      same dialog with different boxes in it.
+    */
+    <Editor
+      title={profile ? 'Change what this person is paid' : 'Set what this person is paid'}
+      /*
         Which of these six numbers actually reaches a payout, said before the boxes rather than
         after the mistake. Filling in an hourly rate and expecting it to be paid is the error this
         dialog invited, and there is nothing further down the system that would ever correct it.
-      */}
-      <div style={{ fontSize: '12px', color: 'var(--text-secondary)', background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)', borderRadius: '8px', padding: '9px 11px', marginBottom: '12px', lineHeight: 1.5 }}>
-        Assignments are priced and paid on the <strong>base fee</strong> only. The other figures are
-        kept on this person's record as their agreed terms, but no invoice or payout is calculated
-        from them.
+      */
+      intro={(
+        <>
+          Assignments are priced and paid on the <strong>base fee</strong> only. The other figures are
+          kept on this person's record as their agreed terms, but no invoice or payout is calculated
+          from them.
+        </>
+      )}
+      onCancel={onClose}
+      onSave={() => void submit()}
+      saveLabel={profile ? 'Save changes' : 'Save pay terms'}
+      busy={busy}
+      width={520}
+    >
+      <div style={{ flexBasis: '100%' }}>
+        <AlertBanner type="error" message={err} onClose={() => setErr(null)} />
       </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px' }}>
-        {NUMERIC_FIELDS.map((f) => (
-          <div key={f.key} style={f.key === 'baseFee' ? { gridColumn: '1 / -1' } : undefined}>
-            <label style={label}>{f.label}</label>
-            {f.hint && <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '3px' }}>{f.hint}</div>}
-            <input type="number" min={0} step="0.01" value={form[f.key] || ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} style={input} placeholder="0.00" />
-          </div>
-        ))}
-      </div>
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '12px', marginTop: '12px' }}>
-        <div>
-          <label style={label}>Currency</label>
-          <Select
-            value={form.currency || 'INR'}
-            onChange={(v) => setForm({ ...form, currency: v })}
-            options={CURRENCIES.map((c) => ({ value: c, label: c }))}
-            style={{ width: '100%' }}
-          />
-        </div>
-        <div>
-          <label style={label}>Paid at these terms from</label>
-          <input type="date" value={form.effectiveStartDate || ''} onChange={(e) => setForm({ ...form, effectiveStartDate: e.target.value })} style={input} />
-        </div>
-        <div>
-          <label style={label}>Until (leave blank for no end date)</label>
-          <input type="date" value={form.effectiveEndDate || ''} onChange={(e) => setForm({ ...form, effectiveEndDate: e.target.value })} style={input} />
-        </div>
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '16px' }}>
-        <button type="button" onClick={onClose} className="btn btn-secondary" style={{ fontSize: '12px', padding: '8px 14px' }}>Cancel</button>
-        <button type="submit" disabled={busy} className="btn btn-primary" style={{ fontSize: '12px', padding: '8px 14px' }}>
-          {busy ? 'Saving…' : profile ? 'Save changes' : 'Save pay terms'}
-        </button>
-      </div>
+      {NUMERIC_FIELDS.map((f) => (
+        <Field key={f.key} title={f.label} hint={f.hint} wide={f.key === 'baseFee'}>
+          <input type="number" min={0} step="0.01" value={form[f.key] || ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} style={fieldInput} placeholder="0.00" />
+        </Field>
+      ))}
+      <Field title="Currency">
+        <Select
+          value={form.currency || 'INR'}
+          onChange={(v) => setForm({ ...form, currency: v })}
+          options={CURRENCIES.map((c) => ({ value: c, label: c }))}
+          style={{ width: '100%' }}
+        />
+      </Field>
+      <Field title="Paid at these terms from">
+        <input type="date" value={form.effectiveStartDate || ''} onChange={(e) => setForm({ ...form, effectiveStartDate: e.target.value })} style={fieldInput} />
+      </Field>
+      <Field title="Until (leave blank for no end date)">
+        <input type="date" value={form.effectiveEndDate || ''} onChange={(e) => setForm({ ...form, effectiveEndDate: e.target.value })} style={fieldInput} />
+      </Field>
       {confirmDialog}
-    </Modal>
+    </Editor>
   );
 };
 

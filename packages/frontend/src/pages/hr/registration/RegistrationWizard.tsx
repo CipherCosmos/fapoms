@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  User, MapPin, CreditCard, FileText, Users, ClipboardCheck,
+  User, MapPin, CreditCard, FileText, Users, Building2, ClipboardCheck,
   Check, ChevronLeft, ChevronRight, X, AlertTriangle, Plus, Phone,
 } from 'lucide-react';
 import { Modal, AlertBanner, useToast } from '../../../components/ui';
@@ -12,17 +12,20 @@ import { userMessage } from '../../../services/errors';
 import { useViewParam } from '../hr-ui';
 import { useCurrentRoles, canManageAssayers } from '../../../hooks/useCurrentRoles';
 import {
-  renderFormField, useManagerOptions, resolvePincode, addressConflict, type FieldDef,
+  renderFormField, resolvePincode, addressConflict, type FieldDef,
 } from '../AssayerForms';
 import { isSensitiveKey } from '../assayer-shared';
 import { SensitiveValue } from '../SensitiveValue';
 import {
   REGISTRATION_FIELDS, RATE_FIELDS, REGISTRATION_STEPS, REGISTRATION_STEP_KEYS,
-  STEP_FIELDS, activationGaps, firstIncompleteStep, validateStep,
+  STEP_FIELDS, activationGaps, firstIncompleteStep, isPlannableForSomeone, validateStep,
   type RegistrationStepKey,
 } from './steps';
-import { useDossier, useRegistration, type DossierReference } from './useRegistration';
+import {
+  useDossier, useRegistration, type DossierEmpanelment, type DossierReference,
+} from './useRegistration';
 import { DocumentsStep } from './DocumentsStep';
+import { ClientsStep } from './ClientsStep';
 
 /**
  * Registering an assayer, from the desk, end to end.
@@ -45,6 +48,12 @@ import { DocumentsStep } from './DocumentsStep';
  * From that moment the wizard is a view over a real row, every step saves what moved, and an
  * interrupted registration is simply a person on the roster with blanks left — reopenable, by
  * this same flow, at the first thing still missing.
+ *
+ * The second thing it produced, which took a roster to notice: **a complete record that could not
+ * be given a single job.** Nothing here asked which banks had accepted the person, and planning
+ * refuses anybody with no empanelment standing — 245 of the 548 people who are ACTIVE today are
+ * unplannable for that one reason. `ClientsStep` is that question, and the Review step says out
+ * loud what it costs to skip it rather than leaving the flow to end on a green tick.
  */
 
 const STEP_ICONS: Record<RegistrationStepKey, React.ReactNode> = {
@@ -53,6 +62,7 @@ const STEP_ICONS: Record<RegistrationStepKey, React.ReactNode> = {
   identity: <CreditCard size={14} />,
   documents: <FileText size={14} />,
   people: <Users size={14} />,
+  clients: <Building2 size={14} />,
   review: <ClipboardCheck size={14} />,
 };
 
@@ -259,10 +269,12 @@ const ReviewStep: React.FC<{
   record: Parameters<typeof activationGaps>[0];
   scannedCount: number;
   requirementCount: number;
+  standings: DossierEmpanelment[];
   onGo: (step: RegistrationStepKey) => void;
-}> = ({ record, scannedCount, requirementCount, onGo }) => {
+}> = ({ record, scannedCount, requirementCount, standings, onGo }) => {
   const gaps = activationGaps(record);
   const name = [record?.firstName, record?.lastName].filter(Boolean).join(' ').trim();
+  const plannable = isPlannableForSomeone(standings);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
@@ -277,6 +289,40 @@ const ReviewStep: React.FC<{
           Their code is <strong style={{ fontFamily: 'var(--font-mono, monospace)' }}>{record?.assayerCode || '—'}</strong>.
           {' '}They are waiting to be taken through onboarding on their record, where the stage is moved by hand.
         </div>
+      </div>
+
+      {/*
+        * The one thing on this page that is a sentence rather than an item in a list.
+        *
+        * Being on the roster and being givable work are two different states, and the gap between
+        * them is invisible: `planning.eligibility.noEmpanelmentRow` defaults to BLOCK, so a person
+        * with no standing is dropped from every client's candidate list with a reason that never
+        * reaches the desk. 245 of the 548 people currently ACTIVE are in that state, and every one
+        * of them looks finished on this page.
+        *
+        * So it is said, not iconified. A warning triangle beside a phrase like "no client
+        * standing" is read as a nag about paperwork; "cannot be given work for any client" is read
+        * as what it is. Not a blocker either — RECOMMENDED and "waiting on paperwork" are honest
+        * pre-vetting states and HR must be able to enrol somebody before a bank has cleared them.
+        */}
+      <div style={{
+        ...cardish,
+        borderColor: plannable ? 'var(--success)' : 'var(--danger)',
+        borderWidth: plannable ? '1px' : '2px',
+      }}>
+        <div style={{ ...blockTitleStyle, color: plannable ? 'var(--text-primary)' : 'var(--danger)' }}>
+          {plannable ? 'Who they can work for' : 'They cannot be given work yet'}
+        </div>
+        <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+          {plannable
+            ? `Accepted by ${standings.filter((s) => s.client).map((s) => s.client!.name).join(', ') || 'a client'}.`
+            : `${name || 'This person'} cannot be given work for any client until a client standing is set. `
+              + 'No bank is ever offered somebody they have not accepted, so until then they will '
+              + 'not appear on any planning screen however complete the rest of this record is.'}
+        </div>
+        <button type="button" onClick={() => onGo('clients')} style={linkButtonStyle}>
+          {plannable ? 'Change who they can work for' : 'Set it now'}
+        </button>
       </div>
 
       <div style={cardish}>
@@ -365,10 +411,9 @@ export const RegistrationWizard: React.FC<{
   const [stepProblems, setStepProblems] = useState<string[]>([]);
   const [addrNote, setAddrNote] = useState<{ message: string; blocking: boolean } | null>(null);
   const [addrLookup, setAddrLookup] = useState(false);
-  const [docBusy, setDocBusy] = useState(false);
+  const [stepBusy, setStepBusy] = useState(false);
   const { skills, languages, certifications } = useWorkforceVocabulary();
   const vocabulary = { skills, languages, certifications };
-  const managerOpts = useManagerOptions(step === 'people', reg.assayerId ?? undefined);
   const { toast } = useToast();
 
   const stepIndex = REGISTRATION_STEP_KEYS.indexOf(step);
@@ -413,13 +458,15 @@ export const RegistrationWizard: React.FC<{
     setAddrNote(addressConflict(po, clean, reg.form.state, reg.form.district));
   };
 
+  // No `people` argument: the reporting-manager picker is the one field type this flow used it
+  // for, and that field is no longer offered at admission — see `NEVER_KEPT` in `steps.ts`. It
+  // took a fetch of the whole roster with it.
   const renderOne = (field: FieldDef) => renderFormField(
     field,
     reg.form,
     formSetter,
     vocabulary,
     (key) => { if (key === 'pincode') void applyPincodeLookup(reg.form.pincode || ''); },
-    field.people ? { options: managerOpts.people, failed: managerOpts.failed, incomplete: managerOpts.incomplete } : undefined,
   );
 
   /**
@@ -465,7 +512,9 @@ export const RegistrationWizard: React.FC<{
     const problems = validateStep(step, reg.form);
     if (problems.length > 0) { setStepProblems(problems); return false; }
     setStepProblems([]);
-    if (step === 'documents' || step === 'review') return true;
+    // The three steps that own no box on the record. Papers, client standings and the summary all
+    // write through routes of their own as they go, so there is nothing here left to commit.
+    if (step === 'documents' || step === 'clients' || step === 'review') return true;
     // A state the postal directory places in another state is the one address answer that cannot
     // be saved as typed; the district disagreement below it is normal and saves fine.
     if (step === 'address' && addrNote?.blocking) return false;
@@ -484,12 +533,24 @@ export const RegistrationWizard: React.FC<{
     if (await leaveStep()) setStep(REGISTRATION_STEP_KEYS[Math.min(stepIndex + 1, REGISTRATION_STEP_KEYS.length - 1)]);
   };
 
+  /**
+   * Finishing says what was actually achieved, which is not always "registered".
+   *
+   * A green "Registered" on somebody who cannot be offered a single assignment is the exact
+   * confusion this flow was producing: the record is genuinely complete and the person is
+   * genuinely unusable, and only the second half is surprising. The step is not blocked — see
+   * `ClientsStep` for why — so the confirmation carries the caveat instead.
+   */
   const finish = async () => {
     if (!(await leaveStep())) return;
+    const who = [reg.form.firstName, reg.form.lastName].filter(Boolean).join(' ').trim() || 'This person';
+    const plannable = isPlannableForSomeone(dossier?.empanelments ?? []);
     toast({
-      type: 'success',
-      title: 'Registered',
-      message: `${[reg.form.firstName, reg.form.lastName].filter(Boolean).join(' ').trim() || 'This person'} is on the roster. Move them through onboarding from their record.`,
+      type: plannable ? 'success' : 'warning',
+      title: plannable ? 'Registered' : 'Registered, but not yet workable',
+      message: plannable
+        ? `${who} is on the roster. Move them through onboarding from their record.`
+        : `${who} is on the roster, but cannot be given work for any client until a client standing is set on their record.`,
     });
     onCreated();
   };
@@ -499,7 +560,7 @@ export const RegistrationWizard: React.FC<{
     [dossier],
   );
 
-  const busy = reg.busy || docBusy;
+  const busy = reg.busy || stepBusy;
   const current = REGISTRATION_STEPS[stepIndex];
 
   return (
@@ -673,7 +734,7 @@ export const RegistrationWizard: React.FC<{
           dossier={dossier}
           dossierError={dossierError}
           onChanged={() => { reloadDossier(); void reg.refresh(); }}
-          onBusy={setDocBusy}
+          onBusy={setStepBusy}
         />
       ) : step === 'people' ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
@@ -689,15 +750,9 @@ export const RegistrationWizard: React.FC<{
             onChanged={reloadDossier}
           />
           <Block
-            title="What they can do"
-            note="Picked from lists the roster already uses. Typing a skill that is not on the list would make a capability nobody holds, so the person would quietly look unassignable."
-            keys={['skills', 'languages', 'certifications', 'experienceYears']}
-            render={renderOne}
-          />
-          <Block
-            title="When they can work"
+            title="How much work they can take"
             note="Leave blank if there is no limit. These are what stop the planner offering somebody more work than they agreed to."
-            keys={['workingHoursStart', 'workingHoursEnd', 'maxDailyWorkload', 'maxWeeklyWorkload']}
+            keys={['experienceYears', 'maxDailyWorkload', 'maxWeeklyWorkload']}
             render={renderOne}
           />
           <Block
@@ -708,17 +763,45 @@ export const RegistrationWizard: React.FC<{
           />
           <Block
             title="Who looks after them here"
-            note="Optional. The reporting line and any numbers your own payroll or HR system knows them by."
-            keys={['managerId', 'hrOwnerName', 'employeeId', 'employeeCode']}
+            note="Optional. Who in HR is their contact, and any reference your own office knows them by."
+            keys={['hrOwnerName', 'employeeCode']}
             render={renderOne}
           />
           <Block title="Anything else" note="Notes about this person, for whoever opens their record next." keys={['notes']} render={renderOne} />
+
+          {/*
+            * Said here because this is where the boxes used to be.
+            *
+            * Skills, languages, certificates, working hours and the regions somebody will travel
+            * to were all collected on this page and are blank on every one of the 1,163 people on
+            * the roster — which is what happens when a clerk is asked, at the counter, for facts
+            * the person themselves keeps up to date from their phone and can overwrite the next
+            * day. The capability is untouched; the question has moved to whoever can answer it. A
+            * step that simply lost five boxes would be read as five things now uncollected.
+            */}
+          <div style={{ ...cardish, background: 'var(--bg-surface-2)' }}>
+            <div style={blockTitleStyle}>What they can do, and when they will work</div>
+            <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+              Skills, languages, certificates, working hours and the regions they will travel to
+              are not asked for here. The assayer keeps those up to date themselves from the app,
+              and you can add a skill or a certificate — with its expiry date — on the Skills tab
+              of their record at any time.
+            </div>
+          </div>
         </div>
+      ) : step === 'clients' ? (
+        <ClientsStep
+          assayerId={reg.assayerId}
+          dossier={dossier}
+          onChanged={reloadDossier}
+          onBusy={setStepBusy}
+        />
       ) : (
         <ReviewStep
           record={reg.record}
           scannedCount={scannedCount}
           requirementCount={dossier?.onboarding.length ?? 0}
+          standings={dossier?.empanelments ?? []}
           onGo={(k) => void goTo(k)}
         />
       )}

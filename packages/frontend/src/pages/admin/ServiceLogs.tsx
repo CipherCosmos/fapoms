@@ -10,7 +10,7 @@ import {
   type AvailableLogService,
 } from '../../services/service-logs';
 import { userMessage } from '../../services/errors';
-import { useCurrentRoles } from '../../hooks/useCurrentRoles';
+import { useCurrentPermissions, useCurrentRoles } from '../../hooks/useCurrentRoles';
 import { canAccessRoute } from '../../config/route-permissions';
 
 /**
@@ -78,6 +78,7 @@ const RANGE_PRESETS: { label: string; since?: string }[] = [
 
 export const ServiceLogs: React.FC = () => {
   const roles = useCurrentRoles();
+  const permissions = useCurrentPermissions();
   // Seeded from localStorage so a page refresh resumes what you were watching. Following a log is
   // a stance, not a click: reloading the tab to clear a rendering glitch should not silently stop
   // the thing you reloaded in order to keep watching.
@@ -278,7 +279,7 @@ export const ServiceLogs: React.FC = () => {
     URL.revokeObjectURL(url);
   }, [text, service]);
 
-  if (!canAccessRoute(roles, '/admin/logs')) {
+  if (!canAccessRoute(roles, permissions, '/admin/logs')) {
     return (
       <div style={{ ...card, margin: 24 }}>
         <h2 style={{ margin: 0 }}>Service logs</h2>

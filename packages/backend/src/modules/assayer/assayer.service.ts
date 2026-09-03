@@ -1,23 +1,6 @@
-import { Injectable, NotFoundException, ConflictException, BadRequestException, UnauthorizedException, OnModuleInit, Logger } from '@nestjs/common';
-import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
-import { Repository, LessThanOrEqual, In, DataSource, ILike } from 'typeorm';
-import * as xlsx from 'xlsx';
-import * as bcrypt from 'bcrypt';
-import { randomInt } from 'crypto';
-import { AssayerEntity } from './assayer.entity';
-import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity';
-import { WorkforceAttributeEntity } from './workforce-attribute.entity';
-import { AssayerRemarkEntity } from './assayer-remark.entity';
-import { AssayerActivityEntity } from './assayer-activity.entity';
-import { TEMP_PASSWORD_WORDS } from './temp-password-words';
-import { AuditService } from '../../core/audit/audit.service';
-import { AssayerStateMachine } from './assayer.state-machine';
-import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { WorkflowEngine } from '../platform/workflow/workflow.engine';
-import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
-import { CacheService } from '../../infrastructure/cache/cache.service';
-import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service';
-import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, DocumentVerification } from '@fapoms/shared';
+import {
+  Injectable, NotFoundException, ConflictException, BadRequestException, UnauthorizedException, OnModuleInit, Logger } from '@nestjs/common'; import { InjectRepository, InjectDataSource } from '@nestjs/typeorm'; import { Repository, LessThanOrEqual, In, DataSource, ILike } from 'typeorm'; import * as xlsx from 'xlsx'; import * as bcrypt from 'bcrypt'; import { randomInt } from 'crypto'; import { AssayerEntity } from './assayer.entity'; import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity'; import { WorkforceAttributeEntity } from './workforce-attribute.entity'; import { AssayerRemarkEntity } from './assayer-remark.entity'; import { AssayerActivityEntity } from './assayer-activity.entity'; import { TEMP_PASSWORD_WORDS } from './temp-password-words'; import { AuditService } from '../../core/audit/audit.service'; import { AssayerStateMachine } from './assayer.state-machine'; import { DomainEventPublisher } from '../../core/events/domain-event.publisher'; import { WorkflowEngine } from '../platform/workflow/workflow.engine'; import { NotificationDispatchService } from '../notifications/notification-dispatch.service'; import { CacheService } from '../../infrastructure/cache/cache.service'; import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service'; import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, DocumentVerification, PLANNABLE_EMPANELMENT_STANDINGS,
+} from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
 import { COMMITTED_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
@@ -672,6 +655,55 @@ export class AssayerService implements OnModuleInit {
         withScan: tally?.with_scan ?? 0,
         verified: tally?.verified ?? 0,
         awaitingVerdict: tally?.awaiting_verdict ?? 0,
+      };
+    }
+
+    await this.hydrateEmpanelmentSummary(assayers, ids);
+  }
+
+  /**
+   * How many clients this person may actually be sent to, per roster row.
+   *
+   * The roster carried no empanelment data at all, and that is the one fact which decides whether
+   * somebody can be given work: `ClientEligibilityFilter` admits only ACTIVE and RECOMMENDED
+   * standings, and treats a candidate with no row for the client as blocked. So a screen could
+   * show a complete, ACTIVE assayer with every document verified and no way to say that the
+   * planner will never offer them anything — which is true of 245 of the 548 active people on this
+   * roster.
+   *
+   * `plannableClients` rather than a raw count of rows, because a row saying REJECTED is not a
+   * qualification; counting rows would have made a refused person look empanelled. `clientCount`
+   * is kept beside it so "vetted by four banks, cleared by none" stays visible — the two numbers
+   * differing is exactly the case a vetting desk needs to see.
+   *
+   * One grouped query for the page, mirroring the document tally above rather than inventing a
+   * second shape. `mapRoster` runs its own richer version because it needs client NAMES for the
+   * map popover; this one deliberately returns counts, since a roster row has nowhere to put 24
+   * client names.
+   */
+  private async hydrateEmpanelmentSummary(assayers: AssayerEntity[], ids: string[]): Promise<void> {
+    if (!ids.length) return;
+
+    const rows: Array<{ assayer_id: string; clients: number; plannable: number }> =
+      await this.assayerRepository.manager.query(
+        `SELECT e.assayer_id,
+                COUNT(DISTINCT e.client_id)::int AS clients,
+                COUNT(DISTINCT e.client_id) FILTER (WHERE e.status = ANY($2))::int AS plannable
+           FROM assayer_client_empanelments e
+           JOIN clients c ON c.id = e.client_id AND c.is_active = true
+          WHERE e.is_active = true AND e.assayer_id = ANY($1)
+          GROUP BY e.assayer_id`,
+        [ids, [...PLANNABLE_EMPANELMENT_STANDINGS]],
+      );
+    const byAssayer = new Map(rows.map((r) => [r.assayer_id, r]));
+
+    for (const assayer of assayers) {
+      const tally = byAssayer.get(assayer.id);
+      // Zeros rather than an absent key, for the same reason as the document tally: somebody with
+      // no standings anywhere is the most important case of this, not an exception to it.
+      (assayer as any).empanelment = {
+        clientCount: tally?.clients ?? 0,
+        plannableClients: tally?.plannable ?? 0,
       };
     }
   }

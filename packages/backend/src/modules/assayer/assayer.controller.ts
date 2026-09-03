@@ -74,7 +74,7 @@ class WorkingHoursDto {
 import { AssayerService, CreateAssayerDto, UpdateAssayerDto } from './assayer.service';
 import { LocationTrailService } from './location-trail.service';
 import { LocationPingSource } from './assayer-location-ping.entity';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public, AnyAuthenticated, PasswordChangeExempt, OnboardingAllowed } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public, AnyAuthenticated, PasswordChangeExempt, OnboardingAllowed, RoleOnly } from '../auth/guards';
 import {
   SystemRole,
   AssayerLifecycleStatus,
@@ -965,6 +965,9 @@ export class AssayerController {
    * Everyone added here receives the operational subset only.
    */
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+  // The roster list. Declared so a role built in Admin -> Roles can open the workforce console:
+  // /hr admitted such a role while this refused it, so the console loaded and its list did not.
+  @RequirePermissions('assayer:view:organization')
   @Get()
   @ApiOperation({ summary: 'List all registered assayers' })
   async findAll(
@@ -1014,6 +1017,7 @@ export class AssayerController {
    * role-based redaction.
    */
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+  @RequirePermissions('assayer:view:organization')
   @Get('/map-roster')
   @ApiOperation({ summary: 'Every active assayer as the map needs them: pin facts, bank standings, committed-today' })
   async mapRoster(@Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
@@ -1088,6 +1092,7 @@ export class AssayerController {
    * allowed to *see* of the record is decided below by `visibleFor`, not by the door.
    */
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+  @RequirePermissions('assayer:view:organization')
   @Get(':id')
   @ApiOperation({ summary: 'Get details for a single assayer by ID' })
   async findOne(@Param('id', ParseUUIDPipe) id: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
@@ -1120,6 +1125,11 @@ export class AssayerController {
    */
   @Get(':id/sensitive/:field')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  // No permission fall-through: this route shares `assayer:view:organization` with the masked
+  // record read, deliberately, so a custom role holding the ordinary roster read must not also be
+  // handed the full number. The narrow @Roles list is the gate, and @RoleOnly() is what keeps it
+  // one now that permissions are otherwise authoritative.
+  @RoleOnly()
   // The vocabulary has one read action per resource, so the unmasked value asks for the same
   // permission as the masked record. What actually holds the line here is the narrow @Roles list
   // above and the audit row the service writes — not a permission of its own.
@@ -1573,6 +1583,7 @@ export class AssayerController {
    * they are. This is entirely the second kind, and the redaction interceptor cannot help here —
    * it identifies assayers by their `assayerCode`, which a reference row does not carry.
    */
+  @RequirePermissions('assayer:view:organization')
   @Get(':assayerId/dossier')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:view:organization')
@@ -1588,6 +1599,7 @@ export class AssayerController {
   // verdicts and reference standing, which the redaction interceptor cannot reach inside
   // sub-rows. Scores are computed on read from the vetting tables; only overrides are stored.
 
+  @RequirePermissions('assayer:view:organization')
   @Get(':assayerId/qualification')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:view:organization')
@@ -1867,6 +1879,7 @@ export class AssayerController {
    * Open to the roles that plan and dispatch: knowing who is turning up at a branch is the whole
    * point of a photograph on a personnel record.
    */
+  @RequirePermissions('assayer:view:organization')
   @Get(':assayerId/photo')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
   @ApiOperation({ summary: "Fetch the person's photograph" })

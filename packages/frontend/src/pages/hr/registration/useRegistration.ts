@@ -333,9 +333,30 @@ export interface DossierReference {
   checkedAt: string | null;
 }
 
+/**
+ * One client's standing, as `GET /assayers/:id/dossier` returns it.
+ *
+ * `client` is null only when the row outlived the client it names, which the import can produce;
+ * the screens fall back to the id rather than dropping the row, because a standing whose client
+ * cannot be resolved is still a standing that governs planning.
+ */
+export interface DossierEmpanelment {
+  id: string;
+  clientId: string;
+  status: string;
+  statusReason: string | null;
+  client: { id: string; name: string; clientCode?: string | null } | null;
+}
+
 export interface Dossier {
   onboarding: DossierDocument[];
   references: DossierReference[];
+  /**
+   * Absent on older responses and on any test double that predates the clients step, so every
+   * reader defaults it rather than indexing into undefined — the dossier is fetched once and
+   * shared by three steps, and one of them crashing takes the whole wizard with it.
+   */
+  empanelments?: DossierEmpanelment[];
 }
 
 /**

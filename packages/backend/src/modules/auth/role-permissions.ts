@@ -157,6 +157,7 @@ export const ROLE_PERMISSIONS: Record<SystemRole, string[]> = {
    * do nothing the head could not.
    */
   [SystemRole.DESK]: [
+    'ASSAYER:VIEW:ORGANIZATION',
     'ASSIGNMENT:VIEW:PLATFORM',
     'BRANCH:VIEW:PLATFORM',
     'DOCUMENT:CREATE:ORGANIZATION',
@@ -178,6 +179,7 @@ export const ROLE_PERMISSIONS: Record<SystemRole, string[]> = {
    * hand it back. Strictly less than DESK, which is the point of it.
    */
   [SystemRole.DESK_OPERATOR]: [
+    'ASSAYER:VIEW:ORGANIZATION',
     'DOCUMENT:DOWNLOAD:PLATFORM',
     'DOCUMENT:VIEW:ORGANIZATION',
     'PROJECT:VIEW:PLATFORM',
@@ -189,11 +191,17 @@ export const ROLE_PERMISSIONS: Record<SystemRole, string[]> = {
    * Read-only oversight; formerly READ_ONLY_AUDITOR. Every grant here is a VIEW.
    */
   [SystemRole.AUDITOR]: [
+    'ASSAYER:VIEW:ORGANIZATION',
     'ASSIGNMENT:VIEW:PLATFORM',
     'AUDIT_LOG:VIEW:PLATFORM',
     'BILLING:VIEW:PLATFORM',
     'BRANCH:VIEW:PLATFORM',
     'CLIENT:VIEW:PLATFORM',
+    // Named by `@Roles` on every document read it can reach — the list, the stats, the operations
+    // overview, the chain-of-custody trail, the data entry queue — and granted none of them. The
+    // name opened those routes while nothing declared a permission; the moment they declare one,
+    // the auditor is refused the screen it was explicitly admitted to.
+    'DOCUMENT:VIEW:ORGANIZATION',
     'PLANNING:VIEW:PLATFORM',
     'PROJECT:VIEW:PLATFORM',
     'SCHEDULING:VIEW:PLATFORM',
