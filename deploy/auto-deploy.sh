@@ -70,6 +70,15 @@ COMPOSE=("$CLI" compose)
 for f in "${COMPOSE_FILES[@]}"; do COMPOSE+=(-f "$f"); done
 COMPOSE+=(--env-file "$ENVFILE")
 
+# A cheap content hash of the compiled shared package inside one container, used to tell a
+# no-op recompile from one that actually replaced the build. Empty when the service or the
+# directory is not there, which compares unequal to any real hash and so errs towards restarting.
+dist_fingerprint() {
+  "${COMPOSE[@]}" exec -T "$1" sh -c \
+    'find /app/packages/shared/dist -type f -exec md5sum {} + 2>/dev/null | sort | md5sum' \
+    2>/dev/null | awk '{print $1}'
+}
+
 # Running from inside the checkout would hand this process the tail of a different file: `git
 # reset --hard` rewrites the script while bash is still reading it. The ops-directory copy below
 # exists precisely to avoid that, so refuse rather than corrupt the run.
@@ -165,12 +174,26 @@ if $SOURCE_MOUNTED; then
   # source edit — and has no effect whatsoever. Nothing imports that source: package.json points
   # at `dist/cjs/index.js`, which each dev image compiles once at BUILD time and which is
   # deliberately not mounted (mounting it over the image's copy breaks every fresh clone, and the
-  # compose file carries the scar). So the new code is present, unreachable, and the container
-  # goes on reporting healthy while running the previous version of it.
+  # compose file carries the scar).
   #
-  # The fix is a compile inside the container, not an image rebuild — seconds rather than minutes.
-  # The watchers do not notice a dist change on their own, so the services are restarted after.
-  echo "$DEPLOYABLE" | grep -qE '^packages/shared/src/' && NEED_SHARED_BUILD=true
+  # Checked on EVERY deploy rather than only when shared/src appears in this diff, because the
+  # thing that invalidates dist is usually not this deploy at all. dist lives in the container's
+  # own filesystem, so `compose up -d` recreating a container throws away whatever was compiled
+  # into it and restores the image's copy — which may be weeks old. A deploy that changes only
+  # the frontend then leaves a backend whose source imports twenty exports its `@fapoms/shared`
+  # has never heard of, and the container reports Up throughout.
+  #
+  # That is exactly how this failed: a frontend-only deploy landed onto a backend recreated after
+  # the last shared build, and the API came back with 46 TS2305 errors for symbols that were
+  # sitting in shared/src the whole time.
+  #
+  # The build is idempotent and takes seconds, so running it always costs far less than the class
+  # of failure it removes. The restart below is still conditional — see there.
+  #
+  # "Always" means every deploy that touches anything a container runs. A commit of documentation
+  # alone still short-circuits below without opening a shell into a container, which keeps the
+  # common no-op tick free and keeps its log line honest about having done nothing.
+  [ -n "$(echo "$DEPLOYABLE" | tr -d '[:space:]')" ] && NEED_SHARED_BUILD=true
   # The manifest is a different matter: dependencies are installed into an anonymous volume at
   # image build time, so a change there does need the image rebuilt.
   echo "$DEPLOYABLE" | grep -qE '^packages/shared/package\.json' && { NEED_BACKEND=true; NEED_FRONTEND=true; NEED_MOBILE=true; }
@@ -355,15 +378,24 @@ if $NEED_SHARED_BUILD && ! $NEED_BACKEND && ! $NEED_FRONTEND; then
   # Skipped when an image rebuild is already happening — that recompiles shared anyway.
   for svc in backend frontend mobile; do
     "${COMPOSE[@]}" ps --services 2>/dev/null | grep -qx "$svc" || continue
-    log "recompiling @fapoms/shared inside $svc"
-    # `-w /app`: build:shared is a ROOT workspace script, and every dev image sets WORKDIR to its
-    # own package (/app/packages/backend). Without it npm resolves the nearest package instead and
-    # exits with "Missing script: build:shared".
-    if "${COMPOSE[@]}" exec -T -w /app "$svc" npm run build:shared >> "$LOG" 2>&1; then
-      "${COMPOSE[@]}" restart "$svc" >> "$LOG" 2>&1
-    else
+
+    # Fingerprint dist before and after, so the restart is paid for only when the compile actually
+    # produced something different. Without this, building on every deploy would also restart both
+    # dev servers on every deploy — throwing away the "the reset IS the deploy" property that
+    # makes a bind-mounted stack worth having.
+    before="$(dist_fingerprint "$svc")"
+    if ! "${COMPOSE[@]}" exec -T -w /app "$svc" npm run build:shared >> "$LOG" 2>&1; then
+      # `-w /app`: build:shared is a ROOT workspace script, and every dev image sets WORKDIR to
+      # its own package (/app/packages/backend). Without it npm resolves the nearest package and
+      # exits with "Missing script: build:shared".
       log "REFUSING: 'npm run build:shared' failed in $svc — leaving the previous build running."
       exit 1
+    fi
+    after="$(dist_fingerprint "$svc")"
+
+    if [ "$before" != "$after" ]; then
+      log "@fapoms/shared recompiled in $svc (dist changed) — restarting it"
+      "${COMPOSE[@]}" restart "$svc" >> "$LOG" 2>&1
     fi
   done
 fi
@@ -405,7 +437,10 @@ if $NEED_RECREATE; then
   log "compose changed — recreating containers without rebuilding"
   "${COMPOSE[@]}" up -d >> "$LOG" 2>&1
 fi
-if ! $NEED_BACKEND && ! $NEED_FRONTEND && ! $NEED_MOBILE && ! $NEED_SHARED_BUILD \
+# NEED_SHARED_BUILD is deliberately absent from this test. It is true on every deploy that
+# touches a container now, so including it would silence the one line that says what an ordinary
+# source-only deploy actually did — leaving the log with a "new commits" entry and then nothing.
+if ! $NEED_BACKEND && ! $NEED_FRONTEND && ! $NEED_MOBILE \
    && ! $NEED_CADDY_RELOAD && ! $NEED_RECREATE; then
   if $SOURCE_MOUNTED && [ -n "$(echo "$DEPLOYABLE" | tr -d '[:space:]')" ]; then
     # The deploy already happened: the reset wrote the new files straight into the containers
