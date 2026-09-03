@@ -65,6 +65,8 @@ fi
 
 git checkout -B "$BRANCH" "origin/$BRANCH"
 echo "==> $APP_DIR now on $BRANCH at $(git rev-parse --short HEAD)"
+# No safe.directory registration needed here, unlike the AWS installer: this runs as the user that
+# owns the checkout and installs USER units, so the service and the repository share an owner.
 
 # --- 3. The scripts, outside the checkout ---------------------------------
 # They cannot run from inside $APP_DIR: `git reset --hard` rewrites files there while bash is

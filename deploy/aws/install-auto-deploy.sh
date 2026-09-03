@@ -115,6 +115,17 @@ fi
 git checkout -B "$BRANCH" "origin/$BRANCH"
 echo "==> $APP_DIR now on $BRANCH at $(git rev-parse --short HEAD)"
 
+# The timer runs as root; this checkout is usually owned by the login user. Git refuses a
+# repository owned by someone else, EXCEPT under sudo, where it consults SUDO_UID — which is why
+# every interactive check passes and only the service fails, with a refusal that looks nothing
+# like a permissions problem. Registered in the SYSTEM config on purpose: a --global written from
+# a sudo shell lands in the calling user's home, which the service never reads.
+OWNER="$(stat -c %U "$APP_DIR" 2>/dev/null || echo root)"
+if [ "$OWNER" != "root" ]; then
+  git config --system --add safe.directory "$APP_DIR" 2>/dev/null || true
+  echo "==> registered $APP_DIR as a safe.directory for root (it is owned by $OWNER)"
+fi
+
 # --- 3. The scripts, outside the checkout ---------------------------------
 # They cannot run from inside $APP_DIR: `git reset --hard` rewrites files there while bash is
 # still reading the script it is executing, and it would resume in the middle of a different file.

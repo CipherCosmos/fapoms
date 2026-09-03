@@ -81,9 +81,42 @@ esac
 
 cd "$REPO"
 
+# ---------------------------------------------------------------------------------------------
+# Which branch is checked out — and, separately, whether git can answer that question at all.
+#
+# These were one line, and collapsing them cost an afternoon. `$(git symbolic-ref … || echo
+# '(detached HEAD)')` reports detachment for EVERY failure, so a git that refused to read the
+# repository at all produced a confident, precise, wrong diagnosis — and the suggested fix ran
+# clean by hand, because by hand it was never broken.
+#
+# The failure it was hiding: git refuses a repository owned by another user ("detected dubious
+# ownership"). Under sudo it does not, because git special-cases SUDO_UID and this checkout is
+# owned by the login user. systemd sets no SUDO_UID, so the timer's root hits the refusal that
+# every interactive test skipped past.
+#
+# So stderr is captured and the exit status is read. Detachment is now only claimed when git
+# actually said so.
+# ---------------------------------------------------------------------------------------------
+HEAD_ERR="$(mktemp)"; trap 'rm -f "$HEAD_ERR"' EXIT
+if CURRENT="$(git symbolic-ref --quiet --short HEAD 2>"$HEAD_ERR")"; then
+  :
+elif [ -s "$HEAD_ERR" ]; then
+  # git had something to say, so this is not a detached HEAD — it is git declining to work here.
+  log "REFUSING: git cannot read $REPO: $(tr '\n' ' ' < "$HEAD_ERR")"
+  if grep -qi 'dubious ownership' "$HEAD_ERR"; then
+    log "         This is the timer running as $(id -un) against a checkout owned by $(stat -c %U "$REPO" 2>/dev/null || echo 'another user')."
+    log "         fix: git config --system --add safe.directory $REPO"
+    log "         (--system, not --global: a --global written under sudo lands in the calling"
+    log "          user's home, which this service never reads.)"
+  fi
+  exit 1
+else
+  # Exited non-zero and said nothing, which is exactly what --quiet does on a detached HEAD.
+  CURRENT='(detached HEAD)'
+fi
+
 # A clone left on the wrong branch would be reset onto this one, quietly moving whatever branch is
 # checked out to another branch's commit. Say so instead, with the command that fixes it.
-CURRENT="$(git symbolic-ref --quiet --short HEAD || echo '(detached HEAD)')"
 if [ "$CURRENT" != "$BRANCH" ]; then
   log "REFUSING: clone is on '$CURRENT' but this host deploys '$BRANCH'."
   log "         fix: git -C $REPO fetch origin $BRANCH && git -C $REPO checkout -B $BRANCH origin/$BRANCH"
