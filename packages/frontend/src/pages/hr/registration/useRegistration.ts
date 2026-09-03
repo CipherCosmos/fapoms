@@ -151,6 +151,25 @@ export function useRegistration(resumeAssayerId?: string): Registration {
   const adopt = useCallback((fresh: Assayer) => {
     const snap = snapshotRecord(fresh);
     const previouslySaved = latest.current.saved;
+    /**
+     * The very first answer from the server needs the opposite rule, because "local work" cannot
+     * be detected yet.
+     *
+     * The test below is "does this box differ from the last saved value?", and before the first
+     * save there IS no last saved value — every box differs from nothing. So the step-one defaults
+     * the form opens with (today's joining date, the employment and engagement types) counted as
+     * unsaved typing and were kept over the server's answer, even though the create had just sent
+     * them and the server had just stored, and possibly normalised, them.
+     *
+     * `joiningDate` made that visible. The box holds `2026-09-03`; the record comes back as
+     * `2026-09-03T00:00:00.000Z`. Kept apart, the two never compared equal again, so the field was
+     * dirty forever and every later step re-sent it — which is precisely the cross-clerk overwrite
+     * the diff exists to prevent, performed by the diff itself.
+     *
+     * On the first adoption the whole form was just submitted, so there is nothing to protect and
+     * the server's answer is authoritative for every box.
+     */
+    const noBaselineYet = Object.keys(previouslySaved).length === 0;
     setRecord(fresh);
     setAssayerId(fresh.id);
     setSaved(snap);
@@ -170,7 +189,13 @@ export function useRegistration(resumeAssayerId?: string): Registration {
         if (isSensitiveKey(key)) continue;
         // Rates never come back from this endpoint — they are a profile behind their own route —
         // so a snapshot would blank them every time any other step saved.
-        if (RATE_KEYS.includes(key) || current[key] !== (previouslySaved[key] ?? '')) {
+        // Rates are kept regardless: they are a profile behind their own route and never come
+        // back from this endpoint, so the snapshot would blank them on every other step's save.
+        if (RATE_KEYS.includes(key)) {
+          merged[key] = current[key];
+          continue;
+        }
+        if (!noBaselineYet && current[key] !== (previouslySaved[key] ?? '')) {
           merged[key] = current[key];
         }
       }
