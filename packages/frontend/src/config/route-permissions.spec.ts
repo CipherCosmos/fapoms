@@ -155,6 +155,18 @@ describe('canAccessRoute', () => {
       expect(canAccessRoute(CUSTOM_ROLE, [], '/notifications')).toBe(true);
     });
 
+    /**
+     * Found 2026-09-04: `/documents` used to declare no `requiredPermissions` at all, even
+     * though the page's own main content fetch (`GET /documents/operations/overview`) has
+     * always required `document:view:organization` on the backend — so this exact role, which
+     * genuinely holds that permission, was refused a page its own API would have served. Fixed
+     * by adding the permission this route's entry was missing; this pins the fix as a positive
+     * case, sitting right next to the still-correct fail-closed examples below.
+     */
+    it('opens branch paperwork once the route names the permission its own API already requires', () => {
+      expect(canAccessRoute(CUSTOM_ROLE, HR_OPERATOR, '/documents')).toBe(true);
+    });
+
     it('does not open the billing book, the user list or the audit map it was not granted', () => {
       expect(canAccessRoute(CUSTOM_ROLE, HR_OPERATOR, '/billing')).toBe(false);
       expect(canAccessRoute(CUSTOM_ROLE, HR_OPERATOR, '/users')).toBe(false);
@@ -162,13 +174,14 @@ describe('canAccessRoute', () => {
     });
 
     /**
-     * FAIL CLOSED, and the case worth keeping. `/documents` names no permission because the API
-     * behind it names none either, so holding every document permission there is still does not
-     * open it. Reading "nothing listed" as "nothing required" is the same defect as an
+     * FAIL CLOSED, and the case worth keeping. These two genuinely name no permission because
+     * the API behind each one names none either, so holding a plausible-looking permission still
+     * does not open them. Reading "nothing listed" as "nothing required" is the same defect as an
      * allow-by-default fallback, which is how forgetting an entry would publish a page.
+     * `/documents` used to be a third example here — see the positive test above for why it
+     * moved: its own API always required a permission, this table just hadn't said so.
      */
     it('is refused a page that lists no permissions, even holding the obvious ones', () => {
-      expect(canAccessRoute(CUSTOM_ROLE, HR_OPERATOR, '/documents')).toBe(false);
       expect(canAccessRoute(CUSTOM_ROLE, ['CONFIGURATION:EDIT:PLATFORM'], '/admin/settings')).toBe(false);
       expect(canAccessRoute(CUSTOM_ROLE, ['AUDIT_LOG:VIEW:PLATFORM'], '/admin/logs')).toBe(false);
     });

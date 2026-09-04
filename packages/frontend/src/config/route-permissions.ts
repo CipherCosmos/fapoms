@@ -165,7 +165,14 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     requiredPermissions: ['ASSAYER:VIEW:ORGANIZATION'],
   },
   {
-    // No permission: the branch-paperwork reads are gated by role name and declare none.
+    // The comment this replaced ("no permission: gated by role name and declare none") was true
+    // of most reads under this controller but not this page's own main content fetch:
+    // `Documents.tsx`'s `loadOverview()` calls `GET /documents/operations/overview`, whose handler
+    // carries `@RequirePermissions('document:view:organization')` alongside its `@Roles`. Found
+    // 2026-09-04 while wiring `DOCUMENT_UPLOADED`'s notification fallback (see
+    // notification-catalog.ts) — without this, `canAccessRoute`'s permission fallback is
+    // fail-closed on an empty `requiredPermissions` list, so no custom role could ever open this
+    // page, even one holding exactly the permission its own data fetch asks for.
     path: '/documents',
     allowedRoles: [
       SystemRole.ADMIN,
@@ -174,6 +181,7 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
       SystemRole.DESK_OPERATOR,
       SystemRole.AUDITOR,
     ],
+    requiredPermissions: ['DOCUMENT:VIEW:ORGANIZATION'],
   },
   {
     // The desk overview draws /validation/attention, /workload and /activity, all three of which
