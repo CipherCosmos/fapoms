@@ -263,7 +263,24 @@ export class AuthService implements OnModuleInit {
     const absoluteHours = Number(this.configService.get<any>('SESSION_ABSOLUTE_HOURS', 168));
     this.sessionAbsoluteMs =
       Number.isFinite(absoluteHours) && absoluteHours > 0 ? absoluteHours * 3_600_000 : 168 * 3_600_000;
+
+    // Per-SOURCE (IP) brute-force brake — "lock the attacker, not the account". Failed sign-ins
+    // from one address are counted in Redis; past a threshold that ADDRESS is refused for an
+    // escalating back-off, so a flood of guesses (against any username, incl. a known one like
+    // `admin`) throttles the attacker's device instead of locking the victim's account. The
+    // account owner signing in from any other address is unaffected. Deliberately high enough not
+    // to trip a shared office NAT under normal fumbling: a real brute-force does far more.
+    this.loginIpMaxFailures = Math.max(5, Number(this.configService.get<any>('LOGIN_IP_MAX_FAILURES', 20)) || 20);
+    this.loginIpFailWindowMs = Math.max(60, Number(this.configService.get<any>('LOGIN_IP_FAIL_WINDOW_SECONDS', 900)) || 900) * 1000;
+    this.loginIpBlockBaseMs = Math.max(15, Number(this.configService.get<any>('LOGIN_IP_BLOCK_BASE_SECONDS', 60)) || 60) * 1000;
+    this.loginIpBlockMaxMs = Math.max(60, Number(this.configService.get<any>('LOGIN_IP_BLOCK_MAX_SECONDS', 1800)) || 1800) * 1000;
   }
+
+  /** Failed sign-ins from one IP within the window before that IP is thrown into back-off. */
+  private readonly loginIpMaxFailures: number;
+  private readonly loginIpFailWindowMs: number;
+  private readonly loginIpBlockBaseMs: number;
+  private readonly loginIpBlockMaxMs: number;
 
   /** Milliseconds of inactivity after which a session is refused on the next request. 0 = disabled. */
   private readonly sessionIdleMs: number;
@@ -357,6 +374,10 @@ export class AuthService implements OnModuleInit {
     ipAddress?: string,
     userAgent?: string,
   ): Promise<LoginResult> {
+    // Per-source brake FIRST — before any lookup or bcrypt — so a flood of guesses is refused
+    // cheaply and cannot lock out the account it is aimed at. See recordSourceFailure below.
+    await this.assertSourceNotBlocked(ipAddress);
+
     // 1. Find user by username or email in UserEntity
     const user = await this.userRepository.findOne({
       where: [
@@ -402,27 +423,13 @@ export class AuthService implements OnModuleInit {
         // that lets an attacker enumerate which usernames/assayer codes exist before guessing
         // passwords. The hash is a fixed dummy; the result is discarded.
         await bcrypt.compare(password, DUMMY_BCRYPT_HASH).catch(() => undefined);
+        await this.recordSourceFailure(ipAddress);
         throw withCode(new UnauthorizedException('Invalid credentials'), AUTH_ERROR_CODES.INVALID_CREDENTIALS);
       }
 
-      /**
-       * Brute-force lockout, matching the staff-login branch below.
-       *
-       * This branch had no attempt counter at all, and the application has no rate limiting,
-       * so an assayer code could be guessed against indefinitely. Combined with the bulk
-       * importer's documented default password (`assayer123`, which every account it creates
-       * keeps until something forces a change), a single guess per account was enough to take
-       * the whole field workforce.
-       */
-      if (assayer.lockedUntil && assayer.lockedUntil > new Date()) {
-        const minutes = Math.max(1, Math.ceil((assayer.lockedUntil.getTime() - Date.now()) / 60000));
-        throw withCode(
-          new ForbiddenException(
-            `Too many incorrect sign-in attempts. Please try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`,
-          ),
-          AUTH_ERROR_CODES.ACCOUNT_LOCKED,
-        );
-      }
+      // No per-account hard lock here on purpose: it let anyone lock a known assayer code out by
+      // guessing wrong a few times. Brute force is now braked per-SOURCE (assertSourceNotBlocked
+      // ran at the top of login); the account's own counter below is kept only as a signal.
 
       // An assayer with no password set has never completed onboarding — deny access
       // rather than silently skipping verification.
@@ -433,11 +440,14 @@ export class AuthService implements OnModuleInit {
       const isPasswordValid = await bcrypt.compare(password, assayer.passwordHash);
       if (!isPasswordValid) {
         const attempts = (assayer.failedLoginAttempts ?? 0) + 1;
-        const lockedUntil = attempts >= 5 ? new Date(Date.now() + 15 * 60 * 1000) : null;
+        // Count it on the account as a SIGNAL (audit + the alert at the threshold), but never set
+        // lockedUntil — the account must not be lockable by someone else's wrong guesses. The
+        // per-source brake (recordSourceFailure) is what actually throttles the attacker.
         await this.assayerRepository
-          .update(assayer.id, { failedLoginAttempts: attempts, lockedUntil })
+          .update(assayer.id, { failedLoginAttempts: attempts, lockedUntil: null })
           .catch(() => undefined);
-        if (lockedUntil) this.notifyAccountLocked(`Assayer ${assayer.displayName ?? assayer.assayerCode ?? assayer.id}`, assayer.id, attempts);
+        if (attempts >= 5) this.notifyAccountLocked(`Assayer ${assayer.displayName ?? assayer.assayerCode ?? assayer.id}`, assayer.id, attempts);
+        await this.recordSourceFailure(ipAddress);
         throw withCode(new UnauthorizedException('Invalid credentials'), AUTH_ERROR_CODES.INVALID_CREDENTIALS);
       }
 
@@ -488,6 +498,7 @@ export class AuthService implements OnModuleInit {
           .update(assayer.id, { failedLoginAttempts: 0, lockedUntil: null })
           .catch(() => undefined);
       }
+      await this.clearSourceFailures(ipAddress);
 
       const payload: JwtPayload = {
         sub: assayer.id,
@@ -551,22 +562,20 @@ export class AuthService implements OnModuleInit {
       );
     }
 
-    // Check if account is locked
-    if (user.lockedUntil && user.lockedUntil > new Date()) {
-      throw withCode(
-        new ForbiddenException('Account is temporarily locked'),
-        AUTH_ERROR_CODES.ACCOUNT_LOCKED,
-      );
-    }
+    // No per-account hard lock here on purpose (it let anyone lock out a known username like
+    // `admin`). Brute force is braked per-SOURCE at the top of login; user.failedLoginAttempts
+    // below is kept only as a signal. A genuinely SUSPENDED/DISABLED account is still refused by
+    // the status check above — that path no longer fires for mere failed passwords.
 
     // Verify password
     const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
     if (!isPasswordValid) {
-      // Track failed attempts
+      // Count the failure on the account as a SIGNAL only — the alert at the threshold, and a
+      // visible counter for incident response. Deliberately NO lockedUntil and NO status=LOCKED:
+      // hard-locking the account is exactly the denial-of-service (lock out `admin` by guessing
+      // wrong five times) the per-source brake replaces. recordSourceFailure throttles the IP.
       user.failedLoginAttempts += 1;
       if (user.failedLoginAttempts >= 5) {
-        user.lockedUntil = new Date(Date.now() + 15 * 60 * 1000); // Lock for 15 min
-        user.status = UserStatus.LOCKED;
         this.notifyAccountLocked(
           `${user.displayName ?? user.username} (${user.email})`,
           user.id,
@@ -574,6 +583,7 @@ export class AuthService implements OnModuleInit {
         );
       }
       await this.userRepository.save(user);
+      await this.recordSourceFailure(ipAddress);
       throw withCode(new UnauthorizedException('Invalid credentials'), AUTH_ERROR_CODES.INVALID_CREDENTIALS);
     }
 
@@ -582,6 +592,7 @@ export class AuthService implements OnModuleInit {
     user.lockedUntil = null;
     user.lastLoginAt = new Date();
     await this.userRepository.save(user);
+    await this.clearSourceFailures(ipAddress);
 
     // MFA GATE: password is proven, but if this account has a confirmed second factor we must NOT
     // issue a session yet. Return a short-lived, single-use challenge instead; the real session is
@@ -932,6 +943,50 @@ export class AuthService implements OnModuleInit {
    * let the old access token keep resolving its permissions — including a stale
    * `mustChangePassword: false` — until the cache TTL expired.
    */
+  // ---------------------------------------------------------------------------------------------
+  // Per-SOURCE brute-force brake ("lock the attacker, not the account").
+  //
+  // Counts failed sign-ins per client IP (real client, via trust-proxy) in Redis. Past a
+  // threshold the ADDRESS is refused for an escalating back-off, so a flood of guesses — against
+  // any username, including a known one like `admin` — throttles the attacker's device rather than
+  // hard-locking the victim's account. The account owner signing in from any other address is
+  // unaffected. Fail-open: if Redis is down these are no-ops and the login path is unchanged.
+  // ---------------------------------------------------------------------------------------------
+  private ipFailKey(ip: string): string { return `authfail:ip:${ip}`; }
+  private ipBlockKey(ip: string): string { return `authblock:ip:${ip}`; }
+
+  /** Refuse early (before any lookup or bcrypt) if this address is currently in back-off. */
+  private async assertSourceNotBlocked(ip?: string): Promise<void> {
+    if (!ip) return;
+    const until = await this.cache.getJson<number>(this.ipBlockKey(ip));
+    if (until && until > Date.now()) {
+      const minutes = Math.max(1, Math.ceil((until - Date.now()) / 60_000));
+      throw withCode(
+        new ForbiddenException(
+          `Too many failed sign-in attempts from this network. Please try again in ${minutes} minute${minutes === 1 ? '' : 's'}.`,
+        ),
+        AUTH_ERROR_CODES.ACCOUNT_LOCKED,
+      );
+    }
+  }
+
+  /** Count a failed sign-in from this address; once over the threshold, apply escalating back-off. */
+  private async recordSourceFailure(ip?: string): Promise<void> {
+    if (!ip) return;
+    const count = await this.cache.incrWithTtl(this.ipFailKey(ip), Math.ceil(this.loginIpFailWindowMs / 1000));
+    if (count >= this.loginIpMaxFailures) {
+      const overBy = count - this.loginIpMaxFailures; // 0 on the first trip, then grows
+      const blockMs = Math.min(this.loginIpBlockBaseMs * 2 ** overBy, this.loginIpBlockMaxMs);
+      await this.cache.setJson(this.ipBlockKey(ip), Date.now() + blockMs, Math.ceil(blockMs / 1000));
+    }
+  }
+
+  /** A clean sign-in wipes this address's failure history and any back-off. */
+  private async clearSourceFailures(ip?: string): Promise<void> {
+    if (!ip) return;
+    await this.cache.del(this.ipFailKey(ip), this.ipBlockKey(ip));
+  }
+
   /**
    * Mint a single-use MFA challenge after a correct password. Stored in Redis (5-min TTL), keyed by
    * a random id; NO session or token exists yet. The client presents `challengeId` + a code to

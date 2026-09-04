@@ -71,6 +71,9 @@ describe('AuthService', () => {
     getJson: mockCacheGetJson,
     setJson: mockCacheSetJson,
     del: jest.fn().mockResolvedValue(undefined),
+    // Per-source brute-force counter. Defaults to 0 (well under any threshold) so ordinary tests
+    // never trip the IP brake; the brake's own tests override it.
+    incrWithTtl: jest.fn().mockResolvedValue(0),
     wrap: mockCacheWrap,
   };
 
@@ -655,9 +658,9 @@ describe('AuthService', () => {
           expect.objectContaining({ failedLoginAttempts: 1, lockedUntil: null }));
       });
 
-      it('locks the account on the fifth consecutive failure', async () => {
+      it('records the fifth failure and alerts, but does NOT hard-lock the account', async () => {
         mockAssayerRepo.findOne.mockResolvedValue({
-          id: 'a-1', assayerCode: 'AS0001', lifecycleStatus: 'ACTIVE',
+          id: 'a-1', assayerCode: 'AS0001', displayName: 'A One', lifecycleStatus: 'ACTIVE',
           passwordHash: realHash, failedLoginAttempts: 4, lockedUntil: null,
         });
 
@@ -665,19 +668,26 @@ describe('AuthService', () => {
 
         const patch = mockAssayerRepo.update.mock.calls.at(-1)[1];
         expect(patch.failedLoginAttempts).toBe(5);
-        expect(patch.lockedUntil).toBeInstanceOf(Date);
-        expect(patch.lockedUntil.getTime()).toBeGreaterThan(Date.now());
+        // The account is a SIGNAL, not a lock: lockedUntil stays null so nobody can be locked out
+        // by someone else's wrong guesses.
+        expect(patch.lockedUntil).toBeNull();
       });
 
-      it('refuses a locked account even when the password is correct', async () => {
+      it('still signs in with the correct password even after prior failures (account not hard-locked)', async () => {
+        // A legacy lockedUntil in the future must be ignored now — enforcement is per-source, not
+        // per-account, so the real owner is never blocked by a burst of failed guesses.
         mockAssayerRepo.findOne.mockResolvedValue({
-          id: 'a-1', assayerCode: 'AS0001', lifecycleStatus: 'ACTIVE',
+          id: 'a-1', assayerCode: 'AS0001', displayName: 'A One', lifecycleStatus: 'ACTIVE',
           passwordHash: realHash, failedLoginAttempts: 5,
           lockedUntil: new Date(Date.now() + 10 * 60 * 1000),
+          organizationId: 'org-1',
         });
 
-        await expect(service.login('AS0001', 'correct-horse', '1.1.1.1', 'jest'))
-          .rejects.toThrow(/try again in \d+ minute/i);
+        const result: any = await service.login('AS0001', 'correct-horse', '1.1.1.1', 'jest');
+
+        expect(result.accessToken).toBe('signed.jwt.token');
+        // The failure history is cleared on a clean sign-in.
+        expect(mockAssayerRepo.update).toHaveBeenCalledWith('a-1', { failedLoginAttempts: 0, lockedUntil: null });
       });
 
       it('clears the counter after a successful sign-in', async () => {
@@ -690,6 +700,67 @@ describe('AuthService', () => {
 
         expect(mockAssayerRepo.update).toHaveBeenCalledWith('a-1',
           { failedLoginAttempts: 0, lockedUntil: null });
+      });
+    });
+
+    /**
+     * "Lock the attacker, not the account." A flood of failed sign-ins from one address is braked
+     * at the SOURCE, so a known username (e.g. `admin`) can no longer be locked out by someone
+     * else's wrong guesses — the classic account-lockout denial-of-service.
+     */
+    describe('per-source IP brute-force brake', () => {
+      const bcrypt = require('bcrypt');
+      const realHash = bcrypt.hashSync('correct-horse', 4);
+
+      afterEach(() => {
+        mockCacheGetJson.mockResolvedValue(null);
+        mockCache.incrWithTtl.mockResolvedValue(0);
+      });
+
+      it('refuses a source IP in back-off BEFORE any account lookup or bcrypt', async () => {
+        mockCacheGetJson.mockImplementation(async (k: string) =>
+          (k === 'authblock:ip:9.9.9.9' ? Date.now() + 5 * 60_000 : null));
+        const cmp = jest.spyOn(bcrypt, 'compare');
+
+        await expect(service.login('admin', 'whatever', '9.9.9.9', 'jest'))
+          .rejects.toThrow(/too many failed sign-in attempts from this network/i);
+
+        expect(mockUserRepo.findOne).not.toHaveBeenCalled(); // refused before the account lookup
+        expect(cmp).not.toHaveBeenCalled();                  // and before spending a bcrypt compare
+        cmp.mockRestore();
+      });
+
+      it('records a per-source failure on a wrong password', async () => {
+        mockUserRepo.findOne.mockResolvedValue(null);
+        mockAssayerRepo.findOne.mockResolvedValue({
+          id: 'a-1', assayerCode: 'AS0001', lifecycleStatus: 'ACTIVE', passwordHash: realHash, failedLoginAttempts: 0, lockedUntil: null,
+        });
+
+        await expect(service.login('AS0001', 'wrong', '2.2.2.2', 'jest')).rejects.toThrow();
+
+        expect(mockCache.incrWithTtl).toHaveBeenCalledWith('authfail:ip:2.2.2.2', expect.any(Number));
+      });
+
+      it('puts the IP into back-off once failures cross the threshold', async () => {
+        mockUserRepo.findOne.mockResolvedValue(null);
+        mockAssayerRepo.findOne.mockResolvedValue(null);      // not-found path still records the failure
+        mockCache.incrWithTtl.mockResolvedValueOnce(20);      // == the default threshold
+
+        await expect(service.login('nobody-here', 'x', '3.3.3.3', 'jest')).rejects.toThrow();
+
+        const blockWrite = mockCacheSetJson.mock.calls.find(([k]: any[]) => k === 'authblock:ip:3.3.3.3');
+        expect(blockWrite).toBeTruthy();
+      });
+
+      it('clears the source failure history on a clean sign-in', async () => {
+        mockUserRepo.findOne.mockResolvedValue(null);
+        mockAssayerRepo.findOne.mockResolvedValue({
+          id: 'a-1', assayerCode: 'AS0001', lifecycleStatus: 'ACTIVE', passwordHash: realHash, failedLoginAttempts: 0, lockedUntil: null, organizationId: 'org-1',
+        });
+
+        await service.login('AS0001', 'correct-horse', '4.4.4.4', 'jest');
+
+        expect(mockCache.del).toHaveBeenCalledWith('authfail:ip:4.4.4.4', 'authblock:ip:4.4.4.4');
       });
     });
 

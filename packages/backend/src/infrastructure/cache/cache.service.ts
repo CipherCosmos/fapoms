@@ -55,6 +55,29 @@ export class CacheService {
     }
   }
 
+  /**
+   * Atomically increment a counter and (re)set its TTL, returning the new value. For abuse/rate
+   * counters where the count must be correct under concurrent requests — a read-modify-write over
+   * getJson/setJson would undercount exactly when it matters (a burst of parallel attempts). Setting
+   * the expiry on every increment makes it a sliding window: the counter lives as long as the abuse
+   * continues. Returns 0 when Redis is unavailable (fail-open — the caller keeps its own guards).
+   */
+  async incrWithTtl(key: string, ttlSeconds: number): Promise<number> {
+    if (!this.redis) return 0;
+    try {
+      const results = await this.redis
+        .multi()
+        .incr(key)
+        .expire(key, Math.max(1, Math.floor(ttlSeconds)))
+        .exec();
+      const value = results?.[0]?.[1];
+      return typeof value === 'number' ? value : Number(value) || 0;
+    } catch (err) {
+      this.logger.warn(`cache incr "${key}" failed: ${(err as Error).message}`);
+      return 0;
+    }
+  }
+
   /** Delete every key matching a glob pattern, using a non-blocking SCAN. */
   async delByPattern(pattern: string): Promise<void> {
     if (!this.redis) return;
