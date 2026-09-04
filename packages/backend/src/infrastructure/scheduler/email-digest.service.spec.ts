@@ -30,7 +30,24 @@ describe('EmailDigestService', () => {
   const feedback = { attention: jest.fn() };
   const hr = { credentialsExpiringWithin: jest.fn() };
   const email = { isEnabled: jest.fn().mockReturnValue(true), send: jest.fn() };
-  const dataSource = { query: jest.fn() };
+  const dataSource = { query: jest.fn(), getRepository: jest.fn() };
+
+  /**
+   * `resolveRecipients` opens a `UserEntity` repository directly (not through `dataSource.query`)
+   * for the `SECTION_FALLBACK_PERMISSIONS` half of the audience — see `usersHoldingPermission`.
+   * Every section but `feedback` now carries a fallback permission, so any test that populates
+   * `desk` or `finance` (most of them) exercises this path whether or not it cares about custom
+   * roles. Defaults to finding nobody, which keeps every pre-existing, name-only test's
+   * expectations unchanged; `permissionQb.getMany` is overridden per-test below for the one that
+   * actually exercises the fallback.
+   */
+  const permissionQb = {
+    innerJoin: jest.fn().mockReturnThis(),
+    leftJoinAndSelect: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    andWhere: jest.fn().mockReturnThis(),
+    getMany: jest.fn(),
+  };
 
   /** The audience query returns one row per (user, role). */
   const audience = (rows: Array<{ id: string; email: string; role_name: string }>) => {
@@ -48,6 +65,8 @@ describe('EmailDigestService', () => {
     hr.credentialsExpiringWithin.mockResolvedValue([]);
     // Finance queries return empty aggregates by default; audience query returns nobody.
     dataSource.query.mockResolvedValue([{ n: 0, total: 0 }]);
+    permissionQb.getMany.mockResolvedValue([]);
+    dataSource.getRepository.mockReturnValue({ createQueryBuilder: jest.fn(() => permissionQb) });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -144,6 +163,39 @@ describe('EmailDigestService', () => {
     expect(toDesk.text).not.toContain('first response');
     expect(toSupport.text).toContain('first response');
     expect(toSupport.text).not.toContain('entry overdue');
+  });
+
+  /**
+   * `SECTION_FALLBACK_PERMISSIONS` mirrors the notification catalog's `fallbackPermissions`
+   * (see `notification-dispatch.service.spec.ts`'s own "custom-role permission fallback"
+   * describe block for the same mechanism on the other pipeline): a role built in Admin ->
+   * Roles matches no name in `SECTION_AUDIENCES`, so without this a custom role holding
+   * VALIDATION:VIEW:ORGANIZATION never heard about the desk section, however precisely its
+   * permissions matched what /data-entry itself requires.
+   */
+  it('also reaches a custom role holding the section fallback permission, by union with the name match', async () => {
+    desk.attention.mockResolvedValue({ ...emptyDesk, entryOverdue: bucket(3) });
+    // Name match finds nobody; the permission fallback finds a custom-role holder instead.
+    audience([]);
+    permissionQb.getMany.mockResolvedValue([
+      {
+        id: 'custom-1',
+        email: 'deskbot@x.in',
+        roles: [
+          {
+            name: 'DATA_DESK_LEAD',
+            permissions: [{ resource: 'VALIDATION', action: 'VIEW', scope: 'ORGANIZATION' }],
+          },
+        ],
+      },
+    ]);
+
+    const result = await service.run();
+
+    expect(result.sent).toBe(1);
+    const payload = email.send.mock.calls[0][0];
+    expect(payload.to).toBe('deskbot@x.in');
+    expect(payload.text).toContain('entry overdue');
   });
 
   it('a broken section costs its own content, never the whole brief', async () => {

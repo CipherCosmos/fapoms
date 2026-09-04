@@ -48,11 +48,21 @@ const SECTION_AUDIENCES: Record<string, string[]> = {
  * A permission that also earns a section, for a role built in Admin -> Roles that
  * `SECTION_AUDIENCES` has never heard of by name — same mirrored-fallback mechanism as the
  * notification catalog's `fallbackPermissions` (see `usersHoldingPermission` and the comment on
- * `NotificationDispatchService.usersInRoles`). Populated only for `hr`, matched to the exact
- * permission `/hr`'s own route requires — the other sections are left as they were rather than
- * guessed.
+ * `NotificationDispatchService.usersInRoles`, and that field's own comment for the general rule
+ * this follows: match whatever permission gates the section's own `link` in
+ * `route-permissions.ts`, never invent one).
+ *
+ * `desk` and `finance` match their section's `link` exactly — `/validation` and `/billing`
+ * both declare a single `requiredPermissions` entry in that table, `VALIDATION:VIEW:ORGANIZATION`
+ * and `BILLING:VIEW:ORGANIZATION` respectively, so a custom role that can already open the page a
+ * section points to now also hears about it in the morning brief. `feedback` is left unset on
+ * purpose, not an oversight: `/feedback` itself declares no permission a role could be granted —
+ * FEEDBACK_TEAM_ROLE_NAMES is ADMIN-only by the platform owner's explicit decision (see
+ * feedback-roles.ts), unrelated to any resource permission, so there is nothing to widen past.
  */
 const SECTION_FALLBACK_PERMISSIONS: Record<string, string[]> = {
+  desk: ['VALIDATION:VIEW:ORGANIZATION'],
+  finance: ['BILLING:VIEW:ORGANIZATION'],
   hr: ['ASSAYER:VIEW:ORGANIZATION'],
 };
 
