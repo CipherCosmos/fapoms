@@ -570,7 +570,7 @@ export const Scheduling: React.FC = () => {
   }, [filteredSchedules, timelineSearch]);
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', height: '100%', minHeight: 0, padding: '0 8px 8px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', height: 'calc(100% / 1.12)', minHeight: 0, padding: '0 8px 8px', zoom: 1.12 as any }}>
       {/* ── UNIFIED COMMAND HEADER BAR ── */}
       <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '10px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
         <PageHeader
