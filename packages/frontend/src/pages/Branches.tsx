@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useUrlSelection } from '../hooks/useUrlSelection';
 import { Upload, Building2, Globe, ShieldAlert, Activity, Plus, Edit2, Trash2, Phone, FileText, User, Filter, ChevronDown, Map, X, AlertTriangle, Loader } from 'lucide-react';
-import { SearchInput, FilterSelect, StatusBadge, AlertBanner, Modal, Select, useToast, useConfirm, Pagination, SkeletonRows, Refreshing } from '../components/ui';
+import { SearchInput, FilterSelect, StatusBadge, AlertBanner, Modal, Select, useToast, useConfirm, Pagination, SkeletonRows, Refreshing, PageHeader } from '../components/ui';
 import { listPhase } from '../components/ui/list-phase';
 import { useImportJob } from '../components/import/useImportJob';
 import { ImportProgressPanel } from '../components/import/ImportProgressPanel';
@@ -488,6 +488,12 @@ export const Branches: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+      <PageHeader
+        icon={<Building2 size={20} />}
+        title="Branches"
+        subtitle="Client branch records — location, risk and complexity, plus the contacts and documents behind each one."
+      />
+
       {/* KPI Cards */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px' }}>
         {[

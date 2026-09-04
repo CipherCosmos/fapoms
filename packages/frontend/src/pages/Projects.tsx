@@ -21,7 +21,7 @@ import { api } from '../services/api';
 import { useScope, withScope } from '../context/ScopeContext';
 import { userMessage } from '../services/errors';
 import { connectSocket } from '../services/socket';
-import { StatusBadge, Modal, SearchInput, FilterSelect, AlertBanner, PrimaryButton, UploadExcelControls, Select, useConfirm } from '../components/ui';
+import { StatusBadge, Modal, SearchInput, FilterSelect, AlertBanner, PrimaryButton, UploadExcelControls, Select, useConfirm, PageHeader } from '../components/ui';
 import { ChipMultiSelect } from '../components/ui/ChipMultiSelect';
 import { useWorkforceVocabulary, asOptions } from '../hooks/useWorkforceVocabulary';
 import { localDateKey } from '../utils/statusLabels';
@@ -879,13 +879,11 @@ export const Projects: React.FC = () => {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
       {confirmDialog}
 
-      {/* Page Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
-        <div>
-          <h2 style={{ fontSize: '24px', fontWeight: 700, fontFamily: 'var(--font-display)' }}>Projects</h2>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginTop: '4px' }}>Manage all client audit cycles and monitor progress</p>
-        </div>
-        <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+      <PageHeader
+        icon={<FolderKanban size={20} />}
+        title="Projects"
+        subtitle="Manage all client audit cycles and monitor progress"
+        actions={<>
           <button onClick={async () => {
             try {
               const data = projects.length > 0 ? projects : await api.request<ProjectItem[]>('/projects');
@@ -918,8 +916,8 @@ export const Projects: React.FC = () => {
               Create Project
             </PrimaryButton>
           )}
-        </div>
-      </div>
+        </>}
+      />
 
       {/* Notifications */}
       {message && (
