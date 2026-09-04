@@ -21,7 +21,7 @@ import { Injectable, Logger, NotFoundException, PayloadTooLargeException } from 
 import { InjectQueue } from '@nestjs/bull';
 import type { JobOptions, Queue } from 'bull';
 
-import { IMPORT_QUEUE, BRANCH_IMPORT_JOB, ROSTER_IMPORT_JOB } from './import.constants';
+import { IMPORT_QUEUE, BRANCH_IMPORT_JOB, ROSTER_IMPORT_JOB, CUSTOMER_MASTER_IMPORT_JOB } from './import.constants';
 import {
   BranchImportOutcome,
   BranchImportProgress,
@@ -86,6 +86,25 @@ export interface RosterImportJobData {
    * unchanged.
    */
   overwrite: boolean;
+}
+
+/**
+ * A queued customer-master import.
+ *
+ * Owned by the person who uploaded it, like the roster: the file spans every branch a client
+ * scheduled for one audit date, so there is no single branch or region to scope the job id to.
+ * `savedPath` travels with it because the upload is persisted before it is queued — the version
+ * this creates records where the file actually lives, not where the worker happened to read it.
+ */
+export interface CustomerMasterImportJobData {
+  actorId: string;
+  projectId: string;
+  /** The workbook, base64-encoded — same reasoning as `BranchImportJobData`. */
+  fileBase64: string;
+  fileName: string;
+  savedPath: string;
+  /** The audit date this batch covers; the client sends one file per run. */
+  auditDate: string | null;
 }
 
 /** Bull's own job states, plus the case where the job is gone. */
@@ -355,6 +374,96 @@ export class ImportJobService {
       finishedAt: job.finishedOn ? new Date(job.finishedOn).toISOString() : null,
     };
   }
+
+  /**
+   * Queue a customer-master import.
+   *
+   * The last spreadsheet import that still ran inside the request. Reconciling a daily file walks
+   * every row against the client's branches by SOL ID and then registers a version — on a real
+   * file that is thousands of lookups with the operator watching a spinner, and a socket timeout
+   * away from an upload that "failed" while it was in fact still running. The file is validated
+   * and persisted before this is called, so an unreadable or wrong-typed upload is still refused
+   * immediately; only the reconciliation moves off the request.
+   */
+  async enqueueCustomerMasterImport(params: {
+    actorId: string;
+    projectId: string;
+    fileBuffer: Buffer;
+    fileName: string;
+    savedPath: string;
+    auditDate?: string | null;
+  }): Promise<ImportJobStatus<never, unknown>> {
+    if (params.fileBuffer.length > ImportJobService.MAX_QUEUED_FILE_BYTES) {
+      throw new PayloadTooLargeException(
+        `This file is ${Math.round(params.fileBuffer.length / (1024 * 1024))} MB, which is larger than the ` +
+          `${ImportJobService.MAX_QUEUED_FILE_BYTES / (1024 * 1024)} MB an import may be. Split it into smaller files and upload them one at a time.`,
+      );
+    }
+
+    const data: CustomerMasterImportJobData = {
+      actorId: params.actorId,
+      projectId: params.projectId,
+      fileBase64: params.fileBuffer.toString('base64'),
+      fileName: params.fileName,
+      savedPath: params.savedPath,
+      auditDate: params.auditDate ?? null,
+    };
+
+    const job = await this.queue.add(CUSTOMER_MASTER_IMPORT_JOB, data, ImportJobService.JOB_OPTIONS);
+    this.logger.log(`Queued customer-master import job ${job.id} for project ${params.projectId}.`);
+
+    return {
+      jobId: String(job.id),
+      state: 'waiting',
+      progress: null,
+      result: null,
+      error: null,
+      fileName: data.fileName,
+      totalRows: 0,
+      rowsNeedingGeocode: 0,
+      enqueuedAt: new Date().toISOString(),
+      startedAt: null,
+      finishedAt: null,
+    };
+  }
+
+  /**
+   * Read a customer-master import job's state.
+   *
+   * Owner-checked on the uploader for the same reason as the roster: the reconciliation report
+   * names branches and account counts for one client, and Bull's incrementing job ids would
+   * otherwise let anyone who may upload a file read someone else's result.
+   */
+  async getCustomerMasterImportStatus(actorId: string, jobId: string): Promise<ImportJobStatus<never, unknown>> {
+    const job = await this.queue.getJob(jobId);
+    const data = job?.data as CustomerMasterImportJobData | undefined;
+
+    if (!job || !data || data.actorId !== actorId) {
+      throw new NotFoundException(
+        `Import job ${jobId} was not found. Jobs are kept for 24 hours after they finish ` +
+          `(7 days if they failed), so an older one will have been cleared.`,
+      );
+    }
+
+    const state = (await job.getState()) as ImportJobState;
+
+    return {
+      jobId: String(job.id),
+      state: state ?? 'unknown',
+      // Reported once, at the end: reconciliation commits its version in one go, so there is no
+      // partial count that means anything until it lands.
+      progress: null,
+      result: state === 'completed' ? ((job.returnvalue as unknown) ?? null) : null,
+      error: state === 'failed' ? (job.failedReason ?? 'The import failed without recording a reason.') : null,
+      fileName: data.fileName,
+      totalRows: 0,
+      rowsNeedingGeocode: 0,
+      enqueuedAt: job.timestamp ? new Date(job.timestamp).toISOString() : null,
+      startedAt: job.processedOn ? new Date(job.processedOn).toISOString() : null,
+      finishedAt: job.finishedOn ? new Date(job.finishedOn).toISOString() : null,
+    };
+  }
+
 
   /**
    * Read one import job's state.

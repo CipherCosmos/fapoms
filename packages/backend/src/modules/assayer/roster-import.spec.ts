@@ -468,8 +468,10 @@ describe('roster import — de-duplication', () => {
       expect(h.assayerLookups[0].conditions).toEqual(['assayer.assayerCode IN (:...codes)']);
       expect(summary.updated).toBe(1);
       expect(summary.created).toBe(0);
-      // No insert was attempted, so no savepoint was taken.
-      expect(h.queries).toEqual([]);
+      // No insert was attempted, so no savepoint was taken. Asserted on the savepoint queries
+      // rather than on an empty list: the import also sets its own `statement_timeout` once for
+      // the whole transaction, which is not a per-row query and says nothing about inserts.
+      expect(h.queries.filter((q) => /SAVEPOINT/i.test(q))).toEqual([]);
     });
 
     /** A code the file names twice is one person updated twice, not a second insert. */

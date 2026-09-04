@@ -39,3 +39,12 @@ export const BRANCH_IMPORT_JOB = 'branch-import';
  * `concurrency: 1` exists to prevent.
  */
 export const ROSTER_IMPORT_JOB = 'roster-import';
+
+/**
+ * Job name for a customer-master spreadsheet import.
+ *
+ * The last import that still ran inside the request: it reconciles every row against the client's
+ * branches by SOL ID and registers a version, which on a real daily file is thousands of lookups
+ * the operator sat and watched. Same queue and the same reasoning as the two above.
+ */
+export const CUSTOMER_MASTER_IMPORT_JOB = 'customer-master-import';

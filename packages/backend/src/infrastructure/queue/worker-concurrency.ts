@@ -120,6 +120,21 @@ export const WORKER_CONCURRENCY = {
    */
   rosterImports: { rosterImport: 1 },
   /**
+   * The customer master, the third `@Processor` class on that same `import-jobs` queue — its own
+   * key here for the same reason as `rosterImports`: this table is keyed per class, because that
+   * is what the fitness test can count from the source.
+   *
+   * It joined on 2026-09-05, when reconciliation stopped running inside its upload request: a
+   * daily file is walked row by row against the client's branches by SOL ID and then registered as
+   * a version, and a socket timeout on that made a still-running import look like a failed one.
+   *
+   * One slot, so two uploads for the same project cannot reconcile and register versions at the
+   * same time, each unaware of the other's version number. It spends its time on database reads
+   * rather than on a rate-limited provider, so unlike the geocoding workers the slot is a
+   * correctness bound, not a politeness one.
+   */
+  customerMasterImports: { customerMasterImport: 1 },
+  /**
    * Audit chain sealing, ticked by cron every minute (see `AuditModule`). One slot: `sealOnce`
    * is already a single-writer pass, serialised cluster-wide by a Redis lock plus a Postgres
    * advisory lock held for the transaction's duration (see `AuditSealService`) — a second
@@ -176,6 +191,7 @@ const QUEUE_NAME_BY_WORKER_KEY: Record<keyof typeof WORKER_CONCURRENCY, string> 
   documents: 'document-dispatch',
   imports: 'import-jobs',
   rosterImports: 'import-jobs',
+  customerMasterImports: 'import-jobs',
   auditSeal: 'audit-seal',
   generic: 'background-jobs',
   geoPrecision: 'geo-precision',

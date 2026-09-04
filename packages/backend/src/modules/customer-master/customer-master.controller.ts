@@ -1,4 +1,5 @@
-import { Controller, Get, Post, Param, Query, UseGuards, ParseUUIDPipe, Req, UseInterceptors, UploadedFile, DefaultValuePipe, ParseIntPipe, Inject } from '@nestjs/common';
+import { Controller, Get, Post, Param, Query, UseGuards, ParseUUIDPipe, Req, Res, UseInterceptors, UploadedFile, DefaultValuePipe, ParseIntPipe, Inject } from '@nestjs/common';
+import type { Response } from 'express';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
@@ -8,6 +9,7 @@ import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { AuditRead } from '../../core/audit/audit-read.decorator';
 import { CustomerMasterService } from './customer-master.service';
+import { ImportJobService } from '../import/import-job.service';
 
 /** Same shape as `documentUploadMulterOptions` in document.controller.ts — see that file. */
 const customerMasterUploadMulterOptions = {
@@ -25,6 +27,7 @@ import { SystemRole } from '@fapoms/shared';
 export class CustomerMasterController {
   constructor(
     private readonly customerMasterService: CustomerMasterService,
+    private readonly importJobService: ImportJobService,
     @Inject('StorageEngine') private readonly storage: StorageEngine,
   ) {}
 
@@ -50,6 +53,7 @@ export class CustomerMasterController {
     // The audit date this batch covers. The client sends one file the day before
     // for all branches scheduled that day, so the date is what identifies the run.
     @Query('auditDate') auditDate?: string,
+    @Res({ passthrough: true }) res?: Response,
   ) {
     // Every sibling upload route in document.controller.ts calls this; this one didn't — a
     // disguised executable (`.exe`, `application/x-msdownload`) was accepted, persisted with its
@@ -68,19 +72,56 @@ export class CustomerMasterController {
       file.buffer,
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     );
-    const report = await this.customerMasterService.uploadAndReconcile(
+    /**
+     * Accepted, not done.
+     *
+     * Reconciliation walks every row against the client's branches by SOL ID and then registers a
+     * version. On a real daily file that is thousands of lookups, and it used to happen here, on
+     * the request — the operator watched a spinner, and a socket timeout made a still-running
+     * import indistinguishable from a failed one, which invites uploading the same file twice.
+     *
+     * The parts that must answer immediately still do: the file type and size are validated and
+     * the upload is persisted above, so a wrong or unreadable file is refused right here with a
+     * specific error rather than a cheerful 202 and a failure to go looking for.
+     */
+    const job = await this.importJobService.enqueueCustomerMasterImport({
+      actorId: req.user.id,
       projectId,
-      file.originalname,
+      fileBuffer: file.buffer,
+      fileName: file.originalname,
       savedPath,
-      file.buffer,
-      req.user.id,
       auditDate,
-    );
+    });
 
+    // 202: accepted, not done. Same body shape every queued import answers with, so the client's
+    // shared `useImportJob` hook follows this one exactly as it follows the roster and branch runs.
+    res?.status(202);
     return {
       success: true,
-      data: report,
+      data: {
+        ...job,
+        queued: true,
+        statusUrl: `/customer-master/import-jobs/${job.jobId}`,
+        message:
+          'Upload received. Reconciling every row against this client\'s branches runs in the '
+          + 'background — it does not need this page kept open; the report appears when it finishes.',
+      },
     };
+  }
+
+  /**
+   * Where a queued customer-master import has reached.
+   *
+   * Owner-checked inside the service: the report names a client's branches and account counts, so
+   * a job id alone must not be enough to read someone else's run.
+   */
+  @Get('import-jobs/:jobId')
+  @Roles(SystemRole.ADMIN, SystemRole.DESK, SystemRole.OPERATIONS)
+  @RequirePermissions('document:upload:organization')
+  @ApiOperation({ summary: 'Progress and result of a queued customer master import' })
+  async importJobStatus(@Param('jobId') jobId: string, @Req() req: any) {
+    const status = await this.importJobService.getCustomerMasterImportStatus(req.user.id, jobId);
+    return { success: true, data: status };
   }
 
   @Post('versions/:versionId/approve')

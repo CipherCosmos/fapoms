@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { UploadCloud, AlertTriangle, CheckCircle2, Clock, Send, ArrowRightCircle } from 'lucide-react';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { counted } from '../../utils/plural';
 import { UPLOAD_LIMIT_HINT } from '@fapoms/shared';
+import { useImportJob } from '../../components/import/useImportJob';
 
 /**
  * What still has to happen for a branch on this audit date. Ordered as the day
@@ -109,6 +110,8 @@ export const DailyRunPanel: React.FC<{
   const [acting, setActing] = useState<Set<string>>(new Set());
   const [unmatched, setUnmatched] = useState<Array<{ fileName: string; reason: string }>>([]);
   const [recon, setRecon] = useState<ReconOutcome | null>(null);
+  /** The client batch's reconciliation now runs on the server's import queue — see `uploadBatch`. */
+  const batchImport = useImportJob<ReconOutcome>();
 
   const load = useCallback(async () => {
     if (!projectId || !auditDate) return;
@@ -131,30 +134,59 @@ export const DailyRunPanel: React.FC<{
     }
   };
 
+  /**
+   * Send the client batch; the reconciliation happens on the queue.
+   *
+   * Reconciling a daily file walks every row against this client's branches by SOL ID and then
+   * registers a version. That used to run inside this upload request, so the operator watched a
+   * spinner for however long it took — and a socket timeout made a still-running import
+   * indistinguishable from a failed one, which invites uploading the same file twice. The server
+   * now answers 202 as soon as the file is accepted; `useImportJob` (the same hook the roster and
+   * branch imports use) follows the job, and the effect below reports the outcome when it lands.
+   * The page can be left in the meantime.
+   */
   const uploadBatch = async (file: File) => {
-    await withActing('batch', async () => {
-      try {
-        // The reconciliation report, not a fire-and-forget POST. It carries the true outcome
-        // (accepted vs rejected + why) and the account rows that matched no branch, so the toast
-        // can tell the truth and the exceptions can be shown instead of hidden behind a flat
-        // "uploaded and reconciled" that lied on a rejection.
-        const report = await api.request<ReconOutcome>(
-          `/customer-master/upload?projectId=${projectId}&auditDate=${auditDate}`,
-          { method: 'POST', body: (() => { const fd = new FormData(); fd.append('file', file); return fd; })() },
-        );
-        setRecon(report);
-        if (report.accepted) {
-          onSuccess(
-            `Client batch "${file.name}" accepted — v${report.versionNumber}, ${counted(report.uniqueAccountsCount, 'account')}` +
-            (report.unmatchedCount > 0 ? `, ${counted(report.unmatchedCount, 'row')} matched no branch (see below)` : '') + '.',
-          );
-        } else {
-          // A rejection is a failure, and must read as one — not a success toast.
-          onError(`Client batch "${file.name}" was rejected. ${report.blockReason ?? ''}`.trim());
-        }
-      } catch (e) { onError(userMessage(e)); }
-    });
+    await batchImport.start(
+      `/customer-master/upload?projectId=${projectId}&auditDate=${auditDate}`,
+      file,
+    );
   };
+
+  /**
+   * Report a queued reconciliation as it moves.
+   *
+   * Keyed on the value just handled, so a re-render cannot toast the same outcome twice. The three
+   * phases carry different values (job id, report object, error string), so one ref covers them all.
+   */
+  const handledImport = useRef<unknown>(null);
+  useEffect(() => {
+    const s = batchImport.state;
+    if (s.phase === 'running' && handledImport.current !== s.jobId) {
+      handledImport.current = s.jobId;
+      onSuccess(s.message || `Client batch "${s.fileName}" received — reconciling in the background.`);
+      return;
+    }
+    if (s.phase === 'done' && handledImport.current !== s.report) {
+      handledImport.current = s.report;
+      const report = s.report;
+      setRecon(report);
+      if (report.accepted) {
+        onSuccess(
+          `Client batch "${s.fileName}" accepted — v${report.versionNumber}, ${counted(report.uniqueAccountsCount, 'account')}` +
+          (report.unmatchedCount > 0 ? `, ${counted(report.unmatchedCount, 'row')} matched no branch (see below)` : '') + '.',
+        );
+      } else {
+        // A rejection is a failure, and must read as one — not a success toast.
+        onError(`Client batch "${s.fileName}" was rejected. ${report.blockReason ?? ''}`.trim());
+      }
+      void load();
+      return;
+    }
+    if (s.phase === 'error' && handledImport.current !== s.error) {
+      handledImport.current = s.error;
+      onError(s.error);
+    }
+  }, [batchImport.state, load, onError, onSuccess]);
 
   const uploadPacket = async (branch: DailyRunBranch, file: File) => {
     await withActing(branch.projectBranchId, async () => {
@@ -246,7 +278,7 @@ export const DailyRunPanel: React.FC<{
                 Nothing can be generated until the client sends the customer master file for {auditDate}.
               </div>
             </div>
-            <FileUploadButton label="Upload client file" busy={acting.has('batch')} onFile={uploadBatch} />
+            <FileUploadButton label="Upload client file" busy={batchImport.state.phase === 'uploading'} onFile={uploadBatch} />
           </div>
         )}
         {s && s.unexpectedBranchesInBatch > 0 && (
