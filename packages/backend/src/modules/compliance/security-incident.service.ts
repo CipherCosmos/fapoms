@@ -127,17 +127,23 @@ export class SecurityIncidentService {
   }
 
   /** Counts for the compliance-health view: how many are open and how many have missed a clock. */
-  async summary(): Promise<{ total: number; open: number; certInOverdue: number; principalsOverdue: number }> {
+  async summary(): Promise<{
+    total: number; open: number; certInOverdue: number; boardOverdue: number; principalsOverdue: number;
+  }> {
     const rows = await this.repo.find({ take: 2000 });
     const now = new Date();
-    let open = 0, certInOverdue = 0, principalsOverdue = 0;
+    let open = 0, certInOverdue = 0, boardOverdue = 0, principalsOverdue = 0;
     for (const r of rows) {
       if (r.status === 'OPEN' || r.status === 'CONTAINED') open++;
       const c = computeIncidentClocks(r, now);
       if (c.certIn.overdue) certInOverdue++;
-      if (c.dpdpPrincipals.overdue) principalsOverdue++;
+      if (c.dpdpBoard.overdue) boardOverdue++;
+      // dpdpPrincipals has no fixed deadline (see incident-clocks.ts) so it cannot be "overdue" in the
+      // same sense — "still not done" is the honest signal, counted here as its own thing rather than
+      // folded into a field named *Overdue that the other two genuinely earn.
+      if (c.dpdpPrincipals.applicable && !c.dpdpPrincipals.satisfied) principalsOverdue++;
     }
-    return { total: rows.length, open, certInOverdue, principalsOverdue };
+    return { total: rows.length, open, certInOverdue, boardOverdue, principalsOverdue };
   }
 
   private toView(row: SecurityIncidentEntity): IncidentView {

@@ -8,13 +8,16 @@ import {
  * The point of this register is not to report FOR the operator — reporting is a human judgement call
  * made to external bodies — but to make the deadlines impossible to miss:
  *   - CERT-In Directions 2022: report a cyber incident within 6 HOURS of noticing it.
- *   - DPDP Rules 2025: on a personal-data breach, notify the Data Protection Board without delay and
- *     the affected Data Principals within 72 HOURS.
+ *   - DPDP Rules 2025, Rule 7: on a personal-data breach, intimate the Data Protection Board WITHOUT
+ *     DELAY, then give it a full breach report within a fixed 72-HOUR window — and separately,
+ *     intimate each affected Data Principal WITHOUT DELAY too (the Act sets no fixed hour count for
+ *     that second one; 72 hours is the Board-report figure only, not a Data-Principal grace period).
  *
  * So each row carries when the incident was detected, and the milestones as they are reached
  * (CERT-In reported, Board notified, principals notified). The service computes the deadlines and
  * how much time is left from `detectedAt`, so "which incidents are about to breach a statutory
- * clock" is answerable at a glance rather than reconstructed from memory during an actual incident.
+ * clock" is answerable at a glance rather than reconstructed from memory during an actual incident —
+ * see `incident-clocks.ts` for exactly which milestone carries which figure, and why.
  */
 @Entity('security_incidents')
 @Index('IDX_security_incidents_status', ['status'])

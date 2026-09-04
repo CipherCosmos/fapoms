@@ -8,20 +8,35 @@ import {
   type SecurityIncident, type IncidentClock, type RightsRequest, type SlaClock,
 } from '../../services/compliance';
 import { userMessage } from '../../services/errors';
+import { useCurrentRoles, canManageCompliance } from '../../hooks/useCurrentRoles';
 
 const fmt = (d: string | null) =>
   d ? new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
 
-/** A statutory clock, rendered as time-left, OVERDUE, or done. */
-const ClockBadge: React.FC<{ name: string; clock: IncidentClock }> = ({ name, clock }) => {
+/**
+ * A statutory clock, rendered as time-left, OVERDUE, or done — except a clock with no fixed hour
+ * count (DPDP's "without delay" Data-Principal notification: `dueAt` is always null while unsatisfied,
+ * never a fabricated countdown — see incident-clocks.ts on the backend), which renders as its own,
+ * deliberately non-calm "without delay" state instead of a false OVERDUE or a false countdown.
+ */
+const ClockBadge: React.FC<{ name: string; clock: IncidentClock; doneWord?: string }> = ({ name, clock, doneWord = 'reported' }) => {
   if (!clock.applicable) return null;
-  const tone = clock.satisfied ? 'var(--success)' : clock.overdue ? 'var(--danger)' : (clock.hoursRemaining ?? 99) < 2 ? 'var(--warning)' : 'var(--accent)';
+  const noFixedDeadline = clock.dueAt === null;
+  const tone = clock.satisfied
+    ? 'var(--success)'
+    : clock.overdue
+      ? 'var(--danger)'
+      : noFixedDeadline
+        ? 'var(--warning)'
+        : (clock.hoursRemaining ?? 99) < 2 ? 'var(--warning)' : 'var(--accent)';
   const text = clock.satisfied
-    ? 'reported'
+    ? doneWord
     : clock.overdue
       ? 'OVERDUE'
-      : `${clock.hoursRemaining}h left`;
-  const Icon = clock.satisfied ? CheckCircle2 : clock.overdue ? AlertTriangle : Clock;
+      : noFixedDeadline
+        ? 'without delay'
+        : `${clock.hoursRemaining}h left`;
+  const Icon = clock.satisfied ? CheckCircle2 : (clock.overdue || noFixedDeadline) ? AlertTriangle : Clock;
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontWeight: 700, color: tone,
       background: `color-mix(in srgb, ${tone} 12%, transparent)`, padding: '3px 9px', borderRadius: 'var(--radius-full)' }}>
@@ -39,6 +54,7 @@ const HealthTile: React.FC<{ label: string; value: number; bad?: boolean }> = ({
 
 export const CompliancePanel: React.FC = () => {
   const qc = useQueryClient();
+  const canWrite = canManageCompliance(useCurrentRoles());
   const health = useQuery({ queryKey: ['compliance', 'health'], queryFn: getComplianceHealth });
   const incidents = useQuery({ queryKey: ['compliance', 'incidents'], queryFn: listIncidents });
 
@@ -70,7 +86,8 @@ export const CompliancePanel: React.FC = () => {
         </h2>
         <p style={{ color: 'var(--text-secondary)', fontSize: 14, margin: '4px 0 0' }}>
           The security-incident register and the statutory clocks it runs — CERT-In reporting within 6 hours,
-          DPDP notification of affected people within 72 hours.
+          a full DPDP breach report to the Data Protection Board within 72 hours, and affected people notified
+          without delay (DPDP sets no fixed hour count for that one).
         </p>
       </div>
 
@@ -78,7 +95,8 @@ export const CompliancePanel: React.FC = () => {
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
         <HealthTile label="Open incidents" value={health.data?.incidents.open ?? 0} />
         <HealthTile label="CERT-In overdue" value={health.data?.incidents.certInOverdue ?? 0} bad />
-        <HealthTile label="72h notice overdue" value={health.data?.incidents.principalsOverdue ?? 0} bad />
+        <HealthTile label="DPDP Board report overdue" value={health.data?.incidents.boardOverdue ?? 0} bad />
+        <HealthTile label="People not yet notified" value={health.data?.incidents.principalsOverdue ?? 0} bad />
         <HealthTile label="Rights requests overdue" value={health.data?.rightsRequests.overdue ?? 0} bad />
         <HealthTile label="Audit unsealed" value={health.data?.auditUnsealed ?? 0} bad />
       </div>
@@ -97,13 +115,15 @@ export const CompliancePanel: React.FC = () => {
       {tab === 'RIGHTS' && <RightsRequestsSection />}
 
       {tab === 'INCIDENTS' && (<>
+      {canWrite && (
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
         <button className="btn btn-primary" onClick={() => setShowForm((s) => !s)} style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
           <Plus size={15} /> Raise incident
         </button>
       </div>
+      )}
 
-      {showForm && (
+      {canWrite && showForm && (
         <div className="glass-card" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 14 }}>
           {raise.isError && <div style={{ color: 'var(--danger)', fontSize: 13 }}>{userMessage(raise.error)}</div>}
           <input placeholder="What happened? (short title)" value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })}
@@ -117,7 +137,7 @@ export const CompliancePanel: React.FC = () => {
             </select>
             <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--text-secondary)' }}>
               <input type="checkbox" checked={form.personalDataInvolved} onChange={(e) => setForm({ ...form, personalDataInvolved: e.target.checked })} />
-              Personal data involved (starts the 72h DPDP clock)
+              Personal data involved (starts the DPDP Board's 72h report clock, and the without-delay duty to notify affected people)
             </label>
           </div>
           <textarea placeholder="Description (optional)" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })}
@@ -156,7 +176,8 @@ export const CompliancePanel: React.FC = () => {
 
                 <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
                   <ClockBadge name="CERT-In" clock={inc.clocks.certIn} />
-                  <ClockBadge name="DPDP 72h" clock={inc.clocks.dpdpPrincipals} />
+                  <ClockBadge name="DPDP Board" clock={inc.clocks.dpdpBoard} />
+                  <ClockBadge name="Notify people" clock={inc.clocks.dpdpPrincipals} doneWord="notified" />
                   {inc.personalDataInvolved && (
                     <span style={{ fontSize: 11, color: 'var(--warning)', fontWeight: 700, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
                       <Link2 size={11} /> personal data{inc.affectedDataPrincipals ? ` · ${inc.affectedDataPrincipals} people` : ''}
@@ -164,11 +185,15 @@ export const CompliancePanel: React.FC = () => {
                   )}
                 </div>
 
-                {!resolved && (
+                {!resolved && canWrite && (
                   <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
                     {!inc.certInReportedAt && (
                       <button className="btn btn-secondary" style={smallBtn} disabled={act.isPending}
                         onClick={() => act.mutate({ id: inc.id, body: { markCertInReported: true } })}>Mark CERT-In reported</button>
+                    )}
+                    {inc.personalDataInvolved && !inc.boardNotifiedAt && (
+                      <button className="btn btn-secondary" style={smallBtn} disabled={act.isPending}
+                        onClick={() => act.mutate({ id: inc.id, body: { markBoardNotified: true } })}>Mark Board notified</button>
                     )}
                     {inc.personalDataInvolved && !inc.principalsNotifiedAt && (
                       <button className="btn btn-secondary" style={smallBtn} disabled={act.isPending}
@@ -195,6 +220,7 @@ export const CompliancePanel: React.FC = () => {
  */
 const RightsRequestsSection: React.FC = () => {
   const qc = useQueryClient();
+  const canWrite = canManageCompliance(useCurrentRoles());
   const { data, isLoading } = useQuery({ queryKey: ['compliance', 'rights'], queryFn: listRightsRequests });
   const [form, setForm] = useState({ requestType: 'ACCESS', subjectRef: '', requesterName: '', details: '' });
   const [show, setShow] = useState(false);
@@ -214,12 +240,14 @@ const RightsRequestsSection: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {canWrite && (
       <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
         <button className="btn btn-primary" onClick={() => setShow((s) => !s)} style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
           <Plus size={15} /> Log a request
         </button>
       </div>
-      {show && (
+      )}
+      {canWrite && show && (
         <div className="glass-card" style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
           {log.isError && <div style={{ color: 'var(--danger)', fontSize: 13 }}>{userMessage(log.error)}</div>}
           <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
@@ -257,7 +285,7 @@ const RightsRequestsSection: React.FC = () => {
             </div>
             {r.details && <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', marginTop: 6 }}>{r.details}</div>}
             {r.legalHoldApplied && <div style={{ fontSize: 11.5, color: 'var(--warning)', fontWeight: 700, marginTop: 6 }}>Legal-retention hold applied — data kept per retention duty</div>}
-            {!terminal && (
+            {!terminal && canWrite && (
               <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
                 {r.status === 'RECEIVED' && (
                   <button className="btn btn-secondary" style={smallBtn} disabled={act.isPending}

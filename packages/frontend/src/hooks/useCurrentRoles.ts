@@ -339,6 +339,17 @@ export function canManageTransportRates(roles: SystemRole[], permissions?: strin
 }
 
 /**
+ * The security-incident register and DPDP rights-request queue: administrators run it (raise
+ * incidents, record milestones, log and resolve rights requests), auditors read it. Mirrors
+ * ComplianceController exactly — every write route there is `@Roles(SystemRole.ADMIN)` only, with
+ * no `@RequirePermissions` declared at all, so there is no permission-fallback path in either
+ * direction; this must stay name-only to match.
+ */
+export function canManageCompliance(roles: SystemRole[]): boolean {
+  return roles.includes(SystemRole.ADMIN);
+}
+
+/**
  * Notification & email administration. Deliberately narrower than the other config helpers:
  * these settings decide what reaches everyone's inbox and phone across the organisation, not
  * one desk's planning inputs. Mirrors NOTIFICATION_ADMIN_ROLES on the backend controller.

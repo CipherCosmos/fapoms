@@ -23,12 +23,17 @@ export interface SecurityIncident {
   principalsNotifiedAt: string | null;
   remediation: string | null;
   resolvedAt: string | null;
-  clocks: { certIn: IncidentClock; dpdpPrincipals: IncidentClock };
+  // dpdpBoard: the real, fixed 72-hour DPDP clock (Board breach report). dpdpPrincipals: "without
+  // delay" — DPDP sets no fixed hour count for notifying Data Principals, so that clock never carries
+  // a dueAt/hoursRemaining or an `overdue` of its own; see incident-clocks.ts on the backend.
+  clocks: { certIn: IncidentClock; dpdpBoard: IncidentClock; dpdpPrincipals: IncidentClock };
 }
 
 export interface ComplianceHealth {
   auditUnsealed: number;
-  incidents: { total: number; open: number; certInOverdue: number; principalsOverdue: number };
+  incidents: {
+    total: number; open: number; certInOverdue: number; boardOverdue: number; principalsOverdue: number;
+  };
   rightsRequests: { open: number; overdue: number };
 }
 

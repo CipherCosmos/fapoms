@@ -44,12 +44,31 @@ describe('SecurityIncidentService', () => {
 
     expect(updated.certInReportedAt).toBeInstanceOf(Date);
     expect(updated.principalsNotifiedAt).toBeInstanceOf(Date);
-    // Both clocks now satisfied → not overdue however much time passes.
+    // Both milestones now satisfied → not overdue however much time passes.
     expect(updated.clocks.certIn.satisfied).toBe(true);
     expect(updated.clocks.dpdpPrincipals.satisfied).toBe(true);
+    // The Board milestone is separate and was never marked — its own 72h clock is still running.
+    // (falsy, not strictly toBeNull(): this suite's hand-rolled repo mock doesn't simulate TypeORM's
+    // nullable-column defaults the way the real, Postgres-backed row does — confirmed live that the
+    // real API returns an explicit `null` here, not `undefined`.)
+    expect(updated.boardNotifiedAt).toBeFalsy();
+    expect(updated.clocks.dpdpBoard.applicable).toBe(true);
+    expect(updated.clocks.dpdpBoard.satisfied).toBe(false);
     expect(audit.recordEventSafe).toHaveBeenLastCalledWith(
       expect.objectContaining({ eventType: 'SECURITY_INCIDENT_UPDATED' }),
     );
+  });
+
+  it('records the Board-notified milestone independently and satisfies its own 72h clock', async () => {
+    const created = await service.create({ title: 'Breach', category: 'DATA_BREACH', severity: 'CRITICAL', personalDataInvolved: true }, 'a');
+    const updated = await service.update(created.id, { markBoardNotified: true }, 'a');
+
+    expect(updated.boardNotifiedAt).toBeInstanceOf(Date);
+    expect(updated.clocks.dpdpBoard.satisfied).toBe(true);
+    expect(updated.clocks.dpdpBoard.overdue).toBe(false);
+    // Marking the Board notified does not itself notify Data Principals — separate obligation, separate milestone.
+    expect(updated.principalsNotifiedAt).toBeFalsy();
+    expect(updated.clocks.dpdpPrincipals.satisfied).toBe(false);
   });
 
   it('stamps resolvedAt when moved to RESOLVED', async () => {
@@ -58,8 +77,10 @@ describe('SecurityIncidentService', () => {
     expect(updated.resolvedAt).toBeInstanceOf(Date);
   });
 
-  it('summarises open and clock-overdue incidents', async () => {
-    // One old, unreported personal-data breach → both clocks overdue and still open.
+  it('summarises open and clock-overdue incidents, including the Board clock', async () => {
+    // One old, unreported personal-data breach → CERT-In and Board both genuinely overdue (both carry
+    // a fixed hour count), and principals still un-notified (counted, though "overdue" isn't the
+    // legally accurate word for that one — see incident-clocks.ts).
     await service.create(
       { title: 'old', category: 'DATA_BREACH', severity: 'HIGH', personalDataInvolved: true, detectedAt: '2026-01-01T00:00:00.000Z' },
       'a',
@@ -67,6 +88,18 @@ describe('SecurityIncidentService', () => {
     const summary = await service.summary();
     expect(summary.open).toBe(1);
     expect(summary.certInOverdue).toBe(1);
+    expect(summary.boardOverdue).toBe(1);
     expect(summary.principalsOverdue).toBe(1);
+  });
+
+  it('does not count the Board clock against a non-personal-data incident', async () => {
+    await service.create(
+      { title: 'old, no personal data', category: 'MALWARE', severity: 'HIGH', detectedAt: '2026-01-01T00:00:00.000Z' },
+      'a',
+    );
+    const summary = await service.summary();
+    expect(summary.certInOverdue).toBe(1); // CERT-In always applies
+    expect(summary.boardOverdue).toBe(0); // DPDP does not
+    expect(summary.principalsOverdue).toBe(0);
   });
 });
