@@ -2,7 +2,7 @@ import { SystemRole } from '@fapoms/shared';
 import {
   canManageAssayers, canCreateAssayers, canDeleteProjects,
   canAdministerDataReset, canAdministerPlatformSettings,
-  canReadCustomerMaster,
+  canReadCustomerMaster, canManageRoles, permissionKeysFrom,
 } from './useCurrentRoles';
 
 /**
@@ -65,6 +65,18 @@ describe('capability checks', () => {
       expect(canAdministerDataReset([SystemRole.OPERATIONS])).toBe(false);
       expect(canAdministerDataReset([SystemRole.ADMIN])).toBe(true);
     });
+
+    /**
+     * Tightened 2026-09-04 to match the backend's `@RoleOnly()` fix on `PUT`/`DELETE
+     * /platform-settings/:key`: a role holding `configuration:edit:platform` without the ADMIN
+     * role used to see (and could actually use) the Save controls here — the API now refuses
+     * it, so the button must not be shown either.
+     */
+    it('never opens platform settings to a permission, however broad', () => {
+      expect(canAdministerPlatformSettings(NO_ROLES, custom('CONFIGURATION:EDIT:ORGANIZATION'))).toBe(false);
+      expect(canAdministerPlatformSettings([SystemRole.OPERATIONS], custom('CONFIGURATION:EDIT:ORGANIZATION'))).toBe(false);
+      expect(canAdministerPlatformSettings([SystemRole.ADMIN], [])).toBe(true);
+    });
   });
 
   /**
@@ -99,6 +111,53 @@ describe('capability checks', () => {
     it('stays shut for a custom role without project:view', () => {
       const custom = ['DOCUMENT_DESK'] as unknown as SystemRole[];
       expect(canReadCustomerMaster(custom, ['DOCUMENT:VIEW:ORGANIZATION'])).toBe(false);
+    });
+  });
+
+  /**
+   * RolesPermissionsPanel.tsx used to test `roles_.includes(SystemRole.ADMIN) ||
+   * roles_.includes(SystemRole.ADMIN)` — the same clause written twice, which read as "either of
+   * two roles" but was really one role checked redundantly. It happened to still be correct for
+   * ADMIN, which is why it shipped unnoticed, but it meant a custom role granted
+   * `user:edit:organization` — the exact permission the backend's own role-CRUD routes accept
+   * from a custom role, since there is no dedicated `role:*` permission (see UserController's own
+   * comment) — was shown "Viewing only... requires an Administrator role" for a save the API
+   * would actually have accepted. `canManageRoles` replaces it with the same
+   * name-or-custom-permission rule every other screen in this file already follows.
+   */
+  describe('canManageRoles', () => {
+    it('opens for ADMIN by name, with no permission needed', () => {
+      expect(canManageRoles([SystemRole.ADMIN], [])).toBe(true);
+    });
+
+    it('opens for a custom role that genuinely holds user:edit:organization', () => {
+      const custom = ['QATRACK_L_CONFIG_EDITOR'] as unknown as SystemRole[];
+      expect(canManageRoles(custom, ['USER:EDIT:ORGANIZATION'])).toBe(true);
+    });
+
+    it('honours a PLATFORM grant for a custom role, matching the backend widening', () => {
+      // canManageRoles itself does no widening — that happens one layer up, in
+      // permissionKeysFrom, which is what useCurrentPermissions() actually returns from the
+      // cache. This exercises the real pipeline end to end rather than a bare ORGANIZATION
+      // string, which every other "honours PLATFORM" test in this file (misleadingly) does too.
+      const cached = { roles: [{ name: 'SOME_CUSTOM_ROLE', permissions: [{ resource: 'USER', action: 'EDIT', scope: 'PLATFORM' }] }] };
+      const custom = ['SOME_CUSTOM_ROLE'] as unknown as SystemRole[];
+      expect(canManageRoles(custom, permissionKeysFrom(cached))).toBe(true);
+    });
+
+    it('stays shut for a custom role without it', () => {
+      const custom = ['SOME_CUSTOM_ROLE'] as unknown as SystemRole[];
+      expect(canManageRoles(custom, ['USER:VIEW:ORGANIZATION'])).toBe(false);
+    });
+
+    it('stays shut for a built-in, non-ADMIN role even if it somehow held the permission', () => {
+      // Mirrors canReadCustomerMaster's DESK_OPERATOR case: a named built-in role must not slip
+      // in on a permission it happens to hold, only unrecognised (custom) roles get the fallback.
+      expect(canManageRoles([SystemRole.OPERATIONS], ['USER:EDIT:ORGANIZATION'])).toBe(false);
+    });
+
+    it('is false for nobody — no roles, no permissions', () => {
+      expect(canManageRoles(NO_ROLES, [])).toBe(false);
     });
   });
 });

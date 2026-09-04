@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Shield, Users as UsersIcon, Plus, Trash2, Lock, Info, X, ChevronRight, Search } from 'lucide-react';
-import { SystemRole, roleLabel } from '@fapoms/shared';
+import { roleLabel } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { Modal, AlertBanner, useConfirm } from '../../components/ui';
-import { useCurrentRoles } from '../../hooks/useCurrentRoles';
+import { useCurrentRoles, useCurrentPermissions, canManageRoles } from '../../hooks/useCurrentRoles';
 import {
   PERMISSION_AREAS, resourceLabel, actionLabel, scopeQualifier, areaForResource,
 } from '../../config/permission-labels';
@@ -45,12 +45,18 @@ const input: React.CSSProperties = {
 };
 
 export const RolesPermissionsPanel: React.FC = () => {
-  // Mirrors the API's gate on these routes, so nobody is shown a control that would 403.
-  // Administrators are included: they can already grant themselves any role from the Directory
-  // tab, so locking this screen to the super administrator only made it inert, not safer.
+  // Mirrors the API's gate on these routes (POST/PUT/DELETE /users/roles*, all gated on
+  // user:edit:organization — see canManageRoles), so nobody is shown a control that would 403,
+  // and nobody is told "requires an Administrator role" for a save the API would actually accept.
+  // Administrators are included by that same check: they hold the permission by name, and they
+  // could already grant themselves any role from the Directory tab, so locking this screen to
+  // some narrower group made it inert, not safer. This used to test
+  // `roles_.includes(SystemRole.ADMIN)` twice — the same clause repeated rather than the built-in
+  // OR custom-role check it was clearly meant to be — which happened to read correctly for ADMIN
+  // only because no custom role has ever been granted user:edit:organization yet.
   const roles_ = useCurrentRoles();
-  const canEdit =
-    roles_.includes(SystemRole.ADMIN) || roles_.includes(SystemRole.ADMIN);
+  const permissions_ = useCurrentPermissions();
+  const canEdit = canManageRoles(roles_, permissions_);
   const { confirm, confirmDialog } = useConfirm();
 
   const { data: rolesRes, isLoading, refetch } = useQuery({
