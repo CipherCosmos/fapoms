@@ -1,6 +1,7 @@
 import React from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { LayoutDashboard, Inbox, ClipboardCheck, MessagesSquare } from 'lucide-react';
+import { PageHeader } from '../../components/ui';
 
 /**
  * The shell the data-entry & validation pages sit in.
@@ -23,10 +24,11 @@ const PAGES = [
 
 export const DataEntryLayout: React.FC = () => (
   <div style={{ padding: '20px 24px', maxWidth: 1500 }}>
-    <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
-      <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Data Entry & Validation</h1>
-      <span style={{ fontSize: 13, color: 'var(--text-muted)' }}>Received audits, OCR processing, and the assayer chat.</span>
-    </div>
+    <PageHeader
+      icon={<ClipboardCheck size={20} />}
+      title="Data Entry & Validation"
+      subtitle="Received audits, OCR processing, and the assayer chat."
+    />
 
     <nav style={{ display: 'flex', gap: 4, margin: '18px 0', flexWrap: 'wrap', borderBottom: '1px solid var(--border-color)' }}>
       {PAGES.map((p) => {

@@ -4,6 +4,7 @@ import {
   ScrollText, Play, Square, Copy, ClipboardList, Check, Download, Search, RefreshCw,
   AlertTriangle, Terminal, CircleDot,
 } from 'lucide-react';
+import { PageHeader } from '../../components/ui';
 import { LOG_TAIL_DEFAULT, LOG_TAIL_MAX, type LogLine } from '@fapoms/shared';
 import {
   fetchLogServices, fetchLogHistory, streamServiceLogs, renderLogLine, stripAnsi, copyText,
@@ -295,16 +296,11 @@ export const ServiceLogs: React.FC = () => {
 
   return (
     <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 16, height: '100%' }}>
-      <header style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-        <ScrollText size={22} />
-        <div>
-          <h1 style={{ margin: 0, fontSize: 20 }}>Service logs</h1>
-          <p style={{ margin: 0, color: 'var(--text-secondary)', fontSize: 13 }}>
-            Live and historical output from the containers running this deployment.
-            Credentials are stripped before anything leaves the server; every read is recorded in the audit trail.
-          </p>
-        </div>
-      </header>
+      <PageHeader
+        icon={<ScrollText size={20} />}
+        title="Service logs"
+        subtitle="Live and historical output from the containers running this deployment. Credentials are stripped before anything leaves the server; every read is recorded in the audit trail."
+      />
 
       {services.isError && (
         <div style={{ ...card, borderColor: 'var(--danger)', display: 'flex', gap: 8 }}>

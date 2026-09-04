@@ -8,7 +8,7 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { isValidPan } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
-import { useToast, Select, useConfirm } from '../../components/ui';
+import { useToast, Select, useConfirm, PageHeader } from '../../components/ui';
 import {
   SectionCard, SettingRow, Toggle, Pill, controlStyle,
 } from '../../components/ui/settings';
@@ -463,14 +463,11 @@ export const PlatformSettings: React.FC = () => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
       {confirmDialog}
-      <div>
-        <h2 style={{ fontSize: '20px', fontWeight: 700, margin: 0, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <SlidersHorizontal style={{ color: 'var(--accent)' }} /> Platform Settings
-        </h2>
-        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-          What the platform assumes when no contract says otherwise — changeable here, without a deploy.
-        </span>
-      </div>
+      <PageHeader
+        icon={<SlidersHorizontal size={20} />}
+        title="Platform Settings"
+        subtitle="What the platform assumes when no contract says otherwise — changeable here, without a deploy."
+      />
 
       {!canEdit && (
         <div className="glass-card" style={{ padding: '10px 14px', display: 'flex', gap: '8px', alignItems: 'center', fontSize: '12px', color: 'var(--text-secondary)' }}>
