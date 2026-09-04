@@ -4,6 +4,7 @@ import { Repository } from 'typeorm';
 import { EventCategory } from '@fapoms/shared';
 import { AuditService } from '../../core/audit/audit.service';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { DataRightsRequestEntity } from './data-rights-request.entity';
 import { computeSlaClock, type SlaClock } from './sla-clock';
 
@@ -44,6 +45,7 @@ export class DataRightsRequestService {
     private readonly repo: Repository<DataRightsRequestEntity>,
     private readonly audit: AuditService,
     private readonly settings: PlatformSettingsService,
+    private readonly notificationDispatch: NotificationDispatchService,
   ) {}
 
   private async slaDays(): Promise<number> {
@@ -75,7 +77,17 @@ export class DataRightsRequestService {
       remarks: `${saved.requestType} request`,
       metadata: { subjectType: saved.subjectType },
     });
-    return this.toView(saved, await this.slaDays());
+
+    const slaDays = await this.slaDays();
+    this.notificationDispatch.emitSafe({
+      type: 'DATA_RIGHTS_REQUEST_RECEIVED',
+      entityType: 'DATA_RIGHTS_REQUEST',
+      entityId: saved.id,
+      actorUserId: actorId,
+      payload: { requestType: saved.requestType, subjectRef: saved.subjectRef ?? undefined, slaDays },
+    });
+
+    return this.toView(saved, slaDays);
   }
 
   async list(): Promise<RightsRequestView[]> {

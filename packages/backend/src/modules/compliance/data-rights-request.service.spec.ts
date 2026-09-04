@@ -5,6 +5,7 @@ describe('DataRightsRequestService', () => {
   let repo: any;
   let audit: any;
   let settings: any;
+  let notificationDispatch: any;
   let service: DataRightsRequestService;
 
   beforeEach(() => {
@@ -17,10 +18,11 @@ describe('DataRightsRequestService', () => {
     };
     audit = { recordEventSafe: jest.fn().mockResolvedValue(undefined) };
     settings = { get: jest.fn().mockResolvedValue(null) }; // → default 30-day SLA
-    service = new DataRightsRequestService(repo, audit, settings);
+    notificationDispatch = { emitSafe: jest.fn() };
+    service = new DataRightsRequestService(repo, audit, settings, notificationDispatch);
   });
 
-  it('logs a rights request with the default 30-day SLA and audits it', async () => {
+  it('logs a rights request with the default 30-day SLA, audits it, and notifies', async () => {
     const view = await service.create({ requestType: 'ERASURE', subjectRef: 'ASY-0001' }, 'admin-1');
     expect(view.status).toBe('RECEIVED');
     // Received now → due ~30 days out, not overdue.
@@ -28,6 +30,15 @@ describe('DataRightsRequestService', () => {
     expect(view.sla.daysRemaining).toBeGreaterThan(29);
     expect(audit.recordEventSafe).toHaveBeenCalledWith(
       expect.objectContaining({ eventType: 'DATA_RIGHTS_REQUEST_RECEIVED', entityType: 'DATA_RIGHTS_REQUEST' }),
+    );
+    // A logged request must reach somebody, not just the audit trail — see notification-catalog.ts.
+    expect(notificationDispatch.emitSafe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'DATA_RIGHTS_REQUEST_RECEIVED',
+        entityId: view.id,
+        actorUserId: 'admin-1',
+        payload: expect.objectContaining({ requestType: 'ERASURE', subjectRef: 'ASY-0001', slaDays: 30 }),
+      }),
     );
   });
 

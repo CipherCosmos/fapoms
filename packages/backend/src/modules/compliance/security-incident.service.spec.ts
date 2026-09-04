@@ -4,6 +4,7 @@ import { SecurityIncidentService } from './security-incident.service';
 describe('SecurityIncidentService', () => {
   let repo: any;
   let audit: any;
+  let notificationDispatch: any;
   let service: SecurityIncidentService;
 
   beforeEach(() => {
@@ -15,10 +16,11 @@ describe('SecurityIncidentService', () => {
       find: jest.fn(async () => [...store.values()]),
     };
     audit = { recordEventSafe: jest.fn().mockResolvedValue(undefined) };
-    service = new SecurityIncidentService(repo, audit);
+    notificationDispatch = { emitSafe: jest.fn() };
+    service = new SecurityIncidentService(repo, audit, notificationDispatch);
   });
 
-  it('raises an incident, audits it, and returns it with live clocks', async () => {
+  it('raises an incident, audits it, notifies, and returns it with live clocks', async () => {
     const view = await service.create(
       { title: 'Suspicious admin login', category: 'UNAUTHORISED_ACCESS', severity: 'HIGH', personalDataInvolved: true },
       'admin-1',
@@ -28,6 +30,15 @@ describe('SecurityIncidentService', () => {
     expect(view.clocks.dpdpPrincipals.applicable).toBe(true); // personal data → DPDP clock on
     expect(audit.recordEventSafe).toHaveBeenCalledWith(
       expect.objectContaining({ eventType: 'SECURITY_INCIDENT_RAISED', entityType: 'SECURITY_INCIDENT' }),
+    );
+    // A raised incident must reach somebody, not just the audit trail — see notification-catalog.ts.
+    expect(notificationDispatch.emitSafe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'SECURITY_INCIDENT_RAISED',
+        entityId: view.id,
+        actorUserId: 'admin-1',
+        payload: expect.objectContaining({ severity: 'HIGH', category: 'UNAUTHORISED_ACCESS' }),
+      }),
     );
   });
 

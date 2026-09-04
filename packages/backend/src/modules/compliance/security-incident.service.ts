@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { EventCategory } from '@fapoms/shared';
 import { AuditService } from '../../core/audit/audit.service';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { SecurityIncidentEntity } from './security-incident.entity';
 import { computeIncidentClocks, type IncidentClocks } from './incident-clocks';
 
@@ -50,6 +51,7 @@ export class SecurityIncidentService {
     @InjectRepository(SecurityIncidentEntity)
     private readonly repo: Repository<SecurityIncidentEntity>,
     private readonly audit: AuditService,
+    private readonly notificationDispatch: NotificationDispatchService,
   ) {}
 
   async create(dto: CreateIncidentDto, actorId: string | null): Promise<IncidentView> {
@@ -79,6 +81,15 @@ export class SecurityIncidentService {
       remarks: `${saved.severity} ${saved.category}: ${saved.title}`,
       metadata: { personalDataInvolved: saved.personalDataInvolved },
     });
+
+    this.notificationDispatch.emitSafe({
+      type: 'SECURITY_INCIDENT_RAISED',
+      entityType: 'SECURITY_INCIDENT',
+      entityId: saved.id,
+      actorUserId: actorId,
+      payload: { severity: saved.severity, category: saved.category, title: saved.title },
+    });
+
     return this.toView(saved);
   }
 

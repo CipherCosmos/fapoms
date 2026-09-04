@@ -12,6 +12,7 @@ import { NotificationsModule } from '../../modules/notifications/notifications.m
 import { ValidationModule } from '../../modules/validation/validation.module';
 import { BillingEngineModule } from '../../modules/billing-engine/billing-engine.module';
 import { FeedbackModule } from '../../modules/feedback/feedback.module';
+import { ComplianceModule } from '../../modules/compliance/compliance.module';
 
 @Module({
   imports: [
@@ -27,6 +28,9 @@ import { FeedbackModule } from '../../modules/feedback/feedback.module';
     // And the money chain: unapproved payouts, attended-but-unclosed audits, and the booking
     // reconcile that used to run only when somebody pressed a button.
     BillingEngineModule,
+    // And the compliance register's statutory clocks and rights-request SLA — see
+    // ComplianceEscalationService.
+    ComplianceModule,
   ],
   providers: [SlaScannerWorker, EmailDigestService],
   exports: [SlaScannerWorker],

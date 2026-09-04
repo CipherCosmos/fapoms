@@ -6,6 +6,7 @@ import { HrWorkforceService } from '../../modules/assayer/hr-workforce.service';
 import { NotificationDispatchService } from '../../modules/notifications/notification-dispatch.service';
 import { DeskEscalationService } from '../../modules/validation/desk-escalation.service';
 import { FeedbackEscalationService } from '../../modules/feedback/feedback-escalation.service';
+import { ComplianceEscalationService } from '../../modules/compliance/compliance-escalation.service';
 import { LocationTrailService } from '../../modules/assayer/location-trail.service';
 import { DataIntegrityService } from '../../modules/assayer/data-integrity.service';
 import { EmailDigestService } from './email-digest.service';
@@ -39,6 +40,7 @@ export class SlaScannerWorker {
     private readonly notificationDispatch: NotificationDispatchService,
     private readonly deskEscalation: DeskEscalationService,
     private readonly feedbackEscalation: FeedbackEscalationService,
+    private readonly complianceEscalation: ComplianceEscalationService,
     private readonly locationTrail: LocationTrailService,
     private readonly dataIntegrity: DataIntegrityService,
     private readonly emailDigest: EmailDigestService,
@@ -71,7 +73,9 @@ export class SlaScannerWorker {
   @Process('scan')
   async runScan(_job: Job) {
     const failures: Array<{ phase: string; error: unknown }> = [];
+    let totalPhases = 0;
     const runPhase = async (phase: string, fn: () => Promise<unknown>) => {
+      totalPhases++;
       try {
         await fn();
       } catch (error) {
@@ -148,6 +152,10 @@ export class SlaScannerWorker {
     // The feedback desk's response-time SLAs: items awaiting a first reply, or open
     // past their severity-scaled resolution clock.
     await runPhase('feedback escalation scan', () => this.feedbackEscalation.scan());
+
+    // The compliance register's statutory clocks (CERT-In 6h, DPDP Board 72h) and the DPDP
+    // rights-request response SLA — see ComplianceEscalationService.
+    await runPhase('compliance escalation scan', () => this.complianceEscalation.scan());
 
     /**
      * The money chain's watchdog — the half of the lifecycle nothing was watching.
@@ -263,7 +271,7 @@ export class SlaScannerWorker {
       // phase was attempted. AggregateError keeps each underlying cause for the logs.
       throw new AggregateError(
         failures.map((f) => f.error),
-        `SLA scanner: ${failures.length} of 10 phases failed (${failures.map((f) => f.phase).join(', ')}).`,
+        `SLA scanner: ${failures.length} of ${totalPhases} phases failed (${failures.map((f) => f.phase).join(', ')}).`,
       );
     }
   }

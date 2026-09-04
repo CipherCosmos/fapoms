@@ -5,6 +5,7 @@ import { HrWorkforceService } from '../../modules/assayer/hr-workforce.service';
 import { NotificationDispatchService } from '../../modules/notifications/notification-dispatch.service';
 import { DeskEscalationService } from '../../modules/validation/desk-escalation.service';
 import { FeedbackEscalationService } from '../../modules/feedback/feedback-escalation.service';
+import { ComplianceEscalationService } from '../../modules/compliance/compliance-escalation.service';
 import { LocationTrailService } from '../../modules/assayer/location-trail.service';
 import { DataIntegrityService } from '../../modules/assayer/data-integrity.service';
 import { EmailDigestService } from './email-digest.service';
@@ -32,6 +33,7 @@ describe('SlaScannerWorker phase isolation', () => {
   const notificationDispatch = { emitSafe: jest.fn() };
   const deskEscalation = { scan: jest.fn().mockResolvedValue(0) };
   const feedbackEscalation = { scan: jest.fn().mockResolvedValue(0) };
+  const complianceEscalation = { scan: jest.fn().mockResolvedValue(0) };
   // Retention is a no-op unless LOCATION_TRAIL_RETENTION_DAYS is configured.
   const locationTrail = { purgeOlderThanRetention: jest.fn().mockResolvedValue({ configured: false, deleted: 0 }) };
   // The roster data-integrity scan. Quiet by default: nothing found, nothing written.
@@ -51,6 +53,7 @@ describe('SlaScannerWorker phase isolation', () => {
         { provide: NotificationDispatchService, useValue: notificationDispatch },
         { provide: DeskEscalationService, useValue: deskEscalation },
         { provide: FeedbackEscalationService, useValue: feedbackEscalation },
+        { provide: ComplianceEscalationService, useValue: complianceEscalation },
         { provide: LocationTrailService, useValue: locationTrail },
         { provide: DataIntegrityService, useValue: dataIntegrity },
         { provide: EmailDigestService, useValue: { run: jest.fn() } },
@@ -96,6 +99,7 @@ describe('SlaScannerWorker phase isolation', () => {
     expect(hrWorkforceService.credentialsExpiringWithin).toHaveBeenCalledTimes(1);
     expect(deskEscalation.scan).toHaveBeenCalledTimes(1);
     expect(feedbackEscalation.scan).toHaveBeenCalledTimes(1);
+    expect(complianceEscalation.scan).toHaveBeenCalledTimes(1);
     expect(locationTrail.purgeOlderThanRetention).toHaveBeenCalledTimes(1);
     expect(dataIntegrity.scan).toHaveBeenCalledTimes(1);
   });
@@ -110,6 +114,7 @@ describe('SlaScannerWorker phase isolation', () => {
     expect(hrWorkforceService.credentialsExpiringWithin).toHaveBeenCalledTimes(1);
     expect(deskEscalation.scan).toHaveBeenCalledTimes(1);
     expect(feedbackEscalation.scan).toHaveBeenCalledTimes(1);
+    expect(complianceEscalation.scan).toHaveBeenCalledTimes(1);
     expect(locationTrail.purgeOlderThanRetention).toHaveBeenCalledTimes(1);
     expect(dataIntegrity.scan).toHaveBeenCalledTimes(1);
   });

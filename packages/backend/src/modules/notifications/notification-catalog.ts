@@ -104,6 +104,8 @@ export interface NotificationTypeDef {
 const OPS = ['OPERATIONS'];
 const ADMINS = ['ADMIN'];
 const VALIDATION = ['DESK', 'DESK_OPERATOR'];
+/** Whoever can read the compliance register — ComplianceController's own @Roles on every GET. */
+const COMPLIANCE = ['ADMIN', 'AUDITOR'];
 const BOTH_CHANNELS = [NotificationChannel.IN_APP, NotificationChannel.PUSH];
 const IN_APP = [NotificationChannel.IN_APP];
 /**
@@ -850,6 +852,61 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     link: '/users',
     // The lock event itself is the news; the actor is the attacker, not a colleague.
     skipActor: false,
+  },
+
+  // ── Compliance (security incidents & DPDP rights requests) ────────────────
+  // SecurityIncidentService and DataRightsRequestService used to notify nobody: raising a
+  // CRITICAL data breach or logging a rights request left only an audit-log row and whatever a
+  // person happened to see by opening /admin/compliance on their own initiative. The register's
+  // own doc-comment (security-incident.entity.ts) says the point is to make the CERT-In 6-hour
+  // and DPDP 72-hour clocks "impossible to miss... answerable at a glance rather than
+  // reconstructed from memory during an actual incident" — a register nobody is told to look at
+  // does not deliver that. Every type below reaches ADMIN (who act on this register) and AUDITOR
+  // (who can already read it — see ComplianceController's own @Roles).
+  SECURITY_INCIDENT_RAISED: {
+    category: NotificationCategory.SYSTEM,
+    priority: NotificationPriority.CRITICAL,
+    roles: COMPLIANCE,
+    channels: ALL_CHANNELS,
+    title: 'Security incident raised',
+    body: '${severity} ${category} incident raised: "${title}". The CERT-In 6-hour reporting clock is running.',
+    link: '/admin/compliance',
+    skipActor: true,
+  },
+  /**
+   * A statutory clock — CERT-In's 6 hours, or DPDP's 72-hour Board report — ran out with the
+   * milestone still unset. Raised by the same 15-minute scanner that already chases every other
+   * SLA in this system (ComplianceEscalationService.scan()); one reminder per clock per incident
+   * per day, the same shape as ASSIGNMENT_SLA_BREACHED and the FEEDBACK_SLA_* pair.
+   */
+  SECURITY_INCIDENT_CLOCK_BREACHED: {
+    category: NotificationCategory.SYSTEM,
+    priority: NotificationPriority.CRITICAL,
+    roles: COMPLIANCE,
+    channels: ALL_CHANNELS,
+    title: 'Statutory reporting deadline missed',
+    body: '"${title}" has missed its ${clockName} deadline and still has not been reported.',
+    link: '/admin/compliance',
+  },
+  DATA_RIGHTS_REQUEST_RECEIVED: {
+    category: NotificationCategory.SYSTEM,
+    priority: NotificationPriority.NORMAL,
+    roles: COMPLIANCE,
+    channels: IN_APP,
+    title: 'New data rights request',
+    body: '${requestType} request received for ${subjectRef}. SLA: ${slaDays} day(s) to respond.',
+    link: '/admin/compliance',
+    skipActor: true,
+  },
+  /** The rights-request mirror of FEEDBACK_SLA_RESOLUTION_BREACH — same scanner, same day-bucketed dedupe. */
+  DATA_RIGHTS_REQUEST_SLA_BREACH: {
+    category: NotificationCategory.SYSTEM,
+    priority: NotificationPriority.HIGH,
+    roles: COMPLIANCE,
+    channels: IN_APP_AND_EMAIL,
+    title: 'Data rights request past its SLA',
+    body: '${requestType} request has been open ${days} day(s), past its response SLA.',
+    link: '/admin/compliance',
   },
 };
 
