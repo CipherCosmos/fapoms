@@ -17,6 +17,7 @@ import {
   OnModuleInit,
   UnauthorizedException,
   ForbiddenException,
+  BadRequestException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -187,6 +188,21 @@ export interface MfaChallengeResult {
 
 /** Login either signs the user in (tokens + user) or demands a second factor first. */
 export type LoginResult = (TokenPair & { user: any }) | MfaChallengeResult;
+
+/**
+ * Constant-time check of an entered delivered code against the SHA-256 hex hash stashed on the
+ * challenge. Must match `MfaService.hashCode` (sha256 of the trimmed code); the code itself is
+ * never stored, so this is the only thing to compare against.
+ */
+function deliveredCodeMatches(expectedHashHex: string, code: string): boolean {
+  const got = crypto.createHash('sha256').update((code || '').trim()).digest('hex');
+  if (!expectedHashHex || got.length !== expectedHashHex.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(got, 'hex'), Buffer.from(expectedHashHex, 'hex'));
+  } catch {
+    return false;
+  }
+}
 
 @Injectable()
 export class AuthService implements OnModuleInit {
@@ -928,12 +944,45 @@ export class AuthService implements OnModuleInit {
     userAgent?: string,
   ): Promise<MfaChallengeResult> {
     const challengeId = crypto.randomUUID();
+    const factors = await this.mfaService.factorsFor(userId);
     await this.cache.setJson(
       `mfa:challenge:${challengeId}`,
-      { userId, principalType, ip: ipAddress ?? null, ua: userAgent ?? null, attempts: 0 },
+      { userId, principalType, ip: ipAddress ?? null, ua: userAgent ?? null, attempts: 0, sends: 0, factors },
       300,
     );
-    return { mfaRequired: true, challengeId, factors: ['TOTP'] };
+    // The factors the account can satisfy. A TOTP or recovery code is entered straight into
+    // /auth/mfa/verify; a delivered factor (EMAIL/SMS) needs /auth/mfa/send first to receive a code.
+    return { mfaRequired: true, challengeId, factors };
+  }
+
+  /**
+   * Send a login code for a DELIVERED factor (email or SMS) against an existing challenge. Kept off
+   * the password step so a code is only ever sent when the user actually asks for one. Anti-abuse:
+   * at most 3 sends per challenge and a 30-second cooldown between them; the code itself is bounded
+   * by its own 5-minute expiry and the challenge's 5-attempt verify cap. The code's hash — never
+   * the code — is stashed on the challenge for verifyMfaChallenge to check.
+   */
+  async sendMfaChallengeCode(challengeId: string, factor: 'EMAIL' | 'SMS'): Promise<{ sent: true; to: string }> {
+    const key = `mfa:challenge:${challengeId}`;
+    const chal = await this.cache.getJson<any>(key);
+    if (!chal) throw withCode(new UnauthorizedException('This sign-in step has expired. Please sign in again.'), AUTH_ERROR_CODES.INVALID_CREDENTIALS);
+    if (!Array.isArray(chal.factors) || !chal.factors.includes(factor)) {
+      throw new BadRequestException('That verification method is not available for this account.');
+    }
+    const sends = (chal.sends ?? 0);
+    if (sends >= 3) throw new BadRequestException('Too many codes requested. Please sign in again.');
+    if (chal.lastSentAt && Date.now() - chal.lastSentAt < 30_000) {
+      throw new BadRequestException('A code was just sent. Please wait a few seconds before requesting another.');
+    }
+
+    const { codeHash, expiresAt, sentTo } = await this.mfaService.sendLoginCode(chal.userId, factor);
+    // Preserve the remaining TTL as best we can (challenges live 5 min); re-set at the full window
+    // is acceptable because the code's own expiresAt is the real bound on the delivered code.
+    await this.cache.setJson(key, {
+      ...chal, sends: sends + 1, lastSentAt: Date.now(),
+      deliveredFactor: factor, deliveredHash: codeHash, deliveredExpiresAt: expiresAt,
+    }, 300);
+    return { sent: true, to: sentTo };
   }
 
   /**
@@ -950,7 +999,10 @@ export class AuthService implements OnModuleInit {
     userAgent?: string,
   ): Promise<TokenPair & { user: any }> {
     const key = `mfa:challenge:${challengeId}`;
-    const chal = await this.cache.getJson<{ userId: string; principalType: 'USER' | 'ASSAYER'; attempts: number }>(key);
+    const chal = await this.cache.getJson<{
+      userId: string; principalType: 'USER' | 'ASSAYER'; attempts: number;
+      deliveredHash?: string; deliveredExpiresAt?: number;
+    }>(key);
     if (!chal) {
       throw withCode(new UnauthorizedException('This sign-in step has expired. Please sign in again.'), AUTH_ERROR_CODES.INVALID_CREDENTIALS);
     }
@@ -960,7 +1012,13 @@ export class AuthService implements OnModuleInit {
       throw withCode(new UnauthorizedException('Too many attempts. Please sign in again.'), AUTH_ERROR_CODES.INVALID_CREDENTIALS);
     }
 
-    const ok = await this.mfaService.verify(chal.userId, code);
+    // TOTP or a recovery code goes through MfaService (with its own lockout). If that does not
+    // match, and a delivered email/SMS code was sent for this challenge and has not expired, check
+    // the entered code against that code's hash in constant time. Either path is a valid factor.
+    let ok = await this.mfaService.verify(chal.userId, code);
+    if (!ok && chal.deliveredHash && chal.deliveredExpiresAt && Date.now() < chal.deliveredExpiresAt) {
+      ok = deliveredCodeMatches(chal.deliveredHash, code);
+    }
     if (!ok) {
       // Record the attempt on the challenge (do NOT reset it — that would defeat the cap); the code
       // was wrong, so no session is issued and the challenge is NOT consumed until it succeeds or expires.

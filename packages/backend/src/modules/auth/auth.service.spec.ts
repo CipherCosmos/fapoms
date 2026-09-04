@@ -4,6 +4,7 @@ import { UnauthorizedException, ForbiddenException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
 import { AuthService, rbacPrincipalCacheKey } from './auth.service';
 import { SessionService } from './session.service';
 import { MfaService } from './mfa.service';
@@ -82,8 +83,10 @@ describe('AuthService', () => {
   // the MFA-specific tests flip isChallengeRequired on.
   const mockMfaService = {
     isChallengeRequired: jest.fn().mockResolvedValue(false),
+    factorsFor: jest.fn().mockResolvedValue(['TOTP']),
     verify: jest.fn().mockResolvedValue(true),
-    status: jest.fn(), beginEnrol: jest.fn(), confirmEnrol: jest.fn(), disable: jest.fn(), regenerateRecoveryCodes: jest.fn(),
+    sendLoginCode: jest.fn().mockResolvedValue({ codeHash: 'unused', expiresAt: Date.now() + 300_000, sentTo: 'a***@b.com' }),
+    status: jest.fn(), beginEnrol: jest.fn(), confirmEnrol: jest.fn(), beginDeliveredEnrol: jest.fn(), disable: jest.fn(), regenerateRecoveryCodes: jest.fn(),
   };
 
   // The durable session store. Login mints one; refresh touches it; logout/reuse revoke all.
@@ -963,6 +966,50 @@ describe('AuthService', () => {
       expect(tokens.accessToken).toBe('signed.jwt.token');
       expect(tokens.user.username).toBe('AS-01');
       expect(mockAssayerRepo.findOne).toHaveBeenCalledWith({ where: { id: 'asr-1' } });
+    });
+
+    it('sendMfaChallengeCode stashes the delivered code hash on the challenge (cap + cooldown enforced)', async () => {
+      store.set('mfa:challenge:c5', { userId: 'u-1', principalType: 'USER', attempts: 0, sends: 0, factors: ['EMAIL'] });
+      const hash = crypto.createHash('sha256').update('654321').digest('hex');
+      mockMfaService.sendLoginCode.mockResolvedValue({ codeHash: hash, expiresAt: Date.now() + 300_000, sentTo: 'a***@b.com' });
+
+      const res: any = await service.sendMfaChallengeCode('c5', 'EMAIL');
+
+      expect(res).toEqual({ sent: true, to: 'a***@b.com' });
+      const chal = store.get('mfa:challenge:c5');
+      expect(chal.deliveredHash).toBe(hash);
+      expect(chal.sends).toBe(1);
+      // A second immediate send is refused by the 30-second cooldown.
+      await expect(service.sendMfaChallengeCode('c5', 'EMAIL')).rejects.toThrow(/wait/i);
+      // A factor the challenge does not offer is refused.
+      await expect(service.sendMfaChallengeCode('c5', 'SMS')).rejects.toThrow(/not available/i);
+    });
+
+    it('verifyMfaChallenge accepts a delivered code that matches the stored hash (TOTP path having failed)', async () => {
+      const hash = crypto.createHash('sha256').update('654321').digest('hex');
+      store.set('mfa:challenge:c6', {
+        userId: 'u-1', principalType: 'USER', attempts: 0,
+        deliveredFactor: 'EMAIL', deliveredHash: hash, deliveredExpiresAt: Date.now() + 300_000,
+      });
+      mockMfaService.verify.mockResolvedValue(false); // not a TOTP/recovery code
+      mockUserRepo.findOne.mockResolvedValue({ id: 'u-1', username: 'staff1', email: 'staff1@example.com', status: 'ACTIVE', roles: [] });
+
+      const tokens: any = await service.verifyMfaChallenge('c6', '654321');
+
+      expect(tokens.accessToken).toBe('signed.jwt.token');
+      expect(store.has('mfa:challenge:c6')).toBe(false); // consumed
+      // A different code would not have matched the stored hash.
+      store.set('mfa:challenge:c6b', { userId: 'u-1', principalType: 'USER', attempts: 0, deliveredHash: hash, deliveredExpiresAt: Date.now() + 300_000 });
+      await expect(service.verifyMfaChallenge('c6b', '000000')).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('a delivered code that has expired is not accepted', async () => {
+      const hash = crypto.createHash('sha256').update('654321').digest('hex');
+      store.set('mfa:challenge:c7', { userId: 'u-1', principalType: 'USER', attempts: 0, deliveredHash: hash, deliveredExpiresAt: Date.now() - 1 });
+      mockMfaService.verify.mockResolvedValue(false);
+
+      await expect(service.verifyMfaChallenge('c7', '654321')).rejects.toThrow(UnauthorizedException);
+      expect(mockSessionService.create).not.toHaveBeenCalled();
     });
   });
 });

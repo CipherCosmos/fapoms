@@ -15,7 +15,7 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { IsString, IsNotEmpty } from 'class-validator';
+import { IsString, IsNotEmpty, IsIn } from 'class-validator';
 import { AuthService } from './auth.service';
 import { JwtAuthGuard, PasswordChangeExempt, OnboardingAllowed } from './guards';
 import { Throttle } from '@nestjs/throttler';
@@ -38,6 +38,16 @@ class MfaVerifyDto {
   @IsString()
   @IsNotEmpty()
   code: string;
+}
+
+class MfaSendDto {
+  @IsString()
+  @IsNotEmpty()
+  challengeId: string;
+
+  // Which delivered factor to send a code over. TOTP/recovery need no send.
+  @IsIn(['EMAIL', 'SMS'])
+  factor: 'EMAIL' | 'SMS';
 }
 
 class VerifyAssayerDto {
@@ -198,6 +208,20 @@ export class AuthController {
         },
       },
     };
+  }
+
+  /**
+   * Send a login code for a delivered second factor (email or SMS) against an open challenge. Only
+   * needed for EMAIL/SMS — a TOTP or recovery code is entered straight into /auth/mfa/verify. The
+   * service enforces a per-challenge send cap and cooldown; the response says (masked) where it went.
+   */
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('mfa/send')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Send a login code over email or SMS for an open MFA challenge' })
+  async sendMfaCode(@Body() dto: MfaSendDto) {
+    const result = await this.authService.sendMfaChallengeCode(dto.challengeId, dto.factor);
+    return { success: true, data: result };
   }
 
   // Same reasoning as login: it exchanges a stored secret for a session.
