@@ -4,6 +4,7 @@ import { UsersRound, ShieldCheck, Activity as ActivityIcon } from 'lucide-react'
 import { DirectoryPanel } from './users/DirectoryPanel';
 import { RolesPermissionsPanel } from './users/RolesPermissionsPanel';
 import { ActivityFeed } from './users/ActivityFeed';
+import { PageHeader } from '../components/ui';
 
 /**
  * User administration, as three views of the same IAM model rather than a
@@ -28,12 +29,11 @@ export const Users: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', padding: '16px' }}>
-      <div>
-        <h3 style={{ fontSize: '20px', fontWeight: 700, margin: 0 }}>User Administration</h3>
-        <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginTop: '4px' }}>
-          Staff accounts, roles, and access — not the assayer workforce, which lives under Workforce.
-        </p>
-      </div>
+      <PageHeader
+        icon={<UsersRound size={20} />}
+        title="User Administration"
+        subtitle="Staff accounts, roles, and access — not the assayer workforce, which lives under Workforce."
+      />
 
       <nav style={{ display: 'flex', gap: '2px', borderBottom: '1px solid var(--border-color)' }}>
         {TABS.map((t) => {

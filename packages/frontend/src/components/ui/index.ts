@@ -18,3 +18,4 @@ export { useConfirm } from './ConfirmDialog';
 export type { ConfirmOptions, ConfirmTone } from './ConfirmDialog';
 export { ChipMultiSelect } from './ChipMultiSelect';
 export type { ChipOption, ChipMultiSelectProps } from './ChipMultiSelect';
+export { PageHeader } from './PageHeader';

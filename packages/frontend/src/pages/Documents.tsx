@@ -5,8 +5,8 @@ import { BranchDocumentPanel } from './documents/BranchDocumentPanel';
 import { DocumentModelLegend } from './documents/DocumentModelLegend';
 import { DailyRunPanel } from './documents/DailyRunPanel';
 import { CustomerMasterVersions } from './CustomerMasterVersions';
-import { RefreshCw } from 'lucide-react';
-import { AlertBanner, Select, useConfirm } from '../components/ui';
+import { RefreshCw, FileText } from 'lucide-react';
+import { AlertBanner, Select, useConfirm, PageHeader } from '../components/ui';
 import { connectSocket, getSocket } from '../services/socket';
 import { fetchWithTimeout } from '../services/http';
 import { api } from '../services/api';
@@ -409,25 +409,16 @@ export const Documents: React.FC = () => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       {confirmDialog}
-      {/* Header */}
-      <div style={{ background: 'linear-gradient(90deg, var(--status-pending-bg) 0%, var(--status-completed-bg) 100%)', border: '1px solid var(--status-pending-bg)', padding: '14px 20px', borderRadius: 'var(--radius-md)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minWidth: 0 }}>
-          <span style={{ backgroundColor: 'var(--accent)', color: 'var(--on-accent)', fontSize: '11px', fontWeight: 800, padding: '4px 8px', borderRadius: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-            Document Management
-          </span>
-          <div>
-            <h3 style={{ fontSize: '16px', fontWeight: 700, color: 'var(--text-primary)', margin: 0 }}>
-              Branch Paperwork Tracking
-            </h3>
-            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-              Every branch's files in one place — upload, dispatch, receive and process without switching screens
-            </span>
-          </div>
-        </div>
-        <button onClick={loadOverview} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <RefreshCw size={16} /> Refresh
-        </button>
-      </div>
+      <PageHeader
+        icon={<FileText size={20} />}
+        title="Branch Paperwork"
+        subtitle="Every branch's files in one place — upload, dispatch, receive and process without switching screens."
+        actions={
+          <button onClick={loadOverview} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <RefreshCw size={16} /> Refresh
+          </button>
+        }
+      />
 
       {error && <AlertBanner type="error" message={error} onClose={() => setError(null)} />}
       {successMsg && <AlertBanner type="success" message={successMsg} onClose={() => setSuccessMsg(null)} />}

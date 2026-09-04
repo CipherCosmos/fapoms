@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Building2, Plus, ExternalLink, ArrowLeftRight, RefreshCw, Pencil, Trash2 } from 'lucide-react';
-import { SearchInput, FilterSelect, DataTable, Pagination, DetailDrawer, StatusBadge, Modal, Select } from '../components/ui';
+import { SearchInput, FilterSelect, DataTable, Pagination, DetailDrawer, StatusBadge, Modal, Select, PageHeader } from '../components/ui';
 import { useClientsList } from '../hooks/useClients';
 import type { Column } from '../components/ui';
 import type { Client } from '@fapoms/shared';
@@ -292,14 +292,11 @@ const Clients: React.FC = () => {
 
   return (
     <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-        <div style={{ minWidth: 0 }}>
-          <h2 style={{ margin: 0, fontSize: 20, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 8 }}>
-            <Building2 size={20} /> Clients
-          </h2>
-          <p style={{ margin: '2px 0 0', fontSize: 13, color: 'var(--text-muted)' }}>Client records, contacts, contracts and billing — and whether each one is still active.</p>
-        </div>
-        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+      <PageHeader
+        icon={<Building2 size={20} />}
+        title="Clients"
+        subtitle="Client records, contacts, contracts and billing — and whether each one is still active."
+        actions={<>
           <button onClick={() => refetch()} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}>
             <RefreshCw size={15} className={isFetching ? 'spin' : ''} /> Refresh
           </button>
@@ -308,8 +305,8 @@ const Clients: React.FC = () => {
               <Plus size={15} /> Add Client
             </button>
           )}
-        </div>
-      </div>
+        </>}
+      />
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         <div style={{ width: 260, maxWidth: '100%', flex: '1 1 200px' }}><SearchInput value={search} onChange={setSearch} placeholder="Search clients..." /></div>
