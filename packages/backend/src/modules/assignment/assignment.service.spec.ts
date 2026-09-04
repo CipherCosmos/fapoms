@@ -12,7 +12,7 @@ import { NotificationDispatchService } from '../notifications/notification-dispa
 import { PushNotificationService } from '../notifications/push-notification.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
-import { AssignmentStatus, ProjectBranchStatus, EventCategory, Priority, businessTodayDateKey } from '@fapoms/shared';
+import { AssignmentStatus, ProjectBranchStatus, EventCategory, Priority, businessTodayDateKey, BypassableRule } from '@fapoms/shared';
 import { ProjectService } from '../project/project.service';
 import { ProjectQueryService } from '../project/project-query.service';
 import { AssayerService } from '../assayer/assayer.service';
@@ -168,6 +168,10 @@ const mockNotificationService = {
     getRepository: jest.fn((target: any) =>
       target === 'schedules' || target === ScheduleEntity ? mockScheduleRepoViaDataSource : mockUserRepoViaDataSource,
     ),
+    // Only the CLIENT_ELIGIBILITY bypass-attribution test below sets a project branch with a
+    // real clientId, which is what makes create() reach this raw empanelment lookup at all —
+    // every other test's `project: {}` skips the whole eligibility block, `query` unused.
+    query: jest.fn().mockResolvedValue([]),
   };
 
   // The real UnitOfWork releases emitted events through the publisher after commit; this
@@ -226,6 +230,15 @@ const mockNotificationService = {
     ),
   };
 
+  // Named (not an inline literal) so an individual test can override one method — see the
+  // CLIENT_ELIGIBILITY bypass-attribution test below — without touching every other test's
+  // "nothing suspended" baseline, which `beforeEach` restores here on every run.
+  const mockRuleBypass = {
+    isBypassedSync: jest.fn().mockReturnValue(false),
+    isBypassed: jest.fn().mockResolvedValue(false),
+    noteBypass: jest.fn(),
+  };
+
   const mockConstraintEvaluator = {
     checkDoubleBooking: jest.fn().mockResolvedValue({ passed: true }),
     checkLeaves: jest.fn().mockReturnValue({ passed: true }),
@@ -241,10 +254,11 @@ const mockNotificationService = {
       providers: [
         {
           // Rules are enforced unless an administrator suspends them — see
-          // modules/platform/rule-bypass. Nothing is suspended here, which is the state these
-          // tests are actually about.
+          // modules/platform/rule-bypass. Nothing is suspended here by default, which is the
+          // state most of these tests are actually about; the bypass-attribution test below
+          // overrides `isBypassedSync` for its own run only.
           provide: RuleBypassService,
-          useValue: { isBypassedSync: () => false, isBypassed: async () => false, noteBypass: () => undefined },
+          useValue: mockRuleBypass,
         },
         {
           // Nothing configured in tests, so every lookup falls through to the caller's fallback
@@ -379,6 +393,48 @@ const mockNotificationService = {
       const result = await service.create(validDto, 'user-1');
       expect(result.status).toBe(AssignmentStatus.PENDING);
       expect(mockAuditService.recordEvent).toHaveBeenCalled();
+    });
+
+    /**
+     * Found live 2026-09-04: an active CLIENT_ELIGIBILITY bypass let a non-empanelled assayer be
+     * assigned with no override reason at all, but the only trace was an anonymous, window-level
+     * audit row naming the assayer — nothing on the assignment's own history. This proves the fix:
+     * `noteBypass` is called with `entityType: 'ASSIGNMENT'` and THIS assignment's own id, once it
+     * exists, matching the sibling `CHECK_IN_SCHEDULED_DAY`/`CHECK_IN_GEOFENCE` calls elsewhere in
+     * this same file.
+     */
+    it('attributes a CLIENT_ELIGIBILITY bypass to the specific assignment it let through, not an anonymous window row', async () => {
+      mockProjectBranchRepo.findOne.mockResolvedValue({
+        id: 'pb-1', projectId: 'p-1', branch: { name: 'Test Branch', state: 'MH' },
+        project: { clientId: 'client-1', client: { clientCode: 'CL1', restrictedAssayers: [] } },
+      });
+      mockAssayerRepo.findOne.mockResolvedValue({
+        id: 'as-1', displayName: 'Test Assayer', skills: [], certifications: [],
+      });
+      mockAssignmentRepo.findOne.mockResolvedValue(null);
+      const created = { id: 'asn-bypass-1', assignmentNumber: 'ASN-2026-1', status: AssignmentStatus.PENDING };
+      mockAssignmentRepo.create.mockReturnValue(created);
+      mockAssignmentRepo.save.mockResolvedValue(created);
+      // No empanelment row at all for (assayer, client) — the "not empanelled" branch (the
+      // shared default already resolves to [], set explicitly here for this test's own clarity).
+      mockDataSource.query.mockResolvedValueOnce([]);
+      // Once only: this test's sole call to isBypassedSync, reverting to the shared
+      // "nothing suspended" default for every other test in this file afterward.
+      mockRuleBypass.isBypassedSync.mockReturnValueOnce(true);
+
+      // No overrideReason on the dto — the bypass must be sufficient on its own.
+      const result = await service.create(validDto, 'user-1');
+
+      expect(result.id).toBe('asn-bypass-1');
+      expect(mockRuleBypass.noteBypass).toHaveBeenCalledWith(
+        BypassableRule.CLIENT_ELIGIBILITY,
+        expect.objectContaining({
+          entityType: 'ASSIGNMENT',
+          entityId: 'asn-bypass-1',
+          userId: 'user-1',
+          detail: expect.stringContaining('Test Assayer'),
+        }),
+      );
     });
   });
 

@@ -456,6 +456,13 @@ export class AssignmentService {
      * eligible even though they query it separately.
      */
     let eligibilityOverride: { barredReason: string; overrideReason: string } | null = null;
+    /**
+     * Set when an active `CLIENT_ELIGIBILITY` bypass window let this specific assignment through
+     * with no override reason at all. Noted to `ruleBypass` once `savedAssignment.id` exists
+     * (below, alongside `eligibilityOverride`'s own deferred write) rather than immediately here —
+     * see that call site's comment for why this one call site needed to move.
+     */
+    let eligibilityBypassReason: string | null = null;
     const clientId = projectBranch.project?.clientId;
     if (clientId) {
       const restrictedAssayers = projectBranch.project?.client?.restrictedAssayers || [];
@@ -484,9 +491,14 @@ export class AssignmentService {
       if (eligibilityReason) {
         const bypassed = this.ruleBypass.isBypassedSync(BypassableRule.CLIENT_ELIGIBILITY);
         if (bypassed) {
-          this.ruleBypass.noteBypass(BypassableRule.CLIENT_ELIGIBILITY, {
-            entityType: 'ASSAYER', entityId: assayer.id, detail: eligibilityReason,
-          });
+          // Not noted here: at this point there is no `savedAssignment.id` yet to attribute it
+          // to, and this is a decision about ONE specific assignment for ONE specific assayer —
+          // the same "a record, not a sweep" shape `eligibilityOverride` below is deferred for,
+          // not the candidate-sifting case `noteBypass`'s aggregate bucket exists for. Found live
+          // 2026-09-04: the aggregate write this replaced left no trace on the assignment's own
+          // audit trail at all — only a window-level row naming the assayer, indistinguishable
+          // from any other assayer the same bypass window touched in the same few seconds.
+          eligibilityBypassReason = eligibilityReason;
         } else if (!dto.overrideReason?.trim()) {
           throw new BadRequestException(
             `${eligibilityReason} Assigning anyway needs a stated reason — record one, or choose an eligible candidate.`,
@@ -761,6 +773,17 @@ export class AssignmentService {
           userId,
           remarks: `${eligibilityOverride.barredReason} Overridden: ${eligibilityOverride.overrideReason}`,
         }, { manager });
+      }
+      if (eligibilityBypassReason) {
+        // Same question as `eligibilityOverride` just above ("who placed a non-empanelled
+        // assayer on this client, and why"), answered the same way — attributed to this record,
+        // immediately — rather than the anonymous, window-aggregated bucket `noteBypass` uses
+        // for candidate-sifting reads. `userId` is the caller creating this one assignment right
+        // now, exactly as the check-in-path calls to `noteBypass` further down this file already
+        // do for the identical reason.
+        this.ruleBypass.noteBypass(BypassableRule.CLIENT_ELIGIBILITY, {
+          entityType: 'ASSIGNMENT', entityId: savedAssignment.id, userId, detail: eligibilityBypassReason,
+        });
       }
 
       // Through the outbox rather than a post-commit publish: the event now commits with the
