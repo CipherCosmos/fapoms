@@ -5,7 +5,7 @@ import { INDIAN_STATES } from '@fapoms/shared';
 import { api } from '../services/api';
 import { useClientOptions } from '../hooks/useClients';
 import { userMessage } from '../services/errors';
-import { Modal, AlertBanner, Select, ChipMultiSelect, useConfirm } from '../components/ui';
+import { Modal, AlertBanner, Select, ChipMultiSelect, useConfirm, PageHeader } from '../components/ui';
 import { useCurrentRoles, canManageZones, canDeleteZones } from '../hooks/useCurrentRoles';
 
 interface Zone {
@@ -229,21 +229,16 @@ export const Zones: React.FC = () => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
       {confirmDialog}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
-        <div>
-          <h2 style={{ fontSize: '20px', fontWeight: 700, margin: 0, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Map style={{ color: 'var(--accent)' }} /> Territorial Zones
-          </h2>
-          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            Groupings of states and districts the coverage planner keeps audits within.
-          </span>
-        </div>
-        {canManage && (
+      <PageHeader
+        icon={<Map size={20} />}
+        title="Territorial Zones"
+        subtitle="Groupings of states and districts the coverage planner keeps audits within."
+        actions={canManage && (
           <button onClick={handleOpenCreate} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 14px' }}>
             <Plus size={14} /> Add Zone
           </button>
         )}
-      </div>
+      />
 
       {error && <AlertBanner type="error">{error}</AlertBanner>}
       {success && <AlertBanner type="success">{success}</AlertBanner>}

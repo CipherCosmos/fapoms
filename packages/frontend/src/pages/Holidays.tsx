@@ -5,7 +5,7 @@ import { INDIAN_STATES } from '@fapoms/shared';
 import { api } from '../services/api';
 import { useClientOptions } from '../hooks/useClients';
 import { userMessage } from '../services/errors';
-import { StatusBadge, Modal, AlertBanner, Select, useConfirm } from '../components/ui';
+import { StatusBadge, Modal, AlertBanner, Select, useConfirm, PageHeader } from '../components/ui';
 import type { ConfirmOptions } from '../components/ui';
 import { useCurrentRoles, canManageHolidays } from '../hooks/useCurrentRoles';
 
@@ -204,16 +204,11 @@ export const Holidays: React.FC = () => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
       {confirmDialog}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
-        <div>
-          <h2 style={{ fontSize: '20px', fontWeight: 700, margin: 0, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Calendar style={{ color: 'var(--accent)' }} /> Holiday Calendar
-          </h2>
-          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-            National, bank and state holidays used to keep audits off dates nobody can work.
-          </span>
-        </div>
-        <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+      <PageHeader
+        icon={<Calendar size={20} />}
+        title="Holiday Calendar"
+        subtitle="National, bank and state holidays used to keep audits off dates nobody can work."
+        actions={<div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', border: '1px solid var(--border-color)', borderRadius: '6px', overflow: 'hidden' }}>
             <button onClick={() => setView('calendar')} title="Calendar view"
               style={{ padding: '7px 10px', background: view === 'calendar' ? 'var(--accent-primary)' : 'transparent', border: 'none', color: view === 'calendar' ? 'var(--on-accent)' : 'var(--text-muted)', cursor: 'pointer', display: 'flex' }}>
@@ -244,8 +239,8 @@ export const Holidays: React.FC = () => {
               </button>
             </>
           )}
-        </div>
-      </div>
+        </div>}
+      />
 
       {error && <AlertBanner type="error">{error}</AlertBanner>}
       {success && <AlertBanner type="success">{success}</AlertBanner>}
