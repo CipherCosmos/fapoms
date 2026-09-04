@@ -244,19 +244,30 @@ export const Dashboard: React.FC = () => {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
       <DashboardStyles />
 
-      {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
-        <div>
-          <h3 style={{ fontSize: 22, fontWeight: 800, margin: 0, fontFamily: 'var(--font-display)' }}>Operations</h3>
-          <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '4px 0 0' }}>
-            {data?.focus ?? 'What needs doing, what’s at risk, and where the book stands.'}
-          </p>
+      {/* Hero masthead */}
+      <header className="dash-hero">
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{
+              display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 38, height: 38,
+              borderRadius: 'var(--radius-md)', color: 'var(--accent)',
+              background: 'color-mix(in srgb, var(--accent) 13%, transparent)', flexShrink: 0,
+            }}><ActivityIcon size={20} /></span>
+            <div style={{ minWidth: 0 }}>
+              <h2 style={{ fontSize: 26, fontWeight: 800, margin: 0, fontFamily: 'var(--font-display)', lineHeight: 1.1, letterSpacing: '-0.3px' }}>
+                Operations
+              </h2>
+              <p style={{ color: 'var(--text-secondary)', fontSize: 13, margin: '3px 0 0', lineHeight: 1.45 }}>
+                {data?.focus ?? 'What needs doing, what’s at risk, and where the book stands.'}
+              </p>
+            </div>
+          </div>
         </div>
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
           {updatedAt && (
             <span title="Figures refresh automatically" style={{
               display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 11.5, fontWeight: 600,
-              color: 'var(--text-muted)', padding: '5px 11px', borderRadius: 'var(--radius-full)',
+              color: 'var(--text-muted)', padding: '6px 12px', borderRadius: 'var(--radius-full)',
               background: 'var(--bg-secondary)', border: '1px solid var(--border-hair)',
             }}>
               <span className={isFetching ? 'dash-live-dot dash-live-dot--busy' : 'dash-live-dot'} />
@@ -274,7 +285,7 @@ export const Dashboard: React.FC = () => {
             </button>
           )}
         </div>
-      </div>
+      </header>
 
       {/*
        * `isPending` (no data has EVER settled, fetching or not), not TanStack v5's `isLoading`
@@ -340,20 +351,25 @@ export const Dashboard: React.FC = () => {
                 {data.attention.map((a) => {
                   const c = SEVERITY[a.severity];
                   return (
-                    <button key={a.key} onClick={() => navigate(a.link)} className="dash-attention"
+                    <button key={a.key} onClick={() => navigate(a.link)}
+                      className={`dash-attention${a.severity === 'critical' ? ' dash-attention--critical' : ''}`}
                       style={{
-                        textAlign: 'left', cursor: 'pointer', background: 'var(--bg-secondary)',
-                        border: `1px solid color-mix(in srgb, ${c} 28%, transparent)`, borderLeft: `3px solid ${c}`,
-                        borderRadius: 'var(--radius-md)', padding: '13px 15px', color: 'var(--text-primary)',
+                        textAlign: 'left', cursor: 'pointer',
+                        background: `linear-gradient(135deg, color-mix(in srgb, ${c} 7%, var(--bg-secondary)), var(--bg-secondary) 70%)`,
+                        border: `1px solid color-mix(in srgb, ${c} 30%, transparent)`, borderLeft: `3px solid ${c}`,
+                        borderRadius: 'var(--radius-md)', padding: '14px 16px', color: 'var(--text-primary)',
                       }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 7, color: c, fontSize: 11.5, fontWeight: 700 }}>
-                        <AlertTriangle size={13} />{a.label}
-                        <ArrowRight size={13} style={{ marginLeft: 'auto', opacity: 0.6 }} />
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, color: c, fontSize: 11.5, fontWeight: 700 }}>
+                        <span style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 22, height: 22, borderRadius: 'var(--radius-sm)', background: `color-mix(in srgb, ${c} 15%, transparent)` }}>
+                          <AlertTriangle size={13} />
+                        </span>
+                        {a.label}
+                        <ArrowRight size={13} style={{ marginLeft: 'auto', opacity: 0.55 }} />
                       </div>
-                      <div style={{ fontSize: 23, fontWeight: 800, marginTop: 6, fontFamily: 'var(--font-display)' }}>
+                      <div style={{ fontSize: 26, fontWeight: 800, marginTop: 8, fontFamily: 'var(--font-display)', lineHeight: 1, letterSpacing: '-0.3px' }}>
                         {a.isMoney ? money(a.count) : a.count}
                       </div>
-                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, lineHeight: 1.45 }}>{a.detail}</div>
+                      <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 5, lineHeight: 1.45 }}>{a.detail}</div>
                     </button>
                   );
                 })}
@@ -570,10 +586,10 @@ const KpiTile: React.FC<{ kpi: Kpi }> = ({ kpi }) => {
  * rather than the older label-floating-above-a-card pattern that read as a stack of loose pieces.
  */
 const ChartCard: React.FC<{ title: string; icon?: React.ReactNode; action?: React.ReactNode; center?: boolean; children: React.ReactNode }> = ({ title, icon, action, center, children }) => (
-  <div className="glass-card" style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 14, height: '100%' }}>
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-      {icon && <span style={{ color: 'var(--accent)', display: 'inline-flex' }}>{icon}</span>}
-      <span style={{ fontSize: 12.5, fontWeight: 700, color: 'var(--text-primary)' }}>{title}</span>
+  <div className="glass-card" style={{ padding: 18, display: 'flex', flexDirection: 'column', gap: 15, height: '100%' }}>
+    <div className="dash-card-head">
+      {icon && <span className="dash-card-head__chip">{icon}</span>}
+      <span style={{ fontSize: 13, fontWeight: 700, color: 'var(--text-primary)' }}>{title}</span>
       {action && <span style={{ marginLeft: 'auto' }}>{action}</span>}
     </div>
     <div style={{ display: center ? 'flex' : 'block', justifyContent: 'center', flex: 1 }}>{children}</div>
@@ -595,9 +611,12 @@ const Stat: React.FC<{ icon: React.ReactNode; label: string; value: string; sub?
 );
 
 const SectionLabel: React.FC<{ icon?: React.ReactNode; children: React.ReactNode }> = ({ icon, children }) => (
-  <div style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.9px', color: 'var(--text-muted)', marginBottom: 10 }}>
-    {icon && <span style={{ color: 'var(--accent)', display: 'inline-flex' }}>{icon}</span>}
-    {children}
+  <div className="dash-sec">
+    <span style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.9px', color: 'var(--text-muted)' }}>
+      {icon && <span style={{ color: 'var(--accent)', display: 'inline-flex' }}>{icon}</span>}
+      {children}
+    </span>
+    <span className="dash-sec__rule" />
   </div>
 );
 
@@ -636,9 +655,34 @@ const DashboardSkeleton: React.FC = () => (
  *  code that uses it rather than scattering it into the global stylesheet. */
 const DashboardStyles: React.FC = () => (
   <style>{`
+    /* Hero — the page's masthead: a gradient flame edge, a soft corner glow, the title and actions. */
+    .dash-hero { position: relative; overflow: hidden; padding: 20px 24px; border-radius: var(--radius-lg);
+      background: var(--card-bg); border: 1px solid var(--border-hair);
+      box-shadow: var(--shadow-sm), inset 0 1px 0 var(--glass-edge, rgba(255,255,255,0.4));
+      display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 16px; }
+    .dash-hero::before { content: ''; position: absolute; top: 0; left: 0; bottom: 0; width: 4px; background: var(--gradient-neon); }
+    .dash-hero::after { content: ''; position: absolute; right: -50px; top: -70px; width: 230px; height: 230px; border-radius: 50%;
+      background: radial-gradient(circle, color-mix(in srgb, var(--accent) 13%, transparent), transparent 68%); pointer-events: none; }
+    .dash-hero > * { position: relative; z-index: 1; }
+
+    /* KPI tiles — a tone accent bar on top, a faint tone glow, a lift on hover. */
+    .dash-kpi { position: relative; overflow: hidden; }
+    .dash-kpi::before { content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+      background: linear-gradient(90deg, var(--kpi-tone), color-mix(in srgb, var(--kpi-tone) 25%, transparent)); }
+    .dash-kpi::after { content: ''; position: absolute; right: -28px; bottom: -28px; width: 96px; height: 96px; border-radius: 50%;
+      background: radial-gradient(circle, color-mix(in srgb, var(--kpi-tone) 11%, transparent), transparent 70%); pointer-events: none; }
+
+    /* Card + section chrome. */
+    .dash-card-head { display: flex; align-items: center; gap: 9px; padding-bottom: 12px; margin-bottom: 2px; border-bottom: 1px solid var(--border-hair); }
+    .dash-card-head__chip { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border-radius: var(--radius-sm); color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+    .dash-sec { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+    .dash-sec__rule { flex: 1; height: 1px; background: linear-gradient(90deg, var(--border-hair), transparent); }
+
     .dash-kpi, .dash-attention, .dash-stat, .dash-project { transition: transform .15s ease, border-color .15s ease, box-shadow .15s ease, background-color .15s ease; }
     .dash-kpi:hover { transform: translateY(-2px); border-color: color-mix(in srgb, var(--kpi-tone) 55%, var(--border-hair)); box-shadow: var(--shadow-md); }
     .dash-attention:hover, .dash-stat:hover { transform: translateY(-1px); box-shadow: var(--shadow-md); }
+    .dash-attention--critical { animation: dashEdge 2.2s ease-in-out infinite; }
+    @keyframes dashEdge { 0%,100% { box-shadow: var(--shadow-sm); } 50% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 14%, transparent); } }
     .dash-project:hover { background: var(--bg-secondary); }
     .dash-spin { animation: spin 0.9s linear infinite; }
     .dash-live-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--success); box-shadow: 0 0 0 0 color-mix(in srgb, var(--success) 60%, transparent); }
@@ -646,6 +690,6 @@ const DashboardStyles: React.FC = () => (
     @keyframes dashPulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent); } 70% { box-shadow: 0 0 0 6px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
     .dash-shimmer { background: linear-gradient(90deg, var(--bg-tertiary) 25%, var(--bg-secondary) 37%, var(--bg-tertiary) 63%); background-size: 400% 100%; animation: dashShimmer 1.4s ease infinite; }
     @keyframes dashShimmer { 0% { background-position: 100% 0; } 100% { background-position: -100% 0; } }
-    @media (prefers-reduced-motion: reduce) { .dash-kpi:hover, .dash-attention:hover, .dash-stat:hover { transform: none; } .dash-spin, .dash-live-dot--busy, .dash-shimmer { animation: none; } }
+    @media (prefers-reduced-motion: reduce) { .dash-kpi:hover, .dash-attention:hover, .dash-stat:hover { transform: none; } .dash-spin, .dash-live-dot--busy, .dash-shimmer, .dash-attention--critical { animation: none; } }
   `}</style>
 );
