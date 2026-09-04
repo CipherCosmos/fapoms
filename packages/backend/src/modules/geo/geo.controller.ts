@@ -10,7 +10,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { RoutingService, DestinationCoords } from './routing.provider';
 import { GeoStateEntity, GeoDistrictEntity, GeoCityEntity } from './geo.entities';
-import { autocompleteIndia } from './india-autocomplete.helper';
+import { autocompleteIndia, isPlaceLookupConfigured } from './india-autocomplete.helper';
 import { lookupIfsc } from './ifsc-lookup.helper';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AnyAuthenticated } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';
@@ -153,7 +153,15 @@ export class GeoController {
   @ApiOperation({ summary: 'Live whole-India place search (state/district/city/town/pincode) for type-ahead' })
   async autocomplete(@Query('q') q?: string) {
     const results = await autocompleteIndia((q || '').trim());
-    return { success: true, data: results };
+    /**
+     * `autocompleteIndia`'s own doc comment: with no GOOGLE_MAPS_API_KEY configured, an empty
+     * list is "indistinguishable from 'no such place' unless the caller asks" — and this
+     * controller is exactly that caller. Every query, including unambiguous ones like "Mumbai",
+     * returned `data: []` with nothing to tell a consumer the integration is absent rather than
+     * the place not existing. `isPlaceLookupConfigured()` already exists for this; it was just
+     * never read here. Additive field — no existing consumer of `data` is affected.
+     */
+    return { success: true, data: results, meta: { configured: isPlaceLookupConfigured() } };
   }
 
   @Get('ifsc/:code')
