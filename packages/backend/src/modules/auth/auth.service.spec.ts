@@ -81,6 +81,9 @@ describe('AuthService', () => {
   const mockSessionService = {
     create: jest.fn().mockResolvedValue({ id: 'session-1' }),
     touch: jest.fn().mockResolvedValue(undefined),
+    // The per-request session gate; defaults to "usable" so unrelated tests are unaffected.
+    touchIfUsable: jest.fn().mockResolvedValue(true),
+    isUsable: jest.fn().mockReturnValue(true),
     revokeAllForUser: jest.fn().mockResolvedValue(undefined),
     revoke: jest.fn().mockResolvedValue(undefined),
     listForUser: jest.fn().mockResolvedValue([]),
@@ -541,6 +544,43 @@ describe('AuthService', () => {
    * route until it expired, even though login and refresh both refuse them (and refresh even
    * clears the cache expecting this re-load to reject). CONFIRMED-EXPLOITABLE 2026-09-04.
    */
+  describe('validateJwtPayload — per-request session gate (idle/absolute/revocation bite every request)', () => {
+    const payload = {
+      sub: 'usr-1', username: 'u', email: 'u@x.com', roles: [], permissions: [],
+      organizationId: 'org-1', sid: 'session-1',
+    } as any;
+
+    beforeEach(() => {
+      mockUserRepo.findOne.mockResolvedValue({ id: 'usr-1', status: 'ACTIVE', roles: [] });
+      mockSessionService.touchIfUsable.mockResolvedValue(true);
+    });
+
+    it('checks the session on EVERY request, before the principal cache, and touches it', async () => {
+      await service.validateJwtPayload(payload);
+      expect(mockSessionService.touchIfUsable).toHaveBeenCalledWith('session-1', expect.any(Number));
+    });
+
+    it('refuses the request (null principal) when the session is revoked / absolute-expired / idle', async () => {
+      mockSessionService.touchIfUsable.mockResolvedValue(false);
+      await expect(service.validateJwtPayload(payload)).resolves.toBeNull();
+      // The gate must reject BEFORE loading the principal — a dead session never reaches the DB read.
+      expect(mockUserRepo.findOne).not.toHaveBeenCalled();
+    });
+
+    it('an ACTIVE session keeps working — the gate does not interrupt legitimate work', async () => {
+      mockSessionService.touchIfUsable.mockResolvedValue(true);
+      await expect(service.validateJwtPayload(payload)).resolves.toMatchObject({ id: 'usr-1' });
+    });
+
+    it('a token with no sid (issued before the session store) is not gated here', async () => {
+      const noSid = { ...payload, sid: undefined };
+      // touchIfUsable is defined to return true for an absent sid; the request proceeds.
+      mockSessionService.touchIfUsable.mockResolvedValue(true);
+      await expect(service.validateJwtPayload(noSid)).resolves.toMatchObject({ id: 'usr-1' });
+      expect(mockSessionService.touchIfUsable).toHaveBeenCalledWith(undefined, expect.any(Number));
+    });
+  });
+
   describe('validateJwtPayload — assayer status gate (revocation takes effect immediately)', () => {
     const assayerPayload = {
       sub: 'asr-1', username: 'AS-01', email: 'as-01@fapoms.com',

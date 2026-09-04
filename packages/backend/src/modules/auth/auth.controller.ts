@@ -8,11 +8,14 @@ import {
   Controller,
   Get,
   Post,
+  Delete,
+  Param,
   Body,
   UseGuards,
   Req,
   HttpCode,
   HttpStatus,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsNotEmpty } from 'class-validator';
@@ -233,5 +236,45 @@ export class AuthController {
       success: true,
       data: { message: 'Logged out successfully' },
     };
+  }
+
+  /**
+   * The devices/sessions screen: every session on the account, newest first, with the current one
+   * flagged. `sid` rides the token and is attached per-request by the JWT strategy.
+   */
+  @Get('sessions')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List my active sessions/devices' })
+  async listSessions(@Req() req: any) {
+    return { success: true, data: await this.authService.listMySessions(req.user.id, req.user.sid) };
+  }
+
+  /**
+   * "Log out all my devices" — the control for a lost/stolen laptop that still holds a live session.
+   * Revokes every session AND every refresh token for the account and drops the cached principal, so
+   * each device is refused on its next request. Left reachable during a forced password change so a
+   * user who suspects compromise can pull the plug before anything else.
+   */
+  @Post('sessions/revoke-all')
+  @OnboardingAllowed()
+  @PasswordChangeExempt()
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Revoke every session on my account (log out all devices)' })
+  async revokeAllSessions(@Req() req: any) {
+    await this.authService.revokeAllSessions(req.user.id);
+    return { success: true, data: { message: 'All sessions signed out.' } };
+  }
+
+  /** Sign out ONE of my devices by session id. Ownership-checked; takes effect on that device's next request. */
+  @Delete('sessions/:id')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Revoke one of my sessions/devices' })
+  async revokeSession(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+    await this.authService.revokeOwnSession(req.user.id, id);
+    return { success: true, data: { message: 'Session signed out.' } };
   }
 }

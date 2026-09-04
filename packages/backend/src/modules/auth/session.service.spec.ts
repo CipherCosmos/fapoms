@@ -87,4 +87,66 @@ describe('SessionService', () => {
     expect(view[0]).toMatchObject({ id: 'sess-1', current: true, active: true });
     expect(view[1]).toMatchObject({ id: 'sess-2', current: false, active: false }); // expired
   });
+
+  /**
+   * The per-request gate. `touchIfUsable` is ONE atomic conditional UPDATE (not revoked, not past
+   * absolute expiry, not idle) that also moves last-seen forward: affected>0 means usable+touched,
+   * 0 means dead. `isUsable` is its read-only twin for the refresh path.
+   */
+  describe('touchIfUsable — atomic per-request check + touch', () => {
+    const qbFor = (affected: number) => {
+      const qb: any = {};
+      for (const m of ['update', 'set', 'where', 'andWhere']) qb[m] = jest.fn(() => qb);
+      qb.execute = jest.fn(async () => ({ affected }));
+      return qb;
+    };
+
+    it('returns true and touches when the atomic update affects a row', async () => {
+      const qb = qbFor(1);
+      sessions.createQueryBuilder = jest.fn(() => qb);
+      await expect(service.touchIfUsable('sess-1', 60_000)).resolves.toBe(true);
+      // idle arm present when idleMs > 0
+      expect(qb.andWhere).toHaveBeenCalledWith(expect.stringContaining('last_seen_at'), expect.anything());
+      expect(qb.andWhere).toHaveBeenCalledWith(expect.stringContaining('expires_at'));
+    });
+
+    it('returns false when the update affects no row (revoked / absolute-expired / idle)', async () => {
+      sessions.createQueryBuilder = jest.fn(() => qbFor(0));
+      await expect(service.touchIfUsable('sess-1', 60_000)).resolves.toBe(false);
+    });
+
+    it('omits the idle predicate when idleMs is 0 (idle disabled), still checks revoked + absolute', async () => {
+      const qb = qbFor(1);
+      sessions.createQueryBuilder = jest.fn(() => qb);
+      await service.touchIfUsable('sess-1', 0);
+      const idleCalls = qb.andWhere.mock.calls.filter((c: any[]) => String(c[0]).includes('last_seen_at'));
+      expect(idleCalls).toHaveLength(0);
+      expect(qb.andWhere).toHaveBeenCalledWith(expect.stringContaining('expires_at'));
+    });
+
+    it('a token with no sid is not gated (returns true, no query)', async () => {
+      sessions.createQueryBuilder = jest.fn();
+      await expect(service.touchIfUsable(undefined, 60_000)).resolves.toBe(true);
+      expect(sessions.createQueryBuilder).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('isUsable — read-only twin for the refresh path', () => {
+    const base = (over: Partial<UserSessionEntity> = {}): UserSessionEntity => ({
+      revokedAt: null,
+      expiresAt: new Date(Date.now() + 3_600_000),
+      lastSeenAt: new Date(),
+      ...over,
+    } as any);
+
+    it('true for a live session', () => expect(service.isUsable(base(), 60_000)).toBe(true));
+    it('false when revoked', () => expect(service.isUsable(base({ revokedAt: new Date() }), 60_000)).toBe(false));
+    it('false when past absolute expiry', () =>
+      expect(service.isUsable(base({ expiresAt: new Date(Date.now() - 1) }), 60_000)).toBe(false));
+    it('false when idle beyond the window', () =>
+      expect(service.isUsable(base({ lastSeenAt: new Date(Date.now() - 120_000) }), 60_000)).toBe(false));
+    it('idle ignored when idleMs is 0', () =>
+      expect(service.isUsable(base({ lastSeenAt: new Date(Date.now() - 10 * 86_400_000) }), 0)).toBe(true));
+    it('false for a null session', () => expect(service.isUsable(null, 60_000)).toBe(false));
+  });
 });

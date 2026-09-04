@@ -79,8 +79,11 @@ export class SearchService {
     const term = `%${trimmed}%`;
     // The same object-where fragment the branch list is filtered by, merged into each arm of
     // the OR — a `find` with an array of wheres ORs them, so the scope has to be on every one
-    // or the unscoped arms leak.
-    const branchScope = branchScopeWhere(scope) ?? {};
+    // or the unscoped arms leak. Kept undefined (not `?? {}`) here so the assignment arm below
+    // can tell "no scope" apart from "scope resolved to an empty object" — nesting `{}` under a
+    // relation makes TypeORM add a pointless join instead of skipping the clause.
+    const rawBranchScope = branchScopeWhere(scope);
+    const branchScope = rawBranchScope ?? {};
     const regionScope = scope?.regions && scope.regions.length > 0
       ? { region: In(scope.regions) }
       : {};
@@ -122,7 +125,22 @@ export class SearchService {
       }),
       this.assignmentRepo.find({
         where: [
-          { isActive: true, assignmentNumber: ILike(term) },
+          {
+            isActive: true,
+            assignmentNumber: ILike(term),
+            /**
+             * An assignment carries region/state/zone/client the same way the real assignment
+             * list does — through its branch (`assignment.service.ts#findAll` merges this exact
+             * `branchScopeWhere` fragment into `projectBranch.branch`). This arm used to skip
+             * scoping entirely: a region-scoped account searching an assignment number got back
+             * every OTHER region's assignment too, branch name and assayer name included — the
+             * one piece of cross-region detail the branches and assayers arms right beside it
+             * were already careful not to leak. Confirmed live: a SOUTH-only account searching
+             * "ASN-2026-0000" saw all nine WEST-region assignments verbatim, and a WEST-only
+             * account saw the one SOUTH assignment — both now correctly excluded.
+             */
+            ...(rawBranchScope ? { projectBranch: { branch: rawBranchScope } } : {}),
+          },
         ],
         relations: ['projectBranch', 'projectBranch.branch', 'assayer'],
         take: 10,

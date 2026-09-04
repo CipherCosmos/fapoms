@@ -90,6 +90,57 @@ export class SessionService {
     }
   }
 
+  /**
+   * The PER-REQUEST session gate — the control that makes idle/absolute limits and revocation bite
+   * on every authenticated request, not merely on refresh.
+   *
+   * ONE atomic statement both validates and touches: it moves `last_seen_at` forward only while the
+   * session is still usable — not revoked, not past its absolute `expires_at`, and seen within
+   * `idleMs`. `affected === 0` means the session is dead (revoked / absolute-expired / idle-expired),
+   * and the caller must refuse the request.
+   *
+   * Race-safety (the WHERE clause is the gate, not a prior read): two concurrent requests arriving
+   * after the idle or absolute boundary both match zero rows and are both refused — a stale write
+   * cannot revive an expired or revoked session, because the same predicate that would refuse the
+   * request also guards the write. A revoked session stays revoked; `last_seen_at` is only ever
+   * pushed forward on a row that is still alive.
+   *
+   * Idle is defined as time since the LAST AUTHENTICATED REQUEST (this method runs on each one).
+   * `idleMs <= 0` disables the idle arm (absolute + revocation still apply). A token with no `sid`
+   * (issued before the session store) has nothing to gate here and is allowed through — those expire
+   * on the short access-token clock.
+   */
+  async touchIfUsable(sessionId: string | undefined | null, idleMs: number): Promise<boolean> {
+    if (!sessionId) return true;
+    const qb = this.sessions
+      .createQueryBuilder()
+      .update(UserSessionEntity)
+      .set({ lastSeenAt: () => 'now()' })
+      .where('id = :id', { id: sessionId })
+      .andWhere('revoked_at IS NULL')
+      .andWhere('expires_at > now()');
+    if (idleMs > 0) {
+      // Postgres interval arithmetic in ms, so the idle window is exact and set-side.
+      qb.andWhere('last_seen_at > now() - (:idleMs || \' milliseconds\')::interval', { idleMs: String(idleMs) });
+    }
+    const result = await qb.execute();
+    return (result.affected ?? 0) > 0;
+  }
+
+  /**
+   * The read-only counterpart for the refresh path, where the caller already re-reads the row and
+   * wants to know if the session is still usable before rotating a token. Same predicate as
+   * `touchIfUsable`, without the write (refresh does its own `touch`).
+   */
+  isUsable(session: UserSessionEntity | null | undefined, idleMs: number): boolean {
+    if (!session) return false;
+    const now = Date.now();
+    if (session.revokedAt) return false;
+    if (session.expiresAt.getTime() <= now) return false;
+    if (idleMs > 0 && now - session.lastSeenAt.getTime() > idleMs) return false;
+    return true;
+  }
+
   /** A user's sessions, newest first, mapped for display and marked with which one is current. */
   async listForUser(userId: string, currentSessionId?: string): Promise<SessionView[]> {
     const rows = await this.sessions.find({

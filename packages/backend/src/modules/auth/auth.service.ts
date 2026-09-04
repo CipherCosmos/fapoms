@@ -221,7 +221,26 @@ export class AuthService implements OnModuleInit {
     // With that in place the TTL only bounds the worst case if an invalidation is ever missed,
     // not the normal case, so it can be sized for hit rate instead of for that worst case.
     this.principalCacheTtl = Number(this.configService.get<any>('RBAC_CACHE_TTL_SECONDS', 600));
+
+    // Session containment (read at boot from the environment; the per-request hot path must not
+    // couple to the live settings store). Idle = minutes since the last authenticated request;
+    // absolute = the hard ceiling on a single sign-in, set when the session is minted and never
+    // extended. Defaults match settings.registry.ts (`security.session.*`).
+    // Idle defaults to 0 (OFF) so an active or merely-open session is NEVER force-logged-out
+    // mid-work; an operator can raise it to expire abandoned-but-open devices. Absolute defaults to
+    // 7 days — a weekly re-login at a natural boundary, not a mid-session interruption — and is the
+    // ceiling that bounds an actively-used stolen session (idle cannot, since activity resets it).
+    const idleMinutes = Number(this.configService.get<any>('SESSION_IDLE_TIMEOUT_MINUTES', 0));
+    this.sessionIdleMs = Number.isFinite(idleMinutes) && idleMinutes > 0 ? idleMinutes * 60_000 : 0;
+    const absoluteHours = Number(this.configService.get<any>('SESSION_ABSOLUTE_HOURS', 168));
+    this.sessionAbsoluteMs =
+      Number.isFinite(absoluteHours) && absoluteHours > 0 ? absoluteHours * 3_600_000 : 168 * 3_600_000;
   }
+
+  /** Milliseconds of inactivity after which a session is refused on the next request. 0 = disabled. */
+  private readonly sessionIdleMs: number;
+  /** The absolute lifetime of a session in ms, stamped as `expires_at` at login and never extended. */
+  private readonly sessionAbsoluteMs: number;
 
   /**
    * Keep the request-time principal cache honest. A user's status or roles changing
@@ -457,7 +476,10 @@ export class AuthService implements OnModuleInit {
         ipAddress,
         userAgent,
         loginMethod: 'PASSWORD',
-        expiresAt: new Date(Date.now() + this.refreshExpiration * 1000),
+        // The session's ABSOLUTE lifetime — the hard ceiling, never extended by a refresh, so an
+        // actively-used stolen session still dies here. Separate from (and shorter than) the
+        // refresh token's own expiry.
+        expiresAt: new Date(Date.now() + this.sessionAbsoluteMs),
       });
       const tokens = await this.generateTokenPair(payload, ipAddress, userAgent, session.id);
 
@@ -535,7 +557,8 @@ export class AuthService implements OnModuleInit {
       ipAddress,
       userAgent,
       loginMethod: 'PASSWORD',
-      expiresAt: new Date(Date.now() + this.refreshExpiration * 1000),
+      // Absolute session ceiling — see the assayer login path above. Never extended by refresh.
+      expiresAt: new Date(Date.now() + this.sessionAbsoluteMs),
     });
 
     // Generate tokens
@@ -691,11 +714,16 @@ export class AuthService implements OnModuleInit {
       storedToken.revokedAt = new Date();
       await this.refreshTokenRepository.save(storedToken);
 
-      // Carry the session forward — one sign-in keeps one session id across every rotation — and
-      // move its last-seen forward so the sessions screen shows when this device was last active.
+      // Carry the session forward — one sign-in keeps one session id across every rotation. Before
+      // minting a new pair, confirm the SESSION itself is still alive (not revoked, not past its
+      // absolute lifetime, not idle) — the refresh token being valid is not enough, or an
+      // absolute/idle-expired session could renew forever. `touchIfUsable` checks and moves
+      // last-seen forward in one atomic statement.
       const sessionId = storedToken.sessionId ?? undefined;
+      if (sessionId && !(await this.sessionService.touchIfUsable(sessionId, this.sessionIdleMs))) {
+        throw new UnauthorizedException('Your session has ended. Please sign in again.');
+      }
       const { tokens, refreshRowId } = await this.generateTokenPairWithRow(user, ipAddress, userAgent, sessionId);
-      if (sessionId) await this.sessionService.touch(sessionId, ipAddress);
 
       // Point at the successor ROW, never store its secret. See generateTokenPairWithRow.
       storedToken.replacedBy = refreshRowId;
@@ -764,8 +792,12 @@ export class AuthService implements OnModuleInit {
     // last-seen. (This path also now records the refresh request's IP/UA on the new token row,
     // which the assayer branch previously left null.)
     const sessionId = storedToken.sessionId ?? undefined;
+    // Refuse to renew a dead session (revoked / absolute-expired / idle) — same rule as the staff
+    // path; checks and touches atomically.
+    if (sessionId && !(await this.sessionService.touchIfUsable(sessionId, this.sessionIdleMs))) {
+      throw new UnauthorizedException('Your session has ended. Please sign in again.');
+    }
     const { tokens, refreshRowId } = await this.generateTokenPairWithRow(assayerPayload, ipAddress, userAgent, sessionId);
-    if (sessionId) await this.sessionService.touch(sessionId, ipAddress);
 
     // Point at the successor ROW, never store its secret. See generateTokenPairWithRow.
     storedToken.replacedBy = refreshRowId;
@@ -859,6 +891,22 @@ export class AuthService implements OnModuleInit {
    * let the old access token keep resolving its permissions — including a stale
    * `mustChangePassword: false` — until the cache TTL expired.
    */
+  /** The devices/sessions list for the signed-in user, marking which one is the current request's. */
+  async listMySessions(userId: string, currentSessionId?: string) {
+    return this.sessionService.listForUser(userId, currentSessionId);
+  }
+
+  /**
+   * Self-service revoke of ONE of the caller's own sessions (the "sign out that device" button).
+   * Ownership-checked so a user can only end their own sessions. The revoked session is refused on
+   * its very next request by the per-request session gate — no waiting for a token to expire.
+   */
+  async revokeOwnSession(userId: string, sessionId: string): Promise<void> {
+    const owned = await this.sessionService.findOwned(sessionId, userId);
+    if (!owned) throw new UnauthorizedException('That session was not found on your account.');
+    await this.sessionService.revoke(sessionId, userId, 'USER_REVOKED');
+  }
+
   async revokeAllSessions(userId: string): Promise<void> {
     await this.refreshTokenRepository.update(
       { userId, isRevoked: false },
@@ -987,6 +1035,26 @@ export class AuthService implements OnModuleInit {
     // right after the cache expires runs the query once, not once per request. A cache MISS (or
     // Redis being down) simply falls through to `loadPrincipal`, so correctness never depends on
     // the cache being available.
+    /**
+     * The per-request SESSION GATE — enforced here, before the principal cache, so it runs on
+     * EVERY authenticated request rather than only on refresh. One atomic statement both checks
+     * (not revoked / not past absolute expiry / not idle) and moves last-seen forward; a dead
+     * session returns false and the request is refused (null principal -> 401).
+     *
+     * This is what makes "log out everywhere" and idle/absolute limits bite on a live access
+     * token, not merely stop it renewing. Stolen-token window, stated explicitly: after a
+     * revoke/logout the very next request on that session matches zero rows and fails (≈ one
+     * request, not the access-token TTL); an idle session dies once activity stops; an
+     * actively-used session is bounded by the absolute lifetime. Tokens minted before the session
+     * store carry no `sid` and are not gated here — they expire on the short access clock.
+     *
+     * Deliberately NOT cached: caching this check would reintroduce the very stale-authorization
+     * window it exists to remove. It is one indexed single-row UPDATE per request — the accepted
+     * cost of crisp revocation.
+     */
+    const sessionUsable = await this.sessionService.touchIfUsable(payload.sid, this.sessionIdleMs);
+    if (!sessionUsable) return null;
+
     const cacheKey = this.principalKey(payload.sub);
     return this.cache.wrap(cacheKey, this.principalCacheTtl, () => this.loadPrincipal(payload));
   }

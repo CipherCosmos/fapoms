@@ -709,6 +709,41 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     envVar: 'SEGREGATION_OF_DUTIES_MODE',
     applies: 'immediately',
   },
+  {
+    // Enforced on EVERY authenticated request (SessionService.touchIfUsable), not only on refresh —
+    // so an inactive session becomes unusable, it does not merely fail to renew. "Idle" is measured
+    // from the last authenticated request. 0 disables the idle arm (absolute + revocation still bite).
+    key: 'security.session.idleTimeoutMinutes',
+    label: 'Session idle timeout',
+    description: 'Sign a session out after this many minutes with NO activity at all. An open app in active use keeps itself alive (every request and token refresh resets the clock), so this only ends a session that has gone completely quiet — a laptop left logged in and walked away from. DEFAULT 0 (off) so nobody is ever logged out in the middle of their work; raise it (e.g. 30–60) only if you want an abandoned-but-open device to expire on its own, accepting that a long on-screen pause with no requests could then log someone out. The absolute limit below and "log out all devices" bound a stolen session without this.',
+    group: 'security',
+    type: 'number',
+    default: 0,
+    envVar: 'SESSION_IDLE_TIMEOUT_MINUTES',
+    min: 0,
+    max: 43200,
+    unit: 'minutes',
+    // Read from the environment at boot by AuthService (the per-request hot path deliberately does
+    // not couple to the live settings store), so a change needs a restart to take effect.
+    applies: 'restart',
+  },
+  {
+    // The session's absolute lifetime, set as `expires_at` when the session is minted and never
+    // extended by a refresh — so a session cannot outlive this no matter how actively it is used.
+    // This is the cap that bounds an actively-exploited stolen session.
+    key: 'security.session.absoluteHours',
+    label: 'Session absolute lifetime',
+    description: 'The longest a single sign-in may last before a full re-login is required, regardless of activity — the hard ceiling on how long a stolen but actively-used session can live (the idle timeout cannot cap that, since activity keeps resetting it). Default 168h (7 days): a weekly boundary that falls in a natural gap rather than mid-work. Lower it for a tighter stolen-session cap, accepting that a shorter value can force a re-login while someone is still working. Applies to sessions created after the change.',
+    group: 'security',
+    type: 'number',
+    default: 168,
+    envVar: 'SESSION_ABSOLUTE_HOURS',
+    min: 1,
+    max: 8760,
+    unit: 'hours',
+    // Applied when a session is minted; read from the environment at boot (see idle timeout above).
+    applies: 'restart',
+  },
 
   // ── Retention ───────────────────────────────────────────────────────────
   {

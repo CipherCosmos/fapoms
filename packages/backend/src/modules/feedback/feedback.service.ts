@@ -488,6 +488,24 @@ export class FeedbackService {
         thread.resolvedByUserId = userId;
       }
     }
+    /**
+     * A triage note is posted as a reporter-visible message below (same as any team chat
+     * reply) — so it must close the first-response SLA clock exactly the way
+     * `FeedbackThreadService.postMessage()` does for one, or the clock only ever stops for
+     * whichever of the two reply paths a caller happens to use.
+     *
+     * This was silently one-directional: `triage(..., { note })` is reachable today only via
+     * a direct API call (no current screen collects a note — every frontend triage/resolve
+     * call site passes none), so it has not yet nagged a real desk. But `resolveFeedback(id,
+     * note)` already wires a note through to here, and the escalation scan's own
+     * `firstResponseOverdue` query excludes RESOLVED items, not "items resolved with a note
+     * but never actually replied to" — so a future caller (mobile, a resolution-note field
+     * added to the UI) would resolve an item the reporter had genuinely heard from, yet the
+     * SLA scan would still be able to report it as never having received a first response.
+     */
+    if (dto.note?.trim() && !thread.firstRespondedAt) {
+      thread.firstRespondedAt = new Date();
+    }
     thread.updatedBy = userId;
     const saved = await this.threadRepository.save(thread);
 

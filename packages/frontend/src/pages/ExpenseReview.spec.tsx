@@ -116,3 +116,91 @@ describe('ExpenseReview — reject reason', () => {
     expect(screen.getByRole('button', { name: /Reject claim/ })).not.toBeDisabled();
   });
 });
+
+/**
+ * Approve, and specifically a rapid double-tap on it.
+ *
+ * Live-verified against the real backend this session (Track K): a genuine double-click on this
+ * exact button, and separately two truly concurrent `POST /expenses/:id/review` calls, both
+ * produced exactly one state change — the server's own locked compare-and-swap is the backstop.
+ * This suite locks in the client half: the button must go `disabled` on the *first* click,
+ * synchronously enough that a second click before the request resolves never reaches
+ * `reviewExpense` at all, so the network is not depended on to catch what the UI can prevent.
+ */
+describe('ExpenseReview — approve', () => {
+  it('approves a claim and removes it from the queue on success', async () => {
+    mockReview.mockResolvedValue(claim({ status: 'APPROVED' }));
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Test Assayer')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTitle('Approve'));
+
+    await waitFor(() => expect(mockReview).toHaveBeenCalledWith('e-1', true));
+    await waitFor(() => expect(screen.queryByText('Test Assayer')).not.toBeInTheDocument());
+  });
+
+  it('a second click before the first request resolves never calls reviewExpense again', async () => {
+    // A promise this test resolves on its own timeline, so the row stays "busy" across both
+    // clicks — the exact window a real double-tap races.
+    let resolveReview!: (v: unknown) => void;
+    mockReview.mockReturnValue(new Promise((res) => { resolveReview = res; }));
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Test Assayer')).toBeInTheDocument());
+
+    const approveButton = screen.getByTitle('Approve');
+    fireEvent.click(approveButton);
+    expect(mockReview).toHaveBeenCalledTimes(1);
+    // `disabled={busyId === c.id || !!bulkProgress}` should already be true by now — `setBusyId`
+    // runs synchronously before the first `await`, and `fireEvent` flushes that render.
+    expect(approveButton).toBeDisabled();
+
+    fireEvent.click(approveButton);
+    expect(mockReview).toHaveBeenCalledTimes(1); // still one — the second click never reached the handler's call
+
+    resolveReview(claim({ status: 'APPROVED' }));
+    await waitFor(() => expect(screen.queryByText('Test Assayer')).not.toBeInTheDocument());
+    expect(mockReview).toHaveBeenCalledTimes(1); // and stays one, even after the row leaves the queue
+  });
+
+  it('re-enables the button and keeps the claim on screen if the request fails, so a retry is possible', async () => {
+    mockReview.mockRejectedValue(new Error('network blip'));
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Test Assayer')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByTitle('Approve'));
+    await waitFor(() => expect(mockReview).toHaveBeenCalledTimes(1));
+
+    // The row is still here to retry against, and the button is usable again — a failed approve
+    // must not strand the claim in a permanently-disabled state.
+    await waitFor(() => expect(screen.getByTitle('Approve')).not.toBeDisabled());
+    expect(screen.getByText('Test Assayer')).toBeInTheDocument();
+  });
+});
+
+/**
+ * The "Trail" control: only a claim that could plausibly have a movement trail behind it should
+ * offer to show one. Showing it on a claim with no journey (a food receipt, a toll) would imply
+ * the platform can verify something it fundamentally cannot for that category.
+ */
+describe('ExpenseReview — movement trail visibility', () => {
+  it('shows "Trail" for a TRAVEL_KM claim with an assignment behind it', async () => {
+    mockGetPending.mockResolvedValue([claim({ category: 'TRAVEL_KM' })]);
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Test Assayer')).toBeInTheDocument());
+    expect(screen.getByTitle('Check the recorded movement trail')).toBeInTheDocument();
+  });
+
+  it('hides "Trail" for a non-travel category (e.g. a food or toll claim)', async () => {
+    mockGetPending.mockResolvedValue([claim({ category: 'FOOD' })]);
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Test Assayer')).toBeInTheDocument());
+    expect(screen.queryByTitle('Check the recorded movement trail')).not.toBeInTheDocument();
+  });
+
+  it('hides "Trail" for a TRAVEL_KM claim with no assignmentId to look a trail up against', async () => {
+    mockGetPending.mockResolvedValue([claim({ category: 'TRAVEL_KM', assignmentId: null })]);
+    renderPage();
+    await waitFor(() => expect(screen.getByText('Test Assayer')).toBeInTheDocument());
+    expect(screen.queryByTitle('Check the recorded movement trail')).not.toBeInTheDocument();
+  });
+});

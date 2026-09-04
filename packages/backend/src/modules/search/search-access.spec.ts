@@ -76,9 +76,17 @@ describe('global search access', () => {
        * table however carefully the others are written. Every clause that matches a *branch*
        * or an *assayer* — the two things region actually applies to — must carry it.
        *
-       * Clients and assignments are deliberately not region-filtered: a client is not
-       * territorial and their own list endpoints do not narrow them either, so doing it here
-       * would make search answer differently from the page it feeds.
+       * Clients are deliberately not region-filtered: a client is not territorial and their
+       * own list endpoint does not narrow them either (`ClientEntity` has no region column —
+       * see `client.controller.ts#findAll`'s doc comment), so doing it here would make search
+       * answer differently from the page it feeds.
+       *
+       * Assignments are NOT in that category, unlike what this file used to claim: the real
+       * assignment list (`assignment.service.ts#findAll`) narrows by region through the exact
+       * same `branchScopeWhere` fragment, merged into `projectBranch.branch` — so an assignment
+       * clause left unscoped here was search quietly answering more than the Assignments page
+       * itself would. Covered by its own pair of tests below, not folded into `geographic`,
+       * since its scope nests under `projectBranch.branch` rather than sitting flat on `w`.
        */
       const geographic = clauses.filter(
         (w: any) => 'solId' in w || 'assayerCode' in w || 'city' in w || 'address' in w
@@ -95,6 +103,40 @@ describe('global search access', () => {
 
       for (const w of wheresPassed()) {
         expect(w).not.toHaveProperty('region');
+      }
+    });
+
+    /**
+     * Found live 2026-09-04, testing the region-scope rollout from the customer-master and
+     * search side (see `customer-master-region-scope.spec.ts`'s sibling doc comment): this arm
+     * carried no scope at all until now. A SOUTH-only account searching "ASN-2026-0000" saw
+     * every WEST-region assignment's branch name and assayer name verbatim — the assignment id
+     * is caller-supplied nowhere, so there was no detail route to fall back on catching it, the
+     * way `RegionGuardService`'s doc comment describes for a guessed branch id. Fixed by merging
+     * the same `branchScopeWhere` fragment the branches/assayers arms already carry into
+     * `projectBranch.branch`, the identical path `assignment.service.ts#findAll` uses for the
+     * real Assignments list.
+     */
+    it('narrows the assignment clause to the caller regions, through its branch', async () => {
+      await service.searchAll('ASN-2026', { regions: [Region.WEST] }, [SystemRole.OPERATIONS]);
+
+      const assignmentClauses = wheresPassed().filter((w: any) => 'assignmentNumber' in w);
+      expect(assignmentClauses.length).toBeGreaterThan(0);
+      for (const w of assignmentClauses) {
+        expect(w.projectBranch?.branch).toEqual({ region: expect.anything() });
+      }
+    });
+
+    it('does not nest a branch clause onto assignments when the caller holds every region', async () => {
+      await service.searchAll('ASN-2026', { regions: null }, [SystemRole.ADMIN]);
+
+      const assignmentClauses = wheresPassed().filter((w: any) => 'assignmentNumber' in w);
+      expect(assignmentClauses.length).toBeGreaterThan(0);
+      for (const w of assignmentClauses) {
+        // Not merely `region` absent — `projectBranch` itself must be absent, or TypeORM adds a
+        // join for an empty filter (see `branchScopeWhere`'s own doc comment on why it returns
+        // `undefined` rather than `{}` for exactly this reason).
+        expect(w).not.toHaveProperty('projectBranch');
       }
     });
 
