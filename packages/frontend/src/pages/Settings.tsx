@@ -5,6 +5,7 @@ import {
 import { api } from '../services/api';
 import { userMessage } from '../services/errors';
 import { SessionsPanel } from './account/SessionsPanel';
+import { MfaPanel } from './account/MfaPanel';
 import {
   THEMES,
   ACCENTS,
@@ -430,6 +431,10 @@ export const Settings: React.FC = () => {
               </button>
             </div>
           </form>
+
+          {/* Two-step verification lives with the password — both are "how you prove it's you". */}
+          <div style={{ height: 1, background: 'var(--border-color)', margin: '28px 0' }} />
+          <MfaPanel />
         </div>
       )}
 

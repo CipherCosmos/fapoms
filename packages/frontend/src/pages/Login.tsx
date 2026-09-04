@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ShieldCheck, MapPinned, FileCheck2, Eye, EyeOff, ArrowRight, AlertTriangle, Clock } from 'lucide-react';
+import { ShieldCheck, MapPinned, FileCheck2, Eye, EyeOff, ArrowRight, AlertTriangle, Clock, Mail, MessageSquare, Smartphone } from 'lucide-react';
 import { BrandLogo } from '../components/BrandLogo';
 import { fetchWithTimeout } from '../services/http';
 import { consumeSignedOutReason } from '../services/session';
@@ -123,6 +123,16 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
    */
   const [signedOutReason] = useState(() => consumeSignedOutReason());
 
+  /**
+   * Second-factor challenge. Set when the password was right but the account has 2FA on: the
+   * server issued a short-lived challenge id and NO session yet. We collect a code and redeem it
+   * at /auth/mfa/verify. `sentTo` is the masked destination once an email/SMS code has been sent.
+   */
+  const [challenge, setChallenge] = useState<{ id: string; factors: string[] } | null>(null);
+  const [mfaCode, setMfaCode] = useState('');
+  const [mfaSentTo, setMfaSentTo] = useState<string | null>(null);
+  const [mfaBusy, setMfaBusy] = useState(false);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
@@ -140,7 +150,19 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
       });
       const resData = await response.json().catch(() => ({}));
 
-      if (response.ok && resData.success) {
+      if (response.ok && resData.success && resData.data?.mfaRequired) {
+        // Password proven, second factor required. No session yet — move to the code step.
+        const factors: string[] = resData.data.factors || [];
+        setChallenge({ id: resData.data.challengeId, factors });
+        setMfaCode('');
+        setMfaSentTo(null);
+        // If there is no authenticator (TOTP) — only email/SMS — send a code straight away so the
+        // person is not left on a screen asking for a code that has not been sent.
+        if (!factors.includes('TOTP')) {
+          const first = factors.find((f) => f === 'EMAIL' || f === 'SMS') as 'EMAIL' | 'SMS' | undefined;
+          if (first) void sendMfaCode(resData.data.challengeId, first);
+        }
+      } else if (response.ok && resData.success) {
         onLoginSuccess(resData.data.accessToken, resData.data.refreshToken);
       } else if (usedDemoDefault) {
         setError(
@@ -155,6 +177,62 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  /** Ask the server to send a login code over email/SMS for the open challenge. */
+  const sendMfaCode = async (challengeId: string, factor: 'EMAIL' | 'SMS') => {
+    setMfaBusy(true);
+    setError('');
+    try {
+      const res = await fetchWithTimeout('/api/v1/auth/mfa/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ challengeId, factor }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        setMfaSentTo(data.data?.to || null);
+      } else {
+        setError(data.message || data.error?.message || 'Could not send a code. Try another method.');
+      }
+    } catch {
+      setError('Unable to reach the server to send a code.');
+    } finally {
+      setMfaBusy(false);
+    }
+  };
+
+  /** Redeem the challenge id + code for a real session. */
+  const verifyMfa = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!challenge) return;
+    setMfaBusy(true);
+    setError('');
+    try {
+      const res = await fetchWithTimeout('/api/v1/auth/mfa/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ challengeId: challenge.id, code: mfaCode.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success && data.data?.accessToken) {
+        onLoginSuccess(data.data.accessToken, data.data.refreshToken);
+      } else {
+        setError(data.message || data.error?.message || 'That code is not valid. Please try again.');
+      }
+    } catch {
+      setError('Unable to reach the server to verify your code.');
+    } finally {
+      setMfaBusy(false);
+    }
+  };
+
+  /** Abandon the challenge and go back to the username/password step. */
+  const cancelMfa = () => {
+    setChallenge(null);
+    setMfaCode('');
+    setMfaSentTo(null);
+    setError('');
   };
 
   const setDemoAccount = (user: string, pass: string) => {
@@ -225,13 +303,14 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                 fontFamily: 'var(--font-display)', fontSize: 26, fontWeight: 800,
                 color: 'var(--text-primary)', margin: '0 0 6px',
               }}>
-                Sign in
+                {challenge ? 'Verify it’s you' : 'Sign in'}
               </h2>
               <p style={{ color: 'var(--text-secondary)', fontSize: 14, margin: 0 }}>
-                Use the account your administrator issued you.
+                {challenge ? 'One more step — enter your second-factor code to finish signing in.' : 'Use the account your administrator issued you.'}
               </p>
             </div>
 
+            {!challenge && (
             <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
 
               {/*
@@ -356,6 +435,100 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                 )}
               </button>
             </form>
+            )}
+
+            {/* ---------- Second-factor step ---------- */}
+            {challenge && (
+              <form onSubmit={verifyMfa} style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+                <div aria-live="polite">
+                  {error && (
+                    <div style={{
+                      background: 'rgba(239, 68, 68, 0.12)', border: '1px solid rgba(239, 68, 68, 0.3)',
+                      color: '#ef4444', padding: '12px 14px', borderRadius: 'var(--radius-md)',
+                      fontSize: 13, lineHeight: 1.45, display: 'flex', alignItems: 'center', gap: 10,
+                    }}>
+                      <AlertTriangle size={16} style={{ flexShrink: 0 }} />
+                      <span>{error}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* How to get a code, given the factors this account has. */}
+                {challenge.factors.includes('TOTP') && (
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 13, color: 'var(--text-secondary)' }}>
+                    <Smartphone size={16} style={{ flexShrink: 0, marginTop: 1, color: 'var(--accent-primary)' }} />
+                    <span>Open your authenticator app and enter the 6-digit code it shows.</span>
+                  </div>
+                )}
+                {mfaSentTo && (
+                  <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, fontSize: 13, color: 'var(--text-secondary)' }}>
+                    <Mail size={16} style={{ flexShrink: 0, marginTop: 1, color: 'var(--accent-primary)' }} />
+                    <span>We sent a code to <strong style={{ color: 'var(--text-primary)' }}>{mfaSentTo}</strong>. Enter it below.</span>
+                  </div>
+                )}
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 7 }}>
+                  <label htmlFor="lg-mfa-code" style={{ fontSize: 13, fontWeight: 600, color: 'var(--text-secondary)' }}>
+                    Verification code
+                  </label>
+                  <input
+                    id="lg-mfa-code"
+                    className="lg-input"
+                    style={{ letterSpacing: 6, fontSize: 20, textAlign: 'center' }}
+                    inputMode="numeric"
+                    autoComplete="one-time-code"
+                    autoFocus
+                    value={mfaCode}
+                    onChange={(e) => setMfaCode(e.target.value)}
+                    placeholder="000000"
+                    maxLength={14}
+                  />
+                  <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                    You can also enter one of your recovery codes.
+                  </span>
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={mfaBusy || mfaCode.trim().length < 6}
+                  className="btn btn-primary"
+                  style={{
+                    padding: '13px', fontWeight: 600, fontSize: 15, marginTop: 2, width: '100%',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9,
+                  }}
+                >
+                  {mfaBusy ? (
+                    <span style={{
+                      display: 'inline-block', width: 16, height: 16, border: '2px solid currentColor',
+                      borderRightColor: 'transparent', borderRadius: '50%', animation: 'spin 0.75s linear infinite',
+                    }} />
+                  ) : (<><span>Verify &amp; sign in</span><ArrowRight size={17} /></>)}
+                </button>
+
+                {/* Alternate delivery methods for whichever factors this account has enrolled. */}
+                {(challenge.factors.includes('EMAIL') || challenge.factors.includes('SMS')) && (
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', justifyContent: 'center' }}>
+                    {challenge.factors.includes('EMAIL') && (
+                      <button type="button" disabled={mfaBusy} onClick={() => sendMfaCode(challenge.id, 'EMAIL')}
+                        className="btn btn-ghost" style={{ gap: 6, fontSize: 12.5 }}>
+                        <Mail size={14} /> {mfaSentTo ? 'Resend email code' : 'Email me a code'}
+                      </button>
+                    )}
+                    {challenge.factors.includes('SMS') && (
+                      <button type="button" disabled={mfaBusy} onClick={() => sendMfaCode(challenge.id, 'SMS')}
+                        className="btn btn-ghost" style={{ gap: 6, fontSize: 12.5 }}>
+                        <MessageSquare size={14} /> {mfaSentTo ? 'Resend text code' : 'Text me a code'}
+                      </button>
+                    )}
+                  </div>
+                )}
+
+                <button type="button" onClick={cancelMfa} className="btn btn-ghost"
+                  style={{ fontSize: 12.5, color: 'var(--text-muted)', alignSelf: 'center' }}>
+                  Use a different account
+                </button>
+              </form>
+            )}
 
             {/*
               Quick-demo login buttons stay behind the dev flag. They shipped clickable super-admin,
@@ -363,7 +536,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
               the form with the real seeded accounts — a one-click privileged sign-in on the public
               login page.
             */}
-            {import.meta.env.DEV && (
+            {!challenge && import.meta.env.DEV && (
               <div style={{ marginTop: 26, paddingTop: 18, borderTop: '1px dashed var(--border-color)' }}>
                 <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 10, textAlign: 'center' }}>
                   Quick demo login (development only)
