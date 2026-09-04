@@ -12,6 +12,7 @@ import { AuditService } from '../../core/audit/audit.service';
 import { NOTIFICATION_CATALOG, renderTemplate } from './notification-catalog';
 import { NOTIFICATION_QUEUE } from './notification-delivery.worker';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 
 describe('NotificationDispatchService', () => {
   let service: NotificationDispatchService;
@@ -34,9 +35,19 @@ describe('NotificationDispatchService', () => {
 
   const mockUserQb = {
     innerJoin: jest.fn().mockReturnThis(),
+    leftJoinAndSelect: jest.fn().mockReturnThis(),
     where: jest.fn().mockReturnThis(),
     andWhere: jest.fn().mockReturnThis(),
     getMany: jest.fn(),
+  };
+
+  /**
+   * Region resolution and narrowing default to a no-op (null region -> everyone kept), which is
+   * every test's assumption except the ones under "region ceiling" below that override it.
+   */
+  const mockRegionGuard = {
+    resolveEventRegion: jest.fn(async () => null as string | null),
+    filterUsersByRegion: jest.fn(async (ids: string[]) => ids),
   };
 
   let idCounter = 0;
@@ -94,6 +105,8 @@ describe('NotificationDispatchService', () => {
     mockQueue.add.mockClear();
     mockQueue.addBulk.mockClear();
     mockUserQb.getMany.mockReset();
+    mockRegionGuard.resolveEventRegion.mockReset().mockResolvedValue(null);
+    mockRegionGuard.filterUsersByRegion.mockReset().mockImplementation(async (ids: string[]) => ids);
     mockSettings.defFor.mockReset();
     mockSettings.defFor.mockImplementation(async (t: string) => {
       const base = NOTIFICATION_CATALOG[t];
@@ -129,6 +142,7 @@ describe('NotificationDispatchService', () => {
         { provide: EmailProvider, useValue: { isEnabled: jest.fn().mockReturnValue(true), send: jest.fn() } },
         { provide: NotificationSettingsService, useValue: mockSettings },
         { provide: DomainEventPublisher, useValue: mockEventPublisher },
+        { provide: RegionGuardService, useValue: mockRegionGuard },
         {
           provide: AuditService,
           useValue: { recordEvent: jest.fn(async (e) => { auditCalls.push(e); return e; }) },
@@ -598,6 +612,115 @@ describe('NotificationDispatchService', () => {
         expect(`${name} -> ${link}`).not.toMatch(/\$\{\w*[Ii]d\}/);
         expect(def.collapse.windowSeconds).toBeGreaterThan(0);
       }
+    });
+  });
+
+  /**
+   * A role built in Admin -> Roles matches no name in `def.roles` — that is a closed set of
+   * built-in SystemRole strings — so before `fallbackPermissions` existed it was invisible to
+   * every notification however precisely its permissions matched. Mirrors RolesGuard's own
+   * fallback (guards.ts): only a role name `def.roles` never heard of is judged by permission.
+   */
+  describe('custom-role permission fallback (fallbackPermissions)', () => {
+    it('reaches a user who holds the permission through a role the catalog never named', async () => {
+      // usersInRoles(['OPERATIONS'], ['ASSAYER:VIEW:ORGANIZATION']) makes two queries in order:
+      // the name match (nobody, here), then the permission-fallback candidates.
+      mockUserQb.getMany
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          {
+            id: 'hr-1',
+            roles: [
+              {
+                name: 'HR_OPERATOR',
+                permissions: [{ resource: 'ASSAYER', action: 'VIEW', scope: 'ORGANIZATION' }],
+              },
+            ],
+          },
+        ]);
+
+      const res = await service.emit({
+        type: 'ASSAYER_DOCUMENT_EXPIRING',
+        entityType: 'ASSAYER',
+        entityId: 'as-1',
+        assayerId: 'as-1',
+        payload: { assayerName: 'Nilesh', documentName: 'Aadhaar', expiryDate: '2026-10-01' },
+      });
+
+      expect(res.recipients.userIds).toEqual(['hr-1']);
+      expect(insertedRows).toHaveLength(1);
+    });
+
+    it('does not let a permission borrowed from an excluded built-in role count', async () => {
+      // A user holding OPERATIONS (already named by `roles`, so this branch deliberately never
+      // heard of it) plus a custom role with no permissions of its own must not sneak in on
+      // OPERATIONS's coincidental grant — exactly the CLIENT_USER trap RolesGuard's own
+      // "unrecognised roles only" filter exists to prevent.
+      mockUserQb.getMany
+        .mockResolvedValueOnce([]) // byName: nobody currently holds OPERATIONS
+        .mockResolvedValueOnce([
+          {
+            id: 'mixed-1',
+            roles: [
+              { name: 'OPERATIONS', permissions: [{ resource: 'ASSAYER', action: 'VIEW', scope: 'ORGANIZATION' }] },
+              { name: 'SOME_CUSTOM_ROLE', permissions: [] },
+            ],
+          },
+        ])
+        .mockResolvedValueOnce([]); // the empty-audience ADMIN fallback also finds nobody
+
+      const res = await service.emit({
+        type: 'ASSAYER_DOCUMENT_EXPIRING',
+        entityType: 'ASSAYER',
+        entityId: 'as-2',
+        assayerId: 'as-2',
+        payload: { assayerName: 'Priya', documentName: 'PAN', expiryDate: '2026-10-05' },
+      });
+
+      expect(res.recipients.userIds).not.toContain('mixed-1');
+    });
+  });
+
+  /**
+   * `usersInRoles`'s resolved audience is narrowed to the event's own region before it becomes a
+   * recipient list — same rule the read side enforces (RegionGuardService.assertRegionAllowed).
+   * RegionGuardService's own predicate is exercised where it lives; this only proves
+   * NotificationDispatchService actually calls it, with the right inputs, and honours what it
+   * returns.
+   */
+  describe('region ceiling on the resolved audience', () => {
+    it('narrows recipients to what filterUsersByRegion returns, and offers assayerId for region resolution', async () => {
+      mockUserQb.getMany.mockResolvedValueOnce([{ id: 'ops-1' }, { id: 'ops-2' }]);
+      mockRegionGuard.filterUsersByRegion.mockResolvedValueOnce(['ops-1']);
+
+      const res = await service.emit({
+        type: 'ASSIGNMENT_ESCALATED',
+        entityType: 'ASSIGNMENT',
+        entityId: 'asn-9',
+        assayerId: 'assayer-9',
+        payload: { branchName: 'Kochi', reason: 'Client escalated.' },
+      });
+
+      // `assayerId` is a top-level EmitOptions field on this call, not inside `payload` — it
+      // must still reach resolveEventRegion, merged in.
+      expect(mockRegionGuard.resolveEventRegion).toHaveBeenCalledWith(
+        expect.objectContaining({ assayerId: 'assayer-9' }),
+      );
+      expect(res.recipients.userIds).toEqual(['ops-1']);
+      expect(insertedRows).toHaveLength(1);
+    });
+
+    it('skips the region lookup entirely when nobody was resolved, rather than querying for nobody', async () => {
+      mockUserQb.getMany.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+
+      await service.emit({
+        type: 'VALIDATION_QUERY_ANSWERED',
+        entityType: 'VALIDATION_QUERY',
+        entityId: 'q-9',
+        payload: { assayerName: 'Nilesh', branchName: 'Thrissur' },
+      });
+
+      expect(mockRegionGuard.resolveEventRegion).not.toHaveBeenCalled();
     });
   });
 });

@@ -32,6 +32,18 @@ export interface NotificationTypeDef {
   priority: NotificationPriority;
   /** Roles whose active holders receive this. */
   roles: string[];
+  /**
+   * A permission that also earns this notification, for a role built in Admin -> Roles that
+   * `roles` above has never heard of by name — mirrors `RolesGuard`'s `@RolesFallbackPermissions`
+   * (see `usersHoldingPermission` in `permission-audience.ts`). Additive: it never narrows who
+   * `roles` already reaches, only widens past a name a custom role will never match.
+   *
+   * Populated so far only where a live case proved the gap and the right permission was
+   * unambiguous — the three workforce/HR types below, matched to the exact permission `/hr`'s
+   * own route requires. Left unset elsewhere rather than guessed; a wrong permission here would
+   * either leak an event to the wrong desk or silently claim a fix that misses its audience.
+   */
+  fallbackPermissions?: string[];
   /** Non-role recipients resolved from the payload. */
   special?: SpecialRecipient[];
   channels: NotificationChannel[];
@@ -680,6 +692,9 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     category: NotificationCategory.WORKFORCE,
     priority: NotificationPriority.HIGH,
     roles: ['OPERATIONS'],
+    // Same permission /hr's own route requires (hr.controller.ts) — a custom role built to run
+    // the HR desk holds this without holding OPERATIONS by name.
+    fallbackPermissions: ['ASSAYER:VIEW:ORGANIZATION'],
     channels: IN_APP,
     title: 'Assayer document expiring',
     body: "${assayerName}'s ${documentName} expires on ${expiryDate}.",
@@ -705,6 +720,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     category: NotificationCategory.WORKFORCE,
     priority: NotificationPriority.HIGH,
     roles: ['OPERATIONS'],
+    fallbackPermissions: ['ASSAYER:VIEW:ORGANIZATION'],
     channels: IN_APP,
     title: 'Assayer certification expiring',
     body: "${assayerName}'s ${certificationName} certification expires on ${expiryDate}. Once it lapses they cannot be assigned to work that requires it, so please start the renewal.",
@@ -717,6 +733,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     // reaches them where they use it, in the planning screen's candidate list, rather than as a
     // bell item linking to a roster they are not permitted to see.
     roles: ['OPERATIONS', ...ADMINS],
+    fallbackPermissions: ['ASSAYER:VIEW:ORGANIZATION'],
     channels: IN_APP,
     title: 'New assayer onboarded',
     body: '${assayerName} is now active and available for assignment.',

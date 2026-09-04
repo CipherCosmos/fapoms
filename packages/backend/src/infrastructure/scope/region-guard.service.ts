@@ -218,6 +218,31 @@ export class RegionGuardService {
   }
 
   /**
+   * Narrows a candidate id list to accounts whose region assignment covers `region` — same
+   * predicate as `regionAllowed` below: an unassigned (national) account always passes, and a
+   * region-assigned one passes only for its own region(s).
+   *
+   * `region: null` — the event's own region could not be resolved — passes everyone through
+   * unfiltered, same reasoning as `assertRegionAllowed`'s note on a null record region: an
+   * unresolvable region is a data gap, not a security boundary, and narrowing on it would make
+   * the event permanently invisible to the very people who could notice and fix the gap.
+   */
+  async filterUsersByRegion(userIds: string[], region: string | null): Promise<string[]> {
+    if (!region || userIds.length === 0) return userIds;
+    const rows = await this.dataSource.query(
+      `SELECT id, regions FROM users WHERE id = ANY($1)`,
+      [userIds],
+    );
+    const regionsById = new Map<string, Region[] | null>(
+      rows.map((r: any) => [
+        r.id,
+        Array.isArray(r.regions) && r.regions.length > 0 ? (r.regions as Region[]) : null,
+      ]),
+    );
+    return userIds.filter((id) => this.regionAllowed(region, regionsById.get(id) ?? null));
+  }
+
+  /**
    * The region an outgoing realtime event belongs to, or `null` when it has none.
    *
    * Broadcast payloads are written by 75 different call sites and most do not carry a region,
