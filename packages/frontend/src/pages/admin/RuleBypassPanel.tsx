@@ -7,7 +7,7 @@ import {
 } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
-import { useConfirm } from '../../components/ui';
+import { useConfirm, PageHeader } from '../../components/ui';
 import { useCurrentPermissions, useCurrentRoles } from '../../hooks/useCurrentRoles';
 import { canAccessRoute } from '../../config/route-permissions';
 
@@ -260,15 +260,11 @@ export const RuleBypassPanel: React.FC = () => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '900px' }}>
       {confirmDialog}
-      <div>
-        <h2 style={{ fontSize: '19px', fontWeight: 700, margin: 0 }}>Rule bypass</h2>
-        <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: '5px 0 0', lineHeight: 1.55 }}>
-          Suspend named operational rules so a workflow can be tested end to end without
-          travelling to a branch or fabricating reference data. Every suspension is recorded
-          against the records it affects, announced across the whole product while it is on, and
-          expires on its own.
-        </p>
-      </div>
+      <PageHeader
+        icon={<Unlock size={20} />}
+        title="Rule bypass"
+        subtitle="Suspend named operational rules so a workflow can be tested end to end. Every suspension is recorded against the records it affects, announced while it is on, and expires on its own."
+      />
 
       {current.active ? (
         <div style={{ ...card, borderColor: 'var(--danger)', background: 'var(--status-cancelled-bg)' }}>

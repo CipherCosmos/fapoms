@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import { Bell, Mail, RotateCcw, Save, Eye, FileText, Info } from 'lucide-react';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
-import { Modal, AlertBanner, useToast, Select, useConfirm } from '../../components/ui';
+import { Modal, AlertBanner, useToast, Select, useConfirm, PageHeader } from '../../components/ui';
 import { useCurrentRoles, canAdministerNotifications } from '../../hooks/useCurrentRoles';
 
 /**
@@ -182,15 +182,11 @@ export const NotificationAdmin: React.FC = () => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
       {confirmDialog}
-      <div>
-        <h2 style={{ fontSize: '20px', fontWeight: 700, margin: 0, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <Bell style={{ color: 'var(--accent)' }} /> Notification Rules
-        </h2>
-        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-          Which events the platform raises, who receives them, on which channels, and in what words.
-          Email delivery itself is configured under Platform Settings.
-        </span>
-      </div>
+      <PageHeader
+        icon={<Bell size={20} />}
+        title="Notification Rules"
+        subtitle="Which events the platform raises, who receives them, on which channels, and in what words. Email delivery itself is configured under Platform Settings."
+      />
 
       {error && <AlertBanner type="error">{error}</AlertBanner>}
 

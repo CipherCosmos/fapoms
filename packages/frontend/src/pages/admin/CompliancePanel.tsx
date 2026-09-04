@@ -9,6 +9,7 @@ import {
 } from '../../services/compliance';
 import { userMessage } from '../../services/errors';
 import { useCurrentRoles, canManageCompliance } from '../../hooks/useCurrentRoles';
+import { PageHeader } from '../../components/ui';
 
 const fmt = (d: string | null) =>
   d ? new Date(d).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—';
@@ -80,16 +81,11 @@ export const CompliancePanel: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 20, maxWidth: 1000, margin: '0 auto' }}>
-      <div>
-        <h2 style={{ fontSize: 24, fontWeight: 800, fontFamily: 'var(--font-display)', margin: 0, display: 'flex', alignItems: 'center', gap: 10 }}>
-          <ShieldAlert size={22} /> Security & Compliance
-        </h2>
-        <p style={{ color: 'var(--text-secondary)', fontSize: 14, margin: '4px 0 0' }}>
-          The security-incident register and the statutory clocks it runs — CERT-In reporting within 6 hours,
-          a full DPDP breach report to the Data Protection Board within 72 hours, and affected people notified
-          without delay (DPDP sets no fixed hour count for that one).
-        </p>
-      </div>
+      <PageHeader
+        icon={<ShieldAlert size={20} />}
+        title="Security & Compliance"
+        subtitle="The security-incident register and the statutory clocks it runs — CERT-In within 6 hours, a full DPDP breach report to the Data Protection Board within 72 hours, and affected people notified without delay."
+      />
 
       {/* Health strip */}
       <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>

@@ -1,5 +1,5 @@
 import React from 'react';
-import { NavLink, Navigate, Outlet, useOutletContext, useSearchParams } from 'react-router-dom';
+import { NavLink, Navigate, Outlet, useOutletContext, useSearchParams, Link } from 'react-router-dom';
 import {
   Users, MapPin, ClipboardList, Wallet, AlertTriangle,
 } from 'lucide-react';
@@ -7,9 +7,9 @@ import {
 import { useHrWorkforce } from '../../hooks/useHrWorkforce';
 import type { HrWorkforceOverview } from '../../hooks/useHrWorkforce';
 import { useCurrentRoles, canManageAssayers } from '../../hooks/useCurrentRoles';
-import { AlertBanner } from '../../components/ui';
+import { AlertBanner, PageHeader } from '../../components/ui';
 import { useImportIssues } from './useImportIssues';
-import { HrHeader } from './hr-ui';
+import { fmtWhen } from './hr-ui';
 import { LEGACY_TABS, LEGACY_PATHS, resolveHrDestination } from './hr-destinations';
 import { userMessage } from '../../services/errors';
 
@@ -186,7 +186,16 @@ export const HrLayout: React.FC = () => {
 
   return (
     <div style={{ padding: '20px 24px', maxWidth: '1500px' }}>
-      <HrHeader data={d} canManage={canManage} />
+      <PageHeader
+        icon={<Users size={20} />}
+        title="Workforce"
+        subtitle={`${d.headcount.active} active · ${d.headcount.onboarding} onboarding · ${d.headcount.exited} exited · updated ${fmtWhen(d.generatedAt)}`}
+        actions={
+          <Link to="/hr/roster" className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 14px', textDecoration: 'none' }}>
+            <Users size={14} /> {canManage ? 'Manage roster' : 'View roster'}
+          </Link>
+        }
+      />
 
       {/*
         * ONE SCROLLING STRIP, NEVER A WRAPPED STACK.
