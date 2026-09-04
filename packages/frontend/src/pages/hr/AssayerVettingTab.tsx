@@ -14,6 +14,8 @@ import { looksLikeMask } from './assayer-shared';
 import { fmtDate } from '../../utils/dates';
 import { userMessage } from '../../services/errors';
 import { counted } from '../../utils/plural';
+import { relationshipOptions } from './reference-vocabulary';
+import { EMPANELMENT_STATUS_REASONS, OTHER_STATUS_REASON } from './empanelment-reason-vocabulary';
 
 /**
  * May we send this person out, and to whom.
@@ -356,19 +358,6 @@ const UploadButton: React.FC<{
   </label>
 );
 
-/**
- * How a referee knows the person.
- *
- * Free text here produced nothing usable — every one of the 1,983 imported references has this
- * blank — and free text is also how one relationship becomes "Ex-manager", "ex manager" and
- * "Former Manager". A short list covers what a reference actually is; anything else is a note,
- * not a relationship.
- */
-const RELATIONSHIPS = [
-  'Former manager', 'Former colleague', 'Current colleague', 'Client contact',
-  'Friend', 'Neighbour', 'Relative',
-] as const;
-
 /** The office a signed original sits in, chosen rather than typed. */
 const LocationPicker: React.FC<{ value: string | null; onChange: (v: string) => void; documentLabel: string }> = ({
   value, onChange, documentLabel,
@@ -387,6 +376,52 @@ const LocationPicker: React.FC<{ value: string | null; onChange: (v: string) => 
     {HARD_COPY_LOCATIONS.map((l) => <option key={l} value={l}>{l}</option>)}
   </select>
 );
+
+/**
+ * The "why" behind a standing, as a pick from what HR actually writes plus a way to say something
+ * else.
+ *
+ * `status_reason` on this table is mostly the importer's own "Working per roster (Project Name:
+ * X)" — nobody typed that, so it is not offered as a choice here. What a person does type
+ * clusters into a short list (see `empanelment-reason-vocabulary.ts`); "Other" still takes
+ * anything, same as the plain textarea this replaces.
+ *
+ * A value already on the record that is not one of these clusters — an old free-typed reason, or
+ * one of the importer strings this list deliberately excludes — opens straight into the free-text
+ * box with that exact text, rather than being blanked because it does not match an option. `other`
+ * is seeded once from the incoming value, not recomputed on every render, so picking "Other" for a
+ * blank field does not later flip back just because the field is still empty.
+ */
+const StatusReasonField: React.FC<{ value: string; onChange: (v: string) => void; placeholder: string }> = ({
+  value, onChange, placeholder,
+}) => {
+  const known = !value || (EMPANELMENT_STATUS_REASONS as readonly string[]).includes(value);
+  const [other, setOther] = useState(!known);
+  return (
+    <>
+      <Select
+        value={other ? OTHER_STATUS_REASON : value}
+        onChange={(v) => {
+          if (v === OTHER_STATUS_REASON) { setOther(true); } else { setOther(false); onChange(String(v)); }
+        }}
+        options={[
+          { value: '', label: 'Not recorded' },
+          ...EMPANELMENT_STATUS_REASONS.map((r) => ({ value: r, label: r })),
+          { value: OTHER_STATUS_REASON, label: 'Other (type it in)' },
+        ]}
+      />
+      {other && (
+        <textarea
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          rows={3}
+          placeholder={placeholder}
+          style={{ ...fieldInput, resize: 'vertical', marginTop: '6px' }}
+        />
+      )}
+    </>
+  );
+};
 
 /**
  * The one thing being edited, whichever of the four it is.
@@ -819,14 +854,13 @@ export const AssayerVettingTab: React.FC<{
             />
           </Field>
           <Field title="Why (optional)" wide>
-            <textarea
+            <StatusReasonField
+              key={editor.clientId}
               value={editor.statusReason}
-              onChange={(e) => setEditor({ ...editor, statusReason: e.target.value })}
-              rows={3}
+              onChange={(v) => setEditor({ ...editor, statusReason: v })}
               placeholder={standingAllowsPlanning(editor.status)
                 ? 'Anything worth recording alongside this decision.'
                 : 'What was the reason? This is the record of why they are not being sent.'}
-              style={{ ...fieldInput, resize: 'vertical' }}
             />
           </Field>
         </Editor>
@@ -898,7 +932,7 @@ export const AssayerVettingTab: React.FC<{
             <Select
               value={editor.relationship}
               onChange={(v) => setEditor({ ...editor, relationship: String(v) })}
-              options={[{ value: '', label: 'Not recorded' }, ...RELATIONSHIPS.map((r) => ({ value: r, label: r }))]}
+              options={relationshipOptions(editor.relationship)}
             />
           </Field>
           <Field title="Phone">

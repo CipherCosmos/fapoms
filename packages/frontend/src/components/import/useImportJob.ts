@@ -225,14 +225,17 @@ export function useImportJob<TReport = ImportReport>() {
    * @param url The import endpoint. It must answer either a report (small file, done inside the
    *   request) or a 202 carrying `jobId` and `statusUrl` — which every import endpoint does,
    *   because they all route through the same `ImportJobService`.
+   * @param extraFields Additional multipart fields alongside `file` (e.g. the roster importer's
+   *   `overwrite`). Optional so every existing caller is unaffected.
    */
-  const start = useCallback(async (url: string, file: File) => {
+  const start = useCallback(async (url: string, file: File, extraFields?: Record<string, string>) => {
     if (timer.current) clearTimeout(timer.current);
     cancelled.current = false;
     setState({ phase: 'uploading', fileName: file.name });
 
     const body = new FormData();
     body.append('file', file);
+    for (const [key, value] of Object.entries(extraFields ?? {})) body.append(key, value);
 
     try {
       const res = await api.request<QueuedResponse | TReport>(url, { method: 'POST', body });

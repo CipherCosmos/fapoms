@@ -28,6 +28,7 @@ import { ConfigService } from '@nestjs/config';
 
 import { UserEntity } from '../user/user.entity';
 import { RefreshTokenEntity } from './refresh-token.entity';
+import { SessionService } from './session.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { AssayerEntity } from '../assayer/assayer.entity';
 import { AssayerLifecycleStatus, AUTH_ERROR_CODES, EventCategory, UserStatus } from '@fapoms/shared';
@@ -159,6 +160,15 @@ export interface JwtPayload {
   roles: string[];
   permissions: string[];
   organizationId: string | null;
+  /**
+   * The durable session id (a `user_sessions` row) this token belongs to.
+   *
+   * Minted at login and carried forward through every refresh, so a request can be attributed to a
+   * specific session/device — which is what the per-session activity history and per-device revoke
+   * need. Optional so a token issued before the session store still validates; a principal without
+   * it simply has no session dimension.
+   */
+  sid?: string;
 }
 
 export interface TokenPair {
@@ -169,6 +179,7 @@ export interface TokenPair {
 
 @Injectable()
 export class AuthService implements OnModuleInit {
+  private readonly logger = new Logger(AuthService.name);
   private readonly accessExpiration: number;
   private readonly refreshExpiration: number;
   private readonly principalCacheTtl: number;
@@ -186,6 +197,7 @@ export class AuthService implements OnModuleInit {
     private readonly cache: CacheService,
     private readonly events: DomainEventPublisher,
     private readonly notificationDispatch: NotificationDispatchService,
+    private readonly sessionService: SessionService,
   ) {
     this.accessExpiration = AuthService.expirationSeconds(
       this.configService.get<any>('JWT_ACCESS_EXPIRATION'),
@@ -197,11 +209,18 @@ export class AuthService implements OnModuleInit {
       604800, // 7 days
       'JWT_REFRESH_EXPIRATION',
     );
-    // Short by design: this cache removes the per-request 5-join RBAC load, but a
-    // suspension or role change must take effect quickly. Explicit invalidation
-    // (below + on logout) makes changes near-instant; the TTL only bounds the worst
-    // case if an invalidation is ever missed.
-    this.principalCacheTtl = Number(this.configService.get<any>('RBAC_CACHE_TTL_SECONDS', 30));
+    // Raised from 30s to 600s (10 minutes). The short TTL was there because a suspension or
+    // role change must take effect quickly, but that is already guaranteed a different way:
+    // every path that changes what a principal holds explicitly deletes this cache entry
+    // synchronously, before its own response returns:
+    //   - role edit / permission change -> invalidateRoleHolders -> user:role-changed -> here
+    //   - user update (status, regions) -> UserService.updateUser -> user:updated -> here
+    //   - password change / admin reset -> UserService deletes the key directly, and also
+    //     revokes every refresh token so a stale session cannot even reach this cache
+    //   - app-access lifecycle changes on the assayer side -> the same invalidation path
+    // With that in place the TTL only bounds the worst case if an invalidation is ever missed,
+    // not the normal case, so it can be sized for hit rate instead of for that worst case.
+    this.principalCacheTtl = Number(this.configService.get<any>('RBAC_CACHE_TTL_SECONDS', 600));
   }
 
   /**
@@ -227,6 +246,55 @@ export class AuthService implements OnModuleInit {
       const id = payload?.userId;
       if (id) void this.revokeAllSessions(id);
     });
+
+    // Fire-and-forget: a boot check that never blocks or fails startup. See runRbacDriftCheck.
+    void this.runRbacDriftCheck();
+  }
+
+  /**
+   * Warn on boot if the capability path (role_responsibilities -> responsibility_capabilities
+   * -> capability_permissions) has ever granted something role_permissions does not also grant
+   * directly.
+   *
+   * Both `permissionKeysHeldBy` (guards.ts) and the JWT claim built at login read ONLY
+   * role.permissions — the capability path is documentation, describing why a role holds a
+   * grant, not a second source of authorization (see the docblocks on ResponsibilityEntity and
+   * CapabilityEntity). That is true today (verified: the capability-only count is 0 across every
+   * role), but nothing stops the seed data or a future admin-UI feature from adding a
+   * responsibility/capability grant without also adding the matching direct one, at which point
+   * the two would silently disagree about what a role holds and nobody enforcing access would
+   * ever notice, because nothing enforcing access reads that path. This just watches for that
+   * and logs loudly if it ever happens; it does not change behaviour or block boot.
+   */
+  private async runRbacDriftCheck(): Promise<void> {
+    try {
+      const rows: Array<{ role_name: string; resource: string; action: string; scope: string }> =
+        await this.userRepository.manager.query(`
+          SELECT DISTINCT r.name AS role_name, p.resource, p.action, p.scope
+          FROM roles r
+          JOIN role_responsibilities rr ON rr.role_id = r.id
+          JOIN responsibility_capabilities rc ON rc.responsibility_id = rr.responsibility_id
+          JOIN capability_permissions cp ON cp.capability_id = rc.capability_id
+          JOIN permissions p ON p.id = cp.permission_id
+          WHERE NOT EXISTS (
+            SELECT 1 FROM role_permissions rp
+            WHERE rp.role_id = r.id AND rp.permission_id = p.id
+          )
+        `);
+      if (rows.length > 0) {
+        for (const row of rows) {
+          this.logger.warn(
+            `RBAC drift: role ${row.role_name} reaches ${row.resource}:${row.action}:${row.scope} ` +
+            `only via the responsibility/capability path, with no matching direct role_permissions ` +
+            `grant. Guards and the JWT claim ignore that path, so this role does NOT actually hold ` +
+            `the permission the seed data implies it should.`,
+          );
+        }
+      }
+    } catch (err) {
+      // Never let a diagnostic query prevent the service from starting.
+      this.logger.warn(`RBAC drift check failed to run: ${(err as Error).message}`);
+    }
   }
 
   private principalKey(userId: string): string {
@@ -248,7 +316,7 @@ export class AuthService implements OnModuleInit {
         { username: usernameOrEmail },
         { email: usernameOrEmail },
       ],
-      relations: ['roles', 'roles.permissions', 'roles.responsibilities', 'roles.responsibilities.capabilities', 'roles.responsibilities.capabilities.permissions'],
+      relations: ['roles', 'roles.permissions'],
     });
     if (user) {
       // passwordHash is `select: false` on the entity, so the relation-loaded row above does not
@@ -276,7 +344,7 @@ export class AuthService implements OnModuleInit {
           id: true, assayerCode: true, displayName: true, email: true, phone: true,
           organizationId: true, lifecycleStatus: true, passwordHash: true,
           failedLoginAttempts: true, lockedUntil: true, mustChangePassword: true,
-          tempPasswordExpiresAt: true,
+          tempPasswordExpiresAt: true, isActive: true,
         },
       });
 
@@ -331,6 +399,22 @@ export class AuthService implements OnModuleInit {
       }
 
       /**
+       * `maySignIn` only looks at the lifecycle status, and a soft-deleted assayer's status is
+       * not necessarily changed by the delete itself (a soft-deleted assayer can still sit at
+       * ACTIVE in the lifecycle column while `isActive` is what the delete actually flips). This
+       * check refuses a soft-deleted account even though its password and lifecycle status would
+       * otherwise pass, using the same coded refusal shape as `signInRefusal` so the client
+       * handles it identically to an ordinary closed account.
+       */
+      if (assayer.isActive === false) {
+        await this.cache.del(this.principalKey(assayer.id));
+        throw withCode(
+          new ForbiddenException('This account is closed. If you think that is wrong, please speak to your HR contact.'),
+          AUTH_ERROR_CODES.ACCOUNT_CLOSED,
+        );
+      }
+
+      /**
        * A temporary password stops working on the date HR was told it would.
        *
        * Issuing app access returns an `expiresAt` that HR reads out or sends on, and for a while
@@ -367,7 +451,15 @@ export class AuthService implements OnModuleInit {
         organizationId: assayer.organizationId,
       };
 
-      const tokens = await this.generateTokenPair(payload, ipAddress, userAgent);
+      const session = await this.sessionService.create({
+        userId: assayer.id,
+        principalType: 'ASSAYER',
+        ipAddress,
+        userAgent,
+        loginMethod: 'PASSWORD',
+        expiresAt: new Date(Date.now() + this.refreshExpiration * 1000),
+      });
+      const tokens = await this.generateTokenPair(payload, ipAddress, userAgent, session.id);
 
       await this.auditService.recordEventSafe({
         category: EventCategory.USER,
@@ -436,8 +528,18 @@ export class AuthService implements OnModuleInit {
     user.lastLoginAt = new Date();
     await this.userRepository.save(user);
 
+    // Mint the durable session this sign-in belongs to; its id rides every token as `sid`.
+    const session = await this.sessionService.create({
+      userId: user.id,
+      principalType: 'USER',
+      ipAddress,
+      userAgent,
+      loginMethod: 'PASSWORD',
+      expiresAt: new Date(Date.now() + this.refreshExpiration * 1000),
+    });
+
     // Generate tokens
-    const tokens = await this.generateTokenPair(user, ipAddress, userAgent);
+    const tokens = await this.generateTokenPair(user, ipAddress, userAgent, session.id);
 
     // Record audit event
     await this.auditService.recordEventSafe({
@@ -574,7 +676,7 @@ export class AuthService implements OnModuleInit {
     // Load user with roles
     const user = await this.userRepository.findOne({
       where: { id: storedToken.userId },
-      relations: ['roles', 'roles.permissions', 'roles.responsibilities', 'roles.responsibilities.capabilities', 'roles.responsibilities.capabilities.permissions'],
+      relations: ['roles', 'roles.permissions'],
     });
 
     if (user) {
@@ -589,7 +691,11 @@ export class AuthService implements OnModuleInit {
       storedToken.revokedAt = new Date();
       await this.refreshTokenRepository.save(storedToken);
 
-      const { tokens, refreshRowId } = await this.generateTokenPairWithRow(user, ipAddress, userAgent);
+      // Carry the session forward — one sign-in keeps one session id across every rotation — and
+      // move its last-seen forward so the sessions screen shows when this device was last active.
+      const sessionId = storedToken.sessionId ?? undefined;
+      const { tokens, refreshRowId } = await this.generateTokenPairWithRow(user, ipAddress, userAgent, sessionId);
+      if (sessionId) await this.sessionService.touch(sessionId, ipAddress);
 
       // Point at the successor ROW, never store its secret. See generateTokenPairWithRow.
       storedToken.replacedBy = refreshRowId;
@@ -629,6 +735,18 @@ export class AuthService implements OnModuleInit {
       throw signInRefusal(assayer.lifecycleStatus as AssayerLifecycleStatus);
     }
 
+    // Same soft-delete check as login (see the comment there) — a refresh must not admit a
+    // principal the login path would refuse. Also drop the cached principal on this path: a
+    // still-valid access token issued before the delete would otherwise keep validating against
+    // the cached copy for up to the cache TTL even after every refresh/login is shut.
+    if (assayer.isActive === false) {
+      await this.cache.del(this.principalKey(assayer.id));
+      throw withCode(
+        new ForbiddenException('This account is closed. If you think that is wrong, please speak to your HR contact.'),
+        AUTH_ERROR_CODES.ACCOUNT_CLOSED,
+      );
+    }
+
     const assayerPayload: JwtPayload = {
       sub: assayer.id,
       username: assayer.assayerCode,
@@ -642,7 +760,12 @@ export class AuthService implements OnModuleInit {
     storedToken.revokedAt = new Date();
     await this.refreshTokenRepository.save(storedToken);
 
-    const { tokens, refreshRowId } = await this.generateTokenPairWithRow(assayerPayload);
+    // Carry the session forward across the rotation, as on the staff path above, and refresh its
+    // last-seen. (This path also now records the refresh request's IP/UA on the new token row,
+    // which the assayer branch previously left null.)
+    const sessionId = storedToken.sessionId ?? undefined;
+    const { tokens, refreshRowId } = await this.generateTokenPairWithRow(assayerPayload, ipAddress, userAgent, sessionId);
+    if (sessionId) await this.sessionService.touch(sessionId, ipAddress);
 
     // Point at the successor ROW, never store its secret. See generateTokenPairWithRow.
     storedToken.replacedBy = refreshRowId;
@@ -741,7 +864,11 @@ export class AuthService implements OnModuleInit {
       { userId, isRevoked: false },
       { isRevoked: true, revokedAt: new Date() },
     );
+    // Drop the cached principal first (a stale access token must re-read fresh state promptly),
+    // then close the durable session rows to match the tokens so the sessions/devices view and the
+    // audit trail agree the sessions ended. The order between these two is not significant.
     await this.cache.del(this.principalKey(userId));
+    await this.sessionService.revokeAllForUser(userId, null, 'BULK_REVOKE');
   }
 
   /**
@@ -780,6 +907,9 @@ export class AuthService implements OnModuleInit {
       { userId, isRevoked: false },
       { isRevoked: true, revokedAt: new Date() },
     );
+
+    // Close this user's session rows too — self-initiated, so the actor is the user themselves.
+    await this.sessionService.revokeAllForUser(userId, userId, 'LOGOUT');
 
     // Drop the cached principal so a re-auth after logout re-reads fresh state.
     await this.cache.del(this.principalKey(userId));
@@ -850,29 +980,48 @@ export class AuthService implements OnModuleInit {
   }
 
   async validateJwtPayload(payload: JwtPayload): Promise<any> {
-    // Hot path: this runs on every authenticated request. The underlying query
-    // eager-loads roles → permissions → responsibilities → capabilities →
-    // permissions (a five-way join), so serving it from a short-lived Redis cache
-    // is the single biggest per-request saving in the system. A cache MISS (or Redis
-    // being down) simply falls through to the database, so correctness never depends
-    // on the cache being available.
+    // Hot path: this runs on every authenticated request. The underlying query joins
+    // roles -> permissions, so serving it from a short-lived Redis cache is the single
+    // biggest per-request saving in the system. `cache.wrap` also single-flights concurrent
+    // misses of the same key into one load, so a stampede of requests for the same principal
+    // right after the cache expires runs the query once, not once per request. A cache MISS (or
+    // Redis being down) simply falls through to `loadPrincipal`, so correctness never depends on
+    // the cache being available.
     const cacheKey = this.principalKey(payload.sub);
-    const cached = await this.cache.getJson<any>(cacheKey);
-    if (cached) return cached;
+    return this.cache.wrap(cacheKey, this.principalCacheTtl, () => this.loadPrincipal(payload));
+  }
 
+  /** The database load behind `validateJwtPayload`, run on every cache miss. */
+  private async loadPrincipal(payload: JwtPayload): Promise<any> {
     const user = await this.userRepository.findOne({
       where: { id: payload.sub, status: UserStatus.ACTIVE },
-      relations: ['roles', 'roles.permissions', 'roles.responsibilities', 'roles.responsibilities.capabilities', 'roles.responsibilities.capabilities.permissions'],
+      relations: ['roles', 'roles.permissions'],
     });
-    if (user) {
-      await this.cache.setJson(cacheKey, user, this.principalCacheTtl);
-      return user;
-    }
+    if (user) return user;
 
     const assayer = await this.assayerRepository.findOne({
       where: { id: payload.sub },
     });
     if (assayer) {
+      /**
+       * The per-request status gate the staff branch already has (`status: UserStatus.ACTIVE` in
+       * the query above) — the assayer branch was missing it entirely.
+       *
+       * Login (`login`) and refresh (`refreshToken`) both refuse an assayer who is terminated,
+       * resigned, suspended, inactive, archived or soft-deleted (`maySignIn` + `isActive`), and
+       * the refresh path even deletes the cached principal on a soft-delete "so a still-valid
+       * access token stops validating against the cached copy". But that only works if the
+       * RE-LOAD then also rejects — and it did not: `loadPrincipal` returned a full ASSAYER
+       * principal for ANY existing row, so a fired assayer's held access token kept returning 200
+       * on every route until it expired, and clearing the cache achieved nothing. Confirmed
+       * 2026-09-04: AS-01 set TERMINATED + SUSPENDED + is_active=false, cache cleared, held token
+       * still 200 (re-login correctly 403). Gating here cuts the session on the very next request,
+       * matching how a suspended STAFF account is already cut immediately. Onboarding stages stay
+       * admitted (`maySignIn` includes them) — `JwtAuthGuard` confines those separately.
+       */
+      if (!maySignIn(assayer.lifecycleStatus as AssayerLifecycleStatus) || assayer.isActive === false) {
+        return null;
+      }
       const principal = {
         id: assayer.id,
         username: assayer.assayerCode,
@@ -896,7 +1045,7 @@ export class AuthService implements OnModuleInit {
          * `JwtAuthGuard` refuses an onboarding principal on every route not marked
          * `@OnboardingAllowed()`, so the restriction is enforced once here rather than per
          * controller. Read from the row on every cache miss, so HR activating somebody clears it
-         * within the principal cache's TTL (`RBAC_CACHE_TTL_SECONDS`, 30s by default) without
+         * within the principal cache's TTL (`RBAC_CACHE_TTL_SECONDS`) without
          * anyone signing out — worth knowing, because the failure it bounds is a newly activated
          * assayer briefly still being told to finish registering.
          */
@@ -909,7 +1058,6 @@ export class AuthService implements OnModuleInit {
           }),
         }],
       };
-      await this.cache.setJson(cacheKey, principal, this.principalCacheTtl);
       return principal;
     }
 
@@ -935,8 +1083,9 @@ export class AuthService implements OnModuleInit {
     userOrPayload: UserEntity | JwtPayload,
     ipAddress?: string,
     userAgent?: string,
+    sessionId?: string,
   ): Promise<TokenPair> {
-    const { tokens } = await this.generateTokenPairWithRow(userOrPayload, ipAddress, userAgent);
+    const { tokens } = await this.generateTokenPairWithRow(userOrPayload, ipAddress, userAgent, sessionId);
     return tokens;
   }
 
@@ -956,6 +1105,7 @@ export class AuthService implements OnModuleInit {
     userOrPayload: UserEntity | JwtPayload,
     ipAddress?: string,
     userAgent?: string,
+    sessionId?: string,
   ): Promise<{ tokens: TokenPair; refreshRowId: string }> {
     let payload: JwtPayload;
     let userId: string;
@@ -967,16 +1117,17 @@ export class AuthService implements OnModuleInit {
       const user = userOrPayload;
       userId = user.id;
       const roles = user.roles ? user.roles.map((r) => r.name) : [];
-      const directPerms = user.roles ? user.roles.flatMap((r) => r.permissions || []) : [];
-      const responsibilityPerms = user.roles
-        ? user.roles.flatMap((r) =>
-            (r.responsibilities || []).flatMap((resp) =>
-              (resp.capabilities || []).flatMap((cap) => cap.permissions || []),
-            ),
-          )
-        : [];
-      const allPerms = [...directPerms, ...responsibilityPerms];
-      const permissions = allPerms.map((p) => `${p.resource}:${p.action}:${p.scope}`);
+      // One vocabulary: this used to compute permissions itself by walking
+      // roles -> permissions AND roles -> responsibilities -> capabilities -> permissions,
+      // a second copy of the rule `permissionKeysHeldBy` (guards.ts) already implements for the
+      // guards themselves. Every capability-path permission is also a direct role_permissions
+      // grant (verified: capability-only count is 0 across every role), so the two copies never
+      // actually disagreed today. Still, a token built by one rule and checked by another is a
+      // vocabulary the guard and the JWT claim could silently drift apart on, and the scope
+      // widening in `permissionKeysHeldBy` (a PLATFORM grant implies every narrower scope) was
+      // duplicated nowhere here at all. Delegating to the same helper the guards call means the
+      // token can only ever claim what the guard would also grant.
+      const permissions = [...permissionKeysHeldBy(user)];
 
       payload = {
         sub: user.id,
@@ -987,6 +1138,12 @@ export class AuthService implements OnModuleInit {
         organizationId: user.organizationId ?? null,
       };
     }
+
+    // The session this token belongs to: on login the caller mints a fresh one and passes its id;
+    // on refresh the caller passes the retiring token's session id, so the whole rotation chain of
+    // one sign-in shares a session. A token built from a passed-in payload that already carries a
+    // sid keeps it if no override is given (defence for any future caller).
+    if (sessionId !== undefined) payload.sid = sessionId;
 
     const accessToken = this.jwtService.sign(payload, {
       expiresIn: this.accessExpiration,
@@ -1003,6 +1160,7 @@ export class AuthService implements OnModuleInit {
       expiresAt: new Date(Date.now() + this.refreshExpiration * 1000),
       ipAddress: ipAddress ?? null,
       userAgent: userAgent ?? null,
+      sessionId: payload.sid ?? null,
     });
     await this.refreshTokenRepository.save(refreshTokenEntity);
 

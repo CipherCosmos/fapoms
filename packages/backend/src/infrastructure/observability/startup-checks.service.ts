@@ -156,8 +156,68 @@ export class StartupChecksService implements OnApplicationBootstrap {
           : 'NOT configured — no push will reach any handset. Provide the Firebase service account.',
     });
 
+    // ── Clock sync (NTP) ─────────────────────────────────────────────────────
+    // Audit timestamps and the hash chain's ordering are only as trustworthy as the clock behind
+    // them, and CERT-In 2022 requires ICT systems to be NTP-synced (to NPL/NIC in India). This
+    // cannot verify the NTP daemon from inside the process, but it CAN catch the symptom that
+    // matters: the app server and the database disagreeing about the time. A large drift means one
+    // of them is not synced, and audit rows will carry a time nobody can trust.
+    checks.push(await this.clockDriftCheck());
+
+    // ── Data residency ───────────────────────────────────────────────────────
+    // CERT-In requires logs stored within India; RBI's outsourcing direction requires customer data
+    // stored only in India. The app cannot detect where it is hosted, so this is a declared value —
+    // a deliberate acknowledgement that the operator has confirmed India-only hosting, and a loud
+    // reminder in the boot log when they have not.
+    checks.push(this.dataResidencyCheck());
+
     this.last = checks;
     return checks;
+  }
+
+  /** App-vs-database clock drift — the observable symptom of a missing NTP sync. */
+  private async clockDriftCheck(): Promise<StartupCheck> {
+    const thresholdMs = Number(process.env.CLOCK_DRIFT_WARN_MS) || 5_000;
+    try {
+      const before = Date.now();
+      const rows: Array<{ now: string | Date }> = await this.dataSource.query('SELECT now() AS now');
+      const after = Date.now();
+      // Charge the round-trip to the app side of the comparison so query latency cannot masquerade
+      // as drift: the DB clock is compared against the midpoint of when we could have observed it.
+      const appMid = before + (after - before) / 2;
+      const driftMs = Math.abs(new Date(rows[0].now).getTime() - appMid);
+      return {
+        name: 'clock sync',
+        ok: driftMs <= thresholdMs,
+        critical: false,
+        detail: driftMs <= thresholdMs
+          ? `app and database clocks agree within ${Math.round(driftMs)} ms`
+          : `app and database clocks differ by ${Math.round(driftMs)} ms (> ${thresholdMs} ms) — check NTP sync (CERT-In requires it); audit timestamps may be unreliable`,
+      };
+    } catch (err) {
+      return { name: 'clock sync', ok: false, critical: false, detail: `could not compare clocks: ${(err as Error).message}` };
+    }
+  }
+
+  /** Declared hosting region — India is required for logs (CERT-In) and customer data (RBI). */
+  private dataResidencyCheck(): StartupCheck {
+    const region = (process.env.DATA_RESIDENCY_REGION || '').trim().toUpperCase();
+    if (!region) {
+      return {
+        name: 'data residency',
+        ok: false,
+        critical: false,
+        detail: 'DATA_RESIDENCY_REGION unset — confirm this deployment (database, object store, logs) is hosted in India, then set it to IN. CERT-In requires logs in India; RBI requires customer data stored only in India.',
+      };
+    }
+    return {
+      name: 'data residency',
+      ok: region === 'IN',
+      critical: false,
+      detail: region === 'IN'
+        ? 'declared India (IN)'
+        : `declared "${region}" — CERT-In and RBI require Indian jurisdiction for logs and customer data; a non-IN region is almost certainly a misconfiguration`,
+    };
   }
 
   private async roleNames(): Promise<Set<string>> {

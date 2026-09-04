@@ -83,6 +83,9 @@ const HUMAN_ALLOWED = 'PDF, images (JPEG/PNG/WebP/HEIC), Excel and CSV';
 /** What the narrower set is called when a route refuses something for being outside it. */
 const HUMAN_SCANS = 'PDF or an image (JPEG/PNG/WebP/HEIC)';
 
+/** As above, for the spreadsheet-only routes. */
+const HUMAN_SPREADSHEETS = 'an Excel (.xlsx/.xls) or CSV file';
+
 /**
  * The refusal names what *this* route takes, not what the system takes somewhere else.
  *
@@ -90,7 +93,9 @@ const HUMAN_SCANS = 'PDF or an image (JPEG/PNG/WebP/HEIC)';
  * refused their file, is a message that sends them to try a spreadsheet.
  */
 const humanList = (allowed: Set<string>): string =>
-  allowed === SCAN_UPLOAD_TYPES ? HUMAN_SCANS : HUMAN_ALLOWED;
+  allowed === SCAN_UPLOAD_TYPES ? HUMAN_SCANS
+  : allowed === SPREADSHEET_UPLOAD_TYPES ? HUMAN_SPREADSHEETS
+  : HUMAN_ALLOWED;
 
 function mb(bytes: number): string {
   return (bytes / 1024 / 1024).toFixed(bytes < 10 * 1024 * 1024 ? 1 : 0);
@@ -107,6 +112,13 @@ function mb(bytes: number): string {
 export const SCAN_UPLOAD_TYPES = new Set([
   'application/pdf',
   'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif',
+]);
+
+/** Spreadsheets and CSV. What a customer-master batch can actually be — never a PDF, an image, or anything else `ALLOWED_UPLOAD_TYPES` waves through for the scan routes. */
+export const SPREADSHEET_UPLOAD_TYPES = new Set([
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'application/vnd.ms-excel',
+  'text/csv', 'application/csv',
 ]);
 
 /**

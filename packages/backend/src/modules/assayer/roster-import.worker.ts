@@ -38,7 +38,7 @@ export class RosterImportWorker {
    */
   @Process({ name: ROSTER_IMPORT_JOB, concurrency: 1 })
   async runRosterImport(job: Job<RosterImportJobData>): Promise<RosterImportSummary> {
-    const { actorId, fileBase64, fileName, totalRows, sheetName } = job.data;
+    const { actorId, fileBase64, fileName, totalRows, sheetName, overwrite } = job.data;
     const startedAt = Date.now();
 
     this.logger.log(`Roster import ${job.id} starting: ${totalRows} row(s) from ${fileName ?? 'an uploaded file'}.`);
@@ -49,7 +49,16 @@ export class RosterImportWorker {
       // Never a rehearsal. A queued `dryRun` would spend the whole import writing nothing and then
       // report it to a page that has moved on — the rehearsal is the part the operator waits for,
       // so it stays in the request.
-      { dryRun: false, sheetName: sheetName ?? undefined },
+      //
+      // `fileName` and `overwrite` used to stop at `job.data` and never reach the importer, so
+      // every queued run's `ROSTER_IMPORT_APPLIED` audit row said "an uploaded file" regardless
+      // of what was actually uploaded, and no queued run could ever opt into overwriting a
+      // disagreeing stored value — both silently defaulted, one to a wrong label, one to the
+      // safe behavior with no way to choose otherwise.
+      {
+        dryRun: false, sheetName: sheetName ?? undefined,
+        fileName: fileName ?? undefined, overwrite: overwrite ?? false,
+      },
     );
 
     const seconds = Math.round((Date.now() - startedAt) / 1000);

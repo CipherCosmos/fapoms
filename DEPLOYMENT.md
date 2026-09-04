@@ -91,6 +91,25 @@ that already exist.
 Set `DB_MIGRATIONS_RUN=false` and apply migrations as a separate step before rollout. TypeORM
 takes no cross-instance lock, so parallel starts can race on the same migration.
 
+### api / worker split
+
+`PROCESS_ROLE` (default `all`) picks what a replica does: `api` serves HTTP only and pauses its
+own Bull processors so background work never contends with request handlers for the connection
+pool; `worker` runs every processor and scheduled cron and serves nothing but `GET /api/v1/health`
+(liveness only, so the compose healthcheck has something to hit). `deploy/docker-compose.prod.yml`
+runs both — `backend` (api) and `backend-worker` (worker) — each with its own `DB_POOL_MAX` sized
+against Postgres's `max_connections` (see the comments on those two services in that file). If any
+replica is `api`, at least one `worker` (or `all`) replica must also run, or queued jobs pile up
+forever. Job concurrency across every queue lives in one table,
+`packages/backend/src/infrastructure/queue/worker-concurrency.ts`
+(`WORKER_CONCURRENCY`) — that file also derives the queue list every consumer (queue pausing,
+dead-letter monitoring, the Bull Board dashboard) uses, so a new queue only needs adding there.
+
+For a single small instance where running two containers isn't worth it, stay on
+`PROCESS_ROLE=all` and instead cap `WORKER_CONCURRENCY`'s total so it stays at least 5 below
+`DB_POOL_MAX` — see the "AWS saving profile" note beside `PROCESS_ROLE` in
+`.env.production.example`.
+
 ---
 
 ## Before production
@@ -184,6 +203,7 @@ encryption, which means at that moment nothing was protecting the scans at rest.
 | minio | 9000 / 9001 | **Yes** — the API refuses to start if object storage is unreachable, and creates its own bucket on first connect |
 | redis | 6379 | Yes — background jobs and notification delivery |
 | backend | 3000 | — |
+| backend-worker | 3000 (internal only, not published) | — runs background jobs; see "api / worker split" above |
 | frontend | 80 | — |
 | livekit | 7880+ | Only for in-app calling |
 

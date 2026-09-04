@@ -350,6 +350,18 @@ describe('security controls are still wired', () => {
         + 'token and drop the cached principal on a `user:password-changed` event.',
     },
     {
+      id: 'assayer-principal-status-gated-per-request',
+      file: `${B}/modules/auth/auth.service.ts`,
+      marker: 'if (!maySignIn(assayer.lifecycleStatus as AssayerLifecycleStatus) || assayer.isActive === false) {',
+      why: 'loadPrincipal resolves the principal on EVERY authenticated request. Its staff branch '
+        + 'queries status:ACTIVE, but its assayer branch had no status gate — it returned a full '
+        + 'ASSAYER principal for any existing row. A terminated/suspended/soft-deleted assayer '
+        + 'therefore kept full API access on their held access token until it expired, even though '
+        + 'login and refresh both refuse them and refresh clears the cache expecting this re-load '
+        + 'to reject. Losing this line silently re-opens continued access for a fired field worker '
+        + '(1,165 of them). Confirmed exploitable 2026-09-04.',
+    },
+    {
       id: 'password-change-invalidates-principal-cache-synchronously',
       file: `${B}/modules/user/user.service.ts`,
       marker: 'rbacPrincipalCacheKey',

@@ -8,6 +8,17 @@ import {
 } from './route-permissions';
 
 /**
+ * A role built in Admin → Roles is a database row whose name is not a `SystemRole`, and the
+ * permission fallback exists for it alone (see canAccessRoute note 4). At runtime `useCurrentRoles`
+ * returns every role by NAME without filtering to the enum, so a custom-role principal always
+ * carries its own name in the roles array — which is precisely what tells `canAccessRoute` the
+ * fallback may run. Modelling such a principal with an empty roles array, as an earlier version of
+ * these tests did, described a principal that cannot exist and quietly relied on the fallback
+ * running for everyone.
+ */
+const CUSTOM_ROLE = ['HR_OPERATOR'] as unknown as SystemRole[];
+
+/**
  * Role gating decides who can see audit evidence, so it is the one piece of frontend logic that
  * must not be reasoned about by eye.
  */
@@ -53,8 +64,8 @@ describe('canAccessRoute', () => {
     });
 
     it('carries the section permissions down to a sub-path as well as the roles', () => {
-      expect(canAccessRoute([], ['ASSAYER:VIEW:ORGANIZATION'], '/hr/roster')).toBe(true);
-      expect(canAccessRoute([], ['DOCUMENT:VIEW:ORGANIZATION'], '/hr/roster')).toBe(false);
+      expect(canAccessRoute(CUSTOM_ROLE, ['ASSAYER:VIEW:ORGANIZATION'], '/hr/roster')).toBe(true);
+      expect(canAccessRoute(CUSTOM_ROLE, ['DOCUMENT:VIEW:ORGANIZATION'], '/hr/roster')).toBe(false);
     });
 
     it('lets a sub-path override its section when it declares its own roles', () => {
@@ -136,18 +147,18 @@ describe('canAccessRoute', () => {
     ];
 
     it('opens the workforce console it was granted', () => {
-      expect(canAccessRoute([], HR_OPERATOR, '/hr')).toBe(true);
+      expect(canAccessRoute(CUSTOM_ROLE, HR_OPERATOR, '/hr')).toBe(true);
     });
 
     it('opens its own account and its own notifications, as every signed-in user may', () => {
-      expect(canAccessRoute([], HR_OPERATOR, '/settings')).toBe(true);
-      expect(canAccessRoute([], [], '/notifications')).toBe(true);
+      expect(canAccessRoute(CUSTOM_ROLE, HR_OPERATOR, '/settings')).toBe(true);
+      expect(canAccessRoute(CUSTOM_ROLE, [], '/notifications')).toBe(true);
     });
 
     it('does not open the billing book, the user list or the audit map it was not granted', () => {
-      expect(canAccessRoute([], HR_OPERATOR, '/billing')).toBe(false);
-      expect(canAccessRoute([], HR_OPERATOR, '/users')).toBe(false);
-      expect(canAccessRoute([], HR_OPERATOR, '/executive-map')).toBe(false);
+      expect(canAccessRoute(CUSTOM_ROLE, HR_OPERATOR, '/billing')).toBe(false);
+      expect(canAccessRoute(CUSTOM_ROLE, HR_OPERATOR, '/users')).toBe(false);
+      expect(canAccessRoute(CUSTOM_ROLE, HR_OPERATOR, '/executive-map')).toBe(false);
     });
 
     /**
@@ -157,21 +168,113 @@ describe('canAccessRoute', () => {
      * allow-by-default fallback, which is how forgetting an entry would publish a page.
      */
     it('is refused a page that lists no permissions, even holding the obvious ones', () => {
-      expect(canAccessRoute([], HR_OPERATOR, '/documents')).toBe(false);
-      expect(canAccessRoute([], ['CONFIGURATION:EDIT:PLATFORM'], '/admin/settings')).toBe(false);
-      expect(canAccessRoute([], ['AUDIT_LOG:VIEW:PLATFORM'], '/admin/logs')).toBe(false);
+      expect(canAccessRoute(CUSTOM_ROLE, HR_OPERATOR, '/documents')).toBe(false);
+      expect(canAccessRoute(CUSTOM_ROLE, ['CONFIGURATION:EDIT:PLATFORM'], '/admin/settings')).toBe(false);
+      expect(canAccessRoute(CUSTOM_ROLE, ['AUDIT_LOG:VIEW:PLATFORM'], '/admin/logs')).toBe(false);
     });
 
     it('needs the exact key a page lists, not a neighbour on the same resource', () => {
       // Every entry currently names one permission, so `every` and `some` cannot be told apart
       // from the outside yet; what this pins down is that the match is by whole key. Being
       // granted create/edit/delete on assayers is not being granted the console that reads them.
-      expect(canAccessRoute([], ['ASSAYER:CREATE:ORGANIZATION'], '/hr')).toBe(false);
-      expect(canAccessRoute([], ['ASSAYER:VIEW:SELF'], '/hr')).toBe(false);
+      expect(canAccessRoute(CUSTOM_ROLE, ['ASSAYER:CREATE:ORGANIZATION'], '/hr')).toBe(false);
+      expect(canAccessRoute(CUSTOM_ROLE, ['ASSAYER:VIEW:SELF'], '/hr')).toBe(false);
     });
 
     it('is matched case-insensitively, since the backend declares these in lower case', () => {
-      expect(canAccessRoute([], ['assayer:view:organization'], '/hr')).toBe(true);
+      expect(canAccessRoute(CUSTOM_ROLE, ['assayer:view:organization'], '/hr')).toBe(true);
+    });
+  });
+
+  /**
+   * The permission fallback is for custom roles only — the fix for a real leak.
+   *
+   * A built-in role that a route deliberately leaves off its `allowedRoles` must not slip in
+   * through a permission it holds for an unrelated page. AUDITOR is the reported case: it is not on
+   * `/planning`'s list (planning is operations' job) yet it holds `PLANNING:VIEW:ORGANIZATION` for
+   * `/executive-map`, which it does own. When the fallback ran for every role, that one shared
+   * permission opened `/planning` to AUDITOR by the back door — the shell loaded, the page's own
+   * API then 403'd, and the result read as a misleading "no assayers found" empty state. This is
+   * the frontend catching up to `RolesGuard`, which already filters to unrecognised roles first.
+   */
+  describe('the permission fallback is offered to custom roles only', () => {
+    it('refuses a built-in role a page it holds the permission for but is not listed on', () => {
+      // AUDITOR holds PLANNING:VIEW:ORGANIZATION (widened from its /executive-map grant) but is
+      // deliberately absent from /planning's allowedRoles. The permission must not let it in.
+      expect(canAccessRoute([SystemRole.AUDITOR], ['PLANNING:VIEW:ORGANIZATION'], '/planning')).toBe(false);
+    });
+
+    it('still admits a built-in role that is named on the route, permission or not', () => {
+      // OPERATIONS is on /planning's list, so it never reaches the fallback — unaffected.
+      expect(canAccessRoute([SystemRole.OPERATIONS], [], '/planning')).toBe(true);
+      expect(canAccessRoute([SystemRole.ADMIN], [], '/planning')).toBe(true);
+    });
+
+    it('still admits a custom role that genuinely holds the page permission', () => {
+      // The fallback is for exactly this principal: a database role granted what the page asks for.
+      expect(canAccessRoute(CUSTOM_ROLE, ['PLANNING:VIEW:ORGANIZATION'], '/planning')).toBe(true);
+    });
+
+    it('refuses a custom role that does not hold the page permission', () => {
+      expect(canAccessRoute(CUSTOM_ROLE, ['ASSAYER:VIEW:ORGANIZATION'], '/planning')).toBe(false);
+    });
+
+    /**
+     * The mixed principal: a person carrying both a built-in role and a custom one. The presence
+     * of the custom role is what re-opens the fallback, so the merged permission set is checked —
+     * matching the runtime, where such a person's cache carries both roles' grants together.
+     */
+    it('offers the fallback to a principal who also holds a custom role', () => {
+      const roles = [SystemRole.AUDITOR, ...CUSTOM_ROLE] as unknown as SystemRole[];
+      expect(canAccessRoute(roles, ['PLANNING:VIEW:ORGANIZATION'], '/planning')).toBe(true);
+    });
+  });
+
+  /**
+   * The dashboard is the app's floor, but only for the roles that can load it.
+   *
+   * Its entry lists the six roles that hold `PROJECT:VIEW`, not every role. Listing every role let
+   * the name match admit PRODUCT_SUPPORT and ASSAYER — which hold nothing — so `requiredPermissions`
+   * was never consulted for them and `defaultRouteFor` sent them to a page whose API 403s, where the
+   * dashboard hung on loading skeletons. These pin the floor to the roles that can actually stand
+   * on it.
+   */
+  describe('the operations dashboard', () => {
+    it.each([
+      SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK,
+      SystemRole.DESK_OPERATOR, SystemRole.AUDITOR, SystemRole.CLIENT_USER,
+    ])('opens for %s, which holds project:view', (role) => {
+      expect(canAccessRoute([role], [], '/dashboard')).toBe(true);
+    });
+
+    it.each([
+      SystemRole.PRODUCT_SUPPORT, SystemRole.ASSAYER,
+    ])('is closed to %s, which holds no project:view and would only see a 403', (role) => {
+      expect(canAccessRoute([role], [], '/dashboard')).toBe(false);
+    });
+
+    it('still opens for a custom role granted project:view', () => {
+      expect(canAccessRoute(CUSTOM_ROLE, ['PROJECT:VIEW:ORGANIZATION'], '/dashboard')).toBe(true);
+    });
+  });
+
+  /**
+   * The data-entry desk is DESK/DESK_OPERATOR's, admins' to run — not the auditor's.
+   *
+   * AUDITOR used to be listed, but the page fetches a non-head's PERSONAL queue
+   * (GET /documents/data-entry/mine, @Roles ADMIN/DESK/DESK_OPERATOR) for anyone who is not a desk
+   * head, which 403s an auditor and would be empty even if it did not. Auditor oversight of
+   * validation is the dashboard's job, not the desk's working queue.
+   */
+  describe('the data-entry desk', () => {
+    it.each(['/data-entry', '/validation'])('opens %s for the desk roles', (path) => {
+      expect(canAccessRoute([SystemRole.ADMIN], [], path)).toBe(true);
+      expect(canAccessRoute([SystemRole.DESK], [], path)).toBe(true);
+      expect(canAccessRoute([SystemRole.DESK_OPERATOR], [], path)).toBe(true);
+    });
+
+    it.each(['/data-entry', '/validation'])('is closed to AUDITOR at %s, whose personal queue fetch 403s', (path) => {
+      expect(canAccessRoute([SystemRole.AUDITOR], [], path)).toBe(false);
     });
   });
 
@@ -284,11 +387,20 @@ describe('defaultRouteFor', () => {
   });
 
   it('lands a workforce role built in the admin screen on the workforce console', () => {
-    expect(defaultRouteFor([], ['ASSAYER:VIEW:ORGANIZATION'])).toBe('/hr');
+    expect(defaultRouteFor(CUSTOM_ROLE, ['ASSAYER:VIEW:ORGANIZATION'])).toBe('/hr');
   });
 
   it('lands a read-only auditor on the overview it can read', () => {
     expect(defaultRouteFor([SystemRole.AUDITOR], [])).toBe('/dashboard');
+  });
+
+  it.each([
+    SystemRole.PRODUCT_SUPPORT,
+    SystemRole.ASSAYER,
+  ])('does not strand %s on a dashboard whose data it cannot load', (role) => {
+    const landing = defaultRouteFor([role], []);
+    expect(landing).not.toBe('/dashboard');
+    expect(canAccessRoute([role], [], landing)).toBe(true);
   });
 
   it('never returns a page the person cannot open', () => {
@@ -296,9 +408,9 @@ describe('defaultRouteFor', () => {
     const cases: [SystemRole[], string[]][] = [
       ...everyRole.map((roles) => [roles, []] as [SystemRole[], string[]]),
       [[], []],
-      [[], ['ASSAYER:VIEW:ORGANIZATION']],
-      [[], ['BILLING:VIEW:ORGANIZATION']],
-      [[], ['VALIDATION:VIEW:ORGANIZATION']],
+      [CUSTOM_ROLE, ['ASSAYER:VIEW:ORGANIZATION']],
+      [CUSTOM_ROLE, ['BILLING:VIEW:ORGANIZATION']],
+      [CUSTOM_ROLE, ['VALIDATION:VIEW:ORGANIZATION']],
     ];
     for (const [roles, permissions] of cases) {
       const landing = defaultRouteFor(roles, permissions);
@@ -312,7 +424,7 @@ describe('defaultRouteFor', () => {
    * dashboard anyway, which then answered 403 and offered a Retry that could only fail again.
    */
   it('does not send someone to the dashboard when the dashboard is closed to them', () => {
-    expect(defaultRouteFor([], ['ASSAYER:VIEW:ORGANIZATION'])).not.toBe('/dashboard');
+    expect(defaultRouteFor(CUSTOM_ROLE, ['ASSAYER:VIEW:ORGANIZATION'])).not.toBe('/dashboard');
     expect(defaultRouteFor([], [])).not.toBe('/dashboard');
   });
 

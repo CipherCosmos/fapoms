@@ -21,6 +21,7 @@ const PAYABLE_TONE: Record<AssayerPayableStatus, string> = {
   PENDING: 'var(--warning)',
   APPROVED: 'var(--accent)',
   PAID: 'var(--success)',
+  VOIDED: 'var(--text-muted)',
 };
 const INVOICE_TONE: Record<InvoiceStatus, string> = {
   DRAFT: 'var(--text-secondary)',

@@ -169,6 +169,18 @@ export const NegotiateModal: React.FC<NegotiateModalProps> = ({
               onChangeText={setFeeText}
               placeholder={tr('negotiate.amountPlaceholder')}
               placeholderTextColor={t.colors.textFaint}
+              /**
+               * This box is deliberately pre-filled with the real travel figure on the table (see
+               * the comment on `feeText` above), not a placeholder — so tapping in and typing a
+               * new number without clearing the old one first does not insert, it *appends*.
+               * Proven live: countering an assignment already sitting at a ₹2,200 counter by
+               * typing "2600" over it submitted ₹22,002,600 — the two numbers concatenated, not
+               * replaced — as a genuine counter-offer, with nothing on either end catching it.
+               * `selectTextOnFocus` makes the first keystroke on focus replace the whole value,
+               * the same fix already applied to the identical pre-filled-editable-value pattern in
+               * `ExcludedCandidatesPanel.tsx` on the web side.
+               */
+              selectTextOnFocus
             />
           </View>
 

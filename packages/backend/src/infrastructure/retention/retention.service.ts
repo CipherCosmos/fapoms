@@ -5,6 +5,8 @@ import { CacheService } from '../cache/cache.service';
 import { PlatformSettingsService } from '../settings/platform-settings.service';
 import { AuthService } from '../../modules/auth/auth.service';
 import { MetricsService } from '../observability/metrics.service';
+import { ensureFuturePartitions, dropExpiredPartitions } from './location-ping-partitions';
+import { resolveRetention } from './retention-classes';
 
 /**
  * FAPOMS — the only *scheduled* thing in this system that deletes anything.
@@ -173,6 +175,8 @@ export class RetentionService {
       refreshTokens: 0,
       notifications: 0,
       locationPings: 0,
+      sessions: 0,
+      telemetry: 0,
       durationMs: 0,
       saturated: [],
       failures: [],
@@ -207,27 +211,42 @@ export class RetentionService {
       }
     };
 
+    // Ahead-of-need partition creation, before anything else touches the table this tick.
+    // Failure here is logged, not thrown into the aggregate: a missed partition-creation tick is
+    // recoverable by the next one (two months of headroom, see `location-ping-partitions.ts`),
+    // and letting it fail the whole pass would take down the other three phases for a problem
+    // that is not on their tables.
+    try {
+      await ensureFuturePartitions(this.dataSource, this.logger);
+    } catch (error) {
+      this.logger.error(`Failed to ensure future location-ping partitions: ${(error as Error).message}`);
+    }
+
     await phase('outboxEvents', 'outbox_events', () => this.purgeDispatchedOutboxEvents());
     await phase('refreshTokens', 'refresh_tokens', () => this.purgeDeadRefreshTokens());
     await phase('notifications', 'notifications', () => this.purgeReadNotifications());
     await phase('locationPings', 'assayer_location_pings', () => this.purgeLocationPings());
+    await phase('sessions', 'user_sessions', () => this.purgeSessions());
+    await phase('telemetry', 'activity_telemetry', () => this.purgeTelemetry());
 
     report.durationMs = Date.now() - started;
 
     const total =
-      report.outboxEvents + report.refreshTokens + report.notifications + report.locationPings;
+      report.outboxEvents + report.refreshTokens + report.notifications + report.locationPings +
+      report.sessions + report.telemetry;
     if (total > 0) {
       this.logger.log(
         `Retention pass removed ${total} row(s) in ${report.durationMs} ms — ` +
           `outbox ${report.outboxEvents}, refresh tokens ${report.refreshTokens}, ` +
-          `notifications ${report.notifications}, location fixes ${report.locationPings}.`,
+          `notifications ${report.notifications}, location fixes ${report.locationPings}, ` +
+          `sessions ${report.sessions}, telemetry ${report.telemetry}.`,
       );
     }
 
     if (report.failures.length > 0) {
       throw new AggregateError(
         report.failures.map((f) => f.error),
-        `Retention: ${report.failures.length} of 4 phases failed (${report.failures
+        `Retention: ${report.failures.length} of 6 phases failed (${report.failures
           .map((f) => f.phase)
           .join(', ')}).`,
       );
@@ -322,19 +341,113 @@ export class RetentionService {
   /**
    * Location fixes past the retention window.
    *
-   * The statement is deliberately the same shape as `LocationTrailService.purgeOlderThanRetention`
-   * — `ORDER BY recorded_at` is not cosmetic. It is what makes the planner use
-   * `idx_location_pings_recorded_at` (128 buffers) instead of a sequential scan that degrades as
-   * the table is recycled (11,126 buffers measured after a single purge-and-refill cycle).
+   * Since `1794610000000-PartitionLocationPingsByMonth`, `assayer_location_pings` is RANGE
+   * partitioned by month, and a partition wholly past the cutoff is retired with `DROP TABLE`
+   * rather than a batched DELETE — see `location-ping-partitions.ts` for why that is the entire
+   * point of partitioning (185 ms vs ~161 s of statements for the same month, measured in
+   * `1790600000000-DataLifecycleIndexes`, and zero dead tuples left for VACUUM to clean up).
+   *
+   * The batched DELETE is not gone, it is now the fallback for exactly one partition:
+   * `assayer_location_pings_default`, which holds whatever predates this migration and cannot be
+   * dropped wholesale because it is not bounded to a single month (see `droppablePartitions`).
+   * Once that partition ages fully past the window this statement finds nothing and costs one
+   * cheap index probe per tick — the same as it costs today with `idx_location_pings_recorded_at`.
    */
   private async purgeLocationPings(): Promise<BatchOutcome> {
     const days = await this.locationPingRetentionDays();
     if (days <= 0) return NOTHING_TO_DO;
+    const cutoff = this.cutoff(days);
+
+    const { dropped, failures } = await dropExpiredPartitions(this.dataSource, this.logger, cutoff);
+    if (failures.length > 0) {
+      throw new AggregateError(
+        failures.map((f) => f.error),
+        `Failed to drop ${failures.length} expired location-ping partition(s): ` +
+          failures.map((f) => f.name).join(', '),
+      );
+    }
+    if (dropped.length > 0) {
+      this.logger.log(`Dropped ${dropped.length} expired location-ping partition(s): ${dropped.join(', ')}.`);
+    }
+
+    // The default partition's straggler rows — anything not yet swept into a dated partition and
+    // now past the window. Same statement shape as before partitioning, on purpose: it is the one
+    // case where a row-level DELETE is still correct, and `idx_location_pings_recorded_at` still
+    // serves it (Postgres builds that index on every partition, the default one included).
     return this.deleteInBatches(
-      `DELETE FROM assayer_location_pings WHERE id IN (
-         SELECT id FROM assayer_location_pings
+      `DELETE FROM assayer_location_pings_default WHERE id IN (
+         SELECT id FROM assayer_location_pings_default
           WHERE recorded_at < $1
           ORDER BY recorded_at
+          LIMIT $2
+       )`,
+      [cutoff],
+    );
+  }
+
+  /**
+   * Login/session history past its retention window — but only sessions that have ENDED.
+   *
+   * A session is compliance history ("who was signed in, from where, on what device"), so it is
+   * kept by default and purged only once an administrator sets a window — and never below the
+   * 180-day CERT-In floor, which `resolveRetention('SESSION_HISTORY', …)` enforces. Only revoked or
+   * expired sessions are ever removed: a still-live session is never deleted regardless of age, so
+   * an anomalously long-lived one cannot be swept out from under an active user.
+   */
+  private async purgeSessions(): Promise<BatchOutcome> {
+    const days = await this.sessionHistoryRetentionDays();
+    if (days === null || days <= 0) return NOTHING_TO_DO; // null/0 = keep indefinitely
+    return this.deleteInBatches(
+      `DELETE FROM user_sessions WHERE id IN (
+         SELECT id FROM user_sessions
+          WHERE created_at < $1
+            AND (revoked_at IS NOT NULL OR expires_at < now())
+          ORDER BY created_at
+          LIMIT $2
+       )`,
+      [this.cutoff(days)],
+    );
+  }
+
+  /**
+   * The session-history window, from settings → env → the class default, clamped up to the
+   * statutory floor. Null means "keep indefinitely" (the default), which is why the phase above
+   * treats null and 0 the same.
+   */
+  private async sessionHistoryRetentionDays(): Promise<number | null> {
+    const configured = await this.settings
+      .get<number | null>('retention.sessionHistoryDays')
+      .catch(() => undefined);
+    const raw = configured ?? asDays(process.env.SESSION_HISTORY_RETENTION_DAYS);
+    const { days, clampedToFloor } = resolveRetention('SESSION_HISTORY', raw);
+    if (clampedToFloor) {
+      this.logger.warn(
+        `Session-history retention was set below the 180-day CERT-In floor; using the floor instead.`,
+      );
+    }
+    return days;
+  }
+
+  /**
+   * UI interaction telemetry past its window.
+   *
+   * Unlike sessions and the audit trail, telemetry is purged by DEFAULT — the UI_TELEMETRY class
+   * defaults to a short window, in the spirit of DPDP data-minimisation: a click log is analytics,
+   * not evidence, so it should not accumulate. Still clamped up to the class floor if someone sets
+   * it lower, and `0` keeps it indefinitely for the rare deployment that wants to.
+   */
+  private async purgeTelemetry(): Promise<BatchOutcome> {
+    const configured = await this.settings
+      .get<number | null>('retention.uiTelemetryDays')
+      .catch(() => undefined);
+    const raw = configured ?? asDays(process.env.UI_TELEMETRY_RETENTION_DAYS);
+    const { days } = resolveRetention('UI_TELEMETRY', raw);
+    if (days === null || days <= 0) return NOTHING_TO_DO;
+    return this.deleteInBatches(
+      `DELETE FROM activity_telemetry WHERE id IN (
+         SELECT id FROM activity_telemetry
+          WHERE occurred_at < $1
+          ORDER BY occurred_at
           LIMIT $2
        )`,
       [this.cutoff(days)],
@@ -459,6 +572,8 @@ export interface RetentionReport {
   refreshTokens: number;
   notifications: number;
   locationPings: number;
+  sessions: number;
+  telemetry: number;
   durationMs: number;
   /**
    * Tables whose purge stopped because it hit the batch ceiling rather than because it ran out of

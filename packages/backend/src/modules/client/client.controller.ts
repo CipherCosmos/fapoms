@@ -15,8 +15,16 @@ import {
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import {
   IsString, IsNotEmpty, IsOptional, IsObject, IsArray, IsNumber, IsEmail, IsBoolean, IsEnum, Min, Max, IsUUID, MaxLength,
+  ValidateBy, ValidationOptions,
 } from 'class-validator';
 import { Transform } from 'class-transformer';
+import { ClientService, CreateClientDto, UpdateClientDto, CreateContactDto, UpdateContactDto, CreateContractDto, UpdateContractDto, UpdateBillingDto } from './client.service';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
+import { STAFF_ROLES } from '../auth/staff-roles';
+import { SystemRole, ClientLifecycleStatus, ContractStatus, isValidGstin, isValidPan } from '@fapoms/shared';
+import { QualificationScoreService } from '../assayer/qualification-score.service';
+import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { ParsePagePipe } from '../../infrastructure/http/parse-page.pipe';
 
 /**
  * Trim before validating, so a field of spaces fails `@IsNotEmpty` like the empty string it is.
@@ -26,12 +34,26 @@ import { Transform } from 'class-transformer';
  * clients list and, worse, as a selectable "( )" entry in every downstream client picker.
  */
 const TrimmedString = () => Transform(({ value }) => (typeof value === 'string' ? value.trim() : value));
-import { ClientService, CreateClientDto, UpdateClientDto, CreateContactDto, UpdateContactDto, CreateContractDto, UpdateContractDto, UpdateBillingDto } from './client.service';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
-import { STAFF_ROLES } from '../auth/staff-roles';
-import { SystemRole, ClientLifecycleStatus } from '@fapoms/shared';
-import { QualificationScoreService } from '../assayer/qualification-score.service';
-import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+
+/**
+ * `taxId` is presented to the operator as "e.g., GSTIN / PAN" (see `EditClientModal`'s
+ * placeholder) because a client's own registration paperwork is filed under either, depending on
+ * whether the client is GST-registered — an unregistered proprietorship or an individual client
+ * may only have a PAN. Same decorator pattern `assayer.controller.ts`'s `identityFormatRule`
+ * uses for PAN/IFSC/Aadhaar: an absent or null field is skipped by `@IsOptional()`, and an empty
+ * string passes so an edit that clears the field is never blocked by the very rule meant to keep
+ * junk out. What is refused is a value that matches neither shape at all.
+ */
+const IsGstinOrPanFormat = (options?: ValidationOptions): PropertyDecorator =>
+  ValidateBy({
+    name: 'isGstinOrPanFormat',
+    validator: {
+      validate: (value: unknown) =>
+        typeof value === 'string' && (value.trim() === '' || isValidGstin(value) || isValidPan(value)),
+      defaultMessage: () =>
+        "This doesn't look like a GSTIN or a PAN — enter one of the two, e.g. 27AAPFU0939F1ZV or ABCDE1234F.",
+    },
+  }, options);
 
 /**
  * Bounds, not just types.
@@ -87,7 +109,7 @@ class CreateClientRequestDto implements CreateClientDto {
   @IsOptional() @IsString() @MaxLength(100) industry?: string;
   @IsOptional() @IsString() @MaxLength(50) clientType?: string;
   @IsOptional() @IsString() @MaxLength(100) registrationNumber?: string;
-  @IsOptional() @IsString() @MaxLength(100) taxId?: string;
+  @IsOptional() @IsString() @MaxLength(100) @IsGstinOrPanFormat() taxId?: string;
   @IsOptional() @IsString() @MaxLength(200) contactPerson?: string;
   @IsOptional() @IsString() @MaxLength(255) contactEmail?: string;
   @IsOptional() @IsString() @MaxLength(20) contactPhone?: string;
@@ -109,7 +131,7 @@ class UpdateClientRequestDto implements UpdateClientDto {
   @IsOptional() @IsString() @MaxLength(100) industry?: string;
   @IsOptional() @IsString() @MaxLength(50) clientType?: string;
   @IsOptional() @IsString() @MaxLength(100) registrationNumber?: string;
-  @IsOptional() @IsString() @MaxLength(100) taxId?: string;
+  @IsOptional() @IsString() @MaxLength(100) @IsGstinOrPanFormat() taxId?: string;
   @IsOptional() @IsString() @MaxLength(200) contactPerson?: string;
   @IsOptional() @IsString() @MaxLength(255) contactEmail?: string;
   @IsOptional() @IsString() @MaxLength(20) contactPhone?: string;
@@ -155,7 +177,7 @@ class CreateContractRequestDto implements CreateContractDto {
   @IsOptional() @IsString() documentUrl?: string;
 }
 
-class UpdateContractRequestDto implements UpdateContractDto {
+export class UpdateContractRequestDto implements UpdateContractDto {
   @IsOptional() @IsString() title?: string;
   @IsOptional() @IsString() description?: string;
   @IsOptional() @IsString() signedDate?: string;
@@ -163,7 +185,11 @@ class UpdateContractRequestDto implements UpdateContractDto {
   @IsOptional() @IsString() effectiveTo?: string;
   @IsOptional() @IsNumber() value?: number;
   @IsOptional() @IsString() currency?: string;
-  @IsOptional() @IsString() status?: string;
+  // Was @IsString(): the real column is the ContractStatus enum ContractsPanel.tsx displays
+  // (DRAFT/ACTIVE/EXPIRED/TERMINATED/RENEWED). There is no edit-contract UI today — the panel
+  // only adds and deletes — so no working flow sends this field at all; this only closes the
+  // gap for a direct/malformed API call.
+  @IsOptional() @IsEnum(ContractStatus) status?: string;
   @IsOptional() @IsObject() terms?: Record<string, any>;
   @IsOptional() @IsString() documentUrl?: string;
 }
@@ -263,8 +289,12 @@ export class ClientController {
    */
   @Get()
   @ApiOperation({ summary: 'List all active client profiles' })
+  // `page` reached `clientService.findAll`'s `.skip((page - 1) * limit)` unguarded: `?page=0`,
+  // `?page=-1` and `?page=abc` each produced a negative or NaN `skip`, rejected by Postgres/
+  // TypeORM before the query ran — an unhandled 500 rather than just serving page one. Same gap
+  // already found and fixed the same way across several other list endpoints.
   async findAll(
-    @Query('page') page = 1,
+    @Query('page', new ParsePagePipe()) page: number,
     @Query('limit') limit = 20,
     @Query('search') search?: string,
     @Query('status') status?: string,

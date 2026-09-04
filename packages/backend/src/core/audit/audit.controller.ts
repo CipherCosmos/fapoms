@@ -2,6 +2,7 @@ import { Controller, Get, Query, UseGuards, BadRequestException } from '@nestjs/
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { AuditService } from './audit.service';
 import { UnifiedAuditService } from './unified-audit.service';
+import { AuditSealService } from './audit-seal.service';
 import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../../modules/auth/guards';
 import { SystemRole } from '@fapoms/shared';
@@ -47,7 +48,28 @@ export class AuditLogController {
   constructor(
     private readonly auditService: AuditService,
     private readonly unifiedAuditService: UnifiedAuditService,
+    private readonly auditSealService: AuditSealService,
   ) {}
+
+  /**
+   * Prove the trail has not been rewritten.
+   *
+   * Recomputes the `audit_chain` hash chain from genesis and reports whether it holds — the
+   * cryptographic answer to "can you show this evidence was not altered", which append-only storage
+   * alone cannot give. `ok:false` names the first chain position that failed and why (content
+   * altered, a broken link, or a missing event). `unsealed` is how many recorded events are not yet
+   * in the chain (a healthy sealer keeps this near zero); `truncated` means the walk stopped at the
+   * page limit before the head.
+   */
+  @Get('verify')
+  @ApiOperation({ summary: 'Verify the audit hash chain (tamper-evidence) and report any break' })
+  async verify(@Query('limit', new ParseLimitPipe({ default: 100_000, max: 1_000_000 })) limit: number) {
+    const [result, unsealed] = await Promise.all([
+      this.auditSealService.verify(limit),
+      this.auditSealService.unsealedCount(),
+    ]);
+    return { success: true, data: { ...result, unsealed } };
+  }
 
   /**
    * Every recorded event for one record, from every trail this system writes to.

@@ -20,14 +20,9 @@ describe('RetentionService', () => {
   /** Rows the next N delete statements should claim to have removed, consumed in order. */
   let deleteResults: number[];
 
-  const dataSource = {
-    query: jest.fn(async (sql: string, params: unknown[]) => {
-      statements.push({ sql, params });
-      const n = deleteResults.length > 0 ? deleteResults.shift()! : 0;
-      // How node-postgres reports a DELETE through TypeORM's raw `query`.
-      return [[], n];
-    }),
-  };
+  // Default implementation installed fresh in `beforeEach` below (see the comment there for why
+  // it cannot simply be the factory argument here).
+  const dataSource = { query: jest.fn() };
 
   // Runs the body — the real one fails open too, so a test that skipped the body would be
   // testing a behaviour the production path does not have.
@@ -45,6 +40,8 @@ describe('RetentionService', () => {
     'RETENTION_REFRESH_TOKEN_GRACE_DAYS',
     'RETENTION_READ_NOTIFICATION_DAYS',
     'LOCATION_TRAIL_RETENTION_DAYS',
+    'SESSION_HISTORY_RETENTION_DAYS',
+    'UI_TELEMETRY_RETENTION_DAYS',
   ];
   let savedEnv: Record<string, string | undefined>;
 
@@ -52,6 +49,19 @@ describe('RetentionService', () => {
     statements = [];
     deleteResults = [];
     jest.clearAllMocks();
+    // Restored explicitly rather than relying on `jest.clearAllMocks()` to undo it: that resets
+    // call history but NOT an implementation installed with `mockImplementation` (only
+    // `mockReset`/`mockRestore` do), and the fault-containment test below installs one to target
+    // a specific phase. Without this, that override would leak into every test that runs after it.
+    dataSource.query.mockImplementation(async (sql: string, params: unknown[]) => {
+      statements.push({ sql, params });
+      if (sql.includes('pg_class')) return []; // "does this partition already exist?" — no.
+      if (sql.includes('pg_inherits')) return []; // "what partitions exist?" — none to drop.
+      if (sql.includes('PARTITION OF') || sql.includes('DROP TABLE')) return [];
+      const n = deleteResults.length > 0 ? deleteResults.shift()! : 0;
+      // How node-postgres reports a DELETE through TypeORM's raw `query`.
+      return [[], n];
+    });
     settings.get.mockResolvedValue(null);
     auth.pruneRefreshTokens.mockResolvedValue(0);
 
@@ -130,7 +140,11 @@ describe('RetentionService', () => {
   describe('bounded work', () => {
     it('deletes in batches rather than in one statement', async () => {
       await service.runOnce();
-      for (const { sql, params } of statements) {
+      // Partition-maintenance statements (creating ahead-of-need partitions, checking what exists)
+      // are not row deletes and carry no LIMIT by design — only the DELETEs are bounded here.
+      const deletes = statements.filter(({ sql }) => sql.trim().startsWith('DELETE FROM'));
+      expect(deletes.length).toBeGreaterThan(0);
+      for (const { sql, params } of deletes) {
         // A single unbounded DELETE takes a lock and accumulates WAL for as long as it runs,
         // and on the first run after this ships the backlog is everything ever written.
         expect(sql).toMatch(/LIMIT \$\d+/);
@@ -211,6 +225,9 @@ describe('RetentionService', () => {
       process.env.LOCATION_TRAIL_RETENTION_DAYS = '550';
       process.env.RETENTION_OUTBOX_DAYS = '0';
       process.env.RETENTION_READ_NOTIFICATION_DAYS = '0';
+      // Telemetry purges by default; switch it off here so the location trail is the only table
+      // that can saturate (sessions is already off by default).
+      process.env.UI_TELEMETRY_RETENTION_DAYS = '0';
       deleteResults = new Array(200).fill(5_000);
 
       const report = await service.runOnce();
@@ -324,17 +341,95 @@ describe('RetentionService', () => {
   });
 
   // -------------------------------------------------------------------------------------------
+  // Partitioning: DROP TABLE for a fully-expired month, not a row-level DELETE
+  // -------------------------------------------------------------------------------------------
+
+  /**
+   * `1794610000000-PartitionLocationPingsByMonth` converted the table to monthly RANGE
+   * partitions specifically so this phase could stop paying for batched DELETEs and VACUUM on the
+   * table that grows fastest. These tests exist to catch a regression back to the old shape — e.g.
+   * someone "simplifying" `purgeLocationPings` by deleting the call to `dropExpiredPartitions` —
+   * which every other test in this file is written in a way that would NOT notice, because they
+   * only assert on statements matching `assayer_location_pings` as a prefix, and
+   * `assayer_location_pings_default` (the DELETE fallback's target) already satisfies that.
+   */
+  describe('location pings: partitions are dropped, not deleted row by row', () => {
+    /** A `pg_inherits` row naming one partition, already long past any realistic retention window. */
+    const expiredPartitionRow = {
+      name: 'assayer_location_pings_y2020m01',
+      bound: "FOR VALUES FROM ('2020-01-01 00:00:00+00') TO ('2020-02-01 00:00:00+00')",
+    };
+
+    beforeEach(() => {
+      const defaultImpl = dataSource.query.getMockImplementation()!;
+      dataSource.query.mockImplementation(async (sql: string, params: unknown[]) => {
+        if (sql.includes('pg_inherits')) {
+          statements.push({ sql, params });
+          return [expiredPartitionRow];
+        }
+        return defaultImpl(sql, params);
+      });
+    });
+
+    it('issues DROP TABLE for the expired partition', async () => {
+      await service.runOnce();
+      const dropStatements = statements.filter((s) => /DROP TABLE/i.test(s.sql));
+      expect(dropStatements).toHaveLength(1);
+      expect(dropStatements[0].sql).toContain('"assayer_location_pings_y2020m01"');
+    });
+
+    it('never issues a row-level DELETE against the expired partition by name', async () => {
+      await service.runOnce();
+      const deleteAgainstIt = statements.filter(
+        (s) => /^\s*DELETE/i.test(s.sql) && s.sql.includes('assayer_location_pings_y2020m01'),
+      );
+      expect(deleteAgainstIt).toEqual([]);
+    });
+
+    it('still falls back to a batched DELETE for the undated default partition', async () => {
+      // Dropping a dated partition does not make the default partition's straggler rows go away
+      // on its own — that fallback must still run, on its own table name.
+      await service.runOnce();
+      const [stmt] = sqlFor('assayer_location_pings_default');
+      expect(stmt).toBeDefined();
+      expect(stmt.sql).toMatch(/DELETE FROM assayer_location_pings_default/);
+    });
+
+    it('reports the tick as failed, without dropping the notification/outbox phases, if the drop itself fails', async () => {
+      const withFailingDrop = dataSource.query.getMockImplementation()!;
+      dataSource.query.mockImplementation(async (sql: string, params: unknown[]) => {
+        if (sql.trim().startsWith('DROP TABLE')) {
+          statements.push({ sql, params });
+          throw new Error('partition is being read by a long export');
+        }
+        return withFailingDrop(sql, params);
+      });
+
+      await expect(service.runOnce()).rejects.toThrow(/1 of 6 phases failed/);
+      expect(sqlFor('notifications').length).toBeGreaterThan(0);
+      expect(sqlFor('outbox_events').length).toBeGreaterThan(0);
+    });
+  });
+
+  // -------------------------------------------------------------------------------------------
   // Fault containment
   // -------------------------------------------------------------------------------------------
 
   describe('fault containment', () => {
     it('runs every remaining phase when one fails, then reports the tick as failed', async () => {
       // The phase most likely to fail is the one working on the biggest table; if that aborted
-      // the run, the other three would silently stop being cleaned.
-      dataSource.query.mockImplementationOnce(async () => {
-        throw new Error('deadlock detected');
+      // the run, the other three would silently stop being cleaned. Targeted at the location-ping
+      // DELETE specifically (rather than the first query overall) because ahead-of-need partition
+      // creation now runs before any phase and must not be what this test happens to break.
+      const defaultImpl = dataSource.query.getMockImplementation()!;
+      dataSource.query.mockImplementation(async (sql: string, params: unknown[]) => {
+        if (sql.trim().startsWith('DELETE FROM assayer_location_pings')) {
+          statements.push({ sql, params });
+          throw new Error('deadlock detected');
+        }
+        return defaultImpl(sql, params);
       });
-      await expect(service.runOnce()).rejects.toThrow(/1 of 4 phases failed/);
+      await expect(service.runOnce()).rejects.toThrow(/1 of 6 phases failed/);
       expect(sqlFor('notifications').length).toBeGreaterThan(0);
       expect(sqlFor('assayer_location_pings').length).toBeGreaterThan(0);
       expect(auth.pruneRefreshTokens).toHaveBeenCalled();

@@ -16,9 +16,12 @@ import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { EmailProvider } from '../../infrastructure/notifications/email-provider';
+import { SmsProvider } from '../../infrastructure/notifications/sms-provider';
 import { CacheService } from '../../infrastructure/cache/cache.service';
+import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { rbacPrincipalCacheKey } from '../auth/auth.service';
-import { EventCategory, AssayerLifecycleStatus } from '@fapoms/shared';
+import { EventCategory, AssayerLifecycleStatus, AssignmentStatus } from '@fapoms/shared';
 import * as bcrypt from 'bcrypt';
 
 describe('AssayerService', () => {
@@ -88,6 +91,23 @@ describe('AssayerService', () => {
   /** Raw-SQL seam. `hasActiveAssignment` reads through this, so tests drive it from here. */
   const mockDataSource = { query: jest.fn().mockResolvedValue([]) };
 
+  /**
+   * `remove()` now runs its whole cascade inside `UnitOfWork.run` instead of on the pooled
+   * connection directly (see `remove — transactional cascade` below). The manager handed to the
+   * callback routes back to the same repository/query mocks the rest of this file already
+   * asserts against, so existing behaviour keeps reading the same way it did before the
+   * transaction boundary was added.
+   */
+  const mockUowManager = {
+    getRepository: jest.fn((entity: any) => {
+      if (entity === AssayerEntity) return mockAssayerRepo;
+      if (entity === AssayerActivityEntity) return mockActivityRepo;
+      return { create: (x: any) => x, save: (x: any) => Promise.resolve(x) };
+    }),
+    query: (...args: any[]) => mockDataSource.query(...args),
+  };
+  const mockUow = { run: jest.fn((work: any) => work(mockUowManager)) };
+
   // Tracks whether the cache invalidation has actually COMPLETED (not merely been kicked off) —
   // same seam as UserService's password tests. A macrotask delay means this only flips `true`
   // after a full turn of the event loop, so a regression to a fire-and-forget
@@ -99,6 +119,11 @@ describe('AssayerService', () => {
       (..._keys: string[]) => new Promise<void>((resolve) => setTimeout(() => { cacheInvalidated = true; resolve(); }, 10)),
     ),
   };
+
+  // Bulk app-access issuance is the only thing in this file that touches these; every other
+  // suite here never sends anything, so a resolved `false` keeps them inert by default.
+  const mockEmailProvider = { send: jest.fn().mockResolvedValue({ success: false }) };
+  const mockSmsProvider = { send: jest.fn().mockResolvedValue(false) };
 
   const mockWorkflowEngine = {
     registerWorkflow: jest.fn(),
@@ -118,6 +143,9 @@ describe('AssayerService', () => {
         { provide: DomainEventPublisher, useValue: mockDomainEventPublisher },
         { provide: WorkflowEngine, useValue: mockWorkflowEngine },
         { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn() } },
+        { provide: EmailProvider, useValue: mockEmailProvider },
+        { provide: SmsProvider, useValue: mockSmsProvider },
+        { provide: UnitOfWork, useValue: mockUow },
         { provide: getDataSourceToken(), useValue: mockDataSource },
         { provide: CacheService, useValue: mockCache },
       ],
@@ -469,6 +497,56 @@ describe('AssayerService', () => {
   });
 
   /**
+   * `update()`'s audit row used to be a fixed sentence — "Updated assayer profile: X" — no
+   * matter what changed. A bank-detail or identity edit is exactly the kind of change a dispute
+   * needs to trace, and the generic sentence could not say what moved, from what, to what. Each
+   * test here fails on the pre-fix code: the old ASSAYER_UPDATED event carries no `metadata` key
+   * at all, so `dto.metadata` is `undefined` rather than an object with a `changes` array.
+   */
+  describe('update — bank/identity/contact fields are diffed, not summarised', () => {
+    const existing = () => ({
+      id: 'as-1', firstName: 'Rajesh', lastName: 'Gupta', displayName: 'Rajesh Gupta',
+      address: 'Nashik Road', city: 'Nashik', district: 'Nashik', state: 'Maharashtra',
+      phone: '9800000001', panNumber: 'AAAAA1111A', bankAccountNumber: '1234567890',
+      isActive: true,
+    });
+
+    beforeEach(() => {
+      mockAssayerRepo.findOne.mockResolvedValue(existing());
+      mockAssayerRepo.save.mockImplementation(async (a: any) => a);
+    });
+
+    it('records a masked before/after for a changed PAN, not the clear value', async () => {
+      await service.update('as-1', { panNumber: 'BBBBB2222B' } as any, 'u-1');
+
+      const call = mockAuditService.recordEvent.mock.calls.find((c: any) => c[0].eventType === 'ASSAYER_UPDATED');
+      expect(call).toBeDefined();
+      const dto = call[0];
+      expect(dto.metadata.changes).toHaveLength(1);
+      expect(dto.metadata.changes[0].field).toBe('panNumber');
+      expect(dto.metadata.changes[0].fromValue).toBe('******111A');
+      expect(dto.metadata.changes[0].toValue).toBe('******222B');
+      expect(JSON.stringify(dto.metadata)).not.toContain('AAAAA1111A');
+      expect(JSON.stringify(dto.metadata)).not.toContain('BBBBB2222B');
+    });
+
+    it('records the phone number in clear, since it is not a sensitive field', async () => {
+      await service.update('as-1', { phone: '9800000099' } as any, 'u-1');
+
+      const call = mockAuditService.recordEvent.mock.calls.find((c: any) => c[0].eventType === 'ASSAYER_UPDATED');
+      const change = call[0].metadata.changes.find((c: any) => c.field === 'phone');
+      expect(change).toMatchObject({ fromValue: '9800000001', toValue: '9800000099' });
+    });
+
+    it('omits metadata entirely when nothing in the tracked field list changed', async () => {
+      await service.update('as-1', { firstName: 'Rajesh' } as any, 'u-1');
+
+      const call = mockAuditService.recordEvent.mock.calls.find((c: any) => c[0].eventType === 'ASSAYER_UPDATED');
+      expect(call[0].metadata).toBeUndefined();
+    });
+  });
+
+  /**
    * A coordinate somebody placed by hand must survive the nightly geocoder.
    *
    * The sweep skips `geo_source = 'manual'`, so everything turns on the ordinary profile update
@@ -670,6 +748,65 @@ describe('AssayerService', () => {
       const result = await service.activateAssayer('asr-1', 'user-1');
 
       expect(result.status).toBe('ACTIVE');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // remove — the soft-delete cascade, made transactional
+  // ---------------------------------------------------------------------------
+
+  describe('remove — transactional cascade', () => {
+    const deletedAssayer = {
+      id: 'a-1', displayName: 'Test Person', organizationId: 'org-1', isActive: true,
+    };
+
+    beforeEach(() => {
+      mockAssayerRepo.findOne.mockResolvedValue({ ...deletedAssayer });
+      mockAssayerRepo.save.mockImplementation((e: any) => Promise.resolve(e));
+      mockDataSource.query.mockResolvedValue([[], 0]);
+    });
+
+    /**
+     * The whole point of the fix: every write goes through `UnitOfWork.run`, not straight onto
+     * the pooled connection. The pre-fix `remove()` never touched `uow` at all — it called
+     * `this.dataSource.query` directly for every statement — so this assertion fails on that
+     * code with "mockUow.run was called 0 times", proving the cascade is now one transaction
+     * rather than eleven autocommits.
+     */
+    it('runs the whole cascade inside the unit of work', async () => {
+      await service.remove('a-1', 'user-1');
+      expect(mockUow.run).toHaveBeenCalledTimes(1);
+    });
+
+    /**
+     * A COMPLETED assignment is a billable fact and must stay `is_active=true` so billing keeps
+     * finding it. Everything else gets deactivated AND a terminal CANCELLED status, so the
+     * assignment `create()` busy-check (which reads status, not just is_active) does not treat
+     * the branch as occupied forever. The pre-fix statement had no status filter and no status
+     * column in its SET clause at all — it deactivated every assignment unconditionally and
+     * never touched `status` — so both assertions below fail against that code.
+     */
+    it('excludes COMPLETED assignments from deactivation and cancels the rest with a terminal status', async () => {
+      await service.remove('a-1', 'user-1');
+      const assignmentsCall = mockDataSource.query.mock.calls.find(
+        ([sql]: [string]) => /UPDATE\s+assignments\b/i.test(sql),
+      );
+      expect(assignmentsCall).toBeDefined();
+      const [sql, params] = assignmentsCall as [string, unknown[]];
+      expect(sql).toMatch(/status\s*!=\s*\$4/);
+      expect(sql).toMatch(/SET\s+is_active\s*=\s*false,\s*status\s*=\s*\$1/);
+      expect(params).toEqual([AssignmentStatus.CANCELLED, 'user-1', 'a-1', AssignmentStatus.COMPLETED]);
+    });
+
+    it('leaves a COMPLETED assignment\'s schedule alone too', async () => {
+      await service.remove('a-1', 'user-1');
+      const schedulesCall = mockDataSource.query.mock.calls.find(
+        ([sql]: [string]) => /UPDATE\s+schedules\b/i.test(sql),
+      );
+      expect(schedulesCall).toBeDefined();
+      const [sql, params] = schedulesCall as [string, unknown[]];
+      expect(sql).toMatch(/status\s*!=\s*\$3/);
+      expect(params).toEqual(['user-1', 'a-1', AssignmentStatus.COMPLETED]);
     });
   });
 
@@ -1234,12 +1371,81 @@ describe('AssayerService', () => {
 
       await service.acceptResignation('as-1', 'u-1', 'Relocating');
 
-      const [sql, params] = mockDataSource.query.mock.calls.at(-1)! as [string, unknown[]];
+      // Not `.at(-1)`: a departure now also cancels open assignments (see
+      // `cancelOpenAssignmentsOnDeparture`) in the same breath, which added two more `query()`
+      // calls after this one — find the empanelment update by its own SQL instead of assuming
+      // it is the last call.
+      const empanelmentCall = mockDataSource.query.mock.calls.find(
+        ([sql]: [string]) => /UPDATE\s+assayer_client_empanelments\b/i.test(sql),
+      );
+      expect(empanelmentCall).toBeDefined();
+      const [sql, params] = empanelmentCall as [string, unknown[]];
       expect(sql).toMatch(/UPDATE assayer_client_empanelments/);
       // ACTIVE and RECOMMENDED are the two standings the planner's per-client gate admits;
       // they are closed to INACTIVE, the one closed standing that reads as reversible.
       expect(params).toEqual(expect.arrayContaining(['ACTIVE', 'RECOMMENDED', 'INACTIVE', 'as-1']));
       expect(params.some((p) => typeof p === 'string' && p.includes('RESIGNED'))).toBe(true);
+    });
+
+    /**
+     * The gap `cancelOpenAssignmentsOnDeparture` closes: `remove()` (a full delete) has always
+     * cancelled non-completed assignments, but resigning or terminating someone through the
+     * ordinary lifecycle screen — the much more common door — left them exactly as they stood.
+     * Terminal status only (`status`, not `is_active`): the assayer's own row is not being taken
+     * out of the picture here, so a cancelled assignment should stay visible as "cancelled"
+     * rather than disappear the way `remove()` deliberately makes one disappear with the person.
+     */
+    it('cancels this person\'s open assignments the moment they actually leave', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(
+        working({ lifecycleStatus: AssayerLifecycleStatus.SUSPENDED, status: 'SUSPENDED' }),
+      );
+      mockDataSource.query.mockResolvedValue([[], 2]);
+
+      await service.terminateAssayer('as-1', 'u-1', 'Policy violation');
+
+      const assignmentCall = mockDataSource.query.mock.calls.find(
+        ([sql]: [string]) => /UPDATE\s+assignments\b/i.test(sql),
+      );
+      expect(assignmentCall).toBeDefined();
+      const [sql, params] = assignmentCall as [string, unknown[]];
+      // Unlike `remove()`'s cascade, no `is_active = false` here.
+      expect(sql).not.toMatch(/is_active\s*=\s*false/);
+      expect(sql).toMatch(/SET\s+status\s*=\s*\$1/);
+      expect(sql).toMatch(/status\s*!=\s*\$5/);
+      expect(params).toEqual([
+        AssignmentStatus.CANCELLED, expect.any(String), 'u-1', 'as-1', AssignmentStatus.COMPLETED,
+      ]);
+    });
+
+    it('takes the cancelled assignment\'s scheduled visit off the calendar too', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(
+        working({ lifecycleStatus: AssayerLifecycleStatus.SUSPENDED, status: 'SUSPENDED' }),
+      );
+      mockDataSource.query.mockResolvedValue([[], 2]);
+
+      await service.terminateAssayer('as-1', 'u-1', 'Policy violation');
+
+      const scheduleCall = mockDataSource.query.mock.calls.find(
+        ([sql]: [string]) => /UPDATE\s+schedules\b/i.test(sql),
+      );
+      expect(scheduleCall).toBeDefined();
+      const [sql, params] = scheduleCall as [string, unknown[]];
+      expect(sql).toMatch(/is_active\s*=\s*false/);
+      expect(params).toEqual(['u-1', 'as-1', AssignmentStatus.CANCELLED]);
+    });
+
+    it('does NOT cancel assignments on a merely temporary move like SUSPENDED', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(working());
+      mockDataSource.query.mockResolvedValue([[], 0]);
+
+      await service.suspendAssayer('as-1', 'u-1', 'Under investigation');
+
+      const assignmentCall = mockDataSource.query.mock.calls.find(
+        ([sql]: [string]) => /UPDATE\s+assignments\b/i.test(sql),
+      );
+      // SUSPENDED is "not right now", not "not any more" — same scope as the empanelment close,
+      // which also does not run for it.
+      expect(assignmentCall).toBeUndefined();
     });
 
     it('puts the automatic corrections on the record beside the reason', async () => {

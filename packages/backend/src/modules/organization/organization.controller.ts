@@ -8,6 +8,7 @@ import { OrganizationService, CreateOrganizationDto, UpdateOrganizationDto } fro
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole } from '@fapoms/shared';
+import { ParsePagePipe } from '../../infrastructure/http/parse-page.pipe';
 
 class CreateOrganizationRequestDto implements CreateOrganizationDto {
   @IsString() @IsNotEmpty()
@@ -76,7 +77,11 @@ export class OrganizationController {
 
   @Get()
   @ApiOperation({ summary: 'List all organizations' })
-  async findAll(@Query('page') page = 1, @Query('limit') limit = 50) {
+  // `page` reached `organizationService.findAll` as a bare `Number(...)` with no guard: `?page=0`,
+  // `?page=-1` and `?page=abc` each produced a negative or NaN `skip`, which Postgres/TypeORM
+  // reject before the query runs — an unhandled 500 for a request that should just serve page one.
+  // Same gap already found and fixed the same way across several other list endpoints.
+  async findAll(@Query('page', new ParsePagePipe()) page: number, @Query('limit') limit = 50) {
     const { organizations, total } = await this.organizationService.findAll(page, limit);
     return {
       success: true,

@@ -16,7 +16,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AuthGuard } from '@nestjs/passport';
-import { AUTH_ERROR_CODES } from '@fapoms/shared';
+import { AUTH_ERROR_CODES, SystemRole } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
 
 // ---------------------------------------------------------------------------
@@ -271,15 +271,58 @@ export class RolesGuard implements CanActivate {
       ROLE_ONLY_KEY,
       [context.getHandler(), context.getClass()],
     );
-    const requiredPermissions = roleOnly ? undefined : this.reflector.getAllAndOverride<string[]>(
-      PERMISSIONS_KEY,
-      [context.getHandler(), context.getClass()],
+    /**
+     * `@RequirePermissions` first, `@RolesFallbackPermissions` only if that is absent — never
+     * both read together, and never on the same route. `@RequirePermissions` is ALSO read,
+     * unconditionally, by `PermissionsGuard` immediately after this guard: whoever gets past
+     * `RolesGuard`, by name match or by this fallback, is then re-checked against it with no
+     * exceptions. That is harmless on a route whose `@Roles` list holds only names the parity
+     * spec has confirmed all hold the permission — the common case — but SystemRole.ASSAYER
+     * holds NONE, ever (`ROLE_PERMISSIONS[ASSAYER] = []`; it authenticates from its own table
+     * and carries no role row), so a route open to ASSAYER can never safely carry
+     * `@RequirePermissions`: PermissionsGuard would refuse every genuine field assayer outright,
+     * the opposite of what such a route is for. `PUT /assayers/:id` and its three siblings
+     * (`base-location`, `document/:requirement`, `document/:requirement/file`) are exactly this
+     * shape — self-service for ASSAYER, whole-roster for ADMIN/OPERATIONS, and, once HR_OPERATOR
+     * needed the same door, nothing whatsoever for a custom role, because there was nothing here
+     * for its permission to be checked against.
+     *
+     * `@RolesFallbackPermissions` is the second decorator for that shape: read ONLY here, in the
+     * branch already scoped to roles `@Roles` did not recognise, so a name-matched caller (the
+     * ASSAYER whose access must not gain a second, unconditional gate) never has it evaluated at
+     * all, and `PermissionsGuard` — which reads `PERMISSIONS_KEY` alone — never sees it either.
+     */
+    const requiredPermissions = roleOnly ? undefined : (
+      this.reflector.getAllAndOverride<string[]>(PERMISSIONS_KEY, [context.getHandler(), context.getClass()])
+      ?? this.reflector.getAllAndOverride<string[]>(ROLES_FALLBACK_PERMISSIONS_KEY, [context.getHandler(), context.getClass()])
     );
     if (requiredPermissions?.length) {
-      const held = permissionKeysHeldBy(user);
-      // `toUpperCase` because routes declare these in lower case (`assayer:view:organization`)
-      // while the stored rows are upper case — the same normalisation PermissionsGuard applies.
-      if (requiredPermissions.every((perm) => held.has(perm.toUpperCase()))) return true;
+      /**
+       * Only a role this route has genuinely never heard of gets judged by permissions alone.
+       *
+       * A role whose NAME matches a built-in `SystemRole` was excluded from this route's
+       * `@Roles(...)` on purpose — that list is what "this route never heard of it" is supposed
+       * to mean, and a coincidence should not override a decision someone actually made. This is
+       * exactly how CLIENT_USER reached `GET /schedules`: its dashboard-only
+       * `SCHEDULING:VIEW:PLATFORM` grant happened to satisfy `scheduling:view:organization` here,
+       * despite `@Roles(ADMIN, OPERATIONS, DESK, AUDITOR)` never naming it. Found and fixed live
+       * during a chaos-testing pass, once as `@RoleOnly()` on the one route it was caught on
+       * (`system-dashboard/metrics`) — this is the systemic version, so the same coincidence
+       * cannot open a different route serving the same permission tomorrow.
+       *
+       * Filtering to unrecognised roles before computing `held` (rather than filtering the
+       * result) matters when a principal holds both a built-in role and a custom one: a custom
+       * role's own permissions still count, but nothing borrowed from the excluded built-in role
+       * does.
+       */
+      const knownRoleNames = new Set<string>(Object.values(SystemRole));
+      const unrecognisedRoles = (user.roles as any[]).filter((r) => !knownRoleNames.has(r?.name));
+      if (unrecognisedRoles.length > 0) {
+        const held = permissionKeysHeldBy({ roles: unrecognisedRoles });
+        // `toUpperCase` because routes declare these in lower case (`assayer:view:organization`)
+        // while the stored rows are upper case — the same normalisation PermissionsGuard applies.
+        if (requiredPermissions.every((perm) => held.has(perm.toUpperCase()))) return true;
+      }
     }
 
     throw new ForbiddenException('Insufficient role permissions');
@@ -349,9 +392,41 @@ export const PERMISSIONS_KEY = 'permissions';
 /**
  * Decorator to require specific permissions on a route.
  * Format: 'RESOURCE:ACTION:SCOPE' (e.g., 'PROJECT:CREATE:ORGANIZATION')
+ *
+ * Do not combine with `@Roles(...SystemRole.ASSAYER...)`. `PermissionsGuard` enforces this
+ * unconditionally on every caller, including one `RolesGuard` already admitted by direct name
+ * match — and ASSAYER holds no permission, ever, so it would be refused by the very decorator
+ * meant to widen the route to a custom role. Use `@RolesFallbackPermissions` instead on a route
+ * ASSAYER must reach.
  */
 export const RequirePermissions = (...permissions: string[]) =>
   SetMetadata(PERMISSIONS_KEY, permissions);
+
+export const ROLES_FALLBACK_PERMISSIONS_KEY = 'rolesFallbackPermissions';
+
+/**
+ * The permission(s) that admit a role `@Roles(...)` does not name — for a route that cannot use
+ * `@RequirePermissions` for that purpose because `@Roles` also lists `SystemRole.ASSAYER`.
+ *
+ * ASSAYER authenticates from its own table, carries no role row, and so holds no permission at
+ * all (`ROLE_PERMISSIONS[SystemRole.ASSAYER] = []`) — by design, not an oversight (see the
+ * comment on `RolesGuard`'s permission fall-through). `PermissionsGuard` re-checks
+ * `@RequirePermissions` unconditionally on every caller regardless of how `RolesGuard` admitted
+ * them, so pairing it with `@Roles(..., SystemRole.ASSAYER)` refuses every genuine field assayer
+ * outright — confirmed live: adding `@RequirePermissions('assayer:edit:organization')` to
+ * `PUT /assayers/:id` (whose `@Roles` list includes ASSAYER for the mobile app's own profile
+ * edit) made `route-permission-parity.spec.ts` fail with "allows ASSAYER but does not grant it
+ * ASSAYER:EDIT:ORGANIZATION" — the test doing exactly its job.
+ *
+ * This decorator is read ONLY inside `RolesGuard`'s own fallback branch — the one already scoped
+ * to roles `@Roles` failed to match by name — so a name-matched caller (ASSAYER included) never
+ * has it evaluated, and `PermissionsGuard`, which reads `PERMISSIONS_KEY` alone, never sees it.
+ * It exists purely so a route open to ASSAYER can still be widened to a role built in
+ * Admin -> Roles, which is exactly what `@RequirePermissions` already does for every route ASSAYER
+ * is NOT on.
+ */
+export const RolesFallbackPermissions = (...permissions: string[]) =>
+  SetMetadata(ROLES_FALLBACK_PERMISSIONS_KEY, permissions);
 
 @Injectable()
 export class PermissionsGuard implements CanActivate {

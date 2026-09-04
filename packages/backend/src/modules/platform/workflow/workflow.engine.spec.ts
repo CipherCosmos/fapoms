@@ -4,6 +4,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { WorkflowEngine } from './workflow.engine';
 import { WorkflowHistoryEntity } from './workflow-history.entity';
 import { AuditService } from '../../../core/audit/audit.service';
+import { UnitOfWork } from '../../../infrastructure/persistence/unit-of-work';
 import { SystemRole } from '@fapoms/shared';
 
 describe('WorkflowEngine', () => {
@@ -18,6 +19,16 @@ describe('WorkflowEngine', () => {
     save: jest.fn().mockResolvedValue(undefined),
   };
 
+  // `executeCommand` now runs action + history + audit inside one transaction — see the
+  // "atomic" test below — so the engine needs a `UnitOfWork` whose manager hands back the same
+  // history repository mock these tests already assert against.
+  const mockManager = {
+    getRepository: jest.fn(() => mockHistoryRepository),
+  };
+  const mockUow = {
+    run: jest.fn((work: (manager: any) => Promise<any>) => work(mockManager)),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -25,6 +36,10 @@ describe('WorkflowEngine', () => {
         {
           provide: AuditService,
           useValue: mockAuditService,
+        },
+        {
+          provide: UnitOfWork,
+          useValue: mockUow,
         },
         {
           provide: getRepositoryToken(WorkflowHistoryEntity),

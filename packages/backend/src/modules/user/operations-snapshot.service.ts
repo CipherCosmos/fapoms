@@ -44,16 +44,14 @@ export class OperationsSnapshotService {
     DESK_OPERATOR:  ['validation'],
     AUDITOR:        ['funnel', 'projects', 'activity'],
     /**
-     * Nothing, until a client user can be scoped to their own client.
-     *
-     * This read `['projects']` under the heading "Your audit programme". It was not their audit
-     * programme: `projects` is a territorial section, narrowed only by region, and a client user
-     * holds no region assignment — so every client user was shown every client's projects, with
-     * a label asserting the rows were theirs. `users` has no client column and there is no
-     * user↔client table, so there is no correct answer to give here yet; an empty dashboard is
-     * the honest one. Restored the moment the client boundary lands.
+     * Restored: `users.client_id` now exists (see `global-scope.ts`'s `resolveClientScope`),
+     * and `projects` already applies a `client_id` ceiling to its query (`frag.client` below) —
+     * the same ceiling every other client-scoped route in this codebase uses. `activity` stays
+     * out deliberately: it is a national, org-wide audit-trail feed with no per-client query
+     * variant, and was the site of a real cross-tenant leak (see the section-fallback fix in
+     * `snapshot()`) the one time it was added here without one.
      */
-    CLIENT_USER:    [],
+    CLIENT_USER:    ['projects'],
   };
 
   /** Headline shown at the top, so the page states whose view it is. */
@@ -80,14 +78,23 @@ export class OperationsSnapshotService {
   private static readonly TERRITORIAL_SECTIONS = ['funnel', 'due', 'capacity', 'projects'];
 
   async snapshot(roles: string[] = [], userId?: string, scope?: Partial<GlobalScope>): Promise<any> {
-    // Union of every section the viewer's roles allow. Unknown roles fall back to
-    // the read-only set rather than being shown nothing at all.
+    // Union of every section the viewer's roles allow. A role with no entry here at all falls
+    // back to the read-only set rather than being shown nothing. A role WITH an entry that is
+    // deliberately empty (CLIENT_USER, today) must stay empty — the fallback below used to key
+    // off `sections.size === 0`, which cannot tell those two cases apart, so a client user's
+    // intentionally-blank dashboard was silently promoted to the auditor's national view on
+    // every request: `activity` in particular is an explicitly unscoped, org-wide audit trail
+    // (see the comment on `TERRITORIAL_SECTIONS` below), so this leaked every bank's audit
+    // events, fees and branch names to every client user, not just their own.
     const sections = new Set<string>();
+    let recognizedAnyRole = false;
     for (const r of roles) {
-      (OperationsSnapshotService.ROLE_SECTIONS[r] ?? OperationsSnapshotService.ROLE_SECTIONS.AUDITOR)
-        .forEach((s) => sections.add(s));
+      const roleSections = OperationsSnapshotService.ROLE_SECTIONS[r];
+      if (roleSections === undefined) continue;
+      recognizedAnyRole = true;
+      roleSections.forEach((s) => sections.add(s));
     }
-    if (sections.size === 0) OperationsSnapshotService.ROLE_SECTIONS.AUDITOR.forEach((s) => sections.add(s));
+    if (!recognizedAnyRole) OperationsSnapshotService.ROLE_SECTIONS.AUDITOR.forEach((s) => sections.add(s));
 
     const focus = roles.map((r) => OperationsSnapshotService.ROLE_FOCUS[r]).find(Boolean)
       ?? OperationsSnapshotService.ROLE_FOCUS.AUDITOR;

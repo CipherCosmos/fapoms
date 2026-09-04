@@ -19,7 +19,7 @@ const mockRequest = api.request as jest.Mock;
  * that does not contain the name they are after.
  */
 
-const rosterPage = (firstIndex: number, count: number, total: number) => ({
+const rosterPage = (firstIndex: number, count: number, total: number, nextCursor: string | null = null) => ({
   success: true,
   data: Array.from({ length: count }, (_, i) => ({
     id: `a-${firstIndex + i}`,
@@ -27,7 +27,7 @@ const rosterPage = (firstIndex: number, count: number, total: number) => ({
     displayName: `Person ${firstIndex + i}`,
     district: 'Ernakulam',
   })),
-  meta: { pagination: { total } },
+  meta: { pagination: { total, nextCursor } },
 });
 
 const renderPage = () => render(<MemoryRouter><AssayerStatementPage /></MemoryRouter>);
@@ -44,8 +44,8 @@ beforeEach(() => mockRequest.mockReset());
 describe('AssayerStatementPage', () => {
   it('can select somebody past the first thousand rows of the roster', async () => {
     mockRequest
-      .mockResolvedValueOnce(rosterPage(1, 1000, 1155))
-      .mockResolvedValueOnce(rosterPage(1001, 155, 1155));
+      .mockResolvedValueOnce(rosterPage(1, 1000, 1155, 'cursor-1'))
+      .mockResolvedValueOnce(rosterPage(1001, 155, 1155, null));
 
     renderPage();
     await waitFor(() => expect(mockRequest).toHaveBeenCalledTimes(2));

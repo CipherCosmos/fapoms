@@ -1,6 +1,6 @@
 import { Inject, forwardRef, Injectable, Logger, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository, In, Not, LessThan, Raw, EntityManager } from 'typeorm';
+import { DataSource, Repository, In, Not, LessThan, Raw, EntityManager, IsNull } from 'typeorm';
 import { InjectDataSource } from '@nestjs/typeorm';
 
 import { AssignmentEntity } from './assignment.entity';
@@ -37,10 +37,13 @@ import { RoutingService, RouteResult } from '../geo/routing.provider';
 import { ValidationService } from '../validation/validation.service';
 import { DocumentService } from '../document/document.service';
 import { FeePolicyService } from '../pricing/fee-policy.service';
-import { EventCategory, ScheduleStatus, AssignmentStatus, ProjectBranchStatus, CustomerMasterStatus, Priority, SystemRole, calculateHaversineDistance, assignmentIssueCategoryLabel, isAssignmentTerminal, BypassableRule, businessDateKey, businessTodayDateKey } from '@fapoms/shared';
+import { EventCategory, ScheduleStatus, AssignmentStatus, ProjectBranchStatus, CustomerMasterStatus, Priority, SystemRole, calculateHaversineDistance, assignmentIssueCategoryLabel, isAssignmentTerminal, BypassableRule, businessDateKey, businessTodayDateKey, standingAllowsPlanning } from '@fapoms/shared';
+import { NO_EMPANELMENT_ROW_SETTING } from '../planning/recommendation.engine';
 import { applyBranchScope, branchScopeWhere, needsBranchJoin } from '../../infrastructure/scope/apply-scope';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { CacheService } from '../../infrastructure/cache/cache.service';
+import { BillingEngineService } from '../billing-engine/billing-engine.service';
+import { AssayerPayableEntity } from '../billing-engine/payable.entity';
 
 // Fee rates are no longer declared here. They resolve per client contract through
 // FeePolicyService — see packages/backend/src/modules/pricing/fee-policy.service.ts.
@@ -109,6 +112,12 @@ export interface CreateAssignmentDto {
   acceptOnBehalf?: boolean;
   /** Free-text note stored on the acceptance audit event, e.g. who was spoken to. */
   acceptanceReason?: string;
+  /**
+   * Required when the chosen assayer fails the client's empanelment check (no Active/Recommended
+   * standing, or on the client's restricted list) — `create()` throws without one. Recorded on
+   * its own `ASSIGNMENT_ELIGIBILITY_OVERRIDDEN` audit event, never silently accepted.
+   */
+  overrideReason?: string;
 }
 
 export interface UpdateAssignmentDetailsDto {
@@ -134,6 +143,9 @@ export interface TransitionAssignmentDto {
  * person told "3 counter-offers max" would be the last to know if it had.
  */
 const DEFAULT_MAX_NEGOTIATION_ROUNDS = 3;
+
+/** Shipped default for the counter-offer travel-fee safety ceiling; the saved setting wins. */
+const DEFAULT_MAX_COUNTER_OFFER_TRAVEL_FEE = 25000;
 
 /** Shipped default for the check-in geofence; the saved setting wins. */
 const DEFAULT_CHECK_IN_GEOFENCE_METERS = 2000;
@@ -203,6 +215,7 @@ export class AssignmentService {
     private readonly dataSource: DataSource,
     private readonly uow: UnitOfWork,
     private readonly cache: CacheService,
+    private readonly billingEngine: BillingEngineService,
   ) {}
 
 
@@ -419,6 +432,72 @@ export class AssignmentService {
     );
     if (!distancePolicy.passed) {
       throw new BadRequestException(distancePolicy.reason);
+    }
+
+    /**
+     * Client empanelment eligibility — enforced here for the first time.
+     *
+     * Planning's own candidate list already refuses to *recommend* a non-empanelled assayer
+     * (`ClientEligibilityFilter`, `recommendation.engine.ts`) and the "Assign anyway" panel on
+     * that screen makes overriding it look like a real, audited decision — a required "reason
+     * for overriding" box, disabled until filled in. None of that reached this write path: the
+     * reason was folded into free-text `remarks` client-side and nothing here ever checked
+     * eligibility at all, so a direct `POST /assignments` call — with no remarks, no reason,
+     * nothing — placed a non-empanelled, client-ineligible assayer on a real audit with zero
+     * server-side check and no audit trail. Found live, chaos-testing this exact screen.
+     *
+     * Deliberately a standalone check rather than reusing `ClientEligibilityFilter.exclusionReason`
+     * directly: that method reads its standing from a `branchFacts.empanelmentStatusByAssayer`
+     * map the recommendation engine precomputes for a whole candidate pool in one query, with no
+     * single-pair fallback — calling it here with that map absent would read every assayer as
+     * "no standing recorded," including ones with a real ACTIVE standing. This reuses the same
+     * shared vocabulary (`standingAllowsPlanning`, the canonical PLANNABLE_EMPANELMENT_STANDINGS
+     * set) and the same settings key, so the two paths cannot disagree about what counts as
+     * eligible even though they query it separately.
+     */
+    let eligibilityOverride: { barredReason: string; overrideReason: string } | null = null;
+    const clientId = projectBranch.project?.clientId;
+    if (clientId) {
+      const restrictedAssayers = projectBranch.project?.client?.restrictedAssayers || [];
+      const clientLabel = projectBranch.project?.client?.clientCode ?? projectBranch.project?.client?.name ?? 'this client';
+      let eligibilityReason: string | null = null;
+      if (restrictedAssayers.includes(assayer.id)) {
+        eligibilityReason = `${assayer.displayName || assayer.assayerCode} is on ${clientLabel}'s restricted list.`;
+      } else {
+        const empanelmentRows = await this.dataSource.query(
+          `SELECT status FROM assayer_client_empanelments WHERE assayer_id = $1 AND client_id = $2 AND is_active = true LIMIT 1`,
+          [assayer.id, clientId],
+        );
+        const standing: string | undefined = empanelmentRows[0]?.status;
+        if (standing !== undefined) {
+          if (!standingAllowsPlanning(standing)) {
+            eligibilityReason = `${assayer.displayName || assayer.assayerCode} has empanelment standing ${standing} with ${clientLabel} — not Active or Recommended.`;
+          }
+        } else {
+          const noRowPolicy = await this.settings.get<string>(NO_EMPANELMENT_ROW_SETTING).catch(() => 'BLOCK');
+          if (noRowPolicy !== 'ALLOW') {
+            eligibilityReason = `${assayer.displayName || assayer.assayerCode} has no empanelment record with ${clientLabel}.`;
+          }
+        }
+      }
+
+      if (eligibilityReason) {
+        const bypassed = this.ruleBypass.isBypassedSync(BypassableRule.CLIENT_ELIGIBILITY);
+        if (bypassed) {
+          this.ruleBypass.noteBypass(BypassableRule.CLIENT_ELIGIBILITY, {
+            entityType: 'ASSAYER', entityId: assayer.id, detail: eligibilityReason,
+          });
+        } else if (!dto.overrideReason?.trim()) {
+          throw new BadRequestException(
+            `${eligibilityReason} Assigning anyway needs a stated reason — record one, or choose an eligible candidate.`,
+          );
+        } else {
+          // A stated reason lets this through; recorded as its own audit event once the
+          // assignment is actually saved (below), so the override is never silent even when it
+          // succeeds.
+          eligibilityOverride = { barredReason: eligibilityReason, overrideReason: dto.overrideReason.trim() };
+        }
+      }
     }
 
     /**
@@ -668,6 +747,21 @@ export class AssignmentService {
           ? `Reassigned branch ${projectBranch.branch.name} to assayer ${assayer.displayName}. Proposed fee: ₹${resolvedProposedFee}, Date: ${targetDateStr}.`
           : `Created assignment offer for branch ${projectBranch.branch.name}. Fee: ₹${resolvedProposedFee}, Date: ${targetDateStr}.`,
       }, { manager });
+
+      if (eligibilityOverride) {
+        // Its own event, not folded into the line above: ASSIGNMENT_CREATED fires for every
+        // ordinary assignment and nobody reviewing the trail should have to read every row
+        // looking for the ones that overrode an eligibility block. This is the one that answers
+        // "who placed a non-empanelled assayer on this client, and why."
+        await this.auditService.recordEventSafe({
+          category: EventCategory.OPERATIONAL,
+          eventType: 'ASSIGNMENT_ELIGIBILITY_OVERRIDDEN',
+          entityType: 'ASSIGNMENT',
+          entityId: savedAssignment.id,
+          userId,
+          remarks: `${eligibilityOverride.barredReason} Overridden: ${eligibilityOverride.overrideReason}`,
+        }, { manager });
+      }
 
       // Through the outbox rather than a post-commit publish: the event now commits with the
       // assignment and is redelivered if the process dies before it reaches the gateway. The
@@ -944,10 +1038,10 @@ export class AssignmentService {
        * The check now runs first. If the date is not available the assignment still accepts —
        * the assayer's acceptance is real and must not be undone by a calendar clash — but no
        * schedule is written, and the reason is recorded so the desk can place it deliberately.
+       *
+       * The write itself happens inside the uow.run transaction below (see `autoScheduleResult`),
+       * not here — see the comment on that block for why.
        */
-      if (assignment.autoSchedule !== false && assignment.scheduledDate) {
-        await this.autoScheduleOnAcceptance(assignment, userId);
-      }
     } else if (targetStatus === AssignmentStatus.REJECTED) {
       event = AssignmentStateMachine.rejectOffer(assignment, userId, reason);
       if (assignment.projectBranch) {
@@ -962,7 +1056,11 @@ export class AssignmentService {
       // Refuses completion of work that was never accepted, and refuses closing an unattended
       // job without a stated reason — see AssignmentStateMachine.completeAudit.
       event = AssignmentStateMachine.completeAudit(assignment, userId, reason);
-      assignment.completionDate = new Date();
+      // `completion_date` is a `date` column, not a timestamp: writing `new Date()` stores it in
+      // UTC, so a completion recorded 00:00-05:30 IST is saved under the previous calendar day.
+      // `businessTodayDateKey` is the same IST-anchored helper `receivedDate` already uses for
+      // this exact reason.
+      assignment.completionDate = businessTodayDateKey() as any;
       if (assignment.projectBranch && assignment.projectBranch.status !== ProjectBranchStatus.AUDIT_COMPLETED) {
         pbEvent = ProjectBranchStateMachine.completeAudit(assignment.projectBranch, userId);
       }
@@ -980,7 +1078,13 @@ export class AssignmentService {
     assignment.updatedBy = userId;
 
 
-    const saved = await this.uow.run(async (manager, emit) => {
+    // Set inside uow.run when acceptance auto-schedules a calendar entry, and returned
+    // alongside the assignment (rather than closed over in an outer `let`) so its type survives
+    // the transaction boundary cleanly. The dispatch notification built from it is sent only
+    // after the transaction below actually commits.
+    type AutoScheduleResult = { scheduleId: string; scheduledDate: string } | null;
+
+    const { assignment: saved, autoScheduleResult } = await this.uow.run(async (manager, emit) => {
       /**
        * The compare-and-swap that makes concurrent transitions safe.
        *
@@ -1012,6 +1116,19 @@ export class AssignmentService {
         await manager.save(assignment.assessment);
       }
       const savedAssign = await manager.save(assignment);
+
+      let autoScheduleResult: AutoScheduleResult = null;
+      if (
+        targetStatus === AssignmentStatus.ACCEPTED
+        && assignment.autoSchedule !== false
+        && assignment.scheduledDate
+      ) {
+        // Moved inside the transaction, alongside the compare-and-swap above: writing the
+        // CONFIRMED schedule row before the lock/CAS ran meant a conflicting cancel that won
+        // the race left the assayer holding a dispatched, CONFIRMED schedule for an assignment
+        // that was never actually accepted. Now either both commit or neither does.
+        autoScheduleResult = await this.autoScheduleOnAcceptance(savedAssign, userId, manager);
+      }
 
       if (targetStatus === AssignmentStatus.COMPLETED) {
         // Inside the transaction: either both the assignment and its schedule reach
@@ -1067,8 +1184,28 @@ export class AssignmentService {
         emit(pbEvent.constructor.name, { ...pbEvent });
       }
 
-      return savedAssign;
+      return { assignment: savedAssign, autoScheduleResult };
     });
+
+    // Sent only now that the transaction has committed — see the comment inside
+    // autoScheduleOnAcceptance for why a dispatch notification built from a rolled-back write
+    // would tell an assayer they are scheduled for a job that a concurrent cancel just voided.
+    if (autoScheduleResult) {
+      this.notificationDispatch.emitSafe({
+        type: 'SCHEDULE_DISPATCHED',
+        entityType: 'SCHEDULE',
+        entityId: autoScheduleResult.scheduleId,
+        actorUserId: userId,
+        assayerId: saved.assayerId,
+        dedupeKey: `SCHEDULE_DISPATCHED:${autoScheduleResult.scheduleId}`,
+        payload: {
+          assignmentId: saved.id,
+          assignmentNumber: saved.assignmentNumber,
+          scheduledDate: autoScheduleResult.scheduledDate,
+          branchName: assignment.projectBranch?.branch?.name ?? '',
+        },
+      });
+    }
 
     // Notifications.
     //
@@ -1181,8 +1318,23 @@ export class AssignmentService {
    * what the mobile app shows the assayer and what the payable is built from: those must agree
    * with each other and with the travel figure beside them.
    */
-  async proposeCounterFee(id: string, userId: string, counterTravelFee: number, remarks?: string): Promise<AssignmentEntity> {
+  async proposeCounterFee(
+    id: string,
+    userId: string,
+    counterTravelFee: number,
+    remarks?: string,
+    clientRequestId?: string,
+  ): Promise<AssignmentEntity> {
     const assignment = await this.findOne(id);
+    // A retried POST (flaky mobile connection) carries the same clientRequestId as the counter-
+    // offer it is retrying. Without this check the retry read as a genuine second round: it
+    // incremented negotiationCount again and recomputed proposedFee from a previousFee that was
+    // already the retried value, silently compounding a travel figure the assayer sent once.
+    // Checked before the PENDING guard so a retry that lands after the desk has already acted
+    // on the (successfully applied) first attempt still returns cleanly instead of erroring.
+    if (clientRequestId && assignment.lastCounterRequestId === clientRequestId) {
+      return assignment;
+    }
     // A counter-offer only makes sense while the offer is still open. Without this guard it could
     // mutate proposedFee on a COMPLETED assignment (diverging from what was already billed) or
     // re-open a CANCELLED/CHECKED_IN branch by flipping it back to NEGOTIATION.
@@ -1191,18 +1343,105 @@ export class AssignmentService {
         `A counter-offer can only be made on an open offer (PENDING), not '${assignment.status}'.`,
       );
     }
-    const currentCount = assignment.negotiationCount || 0;
     const maxRounds = await this.settings
       .getNumber('field.maxNegotiationRounds', DEFAULT_MAX_NEGOTIATION_ROUNDS)
       .catch(() => DEFAULT_MAX_NEGOTIATION_ROUNDS);
-    if (currentCount >= maxRounds) {
+
+    /**
+     * The only check this figure got before now was `counterTravel < 0` in the controller — no
+     * upper bound at all. Checked here rather than only in the controller so `proposeCounterFee`
+     * itself is safe against any caller, not just the one HTTP path that exists today. A cheap
+     * fast-fail before the transaction, same reasoning as `maxRounds` just above: this cannot
+     * change mid-request, so there is nothing the row lock below would add.
+     */
+    const maxCounterTravelFee = await this.settings
+      .getNumber('field.maxCounterOfferTravelFee', DEFAULT_MAX_COUNTER_OFFER_TRAVEL_FEE)
+      .catch(() => DEFAULT_MAX_COUNTER_OFFER_TRAVEL_FEE);
+    if (counterTravelFee > maxCounterTravelFee) {
+      throw new BadRequestException(
+        `A counter travel fee of ₹${counterTravelFee} is above the ₹${maxCounterTravelFee} safety `
+        + `ceiling. If this is a genuine figure, an administrator can raise the ceiling in Platform Settings.`,
+      );
+    }
+
+    /**
+     * The round increment and the cap are a COMPARE-AND-SWAP under a row lock, not a
+     * check-then-write around the unlocked `findOne` above.
+     *
+     * `negotiationCount` was read unlocked and incremented in a plain transaction with no re-read,
+     * so N concurrent counter-offers all saw the same starting count and overwrote each other:
+     * confirmed live 2026-09-04 — SIX concurrent counters left `negotiation_count = 2`, not 6, and
+     * every one passed the `< maxRounds` cap check against the same stale value, so the
+     * negotiation-round limit was bypassable by firing counters in parallel (and `proposedFee`
+     * was last-write-wins). Re-reading the row `FOR UPDATE` inside the transaction and re-deriving
+     * everything from the locked row serialises them: each counter sees the previous one's
+     * increment, the count is exact, and the cap bites on the real value. Mirrors the CAS the
+     * status-transition path (`executeAssignmentTransition`) already uses.
+     *
+     * The pre-lock checks above stay as a cheap fast-fail with good error messages; the locked
+     * block is the authority.
+     */
+    const outcome = await this.dataSource.transaction(async (manager) => {
+      // Lock the assignment ROW ALONE — no relations. `FOR UPDATE` over a LEFT JOIN
+      // (relations: ['projectBranch']) is rejected by Postgres ("FOR UPDATE cannot be applied to
+      // the nullable side of an outer join"). The project-branch status write below uses the
+      // branch already loaded on the unlocked `assignment` read; it is the same branch.
+      const locked = await manager.findOne(AssignmentEntity, {
+        where: { id },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!locked) throw new NotFoundException(`Assignment ${id} not found`);
+
+      // Re-assert every guard against the locked row — a concurrent counter may have moved any of
+      // these since the unlocked read above.
+      if (clientRequestId && locked.lastCounterRequestId === clientRequestId) {
+        return { kind: 'dedup' as const, assignment: locked };
+      }
+      if (locked.status !== AssignmentStatus.PENDING) {
+        throw new BadRequestException(
+          `A counter-offer can only be made on an open offer (PENDING), not '${locked.status}'.`,
+        );
+      }
+      const lockedCount = locked.negotiationCount || 0;
+      if (lockedCount >= maxRounds) {
+        // Cap reached on the REAL count — signal the caller to run the shared auto-decline path
+        // (rejectOffer) outside this lock, so we do not nest transactions.
+        return { kind: 'cap' as const };
+      }
+
+      const prevFee = locked.proposedFee;
+      const prevTravel = locked.counterTravelFee ?? locked.quotedTravelFee;
+      const quotedTravel = Number(locked.quotedTravelFee ?? 0);
+      const baseFee = locked.quotedBaseFee !== null && locked.quotedBaseFee !== undefined
+        ? Number(locked.quotedBaseFee)
+        : Math.max(0, Number(prevFee ?? 0) - quotedTravel);
+
+      locked.negotiationCount = lockedCount + 1;
+      locked.lastCounterRequestId = clientRequestId ?? null;
+      locked.counterTravelFee = counterTravelFee;
+      locked.proposedFee = Math.round((baseFee + counterTravelFee) * 100) / 100;
+      locked.remarks = remarks
+        ?? `Counter offer #${locked.negotiationCount}: travel ₹${counterTravelFee} `
+           + `(audit fee ₹${baseFee} unchanged)`;
+      locked.updatedBy = userId;
+      // The branch row comes from the unlocked read (the locked query cannot join it). It is the
+      // same project branch; move it to NEGOTIATION in this same transaction.
+      if (assignment.projectBranch) {
+        assignment.projectBranch.status = ProjectBranchStatus.NEGOTIATION;
+        await manager.save(assignment.projectBranch);
+      }
+      const savedRow = await manager.save(locked);
+      return { kind: 'applied' as const, assignment: savedRow, previousFee: prevFee, previousTravel: prevTravel };
+    });
+
+    if (outcome.kind === 'dedup') {
+      return outcome.assignment;
+    }
+    if (outcome.kind === 'cap') {
       /**
-       * Routed through the SAME transition pipeline a manual decline takes — this used to be a
-       * bespoke save that flipped the status and told the notification bus, but skipped
-       * everything else the pipeline does: no ASSIGNMENT_REJECTED audit event (the timeline
-       * showed counter-offers 1..N and then silence), no `assignment:status-changed` realtime
-       * emit (neither the ops board nor the assayer's phone updated live), no schedule
-       * retirement, no stats refresh. One decline path, whoever triggers it.
+       * Routed through the SAME transition pipeline a manual decline takes (ASSIGNMENT_REJECTED
+       * audit event, realtime emit, schedule retirement, stats refresh) — one decline path,
+       * whoever triggers it. Runs after the lock is released so transactions do not nest.
        */
       return this.rejectOffer(
         id,
@@ -1210,38 +1449,9 @@ export class AssignmentService {
         `Negotiation limit reached (${maxRounds} counter-offers max). Offer auto-declined.`,
       );
     }
-    // Captured before the overwrite: a negotiation's audit value is the movement.
-    const previousFee = assignment.proposedFee;
-    const previousTravel = assignment.counterTravelFee ?? assignment.quotedTravelFee;
-
-    /**
-     * The audit fee the rate card set, which a counter-offer does not touch.
-     *
-     * Taken from the quote where there is one. An offer made before the quote columns existed
-     * has none, and for those the previous total less its travel is the best available reading of
-     * what the base was — the same arithmetic `assignmentMoney` has always applied.
-     */
-    const quotedTravel = Number(assignment.quotedTravelFee ?? 0);
-    const baseFee = assignment.quotedBaseFee !== null && assignment.quotedBaseFee !== undefined
-      ? Number(assignment.quotedBaseFee)
-      : Math.max(0, Number(previousFee ?? 0) - quotedTravel);
-
-    assignment.negotiationCount = currentCount + 1;
-    assignment.counterTravelFee = counterTravelFee;
-    assignment.proposedFee = Math.round((baseFee + counterTravelFee) * 100) / 100;
-    assignment.remarks = remarks
-      ?? `Counter offer #${assignment.negotiationCount}: travel ₹${counterTravelFee} `
-         + `(audit fee ₹${baseFee} unchanged)`;
-    assignment.updatedBy = userId;
-    if (assignment.projectBranch) {
-      assignment.projectBranch.status = ProjectBranchStatus.NEGOTIATION;
-    }
-    const saved = await this.dataSource.transaction(async (manager) => {
-      if (assignment.projectBranch) {
-        await manager.save(assignment.projectBranch);
-      }
-      return manager.save(assignment);
-    });
+    const saved = outcome.assignment;
+    const previousFee = outcome.previousFee;
+    const previousTravel = outcome.previousTravel;
 
     /**
      * A counter-offer changes what this audit will cost, so it is a money decision and needs
@@ -1354,6 +1564,76 @@ export class AssignmentService {
    */
   async completeAssignment(id: string, userId: string, reason?: string): Promise<AssignmentEntity> {
     const { saved } = await this.executeAssignmentTransition(id, AssignmentStatus.COMPLETED, userId, reason);
+    return saved;
+  }
+
+  /**
+   * The owner-decision undo: a completion that should not have booked money. Voids the payable
+   * first — inside the same lock, same transaction — and only then reopens the assignment, so a
+   * failure voiding the money leaves the assignment untouched rather than reopened with its
+   * payable still standing. Not routed through `executeAssignmentTransition`: that pipeline's
+   * ACCEPTED branch re-runs fee resolution and auto-scheduling, neither of which belongs to
+   * undoing a completion.
+   *
+   * Gated to ADMIN/OPERATIONS at the controller, matching `voidPayable` in billing-engine —
+   * the two are one decision made in two ledgers and must not be reachable independently.
+   */
+  async reopen(id: string, userId: string, reason: string): Promise<AssignmentEntity> {
+    if (!reason?.trim()) {
+      throw new BadRequestException('Say why this completed assignment is being reopened.');
+    }
+
+    const saved = await this.uow.run(async (manager, emit) => {
+      const lockedRows: Array<{ status: string }> = await manager.query(
+        'SELECT status FROM assignments WHERE id = $1 FOR UPDATE',
+        [id],
+      );
+      const lockedStatus = lockedRows?.[0]?.status;
+      if (!lockedStatus) throw new NotFoundException(`Assignment ${id} not found`);
+      if (lockedStatus !== AssignmentStatus.COMPLETED) {
+        throw new ConflictException(`Only a COMPLETED assignment can be reopened; this one is '${lockedStatus}'.`);
+      }
+
+      const assignment = await manager.findOne(AssignmentEntity, { where: { id } });
+      if (!assignment) throw new NotFoundException(`Assignment ${id} not found`);
+
+      // Void the payable first, on the caller's own manager/transaction, so this and the
+      // assignment status flip commit or roll back together — see the class comment above.
+      const payable = await manager.findOne(AssayerPayableEntity, {
+        where: { assignmentId: id, expenseId: IsNull() },
+      });
+      if (payable) {
+        await this.billingEngine.voidPayable(payable.id, reason.trim(), userId, { manager, emit });
+      }
+
+      const event = AssignmentStateMachine.reopen(assignment, userId, reason.trim());
+      assignment.updatedBy = userId;
+      const savedAssign = await manager.save(assignment);
+
+      await this.auditService.recordEventSafe({
+        category: EventCategory.WORKFLOW,
+        eventType: 'ASSIGNMENT_REOPENED',
+        entityType: 'ASSIGNMENT',
+        entityId: savedAssign.id,
+        previousState: event.previousState,
+        newState: event.newState,
+        userId,
+        remarks: reason.trim(),
+      }, { manager });
+
+      emit('assignment:status-changed', {
+        eventType: 'assignment:status-changed',
+        assignmentId: savedAssign.id,
+        assignmentNumber: savedAssign.assignmentNumber,
+        previousState: event.previousState,
+        newState: savedAssign.status,
+        assayerId: savedAssign.assayerId,
+        userId,
+      });
+
+      return savedAssign;
+    });
+
     return saved;
   }
 
@@ -1563,7 +1843,11 @@ export class AssignmentService {
    * through the `schedules` repository with the same shape `SchedulingService.create` produces,
    * and the same audit event, so a schedule is indistinguishable whichever door it came through.
    */
-  private async autoScheduleOnAcceptance(assignment: AssignmentEntity, userId: string): Promise<void> {
+  private async autoScheduleOnAcceptance(
+    assignment: AssignmentEntity,
+    userId: string,
+    manager: EntityManager,
+  ): Promise<{ scheduleId: string; scheduledDate: string } | null> {
     const scheduledDateObj = new Date(assignment.scheduledDate as any);
 
     // try/catch, not `.catch()`: a synchronous throw here would escape a promise-only handler and
@@ -1601,11 +1885,11 @@ export class AssignmentService {
         entityId: assignment.id,
         userId,
         remarks: `Offer accepted, calendar entry withheld: ${availability.reason}`,
-      });
-      return;
+      }, { manager });
+      return null;
     }
 
-    const scheduleRepo = this.dataSource.getRepository(ScheduleEntity);
+    const scheduleRepo = manager.getRepository(ScheduleEntity);
 
     /**
      * One calendar entry per assignment, revived rather than duplicated.
@@ -1631,7 +1915,7 @@ export class AssignmentService {
       .findOne({ where: { assignmentId: assignment.id } })
       .catch(() => null);
 
-    if (existing && existing.isActive && existing.status === ScheduleStatus.CONFIRMED) return;
+    if (existing && existing.isActive && existing.status === ScheduleStatus.CONFIRMED) return null;
 
     const saved = existing
       ? await scheduleRepo.save(Object.assign(existing, {
@@ -1663,24 +1947,26 @@ export class AssignmentService {
       entityId: (saved as any).id,
       userId,
       remarks: `Confirmed on acceptance of ${assignment.assignmentNumber}.`,
-    });
+    }, { manager });
 
-    // The assayer is the one who has to show up; a dispatch they were never told about is not a
-    // dispatch. `SchedulingService` sends this on its path, and this one sent nothing.
-    this.notificationDispatch.emitSafe({
-      type: 'SCHEDULE_DISPATCHED',
-      entityType: 'SCHEDULE',
-      entityId: (saved as any).id,
-      actorUserId: userId,
-      assayerId: assignment.assayerId,
-      dedupeKey: `SCHEDULE_DISPATCHED:${(saved as any).id}`,
-      payload: {
-        assignmentId: assignment.id,
-        assignmentNumber: assignment.assignmentNumber,
-        scheduledDate: scheduledDateObj.toISOString(),
-        branchName: assignment.projectBranch?.branch?.name ?? '',
-      },
-    });
+    // The dispatch notification is NOT sent here. This runs inside the same transaction as the
+    // FOR UPDATE compare-and-swap in executeAssignmentTransition -- if a concurrent cancel wins
+    // that race the whole transaction (including this schedule write) rolls back, and an
+    // assayer already told "you're dispatched" for a job that never actually got accepted is
+    // exactly the inconsistency this ordering fix exists to remove. The caller sends this once
+    // the transaction has committed.
+    return {
+      scheduleId: (saved as any).id,
+      // Date-only, not `.toISOString()`'s full timestamp-with-time-and-Z: this value's one
+      // consumer interpolates it straight into the SCHEDULE_DISPATCHED notification body
+      // ("...is confirmed for ${scheduledDate}."), which read "...confirmed for
+      // 2026-09-04T00:00:00.000Z." on a real device — a raw ISO instant on a field (branch
+      // visits have no time-of-day component anywhere else in the app). Matches the date-only
+      // convention `scheduling.service.ts`'s own `fmt()` helper already uses for
+      // SCHEDULE_RESCHEDULED/SCHEDULE_CANCELLED's date fields, and what `dto.scheduledDate`
+      // naturally is when a schedule is created directly through that service instead of here.
+      scheduledDate: scheduledDateObj.toISOString().slice(0, 10),
+    };
   }
 
   async scheduleAudit(id: string, userId: string, scheduledDate: string, remarks?: string): Promise<AssignmentEntity> {
@@ -1721,6 +2007,13 @@ export class AssignmentService {
     }
     assignment.scheduledDate = new Date(scheduledDate);
     assignment.updatedBy = userId;
+    // The SLA clock measures "attend by the scheduled day", so moving the date without
+    // re-arming `slaDueDate` leaves the old deadline standing: a re-schedule pushed a week out
+    // still reads BREACHED against a date that no longer applies, or a pull-in gets a deadline
+    // later than the actual visit. Recomputed with the exact rule acceptance uses (~line 914)
+    // so the two paths cannot disagree about what "on time" means for the same field.
+    assignment.slaDueDate = new Date(`${businessDateKey(assignment.scheduledDate)}T23:59:59+05:30`);
+    assignment.slaStatus = 'COMPLIANT';
 
     const saved = await this.dataSource.transaction(async (manager) => {
       if (assignment.projectBranch) {

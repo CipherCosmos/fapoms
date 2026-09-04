@@ -1,4 +1,4 @@
-import { Injectable, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, BadRequestException, NotFoundException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import {
@@ -16,6 +16,8 @@ import { TransportRateEntity, TransportRateScope } from './transport-rate.entity
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { SETTING_BY_KEY } from '../../infrastructure/settings/settings.registry';
+import { AuditService } from '../../core/audit/audit.service';
+import { EventCategory } from '@fapoms/shared';
 
 /**
  * The transport rate card: what travelling actually costs, managed by the desk, consumed by
@@ -224,6 +226,10 @@ export class TransportRateService {
     private readonly rateRepository: Repository<TransportRateEntity>,
     private readonly cache: CacheService,
     private readonly settings: PlatformSettingsService,
+    // Optional (`@Optional()`, not just `?`) so existing specs that build this service through
+    // Nest's DI without an audit collaborator still resolve; DI always supplies the real one.
+    // Every call site guards with `?.`.
+    @Optional() private readonly auditService?: AuditService,
   ) {}
 
   // ---------------------------------------------------------------- CRUD
@@ -244,12 +250,32 @@ export class TransportRateService {
     });
     const saved = await this.rateRepository.save(entity);
     await this.invalidate();
+    await this.auditService?.recordEventSafe({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'TRANSPORT_RATE_CREATED',
+      entityType: 'TRANSPORT_RATE',
+      entityId: saved.id,
+      userId,
+      remarks: `Created ${saved.mode} rate ${scopePhrase(saved.scopeType, saved.scopeValue)}`,
+      metadata: { newValue: normalized },
+    });
     return saved;
   }
 
   async update(id: string, dto: UpdateTransportRateDto, userId?: string): Promise<TransportRateEntity> {
     const existing = await this.rateRepository.findOne({ where: { id } });
     if (!existing) throw new NotFoundException('Transport rate not found');
+
+    // Captured before Object.assign overwrites the entity, so the audit row below can carry
+    // both sides of the change.
+    const previousValue = {
+      baseFare: Number(existing.baseFare),
+      perKmRate: Number(existing.perKmRate),
+      isPreferred: existing.isPreferred,
+      effectiveFrom: existing.effectiveFrom,
+      effectiveTo: existing.effectiveTo,
+      isActive: existing.isActive,
+    };
 
     const merged = this.validate({
       mode: dto.mode ?? existing.mode,
@@ -270,6 +296,25 @@ export class TransportRateService {
     });
     const saved = await this.rateRepository.save(existing);
     await this.invalidate();
+    await this.auditService?.recordEventSafe({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'TRANSPORT_RATE_UPDATED',
+      entityType: 'TRANSPORT_RATE',
+      entityId: saved.id,
+      userId,
+      remarks: `Updated ${saved.mode} rate ${scopePhrase(saved.scopeType, saved.scopeValue)}`,
+      metadata: {
+        previousValue,
+        newValue: {
+          baseFare: Number(saved.baseFare),
+          perKmRate: Number(saved.perKmRate),
+          isPreferred: saved.isPreferred,
+          effectiveFrom: saved.effectiveFrom,
+          effectiveTo: saved.effectiveTo,
+          isActive: saved.isActive,
+        },
+      },
+    });
     return saved;
   }
 
@@ -277,9 +322,22 @@ export class TransportRateService {
    * Hard delete is deliberately absent. A rate that has priced even one offer is part of that
    * offer's audit trail; retiring it (isActive=false, or an effectiveTo date) removes it from
    * every future quote while keeping the past explicable.
+   *
+   * Goes through `update()` for the mutation (so it gets TRANSPORT_RATE_UPDATED's before/after),
+   * plus its own event: "deactivated" is a distinct fact from "some field changed" and a desk
+   * scanning the trail for retirements should not have to open every update to find it.
    */
   async deactivate(id: string, userId?: string): Promise<TransportRateEntity> {
-    return this.update(id, { isActive: false }, userId);
+    const saved = await this.update(id, { isActive: false }, userId);
+    await this.auditService?.recordEventSafe({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'TRANSPORT_RATE_DEACTIVATED',
+      entityType: 'TRANSPORT_RATE',
+      entityId: saved.id,
+      userId,
+      remarks: `Deactivated ${saved.mode} rate ${scopePhrase(saved.scopeType, saved.scopeValue)}`,
+    });
+    return saved;
   }
 
   // ---------------------------------------------------------------- resolution

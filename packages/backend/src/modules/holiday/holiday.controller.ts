@@ -24,6 +24,8 @@ import { HolidayService, CreateHolidayDto } from './holiday.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole } from '@fapoms/shared';
+import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
+import { ParsePagePipe } from '../../infrastructure/http/parse-page.pipe';
 
 class CreateHolidayRequestDto implements CreateHolidayDto {
   @IsString() @IsNotEmpty()
@@ -86,8 +88,11 @@ export class HolidayController {
   @Get()
   @ApiOperation({ summary: 'List and filter holiday records' })
   async findAll(
-    @Query('page') page = 1,
-    @Query('limit') limit = 50,
+    // Same gap, same fix as ZoneController.findAll: an unguarded `page`/`limit` reached the
+    // query builder as a bare Number(...), and `?page=0`/`-1`/`abc` produced a `skip` Postgres
+    // or TypeORM refuse outright — an unhandled 500 for a request that should just return page one.
+    @Query('page', new ParsePagePipe()) page: number,
+    @Query('limit', new ParseLimitPipe({ default: 50, max: 500 })) limit: number,
     @Query('year') year?: number,
     @Query('clientId') clientId?: string,
   ) {

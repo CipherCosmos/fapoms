@@ -11,8 +11,10 @@ import { RegionGuardService } from './region-guard.service';
  */
 describe('RegionGuardService', () => {
   const dataSource = { query: jest.fn() };
-  // Defaults to 'log' — matches the setting's own shipped default, so a spec that never
-  // touches security.regionScope.mode exercises the same behaviour a fresh deployment does.
+  // This mock returns 'log' so the cases below can assert the log-mode behaviour (warn, allow)
+  // explicitly. NOTE: the setting's *shipped* default is now 'enforce' (see
+  // settings/security-defaults.spec.ts) — 'log' here is a deliberate per-test choice, not the
+  // default a fresh deployment runs under. Cases that care about enforce/off set the mode themselves.
   const mockSettings = { get: jest.fn().mockResolvedValue('log') };
   const guard = new RegionGuardService(dataSource as any, mockSettings as any);
 

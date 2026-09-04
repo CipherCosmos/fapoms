@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import {
-  useNavigate } from 'react-router-dom'; import { useQueryClient } from '@tanstack/react-query'; import { Plus, Search, Edit2, Trash2, AlertTriangle, Download, ArrowRightLeft, MapPin, CheckCircle2, Users, SlidersHorizontal, Upload, FileSpreadsheet, PlayCircle } from 'lucide-react'; import { AssayerLifecycleStatus, assayerLifecyclePath, assayerLifecycleLabel, isOnboardingStage,
+  useNavigate } from 'react-router-dom'; import { useQueryClient } from '@tanstack/react-query'; import { Plus, Search, Edit2, Trash2, AlertTriangle, Download, ArrowRightLeft, MapPin, CheckCircle2, Users, SlidersHorizontal, Upload, FileSpreadsheet, PlayCircle, KeyRound } from 'lucide-react'; import { AssayerLifecycleStatus, assayerLifecyclePath, assayerLifecycleLabel, isOnboardingStage,
 } from '@fapoms/shared';
 
 import { api } from '../../services/api';
@@ -12,7 +12,7 @@ import { ImportIssuesPanel } from './ImportIssuesPanel';
 import { visibleSelection, hiddenSelectionNote } from '../../utils/selection';
 import { useSearchParams } from 'react-router-dom';
 import { useCurrentRoles, canManageAssayers, canCreateAssayers } from '../../hooks/useCurrentRoles';
-import { useExcelExport } from '../../hooks/useExcelExport';
+import { useQueuedExcelExport } from '../../hooks/useQueuedExcelExport';
 import { RegistrationWizard } from './registration/RegistrationWizard';
 import {
   STATUS_COLORS, onboardingNextStep, stillWorkable, isRecordedDeceased,
@@ -20,6 +20,7 @@ import {
 import {
   ROSTER_SEGMENTS, EMPTY_FILTERS, applyRosterFilters, activeFilterCount, describeFilters,
   missingFields, payoutBlockers, tenureMonths, parseFilters, writeFilters, segmentFor,
+  toServerQuery,
   type RosterFilterState, type RosterPerson,
 } from './roster-filters';
 import { RosterFilterPanel, AppliedFilterBar } from './RosterFilterPanel';
@@ -176,8 +177,11 @@ export const AssayerRoster: React.FC<{
     }
   };
   const [bulkTarget, setBulkTarget] = useState('');
-  const { download: downloadExcel, busy: exporting } = useExcelExport();
-  const handleExportExcel = () => void downloadExcel('/reports/assayer-roster');
+  // Queued (POST .../jobs, poll, download) rather than the synchronous GET — see
+  // useQueuedExcelExport.ts. The roster workbook also carries the payroll rate card, built
+  // over the whole roster, so it is one of the exports the blocking xlsx.write cost applies to.
+  const { download: downloadExcel, busy: exporting } = useQueuedExcelExport();
+  const handleExportExcel = () => void downloadExcel('/reports/assayer-roster/jobs');
   const [busy, setBusy] = useState(false);
   /**
    * A roster import runs for as long as the server takes to read the sheet, and nothing on
@@ -185,6 +189,13 @@ export const AssayerRoster: React.FC<{
    * overlapping imports re-run every row against a roster the first is still writing.
    */
   const [uploading, setUploading] = useState(false);
+  /**
+   * Off by default: a sheet value that disagrees with what is already on file is left alone and
+   * filed as a review issue instead of silently overwriting it — the safer default for a
+   * roster edited both here and in the sheet between imports. Checking this makes the sheet win
+   * every disagreement instead, for the one workbook this run imports.
+   */
+  const [overwriteConflicts, setOverwriteConflicts] = useState(false);
   /**
    * The real roster import's lifetime — the same hook the branch importers use, so the three
    * upload screens cannot drift into three different ideas of what "finished" means.
@@ -203,6 +214,20 @@ export const AssayerRoster: React.FC<{
     failed: { id: string; reason: string }[];
     names: Record<string, string>;
   } | null>(null);
+  /**
+   * The per-person outcome of the last bulk app-access run. Kept separate from `bulkReport`
+   * (the lifecycle-move one) rather than folded in, because the two shapes don't overlap —
+   * this one carries delivery channels and skip/fail reasons that have nothing to do with a
+   * lifecycle stage — and a batch of one kind can run right after the other without either
+   * report clobbering the other's names lookup.
+   */
+  const [appAccessReport, setAppAccessReport] = useState<{
+    succeeded: { id: string; channels: ('EMAIL' | 'SMS')[] }[];
+    skipped: { id: string; reason: string }[];
+    failed: { id: string; reason: string }[];
+    names: Record<string, string>;
+  } | null>(null);
+  const [appAccessBusy, setAppAccessBusy] = useState(false);
   const RENDER_CHUNK = 200;
   /** How many rows the roster asks for at once. The chips count what arrives. */
   const ROSTER_LIMIT = 1000;
@@ -212,22 +237,34 @@ export const AssayerRoster: React.FC<{
   const queryClient = useQueryClient();
 
   /**
+   * The server-mappable slice of the active filters, as `GET /assayers` query params — see
+   * `toServerQuery`. Kept as its own memo (rather than reading `filters` straight in `load`) so
+   * a change to a client-only rule filter (record completeness, documents, pin quality — none of
+   * which the server can apply) does not trigger a network round trip: only a change to an axis
+   * the server actually understands refetches.
+   */
+  const serverQuery = useMemo(() => toServerQuery(filters), [filters]);
+
+  /**
    * The roster, and how big the set it came from actually is.
    *
-   * This asked for a thousand rows and then counted them for every filter chip, while the tab
-   * badge above reads the server's own total. Past a thousand people the two silently describe
-   * different things — "Everyone 1,000" under a badge saying 1,400 — and every other chip
-   * counts an arbitrary window of the roster ordered by creation date. The account's region
-   * scope narrows this list too, and does not narrow the badge.
+   * This asked for a thousand rows — of the WHOLE roster, ignoring every filter — and then
+   * counted them for every filter chip, while the tab badge above reads the server's own total.
+   * At 11,000 people that put 9% of the roster in front of anyone who filtered by state or
+   * stage, silently. `serverQuery` now travels with the request, so the 1,000-row window is the
+   * top of the FILTERED set — the same axes `AssayerController.parseRosterFilters` reads — and
+   * `meta.pagination.total` is that filtered set's true size, not the unfiltered roster's.
    *
-   * `meta.pagination.total` is the size of the set the server cut this page from, so the screen
-   * can say plainly when it is showing part of the roster rather than implying it is all of it.
+   * The remaining "rule"-kind filters (record completeness, documents, certificates, pin
+   * quality, qualification band) stay client-side over this window, exactly as `applyRosterFilters`
+   * already does below — they are computed from several columns or a compute-on-read score, so
+   * there is no single column for the server to filter on.
    */
   const load = useCallback(async () => {
     setLoading(true);
     try {
       const res = await api.request<{ data: RosterPerson[]; meta?: { pagination?: { total?: number } } }>(
-        `/assayers?limit=${ROSTER_LIMIT}`,
+        `/assayers?limit=${ROSTER_LIMIT}${serverQuery ? `&${serverQuery}` : ''}`,
         { withMeta: true },
       );
       const rows = Array.isArray(res?.data) ? res.data : [];
@@ -238,7 +275,7 @@ export const AssayerRoster: React.FC<{
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [serverQuery]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -448,6 +485,80 @@ export const AssayerRoster: React.FC<{
     }
   };
 
+  /**
+   * Issue app access to every selected row in one request, instead of HR opening 540 detail
+   * screens one at a time to press the same button.
+   *
+   * The roster's own projection carries no field for "already has a password" — `canSignInNow`
+   * only exists as the output of issuing access, not as something stored — so this is not
+   * gated on lifecycle or existing-access state the way the move-stage action is gated on a
+   * reachable target. It runs for whoever is selected and reports the per-person outcome; a
+   * re-issue to someone who already had access simply replaces their credential, which is the
+   * same behaviour the single-person "Issue app access" button on the record screen already has.
+   *
+   * The temporary passwords never reach this component: the server delivers them straight to
+   * each person by email and SMS and returns only which channel(s), if any, actually reported
+   * success.
+   */
+  const runBulkIssueAppAccess = async () => {
+    if (selected.length === 0) return;
+    const names = selected.slice(0, 5).map((a) => `${a.displayName} (${a.assayerCode})`);
+    const ok = await confirm({
+      title: `Issue app access to ${counted(selected.length, 'person', 'people')}?`,
+      message: (
+        <>
+          Each person gets a new temporary password, sent to whatever contact details are on
+          file for them — email, SMS, or both. Anyone with neither on record is skipped rather
+          than left without a way to receive it.
+          <div style={{ marginTop: '8px', fontSize: '12px' }}>
+            {names.join(', ')}
+            {selected.length > names.length && ` and ${selected.length - names.length} more`}
+          </div>
+          {hiddenNote && <div style={{ marginTop: '6px', fontSize: '12px' }}>{hiddenNote}</div>}
+        </>
+      ),
+      confirmLabel: `Issue access to ${selected.length}`,
+      reversible: false,
+      reversibleNote: 'Anyone who already had a password gets a new one — the old one stops working.',
+    });
+    if (!ok) return;
+
+    setAppAccessBusy(true);
+    setAppAccessReport(null);
+    const ids = selectedVisibleIds;
+    const nameById = Object.fromEntries(selected.map((a) => [a.id, `${a.displayName} (${a.assayerCode})`]));
+    try {
+      const res = await api.request<{
+        succeeded: { id: string; channels: ('EMAIL' | 'SMS')[] }[];
+        skipped: { id: string; reason: string }[];
+        failed: { id: string; reason: string }[];
+      }>('/assayers/app-access/bulk', { method: 'POST', body: JSON.stringify({ ids }) });
+      const { succeeded, skipped, failed } = res ?? { succeeded: [], skipped: [], failed: [] };
+      setAppAccessReport({ succeeded, skipped, failed, names: nameById });
+
+      const byEmail = succeeded.filter((s) => s.channels.includes('EMAIL')).length;
+      const bySms = succeeded.filter((s) => s.channels.includes('SMS')).length;
+      setNotice(
+        skipped.length || failed.length
+          ? {
+              tone: 'err',
+              text: `${succeeded.length} issued (${byEmail} by email, ${bySms} by SMS), `
+                + `${skipped.length} skipped, ${failed.length} failed.`,
+            }
+          : {
+              tone: 'ok',
+              text: `${counted(succeeded.length, 'person', 'people')} issued app access `
+                + `(${byEmail} by email, ${bySms} by SMS).`,
+            },
+      );
+    } catch (e) {
+      setNotice({ tone: 'err', text: `Nobody was issued access. ${userMessage(e)}` });
+    } finally {
+      setAppAccessBusy(false);
+      setSelectedIds(new Set());
+    }
+  };
+
   const remove = async (a: RosterPerson) => {
     // Deleting a person's whole HR record. The assayer code is what uniquely identifies
     // them on a roster full of similar names, so that is what has to be typed — it also
@@ -506,10 +617,11 @@ export const AssayerRoster: React.FC<{
    * Rehearse the workbook. Writes nothing; the operator is waiting on its answer, so it stays a
    * plain request.
    */
-  const rehearseRoster = (file: File): Promise<RosterImportSummary> => {
+  const rehearseRoster = (file: File, overwrite: boolean): Promise<RosterImportSummary> => {
     const fd = new FormData();
     fd.append('file', file);
     fd.append('dryRun', 'true');
+    fd.append('overwrite', String(overwrite));
     return api.request<RosterImportSummary>('/assayers/roster/import', { method: 'POST', body: fd });
   };
 
@@ -517,7 +629,7 @@ export const AssayerRoster: React.FC<{
     setUploading(true);
     try {
       // Rehearse — writes nothing, tells us what the file holds.
-      const dry = await rehearseRoster(file);
+      const dry = await rehearseRoster(file, overwriteConflicts);
       const extras = [
         dry.references ? `${dry.references.toLocaleString('en-IN')} references` : '',
         dry.backgroundChecks ? `${dry.backgroundChecks.toLocaleString('en-IN')} background checks` : '',
@@ -549,6 +661,12 @@ export const AssayerRoster: React.FC<{
             <div style={{ marginTop: '10px', fontSize: '12px', color: 'var(--text-muted)' }}>
               Re-importing the same appraiser code updates that person — it never creates a duplicate.
             </div>
+            {overwriteConflicts && (
+              <div style={{ marginTop: '8px', fontSize: '12px', color: 'var(--warning)' }}>
+                "Sheet wins conflicts" is on: where this workbook disagrees with what is already on
+                file, the sheet's value will replace it instead of being filed for review.
+              </div>
+            )}
           </>
         ),
         confirmLabel: `Import ${dry.rowsRead.toLocaleString('en-IN')} appraisers`,
@@ -563,7 +681,7 @@ export const AssayerRoster: React.FC<{
        * hour, with nothing to look at and no way to tell a slow import from a dead one. The panel
        * below follows the job the server returns, and the page can be left.
        */
-      await rosterImport.start('/assayers/roster/import', file);
+      await rosterImport.start('/assayers/roster/import', file, { overwrite: String(overwriteConflicts) });
     } catch (e) {
       setNotice({ tone: 'err', text: userMessage(e) });
     } finally {
@@ -803,6 +921,24 @@ export const AssayerRoster: React.FC<{
                 Bring in a client's appraiser workbook. Every import is rehearsed first and shows
                 what it would change before anything is written.
               </div>
+              <label style={{
+                display: 'flex', alignItems: 'flex-start', gap: '6px', fontSize: '12px',
+                color: 'var(--text-secondary)', cursor: 'pointer', lineHeight: 1.4,
+              }}>
+                <input
+                  type="checkbox"
+                  checked={overwriteConflicts}
+                  onChange={(e) => setOverwriteConflicts(e.target.checked)}
+                  style={{ marginTop: '2px' }}
+                />
+                <span>
+                  Sheet wins conflicts
+                  <span style={{ display: 'block', color: 'var(--text-muted)' }}>
+                    Off: a disagreeing value is left alone and filed for review. On: the sheet
+                    replaces it.
+                  </span>
+                </span>
+              </label>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'stretch' }}>
                 <UploadExcelControls
                   onUpload={handleUpload}
@@ -889,6 +1025,19 @@ export const AssayerRoster: React.FC<{
           <button onClick={runBulkTransition} disabled={!bulkTarget || busy} className="btn btn-primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
             {busy ? 'Applying…' : 'Apply'}
           </button>
+          {/* Separate from the stage-move control above: issuing access has nothing to do with
+              the reachable-target dropdown, and runs for whoever is selected regardless of
+              lifecycle stage — the roster's own row shape carries no "already has a password"
+              field to gate it on. See the note on runBulkIssueAppAccess. */}
+          <button
+            onClick={runBulkIssueAppAccess}
+            disabled={appAccessBusy}
+            className="btn btn-secondary"
+            style={{ fontSize: '12px', padding: '6px 12px', display: 'inline-flex', alignItems: 'center', gap: '5px' }}
+          >
+            <KeyRound size={13} />
+            {appAccessBusy ? 'Issuing…' : 'Issue app access'}
+          </button>
           <button onClick={() => setSelectedIds(new Set())} className="btn btn-secondary" style={{ fontSize: '12px', padding: '6px 12px', marginLeft: 'auto' }}>
             Clear selection
           </button>
@@ -934,6 +1083,59 @@ export const AssayerRoster: React.FC<{
               {bulkReport.failed.map((f) => (
                 <div key={f.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
                   <span style={{ color: 'inherit' }}>{bulkReport.names[f.id] ?? 'This assayer'}</span>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>— {f.reason}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Bulk app-access result — who was issued a credential and by which channel(s), who was
+          skipped for lacking any contact detail, and who failed outright. The password itself
+          never appears here or anywhere else in this component: the server delivered it
+          straight to each person and told this screen only whether that delivery succeeded. */}
+      {appAccessReport && (
+        <div style={{
+          marginTop: '10px', padding: '12px 14px', borderRadius: '8px', fontSize: '12px',
+          background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)',
+        }}>
+          <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', fontWeight: 600, marginBottom: '8px' }}>
+            <span style={{ color: 'var(--status-active-text)' }}>{appAccessReport.succeeded.length} issued</span>
+            <span style={{ color: 'var(--text-muted)' }}>{appAccessReport.skipped.length} skipped</span>
+            {appAccessReport.failed.length > 0 && <span style={{ color: 'var(--status-danger-text)' }}>{appAccessReport.failed.length} failed</span>}
+            <button onClick={() => setAppAccessReport(null)} className="btn btn-secondary" style={{ fontSize: '12px', padding: '2px 8px', marginLeft: 'auto' }}>Dismiss</button>
+          </div>
+          {appAccessReport.succeeded.length > 0 && (
+            <div style={{ marginTop: '6px' }}>
+              <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Issued:</div>
+              {appAccessReport.succeeded.map((s) => (
+                <div key={s.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
+                  <span style={{ color: 'inherit' }}>{appAccessReport.names[s.id] ?? 'This assayer'}</span>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
+                    — {s.channels.length > 0 ? `sent by ${s.channels.join(' and ').toLowerCase()}` : 'not reachable on any channel'}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+          {appAccessReport.skipped.length > 0 && (
+            <div style={{ marginTop: '6px' }}>
+              <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Skipped:</div>
+              {appAccessReport.skipped.map((s) => (
+                <div key={s.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
+                  <span style={{ color: 'inherit' }}>{appAccessReport.names[s.id] ?? 'This assayer'}</span>
+                  <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>— {s.reason}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {appAccessReport.failed.length > 0 && (
+            <div style={{ marginTop: '6px' }}>
+              <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Failed:</div>
+              {appAccessReport.failed.map((f) => (
+                <div key={f.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
+                  <span style={{ color: 'inherit' }}>{appAccessReport.names[f.id] ?? 'This assayer'}</span>
                   <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>— {f.reason}</span>
                 </div>
               ))}

@@ -1,5 +1,4 @@
 import { canonicalStateName } from './regions';
-import { canonicalState } from './utils';
 
 /**
  * Reading a pincode out of an address, and refusing to guess.
@@ -58,14 +57,16 @@ const stateKey = (value: string): string =>
 /**
  * Every form of a state name worth comparing.
  *
- * Two canonicalisers exist and neither covers the roster alone: `canonicalStateName` returns
- * null for "M.P", "A.P", "U.P" and "WB", while `canonicalState` answers "MP" and "JK" — full
- * names for some, abbreviations for others. Taking both, plus the raw value, is what makes the
- * circle check actually run. It was silently skipped on roughly 150 records whose state the
- * first one could not read, which is the worst way for a validation to fail: it reported success.
+ * This used to chain two disagreeing canonicalisers: `canonicalStateName` returned null for
+ * "M.P", "A.P", "U.P" and "WB" while `utils.ts:canonicalState` answered those but not every
+ * misspelling the first one could recover. Skipping either lost roughly 150 records to a check
+ * that was silently never run — the worst way for a validation to fail, since it reported
+ * success. `canonicalStateName` now recognises both (`regions.ts:STATE_ABBREVIATIONS` covers the
+ * codes, `canonicalState` is a thin wrapper over this same function), so one call plus the raw
+ * value — kept for a state this function does not recognise at all — is enough.
  */
 const stateForms = (state: string): string[] =>
-  [canonicalStateName(state), canonicalState(state), state]
+  [canonicalStateName(state), state]
     .filter((v): v is string => !!v && v !== 'UNKNOWN')
     .map(stateKey);
 

@@ -234,7 +234,16 @@ export class BranchController {
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('branch:edit:organization')
   @ApiOperation({ summary: 'Update branch details' })
-  async update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateBranchRequestDto, @Req() req: any) {
+  async update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateBranchRequestDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    // The region ceiling `GET :id` enforces must also gate the WRITE — otherwise a region-restricted
+    // operator refused reading a branch in another region could still edit it (the same read/write
+    // asymmetry found on the schedule transition). Branches are the region anchor, so assert by id.
+    await this.regionGuard.assertBranchInScope(id, scope);
     const branch = await this.branchService.update(id, dto, req.user.id);
     return { success: true, data: branch };
   }
@@ -243,7 +252,14 @@ export class BranchController {
   @Roles(SystemRole.ADMIN)
   @RequirePermissions('branch:delete:organization')
   @ApiOperation({ summary: 'Soft delete branch' })
-  async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+  async remove(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    // Same region ceiling as the read/update above — a region-restricted ADMIN must not delete an
+    // out-of-region branch it cannot see.
+    await this.regionGuard.assertBranchInScope(id, scope);
     await this.branchService.remove(id, req.user.id);
     return { success: true, data: { message: 'Branch deleted successfully' } };
   }

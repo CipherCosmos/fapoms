@@ -36,9 +36,9 @@ const DESK_QUEUES = [
 const PLANNING_DESK = [queryKeys.planning.queue, queryKeys.planning.recommendationsAll];
 
 const EVENT_KEYS: [string, ...any[]][] = [
-  ['assignment:status-changed', queryKeys.assignments.all, ...DESK_QUEUES, ...PLANNING_DESK, queryKeys.dashboard.all, queryKeys.schedules.all],
+  ['assignment:status-changed', queryKeys.assignments.all, ...DESK_QUEUES, ...PLANNING_DESK, queryKeys.dashboard.all, queryKeys.schedules.all, queryKeys.commandCenter.all],
   ['assignment:counter-offered', queryKeys.assignments.all, ...DESK_QUEUES, ...PLANNING_DESK, queryKeys.dashboard.all, queryKeys.schedules.all],
-  ['assignment:created', queryKeys.assignments.all, ...DESK_QUEUES, ...PLANNING_DESK, queryKeys.dashboard.all],
+  ['assignment:created', queryKeys.assignments.all, ...DESK_QUEUES, ...PLANNING_DESK, queryKeys.dashboard.all, queryKeys.commandCenter.all],
   ['assignment:fee-updated', queryKeys.assignments.all, ...DESK_QUEUES, ...PLANNING_DESK],
   // An assayer flagged a problem from the field — refresh the Field Issues queue and the
   // assignment views so the flag shows without a manual reload.
@@ -46,15 +46,31 @@ const EVENT_KEYS: [string, ...any[]][] = [
   ['assignment:escalated', queryKeys.assignments.all, ...DESK_QUEUES, queryKeys.planning.queue, queryKeys.dashboard.all],
   ['schedule:created', queryKeys.schedules.all, queryKeys.dashboard.all, queryKeys.assignments.all, queryKeys.planning.queue],
   ['schedule:updated', queryKeys.schedules.all, queryKeys.dashboard.all, queryKeys.assignments.all, queryKeys.planning.queue],
-  ['ProjectCompleted', queryKeys.projects.all, queryKeys.planning.queue, queryKeys.dashboard.all],
-  ['ProjectCancelled', queryKeys.projects.all, queryKeys.planning.queue, queryKeys.dashboard.all],
-  ['ProjectPlanningStarted', queryKeys.projects.all, queryKeys.planning.queue, queryKeys.dashboard.all],
+  ['ProjectCompleted', queryKeys.projects.all, queryKeys.planning.queue, queryKeys.dashboard.all, queryKeys.commandCenter.all],
+  ['ProjectCancelled', queryKeys.projects.all, queryKeys.planning.queue, queryKeys.dashboard.all, queryKeys.commandCenter.all],
+  ['ProjectPlanningStarted', queryKeys.projects.all, queryKeys.planning.queue, queryKeys.dashboard.all, queryKeys.commandCenter.all],
   ['document:uploaded', queryKeys.documents.all, queryKeys.documents.stats, queryKeys.schedules.all, queryKeys.assignments.all],
   ['document:status-changed', queryKeys.documents.all, queryKeys.documents.stats, queryKeys.documents.dataEntry, queryKeys.schedules.all, queryKeys.assignments.all],
   ['document:received', queryKeys.documents.all, queryKeys.documents.dataEntry, queryKeys.documents.stats, queryKeys.schedules.all, queryKeys.assignments.all],
   ['client:created', queryKeys.clients.all, queryKeys.clients.list({})],
   ['client:updated', queryKeys.clients.all, queryKeys.clients.list({})],
   ['client:status-changed', queryKeys.clients.all, queryKeys.clients.list({})],
+  /**
+   * The gateway has routed `branch:created`/`branch:updated` since before this hook existed
+   * (`events.gateway.ts`'s `branch:created`/`branch:updated` cases), but nothing here ever
+   * listened for them — the sibling `client:*` events three lines up were wired, these were not,
+   * with no comment explaining a deliberate omission. Reproduced live: with `Branches.tsx` open
+   * on one screen, editing the same branch from a second session updated the record on the
+   * server but the first screen kept showing the pre-edit name/address indefinitely, with no
+   * signal that its data had gone stale. `queryKeys.branches.all` covers `.list()` and
+   * `.directory` (both prefixed under it); `planning.queue` and `desk.branchHistory` because a
+   * branch's own details (name, address, region) surface in both the coverage queue and its
+   * history drawer, the same reasoning already applied to schedule/document events above.
+   * `commandCenter.all` for the same reason: a new or re-geocoded branch changes the Command
+   * Center's coverage-gap and territory rollups, which read the same `branches` table.
+   */
+  ['branch:created', queryKeys.branches.all, queryKeys.planning.queue, queryKeys.desk.branchHistory, queryKeys.commandCenter.all],
+  ['branch:updated', queryKeys.branches.all, queryKeys.planning.queue, queryKeys.desk.branchHistory, queryKeys.commandCenter.all],
   // Money: every billing event is "the book changed" — the three events name what changed so a
   // future screen can be selective, but today every billing query re-reads from the server.
   ['billing:booked', queryKeys.billing.all],
@@ -73,8 +89,12 @@ const EVENT_KEYS: [string, ...any[]][] = [
  *
  * Matched on the first key segment so it covers every scoped variant (`['dashboard', 'operations',
  * scopeKey]`) without having to enumerate them.
+ *
+ * `'command-center'` is the same shape of cost for the same reason: `CommandCenterService.overview`
+ * loads every active branch and assayer and aggregates in memory, and is itself behind a 20s
+ * cluster-wide cache server-side — refetching it on the live tier would mostly just miss that cache.
  */
-const SLOW_ROOTS = new Set<string>(['dashboard']);
+const SLOW_ROOTS = new Set<string>(['dashboard', 'command-center']);
 
 /**
  * Coalescing windows.
@@ -110,6 +130,22 @@ export function useSocketInvalidation() {
     };
     const live = createCoalescer<unknown[]>(LIVE_WAIT_MS, LIVE_MAX_WAIT_MS, invalidate);
     const slow = createCoalescer<unknown[]>(SLOW_WAIT_MS, SLOW_MAX_WAIT_MS, invalidate);
+    /**
+     * The reconnect handler below used to call `invalidateQueries` directly, once per `connect`
+     * event. That is fine for an isolated reconnect — but a flapping connection (a dev backend
+     * restarting under it, a phone crossing a Wi-Fi/cellular handoff) fires `disconnect`/`connect`
+     * in rapid succession, and each one restarted every active query from scratch. A query that
+     * genuinely fails every time (a 403 from a permission the caller doesn't hold, say) never got
+     * a quiet window to actually settle into its error state — each new invalidation cancelled the
+     * previous attempt first — so the screen it feeds stayed blank indefinitely instead of showing
+     * the "you don't have access" message written for exactly that case. Routed through the same
+     * `live` coalescer the event handlers above already use, so a reconnect storm collapses into
+     * the one flush a real reconnect deserves, the same way a burst of `assignment:status-changed`
+     * does.
+     */
+    const RECONNECT_KEY: unknown[] = ['__reconnect__'];
+    const reconnectInvalidate = () => queryClient.invalidateQueries({ refetchType: 'active' });
+    const reconnect = createCoalescer<unknown[]>(LIVE_WAIT_MS, LIVE_MAX_WAIT_MS, reconnectInvalidate);
 
     const handlers: Array<{ event: string; handler: (...args: any[]) => void }> = [];
 
@@ -145,7 +181,7 @@ export function useSocketInvalidation() {
     const handleReconnect = () => {
       if (!wasDisconnected) return;
       wasDisconnected = false;
-      queryClient.invalidateQueries({ refetchType: 'active' });
+      reconnect.schedule(RECONNECT_KEY);
     };
     socket.on('disconnect', handleDisconnect);
     socket.on('connect', handleReconnect);
@@ -153,6 +189,7 @@ export function useSocketInvalidation() {
     return () => {
       live.cancel();
       slow.cancel();
+      reconnect.cancel();
       for (const { event, handler } of handlers) {
         socket.off(event, handler);
       }

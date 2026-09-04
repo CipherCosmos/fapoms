@@ -4,6 +4,7 @@ import { AssayerPayableStatus, formatRupees as money, formatDateOnly } from '@fa
 import { AssayerAssignment, AssayerExpense, ExpenseSummary, AssayerStatement } from '../types/mobile-app';
 
 import { calendarDayDiff } from '../utils/dates';
+import { displayedTds } from './earnings-breakdown';
 import { CAT_LABEL_KEYS } from '../components/ExpenseModal';
 import { useTheme } from '../theme/ThemeProvider';
 import { useT, t as translate, type TranslationKey } from '../i18n';
@@ -47,6 +48,7 @@ const PAYABLE_STATE: Record<AssayerPayableStatus, { labelKey: TranslationKey; to
   [AssayerPayableStatus.PENDING]: { labelKey: 'earnings.payableStatus.pending', tone: 'warning' },
   [AssayerPayableStatus.APPROVED]: { labelKey: 'earnings.payableStatus.approved', tone: 'info' },
   [AssayerPayableStatus.PAID]: { labelKey: 'earnings.payableStatus.paid', tone: 'success' },
+  [AssayerPayableStatus.VOIDED]: { labelKey: 'earnings.payableStatus.voided', tone: 'neutral' },
 };
 
 /** A rejected claim read as "pending" before — the same neutral grey as awaiting approval. */
@@ -262,7 +264,13 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
                       <AppText variant="caption" tone="faint">{tr('earnings.base', { amount: money(p.baseAmount) })}</AppText>
                       <AppText variant="caption" tone="faint">{tr('earnings.travel', { amount: money(p.travelAmount) })}</AppText>
                       {p.tdsAmount > 0 && (
-                        <AppText variant="caption" tone="faint">{tr('earnings.tds', { amount: money(p.tdsAmount) })}</AppText>
+                        // The real (unrounded) tdsAmount still gates whether this line shows at
+                        // all — a genuine deduction that happens to round to ₹0 is still worth
+                        // disclosing. Only the printed number is reconciled to the total; see
+                        // `displayedTds`.
+                        <AppText variant="caption" tone="faint">
+                          {tr('earnings.tds', { amount: money(displayedTds(p.baseAmount, p.travelAmount, p.totalAmount)) })}
+                        </AppText>
                       )}
                     </View>
                   </Card>

@@ -41,6 +41,16 @@ export class RefreshTokenEntity {
   @Column({ name: 'user_agent', type: 'text', nullable: true })
   userAgent: string | null;
 
+  /**
+   * The `user_sessions` row this rotation-chain link belongs to.
+   *
+   * Minted at login and carried forward through every refresh, so all the tokens of one sign-in
+   * share a session id — which is what lets a session be revoked device-by-device rather than all at
+   * once. Nullable for rows that predate the session store.
+   */
+  @Column({ name: 'session_id', type: 'uuid', nullable: true })
+  sessionId: string | null;
+
   @CreateDateColumn({ name: 'created_at', type: 'timestamptz' })
   createdAt: Date;
 }

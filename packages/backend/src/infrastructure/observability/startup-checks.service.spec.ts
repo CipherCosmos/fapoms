@@ -18,16 +18,17 @@ function makeService(opts: {
   staffed?: string[];
   email?: boolean | null;
   push?: boolean | null;
+  dbNow?: Date;
 }) {
   const roles = opts.roles ?? ALL_ROLES;
   const staffed = opts.staffed ?? ALL_ROLES;
 
   const dataSource: any = {
-    query: jest.fn(async (sql: string) =>
-      /user_roles/.test(sql)
-        ? staffed.map((name) => ({ name }))
-        : roles.map((name) => ({ name })),
-    ),
+    query: jest.fn(async (sql: string) => {
+      if (/now\(\)/.test(sql)) return [{ now: opts.dbNow ?? new Date() }];
+      if (/user_roles/.test(sql)) return staffed.map((name) => ({ name }));
+      return roles.map((name) => ({ name }));
+    }),
   };
 
   const moduleRef: any = {
@@ -50,9 +51,50 @@ function makeService(opts: {
 const byName = (checks: any[], name: string) => checks.find((c) => c.name === name);
 
 describe('startup checks', () => {
+  // Residency is a declared value; the "all ok" cases assume a correctly-declared India deployment.
+  // Clock drift reads none of this — its dbNow defaults to now(), so it agrees by construction.
+  const savedRegion = process.env.DATA_RESIDENCY_REGION;
+  beforeEach(() => { process.env.DATA_RESIDENCY_REGION = 'IN'; });
+  afterEach(() => {
+    if (savedRegion === undefined) delete process.env.DATA_RESIDENCY_REGION;
+    else process.env.DATA_RESIDENCY_REGION = savedRegion;
+  });
+
   it('passes when every role exists, is staffed, and both transports are up', async () => {
     const checks = await makeService({}).run();
     expect(checks.every((c) => c.ok)).toBe(true);
+  });
+
+  it('warns when the app and database clocks disagree (a missing NTP sync)', async () => {
+    // DB clock an hour off the app clock — far beyond the 5s threshold.
+    const checks = await makeService({ dbNow: new Date(Date.now() + 3_600_000) }).run();
+    const clock = byName(checks, 'clock sync');
+    expect(clock.ok).toBe(false);
+    expect(clock.critical).toBe(false);
+    expect(clock.detail).toMatch(/NTP/);
+  });
+
+  it('passes the clock check when app and database agree', async () => {
+    const checks = await makeService({}).run();
+    expect(byName(checks, 'clock sync').ok).toBe(true);
+  });
+
+  it('warns when data residency is unset or not India', async () => {
+    delete process.env.DATA_RESIDENCY_REGION;
+    const unset = await makeService({}).run();
+    expect(byName(unset, 'data residency').ok).toBe(false);
+    expect(byName(unset, 'data residency').detail).toMatch(/DATA_RESIDENCY_REGION unset/);
+
+    process.env.DATA_RESIDENCY_REGION = 'US';
+    const wrong = await makeService({}).run();
+    expect(byName(wrong, 'data residency').ok).toBe(false);
+    expect(byName(wrong, 'data residency').detail).toMatch(/Indian jurisdiction/);
+  });
+
+  it('passes data residency when declared IN (case-insensitive)', async () => {
+    process.env.DATA_RESIDENCY_REGION = 'in';
+    const checks = await makeService({}).run();
+    expect(byName(checks, 'data residency').ok).toBe(true);
   });
 
   it('reports the transports truthfully rather than assuming they are missing', async () => {

@@ -348,6 +348,15 @@ export enum EventCategory {
   USER = 'USER',
   WORKFLOW = 'WORKFLOW',
   SYSTEM = 'SYSTEM',
+  /**
+   * A read of personal / sensitive data — who VIEWED a record, not who changed it.
+   *
+   * Compliance (DPDP access logs, RBI forensic trails) needs access to be as auditable as
+   * mutation, and it must be filterable on its own so "who looked at this person's data" is one
+   * query rather than a scan of everything. Recorded by the `@AuditRead` interceptor; the value
+   * read is never stored, only the fact of the access.
+   */
+  DATA_ACCESS = 'DATA_ACCESS',
 }
 
 export enum ClientLifecycleStatus {
@@ -461,6 +470,13 @@ export enum AssayerPayableStatus {
   PENDING = 'PENDING',
   APPROVED = 'APPROVED',
   PAID = 'PAID',
+  /**
+   * The owner decision on a payable that should never be paid: the audit it was booked for was
+   * reopened, or the completion it billed turned out to be wrong. Reachable from PENDING or
+   * APPROVED only — a PAID payable represents money that already left, and voiding it would
+   * make the ledger claim that never happened.
+   */
+  VOIDED = 'VOIDED',
 }
 
 /** What kind of record a billing history row refers to. */

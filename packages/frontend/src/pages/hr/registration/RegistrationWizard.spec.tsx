@@ -237,6 +237,34 @@ describe('which banks will take them', () => {
   });
 });
 
+/**
+ * The relationship box, ported from the vetting tab rather than reinvented.
+ *
+ * Both screens write `assayer_reference.relationship` — this one on first add, the vetting tab on
+ * a later correction — and free text on it is exactly how one relationship became "Ex-manager",
+ * "ex manager" and "Former Manager" with nothing usable to show for the 1,983 references already
+ * on file. `reference-vocabulary.spec.ts` covers the shared list and its escape hatch directly;
+ * this proves the wizard is actually wired to it, not a second list of its own.
+ */
+describe('references', () => {
+  it('offers the same fixed relationship list the vetting tab uses, and posts the picked value', async () => {
+    await mount();
+    type(/^First Name/, 'Ramesh');
+    type(/^Last Name/, 'Iyer');
+    await choose(/^State they work in/, 'Kerala');
+    await click(/Save and continue/);
+    await click(/Contacts and pay/);
+
+    type(/Name of the person who can vouch for them/, 'Auntie Rosa');
+    await choose(/How the reference knows this person/i, 'Friend');
+    await click(/Add this person/);
+
+    const posts = callsTo('POST', (u) => u === '/assayers/asr-1/reference');
+    expect(posts).toHaveLength(1);
+    expect(bodyOf(posts[0])).toMatchObject({ fullName: 'Auntie Rosa', relationship: 'Friend' });
+  });
+});
+
 describe('saving as you go', () => {
   const startAtIdentity = async () => {
     await mount();

@@ -12,7 +12,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, ILike, Not } from 'typeorm';
 import * as bcrypt from 'bcrypt';
 import { randomInt } from 'crypto';
 import { UserEntity } from './user.entity';
@@ -38,6 +38,11 @@ export interface CreateUserDto {
   phone?: string;
   departmentId?: string;
   roleIds?: string[];
+  /**
+   * The client (bank) a CLIENT_USER account is confined to. `undefined`/omitted leaves the
+   * account unrestricted, same as every staff account today — see `UserEntity.clientId`.
+   */
+  clientId?: string | null;
 }
 
 export interface UpdateUserDto {
@@ -52,6 +57,8 @@ export interface UpdateUserDto {
    * territory; enforced server-side by `resolveRegionScope` on every scoped endpoint.
    */
   regions?: string[] | null;
+  /** Same as `CreateUserDto.clientId` — reassign or clear (`null`) which client this account is confined to. */
+  clientId?: string | null;
 }
 
 @Injectable()
@@ -114,6 +121,7 @@ export class UserService {
       displayName: `${dto.firstName} ${dto.lastName}`,
       phone: dto.phone ?? null,
       departmentId: dto.departmentId ?? null,
+      clientId: dto.clientId ?? null,
       status: UserStatus.ACTIVE,
       /**
        * Whoever set this password, the account holder did not choose it — an admin typed it or
@@ -197,6 +205,27 @@ export class UserService {
     return { users, total };
   }
 
+  /**
+   * Name-only staff directory, for pickers that need to let someone name a colleague — the
+   * "who in HR looks after this person" field on the assayer form — without exposing what
+   * `findAll` does: email, lockout state, `mustChangePassword`, every role held.
+   *
+   * Bounded at 5,000 like the assayer roster's own "whole list" loader, and for the same
+   * reason: silently returning a truncated list is worse than a query that could theoretically
+   * miss someone on an organisation that outgrows this, so `total` is returned alongside the
+   * rows and a caller can tell the two apart.
+   */
+  async findDirectory(): Promise<{ people: { id: string; displayName: string }[]; total: number }> {
+    const DIRECTORY_CEILING = 5000;
+    const [users, total] = await this.userRepository.findAndCount({
+      where: { status: UserStatus.ACTIVE },
+      select: ['id', 'displayName'],
+      order: { displayName: 'ASC' },
+      take: DIRECTORY_CEILING,
+    });
+    return { people: users.map((u) => ({ id: u.id, displayName: u.displayName })), total };
+  }
+
   async updateUser(
     id: string,
     dto: UpdateUserDto,
@@ -226,7 +255,11 @@ export class UserService {
       user.status = dto.status;
       user.isActive = dto.status === UserStatus.ACTIVE;
     }
-    let regionsChanged = false;
+    let scopeChanged = false;
+    if (dto.clientId !== undefined) {
+      scopeChanged = dto.clientId !== (user.clientId ?? null);
+      user.clientId = dto.clientId ?? null;
+    }
     if (dto.regions !== undefined) {
       // Canonicalise and reject junk here, not in the DB: a typo'd region stored on a user
       // would silently widen or narrow what they can see.
@@ -237,7 +270,7 @@ export class UserService {
         );
       }
       const next = cleaned.length > 0 ? [...new Set(cleaned)] : null;
-      regionsChanged = JSON.stringify(next) !== JSON.stringify(user.regions ?? null);
+      if (JSON.stringify(next) !== JSON.stringify(user.regions ?? null)) scopeChanged = true;
       user.regions = next;
     }
 
@@ -245,10 +278,10 @@ export class UserService {
 
     const saved = await this.userRepository.save(user);
 
-    // The principal (roles + regions) is cached in Redis for the JWT hot path. A region
-    // change must take effect on the next request, not when the TTL happens to expire —
+    // The principal (roles + regions + clientId) is cached in Redis for the JWT hot path. A
+    // scope change must take effect on the next request, not when the TTL happens to expire —
     // `user:role-changed` is the invalidation the auth service already listens for.
-    if (regionsChanged) {
+    if (scopeChanged) {
       this.eventPublisher.publish('user:role-changed', { userId: saved.id });
     }
 
@@ -636,6 +669,15 @@ export class UserService {
     const existing = await this.roleRepository.findOne({ where: { name } });
     if (existing) throw new ConflictException(`A role named ${name} already exists.`);
 
+    const displayName = dto.displayName?.trim() || name;
+    // `name` above is the internal reference and already unique; `display_name` is what every
+    // picker actually shows, and until now had no such check — see the migration this pairs
+    // with (`UniqueRoleDisplayName`) for how "HR" and "HR" (a second one) ended up coexisting.
+    const existingDisplayName = await this.roleRepository.findOne({ where: { displayName: ILike(displayName) } });
+    if (existingDisplayName) {
+      throw new ConflictException(`A role called "${existingDisplayName.displayName}" already exists.`);
+    }
+
     const permissions = dto.permissionIds?.length
       ? await this.permissionRepository.find({ where: { id: In(dto.permissionIds) } })
       : [];
@@ -643,7 +685,7 @@ export class UserService {
     const role = await this.roleRepository.save(
       this.roleRepository.create({
         name,
-        displayName: dto.displayName?.trim() || name,
+        displayName,
         description: dto.description ?? null,
         permissions,
         createdBy: actorId,
@@ -672,7 +714,16 @@ export class UserService {
     if (!role) throw new NotFoundException('Role not found.');
 
     // `name` is deliberately not updatable for anyone — it is the identifier the guards compare.
-    if (dto.displayName !== undefined) role.displayName = dto.displayName.trim() || role.displayName;
+    if (dto.displayName !== undefined) {
+      const nextDisplayName = dto.displayName.trim() || role.displayName;
+      if (nextDisplayName.toLowerCase() !== role.displayName.toLowerCase()) {
+        const clash = await this.roleRepository.findOne({
+          where: { displayName: ILike(nextDisplayName), id: Not(id) },
+        });
+        if (clash) throw new ConflictException(`A role called "${clash.displayName}" already exists.`);
+      }
+      role.displayName = nextDisplayName;
+    }
     if (dto.description !== undefined) role.description = dto.description as any;
     role.updatedBy = actorId;
 

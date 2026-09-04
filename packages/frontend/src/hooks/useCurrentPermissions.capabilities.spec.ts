@@ -2,6 +2,7 @@ import { SystemRole } from '@fapoms/shared';
 import {
   canManageAssayers, canCreateAssayers, canDeleteProjects,
   canAdministerDataReset, canAdministerPlatformSettings,
+  canReadCustomerMaster,
 } from './useCurrentRoles';
 
 /**
@@ -63,6 +64,41 @@ describe('capability checks', () => {
       expect(canAdministerDataReset(NO_ROLES)).toBe(false);
       expect(canAdministerDataReset([SystemRole.OPERATIONS])).toBe(false);
       expect(canAdministerDataReset([SystemRole.ADMIN])).toBe(true);
+    });
+  });
+
+  /**
+   * The document Daily Run tab mirrors a backend @Roles list that has a permission fallback, so its
+   * gate is the strict `canAccessRoute` rule — named built-in role, OR custom role with the
+   * permission — NOT the write-button `allowed` rule whose permission arm opens for anyone.
+   *
+   * The bug this pins: DESK_OPERATOR holds project:view:platform (widened to organization), which
+   * satisfies the fallback permission — but it is deliberately absent from the daily-run @Roles, so
+   * the endpoint 403s it and the tab must stay hidden. The name check has to win over the permission
+   * for a built-in role, or the page opens on a panel that only paints a permission error.
+   */
+  describe('canReadCustomerMaster', () => {
+    it.each([
+      SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK,
+      SystemRole.AUDITOR, SystemRole.CLIENT_USER,
+    ])('opens for %s, which the daily-run endpoint names', (role) => {
+      expect(canReadCustomerMaster([role], [])).toBe(true);
+    });
+
+    it('stays hidden from DESK_OPERATOR even though its project:view satisfies the fallback', () => {
+      // The exact defect: a built-in role excluded by name must not slip in on a permission it holds
+      // for something else, or the daily-run fetch 403s the moment the page mounts.
+      expect(canReadCustomerMaster([SystemRole.DESK_OPERATOR], ['PROJECT:VIEW:ORGANIZATION'])).toBe(false);
+    });
+
+    it('opens for a custom role that genuinely holds project:view', () => {
+      const custom = ['DOCUMENT_DESK'] as unknown as SystemRole[];
+      expect(canReadCustomerMaster(custom, ['PROJECT:VIEW:ORGANIZATION'])).toBe(true);
+    });
+
+    it('stays shut for a custom role without project:view', () => {
+      const custom = ['DOCUMENT_DESK'] as unknown as SystemRole[];
+      expect(canReadCustomerMaster(custom, ['DOCUMENT:VIEW:ORGANIZATION'])).toBe(false);
     });
   });
 });

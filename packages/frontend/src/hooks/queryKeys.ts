@@ -4,6 +4,14 @@ export const queryKeys = {
     metrics: ['dashboard', 'metrics'] as const,
     slaSummary: ['dashboard', 'slaSummary'] as const,
   },
+  /**
+   * The Executive Command Center's one aggregate call — every active branch and assayer,
+   * geo-matched and rolled up. Same shape of cost as `dashboard`, so it gets the same `SLOW_ROOTS`
+   * treatment in `useSocketInvalidation`: coalesced, not refetched per event.
+   */
+  commandCenter: {
+    all: ['command-center'] as const,
+  },
   assignments: {
     all: ['assignments'] as const,
     list: (page: number, filter?: string) => ['assignments', 'list', page, filter ?? 'ALL'] as const,

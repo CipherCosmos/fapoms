@@ -12,8 +12,12 @@ import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
  * Who is acting on a feedback thread, across both identity spaces.
  *
  * A reporter is either an internal `user` or a field `assayer` — exactly one id is
- * set. `isTeam` marks a PRODUCT_SUPPORT / admin principal, who may read every
- * thread, post on any thread, and leave internal (reporter-invisible) notes.
+ * set. `isTeam` marks a principal holding a {@link FEEDBACK_TEAM_ROLES} role, who may
+ * read every thread, post on any thread, and leave internal (reporter-invisible)
+ * notes. That list is super administrators only as of 2026-08-17 (see
+ * `feedback-roles.ts`) — PRODUCT_SUPPORT remains a role in the database but no
+ * longer sets `isTeam`; a PRODUCT_SUPPORT caller reaches this service exactly as any
+ * other reporter does.
  */
 export interface FeedbackActor {
   userId: string | null;

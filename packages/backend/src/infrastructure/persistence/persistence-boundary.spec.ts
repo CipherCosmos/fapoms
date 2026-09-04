@@ -48,6 +48,7 @@ const IMPORTS_TYPEORM = [
   // the subject is the schema itself, which is precisely why it is queried live rather than
   // transcribed into a list that would drift from it.
   'infrastructure/data-reset/fk-graph.service.ts',
+  'core/audit/audit-seal.service.ts',
   'core/audit/unified-audit.service.ts',
   // The region ceiling on detail routes. Read-only, and single-column region lookups by id
   // across five tables (branch, project_branch, assignment, assayer, schedule) — it exists
@@ -86,6 +87,11 @@ const IMPORTS_TYPEORM = [
   // absent from both lists — that one takes `UnitOfWork` and reaches every table through the
   // transaction manager, which is the shape this list is asking for.
   'modules/assayer/roster-records.service.ts',
+  // The roster's filtered/paginated query path, built with `createQueryBuilder` directly over
+  // `AssayerEntity` so a filter maps to one WHERE clause across the whole table instead of a
+  // client-side filter over one loaded page. Read-only, no transactions; kept separate from
+  // `assayer.service.ts` so the two can change independently.
+  'modules/assayer/roster-query.service.ts',
   // Qualification scoring: compute-on-read over the five vetting tables the roster edits.
   // Reads dominate; the only writes are the override rows (audited via recordActivity).
   'modules/assayer/qualification-score.service.ts',
@@ -100,6 +106,10 @@ const IMPORTS_TYPEORM = [
   // LiveKit voice-call lifecycle (parallel feature work); writes call outcomes into query threads.
   'modules/calls/calls.service.ts',
   'modules/auth/auth.service.ts',
+  // The session/refresh-token store behind login and the sessions & devices screen.
+  // Repository-only: `Repository` for its two injected repositories' types, `IsNull` for "not
+  // yet revoked". No DataSource, no transactions.
+  'modules/auth/session.service.ts',
   'modules/billing-engine/billing-engine.service.ts',
   'modules/branch/branch-query.service.ts',
   'modules/branch/branch.service.ts',
@@ -185,6 +195,7 @@ const OPENS_ITS_OWN_TRANSACTIONS = [
   'infrastructure/scheduler/email-digest.service.ts',
   // Boot-time self-check: two read-only SELECTs, no writes, no transaction.
   'infrastructure/observability/startup-checks.service.ts',
+  'core/audit/audit-seal.service.ts',
   'core/audit/unified-audit.service.ts',
   // Holds a DataSource but never opens a transaction: read-only room entitlement lookups.
   'infrastructure/scope/region-guard.service.ts',
@@ -273,14 +284,21 @@ describe('persistence boundary', () => {
       expect(IMPORTS_TYPEORM_PATTERN.test(read('core/audit/audit.service.ts'))).toBe(false);
     });
 
-    it('has exactly one file that knows the trail is a TypeORM table', () => {
+    it('has exactly two files that know the trail is a TypeORM table', () => {
       const auditFiles = files.filter((f) => f.startsWith('core/audit/'));
       const reaching = auditFiles.filter((f) => IMPORTS_TYPEORM_PATTERN.test(read(f)));
 
-      // `unified-audit.service.ts` is the exception: it merges four history tables with raw
-      // SQL across schemas no single repository owns. The adapter is not a `.service.ts`, so
-      // it is deliberately outside this set.
-      expect(reaching).toEqual(['core/audit/unified-audit.service.ts']);
+      // `unified-audit.service.ts` merges four history tables with raw SQL across schemas no
+      // single repository owns. `audit-seal.service.ts` computes each `audit_chain` row's hash
+      // from the previous row's hash and must insert a whole batch under one Postgres advisory
+      // lock (`pg_advisory_xact_lock`, scoped to the transaction that holds it) — `AuditRepository`
+      // exposes insert/find on the events table alone, with neither the chain table nor a lock
+      // primitive. Both are deliberately outside the repository port, not candidates to route
+      // through it.
+      expect(reaching).toEqual([
+        'core/audit/audit-seal.service.ts',
+        'core/audit/unified-audit.service.ts',
+      ]);
     });
   });
 });

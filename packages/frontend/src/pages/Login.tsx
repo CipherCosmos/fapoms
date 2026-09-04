@@ -94,6 +94,16 @@ const POINTS = [
 export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  /**
+   * True only right after a "Quick demo login" button filled the password field, and only until
+   * either field is edited by hand. Every seeded demo account forces a password rotation on first
+   * real use (`seed.ts`), so `admin123` is a snapshot of day one, not a promise — it goes stale the
+   * moment anyone actually signs in as that account and is asked to pick a real password. When
+   * that's what caused the failure, `admin123` in the field is a fact login already checked and
+   * refused, not the user's typo — the generic message reads as "you mistyped it" when the truer
+   * story is "this button's password is out of date."
+   */
+  const [usedDemoDefault, setUsedDemoDefault] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
@@ -132,6 +142,11 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
 
       if (response.ok && resData.success) {
         onLoginSuccess(resData.data.accessToken, resData.data.refreshToken);
+      } else if (usedDemoDefault) {
+        setError(
+          `This demo account's password has been changed since the day-one default — "${username}" ` +
+          'no longer signs in with the quick-login button. Sign in with its current password instead.',
+        );
       } else {
         setError(resData.message || resData.error?.message || 'Invalid username or password');
       }
@@ -145,6 +160,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
   const setDemoAccount = (user: string, pass: string) => {
     setUsername(user);
     setPassword(pass);
+    setUsedDemoDefault(true);
     setError('');
   };
 
@@ -281,7 +297,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                   // Missing before, which is why saved credentials were never offered.
                   autoComplete="username"
                   value={username}
-                  onChange={(e) => setUsername(e.target.value)}
+                  onChange={(e) => { setUsername(e.target.value); setUsedDemoDefault(false); }}
                   placeholder="you@sumeruglobal.in"
                 />
               </div>
@@ -299,7 +315,7 @@ export const Login: React.FC<LoginProps> = ({ onLoginSuccess }) => {
                     required
                     autoComplete="current-password"
                     value={password}
-                    onChange={(e) => setPassword(e.target.value)}
+                    onChange={(e) => { setPassword(e.target.value); setUsedDemoDefault(false); }}
                     placeholder="Enter your password"
                   />
                   <button

@@ -25,7 +25,7 @@ export class RoleEntity extends BaseEntity {
   @Column({ type: 'text', nullable: true })
   description: string;
 
-  @ManyToMany(() => PermissionEntity, { eager: true })
+  @ManyToMany(() => PermissionEntity)
   @JoinTable({
     name: 'role_permissions',
     joinColumn: { name: 'role_id' },
@@ -33,7 +33,7 @@ export class RoleEntity extends BaseEntity {
   })
   permissions: PermissionEntity[];
 
-  @ManyToMany(() => ResponsibilityEntity, { eager: true })
+  @ManyToMany(() => ResponsibilityEntity)
   @JoinTable({
     name: 'role_responsibilities',
     joinColumn: { name: 'role_id' },

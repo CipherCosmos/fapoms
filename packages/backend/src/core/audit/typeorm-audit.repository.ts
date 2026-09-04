@@ -38,6 +38,13 @@ export class TypeOrmAuditRepository extends AuditRepository {
       ipAddress: event.ipAddress,
       remarks: event.remarks,
       metadata: event.metadata,
+      actorRole: event.actorRole,
+      userAgent: event.userAgent,
+      sessionId: event.sessionId,
+      requestId: event.requestId,
+      outcome: event.outcome,
+      before: event.before,
+      after: event.after,
     });
     const saved = await events.save(row);
     return { id: saved.id };

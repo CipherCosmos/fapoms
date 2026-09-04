@@ -2,11 +2,27 @@ import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Wallet, PauseCircle, PlayCircle, SlidersHorizontal } from 'lucide-react';
 import { AssignmentStatus, BillingState } from '@fapoms/shared';
-import { Modal, useToast } from '../../components/ui';
+import { Modal, Select, useToast } from '../../components/ui';
 import { useAssignmentMoney, useEditClientLine } from '../../hooks/useBilling';
 import { userMessage } from '../../services/errors';
 import { moneyExact as money } from '../../utils/money';
 import { LineStatePill, PayoutStatusPill, InvoiceStatusPill, fmtDate, inputStyle } from './shared';
+// The client line and the assayer payout are held for the same reasons — the same "put this on
+// hold" action, seen from the client side rather than the assayer side — so this imports
+// PayoutsTab's HOLD_REASONS rather than keeping a second list that could drift from it.
+import { HOLD_REASONS } from './PayoutsTab';
+
+/**
+ * Preset reasons for adjusting a client line's amount (a different action from holding it — this
+ * changes what is billed, rather than pausing billing). Seeded from context, the same way
+ * HOLD_REASONS was originally: there is no real adjustment history in this dev database yet.
+ */
+const CLIENT_LINE_ADJUSTMENT_REASONS = [
+  'Client disputed the fee',
+  'Correcting a data-entry error',
+  'Goodwill discount',
+  'Contract rate change applied late',
+];
 
 /**
  * The money line for one assignment — both ledgers, side by side, as the assignment detail
@@ -88,27 +104,70 @@ export const AssignmentMoneyCard: React.FC<{ assignmentId: string; status: strin
   );
 };
 
+/** Local mirror of `assignment-money.ts`'s `round2` — money arithmetic rounded once, no epsilon variants. */
+const round2 = (n: number): number => Math.round(n * 100) / 100;
+
 const ClientLineModal: React.FC<{ assignmentId: string; entry: any; onClose: () => void }> = ({ assignmentId, entry, onClose }) => {
   const { toast } = useToast();
   const edit = useEditClientLine();
   const [adjustment, setAdjustment] = useState(String(Number(entry.adjustmentAmount) || ''));
   const [adjustmentReason, setAdjustmentReason] = useState(entry.adjustmentReason ?? '');
+
+  /**
+   * A live preview of what this adjustment does to the line, computed the same way the server
+   * does (`assignment-money.ts`'s `applyTaxes`, mirrored here for display only — the server is
+   * still the one source of truth and re-derives this itself).
+   *
+   * This field had no preview and no confirmation at all: type a number, click Save, done — the
+   * one place on this screen a stray digit changes what a real bank client is billed, with none
+   * of the friction `PayoutsTab`'s approve dialog deliberately adds for a payout of the same
+   * size. The credit side already has a hard floor on the server (a credit cannot push the line
+   * below zero); this surfaces that floor here too, before the click, rather than only as a 400
+   * after it.
+   */
+  const preTaxBase = round2(Number(entry.baseAmount) + Number(entry.travelAmount));
+  const adjustmentFloor = -preTaxBase;
+  const parsedAmount = adjustment.trim() === '' ? 0 : Number(adjustment);
+  const amountIsNumber = Number.isFinite(parsedAmount);
+  const belowFloor = amountIsNumber && parsedAmount < adjustmentFloor - 0.005;
+  const previewTaxable = amountIsNumber ? round2(Math.max(0, preTaxBase + parsedAmount)) : Number(entry.taxableAmount);
+  const taxRate = Number(entry.taxRate) || 0;
+  const tdsRate = Number(entry.tdsRate) || 0;
+  const previewGst = round2(previewTaxable * (taxRate / 100));
+  const previewTds = round2(previewTaxable * (tdsRate / 100));
+  const previewTotal = round2(previewTaxable + previewGst - previewTds);
+  const totalChanged = amountIsNumber && Math.abs(previewTotal - Number(entry.totalAmount)) > 0.005;
+  // A line may already carry an adjustment reason from before this preset list existed (or one
+  // typed as free text). If it matches a known preset, show that preset selected; otherwise land
+  // on "Other…" with the existing text still in the box, rather than silently discarding it.
+  const [adjustmentPreset, setAdjustmentPreset] = useState(() => {
+    const existing = entry.adjustmentReason ?? '';
+    if (!existing) return '';
+    return CLIENT_LINE_ADJUSTMENT_REASONS.includes(existing) ? existing : '__other__';
+  });
   const [holdReason, setHoldReason] = useState('');
+  const [holdPreset, setHoldPreset] = useState('');
   const busy = edit.isPending;
+
+  const isAdjustmentOther = adjustmentPreset === '__other__';
+  const effectiveAdjustmentReason = isAdjustmentOther ? adjustmentReason.trim() : adjustmentPreset;
+  const isHoldOther = holdPreset === '__other__';
+  const effectiveHoldReason = isHoldOther ? holdReason.trim() : holdPreset;
 
   const saveAdjustment = async () => {
     const amount = adjustment.trim() === '' ? 0 : Number(adjustment);
     if (!Number.isFinite(amount)) { toast('error', 'Enter a number'); return; }
-    if (amount !== 0 && !adjustmentReason.trim()) { toast('error', 'Say why the line is being adjusted'); return; }
+    if (amount !== 0 && !effectiveAdjustmentReason) { toast('error', 'Say why the line is being adjusted'); return; }
+    if (belowFloor) { toast('error', `This credit exceeds the line. The most this line can be reduced by is ${money(preTaxBase)} (to zero).`); return; }
     try {
-      await edit.mutateAsync({ assignmentId, patch: { adjustmentAmount: amount, adjustmentReason: adjustmentReason.trim() || undefined } });
+      await edit.mutateAsync({ assignmentId, patch: { adjustmentAmount: amount, adjustmentReason: effectiveAdjustmentReason || undefined } });
       toast('success', 'Client line adjusted'); onClose();
     } catch (err) { toast({ type: 'error', title: 'Could not adjust', message: userMessage(err) }); }
   };
   const toggleHold = async () => {
-    if (!entry.onHold && !holdReason.trim()) { toast('error', 'Say why the line is on hold'); return; }
+    if (!entry.onHold && !effectiveHoldReason) { toast('error', 'Say why the line is on hold'); return; }
     try {
-      await edit.mutateAsync({ assignmentId, patch: { onHold: !entry.onHold, holdReason: holdReason.trim() || undefined } });
+      await edit.mutateAsync({ assignmentId, patch: { onHold: !entry.onHold, holdReason: effectiveHoldReason || undefined } });
       toast('success', entry.onHold ? 'Hold released' : 'Line on hold'); onClose();
     } catch (err) { toast({ type: 'error', title: 'Could not change hold', message: userMessage(err) }); }
   };
@@ -119,15 +178,56 @@ const ClientLineModal: React.FC<{ assignmentId: string; entry: any; onClose: () 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12, background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)' }}>
         <div style={{ fontSize: 12, fontWeight: 700 }}>Adjustment (₹, negative to reduce)</div>
         <input type="number" step="0.01" value={adjustment} onChange={(e) => setAdjustment(e.target.value)} style={{ ...inputStyle, width: '100%' }} placeholder="0" />
-        <input value={adjustmentReason} onChange={(e) => setAdjustmentReason(e.target.value)} style={{ ...inputStyle, width: '100%' }} placeholder="Reason (required unless 0)" />
-        <div style={{ display: 'flex', justifyContent: 'flex-end' }}><button onClick={saveAdjustment} disabled={busy} className="btn btn-primary">Save adjustment</button></div>
+        {/* Live preview, computed the same way the server will — so a stray extra digit is
+            visible as "New total ₹50,300.00" before the click, not only after it. */}
+        {!amountIsNumber ? (
+          <div style={{ fontSize: 11, color: 'var(--danger)' }}>Enter a number.</div>
+        ) : belowFloor ? (
+          <div style={{ fontSize: 11, color: 'var(--danger)' }}>
+            This credit exceeds the line. The most this line can be reduced by is {money(preTaxBase)} (to zero).
+          </div>
+        ) : totalChanged ? (
+          <div style={{ fontSize: 11, color: 'var(--warning)' }}>
+            New total for this line: <strong>{money(previewTotal)}</strong> (currently {money(entry.totalAmount)})
+          </div>
+        ) : (
+          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>No change to the current total of {money(entry.totalAmount)}.</div>
+        )}
+        <Select
+          value={adjustmentPreset}
+          onChange={setAdjustmentPreset}
+          options={[
+            { value: '', label: 'Reason (required unless 0) *' },
+            ...CLIENT_LINE_ADJUSTMENT_REASONS.map((r) => ({ value: r, label: r })),
+            { value: '__other__', label: 'Other…' },
+          ]}
+          style={{ width: '100%' }}
+        />
+        {isAdjustmentOther && (
+          <input value={adjustmentReason} onChange={(e) => setAdjustmentReason(e.target.value)} style={{ ...inputStyle, width: '100%' }} placeholder="Reason (required unless 0)" />
+        )}
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}><button onClick={saveAdjustment} disabled={busy || !amountIsNumber || belowFloor} className="btn btn-primary">Save adjustment</button></div>
       </div>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 8, padding: 12, background: 'var(--bg-tertiary)', borderRadius: 'var(--radius-sm)' }}>
         <div style={{ fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 6 }}>{entry.onHold ? <><PlayCircle size={13} /> Release hold</> : <><PauseCircle size={13} /> Put on hold</>}</div>
         {entry.onHold ? (
           <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>Held for: <em>{entry.holdReason}</em>. Releasing lets it be invoiced.</div>
         ) : (
-          <input value={holdReason} onChange={(e) => setHoldReason(e.target.value)} style={{ ...inputStyle, width: '100%' }} placeholder="Why is this line on hold? *" />
+          <>
+            <Select
+              value={holdPreset}
+              onChange={setHoldPreset}
+              options={[
+                { value: '', label: 'Why is this line on hold? *' },
+                ...HOLD_REASONS.map((r) => ({ value: r, label: r })),
+                { value: '__other__', label: 'Other…' },
+              ]}
+              style={{ width: '100%' }}
+            />
+            {isHoldOther && (
+              <input value={holdReason} onChange={(e) => setHoldReason(e.target.value)} style={{ ...inputStyle, width: '100%' }} placeholder="Why is this line on hold? *" />
+            )}
+          </>
         )}
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}><button onClick={toggleHold} disabled={busy} className="btn btn-secondary">{entry.onHold ? 'Release' : 'Hold'}</button></div>
       </div>

@@ -3,6 +3,7 @@ import { NavLink, useLocation } from 'react-router-dom';
 import { SystemRole } from '@fapoms/shared';
 import {
   ShieldOff,
+  ShieldAlert,
   LayoutDashboard,
   FolderKanban,
   GitMerge,
@@ -119,6 +120,8 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
       items: [
         { name: 'Notification Rules', path: '/admin/notifications', icon: BellRing },
         { name: 'User Management', path: '/users', icon: Users },
+        // Administrators and auditors — the incident register + compliance health.
+        { name: 'Security & Compliance', path: '/admin/compliance', icon: ShieldAlert },
         // Administrators only — filtered by canAccessRoute against route-permissions, same as
         // every other item here.
         { name: 'Rule Bypass', path: '/admin/rule-bypass', icon: ShieldOff },

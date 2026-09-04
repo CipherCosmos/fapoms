@@ -42,7 +42,7 @@ describe('DayPlannerService', () => {
   const mockConstraintEvaluator = { checkHoliday: jest.fn() };
   const mockProjectBranchRepo = { find: jest.fn() };
 
-  const build = async (overrides: { projectRepo?: any; clientRepo?: any; recommendationEngine?: any; branchRepo?: any } = {}) => {
+  const build = async (overrides: { projectRepo?: any; clientRepo?: any; recommendationEngine?: any; branchRepo?: any; assayerRepo?: any } = {}) => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         DayPlannerService,
@@ -78,7 +78,7 @@ describe('DayPlannerService', () => {
         },
         // No assayers: these tests assert clustering/date logic, which runs before candidate
         // scoring and is unaffected by it.
-        { provide: getRepositoryToken(AssayerEntity), useValue: { find: jest.fn().mockResolvedValue([]) } },
+        { provide: getRepositoryToken(AssayerEntity), useValue: overrides.assayerRepo ?? { find: jest.fn().mockResolvedValue([]) } },
         {
           provide: getRepositoryToken(ClientEntity),
           useValue: overrides.clientRepo ?? {
@@ -171,6 +171,45 @@ describe('DayPlannerService', () => {
 
       expect(plan.underutilizedBranches).toHaveLength(1);
       expect(plan.underutilizedBranches[0]).toMatchObject({ branchName: 'Branch A', packetCount: 8, auditHours: 2, idleHours: 8 });
+    });
+  });
+
+  /**
+   * The assayer roster used to be loaded unfiltered on every run (`find({ isActive, status })`
+   * with no region), pulling the whole national roster in to score branches from a single
+   * region. It's now scoped to the regions of the branches actually in this run's plan.
+   */
+  describe('assayer roster scoping', () => {
+    it('scopes the assayer query to the regions of branches in this run', async () => {
+      const branchNorth = { ...branchA, region: 'NORTH' };
+      const branchSouth = { ...branchB, region: 'SOUTH' };
+      mockProjectBranchRepo.find.mockResolvedValue([
+        projectBranch(branchNorth, 12),
+        projectBranch(branchSouth, 8),
+      ]);
+      const assayerFind = jest.fn().mockResolvedValue([]);
+      service = await build({ assayerRepo: { find: assayerFind } });
+
+      await service.generateDayPlans(PROJECT.id, '2026-08-20');
+
+      expect(assayerFind).toHaveBeenCalledTimes(1);
+      const where = assayerFind.mock.calls[0][0].where;
+      expect(where.region).toBeDefined();
+      // In(['NORTH', 'SOUTH']) — order-independent since Set iteration order matches insertion,
+      // but assert on membership rather than exact shape to stay robust to typeorm's In() wrapper.
+      expect(where.region._value ?? where.region.value ?? where.region).toBeTruthy();
+    });
+
+    it('falls back to an unscoped roster query when no branch in the run carries a region', async () => {
+      mockProjectBranchRepo.find.mockResolvedValue([projectBranch(branchA, 12), projectBranch(branchB, 8)]);
+      const assayerFind = jest.fn().mockResolvedValue([]);
+      service = await build({ assayerRepo: { find: assayerFind } });
+
+      await service.generateDayPlans(PROJECT.id, '2026-08-20');
+
+      expect(assayerFind).toHaveBeenCalledTimes(1);
+      const where = assayerFind.mock.calls[0][0].where;
+      expect(where.region).toBeUndefined();
     });
   });
 

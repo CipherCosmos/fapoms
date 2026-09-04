@@ -80,6 +80,8 @@ export interface BillingPage<T> {
 const BILLING_PAGE_DEFAULT = 50;
 /** The most rows any single billing list request can return; the caller cannot raise it. */
 const BILLING_PAGE_MAX = 100;
+/** See the comment on `findInvoices` — a backstop for its one unpaginated caller, not a page size. */
+const FINDINVOICES_HARD_CAP = 5000;
 
 function billingPageWindow(page?: number | string, limit?: number | string) {
   const safeLimit = Math.min(BILLING_PAGE_MAX, Math.max(1, Number(limit) || BILLING_PAGE_DEFAULT));
@@ -394,12 +396,16 @@ export class BillingEngineService implements OnModuleInit {
   }
 
   private async unbookedAssignmentIds(since: string | null): Promise<string[]> {
+    // No `a.is_active = true` filter: an assayer's delete cascade deactivates their assignments,
+    // and a COMPLETED audit that happened does not stop having happened because the assayer who
+    // did it was later removed. Filtering on is_active hid exactly the work most likely to still
+    // need billing — a deleted assayer's outstanding payable is not deleted with them.
     const rows: Array<{ id: string }> = await this.assignmentRepository.manager.query(
       `SELECT a.id
          FROM assignments a
          LEFT JOIN billing_entries e ON e.assignment_id = a.id
          LEFT JOIN assayer_payables p ON p.assignment_id = a.id AND p.expense_id IS NULL
-        WHERE a.status = 'COMPLETED' AND a.is_active = true
+        WHERE a.status = 'COMPLETED'
           AND (e.id IS NULL OR p.id IS NULL)
           AND ($1::date IS NULL OR a.completion_date >= $1::date)
         ORDER BY a.completion_date ASC NULLS LAST, a.created_at ASC`,
@@ -934,6 +940,90 @@ export class BillingEngineService implements OnModuleInit {
       emit('billing:payout-changed', { payableId: saved.id, assayerId: saved.assayerId, status: saved.status, onHold: saved.onHold });
       return saved;
     });
+  }
+
+  /**
+   * The owner decision: a payable that should never be paid, voided with a reason and an audit
+   * trail — never deleted, because a deleted row cannot explain to a later reviewer why money
+   * that looked owed never went out.
+   *
+   * Refuses a payable already PAID: that money already left, and the ledger must keep saying so.
+   * Voids the matching client line in the same transaction if it has not been invoiced yet —
+   * invoicing already froze it onto a document a client has seen, and unwinding that is a credit
+   * note, not a void.
+   *
+   * Takes an optional external `ctx` (manager + emit) so a caller already inside its own
+   * transaction (the assignment `reopen` path) can run this on that same connection/transaction
+   * instead of opening a second, independent one — two transactions each taking `FOR UPDATE` on
+   * rows the other touches would deadlock, and even without that, voiding money and reopening
+   * the assignment must commit or roll back as one unit, not two. The event is staged through
+   * the caller's own `emit` in that case, so it still only reaches subscribers after the
+   * caller's transaction (not this method's, since there isn't one) actually commits.
+   */
+  async voidPayable(
+    payableId: string,
+    reason: string,
+    userId: string,
+    ctx?: { manager: EntityManager; emit: (event: string, payload: Record<string, unknown>) => void },
+  ): Promise<AssayerPayableEntity> {
+    if (!reason?.trim()) throw new BadRequestException('Say why this payout is being voided.');
+    const work = async (m: EntityManager, emit: (event: string, payload: Record<string, unknown>) => void) => {
+      const p = await this.lockPayable(m, payableId);
+      if (p.status === AssayerPayableStatus.PAID) {
+        throw new ConflictException(`${p.payableNumber} is already paid — it cannot be voided, only reversed by finance.`);
+      }
+      if (p.status === AssayerPayableStatus.VOIDED) return p;
+
+      const fromStatus = p.status;
+      p.status = AssayerPayableStatus.VOIDED;
+      p.onHold = false;
+      p.holdReason = null;
+      p.updatedBy = userId;
+      const saved = await m.save(p);
+
+      await this.history(userId, {
+        clientId: p.clientId, projectId: p.projectId, assignmentId: p.assignmentId, assayerId: p.assayerId,
+        entityType: BillingEntityType.PAYABLE, entityId: saved.id, action: 'PAYABLE_STATUS_CHANGED',
+        fromState: fromStatus, toState: AssayerPayableStatus.VOIDED, reason: reason.trim(),
+      }, m);
+      await this.auditService.recordEvent({
+        category: EventCategory.WORKFLOW,
+        eventType: 'PAYABLE_VOIDED',
+        entityType: 'PAYABLE',
+        entityId: saved.id,
+        previousState: fromStatus,
+        newState: AssayerPayableStatus.VOIDED,
+        userId,
+        remarks: reason.trim(),
+        metadata: { payableId: saved.id, payableNumber: saved.payableNumber, assayerId: saved.assayerId, assignmentId: saved.assignmentId },
+      }, { manager: m });
+
+      // Same transaction, same reason: the client line this payable was booked alongside must
+      // not stand alone as the only surviving half of a job that has been un-billed on the
+      // assayer side.
+      if (saved.assignmentId && !saved.expenseId) {
+        const entry = await m.findOne(BillingEntryEntity, { where: { assignmentId: saved.assignmentId } });
+        if (entry && entry.state !== BillingState.INVOICED && entry.state !== BillingState.PAID && entry.state !== BillingState.CANCELLED) {
+          const entryFromState = entry.state;
+          entry.state = BillingState.CANCELLED;
+          entry.onHold = false;
+          entry.holdReason = null;
+          entry.updatedBy = userId;
+          const savedEntry = await m.save(entry);
+          await this.history(userId, {
+            clientId: savedEntry.clientId, projectId: savedEntry.projectId, assignmentId: savedEntry.assignmentId,
+            entityType: BillingEntityType.ENTRY, entityId: savedEntry.id, action: 'ENTRY_STATUS_CHANGED',
+            fromState: entryFromState, toState: BillingState.CANCELLED, reason: `Voided with payable ${saved.payableNumber}: ${reason.trim()}`,
+          }, m);
+        }
+      }
+
+      emit('billing:payout-changed', { payableId: saved.id, assayerId: saved.assayerId, status: saved.status, onHold: saved.onHold });
+      return saved;
+    };
+
+    if (ctx) return work(ctx.manager, ctx.emit);
+    return this.inTx(work);
   }
 
   /**
@@ -1747,10 +1837,42 @@ export class BillingEngineService implements OnModuleInit {
     return { clients: [...byClient.values()], total: rows.length, truncated: rows.length >= INVOICEABLE_LIMIT };
   }
 
-  /** Client lines with their labels — the export and the assignment filter read this. */
+  /**
+   * Client lines with their labels — the export and the assignment filter read this.
+   *
+   * `paginate` defaults to false so the one internal caller that needs every matching line in
+   * one shot — the billing export in `reports.service.ts`, which self-caps at its own
+   * `EXPORT_ROW_CAP` and says so in a comment there — keeps its existing unbounded array back
+   * unchanged. `GET /billing/lines` is the caller that actually needs bounding: an unauthenticated
+   * ceiling here would have let `?state=` with no other filter return the entire, ever-growing
+   * `billing_entries` table in one response. The controller always passes `paginate: true` with
+   * a limit clamped by the same `billingPageWindow` used by `listPayouts`/`findInvoicesPage`.
+   *
+   * Overloaded (rather than one signature returning `any[] | BillingPage<any>`) so each caller's
+   * return type is pinned to the literal `paginate` value it passes, instead of every caller
+   * having to narrow a union it never actually receives both halves of.
+   */
+  async listClientLines(
+    filters?: {
+      clientId?: string; projectId?: string; assignmentId?: string; assayerId?: string; state?: BillingState; onHold?: boolean;
+      page?: number | string; limit?: number | string;
+    },
+    scope?: Partial<GlobalScope>,
+    paginate?: false,
+  ): Promise<any[]>;
+  async listClientLines(
+    filters: {
+      clientId?: string; projectId?: string; assignmentId?: string; assayerId?: string; state?: BillingState; onHold?: boolean;
+      page?: number | string; limit?: number | string;
+    },
+    scope: Partial<GlobalScope> | undefined,
+    paginate: true,
+  ): Promise<BillingPage<any>>;
   async listClientLines(filters: {
     clientId?: string; projectId?: string; assignmentId?: string; assayerId?: string; state?: BillingState; onHold?: boolean;
-  } = {}, scope?: Partial<GlobalScope>): Promise<any[]> {
+    page?: number | string; limit?: number | string;
+  } = {}, scope?: Partial<GlobalScope>, paginate = false): Promise<any[] | BillingPage<any>> {
+    const w = billingPageWindow(filters.page, filters.limit);
     const regionScopeMode = await this.regionGuard.stagedMode();
     const restrictedRegions = scope?.regions?.length ? scope.regions : null;
 
@@ -1762,25 +1884,39 @@ export class BillingEngineService implements OnModuleInit {
       if (filters.assayerId) where.assayerId = filters.assayerId;
       if (filters.state) where.state = filters.state;
       if (filters.onHold !== undefined) where.onHold = filters.onHold;
-      const entries = await this.entryRepository.find({ where, order: { createdAt: 'DESC' } });
-      return this.attachEntryNames(entries);
+      if (!paginate) {
+        const entries = await this.entryRepository.find({ where, order: { createdAt: 'DESC' } });
+        return this.attachEntryNames(entries);
+      }
+      const [entries, total] = await this.entryRepository.findAndCount({
+        where, order: { createdAt: 'DESC' }, skip: w.skip, take: w.take,
+      });
+      return { items: await this.attachEntryNames(entries), total, page: w.page, limit: w.limit };
     }
 
-    const qb = this.entryRepository.createQueryBuilder('e');
-    if (filters.clientId) qb.andWhere('e.client_id = :clientId', { clientId: filters.clientId });
-    if (filters.projectId) qb.andWhere('e.project_id = :projectId', { projectId: filters.projectId });
-    if (filters.assignmentId) qb.andWhere('e.assignment_id = :assignmentId', { assignmentId: filters.assignmentId });
-    if (filters.assayerId) qb.andWhere('e.assayer_id = :assayerId', { assayerId: filters.assayerId });
-    if (filters.state) qb.andWhere('e.state = :state', { state: filters.state });
-    if (filters.onHold !== undefined) qb.andWhere('e.on_hold = :onHold', { onHold: filters.onHold });
-    qb.leftJoin('assignments', 'rg_a', 'rg_a.id = e.assignment_id')
-      .leftJoin('project_branches', 'rg_pb', 'rg_pb.id = rg_a.project_branch_id')
-      .leftJoin('branches', 'rg_b', 'rg_b.id = rg_pb.branch_id')
-      .addSelect('rg_b.region', 'region_scope')
-      .orderBy('e.createdAt', 'DESC');
-    if (regionScopeMode === 'enforce') qb.andWhere('rg_b.region IN (:...regions)', { regions: restrictedRegions });
+    // One query builder shape shared by the page fetch and the count, so the two can never
+    // disagree about which rows match — built fresh each time because a TypeORM QueryBuilder is
+    // stateful and a `.getCount()` after `.skip()/.take()` would count only the page, not the
+    // whole result set the page is drawn from.
+    const buildQuery = () => {
+      const qb = this.entryRepository.createQueryBuilder('e');
+      if (filters.clientId) qb.andWhere('e.client_id = :clientId', { clientId: filters.clientId });
+      if (filters.projectId) qb.andWhere('e.project_id = :projectId', { projectId: filters.projectId });
+      if (filters.assignmentId) qb.andWhere('e.assignment_id = :assignmentId', { assignmentId: filters.assignmentId });
+      if (filters.assayerId) qb.andWhere('e.assayer_id = :assayerId', { assayerId: filters.assayerId });
+      if (filters.state) qb.andWhere('e.state = :state', { state: filters.state });
+      if (filters.onHold !== undefined) qb.andWhere('e.on_hold = :onHold', { onHold: filters.onHold });
+      qb.leftJoin('assignments', 'rg_a', 'rg_a.id = e.assignment_id')
+        .leftJoin('project_branches', 'rg_pb', 'rg_pb.id = rg_a.project_branch_id')
+        .leftJoin('branches', 'rg_b', 'rg_b.id = rg_pb.branch_id');
+      if (regionScopeMode === 'enforce') qb.andWhere('rg_b.region IN (:...regions)', { regions: restrictedRegions });
+      return qb;
+    };
 
-    const { entities, raw } = await qb.getRawAndEntities();
+    const pageQb = buildQuery().addSelect('rg_b.region', 'region_scope').orderBy('e.createdAt', 'DESC');
+    if (paginate) pageQb.skip(w.skip).take(w.take);
+
+    const { entities, raw } = await pageQb.getRawAndEntities();
 
     if (regionScopeMode === 'log') {
       const outOfScope = raw.filter((r: any) => r.region_scope && !restrictedRegions.includes(r.region_scope)).length;
@@ -1792,11 +1928,28 @@ export class BillingEngineService implements OnModuleInit {
       }
     }
 
-    return this.attachEntryNames(entities);
+    if (!paginate) return this.attachEntryNames(entities);
+    const total = await buildQuery().getCount();
+    return { items: await this.attachEntryNames(entities), total, page: w.page, limit: w.limit };
   }
 
+  /**
+   * Unpaginated by contract: the only caller is `reports.service.ts`'s billing export, which
+   * needs every matching invoice with its lines in one shot to build a workbook, not a page.
+   * `findInvoicesPage` is what `GET /invoices` actually serves — this method is not reachable
+   * from any HTTP route.
+   *
+   * `FINDINVOICES_HARD_CAP` is a backstop, not a page size: an unfiltered export against an
+   * ever-growing table should still fail loudly (or visibly truncate) rather than materialise an
+   * unbounded result and every entry's relations with it. 5,000 matches the row ceiling the
+   * exporter already applies to client lines from the same report (`EXPORT_ROW_CAP` in
+   * reports.service.ts) — this cap does not attempt to invent a different number for the same job.
+   */
   async findInvoices(filters: { clientId?: string; projectId?: string; status?: InvoiceStatus } = {}): Promise<BillingInvoiceEntity[]> {
-    return this.invoiceRepository.find({ where: this.invoiceWhere(filters), relations: ['entries'], order: { createdAt: 'DESC' } });
+    return this.invoiceRepository.find({
+      where: this.invoiceWhere(filters), relations: ['entries'], order: { createdAt: 'DESC' },
+      take: FINDINVOICES_HARD_CAP,
+    });
   }
 
   private invoiceWhere(filters: { clientId?: string; projectId?: string; status?: InvoiceStatus }): Record<string, unknown> {
@@ -2352,7 +2505,9 @@ export class BillingEngineService implements OnModuleInit {
           LEFT JOIN projects pr ON pr.id = a.project_id
           LEFT JOIN clients c ON c.id = pr.client_id
           LEFT JOIN assayers s ON s.id = a.assayer_id
-         WHERE a.status = 'COMPLETED' AND a.is_active = true AND (e.id IS NULL OR p.id IS NULL)
+         -- No a.is_active filter, matching unbookedAssignmentIds: a deleted assayer's cascade
+         -- deactivates their assignments, but a COMPLETED audit still needs billing regardless.
+         WHERE a.status = 'COMPLETED' AND (e.id IS NULL OR p.id IS NULL)
          ORDER BY a.completion_date DESC NULLS LAST LIMIT ${ATTENTION_LIMIT}`).catch(() => []),
       mgr.query(`
         SELECT p.id, p.assignment_id, a.assignment_number, s.display_name AS assayer_name, p.total_amount

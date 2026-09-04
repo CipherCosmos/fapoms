@@ -28,6 +28,7 @@ describe('DocumentController — staged region scope', () => {
     resolveAssessmentRegion: jest.fn(),
     findByProjectBranch: jest.fn(),
     findDispatchedForAssayer: jest.fn(),
+    assertAssayerAssignedToBranch: jest.fn(),
     findByAssessment: jest.fn(),
     findByProject: jest.fn(),
     findAll: jest.fn(),
@@ -131,7 +132,7 @@ describe('DocumentController — staged region scope', () => {
       mockDocumentService.resolveProjectBranchRegion.mockResolvedValue('SOUTH');
       mockDocumentService.findDispatchedForAssayer.mockResolvedValue({ documents: [], readiness: { message: 'x' } });
 
-      await controller.assayerBranchDocuments('pb-1', scope);
+      await controller.assayerBranchDocuments('pb-1', staffReq(), scope);
 
       expect(mockRegionGuard.assertRegionAllowedStaged).toHaveBeenCalledWith(
         'SOUTH', scope, 'document:assayerBranchDocuments',
@@ -189,9 +190,9 @@ describe('DocumentController — staged region scope', () => {
     });
 
     it('GET (findAll)', async () => {
-      mockDocumentService.findAll.mockResolvedValue([]);
-      await controller.findAll(scope);
-      expect(mockDocumentService.findAll).toHaveBeenCalledWith(scope);
+      mockDocumentService.findAll.mockResolvedValue({ data: [], total: 0, limit: 50, offset: 0 });
+      await controller.findAll(scope, 50, undefined);
+      expect(mockDocumentService.findAll).toHaveBeenCalledWith(scope, 50, 0);
     });
 
     it('GET stats/summary (getStats)', async () => {
@@ -222,6 +223,74 @@ describe('DocumentController — staged region scope', () => {
         { assignedTo: 'me-1', lane: undefined, search: undefined, page: undefined, limit: undefined },
         scope,
       );
+    });
+  });
+
+  /**
+   * Cross-assayer IDOR on the three branch-addressed document routes. CONFIRMED-EXPLOITABLE
+   * 2026-09-04 against the live stack: assayer AS-01, with no assignment on the branch, streamed
+   * AS-04's completed-branch "SBI Pune Hinjewadi Audit Packet" PDF (HTTP 200) through
+   * `download-pdf`, and read the same branch's document metadata through `findByProjectBranch`
+   * and the `assayer-view`.
+   *
+   * Root cause: all three admit `SystemRole.ASSAYER` and were gated only by the staged region
+   * ceiling, which refuses nothing in the default `log` rollout mode. `findDispatchedForAssayer`
+   * filters by document type/status, never by assayer — its name means "types an assayer may see",
+   * not "documents for THIS assayer". The fix is a pure-assayer branch-ownership assertion
+   * (`assertAssayerAssignedToBranch`) on each route; staff keep the region ceiling and are
+   * unaffected.
+   *
+   * `assayerReq` is a PURE assayer (the exploitable shape). A caller holding any staff role in
+   * addition is not subject to the check — matching `issueDownloadToken`'s `isPureAssayer` test.
+   */
+  describe('branch routes enforce assayer ownership (cross-assayer IDOR fix)', () => {
+    const assayerReq = () => ({ user: { id: 'assayer-1', assayerId: 'assayer-1', roles: [{ name: 'ASSAYER' }] } });
+
+    beforeEach(() => {
+      mockDocumentService.resolveProjectBranchRegion.mockResolvedValue('SOUTH');
+      mockDocumentService.findDispatchedForAssayer.mockResolvedValue({ documents: [], readiness: { message: 'x' } });
+      mockDocumentService.findByProjectBranch.mockResolvedValue([]);
+      mockDocumentService.assertAssayerAssignedToBranch.mockResolvedValue(undefined);
+    });
+
+    it('download-pdf: a non-owning assayer is refused before any document is resolved or a token minted', async () => {
+      mockDocumentService.assertAssayerAssignedToBranch.mockRejectedValue(
+        new ForbiddenException('You are not assigned to this branch.'),
+      );
+      const res: any = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+      await expect(controller.downloadBranchPdf('pb-victim', assayerReq(), res, scope)).rejects.toThrow(ForbiddenException);
+
+      expect(mockDocumentService.assertAssayerAssignedToBranch).toHaveBeenCalledWith('pb-victim', 'assayer-1');
+      expect(mockDocumentService.findDispatchedForAssayer).not.toHaveBeenCalled();
+      expect(mockDocumentAccessTokenService.issue).not.toHaveBeenCalled();
+    });
+
+    it('download-pdf: an owning assayer passes the check and proceeds to resolve documents', async () => {
+      const res: any = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await controller.downloadBranchPdf('pb-mine', assayerReq(), res, scope);
+      expect(mockDocumentService.assertAssayerAssignedToBranch).toHaveBeenCalledWith('pb-mine', 'assayer-1');
+      expect(mockDocumentService.findDispatchedForAssayer).toHaveBeenCalledWith('pb-mine');
+    });
+
+    it('findByProjectBranch: a non-owning assayer is refused', async () => {
+      mockDocumentService.assertAssayerAssignedToBranch.mockRejectedValue(new ForbiddenException('nope'));
+      await expect(controller.findByProjectBranch('pb-victim', assayerReq(), scope)).rejects.toThrow(ForbiddenException);
+      expect(mockDocumentService.findDispatchedForAssayer).not.toHaveBeenCalled();
+    });
+
+    it('assayer-view: a non-owning assayer is refused', async () => {
+      mockDocumentService.assertAssayerAssignedToBranch.mockRejectedValue(new ForbiddenException('nope'));
+      await expect(controller.assayerBranchDocuments('pb-victim', assayerReq(), scope)).rejects.toThrow(ForbiddenException);
+      expect(mockDocumentService.findDispatchedForAssayer).not.toHaveBeenCalled();
+    });
+
+    it('staff are NOT subjected to the assayer branch-ownership check on any of the three routes', async () => {
+      const res: any = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await controller.downloadBranchPdf('pb-1', staffReq(), res, scope);
+      await controller.findByProjectBranch('pb-1', staffReq(), scope);
+      await controller.assayerBranchDocuments('pb-1', staffReq(), scope);
+      expect(mockDocumentService.assertAssayerAssignedToBranch).not.toHaveBeenCalled();
     });
   });
 });

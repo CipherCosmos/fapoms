@@ -24,6 +24,8 @@ import { ZoneService, CreateZoneDto, UpdateZoneDto } from './zone.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole } from '@fapoms/shared';
+import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
+import { ParsePagePipe } from '../../infrastructure/http/parse-page.pipe';
 
 class CreateZoneRequestDto implements CreateZoneDto {
   @IsString() @IsNotEmpty()
@@ -89,8 +91,12 @@ export class ZoneController {
   @Get()
   @ApiOperation({ summary: 'List all operational zones' })
   async findAll(
-    @Query('page') page = 1,
-    @Query('limit') limit = 20,
+    // `page`/`limit` reached the query builder as a bare `Number(...)` with no guard: `?page=0`,
+    // `?page=-1` and `?page=abc` each produced a negative or NaN `skip`, which Postgres/TypeORM
+    // reject before the query runs — surfacing as an unhandled 500 rather than just serving page
+    // one. Same fix already applied to the other list endpoints that had this gap.
+    @Query('page', new ParsePagePipe()) page: number,
+    @Query('limit', new ParseLimitPipe({ default: 20, max: 200 })) limit: number,
     @Query('clientId') clientId?: string,
   ) {
     const { zones, total } = await this.zoneService.findAll(page, limit, clientId);

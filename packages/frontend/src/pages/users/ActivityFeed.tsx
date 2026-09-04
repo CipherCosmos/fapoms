@@ -26,6 +26,12 @@ export interface AuditEvent {
   userDisplayName: string | null;
   remarks: string | null;
   occurredAt: string;
+  // Compliance metadata — the backend has always returned ipAddress and now returns these too;
+  // the UI simply never showed them, which for an audit trail is the field that most matters.
+  ipAddress?: string | null;
+  actorRole?: string | null;
+  outcome?: string | null;
+  sessionId?: string | null;
 }
 
 const EVENT_ICON: Record<string, React.ReactNode> = {
@@ -36,6 +42,7 @@ const EVENT_ICON: Record<string, React.ReactNode> = {
 
 const CATEGORY_TONE: Record<string, string> = {
   USER: 'var(--accent)', OPERATIONAL: 'var(--accent)', WORKFLOW: 'var(--warning)', SYSTEM: 'var(--text-muted)',
+  DATA_ACCESS: 'var(--accent-secondary)',
 };
 
 const fmtWhen = (d: string) =>
@@ -88,7 +95,7 @@ export const ActivityFeed: React.FC = () => {
       <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
         <span style={{ fontSize: '12.5px', color: 'var(--text-muted)' }}>Every recorded change across the system, most recent first.</span>
         <div style={{ display: 'flex', gap: '4px', marginLeft: 'auto' }}>
-          {['ALL', 'USER', 'OPERATIONAL', 'WORKFLOW'].map((c) => (
+          {['ALL', 'USER', 'DATA_ACCESS', 'OPERATIONAL', 'WORKFLOW'].map((c) => (
             <button key={c} onClick={() => setCategory(c)}
               style={{
                 padding: '5px 11px', borderRadius: '999px', fontSize: '11.5px', fontWeight: 600, cursor: 'pointer',
@@ -96,7 +103,7 @@ export const ActivityFeed: React.FC = () => {
                 background: category === c ? 'var(--accent)' : 'transparent',
                 color: category === c ? 'var(--on-accent)' : 'var(--text-secondary)',
               }}>
-              {c === 'ALL' ? 'All' : c.charAt(0) + c.slice(1).toLowerCase()}
+              {c === 'ALL' ? 'All' : (c.charAt(0) + c.slice(1).toLowerCase()).replace('_', ' ')}
             </button>
           ))}
         </div>
@@ -128,12 +135,16 @@ export const ActivityFeed: React.FC = () => {
                       <span style={{ color: 'var(--text-muted)' }}> ({anyStatusLabel(e.previousState)} → {anyStatusLabel(e.newState)})</span>
                     )}
                   </div>
-                  <div style={{ ...label, marginTop: '3px' }}>
-                    {e.userDisplayName ?? 'system'} · {fmtWhen(e.occurredAt)}
+                  <div style={{ ...label, marginTop: '3px', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    <span>{e.userDisplayName ?? 'system'}{e.actorRole ? ` · ${e.actorRole}` : ''} · {fmtWhen(e.occurredAt)}</span>
+                    {e.ipAddress && <span style={{ color: 'var(--text-muted)' }}>· {e.ipAddress}</span>}
+                    {e.outcome && e.outcome !== 'SUCCESS' && (
+                      <span style={{ color: 'var(--danger)', fontWeight: 700 }}>· {e.outcome}</span>
+                    )}
                   </div>
                 </div>
                 <span style={{ fontSize: '10px', fontWeight: 700, color: CATEGORY_TONE[e.category] ?? 'var(--text-muted)', whiteSpace: 'nowrap' }}>
-                  {e.category}
+                  {e.category === 'DATA_ACCESS' ? 'DATA ACCESS' : e.category}
                 </span>
               </div>
             ))}

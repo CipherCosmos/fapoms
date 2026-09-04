@@ -1,9 +1,11 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Building2 } from 'lucide-react';
 import { Modal, StyledInput, Select, useToast } from '../../components/ui';
+import { Autocomplete } from '../../components/ui/Autocomplete';
 import { useCreateClient } from '../../hooks/useClients';
 import { ClientType, Priority, clientTypeLabel, priorityLabel } from '@fapoms/shared';
 import { userMessage } from '../../services/errors';
+import { applyPlaceToAddressGroup, composeAddress, emptyAddressGroup, stateOptionsFor } from './address-group';
 
 // The enum supplies the values; `@fapoms/shared`'s label layer supplies the wording, the same
 // way the clients list already does. Rendering the value itself put "MICROFINANCE" and
@@ -31,10 +33,16 @@ export const CreateClientModal: React.FC<{ onClose: () => void }> = ({ onClose }
     priority: Priority.MEDIUM,
     budget: '',
   });
+  // Address is its own group, not part of `form`, because it is edited through the shared
+  // pincode/city/district/state cross-fill (`applyPlaceToAddressGroup`) rather than one field
+  // at a time. See `address-group.ts` for why this composes into a single string on submit.
+  const [addr, setAddr] = useState(emptyAddressGroup());
   const { toast } = useToast();
   const create = useCreateClient();
 
   const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
+  const setAddrField = (k: keyof typeof addr) => (v: string) => setAddr((a) => ({ ...a, [k]: v }));
+  const stateOptions = useMemo(() => stateOptionsFor(addr.state), [addr.state]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -53,6 +61,7 @@ export const CreateClientModal: React.FC<{ onClose: () => void }> = ({ onClose }
         industry: form.industry || undefined,
         clientType: form.clientType,
         priority: form.priority,
+        address: composeAddress(addr) || undefined,
         budget: form.budget ? parseFloat(form.budget) : undefined,
       });
       toast('success', 'Client created successfully');
@@ -107,7 +116,58 @@ export const CreateClientModal: React.FC<{ onClose: () => void }> = ({ onClose }
           </div>
         </div>
 
-        {/* Section 2: Contact Details */}
+        {/* Section 2: Address */}
+        <div>
+          <h4 style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, margin: '0 0 12px 0', borderBottom: '1px solid var(--border-color)', paddingBottom: 6, color: 'var(--accent-primary)' }}>Address</h4>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+            {/* Pincode first and geo-backed, same as the branch form: picking a result fills
+                district, city and state in one go instead of asking for all four separately. */}
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <Label text="Pincode" />
+              <Autocomplete
+                value={addr.pincode}
+                onChange={setAddrField('pincode')}
+                onSelect={(place) => setAddr((a) => applyPlaceToAddressGroup('pincode', place, a))}
+                placeholder="Type a pincode — the rest fills in"
+                filterType={(r) => !!r.pincode}
+              />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <Label text="City" />
+              <Autocomplete
+                value={addr.city}
+                onChange={setAddrField('city')}
+                onSelect={(place) => setAddr((a) => applyPlaceToAddressGroup('city', place, a))}
+                placeholder="Type to search city…"
+              />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <Label text="District" />
+              <Autocomplete
+                value={addr.district}
+                onChange={setAddrField('district')}
+                onSelect={(place) => setAddr((a) => applyPlaceToAddressGroup('district', place, a))}
+                placeholder="Type to search district…"
+              />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column' }}>
+              <Label text="State" />
+              <Select
+                value={addr.state}
+                onChange={setAddrField('state')}
+                options={stateOptions}
+                placeholder="Select…"
+                style={{ width: '100%' }}
+              />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gridColumn: '1 / -1' }}>
+              <Label text="Address Line" />
+              <StyledInput placeholder="Building, street, landmark" value={addr.address} onChange={(e) => setAddrField('address')(e.target.value)} />
+            </div>
+          </div>
+        </div>
+
+        {/* Section 3: Contact Details */}
         <div>
           <h4 style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, margin: '0 0 12px 0', borderBottom: '1px solid var(--border-color)', paddingBottom: 6, color: 'var(--accent-primary)' }}>Contact Information</h4>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
@@ -130,7 +190,7 @@ export const CreateClientModal: React.FC<{ onClose: () => void }> = ({ onClose }
           </div>
         </div>
 
-        {/* Section 3: Financials & Preferences */}
+        {/* Section 4: Financials & Preferences */}
         <div>
           <h4 style={{ fontSize: 12, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.5, margin: '0 0 12px 0', borderBottom: '1px solid var(--border-color)', paddingBottom: 6, color: 'var(--accent-primary)' }}>Financials & Preferences</h4>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>

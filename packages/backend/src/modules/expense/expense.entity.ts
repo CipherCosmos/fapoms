@@ -20,6 +20,15 @@ export { ExpenseCategory, ExpenseStatus } from '@fapoms/shared';
 @Entity('assignment_expenses')
 @Index(['assignmentId'])
 @Index(['assayerId', 'status'])
+/**
+ * The mobile app's idempotency key for a claim submission, unique per assayer (not globally) —
+ * see the column comment on `clientRequestId`. Declared at class level, not as a property
+ * decorator on the column itself, because it spans two columns.
+ */
+@Index('UQ_expense_assayer_client_request', ['assayerId', 'clientRequestId'], {
+  unique: true,
+  where: 'client_request_id IS NOT NULL',
+})
 export class ExpenseEntity extends BaseEntity {
   @Column({ name: 'assignment_id', type: 'uuid' })
   assignmentId: string;
@@ -82,4 +91,17 @@ export class ExpenseEntity extends BaseEntity {
   @Index({ unique: true, where: 'reimbursement_payable_id IS NOT NULL' })
   @Column({ name: 'reimbursement_payable_id', type: 'uuid', nullable: true })
   reimbursementPayableId: string | null;
+
+  /**
+   * The mobile app's idempotency key for this claim submission.
+   *
+   * A flaky field connection retries the POST; without a key to recognise the retry by, each
+   * attempt was a distinct row — the same receipt claimed two or three times, each one a real
+   * reimbursement request an approver had to notice and reject by hand. Unique per assayer (not
+   * globally) so two different assayers submitting on the same client build at the same instant
+   * cannot collide on a client-generated id neither of them coordinated. See the class-level
+   * `UQ_expense_assayer_client_request` index above.
+   */
+  @Column({ name: 'client_request_id', type: 'uuid', nullable: true })
+  clientRequestId: string | null;
 }

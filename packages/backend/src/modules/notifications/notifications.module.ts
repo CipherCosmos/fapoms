@@ -10,6 +10,7 @@ import { AssayerEntity } from '../assayer/assayer.entity';
 import { UserEntity } from '../user/user.entity';
 import { FcmProvider } from '../../infrastructure/notifications/fcm-provider';
 import { EmailProvider } from '../../infrastructure/notifications/email-provider';
+import { SmsProvider } from '../../infrastructure/notifications/sms-provider';
 import { ensureRepeatableSchedules } from '../../infrastructure/queue/repeatable-schedules';
 import { PushNotificationService } from './push-notification.service';
 import { NotificationDispatchService } from './notification-dispatch.service';
@@ -38,9 +39,9 @@ import { NotificationAdminController } from './notification-admin.controller';
   controllers: [NotificationController, NotificationAdminController],
   providers: [
     NotificationService, PushNotificationService, NotificationDispatchService,
-    NotificationDeliveryWorker, NotificationSweeper, FcmProvider, EmailProvider, NotificationSettingsService,
+    NotificationDeliveryWorker, NotificationSweeper, FcmProvider, EmailProvider, SmsProvider, NotificationSettingsService,
   ],
-  exports: [NotificationService, PushNotificationService, NotificationDispatchService, EmailProvider, NotificationSettingsService],
+  exports: [NotificationService, PushNotificationService, NotificationDispatchService, EmailProvider, SmsProvider, NotificationSettingsService],
 })
 export class NotificationsModule implements OnModuleInit {
   private readonly logger = new Logger(NotificationsModule.name);

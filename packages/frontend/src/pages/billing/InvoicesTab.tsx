@@ -31,7 +31,9 @@ export const InvoicesTab: React.FC<{ filter: InvoiceFilter; onFilter: (f: Invoic
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'minmax(280px, 1fr) minmax(0, 2fr)', gap: 14, alignItems: 'start' }}>
       <Card title={<span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}><FileText size={14} /> Ready to invoice</span>}>
-        {invoiceable.isLoading ? <Empty>Loading…</Empty> : clients.length === 0 ? (
+        {invoiceable.isLoading ? <Empty>Loading…</Empty> : invoiceable.isError ? (
+          <Empty>Could not load work to invoice — this is not saying there is none. Check your connection and try again.</Empty>
+        ) : clients.length === 0 ? (
           <Empty>Nothing to invoice. Completed assignments appear here automatically.</Empty>
         ) : (<>
           {invoiceable.data?.truncated && (
@@ -80,7 +82,9 @@ export const InvoicesTab: React.FC<{ filter: InvoiceFilter; onFilter: (f: Invoic
           </div>
         }
       >
-        {invoices.isLoading ? <Empty>Loading invoices…</Empty> : rows.length === 0 ? <Empty>No invoices yet.</Empty> : (
+        {invoices.isLoading ? <Empty>Loading invoices…</Empty> : invoices.isError ? (
+          <Empty>Could not load invoices — this is not saying there are none. Check your connection and try again.</Empty>
+        ) : rows.length === 0 ? <Empty>No invoices yet.</Empty> : (
           <>
             <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse' }}>

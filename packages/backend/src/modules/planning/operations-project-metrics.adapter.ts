@@ -46,9 +46,21 @@ export class OperationsProjectMetricsAdapter implements ProjectMetricsProvider {
   }
 
   async getProjectBranchCounts(): Promise<{ total: number; deployed: number }> {
-    const branches = await this.projectBranchRepository.find({ where: { isActive: true } });
-    const total = branches.length;
-    const deployed = branches.filter((pb) => pb.status !== 'IMPORTED' && pb.status !== 'PLANNING').length;
-    return { total, deployed };
+    // Single aggregate query: both counts come from filtered COUNT(*) so the
+    // full active-branch table never has to be materialized in app memory.
+    const row = await this.projectBranchRepository
+      .createQueryBuilder('pb')
+      .where('pb.isActive = :isActive', { isActive: true })
+      .select('COUNT(*)', 'total')
+      .addSelect(
+        "COUNT(*) FILTER (WHERE pb.status NOT IN ('IMPORTED', 'PLANNING'))",
+        'deployed',
+      )
+      .getRawOne<{ total: string; deployed: string }>();
+
+    return {
+      total: parseInt(row?.total ?? '0', 10),
+      deployed: parseInt(row?.deployed ?? '0', 10),
+    };
   }
 }

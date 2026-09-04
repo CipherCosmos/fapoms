@@ -86,11 +86,22 @@ export class PlanningAntiCorruptionLayer
     // Scoped by the assayer's own home region only — an assayer has no client or zone. Pairing
     // a region's branches against the national workforce would produce a plan the operator
     // cannot dispatch, which is worse than a plan that says it cannot cover them.
+    //
+    // A caller's `scope.regions` (the operator's own territorial assignment) is the first and
+    // cheapest source of a region filter. A national desk, or a call with no scope at all, has
+    // no such assignment — but the roster still only needs to cover the regions of branches
+    // that are actually in play right now, not the whole country. Resolve those from the
+    // still-plannable branches (the same statuses `getBranchesForPlanning` treats as in scope)
+    // before ever falling back to an unscoped roster load.
+    const regionsToQuery = scope?.regions?.length
+      ? scope.regions
+      : await this.resolveInPlayRegions();
+
     const assayers = await this.assayerRepository.find({
       where: {
         isActive: true,
         status: AssayerStatus.ACTIVE,
-        ...(scope?.regions?.length ? { region: In(scope.regions) } : {}),
+        ...(regionsToQuery?.length ? { region: In(regionsToQuery) } : {}),
       },
     });
     await this.assayerService.hydrateAllWorkforceAttributes(assayers);
@@ -105,6 +116,32 @@ export class PlanningAntiCorruptionLayer
         maxWeeklyWorkload: a.maxWeeklyWorkload || DEFAULT_WEEKLY_CAPACITY,
       };
     });
+  }
+
+  /**
+   * Distinct regions among branches still awaiting coverage, so a scope-less caller (a national
+   * desk, or a call with no scope at all) can bound the assayer roster to what the current run
+   * could plausibly need instead of the whole country. Returns null (no scope resolvable, e.g.
+   * no branches or none carrying a region) so callers know to fall back to the full roster.
+   */
+  private async resolveInPlayRegions(): Promise<string[] | null> {
+    const rows = await this.projectBranchRepository
+      .createQueryBuilder('pb')
+      .innerJoin('pb.branch', 'branch')
+      .where('pb.isActive = :isActive', { isActive: true })
+      .andWhere('pb.status IN (:...statuses)', {
+        statuses: [
+          ProjectBranchStatus.IMPORTED,
+          ProjectBranchStatus.PLANNING,
+          ProjectBranchStatus.CANDIDATE_SEARCH,
+        ],
+      })
+      .andWhere('branch.region IS NOT NULL')
+      .select('DISTINCT branch.region', 'region')
+      .getRawMany<{ region: string }>();
+
+    const regions = rows.map((r) => r.region).filter(Boolean);
+    return regions.length ? regions : null;
   }
 
   async getAssayerCurrentWorkloads(assayerIds: string[]): Promise<Record<string, number>> {

@@ -2,7 +2,7 @@ import { Controller, Get, UseGuards, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { InjectDataSource } from '@nestjs/typeorm';
 import { DataSource } from 'typeorm';
-import { JwtAuthGuard, RolesGuard, Roles, RequirePermissions } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, Roles, RequirePermissions, RoleOnly } from '../auth/guards';
 import { OperationsSnapshotService } from './operations-snapshot.service';
 import { SystemRole } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
@@ -45,6 +45,11 @@ export class SystemDashboardController {
   @Get('metrics')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('project:view:organization')
+  // Without this, RolesGuard's permission-fallback lets CLIENT_USER through too: it holds
+  // `project:view:organization` (via its PROJECT:VIEW:PLATFORM grant) for the unrelated
+  // reason of viewing its own projects, and this route has no client ceiling on the
+  // platform-wide aggregates below. @RoleOnly() makes the @Roles list above authoritative.
+  @RoleOnly()
   @ApiOperation({ summary: 'Retrieve live aggregated system counts and event history metrics' })
   async getMetrics(@GlobalScopeFilter() scope?: GlobalScope) {
     // Branch counts are territorial and follow the caller's region assignment; clients and

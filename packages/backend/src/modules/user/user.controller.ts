@@ -34,6 +34,7 @@ const TrimmedString = () => Transform(({ value }) => (typeof value === 'string' 
 import { UserService, CreateUserDto, UpdateUserDto } from './user.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AnyAuthenticated, PasswordChangeExempt } from '../auth/guards';
 import { SystemRole, UserStatus } from '@fapoms/shared';
+import { ParsePagePipe } from '../../infrastructure/http/parse-page.pipe';
 
 /**
  * Role names the application's own access rules compare against.
@@ -103,6 +104,9 @@ class CreateUserRequestDto implements CreateUserDto {
 
   @IsOptional() @IsArray()
   roleIds?: string[];
+
+  @IsOptional() @IsString()
+  clientId?: string;
 }
 
 class AssignRolesDto {
@@ -149,6 +153,10 @@ class UpdateUserRequestDto implements UpdateUserDto {
    */
   @IsOptional() @IsArray() @IsString({ each: true })
   regions?: string[] | null;
+
+  /** Send a client id to confine this account, or `null` to make it unrestricted again. */
+  @IsOptional() @IsString()
+  clientId?: string | null;
 }
 
 class ResetPasswordRequestDto {
@@ -250,8 +258,12 @@ export class UserController {
   @Roles(SystemRole.ADMIN)
   @RequirePermissions('user:view:organization')
   @ApiOperation({ summary: 'List all users' })
+  // `page` reached `userService.findAll`'s `skip: (page - 1) * limit` unguarded: `?page=0`,
+  // `?page=-1` and `?page=abc` each produced a negative or NaN `skip`, rejected by Postgres/
+  // TypeORM before the query ran — an unhandled 500 rather than just serving page one. Same gap
+  // already found and fixed the same way across several other list endpoints.
   async findAll(
-    @Query('page') page = 1,
+    @Query('page', new ParsePagePipe()) page: number,
     @Query('limit') limit = 20,
   ) {
     const { users, total } = await this.userService.findAll(page, limit);
@@ -358,6 +370,26 @@ export class UserController {
   async deleteRole(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     await this.userService.deleteRole(id, req.user.id);
     return { success: true };
+  }
+
+  /**
+   * Name-only staff picker, for the same reason `GET /assayers` exists for `useManagerOptions`:
+   * a form that lets someone name a colleague needs a list, and `findAll` above is not that list
+   * — it is gated `@Roles(ADMIN)` plus `user:view:organization`, so the desk clerk this field is
+   * actually for cannot call it, and even if they could it hands back email, lockout state and
+   * every role held for someone who only needs a name.
+   *
+   * Gated the same as the roster list this shares a form with (`AssayerController.findAll`,
+   * `assayer:view:organization`) rather than a `user:*` permission, because that is the audience
+   * this endpoint actually has: whoever can reach `/hr` already holds it.
+   */
+  @Get('directory')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+  @RequirePermissions('assayer:view:organization')
+  @ApiOperation({ summary: 'Name-only list of active staff, for "pick a colleague" fields' })
+  async findDirectory() {
+    const { people, total } = await this.userService.findDirectory();
+    return { success: true, data: people, meta: { pagination: { total } } };
   }
 
   @Get(':id')

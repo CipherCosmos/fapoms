@@ -1597,12 +1597,29 @@ export class RecommendationEngine {
     this.filters.push(
       // First: "can this person be sent anywhere at all?" — see DeployabilityFilter.
       this.deployabilityFilter,
+      /**
+       * Second, ahead of every policy/skills/rotation check below: this loop stops at the
+       * FIRST filter a candidate fails, and DistancePolicyFilter's minDistanceKm floor is a
+       * non-negotiable compliance control (an assayer must not audit a branch on their own
+       * doorstep) that `overrideReason` cannot waive — only a platform-wide admin rule-bypass
+       * can (see ConstraintEvaluator.checkDistancePolicy). Left in its old spot after
+       * clientEligibility/ruleEngine/requiredSkills, a candidate failing both this and one of
+       * those reported ONLY the softer, overridable reason: an operator would read "not
+       * empanelled", type a considered justification, click "Assign anyway", and only then
+       * learn — from a confirm-time error unconnected to anything shown before it — that the
+       * real blocker was an unwaivable distance rule the screen never mentioned. Checking it
+       * here means that whenever it applies, it is what gets reported, before a candidate is
+       * ever offered as a reason-and-override case that was never actually available.
+       *
+       * The one other thing this filter excludes on — an assayer with no home coordinates —
+       * stays exactly as overridable as before; only its position in the priority order moved.
+       */
+      this.distancePolicyFilter,
       this.availabilityFilter,
       this.consecutiveBranchAuditFilter,
       this.clientEligibilityFilter,
       this.ruleEngineEligibilityFilter,
       this.requiredSkillsFilter,
-      this.distancePolicyFilter,
     );
 
     this.calculators.push(
@@ -2334,6 +2351,13 @@ export class RecommendationEngine {
        */
       distanceSource: RouteSource | null;
       nextAvailableDate: string | null;
+      /**
+       * Whether "Assign anyway" on this row can actually succeed. True for everything except a
+       * confirmed conflict-of-interest distance — see the comment where this is computed, above.
+       * Optional so existing shapes (tests constructing this object literally) do not need to
+       * change; absent is read as overridable, matching every kind before this field existed.
+       */
+      overridable?: boolean;
     }[] = [];
 
     for (const assayer of assayers) {
@@ -2352,11 +2376,37 @@ export class RecommendationEngine {
          * keeps the shared wording, so this stays an exception rather than a second reason table.
          */
         let reasonOverride: string | undefined;
+        // Whether this specific exclusion can actually be waived by typing a reason on this
+        // screen. False only for the one case where the answer is provably no: a confirmed
+        // conflict-of-interest distance (an assayer too close to the branch they'd audit) is
+        // enforced by `ConstraintEvaluator.checkDistancePolicy` regardless of `overrideReason` —
+        // only a platform-wide admin rule-bypass can waive it (see DISTANCE_POLICY in
+        // RuleBypassBanner / platform settings). Offering "Assign anyway" for it anyway would be
+        // a control that does not do what it says: an operator types a considered justification,
+        // confirms, and is refused for a reason the screen never mentioned. Every other exclusion
+        // kind — including this filter's OWN other case, an unlocated home — genuinely can be
+        // resolved by an operator attesting to it here, so they keep the button.
+        let overridable = true;
         if (blockedBy === this.distancePolicyFilter.name && this.distancePolicyFilter.unlocatedHome(assayer)) {
           reasonOverride = EXCLUSION_REASONS.distancePolicyUnlocated;
           detail =
             `${assayer.displayName} has no map pin yet, so the client's minimum-distance rule cannot be `
             + 'checked for this branch. Add a pin on their profile, or wait for the address lookup to finish.';
+        } else if (blockedBy === this.distancePolicyFilter.name) {
+          // Not unlocated, so the filter only fails here for the non-negotiable floor (see its
+          // own doc comment) — never the ceiling, which this call always relaxes. Name the
+          // actual numbers rather than the generic "outside the permitted distance band": a
+          // km figure and the club's own floor is what tells an operator this is not a data gap.
+          overridable = false;
+          const minDistanceKm = Number(context.client?.planningPreferences?.minDistanceKm);
+          const distanceKm = routeByAssayer[assayer.id]?.distanceKm;
+          reasonOverride = Number.isFinite(minDistanceKm) && distanceKm != null
+            ? `Too close to audit — conflict of interest: lives ${distanceKm.toFixed(1)}km away, inside the client's ${minDistanceKm}km independence floor`
+            : undefined;
+          detail =
+            `${assayer.displayName} lives inside the client's minimum-distance rule for this branch — a `
+            + "compliance control against auditing one's own doorstep. This cannot be waived with a reason "
+            + 'here; only a platform admin can lift it (Platform Settings → rule bypass), for every branch at once.';
         } else if (blockedBy === this.ruleEngineEligibilityFilter.name) {
           detail = (await this.ruleEngineEligibilityFilter.explain(assayer, context)).join('; ') || undefined;
         } else if (blockedBy === this.deployabilityFilter.name) {
@@ -2416,6 +2466,7 @@ export class RecommendationEngine {
           distanceKm: routeByAssayer[assayer.id]?.distanceKm ?? null,
           distanceSource: routeByAssayer[assayer.id]?.source ?? null,
           nextAvailableDate,
+          overridable,
         });
         continue;
       }
@@ -2517,6 +2568,21 @@ export class RecommendationEngine {
     // makes the top pick (and therefore who coverage planning OFFERS the work to) flip between
     // runs. An audit must be able to reproduce why a person was chosen.
     const ranked = candidates.sort((a, b) => b.score - a.score || a.assayer.id.localeCompare(b.assayer.id));
+    // Same determinism argument as `ranked` above, and it was missed here: `excluded` comes
+    // from iterating `assayers`, which is loaded with no ORDER BY (a plain `.find()` / an `IN`
+    // clause, neither of which promises row order), so it could silently reshuffle between two
+    // otherwise-identical requests. That is not just cosmetic — this is the ExcludedCandidatesPanel
+    // list an operator reads a name off of and then clicks "Assign anyway" next to; a reorder
+    // between the render they read and the click they make can confirm an eligibility override
+    // for a different assayer than the one they looked at. Closest-first because that is the
+    // most actionable ordering for an override decision; assayer id breaks ties for the same
+    // reproducibility reason as `ranked`.
+    excluded.sort((a, b) => {
+      if (a.distanceKm == null && b.distanceKm == null) return a.assayerId.localeCompare(b.assayerId);
+      if (a.distanceKm == null) return 1;
+      if (b.distanceKm == null) return -1;
+      return a.distanceKm - b.distanceKm || a.assayerId.localeCompare(b.assayerId);
+    });
     // Attached to the array so existing callers that just iterate results keep working
     // unchanged, while callers that want the audit trail can read it.
     (ranked as any).excluded = excluded;

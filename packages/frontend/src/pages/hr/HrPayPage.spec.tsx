@@ -19,7 +19,7 @@ const mockRequest = api.request as jest.Mock;
  * whole roster; the banner below is only for when even that cannot be managed.
  */
 
-const rosterPage = (firstIndex: number, count: number, total: number) => ({
+const rosterPage = (firstIndex: number, count: number, total: number, nextCursor: string | null = null) => ({
   success: true,
   data: Array.from({ length: count }, (_, i) => ({
     id: `a-${firstIndex + i}`,
@@ -30,7 +30,7 @@ const rosterPage = (firstIndex: number, count: number, total: number) => ({
     bankAccountNumber: null,
     ifscCode: null,
   })),
-  meta: { pagination: { total } },
+  meta: { pagination: { total, nextCursor } },
 });
 
 /** Routes the two calls the page makes, whatever order they resolve in. */
@@ -47,7 +47,7 @@ beforeEach(() => mockRequest.mockReset());
 
 describe('HrPayPage', () => {
   it('counts and lists all 1,155 people, not the thousand the first request returns', async () => {
-    serve([rosterPage(1, 1000, 1155), rosterPage(1001, 155, 1155)]);
+    serve([rosterPage(1, 1000, 1155, 'cursor-1'), rosterPage(1001, 155, 1155, null)]);
 
     renderPage();
 

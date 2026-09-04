@@ -4,7 +4,7 @@ import {
   User, MapPin, CreditCard, FileText, Users, Building2, ClipboardCheck,
   Check, ChevronLeft, ChevronRight, X, AlertTriangle, Plus, Phone,
 } from 'lucide-react';
-import { Modal, AlertBanner, useToast } from '../../../components/ui';
+import { Modal, AlertBanner, Select, useToast } from '../../../components/ui';
 import { PinCoordinateControl } from '../../../components/PinCoordinateControl';
 import { useWorkforceVocabulary } from '../../../hooks/useWorkforceVocabulary';
 import { api } from '../../../services/api';
@@ -12,7 +12,8 @@ import { userMessage } from '../../../services/errors';
 import { useViewParam } from '../hr-ui';
 import { useCurrentRoles, canManageAssayers } from '../../../hooks/useCurrentRoles';
 import {
-  renderFormField, resolvePincode, addressConflict, type FieldDef,
+  renderFormField, resolvePincode, addressConflict, resolveIfsc, useHrOwnerOptions,
+  type FieldDef, type IfscInfo,
 } from '../AssayerForms';
 import { isSensitiveKey } from '../assayer-shared';
 import { SensitiveValue } from '../SensitiveValue';
@@ -26,6 +27,7 @@ import {
 } from './useRegistration';
 import { DocumentsStep } from './DocumentsStep';
 import { ClientsStep } from './ClientsStep';
+import { relationshipOptions } from '../reference-vocabulary';
 
 /**
  * Registering an assayer, from the desk, end to end.
@@ -235,10 +237,17 @@ const ReferencesBlock: React.FC<{
           aria-label="Name of the person who can vouch for them"
           style={inputStyle}
         />
-        <input
+        {/*
+          A fixed list, not free text — this posts to the same `relationship` column the vetting
+          tab corrects later (`AssayerReferenceEntity.relationship`, a plain varchar with no FK),
+          and free text on it is exactly how one relationship became "Ex-manager", "ex manager"
+          and "Former Manager" with nothing usable to show for the 1,983 references already on
+          file. See `reference-vocabulary.ts` for the shared list both screens render.
+        */}
+        <Select
           value={draft.relationship}
-          onChange={(e) => setDraft({ ...draft, relationship: e.target.value })}
-          placeholder="How they know them"
+          onChange={(v) => setDraft({ ...draft, relationship: String(v) })}
+          options={relationshipOptions(draft.relationship)}
           aria-label="How the reference knows this person"
           style={inputStyle}
         />
@@ -408,9 +417,13 @@ export const RegistrationWizard: React.FC<{
   const canManage = canManageAssayers(useCurrentRoles());
   const { dossier, dossierError, reloadDossier } = useDossier(reg.assayerId);
   const [step, setStep] = useViewParam<RegistrationStepKey>(REGISTRATION_STEP_KEYS, 'person');
+  // Loaded only on the step that shows `hrOwnerName` — see `useHrOwnerOptions`.
+  const hrOwnerOpts = useHrOwnerOptions(step === 'people');
   const [stepProblems, setStepProblems] = useState<string[]>([]);
   const [addrNote, setAddrNote] = useState<{ message: string; blocking: boolean } | null>(null);
   const [addrLookup, setAddrLookup] = useState(false);
+  /** The last resolved IFSC code's bank/branch details — see `applyIfscLookup`. */
+  const [ifscInfo, setIfscInfo] = useState<IfscInfo | null>(null);
   const [stepBusy, setStepBusy] = useState(false);
   const { skills, languages, certifications } = useWorkforceVocabulary();
   const vocabulary = { skills, languages, certifications };
@@ -458,15 +471,33 @@ export const RegistrationWizard: React.FC<{
     setAddrNote(addressConflict(po, clean, reg.form.state, reg.form.district));
   };
 
+  /**
+   * On leaving the IFSC box: fill `bankName` when the code resolves, say nothing when it does
+   * not. A malformed or unknown code is a normal, mid-typing state for this field — `resolveIfsc`
+   * already returns `null` for both rather than throwing, so there is nothing here to catch.
+   */
+  const applyIfscLookup = async (code: string) => {
+    const result = await resolveIfsc(code);
+    setIfscInfo(result);
+    if (result) reg.merge({ bankName: result.bankName });
+  };
+
   // No `people` argument: the reporting-manager picker is the one field type this flow used it
   // for, and that field is no longer offered at admission — see `NEVER_KEPT` in `steps.ts`. It
-  // took a fetch of the whole roster with it.
+  // took a fetch of the whole roster with it. `hrOwnerName` is still offered here, so its own
+  // picker's candidate list is threaded through.
   const renderOne = (field: FieldDef) => renderFormField(
     field,
     reg.form,
     formSetter,
     vocabulary,
-    (key) => { if (key === 'pincode') void applyPincodeLookup(reg.form.pincode || ''); },
+    (key) => {
+      if (key === 'pincode') void applyPincodeLookup(reg.form.pincode || '');
+      if (key === 'ifscCode') void applyIfscLookup(reg.form.ifscCode || '');
+    },
+    undefined,
+    { options: hrOwnerOpts.people, failed: hrOwnerOpts.failed },
+    ifscInfo,
   );
 
   /**

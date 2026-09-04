@@ -32,6 +32,23 @@ const card: React.CSSProperties = {
 
 const DURATION_PRESETS = [1, 2, 4, 8, 24];
 
+/**
+ * A handful of categories that cover why this screen gets used at all, offered as suggestions
+ * rather than a locked list — unlike a hold or a rejection, a bypass reason is written prose
+ * ("Testing the mobile check-in flow before the RBL pilot") more often than it is a short label,
+ * so forcing a preset+Other picker here would fight the very field it names as an example.
+ */
+const REASON_CATEGORIES = [
+  'System or connectivity outage',
+  'Client escalation / one-off exception',
+  'Feature testing before rollout',
+];
+
+/** The shape this screen actually reads off a past bypass window — everything else is ignored. */
+interface BypassHistoryRow {
+  reason: string;
+}
+
 /** "in 1h 58m" / "in 12 min" / "expiring now", for a moment already in the future. */
 function formatCountdown(iso: string | null): string | null {
   if (!iso) return null;
@@ -88,10 +105,40 @@ export const RuleBypassPanel: React.FC = () => {
     staleTime: Infinity,
     enabled: mayUse,
   });
+  /**
+   * Real reasons people have actually typed before, as autocomplete suggestions alongside the
+   * fixed categories above. `history()` already returns up to 200 past windows with their
+   * `reason` field for the audit trail this screen doesn't otherwise surface — reusing it here
+   * means the suggestions come from what this platform's admins actually wrote, not a guess.
+   * Best-effort: if this fails to load, the fixed categories alone still work, and the field
+   * stays fully free-typeable either way.
+   */
+  const { data: history } = useQuery({
+    queryKey: ['rule-bypass', 'history'],
+    queryFn: () => api.request<BypassHistoryRow[]>('/admin/rule-bypass/history?limit=200'),
+    staleTime: 60_000,
+    enabled: mayUse,
+  });
 
   const current = state ?? INACTIVE_BYPASS;
   const rules = catalogue?.rules ?? [];
   const byRule = useMemo(() => new Map(rules.map((r) => [r.rule, r])), [rules]);
+
+  // Fixed categories first, then distinct past reasons that aren't already one of them — a flat,
+  // deduplicated list of suggestions for the datalist below. Order preserves recency, since
+  // `history()` returns newest-first.
+  const reasonSuggestions = useMemo(() => {
+    const seen = new Set(REASON_CATEGORIES);
+    const suggestions = [...REASON_CATEGORIES];
+    for (const row of history ?? []) {
+      const past = row.reason?.trim();
+      if (past && !seen.has(past)) {
+        seen.add(past);
+        suggestions.push(past);
+      }
+    }
+    return suggestions;
+  }, [history]);
 
   // Evidential controls surfaced first and labelled separately — these are the ones where
   // suspending changes what a FINISHED audit record means, not just what can be scheduled.
@@ -340,12 +387,19 @@ export const RuleBypassPanel: React.FC = () => {
           value={reason}
           onChange={(e) => { setReason(e.target.value); if (guidance) setGuidance(null); }}
           placeholder="e.g. Testing the mobile check-in flow before the RBL pilot"
+          // `list` is an assist, not a lock: a native datalist offers the fixed categories and
+          // past reasons as you type, but the input accepts anything — nothing here narrows what
+          // can be submitted.
+          list="rule-bypass-reason-suggestions"
           style={{
             width: '100%', padding: '8px 10px', fontSize: '13px', background: 'var(--bg-primary)',
             border: `1px solid ${reason.length > 0 && !reasonOk ? 'var(--danger)' : 'var(--border-color)'}`,
             borderRadius: '6px', color: 'var(--text-primary)', outline: 'none',
           }}
         />
+        <datalist id="rule-bypass-reason-suggestions">
+          {reasonSuggestions.map((r) => <option key={r} value={r} />)}
+        </datalist>
         {/* Silent disabling told nobody WHY the button wouldn't click. This says so, and turns
             green the moment it stops being true. */}
         <div style={{ fontSize: '11px', marginTop: '4px', color: reasonOk ? 'var(--success)' : 'var(--text-muted)' }}>

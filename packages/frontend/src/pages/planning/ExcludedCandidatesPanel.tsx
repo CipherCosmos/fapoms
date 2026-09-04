@@ -20,7 +20,35 @@ export interface ExcludedCandidate {
   distanceSource?: RouteSource | null;
   /** First day after a blocking leave, when the engine could compute it. */
   nextAvailableDate?: string | null;
+  /**
+   * Whether "Assign anyway" on this row can actually succeed. Absent/true for every exclusion
+   * this panel has always offered an override for. False only for a confirmed conflict-of-interest
+   * distance — enforced server-side regardless of `overrideReason`, so offering the button would
+   * let an operator type a considered justification and be refused for a reason never shown here.
+   */
+  overridable?: boolean;
 }
+
+/**
+ * A suggested justification, keyed off the engine's own exclusion category (`kind`) rather than
+ * the free-text `reason` sentence — `reason` carries interpolated numbers and exact policy wording
+ * (see `EXCLUSION_REASONS`/`EXCLUSION_KINDS` in `recommendation.engine.ts`) that make it a poor
+ * match key, while `kind` is the same small, stable set already used for the badge above.
+ *
+ * This only pre-fills the box (exactly as DATE-kind already did, see `startOverride` below) — it
+ * is never validated against, so an operator can always edit or clear it and type their own.
+ * ROTATION here is the "no repeat auditor on this branch" rule, not a weekly workload cap (this
+ * codebase has no distinct capacity-exclusion kind), so its suggested phrase says what is actually
+ * being waived rather than borrowing a name for a rule that doesn't exist here.
+ */
+const OVERRIDE_SUGGESTIONS: Partial<Record<NonNullable<ExcludedCandidate['kind']>, string>> = {
+  DISTANCE: 'Distance exception approved by ops',
+  ROTATION: 'Rotation rule waived for this assignment',
+  SKILLS: 'Skill or certification requirement waived by ops',
+  POLICY: 'Client specifically requested this assayer',
+};
+/** Fallback for a candidate with no `kind` at all. */
+const DEFAULT_OVERRIDE_SUGGESTION = 'Client specifically requested this assayer';
 
 const KIND_BADGE: Record<NonNullable<ExcludedCandidate['kind']>, { label: string; color: string; bg: string }> = {
   DATE: { label: 'AVAILABLE ANOTHER DAY', color: 'var(--success)', bg: 'var(--status-active-bg)' },
@@ -104,7 +132,11 @@ export const ExcludedCandidatesPanel: React.FC<{
     setOverrideError(null);
     // DATE-kind: the assignment is FOR a date — seed with the first day they're free.
     setDate(e.kind === 'DATE' ? (e.nextAvailableDate ?? nextOfferableDay(holidayDates ?? new Set())) : '');
-    setReason(e.kind === 'DATE' ? 'Assigned for a date the assayer is available' : '');
+    setReason(
+      e.kind === 'DATE'
+        ? 'Assigned for a date the assayer is available'
+        : (e.kind ? OVERRIDE_SUGGESTIONS[e.kind] ?? DEFAULT_OVERRIDE_SUGGESTION : DEFAULT_OVERRIDE_SUGGESTION),
+    );
   };
 
   const confirmOverride = async (candidate: ExcludedCandidate) => {
@@ -144,6 +176,11 @@ export const ExcludedCandidatesPanel: React.FC<{
             const badge = e.kind ? KIND_BADGE[e.kind] : null;
             const isDate = e.kind === 'DATE';
             const isOnboarding = e.kind === 'ONBOARDING';
+            // Only ever false for a confirmed conflict-of-interest distance today (see the
+            // `overridable` doc comment above) — but written against the flag itself, not the
+            // DISTANCE kind, since that kind also covers the unlocated-home case, which IS
+            // overridable and must keep its button.
+            const notOverridable = e.overridable === false;
             return (
               <div key={e.assayerId} style={{ padding: '7px 0', borderTop: '1px solid var(--border-color)' }}>
                 <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '8px' }}>
@@ -187,7 +224,19 @@ export const ExcludedCandidatesPanel: React.FC<{
                       Finish onboarding
                     </a>
                   )}
-                  {onAssignAnyway && !isOverriding && !isOnboarding && (
+                  {/* No "assign anyway" here either — see `overridable` above. Unlike onboarding
+                      there is no per-person fix to link to; this is a platform-wide setting, so
+                      the row just says so plainly instead of offering a button that would refuse
+                      every click with an error the operator had no way to predict. */}
+                  {notOverridable && !isOnboarding && (
+                    <span
+                      title="Enforced regardless of reason. A platform admin can lift this client's minimum-distance rule in Platform Settings, for every branch at once."
+                      style={{ padding: '3px 8px', fontSize: '10px', whiteSpace: 'nowrap', flexShrink: 0, color: 'var(--text-muted)', fontStyle: 'italic' }}
+                    >
+                      Not overridable here
+                    </span>
+                  )}
+                  {onAssignAnyway && !isOverriding && !isOnboarding && !notOverridable && (
                     <button
                       onClick={() => startOverride(e)}
                       className="btn btn-secondary"
@@ -216,7 +265,15 @@ export const ExcludedCandidatesPanel: React.FC<{
                       autoFocus={!isDate}
                       value={reason}
                       onChange={(ev) => setReason(ev.target.value)}
-                      onKeyDown={(ev) => { if (ev.key === 'Enter') confirmOverride(e); if (ev.key === 'Escape') setOverrideFor(null); }}
+                      // The value starts pre-filled with a suggested justification (see
+                      // OVERRIDE_SUGGESTIONS above) that looks identical to operator-typed text
+                      // once it's sitting in the box. Selecting it on focus means the first
+                      // keystroke replaces it instead of appending to it or being missed — so
+                      // confirming without typing still requires a deliberate Enter/click on
+                      // "Confirm", not an accidental one, while anyone who agrees with the
+                      // suggestion can still accept it unedited.
+                      onFocus={(ev) => ev.target.select()}
+                      onKeyDown={(ev) => { if (ev.key === 'Enter') void confirmOverride(e); if (ev.key === 'Escape') setOverrideFor(null); }}
                       placeholder={isDate ? 'Note (recorded)' : 'Reason for overriding this filter (recorded)'}
                       style={{ flex: 1, minWidth: '160px', fontSize: '11px', padding: '4px 7px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none' }}
                     />

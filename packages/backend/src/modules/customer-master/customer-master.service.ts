@@ -7,7 +7,7 @@ import { BranchEntity } from '../branch/branch.entity';
 import { ProjectEntity } from '../project/project.entity';
 import { CustomerMasterStatus, EventCategory } from '@fapoms/shared';
 import { AuditService } from '../../core/audit/audit.service';
-import { GlobalScope } from '../../infrastructure/scope/global-scope';
+import { GlobalScope, assertClientAllowed } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import * as xlsx from 'xlsx';
 
@@ -203,8 +203,38 @@ export class CustomerMasterService {
     if (unmappedBranchCodes > UNMAPPED_BRANCH_CODE_LIMIT) {
       blockReasons.push(`${unmappedBranchCodes} unknown branch codes (limit ${UNMAPPED_BRANCH_CODE_LIMIT})`);
     }
+    /**
+     * Zero usable account rows is never a legitimate batch — verified live: a garbage/corrupt
+     * file (an .xlsx-labelled blob that isn't really a spreadsheet, correct content-type header
+     * and all) parses via `xlsx.read` to an empty sheet with no error, and a real spreadsheet
+     * whose header row doesn't match any recognised alias (`Account Number`/`ACCOUNT_NO`/…) has
+     * every row skipped at the `if (!acc) continue` guard above — `recordEntities` stays empty
+     * either way. Both used to sail through as `RECONCILED, accepted: true`, "mapped cleanly",
+     * with `uniqueAccountsCount`/`coveredBranchCount` at 0. That is not a no-op: RECONCILED is
+     * what triggers the same-date supersede below, so uploading the wrong file — corrupt,
+     * blank, or just the wrong sheet — silently deactivated an already-good, fully-reconciled
+     * batch for that date and replaced it with an empty one, reporting success throughout.
+     * `recordEntities` is pushed for every row with a non-blank account number regardless of
+     * whether its branch matched (see the unmatched-accounts path above), so this cannot fire
+     * for a real batch that merely has unknown branch codes — only for one with nothing
+     * reconcilable in it at all.
+     */
+    if (recordEntities.length === 0) {
+      blockReasons.push(
+        totalRows === 0
+          ? 'the file had no readable rows — it may be corrupt, blank, or not a real spreadsheet'
+          : `none of the ${totalRows} row(s) had a recognisable Account Number column — check the header names`,
+      );
+    }
     const isBlocked = blockReasons.length > 0;
-    const blockReason = isBlocked ? `Too many exceptions to accept automatically: ${blockReasons.join('; ')}.` : null;
+    // "Too many exceptions" fits the two threshold reasons above but not "nothing was readable at
+    // all" — that is not an excess of exceptions, it is the absence of any usable data. Word the
+    // prefix accordingly when the empty-batch reason is the only one that fired.
+    const blockReason = isBlocked
+      ? recordEntities.length === 0 && blockReasons.length === 1
+        ? `This batch could not be reconciled: ${blockReasons[0]}.`
+        : `Too many exceptions to accept automatically: ${blockReasons.join('; ')}.`
+      : null;
     const status = isBlocked ? CustomerMasterStatus.REJECTED : CustomerMasterStatus.RECONCILED;
 
     return this.dataSource.transaction(async (manager) => {
@@ -223,11 +253,25 @@ export class CustomerMasterService {
       });
 
       if (status === CustomerMasterStatus.RECONCILED) {
-        await manager.createQueryBuilder()
+        // Scoped to this batch's own audit date — a project runs one batch per scheduled date
+        // (see `dailyRun`'s doc comment), and a version has no meaning outside the date it
+        // covers. Without the date in this `WHERE`, accepting a new batch for ANY one date
+        // silently deactivated the active version for every OTHER date in the same project too
+        // — caught live when an upload for 2026-09-05 reverted an unrelated, already-correct
+        // 2026-09-04 batch back to "no client data received". `auditDate IS NULL` for both sides
+        // keeps the one pre-existing caller that omits it (no date supplied) superseding across
+        // the whole project, exactly as before this fix — only a *dated* upload now gets a
+        // *dated* supersede.
+        const qb = manager.createQueryBuilder()
           .update(CustomerMasterVersionEntity)
           .set({ isActive: false, updatedBy: userId })
-          .where('projectId = :projectId AND isActive = true', { projectId })
-          .execute();
+          .where('projectId = :projectId AND isActive = true', { projectId });
+        if (auditDate) {
+          qb.andWhere('auditDate = :auditDate', { auditDate });
+        } else {
+          qb.andWhere('auditDate IS NULL');
+        }
+        await qb.execute();
       }
 
       const savedVersion = await manager.save(versionEntity);
@@ -343,6 +387,11 @@ export class CustomerMasterService {
    * run they belonged to.
    */
   async dailyRun(projectId: string, auditDate: string, scope?: Partial<GlobalScope>): Promise<any> {
+    if (scope?.clientId) {
+      const project = await this.projectRepository.findOne({ where: { id: projectId }, select: ['id', 'clientId'] });
+      assertClientAllowed(project?.clientId, scope);
+    }
+
     const version = await this.versionRepository.findOne({
       where: { projectId, auditDate, isActive: true },
       order: { versionNumber: 'DESC' },
@@ -511,7 +560,12 @@ export class CustomerMasterService {
    * region dimension only exists one level down, inside a version, which is exactly what
    * `findRecords` filters.
    */
-  async findByProject(projectId: string): Promise<CustomerMasterVersionEntity[]> {
+  async findByProject(projectId: string, scope?: Partial<GlobalScope>): Promise<CustomerMasterVersionEntity[]> {
+    if (scope?.clientId) {
+      const project = await this.projectRepository.findOne({ where: { id: projectId }, select: ['id', 'clientId'] });
+      assertClientAllowed(project?.clientId, scope);
+    }
+
     return this.versionRepository.find({
       where: { projectId, isActive: true },
       order: { versionNumber: 'DESC' },
@@ -539,6 +593,14 @@ export class CustomerMasterService {
     branchId?: string,
     scope?: Partial<GlobalScope>,
   ): Promise<{ records: CustomerRecordEntity[]; total: number }> {
+    if (scope?.clientId) {
+      const version = await this.versionRepository.findOne({ where: { id: versionId }, select: ['id', 'projectId'] });
+      const project = version
+        ? await this.projectRepository.findOne({ where: { id: version.projectId }, select: ['id', 'clientId'] })
+        : null;
+      assertClientAllowed(project?.clientId, scope);
+    }
+
     const regions = scope?.regions;
     const mode = regions && regions.length > 0 ? await this.regionGuard.stagedMode() : 'off';
 

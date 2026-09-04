@@ -19,7 +19,7 @@ import { ContactsPanel } from './clients/ContactsPanel';
 import { ContractsPanel } from './clients/ContractsPanel';
 import { BillingPanel } from './clients/BillingPanel';
 import { ConfigurationPanel } from './clients/ConfigurationPanel';
-import { useCurrentRoles, canDeleteClients } from '../hooks/useCurrentRoles';
+import { useCurrentRoles, canDeleteClients, canManageClients } from '../hooks/useCurrentRoles';
 import { visibleSelection, hiddenSelectionNote } from '../utils/selection';
 import { safeHttpUrl } from '../utils/url';
 
@@ -101,6 +101,7 @@ const Clients: React.FC = () => {
   
   const roles = useCurrentRoles();
   const canDelete = canDeleteClients(roles);
+  const canManage = canManageClients(roles);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 350);
@@ -123,7 +124,7 @@ const Clients: React.FC = () => {
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
 
-  const { data, isLoading, isFetching, refetch } = useClientsList({
+  const { data, isLoading, isFetching, isError, refetch } = useClientsList({
     page,
     limit,
     search: debouncedSearch || undefined,
@@ -302,9 +303,11 @@ const Clients: React.FC = () => {
           <button onClick={() => refetch()} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}>
             <RefreshCw size={15} className={isFetching ? 'spin' : ''} /> Refresh
           </button>
-          <button onClick={() => setShowCreate(true)} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}>
-            <Plus size={15} /> Add Client
-          </button>
+          {canManage && (
+            <button onClick={() => setShowCreate(true)} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}>
+              <Plus size={15} /> Add Client
+            </button>
+          )}
         </div>
       </div>
 
@@ -326,7 +329,10 @@ const Clients: React.FC = () => {
         )}
       </div>
 
-      {selectedIds.size > 0 && (
+      {/* Selecting rows is harmless with nothing that can act on the selection; the toolbar
+          that actually moves clients between lifecycle stages is what needs the gate — the
+          same `@Roles(ADMIN, OPERATIONS)` `PATCH /clients/bulk/lifecycle` enforces server-side. */}
+      {canManage && selectedIds.size > 0 && (
         <div style={{
           display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap',
           padding: '10px 14px', borderRadius: '8px',
@@ -431,6 +437,23 @@ const Clients: React.FC = () => {
           return next;
         })}
         emptyState={
+          isError ? (
+            /*
+             * `data` is `undefined` whether the list is genuinely empty or the request just
+             * failed — this page rendered the identical "No clients found, add your first
+             * client" empty state either way, with an "Add Client" button that would only
+             * confuse things further on a real outage. Same failed-fetch-as-empty gap Track C
+             * found and fixed on Billing's Payouts/Invoices tabs; same fix, this page's data.
+             */
+            <div style={{ padding: '16px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+              <Building2 size={34} style={{ color: 'var(--danger)', opacity: 0.5 }} />
+              <div style={{ color: 'var(--text-secondary)', fontSize: 13, fontWeight: 600 }}>Couldn&apos;t load clients</div>
+              <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>This is not saying there are none — the request failed.</div>
+              <button onClick={() => refetch()} className="btn btn-secondary" style={{ marginTop: 8, padding: '7px 14px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
+                <RefreshCw size={13} /> Retry
+              </button>
+            </div>
+          ) : (
           <div style={{ padding: '16px 0', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
             <Building2 size={34} style={{ color: 'var(--text-muted)', opacity: 0.4 }} />
             <div style={{ color: 'var(--text-secondary)', fontSize: 13, fontWeight: 600 }}>No clients found</div>
@@ -439,12 +462,13 @@ const Clients: React.FC = () => {
                 ? 'Try adjusting your search or filters.'
                 : 'Add your first client to start booking audits.'}
             </div>
-            {!(status || clientType || priority || debouncedSearch) && (
+            {!(status || clientType || priority || debouncedSearch) && canManage && (
               <button onClick={() => setShowCreate(true)} className="btn btn-primary" style={{ marginTop: 8, padding: '7px 14px', fontSize: 12, display: 'flex', alignItems: 'center', gap: 6 }}>
                 <Plus size={13} /> Add Client
               </button>
             )}
           </div>
+          )
         }
       />
 
@@ -480,12 +504,16 @@ const Clients: React.FC = () => {
                 <StatusBadge label={priorityLabel(selectedClient.priority)} color={PRIORITY_COLORS[selectedClient.priority]?.color ?? 'var(--text-muted)'} bg={PRIORITY_COLORS[selectedClient.priority]?.bg ?? 'var(--bg-surface-2)'} variant="tag" />
               </div>
               <div style={{ display: 'flex', gap: 6 }}>
-                <button onClick={() => setShowEdit(true)} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <Pencil size={14} /> Edit
-                </button>
-                <button onClick={() => setShowLifecycle(true)} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                  <ArrowLeftRight size={14} /> Transition
-                </button>
+                {canManage && (
+                  <>
+                    <button onClick={() => setShowEdit(true)} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <Pencil size={14} /> Edit
+                    </button>
+                    <button onClick={() => setShowLifecycle(true)} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <ArrowLeftRight size={14} /> Transition
+                    </button>
+                  </>
+                )}
                 {canDelete && (
                   <button onClick={() => { setDeleteConfirmText(''); setShowDeleteConfirm(true); }} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, border: '1px solid var(--status-cancelled-bg)', color: 'var(--danger)' }}>
                     <Trash2 size={14} /> Delete

@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 
 import { ONBOARDING_NEXT_STEP, EmpanelmentStatus } from '@fapoms/shared';
 
@@ -7,6 +7,7 @@ import {
   AssayerVettingTab, vettingLede, standingStance, STANDING_LABELS,
 } from './AssayerVettingTab';
 import { api } from '../../services/api';
+import { OTHER_STATUS_REASON } from './empanelment-reason-vocabulary';
 
 /**
  * Two things this tab was quietly getting wrong.
@@ -26,7 +27,18 @@ jest.mock('../../services/api', () => ({ api: { request: jest.fn() } }));
 jest.mock('../../components/ui', () => ({
   useToast: () => ({ toast: jest.fn() }),
   useConfirm: () => ({ confirm: () => Promise.resolve(true), confirmDialog: null }),
-  Select: ({ value, onChange }: any) => <input value={value} onChange={(e) => onChange(e.target.value)} />,
+  // A real (native) select rather than a plain input, so a test can see the actual option list —
+  // in particular the "as recorded"/"Other" escape-hatch entries the relationship and standing-
+  // reason dropdowns add for a value that predates their fixed lists (see reference-vocabulary.ts
+  // and empanelment-reason-vocabulary.ts). Nothing else on this tab drives a Select through
+  // `fireEvent.change`, so widening the stub from an <input> costs none of the existing tests.
+  Select: ({ value, onChange, options, 'aria-label': ariaLabel }: any) => (
+    <select aria-label={ariaLabel} value={value} onChange={(e) => onChange(e.target.value)}>
+      {options.map((o: any) => (
+        <option key={o.value} value={o.value}>{typeof o.label === 'string' ? o.label : o.value}</option>
+      ))}
+    </select>
+  ),
   AlertBanner: ({ message, children }: any) => (message || children ? <div role="alert">{message ?? children}</div> : null),
   SkeletonList: () => <div data-testid="skeleton" />,
   // The real one. This tab's five tables ARE DataTable now, so stubbing it would leave these
@@ -98,6 +110,38 @@ describe('AssayerVettingTab — references', () => {
     expect(JSON.parse(options.body)).toEqual({
       fullName: 'Correct Manager', relationship: 'Former manager', phone: null,
     });
+  });
+
+  it('offers the fixed relationship list, and keeps an unrecognised on-file value visible instead of blanking it', async () => {
+    // 'Ex-manager' stands in for a reference added before this dropdown existed — the very
+    // "Ex-manager"/"ex manager"/"Former Manager" drift RELATIONSHIPS was built to stop.
+    serve(dossier({
+      references: [
+        { id: 'r-2', fullName: 'Odd One', relationship: 'Ex-manager', phone: null, checkedAt: null },
+      ],
+    }));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+    await waitFor(() => expect(screen.getByText('Odd One')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Change'));
+    const select = screen.getByRole('combobox') as HTMLSelectElement;
+
+    // The list shared with the registration wizard, in full.
+    for (const r of ['Former manager', 'Former colleague', 'Current colleague', 'Client contact', 'Friend', 'Neighbour', 'Relative']) {
+      expect(within(select).getByText(r)).toBeInTheDocument();
+    }
+    // The value on file is neither dropped nor swapped for the first option in the list.
+    expect(select.value).toBe('Ex-manager');
+    expect(within(select).getByText('Ex-manager — as recorded')).toBeInTheDocument();
+
+    // And saving untouched sends that same string back, not the option it was displayed beside.
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(mockRequest).toHaveBeenCalledWith(
+      '/assayers/a-1/reference/r-2',
+      expect.objectContaining({ method: 'PUT' }),
+    ));
+    const [, options] = mockRequest.mock.calls.find(([url]) => url === '/assayers/a-1/reference/r-2')!;
+    expect(JSON.parse(options.body)).toMatchObject({ relationship: 'Ex-manager' });
   });
 
   it('deletes through the reference route when Remove is confirmed', async () => {
@@ -333,5 +377,71 @@ describe('AssayerVettingTab — standings the planner will not accept', () => {
       expect(STANDING_LABELS[status]).toBeTruthy();
       expect(STANDING_LABELS[status]).not.toBe(status);
     }
+  });
+});
+
+/**
+ * The "Why" behind a standing, picked from what HR actually writes rather than typed from
+ * scratch every time.
+ *
+ * `status_reason` is mostly the importer's own "Working per roster (Project Name: X)" — not
+ * something a person typed, so it is deliberately left out of the dropdown. What a person does
+ * type clusters into a short list; "Other" still takes anything, same as the plain textarea this
+ * replaced, and it stays optional.
+ */
+describe('AssayerVettingTab — why a standing is what it is', () => {
+  const standing = (over: Record<string, unknown> = {}) => ({
+    id: 'e-1', clientId: 'c-1', client: { name: 'First Bank' },
+    status: 'ACTIVE', statusReason: null, decidedAt: '2025-01-01', ...over,
+  });
+
+  it('lets "Other" carry a reason no cluster covers, end to end', async () => {
+    // references: [] — the default fixture's own reference row renders a "Change" button too,
+    // and this test is about the standing's, not that one.
+    serve(dossier({ references: [], empanelments: [standing({ status: 'REJECTED', statusReason: null })] }));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+    await waitFor(() => expect(screen.getByText('Change')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Change'));
+    // Two dropdowns are open at once here — Standing, then Why — so the reason one is the second.
+    const select = screen.getAllByRole('combobox')[1] as HTMLSelectElement;
+    expect(select.value).toBe(''); // nothing recorded yet
+    fireEvent.change(select, { target: { value: OTHER_STATUS_REASON } });
+
+    const freeText = await screen.findByPlaceholderText(/What was the reason\?/i);
+    fireEvent.change(freeText, { target: { value: 'Fee dispute over a rejected claim' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save standing' }));
+
+    await waitFor(() => expect(mockRequest).toHaveBeenCalledWith(
+      '/assayers/a-1/empanelment/c-1',
+      expect.objectContaining({ method: 'PUT' }),
+    ));
+    const [, options] = mockRequest.mock.calls.find(([url]) => url === '/assayers/a-1/empanelment/c-1')!;
+    expect(JSON.parse(options.body)).toMatchObject({ statusReason: 'Fee dispute over a rejected claim' });
+  });
+
+  it('opens an off-list value — including the importer\'s own text — straight into the free-text box, not blanked', async () => {
+    // Neither "Working per roster (Project Name: Alpha)" (importer-written) nor a pre-dropdown
+    // free-typed reason is one of the fixed clusters, so both must survive re-opening this form.
+    serve(dossier({
+      references: [],
+      empanelments: [standing({ statusReason: 'Working per roster (Project Name: Alpha)' })],
+    }));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
+    await waitFor(() => expect(screen.getByText('Change')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Change'));
+    const freeText = await screen.findByDisplayValue('Working per roster (Project Name: Alpha)');
+    expect(freeText.tagName).toBe('TEXTAREA');
+
+    // Saving without touching it keeps the exact string, rather than resetting to blank because
+    // it does not match a cluster.
+    fireEvent.click(screen.getByRole('button', { name: 'Save standing' }));
+    await waitFor(() => expect(mockRequest).toHaveBeenCalledWith(
+      '/assayers/a-1/empanelment/c-1',
+      expect.objectContaining({ method: 'PUT' }),
+    ));
+    const [, options] = mockRequest.mock.calls.find(([url]) => url === '/assayers/a-1/empanelment/c-1')!;
+    expect(JSON.parse(options.body)).toMatchObject({ statusReason: 'Working per roster (Project Name: Alpha)' });
   });
 });

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Check, X, Receipt, RefreshCw, MapPin, CheckCircle2 } from 'lucide-react';
 import { formatRupees } from '@fapoms/shared';
-import { DataTable, Column, Modal, useConfirm, useToast } from '../components/ui';
+import { DataTable, Column, Modal, Select, useConfirm, useToast } from '../components/ui';
 import {
   getPendingExpenses,
   reviewExpense,
@@ -28,6 +28,23 @@ import { safeHttpUrl } from '../utils/url';
  * told; a reason written once and applied to a batch would be a form letter attached to
  * people's own money, and would be worse than the extra clicks it saved.
  */
+/**
+ * The everyday reasons a claim gets rejected, offered as one-click options.
+ *
+ * There is no real rejection history in this database yet to mine these from — zero claims have
+ * ever been rejected — so the list is seeded from what a reviewer would plausibly type, the same
+ * way PayoutsTab's HOLD_REASONS was seeded before any hold had ever been recorded. "Other…" keeps
+ * the free text for anything these five don't cover, so nothing that could be said before is now
+ * blocked, and the backend still accepts any string — there is no enum behind this on the server.
+ */
+const EXPENSE_REJECTION_REASONS = [
+  'Receipt unreadable or missing',
+  'Not an eligible expense category',
+  'Amount exceeds policy limit',
+  'Duplicate submission',
+  'Claimed against the wrong assignment',
+];
+
 // Always rendered inside <Billing/>'s Expenses tab, never routed standalone — the
 // `embedded=false` branch this used to carry (its own page title) was unreachable and has
 // been removed.
@@ -39,7 +56,12 @@ export const ExpenseReview: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [rejecting, setRejecting] = useState<ExpenseClaim | null>(null);
+  const [rejectPreset, setRejectPreset] = useState('');
   const [rejectReason, setRejectReason] = useState('');
+  // A preset stands on its own; only "Other…" needs anything typed. Either way, what reaches
+  // the API — and what the assayer sees — is a plain sentence.
+  const isRejectOther = rejectPreset === '__other__';
+  const effectiveRejectReason = isRejectOther ? rejectReason.trim() : rejectPreset;
   // A travel claim whose movement trail the reviewer has opened.
   const [inspecting, setInspecting] = useState<ExpenseClaim | null>(null);
   // Ticked claim ids, and the progress line shown while a batch is being worked through.
@@ -192,15 +214,16 @@ export const ExpenseReview: React.FC = () => {
   };
 
   const confirmReject = async () => {
-    if (!rejecting || !rejectReason.trim()) return;
+    if (!rejecting || !effectiveRejectReason) return;
     const claim = rejecting;
     setBusyId(claim.id);
     try {
-      await reviewExpense(claim.id, false, rejectReason.trim());
+      await reviewExpense(claim.id, false, effectiveRejectReason);
       setClaims((prev) => prev.filter((c) => c.id !== claim.id));
       setSelected((s) => { const n = new Set(s); n.delete(claim.id); return n; });
       toast({ type: 'success', title: 'Claim rejected', message: 'The assayer will see the reason you gave.' });
       setRejecting(null);
+      setRejectPreset('');
       setRejectReason('');
     } catch (err: any) {
       toast({ type: 'error', title: 'Could not reject', message: `The claim has not been rejected. Try again in a moment. ${userMessage(err)}` });
@@ -303,7 +326,7 @@ export const ExpenseReview: React.FC = () => {
           </button>
           <button
             type="button"
-            onClick={() => { setRejecting(c); setRejectReason(''); }}
+            onClick={() => { setRejecting(c); setRejectPreset(''); setRejectReason(''); }}
             disabled={busyId === c.id || !!bulkProgress}
             title="Reject"
             style={btnStyle('var(--danger, #dc2626)')}
@@ -371,17 +394,17 @@ export const ExpenseReview: React.FC = () => {
 
       <Modal
         open={!!rejecting}
-        onClose={() => { setRejecting(null); setRejectReason(''); }}
+        onClose={() => { setRejecting(null); setRejectPreset(''); setRejectReason(''); }}
         title="Reject expense claim"
         footer={
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-            <button type="button" onClick={() => { setRejecting(null); setRejectReason(''); }} style={btnStyle('var(--text-muted)')}>
+            <button type="button" onClick={() => { setRejecting(null); setRejectPreset(''); setRejectReason(''); }} style={btnStyle('var(--text-muted)')}>
               Cancel
             </button>
             <button
               type="button"
               onClick={() => void confirmReject()}
-              disabled={!rejectReason.trim() || busyId === rejecting?.id}
+              disabled={!effectiveRejectReason || busyId === rejecting?.id}
               style={btnStyle('var(--danger, #dc2626)')}
             >
               <X size={15} /> Reject claim
@@ -398,16 +421,30 @@ export const ExpenseReview: React.FC = () => {
           </div>
         )}
         <label style={{ fontSize: 13, fontWeight: 600 }}>Reason (required)</label>
-        <textarea
-          value={rejectReason}
-          onChange={(e) => setRejectReason(e.target.value)}
-          rows={3}
-          placeholder="Explain why this claim is being rejected — the assayer will see this."
-          style={{
-            width: '100%', marginTop: 6, padding: 10, borderRadius: 8, resize: 'vertical',
-            border: '1px solid var(--border, #d1d5db)', background: 'var(--bg-surface, #fff)', color: 'inherit', fontSize: 13,
-          }}
-        />
+        <div style={{ marginTop: 6 }}>
+          <Select
+            value={rejectPreset}
+            onChange={setRejectPreset}
+            options={[
+              { value: '', label: 'Why is this claim being rejected? *' },
+              ...EXPENSE_REJECTION_REASONS.map((r) => ({ value: r, label: r })),
+              { value: '__other__', label: 'Other…' },
+            ]}
+            style={{ width: '100%' }}
+          />
+        </div>
+        {isRejectOther && (
+          <textarea
+            value={rejectReason}
+            onChange={(e) => setRejectReason(e.target.value)}
+            rows={3}
+            placeholder="Explain why this claim is being rejected — the assayer will see this."
+            style={{
+              width: '100%', marginTop: 8, padding: 10, borderRadius: 8, resize: 'vertical',
+              border: '1px solid var(--border, #d1d5db)', background: 'var(--bg-surface, #fff)', color: 'inherit', fontSize: 13,
+            }}
+          />
+        )}
       </Modal>
 
       <Modal

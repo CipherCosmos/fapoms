@@ -6,11 +6,14 @@ import { SystemRole } from '@fapoms/shared';
 import { Login } from './pages/Login';
 import { Layout } from './components/Layout';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { TelemetryTracker } from './components/TelemetryTracker';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { api } from './services/api';
+import { AppError } from './services/errors';
 import { clearSession, endSession } from './services/session';
 import ForcePasswordChange from './pages/ForcePasswordChange';
 import { CallProvider } from './components/calls/CallProvider';
+import { useToast } from './components/ui/Toast';
 
 /**
  * Route pages are code-split so the initial bundle carries only the login/shell critical path.
@@ -49,6 +52,7 @@ const ServiceLogs = React.lazy(() => import('./pages/admin/ServiceLogs'));
 const Zones = React.lazy(() => import('./pages/Zones'));
 const Settings = React.lazy(() => import('./pages/Settings'));
 const RuleBypassPanel = React.lazy(() => import('./pages/admin/RuleBypassPanel').then((m) => ({ default: m.RuleBypassPanel })));
+const CompliancePanel = React.lazy(() => import('./pages/admin/CompliancePanel').then((m) => ({ default: m.CompliancePanel })));
 import { LEGACY_PATHS as HR_LEGACY_PATHS } from './pages/hr/hr-destinations';
 
 const HrLayout = React.lazy(() => import('./pages/hr/HrLayout').then((m) => ({ default: m.HrLayout })));
@@ -192,6 +196,7 @@ export const App: React.FC = () => {
   const [isLoadingUser, setIsLoadingUser] = useState<boolean>(Boolean(token) && !currentUser);
   const navigate = useNavigate();
   const location = useLocation();
+  const { toast } = useToast();
 
   useEffect(() => {
     if (token) {
@@ -204,8 +209,23 @@ export const App: React.FC = () => {
           } catch {}
         })
         .catch((err) => {
-          console.warn('[App] User session validation failed:', err);
-          handleLogout();
+          // A 401 here means the token really is invalid or expired — sign out for real. Any
+          // other failure (a 500, a network blip, a dev backend mid-restart) is a transient
+          // problem with the *request*, not proof the session is bad, and used to be treated
+          // identically: this effect re-runs on every `token` change, but nothing here ever
+          // changed `token` on its own, so in practice it only ran once per mount — meaning a
+          // single unlucky moment to load the app (this session's shared dev environment saw
+          // several) silently revoked a real session's refresh token and dropped the user back
+          // to the login screen for no reason they caused. Keep the token and whatever user
+          // profile is already cached (`getCachedUser`, above) instead, and let the next
+          // successful request repair it.
+          const isAuthFailure = err instanceof AppError && err.status === 401;
+          if (isAuthFailure) {
+            console.warn('[App] User session validation failed:', err);
+            handleLogout();
+          } else {
+            console.warn('[App] Could not refresh the user profile; keeping the current session:', err);
+          }
         })
         .finally(() => {
           setIsLoadingUser(false);
@@ -214,6 +234,46 @@ export const App: React.FC = () => {
       setIsLoadingUser(false);
     }
   }, [token]);
+
+  /**
+   * `fapoms_token` is one `localStorage` key, and `api.ts` reads it fresh from `localStorage` on
+   * every single request rather than from this component's own `token` state — deliberately, so
+   * a refreshed token is picked up without a re-render. That also means every open tab on this
+   * origin silently shares one bearer identity: if a second tab signs in (or out) nearby, this
+   * tab keeps its own `currentUser` and UI exactly as they were, but every request it makes from
+   * that moment on goes out under the OTHER tab's token. Caught live this session — an admin tab
+   * started getting `403`s and, on decoding the token actually sitting in `localStorage`, it
+   * belonged to a different, lower-privileged user who had logged in nearby. Permission checks
+   * happened to hold that time; the reverse (a lower-privileged tab silently starts acting as a
+   * just-logged-in higher-privileged user, misattributing `createdBy`/`updatedBy` on any write it
+   * makes) is exactly as easy to construct and clearly worse.
+   *
+   * `storage` fires in every OTHER tab on this origin when one tab's `localStorage` changes — it
+   * never fires in the tab that made the change, which is exactly the tabs that need to hear
+   * about it. A full reload (not just re-fetching `/users/me`) is the honest fix: a stale render
+   * may already be showing figures, filters or drafts scoped to the wrong identity, and nothing
+   * short of a fresh mount is guaranteed to have picked all of that back up correctly. Left as an
+   * explicit, dismissable prompt rather than an automatic reload, so an unsaved form in this tab
+   * is never silently discarded — the risk this guards against is real but not urgent-enough to
+   * override that.
+   */
+  useEffect(() => {
+    const handleStorage = (event: StorageEvent) => {
+      if (event.key !== 'fapoms_token') return;
+      if (event.newValue === event.oldValue) return;
+      toast({
+        type: 'warning',
+        title: 'Signed in as someone else in another tab',
+        message: event.newValue
+          ? 'This tab is still showing your previous session, but requests from it now go out under a different one. Reload to continue safely.'
+          : 'Your session ended in another tab. Reload to sign in again.',
+        duration: 0,
+        action: { label: 'Reload', onClick: () => window.location.reload() },
+      });
+    };
+    window.addEventListener('storage', handleStorage);
+    return () => window.removeEventListener('storage', handleStorage);
+  }, [toast]);
 
   /**
    * Public, token-authorised page — rendered before the whole auth tree.
@@ -249,6 +309,16 @@ export const App: React.FC = () => {
     // skipped handleLogout must not start on top of someone else's cached data or scope.
     // The pending return path lives in sessionStorage, which clearSession does not touch.
     clearSession();
+    /**
+     * `clearSession` only wipes storage — it cannot touch this component's own `currentUser`
+     * state, which survives untouched if the previous session ended without ever calling
+     * `handleLogout` (a closed tab, an expired token). Layout and Sidebar render from that state
+     * directly and are NOT gated on `isLoadingUser` the way routed pages are behind
+     * ProtectedRoute, so without this a sign-in could paint the sidebar with the *previous*
+     * user's roles — a stale, more-privileged nav link — for the whole window until `/users/me`
+     * resolves and overwrites it below.
+     */
+    setCurrentUser(null);
     localStorage.setItem('fapoms_token', jwtToken);
     localStorage.setItem('fapoms_refresh_token', refreshToken);
     /**
@@ -328,6 +398,7 @@ export const App: React.FC = () => {
 
   return (
     <CallProvider>
+    <TelemetryTracker />
     {/*
       Two boundaries, not one, because they protect different things.
 
@@ -426,6 +497,7 @@ export const App: React.FC = () => {
           <Route path="/admin/notifications" element={<NotificationAdmin />} />
           <Route path="/admin/settings" element={<PlatformSettings />} />
           <Route path="/admin/logs" element={<ServiceLogs />} />
+          <Route path="/admin/compliance" element={<CompliancePanel />} />
           <Route path="/zones" element={<Zones />} />
           <Route path="/notifications" element={<Notifications />} />
           <Route path="/feedback" element={<FeedbackPage />} />

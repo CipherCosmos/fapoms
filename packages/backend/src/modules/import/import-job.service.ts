@@ -79,6 +79,13 @@ export interface RosterImportJobData {
   totalRows: number;
   /** An explicit sheet, when the caller knows better than the reader's own scoring. */
   sheetName: string | null;
+  /**
+   * Whether a sheet value that disagrees with a stored one should replace it. Defaults to
+   * `false` (fill blanks only, file a review issue on a disagreement) at every layer between
+   * here and `RosterImportService`, so an operator who never sets this gets the safe behavior
+   * unchanged.
+   */
+  overwrite: boolean;
 }
 
 /** Bull's own job states, plus the case where the job is gone. */
@@ -275,6 +282,7 @@ export class ImportJobService {
     fileName?: string | null;
     totalRows: number;
     sheetName?: string | null;
+    overwrite?: boolean;
   }): Promise<ImportJobStatus<never, unknown>> {
     if (params.fileBuffer.length > ImportJobService.MAX_QUEUED_FILE_BYTES) {
       throw new PayloadTooLargeException(
@@ -289,6 +297,7 @@ export class ImportJobService {
       fileName: params.fileName ?? null,
       totalRows: params.totalRows,
       sheetName: params.sheetName ?? null,
+      overwrite: params.overwrite ?? false,
     };
 
     const job = await this.queue.add(ROSTER_IMPORT_JOB, data, ImportJobService.JOB_OPTIONS);

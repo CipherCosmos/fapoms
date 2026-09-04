@@ -33,14 +33,53 @@ class FakeIssueRepo {
   docHolders = 0;
   queryLog: string[] = [];
 
+  /** Counts every `manager.query` call whose SQL is the bulk latest-generation read — the
+   * assertion that query count stays flat regardless of finding count reads this, not
+   * `queryLog.length`, so it is not thrown off by the unrelated backup/doc-count queries. */
+  bulkReadCalls = 0;
+  bulkUpdateCalls = 0;
+
   manager = {
-    query: jest.fn(async (sql: string) => {
+    query: jest.fn(async (sql: string, params: any[] = []) => {
       this.queryLog.push(sql);
       if (sql.includes('to_regclass')) {
         return [{ t: this.backupRows === null ? null : '_fix_backup_corrupt_dates' }];
       }
-      if (sql.includes('_fix_backup_corrupt_dates')) return this.backupRows ?? [];
+      if (sql.includes('FROM _fix_backup_corrupt_dates')) {
+        const rows = this.backupRows ?? [];
+        return sql.includes('WHERE assayer_code = $1') ? rows.filter((r) => r.assayer_code === params[0]) : rows;
+      }
       if (sql.includes('COUNT(DISTINCT assayer_id)')) return [{ people: this.docHolders }];
+      if (sql.includes('DISTINCT ON (source_column)')) {
+        this.bulkReadCalls += 1;
+        const [sourceSheet, columns] = params as [string, string[]];
+        const byColumn = new Map<string, any>();
+        for (const row of this.rows) {
+          if (row.sourceSheet !== sourceSheet || !columns.includes(row.sourceColumn)) continue;
+          const current = byColumn.get(row.sourceColumn);
+          if (!current || row.sourceRow > current.sourceRow) byColumn.set(row.sourceColumn, row);
+        }
+        return [...byColumn.values()].map((r) => ({
+          id: r.id, source_column: r.sourceColumn, source_row: r.sourceRow,
+          raw_value: r.rawValue, reason: r.reason, assayer_id: r.assayerId,
+          source_assayer_code: r.sourceAssayerCode, resolved_at: r.resolvedAt,
+          resolved_by: r.resolvedBy, resolution: r.resolution,
+        }));
+      }
+      if (sql.startsWith('UPDATE assayer_import_issues AS t')) {
+        this.bulkUpdateCalls += 1;
+        // Five params per row: id, rawValue, reason, assayerId, sourceAssayerCode.
+        for (let i = 0; i < params.length; i += 5) {
+          const row = this.rows.find((r) => r.id === params[i]);
+          if (!row) continue;
+          row.rawValue = params[i + 1];
+          row.reason = params[i + 2];
+          row.assayerId = params[i + 3];
+          row.sourceAssayerCode = params[i + 4];
+          row.updatedBy = 'SYSTEM';
+        }
+        return [];
+      }
       throw new Error(`FakeIssueRepo: unexpected SQL ${sql}`);
     }),
   };
@@ -71,6 +110,49 @@ class FakeIssueRepo {
       if (i >= 0) this.rows[i] = row; else this.rows.push(row);
     }
     return row;
+  });
+
+  /** `repository.insert(rows[])` — one call for the whole batch, exactly like the real bulk INSERT. */
+  insert = jest.fn(async (rows: any[]) => {
+    for (const values of rows) {
+      const row = { ...values };
+      const clash = this.rows.find((r) =>
+        r.sourceSheet === row.sourceSheet && r.sourceRow === row.sourceRow && r.sourceColumn === row.sourceColumn);
+      if (clash) throw new Error(`unique (sheet,row,column) violated: ${row.sourceColumn} @ ${row.sourceRow}`);
+      row.id = `issue-${++this.seq}`;
+      row.resolvedAt ??= null;
+      row.resolvedBy ??= null;
+      row.resolution ??= null;
+      this.rows.push(row);
+    }
+    return { identifiers: rows.map(() => ({})) };
+  });
+
+  /** Stands in for `repository.createQueryBuilder().update(...).set(...).whereInIds(...).execute()` —
+   * the bulk auto-close write. Only the `.update().set().whereInIds().execute()` chain the service
+   * actually calls is implemented. */
+  createQueryBuilder = jest.fn(() => {
+    let pendingSet: any = null;
+    const builder: any = {
+      update: () => builder,
+      set: (values: any) => { pendingSet = values; return builder; },
+      whereInIds: (ids: string[]) => {
+        builder.__ids = ids;
+        return builder;
+      },
+      execute: async () => {
+        for (const id of builder.__ids ?? []) {
+          const row = this.rows.find((r) => r.id === id);
+          if (!row) continue;
+          row.resolvedAt = typeof pendingSet.resolvedAt === 'function' ? new Date() : pendingSet.resolvedAt;
+          row.resolvedBy = pendingSet.resolvedBy;
+          row.resolution = pendingSet.resolution;
+          row.updatedBy = pendingSet.updatedBy;
+        }
+        return {};
+      },
+    };
+    return builder;
   });
 
   seed(row: any) {
@@ -138,7 +220,13 @@ describe('DataIntegrityService', () => {
     const mod = await Test.createTestingModule({
       providers: [
         DataIntegrityService,
-        { provide: getRepositoryToken(AssayerEntity), useValue: { find: jest.fn(async () => people) } },
+        {
+          provide: getRepositoryToken(AssayerEntity),
+          useValue: {
+            find: jest.fn(async () => people),
+            findOne: jest.fn(async (opts: any) => people.find((p) => p.id === opts.where.id) ?? null),
+          },
+        },
         {
           provide: getRepositoryToken(AssayerDocumentEntity),
           useValue: {
@@ -793,5 +881,132 @@ describe('DataIntegrityService', () => {
       expect(title.length).toBeLessThanOrEqual(45);
       expect(`${title} · ${longestCode}`.length).toBeLessThanOrEqual(120);
     }
+  });
+
+  // ── Query count is flat, not O(findings) ─────────────────────────────────
+
+  /**
+   * The whole point of `writeFindings`/`autoClose` being bulk operations: one 133-finding sweep
+   * used to cost 7,719 `manager.query`/`save` calls on the dev DB (2 per finding: a `findOne`
+   * then a `save`) plus one `save` per auto-closed row. A single DISTINCT-ON read plus at most
+   * one INSERT and one UPDATE must cover the whole batch regardless of how many findings or
+   * closures are in it — asserted here by running the same check at two very different finding
+   * counts and requiring the bulk-call counters not to move.
+   */
+  it('writes any number of findings in the same fixed number of bulk queries — not one pair per finding', async () => {
+    const many = Array.from({ length: 40 }, (_, i) => person({
+      assayerCode: `AS${String(i).padStart(4, '0')}`, region: null,
+      phone: `9${String(1000000 + i).padStart(9, '0')}`, // distinct — a shared default would also raise duplicate-phone findings
+    }));
+
+    people = [person({ assayerCode: 'AS9000', region: null })];
+    await scan();
+    const oneFindingReads = issues.bulkReadCalls;
+
+    issues = new (issues.constructor as any)();
+    const mod = await Test.createTestingModule({
+      providers: [
+        DataIntegrityService,
+        { provide: getRepositoryToken(AssayerEntity), useValue: {
+          find: jest.fn(async () => many),
+          findOne: jest.fn(async (opts: any) => many.find((p) => p.id === opts.where.id) ?? null),
+        } },
+        { provide: getRepositoryToken(AssayerDocumentEntity), useValue: { count: jest.fn(async () => 0) } },
+        { provide: getRepositoryToken(AssayerClientEmpanelmentEntity), useValue: { find: jest.fn(async () => []) } },
+        { provide: getRepositoryToken(AssayerImportIssueEntity), useValue: issues },
+      ],
+    }).compile();
+    const manyScanService: DataIntegrityService = mod.get(DataIntegrityService);
+    const manySummary = await manyScanService.scan();
+
+    expect(manySummary.findings).toBe(40); // 40 distinct "No region" findings this time
+    expect(issues.bulkReadCalls).toBe(oneFindingReads); // one bulk read either way
+    expect(issues.bulkUpdateCalls).toBe(0); // both runs are pure inserts, so no UPDATE at all
+  });
+
+  // ── The narrow column list `select` reads ────────────────────────────────
+
+  it('asks the assayers repository for a select list, not the whole ~80-column entity', async () => {
+    const assayersRepo: any = { find: jest.fn(async () => []), findOne: jest.fn() };
+    const mod = await Test.createTestingModule({
+      providers: [
+        DataIntegrityService,
+        { provide: getRepositoryToken(AssayerEntity), useValue: assayersRepo },
+        { provide: getRepositoryToken(AssayerDocumentEntity), useValue: { count: jest.fn(async () => 0) } },
+        { provide: getRepositoryToken(AssayerClientEmpanelmentEntity), useValue: { find: jest.fn(async () => []) } },
+        { provide: getRepositoryToken(AssayerImportIssueEntity), useValue: new (issues.constructor as any)() },
+      ],
+    }).compile();
+    await mod.get(DataIntegrityService).scan();
+
+    expect(assayersRepo.find).toHaveBeenCalledTimes(1);
+    const opts = assayersRepo.find.mock.calls[0][0];
+    expect(Array.isArray(opts.select)).toBe(true);
+    // The full entity carries far more columns than this — the point is that it is narrowed at all.
+    expect(opts.select.length).toBeLessThan(30);
+    expect(opts.select).toEqual(expect.arrayContaining(['panNumber', 'aadhaarNumber', 'bankAccountNumber']));
+  });
+
+  // ── The incremental path shares the same check logic as the full sweep ──
+
+  describe('incrementalScan', () => {
+    it('raises the same finding for one edited person as the full sweep would', async () => {
+      people = [person({ assayerCode: 'AS0001', region: null })];
+
+      const summary = await service.incrementalScan('id-AS0001');
+
+      expect(summary.inserted).toBe(1);
+      const rows = issues.scanner();
+      expect(rows).toHaveLength(1);
+      expect(rows[0].sourceColumn).toBe(`${CHECK_TITLES.noRegion} · AS0001`);
+    });
+
+    it('closes only that person\'s own finding when the defect is fixed, leaving everyone else alone', async () => {
+      people = [
+        person({ assayerCode: 'AS0001', region: null }),
+        person({ assayerCode: 'AS0002', region: null }),
+      ];
+      await scan(); // full sweep seeds both open findings
+
+      (people[0] as any).region = 'West'; // AS0001's gap is fixed
+      const summary = await service.incrementalScan('id-AS0001');
+
+      expect(summary.autoClosed).toBe(1);
+      const stillOpenFor2 = issues.scanner(
+        (r) => r.sourceColumn === `${CHECK_TITLES.noRegion} · AS0002` && !r.resolvedAt,
+      );
+      expect(stillOpenFor2).toHaveLength(1); // untouched by AS0001's incremental run
+      const closedFor1 = issues.scanner((r) => r.sourceColumn === `${CHECK_TITLES.noRegion} · AS0001`)[0];
+      expect(closedFor1.resolvedAt).not.toBeNull();
+    });
+
+    it('finds a duplicate PAN against the roster without recomputing every check over everyone', async () => {
+      people = [
+        person({ assayerCode: 'AS0001', panNumber: 'ABCDE1234F', phone: '9111111111' }),
+        person({ assayerCode: 'AS0002', panNumber: 'ABCDE1234F', phone: '9222222222' }),
+      ];
+
+      const summary = await service.incrementalScan('id-AS0002');
+
+      expect(summary.inserted).toBe(1);
+      const rows = issues.scanner((r) => r.sourceColumn.startsWith(CHECK_TITLES.duplicatePan));
+      expect(rows).toHaveLength(1);
+      expect(rows[0].rawValue).toBe('AS0001 and AS0002');
+    });
+
+    it('never writes the two aggregate, population-wide checks', async () => {
+      people = [person({ assayerCode: 'AS0001', latitude: null, longitude: null })];
+
+      await service.incrementalScan('id-AS0001');
+
+      expect(issues.scanner((r) => r.sourceColumn === CHECK_TITLES.noCoordinates)).toHaveLength(0);
+    });
+
+    it('does nothing for a person who no longer exists — the full sweep is the backstop', async () => {
+      people = [];
+      const summary = await service.incrementalScan('missing-id');
+      expect(summary.findings).toBe(0);
+      expect(issues.rows).toHaveLength(0);
+    });
   });
 });

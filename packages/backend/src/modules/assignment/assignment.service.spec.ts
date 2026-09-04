@@ -12,7 +12,7 @@ import { NotificationDispatchService } from '../notifications/notification-dispa
 import { PushNotificationService } from '../notifications/push-notification.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
-import { AssignmentStatus, ProjectBranchStatus, EventCategory, Priority } from '@fapoms/shared';
+import { AssignmentStatus, ProjectBranchStatus, EventCategory, Priority, businessTodayDateKey } from '@fapoms/shared';
 import { ProjectService } from '../project/project.service';
 import { ProjectQueryService } from '../project/project-query.service';
 import { AssayerService } from '../assayer/assayer.service';
@@ -29,6 +29,7 @@ import { FeePolicyService } from '../pricing/fee-policy.service';
 import { DocumentService } from '../document/document.service';
 import { RuleBypassService } from '../platform/rule-bypass/rule-bypass.service';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
+import { BillingEngineService } from '../billing-engine/billing-engine.service';
 
 describe('AssignmentService', () => {
   let service: AssignmentService;
@@ -76,6 +77,9 @@ describe('AssignmentService', () => {
     // Accepting work turns location sharing on: the movement trail is what will confirm the travel
     // being paid for, so the obligation starts with the job.
     enableLiveTrackingForActiveWork: jest.fn().mockResolvedValue(undefined),
+    // The other half of that promise: sharing stops once the job ends and no other committed
+    // work remains.
+    disableLiveTrackingWhenWorkEnds: jest.fn().mockResolvedValue(undefined),
     getActiveCommercialProfile: jest.fn().mockResolvedValue({ baseFee: 1500 }),
   };
 
@@ -150,6 +154,10 @@ const mockNotificationService = {
 
   const mockDataSource = {
     transaction: jest.fn((cb) => cb({
+      // The counter-offer CAS re-reads the assignment FOR UPDATE inside the transaction; serve it
+      // from whatever the repository's findOne last resolved (the object the test set up), so the
+      // locked re-read sees the same row.
+      findOne: jest.fn((_entity: any, _opts?: any) => mockAssignmentRepo.findOne()),
       save: jest.fn((arg) => Promise.resolve(arg)),
       getRepository: jest.fn().mockReturnValue({
         findOne: jest.fn(),
@@ -283,6 +291,9 @@ const mockNotificationService = {
         { provide: OperationsInboxService, useValue: { resolveChannels: jest.fn().mockResolvedValue(new Map()) } },
         { provide: RoutingService, useValue: mockRoutingService },
         { provide: ValidationService, useValue: { createAssessment: jest.fn().mockResolvedValue({}) } },
+        // Only reached by the owner-decision `reopen` path (billing.service.spec.ts covers
+        // voidPayable itself) — a stub is enough for every other test in this suite.
+        { provide: BillingEngineService, useValue: { voidPayable: jest.fn() } },
       ],
     }).compile();
 
@@ -509,6 +520,51 @@ const mockNotificationService = {
         'ProjectBranchAssignmentConfirmedEvent',
         expect.objectContaining({ aggregateId: 'pb-1' }),
       );
+    });
+  });
+
+  /**
+   * `completion_date` is a `date` column, not a timestamp. Writing `new Date()` into it lets the
+   * driver serialise the value under UTC, so a completion recorded between 00:00 and 05:30 IST
+   * — before UTC has rolled to the same calendar day — lands one day early. `businessTodayDateKey`
+   * is the IST-anchored helper the rest of the codebase already uses for exactly this column type
+   * (see `receivedDate` in billing-engine.service.ts).
+   */
+  describe('completeAssignment — completion date is IST calendar day, not UTC-shifted', () => {
+    const checkedIn = () => ({
+      id: 'asn-1', status: AssignmentStatus.CHECKED_IN, checkedInAt: new Date('2026-08-20T09:00:00Z'),
+      completionDate: null, assayerId: 'assayer-1',
+    });
+
+    it('writes businessTodayDateKey() — a string, never a Date instance', async () => {
+      mockAssignmentRepo.findOne.mockResolvedValue(checkedIn());
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+
+      const result = await service.completeAssignment('asn-1', 'user-1');
+
+      // The mutation this proves: `assignment.completionDate = new Date();` also "succeeds" and
+      // "looks like a date", so a loose assertion (`toBeTruthy()`, `toBeDefined()`) would not
+      // catch reverting the fix. A Date instance fails both of these; only the string key passes.
+      expect(typeof result.completionDate).toBe('string');
+      expect(result.completionDate).toBe(businessTodayDateKey());
+    });
+
+    it('does not silently drift to the previous UTC day when it is already past midnight IST', async () => {
+      // 2026-08-19T20:00:00Z is 2026-08-20T01:30 IST — after midnight IST, still the previous
+      // calendar day in UTC. `new Date().toISOString().slice(0, 10)` here reads '2026-08-19';
+      // the correct business day is '2026-08-20'.
+      jest.useFakeTimers().setSystemTime(new Date('2026-08-19T20:00:00Z'));
+      try {
+        mockAssignmentRepo.findOne.mockResolvedValue(checkedIn());
+        mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+
+        const result = await service.completeAssignment('asn-1', 'user-1');
+
+        expect(result.completionDate).toBe('2026-08-20');
+        expect(result.completionDate).not.toBe('2026-08-19');
+      } finally {
+        jest.useRealTimers();
+      }
     });
   });
 
@@ -775,6 +831,154 @@ const mockNotificationService = {
 
       // Nothing may be written when the date is rejected.
       expect(mockAssignmentRepo.save).not.toHaveBeenCalled();
+    });
+
+    /**
+     * `slaDueDate` measures "attend by the scheduled day". Moving the date without re-arming it
+     * left the old deadline standing: a reschedule pushed a week out still read BREACHED against
+     * a day that no longer applied, and a pull-in got a deadline later than the actual visit —
+     * the SLA scanner and the falling-behind board would both be judging the wrong date.
+     */
+    it('re-arms slaDueDate to the new scheduled day, the same rule acceptance uses', async () => {
+      const assignment = {
+        id: 'asn-1', status: AssignmentStatus.ACCEPTED,
+        scheduledDate: new Date('2026-08-01'),
+        // Stale: set for the OLD date, and already breached under it.
+        slaDueDate: new Date('2026-08-01T23:59:59+05:30'),
+        slaStatus: 'BREACHED',
+        projectBranch: { id: 'pb-1', status: ProjectBranchStatus.SCHEDULED },
+      };
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+      mockAssignmentRepo.save.mockImplementation((a: any) => Promise.resolve(a));
+
+      const result = await service.scheduleAudit('asn-1', 'user-1', '2026-08-20');
+
+      expect(result.slaDueDate).toEqual(new Date('2026-08-20T23:59:59+05:30'));
+      // The mutation this proves: deleting the two `slaDueDate`/`slaStatus` re-arm lines in
+      // scheduleAudit leaves this assertion comparing against the stale 2026-08-01 deadline.
+      expect(result.slaDueDate).not.toEqual(new Date('2026-08-01T23:59:59+05:30'));
+      expect(result.slaStatus).toBe('COMPLIANT');
+    });
+  });
+
+  /**
+   * A retried counter-offer POST (flaky field connection) carries the same `clientRequestId` as
+   * the attempt it is retrying. Without recognising that, the retry read as a genuine second
+   * negotiation round: `negotiationCount` incremented again and `proposedFee` was recomputed
+   * from a `previousFee` that was already the retried value — silently compounding a travel
+   * figure the assayer only ever typed once.
+   */
+  describe('proposeCounterFee — idempotency by clientRequestId', () => {
+    const REQUEST_ID = 'b3e1f7a2-4c5d-4e6f-8a9b-0c1d2e3f4a5b';
+
+    const openOffer = () => ({
+      id: 'asn-1', status: AssignmentStatus.PENDING, negotiationCount: 0,
+      proposedFee: 2000, quotedBaseFee: 1700, quotedTravelFee: 300,
+      lastCounterRequestId: null,
+      projectBranch: { id: 'pb-1', status: ProjectBranchStatus.NEGOTIATION },
+    });
+
+    it('applies the first counter-offer and stamps the request id', async () => {
+      const assignment = openOffer();
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+
+      const result = await service.proposeCounterFee('asn-1', 'user-1', 500, 'more travel', REQUEST_ID);
+
+      expect(result.negotiationCount).toBe(1);
+      expect(result.lastCounterRequestId).toBe(REQUEST_ID);
+      expect(result.proposedFee).toBe(2200); // 1700 base + 500 travel
+    });
+
+    it('returns the current state unchanged on a repeat with the same clientRequestId', async () => {
+      const assignment = {
+        ...openOffer(),
+        negotiationCount: 1, proposedFee: 2200, counterTravelFee: 500,
+        lastCounterRequestId: REQUEST_ID,
+      };
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+
+      const result = await service.proposeCounterFee('asn-1', 'user-1', 500, 'more travel', REQUEST_ID);
+
+      // The mutation this proves: removing the `if (clientRequestId && assignment
+      // .lastCounterRequestId === clientRequestId) return assignment;` guard in
+      // AssignmentService.proposeCounterFee makes negotiationCount increment to 2 here.
+      expect(result.negotiationCount).toBe(1);
+      expect(result.proposedFee).toBe(2200);
+      expect(mockAssignmentRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('still increments on a genuinely new counter-offer (different clientRequestId)', async () => {
+      const assignment = {
+        ...openOffer(),
+        negotiationCount: 1, proposedFee: 2200, counterTravelFee: 500,
+        lastCounterRequestId: REQUEST_ID,
+      };
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+
+      const result = await service.proposeCounterFee(
+        'asn-1', 'user-1', 800, 'more still', 'a1b2c3d4-0000-4000-8000-000000000001',
+      );
+
+      expect(result.negotiationCount).toBe(2);
+      expect(result.proposedFee).toBe(2500); // 1700 base + 800 travel
+    });
+
+    it('still increments when no clientRequestId is sent at all — no key, no dedupe', async () => {
+      const assignment = openOffer();
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+
+      const result = await service.proposeCounterFee('asn-1', 'user-1', 500, 'more travel');
+
+      expect(result.negotiationCount).toBe(1);
+      expect(result.lastCounterRequestId).toBeNull();
+    });
+
+    /**
+     * The cap is enforced on the LOCKED count inside the transaction, not the unlocked read — this
+     * is the compare-and-swap that closes the concurrency bug where N parallel counter-offers all
+     * saw the same stale count and bypassed the limit (confirmed live: 6 concurrent left count at 2).
+     * At the cap the shared auto-decline (rejectOffer) runs and nothing is incremented.
+     */
+    it('auto-declines instead of incrementing when the locked count is already at the cap', async () => {
+      const atCap = { ...openOffer(), negotiationCount: 3 }; // DEFAULT_MAX_NEGOTIATION_ROUNDS
+      mockAssignmentRepo.findOne.mockResolvedValue(atCap);
+      const reject = jest
+        .spyOn(service, 'rejectOffer')
+        .mockResolvedValue({ id: 'asn-1', status: AssignmentStatus.REJECTED } as any);
+
+      const result = await service.proposeCounterFee('asn-1', 'user-1', 500, 'past the cap');
+
+      expect(reject).toHaveBeenCalledWith('asn-1', 'user-1', expect.stringContaining('Negotiation limit reached'));
+      expect(result.status).toBe(AssignmentStatus.REJECTED);
+      reject.mockRestore();
+    });
+
+    /**
+     * Found live 2026-09-04: a mobile UI bug let a pre-filled counter-fee field concatenate
+     * instead of replace ("2200" typed over as "2600" → 22002600), and the only check on the way
+     * in was `counterTravel < 0` — no upper bound at all. A ₹2.2-crore travel counter-offer for a
+     * routine branch audit was accepted as a genuine PENDING offer with no complaint. This proves
+     * the fix: a caller-supplied figure absurdly above the safety ceiling is refused before it
+     * ever reaches the locked transaction — `save` must never be called.
+     */
+    it('refuses a counter travel fee above the safety ceiling, before touching the locked row', async () => {
+      const assignment = openOffer();
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+
+      await expect(
+        service.proposeCounterFee('asn-1', 'user-1', 22_002_600, 'typo, not a real figure'),
+      ).rejects.toThrow(/safety ceiling/);
+      expect(mockAssignmentRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('accepts a genuinely large but plausible counter travel fee under the ceiling', async () => {
+      const assignment = openOffer();
+      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+
+      const result = await service.proposeCounterFee('asn-1', 'user-1', 12_000, 'a genuine long-distance dispute');
+
+      expect(result.negotiationCount).toBe(1);
+      expect(result.proposedFee).toBe(13_700); // 1700 base + 12,000 travel
     });
   });
 
@@ -1263,14 +1467,17 @@ const mockNotificationService = {
     };
 
     beforeEach(() => {
-      mockScheduleRepoViaDataSource.save.mockClear();
+      // The write moved onto the transaction's own manager (see the ordering fix in
+      // executeAssignmentTransition), so it now lands on mockScheduleRepoInTx, not the
+      // dataSource-keyed double.
+      mockScheduleRepoInTx.save.mockClear();
       mockConstraintEvaluator.checkDateAvailability.mockResolvedValue({ passed: true });
     });
 
     it('writes the calendar entry when the date is available', async () => {
       await acceptFlow().catch(() => undefined);
       expect(mockConstraintEvaluator.checkDateAvailability).toHaveBeenCalled();
-      expect(mockScheduleRepoViaDataSource.save).toHaveBeenCalled();
+      expect(mockScheduleRepoInTx.save).toHaveBeenCalled();
     });
 
     it('writes NO calendar entry when the date is refused', async () => {
@@ -1281,7 +1488,7 @@ const mockNotificationService = {
         passed: false, reason: 'Assayer is on approved leave on 2026-09-01.',
       });
       await acceptFlow().catch(() => undefined);
-      expect(mockScheduleRepoViaDataSource.save).not.toHaveBeenCalled();
+      expect(mockScheduleRepoInTx.save).not.toHaveBeenCalled();
     });
 
     it('still accepts the offer when the date is refused', async () => {
@@ -1298,7 +1505,42 @@ const mockNotificationService = {
       mockConstraintEvaluator.checkDateAvailability.mockImplementation(() => { throw new Error('db down'); });
       const result = await acceptFlow();
       expect(result.status).toBe(AssignmentStatus.ACCEPTED);
-      expect(mockScheduleRepoViaDataSource.save).not.toHaveBeenCalled();
+      expect(mockScheduleRepoInTx.save).not.toHaveBeenCalled();
+    });
+
+    /**
+     * A concurrent cancel wins the compare-and-swap race that `executeAssignmentTransition` runs
+     * under `SELECT ... FOR UPDATE`. Before this fix, the schedule write happened BEFORE that
+     * check — so the calendar entry and the SCHEDULE_DISPATCHED notification had already gone
+     * out by the time the CAS discovered the assignment had actually moved elsewhere, leaving
+     * the assayer holding a dispatched, CONFIRMED schedule for a job that was never accepted.
+     */
+    it('writes no schedule and sends no dispatch notification when a concurrent cancel wins the CAS race', async () => {
+      // Force the FOR UPDATE re-read to disagree with both prevStatus (PENDING) and
+      // targetStatus (ACCEPTED) — exactly what a concurrent cancel produces.
+      mockUnitOfWork.run.mockImplementationOnce(async (work: any) =>
+        work(
+          {
+            save: jest.fn((arg: any) => Promise.resolve(arg)),
+            query: jest.fn(async (sql: string) => {
+              if (/FOR UPDATE/.test(sql)) return [{ status: AssignmentStatus.CANCELLED }];
+              return [];
+            }),
+            getRepository: jest.fn(() => ({ findOne: jest.fn(), save: jest.fn(), create: jest.fn((a: any) => a) })),
+          },
+          jest.fn(),
+        ),
+      );
+
+      await expect(acceptFlow()).rejects.toThrow(/changed while you were acting on it/);
+
+      // The mutation this proves: if the schedule write (autoScheduleOnAcceptance) ran BEFORE
+      // the FOR UPDATE compare-and-swap — as it did prior to this fix — this call would have
+      // already happened by the time the CAS throws, regardless of the eventual conflict.
+      expect(mockScheduleRepoInTx.save).not.toHaveBeenCalled();
+      expect(mockNotificationDispatch.emitSafe).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: 'SCHEDULE_DISPATCHED' }),
+      );
     });
   });
 });

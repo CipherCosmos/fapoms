@@ -14,7 +14,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Allow } from 'class-validator';
 import { SystemRole } from '@fapoms/shared';
 
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../../modules/auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AnyAuthenticated } from '../../modules/auth/guards';
 import { PlatformSettingsService, ResolvedSetting } from './platform-settings.service';
 import { SETTINGS_GROUPS } from './settings.registry';
 import { AuditService } from '../../core/audit/audit.service';
@@ -69,9 +69,28 @@ export class PlatformSettingsController {
    * Deliberately open to any authenticated user, unlike the rest of this controller (which is
    * super-administrator only): the field app is not staff, and these are the operating rules
    * its user is already subject to — not configuration. Values only, no provenance, no secrets.
+   *
+   * `@Roles(...Object.values(SystemRole))` used to stand in for "everyone" here, which is a
+   * closed, compile-time list of the eight built-in roles — it does not, and cannot, include a
+   * role created through the admin role-builder. HR_OPERATOR (one such custom role) got a plain
+   * 403 from this route: RolesGuard found its name in neither `@Roles` nor a `@RequirePermissions`
+   * fallback (this route declares none — there is no "limits:view" permission to hold, it is not
+   * configuration) and failed closed, the same way every *future* custom role would too. What
+   * this route actually means is "any signed-in principal, whatever their role" — `@AnyAuthenticated`
+   * is the decorator this codebase already uses for exactly that, e.g. the feedback channel's
+   * reporter-side routes.
+   *
+   * The bare `@AnyAuthenticated()` is not enough by itself: `RolesGuard` reads `@Roles` with
+   * `Reflector.getAllAndOverride([handler, class])`, which falls back to the CLASS-level
+   * `@Roles(...SETTINGS_ADMIN_ROLES)` above whenever the handler carries no `@Roles` metadata of
+   * its own — so without the explicit empty `@Roles()` here, this route would silently inherit
+   * "administrators only" instead of becoming open, which is the opposite of this fix. The empty
+   * list is what makes `requiredRoles.length === 0` true, which is what lets the guard even look
+   * at `@AnyAuthenticated`.
    */
   @Get('limits')
-  @Roles(...Object.values(SystemRole))
+  @Roles()
+  @AnyAuthenticated()
   @ApiOperation({ summary: 'Operational limits the web and mobile clients must render' })
   async limits(): Promise<{ success: boolean; data: { maxNegotiationRounds: number; checkInGeofenceMeters: number; maxSingleExpenseClaim: number } }> {
     const [maxNegotiationRounds, checkInGeofenceMeters, maxSingleExpenseClaim] = await Promise.all([

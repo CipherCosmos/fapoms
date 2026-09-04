@@ -22,10 +22,12 @@ import { SystemRole, DocumentStatus, DocumentType, AssignmentStatus , DispatchMe
 import { ValidationService } from '../validation/validation.service';
 import { DocumentAccessTokenService } from './document-access-token.service';
 import { ChunkedUploadService } from './chunked-upload.service';
-import { assertUploadAllowed, MAX_UPLOAD_BYTES, MAX_RESUMABLE_UPLOAD_BYTES } from './upload-validation';
+import { assertUploadAllowed, MAX_UPLOAD_BYTES, MAX_RESUMABLE_UPLOAD_BYTES, SPREADSHEET_UPLOAD_TYPES, SCAN_UPLOAD_TYPES } from './upload-validation';
 import { AssignmentService } from '../assignment/assignment.service';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { AuditRead } from '../../core/audit/audit-read.decorator';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
+import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 
 /**
  * Multer memory-storage configuration shared by the single-file document upload routes.
@@ -305,6 +307,20 @@ export class DocumentController {
     if (!body.objectKey.startsWith('documents/direct/')) {
       throw new BadRequestException('objectKey is not a direct-upload key issued by /documents/upload/presign.');
     }
+    /**
+     * Idempotent, not merely repeatable. Verified live: finalizing the same objectKey twice
+     * created two separate `documents` rows pointing at the identical storage object — the same
+     * packet then double-counted everywhere a branch's documents are listed or dispatched
+     * (operations overview, data-entry queue), and could be dispatched/notified twice for what
+     * is genuinely one file. A retry here is not a hypothetical: this is the one upload route
+     * whose bytes travel client→storage directly, so the client's own network can drop the
+     * finalize response after the server already succeeded, and an honest retry resends the
+     * identical request. Short-circuit before repeating the stat/scan/create work.
+     */
+    const existing = await this.documentService.findByFilePath(body.objectKey);
+    if (existing) {
+      return { success: true, data: existing };
+    }
     // Confirm the object actually landed before creating a row that claims it did.
     let size = 0;
     try {
@@ -395,7 +411,7 @@ export class DocumentController {
 
     const savedFilePath = await this.storage.saveFile(fileName, buffer, 'application/pdf');
 
-    const doc = await this.documentService.create({
+    let doc = await this.documentService.create({
       assessmentId: targetId,
       fileName,
       filePath: savedFilePath,
@@ -408,8 +424,14 @@ export class DocumentController {
     // Head's queue. This was `.catch(() => {})` — and since receiveDocument used to reject
     // anything not already DISPATCHED, every audited return failed here invisibly and never
     // reached the queue. Surface failures instead of swallowing them.
+    //
+    // The result is reassigned onto `doc`, which used to be discarded — verified live: the
+    // response this endpoint returns to the assayer's phone reported `status: "UPLOADED"` while
+    // the row it was reading right back out of the database already said RECEIVED. `doc` is left
+    // at its pre-receive value on failure (the existing fallback: a receive that did not happen
+    // must not be reported as though it did).
     try {
-      await this.documentService.receiveDocument(doc.id, req?.user?.id || 'SYSTEM');
+      doc = await this.documentService.receiveDocument(doc.id, req?.user?.id || 'SYSTEM');
     } catch (err: any) {
       console.error(
         `Audited return ${doc.id} uploaded but could not be marked received — it will not appear in the data-entry queue:`,
@@ -417,7 +439,7 @@ export class DocumentController {
       );
     }
 
-    await this.completeAssignmentForReturn(doc, body.assignmentId, targetId, req?.user?.id || 'SYSTEM', fileName);
+    await this.completeAssignmentForReturn(doc, body.assignmentId, targetId, req?.user, fileName);
 
     return { success: true, data: doc, documentUrl: `/documents/${doc.id}/download` };
   }
@@ -482,7 +504,7 @@ export class DocumentController {
     }
 
     const savedFilePath = await this.storage.saveFile(file.originalname, file.buffer, file.mimetype || 'application/pdf');
-    const doc = await this.documentService.create(
+    let doc = await this.documentService.create(
       {
         assessmentId: targetId,
         fileName: file.originalname,
@@ -494,13 +516,16 @@ export class DocumentController {
       req.user.id,
     );
 
+    // Reassigned rather than discarded — see the identical fix on the JSON sibling
+    // (`mobileUpload`) above for why: this response was reporting the pre-receive UPLOADED
+    // snapshot to the caller even though the row underneath it had already moved to RECEIVED.
     try {
-      await this.documentService.receiveDocument(doc.id, req.user.id);
+      doc = await this.documentService.receiveDocument(doc.id, req.user.id);
     } catch (err: any) {
       console.error(`Audited return ${doc.id} could not be marked received:`, err?.message);
     }
 
-    await this.completeAssignmentForReturn(doc, assignmentId, targetId, req.user.id, file.originalname);
+    await this.completeAssignmentForReturn(doc, assignmentId, targetId, req.user, file.originalname);
 
     return { success: true, data: doc };
   }
@@ -647,7 +672,7 @@ export class DocumentController {
       throw err;
     }
 
-    const doc = await this.documentService.create(
+    let doc = await this.documentService.create(
       {
         assessmentId: session.assessmentId,
         fileName: session.fileName,
@@ -665,12 +690,15 @@ export class DocumentController {
     await this.chunkedUploadService.discard(uploadId);
 
     if (type === DocumentType.AUDITED_RETURN_PDF) {
+      // Reassigned rather than discarded — the third occurrence of the same gap fixed on
+      // `mobileUpload`/`mobileUploadBinary` above: the response was reporting the pre-receive
+      // UPLOADED snapshot even once the row itself had moved to RECEIVED.
       try {
-        await this.documentService.receiveDocument(doc.id, req.user.id);
+        doc = await this.documentService.receiveDocument(doc.id, req.user.id);
       } catch (err: any) {
         console.error(`Chunked audited return ${doc.id} could not be marked received:`, err?.message);
       }
-      await this.completeAssignmentForReturn(doc, body?.assignmentId, session.assessmentId, req.user.id, session.fileName);
+      await this.completeAssignmentForReturn(doc, body?.assignmentId, session.assessmentId, req.user, session.fileName);
     }
 
     return { success: true, data: doc };
@@ -691,9 +719,10 @@ export class DocumentController {
     doc: { id: string; assessmentId: string | null },
     assignmentId: string | undefined,
     fallbackTargetId: string | undefined,
-    userId: string,
+    user: any,
     fileName: string,
   ): Promise<void> {
+    const userId: string = user?.id || 'SYSTEM';
     let targetAsn = null;
     if (assignmentId) {
       targetAsn = await this.assignmentRepository
@@ -709,6 +738,26 @@ export class DocumentController {
       targetAsn = await this.assignmentRepository
         .findOne({ where: { projectBranchId: fallbackTargetId }, relations: ['projectBranch'] })
         .catch(() => null);
+    }
+
+    /**
+     * Ownership is enforced on the RESOLVED assignment, not just the client-supplied `assignmentId`.
+     *
+     * The two mobile paths pre-check `assertMaySubmitReturnFor(user, assignmentId)`, but this method
+     * resolves a target through two further fallbacks (by assessment, then by project branch) — so a
+     * pure assayer who omits `assignmentId` and lets the assessment/branch fallback pick a target
+     * could still drive SOMEONE ELSE'S assignment to COMPLETED, booking a payable and a client
+     * invoice line for a branch they never visited. The resumable chunked `completeUpload` had no
+     * pre-check at all. Enforcing here, on whatever `targetAsn` was actually resolved, closes both.
+     * CONFIRMED-EXPLOITABLE class (see the branch-PDF IDOR fixed the same day). Staff pass through.
+     */
+    const roles: string[] = (user?.roles ?? []).map((r: any) => (typeof r === 'string' ? r : r?.name)).filter(Boolean);
+    const isPureAssayer = roles.includes(SystemRole.ASSAYER) && !roles.some((r) => r !== SystemRole.ASSAYER);
+    if (isPureAssayer && targetAsn && targetAsn.assayerId !== userId) {
+      this.logger.warn(
+        `Assayer ${userId} attempted to complete assignment ${targetAsn.id} (owner ${targetAsn.assayerId}) via an audited-return upload.`,
+      );
+      throw new ForbiddenException('You can only submit paperwork for an assignment that is assigned to you.');
     }
 
     if (targetAsn && targetAsn.status !== AssignmentStatus.COMPLETED) {
@@ -739,6 +788,16 @@ export class DocumentController {
     if (!file?.buffer?.length) {
       throw new BadRequestException('No file was uploaded. Choose a file and try again.');
     }
+    // Had no type/size allowlist at all — same gap as `uploadGeneratedBatch`/`uploadExcelReport`
+    // above, closed the same way. Size is already capped at the multer layer
+    // (`documentUploadMulterOptions`); this adds the missing type check before an arbitrary
+    // upload reaches `xlsx.read`.
+    assertUploadAllowed({
+      contentType: file.mimetype,
+      size: file.size,
+      fileName: file.originalname,
+      allowed: SPREADSHEET_UPLOAD_TYPES,
+    });
     const workbook = xlsx.read(file.buffer, { type: 'buffer' });
     const sheetName = workbook.SheetNames[0];
     const rows: any[] = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
@@ -903,6 +962,10 @@ export class DocumentController {
   @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, // The whole data entry desk opens returned packets, not just the head, and
     // validation reviews them before they go back to the client.
     SystemRole.DESK, SystemRole.DESK_OPERATOR)
+  // Minting a download token IS the access to a document — bank customer paperwork and scanned ID
+  // cards live here — so it is the point to log "who accessed document X". Records the access, not
+  // the file.
+  @AuditRead({ resource: 'DOCUMENT', idParam: 'id' })
   @ApiOperation({ summary: 'Issue a short-lived signed download URL for a document' })
   async issueDownloadToken(
     @Param('id', ParseUUIDPipe) id: string,
@@ -1065,6 +1128,15 @@ export class DocumentController {
     const region = await this.documentService.resolveProjectBranchRegion(projectBranchId);
     await this.regionGuard.assertRegionAllowedStaged(region, scope, 'document:downloadBranchPdf');
 
+    // A pure assayer may only pull a branch's packet if they actually hold a live assignment on it.
+    // The region ceiling above is staff-oriented and a no-op in the default `log` mode, so without
+    // this any signed-in assayer could stream any branch's audit PDF by iterating UUIDs (confirmed
+    // exploitable 2026-09-04). Staff fall through to the region ceiling as before.
+    const pdfRoles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r);
+    if (pdfRoles.includes(SystemRole.ASSAYER) && !pdfRoles.some((r) => r !== SystemRole.ASSAYER)) {
+      await this.documentService.assertAssayerAssignedToBranch(projectBranchId, req.user.assayerId ?? req.user.id);
+    }
+
     // Resolves only from *dispatched* paperwork. This used to pick the first
     // matching document of any status — so an assayer following this link could
     // pull down a pre-audit PDF operations had not released yet.
@@ -1102,6 +1174,8 @@ export class DocumentController {
     const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r);
     const assayerOnly = roles.includes(SystemRole.ASSAYER) && !roles.some((r) => r !== SystemRole.ASSAYER);
     if (assayerOnly) {
+      // Must hold a live assignment on this branch — see the note on `assertAssayerAssignedToBranch`.
+      await this.documentService.assertAssayerAssignedToBranch(projectBranchId, req.user.assayerId ?? req.user.id);
       const { documents, readiness } = await this.documentService.findDispatchedForAssayer(projectBranchId);
       return { success: true, data: documents, meta: { readiness } };
     }
@@ -1176,6 +1250,19 @@ export class DocumentController {
       const file = byName.get(m.fileName);
       if (!file) continue;
       try {
+        // The one route in the file that saved straight to storage with no type check at all —
+        // every other upload route calls this (see the identical note on `uploadExcelReport`
+        // just below and `POST /customer-master/upload`). Size is already capped at the multer
+        // layer here (`documentBatchUploadMulterOptions`); this closes the type gap, scoped to
+        // what a generated audit packet can actually be. A rejected file lands in `failed` with
+        // a clear reason, exactly like any other per-file failure in this loop — it does not
+        // abort the rest of the batch.
+        assertUploadAllowed({
+          contentType: file.mimetype,
+          size: file.size,
+          fileName: file.originalname,
+          allowed: SCAN_UPLOAD_TYPES,
+        });
         const savedPath = await this.storage.saveFile(file.originalname, file.buffer, file.mimetype);
         const doc = await this.documentService.create({
           assessmentId: m.projectBranchId,
@@ -1222,10 +1309,16 @@ export class DocumentController {
   @ApiOperation({ summary: "Dispatch-gated documents for a branch, with readiness so the field app can explain what to expect" })
   async assayerBranchDocuments(
     @Param('projectBranchId', ParseUUIDPipe) projectBranchId: string,
+    @Req() req: any,
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     const region = await this.documentService.resolveProjectBranchRegion(projectBranchId);
     await this.regionGuard.assertRegionAllowedStaged(region, scope, 'document:assayerBranchDocuments');
+    // A pure assayer must hold a live assignment on this branch — see `assertAssayerAssignedToBranch`.
+    const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r);
+    if (roles.includes(SystemRole.ASSAYER) && !roles.some((r) => r !== SystemRole.ASSAYER)) {
+      await this.documentService.assertAssayerAssignedToBranch(projectBranchId, req.user.assayerId ?? req.user.id);
+    }
     const { documents, readiness } = await this.documentService.findDispatchedForAssayer(projectBranchId);
     return { success: true, data: documents, meta: { readiness } };
   }
@@ -1258,9 +1351,17 @@ export class DocumentController {
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR, SystemRole.AUDITOR)
   @RequirePermissions('document:view:organization')
   @ApiOperation({ summary: 'Get all system documents' })
-  async findAll(@GlobalScopeFilter() scope?: GlobalScope) {
-    const list = await this.documentService.findAll(scope);
-    return { success: true, data: list };
+  async findAll(
+    @GlobalScopeFilter() scope: GlobalScope | undefined,
+    @Query('limit', new ParseLimitPipe({ default: 50, max: 500 })) limit: number,
+    @Query('offset') offset?: string,
+  ) {
+    // Garbage/negative offsets fall back to 0 rather than throwing — an out-of-range page is a
+    // client mistake, not a request worth failing.
+    const parsedOffset = Number(offset);
+    const safeOffset = Number.isFinite(parsedOffset) && parsedOffset > 0 ? Math.floor(parsedOffset) : 0;
+    const { data, total } = await this.documentService.findAll(scope, limit, safeOffset);
+    return { success: true, data, pagination: { total, limit, offset: safeOffset } };
   }
 
   @Get('stats/summary')
@@ -1308,24 +1409,52 @@ export class DocumentController {
     @Query('assessmentId', ParseUUIDPipe) assessmentId: string,
     @Req() req: any,
   ) {
+    /**
+     * The one route in this file that had neither guard. Verified live: a request with no file
+     * field at all was accepted (`file?.buffer || Buffer.from('')` quietly substitutes an empty
+     * buffer) and produced a `GENERATED_EXCEL` document — `fileSize: 0` — immediately marked
+     * COMPLETED, exactly as if the External OCR export had actually landed. That is the same
+     * "silently fabricate a document instead of reporting the failure" shape `downloadFile`'s own
+     * doc comment on this file calls "the worst available behaviour" for an audit artifact: a
+     * failed export becomes indistinguishable from a genuine zero-row report, and this status is
+     * what the pipeline reads as "this branch's report exists."
+     */
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('No file content received. The generated Excel report must be a real uploaded file.');
+    }
+    // Every sibling upload route enforces this; this one, alone, did not — see the same note on
+    // `POST /customer-master/upload`. Narrowed to spreadsheet types: the summary says "Excel
+    // report", and the mimeType saved a few lines down is hardcoded to xlsx regardless of what
+    // was actually sent, so a mismatched upload here would previously have been mislabelled
+    // rather than refused.
+    assertUploadAllowed({
+      contentType: file.mimetype,
+      size: file.size,
+      fileName: file.originalname,
+      allowed: SPREADSHEET_UPLOAD_TYPES,
+    });
+
     const savedPath = await this.storage.saveFile(
-      file?.originalname || `report_${assessmentId}.xlsx`,
-      file?.buffer || Buffer.from(''),
+      file.originalname,
+      file.buffer,
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     );
 
     const doc = await this.documentService.create({
       assessmentId,
-      fileName: file?.originalname || `report_${assessmentId}.xlsx`,
+      fileName: file.originalname,
       filePath: savedPath,
-      fileSize: file?.size || 0,
+      fileSize: file.size,
       mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       type: DocumentType.GENERATED_EXCEL,
     }, req?.user?.id || assessmentId);
 
-    await this.documentService.updateStatus(doc.id, DocumentStatus.COMPLETED, req?.user?.id || 'SYSTEM');
+    // Reassigned rather than discarded — the same stale-response gap fixed on the mobile/chunked
+    // return-upload paths above: the response was reporting UPLOADED to the caller while the row
+    // it just wrote itself already said COMPLETED.
+    const completed = await this.documentService.updateStatus(doc.id, DocumentStatus.COMPLETED, req?.user?.id || 'SYSTEM');
 
-    return { success: true, data: doc, message: 'Excel report uploaded. The document is marked completed.' };
+    return { success: true, data: completed, message: 'Excel report uploaded. The document is marked completed.' };
   }
 
   // ── Data entry desk ───────────────────────────────────────────────────────

@@ -21,6 +21,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { SystemRole, ASSIGNMENT_ISSUE_CATEGORIES } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
+import { ParsePagePipe } from '../../infrastructure/http/parse-page.pipe';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { AssignmentService, CreateAssignmentDto, UpdateAssignmentDetailsDto } from './assignment.service';
 import { OperationsInboxService, SUGGEST_NEXT_AFTER_ATTEMPTS } from './operations-inbox.service';
@@ -76,6 +77,14 @@ class CreateAssignmentRequestDto implements CreateAssignmentDto {
 
   @IsOptional() @IsString() @MaxLength(1000)
   acceptanceReason?: string;
+
+  /**
+   * Required by `AssignmentService.create()` when the assayer fails the client's empanelment
+   * check — see that method's own doc comment. Optional here (class-validator can't express
+   * "required only sometimes"); the service is where this is actually enforced.
+   */
+  @IsOptional() @IsString() @MaxLength(1000)
+  overrideReason?: string;
 }
 
 /** Escalation reason is free text and optional; the endpoint applies a default when absent. */
@@ -307,7 +316,7 @@ export class AssignmentController {
   @Get()
   @ApiOperation({ summary: 'List all assignments, optionally filtered by status, projectBranchStatus, or priority' })
   async findAll(
-    @Query('page') page = 1,
+    @Query('page', new ParsePagePipe()) page: number,
     /**
      * Bounded here rather than trusted from the caller.
      *
@@ -330,7 +339,13 @@ export class AssignmentController {
     @Query('priority') priority?: string,
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
-    const safePage = page ? Number(page) : 1;
+    // `page` arrives already a safe, finite, >= 1 integer — ParsePagePipe's job, not this
+    // handler's. It used to be `page ? Number(page) : 1`, which only caught a missing/empty
+    // page: `?page=0` and `?page=-1` are non-empty strings (truthy) that flow straight through
+    // as 0/-1, and `?page=abc` becomes `Number('abc')` = NaN — each reaching
+    // `assignmentService.findAll` unguarded and throwing out of the query layer as a 500 (the
+    // same shape of bug ParsePagePipe was written to close elsewhere; see its own doc comment).
+    const safePage = page;
     const result = await this.assignmentService.findAll(
       safePage,
       limit,
@@ -494,12 +509,19 @@ export class AssignmentController {
     @Param('id') id: string,
     @Body() dto: any,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     const body = dto || {};
     const targetStatus = body.targetStatus || body.status;
     if (!targetStatus) {
       throw new BadRequestException('targetStatus is required for assignment transition');
     }
+    // The region ceiling `GET :id` enforces must also gate this WRITE — a transition drives money
+    // (accept sets the agreed fee, complete books the payable). Without it a region-restricted
+    // operator refused reading an out-of-region assignment could still accept/cancel/complete it.
+    // No-op for ASSAYER callers (external principals carry no `regions`), whose own-assignment
+    // ownership is enforced below.
+    await this.regionGuard.assertAssignmentInScope(id, scope);
     const userId = req.user.id;
 
     /**
@@ -591,7 +613,13 @@ export class AssignmentController {
       if (counterTravel < 0) {
         throw new BadRequestException('A travel amount cannot be negative.');
       }
-      assignment = await this.assignmentService.proposeCounterFee(id, userId, counterTravel, body.reason ?? body.remarks);
+      assignment = await this.assignmentService.proposeCounterFee(
+        id,
+        userId,
+        counterTravel,
+        body.reason ?? body.remarks,
+        body.clientRequestId,
+      );
     } else if (targetStatus === 'ACCEPTED') {
       // `fee` lets the desk accept on an assayer's behalf at a verbally-agreed number — the
       // phone-channel flow, where the negotiation happened inside the call, not in the app.
@@ -675,12 +703,50 @@ export class AssignmentController {
        */
       assignment = await this.assignmentService.startWork(id, userId, body.reason ?? body.remarks);
     } else if (targetStatus === 'CANCELLED') {
-      assignment = await this.assignmentService.cancelAssignment(id, userId, body.reason ?? body.remarks);
+      /**
+       * Same rule as REJECTED just above, and for the same reason: without it,
+       * `AssignmentStateMachine.cancel` defaulted `cancelReason` to the literal string
+       * "Cancelled" — which, read back in the audit trail or by whoever plans this branch next,
+       * says nothing more than the status column already did.
+       */
+      const cancelReason = (body.reason ?? body.remarks ?? '').trim();
+      if (!cancelReason) {
+        throw new BadRequestException(
+          'A reason is required when cancelling an assignment — it stays on the record for whoever looks at this branch next.',
+        );
+      }
+      assignment = await this.assignmentService.cancelAssignment(id, userId, cancelReason);
     } else if (targetStatus === 'COMPLETED') {
       assignment = await this.assignmentService.completeAssignment(id, userId, body.reason ?? body.remarks);
     } else {
       throw new BadRequestException(`Invalid transition: ${targetStatus}.`);
     }
+    return {
+      success: true,
+      data: assignment,
+    };
+  }
+
+  /**
+   * The owner-decision undo of a completion: voids the payable it booked and puts the
+   * assignment back to ACCEPTED. Gated to the same two roles as `voidPayable` in billing-engine
+   * — this is one decision made across two ledgers, and it must not be reachable from just one
+   * side (a payable voided with no reopened assignment, or vice versa).
+   */
+  @Post(':id/reopen')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @ApiOperation({ summary: 'Reopen a completed assignment, voiding the payable it booked' })
+  async reopen(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { reason?: string },
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    // Reopen VOIDS the booked payable — a money action. Gate it by the same region ceiling the read
+    // enforces, so a region-restricted operator cannot reopen an out-of-region completed assignment.
+    await this.regionGuard.assertAssignmentInScope(id, scope);
+    const userId = req.user.id;
+    const assignment = await this.assignmentService.reopen(id, userId, body?.reason ?? '');
     return {
       success: true,
       data: assignment,
@@ -694,7 +760,10 @@ export class AssignmentController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: EscalateAssignmentRequestDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    // Same region ceiling as the read — an operator should not escalate an out-of-region assignment.
+    await this.regionGuard.assertAssignmentInScope(id, scope);
     const userId = req.user.id;
     const assignment = await this.assignmentService.escalate(id, userId, body?.reason);
     return {

@@ -1,4 +1,5 @@
 import type { RouteSource } from './interfaces';
+import { canonicalStateName } from './regions';
 
 export const INDIAN_STATES: { value: string; label: string }[] = [
   { value: 'Andhra Pradesh', label: 'Andhra Pradesh' }, { value: 'Arunachal Pradesh', label: 'Arunachal Pradesh' },
@@ -56,28 +57,26 @@ export function calculateHaversineDistance(
  * while an assayer living there is recorded under `Maharashtra` or `maharashtra`,
  * and `ANDRAPRADESH` faces `A.P`. Comparing raw values treats these as different
  * states. Canonicalise for comparison; keep the original for display.
+ *
+ * Used to carry its own 13-entry alias table (AP/TS/TN/KL/KA/MH/OD/RJ/UP/PY/DL/GJ/WB and their
+ * spelled-out forms) that disagreed with `regions.ts:canonicalStateName` about which spellings
+ * it recognised — the roster's "M.P" and "WB" resolved here but not there, and a misspelling
+ * like "Gujrat" resolved there but not here. Two lists of the same 36 states is exactly how they
+ * drifted, so this is now a thin re-casing wrapper over the one full canonicaliser: every code
+ * this table used to carry by hand is in `STATE_ABBREVIATIONS` there, consulted by
+ * `canonicalStateName` itself, so there is nothing left for a second table to add.
+ *
+ * The upper-case output and the "return the cleaned input, never null" contract are kept exactly
+ * as before — existing callers (`holiday.service.ts`'s state-scoped holiday match,
+ * `command-center.service.ts`'s displayed branch state, `hr-workforce.service.ts`'s territory
+ * grouping key) compare or display this value and must keep seeing something for a state neither
+ * canonicaliser recognises, never `null`.
  */
-const STATE_ALIASES: Record<string, string> = {
-  AP: 'ANDHRA PRADESH', 'A P': 'ANDHRA PRADESH', ANDRAPRADESH: 'ANDHRA PRADESH',
-  ANDHRAPRADESH: 'ANDHRA PRADESH', 'ANDHRA PRADESH': 'ANDHRA PRADESH',
-  TS: 'TELANGANA', TELANGANA: 'TELANGANA',
-  TN: 'TAMIL NADU', TAMILNADU: 'TAMIL NADU', 'TAMIL NADU': 'TAMIL NADU',
-  KL: 'KERALA', KERALA: 'KERALA',
-  KA: 'KARNATAKA', KARNATAKA: 'KARNATAKA',
-  MH: 'MAHARASHTRA', MAHARASHTRA: 'MAHARASHTRA',
-  OD: 'ODISHA', ORISSA: 'ODISHA', ODISHA: 'ODISHA',
-  RJ: 'RAJASTHAN', RAJASTHAN: 'RAJASTHAN',
-  UP: 'UTTAR PRADESH', UTTARPRADESH: 'UTTAR PRADESH', 'UTTAR PRADESH': 'UTTAR PRADESH',
-  PY: 'PUDUCHERRY', PONDICHERRY: 'PUDUCHERRY', PUDUCHERRY: 'PUDUCHERRY',
-  DL: 'DELHI', 'NEW DELHI': 'DELHI', DELHI: 'DELHI',
-  GJ: 'GUJARAT', GUJARAT: 'GUJARAT', WB: 'WEST BENGAL', 'WEST BENGAL': 'WEST BENGAL',
-};
-
-/** Uppercase, strip punctuation, collapse spaces, then resolve known aliases. */
 export function canonicalState(raw: string | null | undefined): string {
   if (!raw) return 'UNKNOWN';
   const k = String(raw).toUpperCase().replace(/[^A-Z ]/g, '').replace(/\s+/g, ' ').trim();
-  return STATE_ALIASES[k] ?? STATE_ALIASES[k.replace(/\s/g, '')] ?? k;
+  const resolved = canonicalStateName(raw);
+  return resolved ? resolved.toUpperCase() : k;
 }
 
 /**

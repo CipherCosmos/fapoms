@@ -263,6 +263,16 @@ async function holdPayout(id: string, onHold: boolean, reason?: string): Promise
   return api.request<AssayerPayable>(`/billing-engine/payouts/${id}/hold`, { method: 'PATCH', body: JSON.stringify({ onHold, reason }) });
 }
 
+/**
+ * The owner-decision undo of a wrong completion: voids the payable it booked and puts the
+ * assignment back to ACCEPTED, in one call on `assignment.controller.ts` (not the payouts
+ * route) — reopening only the payable without the assignment would leave someone paid for
+ * work the record no longer shows as done.
+ */
+async function reopenAssignment(assignmentId: string, reason: string): Promise<unknown> {
+  return api.request(`/assignments/${assignmentId}/reopen`, { method: 'POST', body: JSON.stringify({ reason }) });
+}
+
 async function getAssayerStatement(assayerId: string): Promise<AssayerStatement> {
   return api.request<AssayerStatement>(`/billing-engine/assayers/${assayerId}/statement`);
 }
@@ -344,6 +354,7 @@ export const billingApi = {
   approvePayouts,
   payPayouts,
   holdPayout,
+  reopenAssignment,
   getAssayerStatement,
   listInvoiceable,
   listInvoices,

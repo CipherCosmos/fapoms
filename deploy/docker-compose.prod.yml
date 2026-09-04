@@ -209,6 +209,10 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # HTTP replica. Runs no Bull processors (PROCESS_ROLE=api pauses them locally at boot, in
+  # main.ts) so a request handler never contends with a job for the pool below. Split from
+  # backend-worker on 2026-09-03 so the two roles scale, and get sized, independently — see
+  # worker-concurrency.ts for why that used to matter (33 job slots sharing one pool with HTTP).
   backend:
     build:
       context: ..
@@ -216,6 +220,13 @@ services:
     restart: unless-stopped
     env_file: [../.env.docker]
     environment:
+      PROCESS_ROLE: api
+      # Postgres default max_connections is 100. Reserved ~10 for psql/migrations/superuser,
+      # leaving 90 to split between this replica and backend-worker below: 20 here (HTTP
+      # concurrency; unchanged from the pre-split default) + 40 on the worker (comfortably above
+      # its 33 declared job slots, see worker-concurrency.ts) = 60, well under the 90 budget with
+      # room for a second replica of either role later.
+      DB_POOL_MAX: ${BACKEND_API_DB_POOL_MAX:-20}
       # Cap the V8 heap below the container limit so Node degrades (GC pressure, then a clean
       # heap-out-of-memory exit that restart policy recovers) instead of being SIGKILLed by
       # the cgroup with no log line. Keep ~500 MB between the two for buffers, sockets, TLS
@@ -238,6 +249,41 @@ services:
       # Liveness only: the process is up and can reach its database. Deliberately not the
       # readiness probe (which includes Redis) — Redis being away must not make the API
       # look dead to the deploy script.
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/v1/health >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      minio: {condition: service_healthy}
+    logging:
+      driver: json-file
+      options: { max-size: "50m", max-file: "5" }
+
+  # Background-job replica. Same image as `backend`, PROCESS_ROLE=worker: runs every Bull
+  # processor and scheduled cron, serves no user-facing routes. Publishes no port — nothing
+  # routes to it from caddy — but still needs its own healthcheck target, so main.ts starts a
+  # minimal listener for GET /api/v1/health only (see main.ts, PROCESS_ROLE === 'worker' branch).
+  backend-worker:
+    build:
+      context: ..
+      dockerfile: packages/backend/Dockerfile
+    restart: unless-stopped
+    env_file: [../.env.docker]
+    environment:
+      PROCESS_ROLE: worker
+      # See the arithmetic on `backend` above: 40 here is sized above the 33 slots
+      # WORKER_CONCURRENCY currently declares (worker-concurrency.ts), not against this
+      # container's own headroom, because that table is the source of truth for demand.
+      DB_POOL_MAX: ${BACKEND_WORKER_DB_POOL_MAX:-40}
+      NODE_OPTIONS: ${BACKEND_WORKER_NODE_OPTIONS:---max-old-space-size=1024}
+    volumes:
+      - backupsdata:/app/backups
+    mem_limit: ${BACKEND_WORKER_MEM_LIMIT:-1536m}
+    stop_grace_period: 60s
+    healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/v1/health >/dev/null 2>&1 || exit 1"]
       interval: 15s
       timeout: 5s

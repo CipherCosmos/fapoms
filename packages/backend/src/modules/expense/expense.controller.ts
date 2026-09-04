@@ -10,7 +10,7 @@ import {
   Controller, Get, Post, Body, Param, Query, Req, UseGuards, ParseUUIDPipe, ForbiddenException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { IsString, IsOptional, IsNumber, IsEnum, IsBoolean, Min } from 'class-validator';
+import { IsString, IsOptional, IsNumber, IsEnum, IsBoolean, IsUUID, Min } from 'class-validator';
 
 import { ExpenseService } from './expense.service';
 import { ExpenseCategory, ExpenseStatus } from './expense.entity';
@@ -31,6 +31,11 @@ class CreateExpenseRequestDto {
 
   @IsOptional() @IsString()
   receiptUrl?: string;
+
+  // Contract shared with the mobile agent: a uuid v4 the client generates once per submission
+  // and resends unchanged on retry, so a flaky connection cannot turn one claim into two.
+  @IsOptional() @IsUUID('4')
+  clientRequestId?: string;
 }
 
 class ReviewExpenseRequestDto {
@@ -57,7 +62,11 @@ export class ExpenseController {
   constructor(private readonly expenseService: ExpenseService) {}
 
   @Post('assignments/:assignmentId/expenses')
-  @Roles(SystemRole.ASSAYER, ...STAFF_ROLES)
+  // Named explicitly rather than `...STAFF_ROLES`: this is the one write in the file, and
+  // origination is meant for staff actually coordinating the field visit — AUDITOR and
+  // PRODUCT_SUPPORT have no reason to inject a claim into a book AUDITOR then reviews, and
+  // `expenses/pending`/`expenses/:id/review` just below already draw that same line.
+  @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.DESK_OPERATOR)
   // This route and the three that follow carry no @RequirePermissions on purpose: they admit
   // SystemRole.ASSAYER, who authenticates from the `assayers` table and holds no permission rows,
   // so any declaration would be checked against an empty set and lock the mobile app out of

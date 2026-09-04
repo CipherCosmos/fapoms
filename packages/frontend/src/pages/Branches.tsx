@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useUrlSelection } from '../hooks/useUrlSelection';
-import { Upload, Building2, Globe, ShieldAlert, Activity, Plus, Edit2, Trash2, Phone, FileText, User, Filter, ChevronDown, Map, X } from 'lucide-react';
+import { Upload, Building2, Globe, ShieldAlert, Activity, Plus, Edit2, Trash2, Phone, FileText, User, Filter, ChevronDown, Map, X, AlertTriangle, Loader } from 'lucide-react';
 import { SearchInput, FilterSelect, StatusBadge, AlertBanner, Modal, Select, useToast, useConfirm, Pagination, SkeletonRows, Refreshing } from '../components/ui';
 import { listPhase } from '../components/ui/list-phase';
 import { useImportJob } from '../components/import/useImportJob';
@@ -9,6 +9,7 @@ import { ChipMultiSelect } from '../components/ui/ChipMultiSelect';
 import { useWorkforceVocabulary, asOptions } from '../hooks/useWorkforceVocabulary';
 import { Autocomplete } from '../components/ui/Autocomplete';
 import type { IndiaPlaceResult } from '../components/ui/Autocomplete';
+import { resolvePincode, addressConflict } from './hr/AssayerForms';
 import { api } from '../services/api';
 import { GeoPrecisionBadge, geoNeedsFixing } from '../components/GeoPrecisionBadge';
 import { PinCoordinateControl } from '../components/PinCoordinateControl';
@@ -83,7 +84,8 @@ interface BranchDocument {
   remarks: string | null;
 }
 
-interface BranchFormData {
+/** Exported so Branches.spec.tsx can mount the form modal directly instead of the whole page. */
+export interface BranchFormData {
   solId: string;
   name: string;
   address: string;
@@ -110,7 +112,7 @@ interface BranchFormData {
   clientId: string;
 }
 
-const emptyForm: BranchFormData = {
+export const emptyForm: BranchFormData = {
   solId: '', name: '', address: '', state: '', district: '', city: '',
   pincode: '', region: '', territory: '', zoneId: '', branchType: '', phone: '', email: '',
   managerName: '', openingDate: '', lastAuditDate: '', latitude: '', longitude: '',
@@ -333,9 +335,13 @@ export const Branches: React.FC = () => {
     };
     socket?.on('ProjectPlanningStarted', refresh);
     socket?.on('ProjectBranchAssignmentConfirmed', refresh);
+    socket?.on('branch:created', refresh);
+    socket?.on('branch:updated', refresh);
     return () => {
       socket?.off('ProjectPlanningStarted', refresh);
       socket?.off('ProjectBranchAssignmentConfirmed', refresh);
+      socket?.off('branch:created', refresh);
+      socket?.off('branch:updated', refresh);
     };
   }, []);
   /**
@@ -803,7 +809,8 @@ export const Branches: React.FC = () => {
   );
 };
 
-const BranchFormModal: React.FC<{
+/** Exported for the same reason as `BranchFormData` above — a focused test harness. */
+export const BranchFormModal: React.FC<{
   title: string;
   initial: BranchFormData;
   branchId?: string;
@@ -814,6 +821,14 @@ const BranchFormModal: React.FC<{
   const { toast } = useToast();
   const [form, setForm] = useState<BranchFormData>(initial);
   const [submitting, setSubmitting] = useState(false);
+  /**
+   * The second-layer postal-directory check the assayer registration wizard already runs on
+   * blur, missing here until now. `applyPlaceToBranch` above only fires when a suggestion is
+   * actually picked from the live autocomplete; a pincode typed by hand and never selected from
+   * the dropdown went completely unchecked, which is exactly the gap a corrected typo falls into.
+   */
+  const [addrNote, setAddrNote] = useState<{ message: string; blocking: boolean } | null>(null);
+  const [addrLookup, setAddrLookup] = useState(false);
   // The zone was previously a free-text box labelled "Zone ID", which asked the operator to type a
   // raw UUID. Zone ids are not shown anywhere in the application, so there was no way to know one;
   // and anything that was not a UUID came back as a 500. Zones are few, so offer them by name.
@@ -899,6 +914,29 @@ const BranchFormModal: React.FC<{
       : f.estimatedDurationHours,
   }));
 
+  /**
+   * On leaving the pincode box: fill in whatever the operator has not typed, warn only about a
+   * real contradiction. This is `RegistrationWizard.tsx`'s own `applyPincodeLookup`, same
+   * directory, same advisory-never-blocking contract, applied to the branch form's field names —
+   * `applyPlaceToBranch` above only runs when a suggestion is actually clicked, so a pincode
+   * typed by hand and never picked from the dropdown went completely unchecked.
+   */
+  const applyPincodeLookup = async (pincode: string) => {
+    const clean = (pincode || '').trim();
+    if (!/^\d{6}$/.test(clean)) { setAddrNote(null); return; }
+    setAddrLookup(true);
+    const po = await resolvePincode(clean);
+    setAddrLookup(false);
+    if (!po) { setAddrNote(null); return; }
+    setForm((f) => ({
+      ...f,
+      state: f.state || (canonicalStateName(po.state) ?? po.state),
+      district: f.district || po.district,
+      city: f.city || po.district,
+    }));
+    setAddrNote(addressConflict(po, clean, form.state, form.district));
+  };
+
   const field = (label: string, key: keyof BranchFormData, opts?: { type?: string; required?: boolean; full?: boolean; options?: {value: string; label: string}[]; placeholder?: string; hint?: string; geo?: 'city' | 'district' | 'pincode'; onChange?: (v: string) => void }) => (
     <div key={key} style={opts?.full ? { gridColumn: '1 / -1' } : {}}>
       <label style={{ display: 'block', fontSize: '11px', color: 'var(--text-muted)', marginBottom: '3px', fontWeight: 500 }}>{label}{opts?.required && ' *'}</label>
@@ -915,6 +953,7 @@ const BranchFormModal: React.FC<{
           value={form[key]}
           onChange={set(key)}
           onSelect={(place) => setForm((f) => applyPlaceToBranch(opts.geo!, place, f))}
+          onBlur={opts.geo === 'pincode' ? (v) => void applyPincodeLookup(v) : undefined}
           placeholder={opts.placeholder || (opts.geo === 'pincode' ? 'Type a pincode — the rest fills in' : `Type to search ${label.toLowerCase()}…`)}
           filterType={(r) => (opts.geo === 'pincode' ? !!r.pincode : true)}
         />
@@ -1000,6 +1039,23 @@ const BranchFormModal: React.FC<{
         {field('District', 'district', { geo: 'district' })}
         {field('State', 'state', { required: true, options: stateOptions })}
         {field('Address', 'address', { full: true })}
+        {/* Same postal-directory check the wizard shows under its own pincode box: advisory, and
+            never a reason this form refuses to save. */}
+        {addrLookup && (
+          <span style={{ gridColumn: '1 / -1', fontSize: '11px', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: '5px' }}>
+            <Loader size={12} /> Checking the pincode against the postal directory…
+          </span>
+        )}
+        {addrNote && (
+          <div style={{
+            gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11.5px',
+            padding: '6px 8px', borderRadius: 'var(--radius-sm)',
+            background: addrNote.blocking ? 'var(--status-cancelled-bg)' : 'var(--status-pending-bg)',
+            color: addrNote.blocking ? 'var(--danger)' : 'var(--warning)',
+          }}>
+            <AlertTriangle size={13} aria-hidden /> {addrNote.message}
+          </div>
+        )}
 
         <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>CONTACT & RISK</span>
         {field('Phone', 'phone', { placeholder: 'e.g. +91-22-12345678' })}
@@ -1036,7 +1092,18 @@ const BranchFormModal: React.FC<{
             placeholder: `Derived from state${form.state ? ` — ${regionLabel(resolveRegion(form.state))}` : ''}`,
             hint: 'Leave blank unless this branch is planned against a different region than its state.',
           })}
-          {field('Territory', 'territory')}
+          {/*
+            Left as free text — a branch's territory is occasionally a real name (a sales
+            region, a cluster) that does not follow from its district — but shown no relation to
+            District at all otherwise. `geo-precision.service.ts` already derives `${district}
+            Area` for a branch with a coordinate and no territory of its own; the same string is
+            offered here as a placeholder (empty-field-only, never written unless typed) so a
+            branch created here does not need the backfill to see what its own field will
+            probably end up holding.
+          */}
+          {field('Territory', 'territory', {
+            placeholder: form.district ? `${form.district} Area` : undefined,
+          })}
           {field('Zone', 'zoneId', { options: zoneOptions, full: true })}
 
           <span style={{ gridColumn: '1 / -1', fontSize: '12px', fontWeight: 600, color: 'var(--accent-primary)', marginTop: '4px' }}>AUDIT & RISK</span>

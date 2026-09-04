@@ -8,6 +8,7 @@ import {
   SENSITIVE_FIELD_NAMES,
   assertNoMaskedPii,
 } from './assayer.service';
+import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity';
 import { WorkforceAttributeEntity } from './workforce-attribute.entity';
@@ -17,6 +18,8 @@ import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { EmailProvider } from '../../infrastructure/notifications/email-provider';
+import { SmsProvider } from '../../infrastructure/notifications/sms-provider';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { MASKED_IN_TRANSIT_FIELDS, scopeAssayerForRoles } from './assayer-visibility';
 import { RosterRecordsService } from './roster-records.service';
@@ -75,6 +78,9 @@ describe('sensitive assayer fields', () => {
         { provide: DomainEventPublisher, useValue: { publish: jest.fn() } },
         { provide: WorkflowEngine, useValue: { registerWorkflow: jest.fn() } },
         { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn() } },
+        { provide: EmailProvider, useValue: { send: jest.fn().mockResolvedValue({ success: false }) } },
+        { provide: SmsProvider, useValue: { send: jest.fn().mockResolvedValue(false) } },
+        { provide: UnitOfWork, useValue: { run: (work: any) => work(undefined) } },
         { provide: getDataSourceToken(), useValue: { query: jest.fn().mockResolvedValue([]) } },
         { provide: CacheService, useValue: { del: jest.fn().mockResolvedValue(undefined) } },
       ],

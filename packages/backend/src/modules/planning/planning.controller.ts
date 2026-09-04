@@ -16,7 +16,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { IsString, IsNotEmpty, IsOptional, IsObject, IsArray, ArrayNotEmpty, IsUUID, IsEnum, IsDateString, IsNumber, Min, MaxLength } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsObject, IsArray, ArrayNotEmpty, IsUUID, IsEnum, IsDateString, IsNumber, Min, MaxLength, ValidateIf } from 'class-validator';
 
 import { CommandCenterService } from './command-center.service';
 import { PlanningService, CreateBusinessRuleDto, UpdateBusinessRuleDto } from './planning.service';
@@ -35,18 +35,62 @@ import { SystemRole } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 
+/**
+ * The `scope` values `BusinessRuleEntity` actually stores (see its own column comment) and the
+ * `ruleType` values `RuleEngine.evaluate` actually dispatches on (modules/platform/rules/rule.engine.ts —
+ * its switch matches `CERTIFICATION`, `SKILL`, `TERRITORY` and `CAPACITY` only).
+ *
+ * This DTO used to comment `ruleType` as 'ELIGIBILITY', 'CAPACITY', 'CERTIFICATION', 'TERRITORY'
+ * — stale, and 'ELIGIBILITY' has never been a value the engine understands. A rule created with
+ * a value outside this set would save (both fields are plain unindexed varchar columns) but then
+ * either match no branch of the engine's switch — an inert rule that silently never fires — or
+ * sit under a scope the engine never queries for. `Rules.tsx` (the only writer) only ever sends
+ * one of these four rule types through its dropdown, so this tightens the API boundary without
+ * touching a value the working UI relies on. `PREFERENCE` is a
+ * client-side-only display label for the client-preference list (see the engine's own comment on
+ * why there is no PREFERENCE branch) and is never created through this endpoint, so it is
+ * deliberately absent here.
+ *
+ * Declared here rather than reusing a type from `business-rule.entity.ts` because no such type
+ * exists there yet, and this agent's ownership for this task is scoped to these two DTOs only.
+ */
+export enum PlanningRuleType {
+  CERTIFICATION = 'CERTIFICATION',
+  SKILL = 'SKILL',
+  TERRITORY = 'TERRITORY',
+  CAPACITY = 'CAPACITY',
+}
+
+export enum PlanningRuleScope {
+  GLOBAL = 'GLOBAL',
+  CLIENT = 'CLIENT',
+  BRANCH = 'BRANCH',
+}
+
 export class CreateBusinessRuleRequestDto implements CreateBusinessRuleDto {
   @IsString() @IsNotEmpty()
   name: string;
 
-  @IsString() @IsNotEmpty()
-  scope: string; // 'GLOBAL', 'CLIENT', 'BRANCH'
+  @IsEnum(PlanningRuleScope)
+  scope: string;
 
-  @IsOptional() @IsString()
+  /**
+   * Required for CLIENT/BRANCH, and only then. `RuleEngine.loadRules` matches a CLIENT-scoped
+   * row on `targetId: clientId` and a BRANCH-scoped one on `targetId: branch.id` — an exact
+   * match against a real id, never against null. A rule saved as `scope: 'BRANCH'` with no
+   * `targetId` therefore cannot match ANY branch, ever: it sits in the rules list looking
+   * exactly like a working rule (active, no error, no warning) while silently doing nothing
+   * for every branch it could have applied to. The frontend already refuses to submit this
+   * combination (`Rules.tsx`'s pre-submit check), but that only protects the one client this
+   * API ships with — this is the actual boundary a nonsensical rule can currently walk past.
+   * GLOBAL is untouched: `targetId` stays optional there, exactly as before.
+   */
+  @ValidateIf((o) => o.scope !== PlanningRuleScope.GLOBAL)
+  @IsString() @IsNotEmpty({ message: 'targetId is required when scope is CLIENT or BRANCH — a rule scoped this way with no target can never match anything.' })
   targetId?: string;
 
-  @IsString() @IsNotEmpty()
-  ruleType: string; // 'ELIGIBILITY', 'CAPACITY', 'CERTIFICATION', 'TERRITORY'
+  @IsEnum(PlanningRuleType)
+  ruleType: string;
 
   @IsObject() @IsNotEmpty()
   conditions: Record<string, any>;
@@ -59,13 +103,13 @@ export class UpdateBusinessRuleRequestDto implements UpdateBusinessRuleDto {
   @IsOptional() @IsString()
   name?: string;
 
-  @IsOptional() @IsString()
+  @IsOptional() @IsEnum(PlanningRuleScope)
   scope?: string;
 
   @IsOptional() @IsString()
   targetId?: string | null;
 
-  @IsOptional() @IsString()
+  @IsOptional() @IsEnum(PlanningRuleType)
   ruleType?: string;
 
   @IsOptional() @IsObject()

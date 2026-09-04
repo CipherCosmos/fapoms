@@ -97,9 +97,17 @@ export const Dashboard: React.FC = () => {
   const roles = useCurrentRoles();
   const permissions = useCurrentPermissions();
 
-  const { data, isLoading, isFetching, error, refetch } = useQuery({
+  const { data, isPending, isFetching, error, refetch } = useQuery({
     queryKey: [...queryKeys.dashboard.all, 'operations', scopeKey],
-    queryFn: () => api.request<Snapshot>(`/system-dashboard/operations?${withScope(scopeParams)}`),
+    // `{ signal }` forwarded so React Query can actually cancel this request — without it, a
+    // query React Query gives up on (a fast remount, a scope change before the first reply)
+    // still resolves or rejects on its own schedule, but into a query instance React Query has
+    // already stopped tracking. The next mount starts a fresh query and never sees that answer,
+    // which is fine when it was going to succeed — but a role with no access to this endpoint
+    // 403s the same way every time, so the abandoned query's rejection matched nothing, `error`
+    // never populated, and the page underneath rendered nothing rather than the "not part of
+    // your access" message written for exactly this case.
+    queryFn: ({ signal }) => api.request<Snapshot>(`/system-dashboard/operations?${withScope(scopeParams)}`, { signal }),
     staleTime: 30_000,
   });
 
@@ -268,7 +276,19 @@ export const Dashboard: React.FC = () => {
         </div>
       </div>
 
-      {isLoading && <DashboardSkeleton />}
+      {/*
+       * `isPending` (no data has EVER settled, fetching or not), not TanStack v5's `isLoading`
+       * (`isPending && isFetching`) — the residual blank-screen edge case under sustained
+       * reconnect churn traced to exactly this difference. `useSocketInvalidation`'s reconnect
+       * coalescer caps refetches to roughly one per its `maxWaitMs` window, so between two
+       * coalesced flushes there is a real gap where nothing is fetching yet nothing has ever
+       * loaded either — `isLoading` reads that gap as "not loading" and rendered neither the
+       * skeleton below nor the settled error state further down, a real blank page while a query
+       * that had never once succeeded sat waiting for its next scheduled attempt. `isPending`
+       * covers that gap: once ANY attempt ever settles — success or a real error — it flips to
+       * `false` for good and the `error &&` block below takes over, exactly as before.
+       */}
+      {isPending && <DashboardSkeleton />}
 
       {error && (isNotEntitled ? (
         /**

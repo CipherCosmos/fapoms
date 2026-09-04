@@ -94,7 +94,15 @@ export const DailyRunPanel: React.FC<{
   onDownload: (docId: string) => void;
   onError: (m: string) => void;
   onSuccess: (m: string) => void;
-}> = ({ projectId, onDispatch, onSendToOcr, onDownload, onError, onSuccess }) => {
+  /**
+   * Whoever can see this tab at all includes CLIENT_USER (an external bank account, via
+   * `canReadCustomerMaster` on the page above) — these two default to `true` only so an older
+   * caller that hasn't been updated to pass them still renders as it always did, not because
+   * everyone is actually meant to dispatch or push to OCR.
+   */
+  canDispatch?: boolean;
+  canSendToOcr?: boolean;
+}> = ({ projectId, onDispatch, onSendToOcr, onDownload, onError, onSuccess, canDispatch = true, canSendToOcr = true }) => {
   const [auditDate, setAuditDate] = useState(tomorrowISO());
   const [run, setRun] = useState<DailyRun | null>(null);
   const [loading, setLoading] = useState(false);
@@ -369,7 +377,7 @@ export const DailyRunPanel: React.FC<{
                   {b.nextAction === 'GENERATE_PDF' && (
                     <FileUploadButton label="Upload packet" busy={busy} onFile={(f) => uploadPacket(b, f)} />
                   )}
-                  {b.nextAction === 'DISPATCH' && b.pdf && (
+                  {b.nextAction === 'DISPATCH' && b.pdf && canDispatch && (
                     <button onClick={() => withActing(b.projectBranchId, () => onDispatch([b.pdf!.id]))} disabled={busy}
                       className="btn btn-primary" style={{ padding: '4px 10px', fontSize: 11.5, display: 'flex', alignItems: 'center', gap: 5 }}>
                       <Send size={11} /> {busy ? '…' : 'Send'}
@@ -380,7 +388,7 @@ export const DailyRunPanel: React.FC<{
                       <Clock size={12} /> waiting
                     </span>
                   )}
-                  {b.nextAction === 'SEND_TO_OCR' && b.pdf && (
+                  {b.nextAction === 'SEND_TO_OCR' && b.pdf && canSendToOcr && (
                     <button onClick={() => withActing(b.projectBranchId, () => onSendToOcr(b.pdf!.id))} disabled={busy}
                       className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: 11.5, display: 'flex', alignItems: 'center', gap: 5, color: 'var(--accent)', borderColor: 'var(--status-pending-bg)' }}>
                       <ArrowRightCircle size={11} /> {busy ? '…' : 'Send to OCR'}

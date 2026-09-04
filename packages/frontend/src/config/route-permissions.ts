@@ -43,8 +43,24 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     // GET /system-dashboard/operations asks for project:view:organization — deliberately the
     // lowest common grant of the six roles it serves, since a dashboard is the floor of the app.
     // A role without it lands somewhere it can use instead (see defaultRouteFor).
+    //
+    // Those six roles are named here rather than `Object.values(SystemRole)`, and the difference is
+    // a real defect this closes. Listing every role made the name match (which runs first) admit
+    // the two roles that hold NOTHING — PRODUCT_SUPPORT and ASSAYER — so `requiredPermissions` was
+    // never consulted for them: `defaultRouteFor` sent them here as their first "reachable" page,
+    // the snapshot API then 403'd, and the dashboard sat on loading skeletons forever. Naming only
+    // the roles that actually hold the grant makes the entry mean what its own comment says — a
+    // role without project:view lands elsewhere — while a custom role granted it still reaches the
+    // page through the permission fallback.
     path: '/dashboard',
-    allowedRoles: Object.values(SystemRole),
+    allowedRoles: [
+      SystemRole.ADMIN,
+      SystemRole.OPERATIONS,
+      SystemRole.DESK,
+      SystemRole.DESK_OPERATOR,
+      SystemRole.AUDITOR,
+      SystemRole.CLIENT_USER,
+    ],
     requiredPermissions: ['PROJECT:VIEW:ORGANIZATION'],
   },
   {
@@ -162,12 +178,20 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
   {
     // The desk overview draws /validation/attention, /workload and /activity, all three of which
     // ask for validation:view:organization.
+    //
+    // AUDITOR is deliberately NOT here, and leaving it in was a leak. The page classifies anyone who
+    // is not a desk head as a working member and fetches their personal queue,
+    // GET /documents/data-entry/mine — whose @Roles names only ADMIN, DESK and DESK_OPERATOR. An
+    // auditor is a built-in role, so it gets no permission fallback there and the fetch 403s; and
+    // even if it were served, `/mine` returns the caller's OWN assigned records, which an auditor
+    // never has. Auditor oversight of validation belongs on the dashboard's validation panel and the
+    // assignments board, not on the desk's working queue. The desk is DESK/DESK_OPERATOR's, admins'
+    // to run.
     path: '/data-entry',
     allowedRoles: [
       SystemRole.ADMIN,
       SystemRole.DESK,
       SystemRole.DESK_OPERATOR,
-      SystemRole.AUDITOR,
     ],
     requiredPermissions: ['VALIDATION:VIEW:ORGANIZATION'],
   },
@@ -202,6 +226,14 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     // decision, not an omission.
     path: '/admin/logs',
     allowedRoles: [SystemRole.ADMIN],
+  },
+  {
+    // Security & compliance: the incident register with its CERT-In/DPDP clocks and the
+    // compliance-health summary. Administrators run it, auditors read it — mirrors the backend
+    // ComplianceController, whose reads are @Roles(ADMIN, AUDITOR) and whose writes are ADMIN.
+    // No permission: the controller gates by role name and declares none.
+    path: '/admin/compliance',
+    allowedRoles: [SystemRole.ADMIN, SystemRole.AUDITOR],
   },
   {
     // Which events the platform raises, to whom, on what channels — super administrators only,
@@ -273,7 +305,6 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
       SystemRole.ADMIN,
       SystemRole.DESK,
       SystemRole.DESK_OPERATOR,
-      SystemRole.AUDITOR,
     ],
     requiredPermissions: ['VALIDATION:VIEW:ORGANIZATION'],
   },
@@ -308,6 +339,18 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
  * an unrecognised role is still refused. The alternative — reading "nothing listed" as "nothing
  * required" — turns every forgotten entry into an open page, which is the defect in (2) wearing a
  * different hat. RolesGuard on the backend takes exactly this position.
+ *
+ * 4. The permission fallback is for CUSTOM roles only, and this took a real leak to notice. AUDITOR
+ *    is a built-in role deliberately left off `/planning`'s `allowedRoles` (planning is an
+ *    operations job), yet it holds `PLANNING:VIEW:ORGANIZATION` for a different page it does own,
+ *    `/executive-map`. When the fallback ran for every role, that one shared permission opened
+ *    `/planning` to AUDITOR by the back door — the shell loaded, then the page's own API 403'd and
+ *    the result read as a misleading "no assayers found" empty state. So the fallback now runs only
+ *    when the person holds a role that is NOT a built-in `SystemRole` (a role built in Admin →
+ *    Roles). For a purely built-in principal, `allowedRoles` is the whole and deliberate answer:
+ *    what a built-in role may open is decided in this table, never inferred from a permission it
+ *    happens to hold for something else. This mirrors RolesGuard, which filters to `unrecognised`
+ *    roles before it consults permissions for exactly this reason.
  */
 export function canAccessRoute(
   userRoles: SystemRole[],
@@ -328,6 +371,14 @@ export function canAccessRoute(
 
   if (routeConfig.anyAuthenticated) return true;
   if (userRoles.some((role) => routeConfig.allowedRoles.includes(role))) return true;
+
+  // The permission fallback exists so a role built in Admin → Roles — which by definition matches
+  // no `allowedRoles` entry — can still reach the pages it was granted. It must NOT hand a built-in
+  // role a page it was deliberately kept off (see note 4). If every role the person holds is a
+  // built-in `SystemRole`, the role-name check above was the whole answer, and it said no.
+  const knownRoleNames = new Set<string>(Object.values(SystemRole));
+  const hasCustomRole = userRoles.some((role) => !knownRoleNames.has(role));
+  if (!hasCustomRole) return false;
 
   // `every`, not `some` — see the type's own note. An empty list can never satisfy this, which is
   // what makes the fail-closed rule above true rather than merely intended.

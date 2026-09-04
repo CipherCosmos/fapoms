@@ -31,6 +31,19 @@ import type { ProgressCallback } from '../../infrastructure/queue/queued-job';
 const EXPORT_PHASES = 3;
 
 /**
+ * Row ceiling shared by every export that hydrates an unbounded list. `assignments()` and
+ * `assayerRoster()` already passed this to their `findAll(page, limit, ...)` calls as a literal
+ * `5000` each; `billing()` did not, because `BillingEngineService.listClientLines` (billing-engine
+ * is a different module's file, not touched here) takes no page/limit at all — it always returns
+ * every matching row. That gap meant a billing export with a wide filter (or none) could still
+ * hit the same `xlsx.write` blocking-CPU cost this whole queued-export mechanism exists to move
+ * off the request path, uncapped. Slicing here does not reduce the query cost (the rows are
+ * already fetched), but it does cap workbook size and serialisation time, which is what actually
+ * blocks the event loop — see `EXPORT_PHASES` above.
+ */
+const EXPORT_ROW_CAP = 5000;
+
+/**
  * Spreadsheet exports for operational reporting. Each method returns an .xlsx Buffer built
  * from the same live data the matching screens show, so an exported figure equals the one
  * on screen and both trace to the same source. Follows the "download a workbook" pattern the
@@ -61,6 +74,20 @@ export class ReportsService {
    */
   async coverage(projectId: string): Promise<Buffer> {
     const branches = await this.projectQueryService.findProjectBranches(projectId);
+
+    /**
+     * `findProjectBranches` is a plain `.find()` — it has no opinion on whether `projectId`
+     * names a real project, so a project that genuinely has zero branches yet and a project id
+     * that is simply wrong (a typo, a stale bookmark, a copy-paste from the wrong tab) both
+     * arrive here as the same empty array. Confirming existence only in this branch — rather
+     * than unconditionally, on every call — costs a second query solely on the empty path,
+     * which is exactly where the ambiguity needs resolving. `findOne` throws `NotFoundException`
+     * on its own, so a bad id now 404s instead of silently downloading a "0 of 0, 0% coverage"
+     * workbook that reads as a real answer about a real project.
+     */
+    if (branches.length === 0) {
+      await this.projectQueryService.findOne(projectId);
+    }
 
     /**
      * Coverage as the client reads it, from the shared status sets rather than a hand-written
@@ -132,7 +159,7 @@ export class ReportsService {
     await onProgress?.(0, EXPORT_PHASES, 'Loading assignments');
     const { assignments } = await this.assignmentService.findAll(
       q.page ?? 1,
-      q.limit ?? 5000,
+      q.limit ?? EXPORT_ROW_CAP,
       q.status,
       q.projectBranchStatus,
       undefined,
@@ -179,8 +206,14 @@ export class ReportsService {
           'Branch',
           'State',
           'Branch Status',
-          'Proposed Fee',
-          'Agreed Fee',
+          // The values are bare numbers, not `inr()`-formatted strings — unlike the Billing and
+          // Command Center exports — because a numeric-typed column stays sortable/summable in
+          // the workbook, which a "₹1,234" string cell would not. The unit therefore has to live
+          // in the header. `PlanningWorkspace.tsx`'s own CSV export of this same field already
+          // spells it exactly this way ('Proposed Fee (₹)') — matched here rather than invented,
+          // so the same field reads identically wherever it is exported from.
+          'Proposed Fee (₹)',
+          'Agreed Fee (₹)',
           'SLA Status',
           'Checked In',
           'Completed',
@@ -200,12 +233,16 @@ export class ReportsService {
     onProgress?: ProgressCallback,
   ): Promise<Buffer> {
     await onProgress?.(0, EXPORT_PHASES, 'Loading client lines and invoices');
-    const entries = await this.billingService.listClientLines({
+    const allEntries = await this.billingService.listClientLines({
       clientId: q.clientId,
       projectId: q.projectId,
       assayerId: q.assayerId,
       state: q.state as any,
     });
+    // listClientLines has no page/limit of its own (see EXPORT_ROW_CAP comment) — cap here so a
+    // wide or unfiltered billing export can't outgrow the other exports' 5000-row ceiling.
+    const truncated = allEntries.length > EXPORT_ROW_CAP;
+    const entries = truncated ? allEntries.slice(0, EXPORT_ROW_CAP) : allEntries;
     const invoices = await this.billingService.findInvoices({
       clientId: q.clientId,
       projectId: q.projectId,
@@ -253,6 +290,19 @@ export class ReportsService {
 
     await onProgress?.(2, EXPORT_PHASES, 'Writing workbook');
     return buildWorkbook([
+      // Only present when the cap above actually cut rows, so an unaffected export gets exactly
+      // the two sheets it always had rather than a permanent empty notice.
+      ...(truncated
+        ? [
+            {
+              name: 'Notice',
+              headers: ['Message'],
+              rows: [[
+                `Showing the first ${EXPORT_ROW_CAP.toLocaleString()} of ${allEntries.length.toLocaleString()} matching client lines. Narrow the filters (client, project, assayer or state) to see the rest.`,
+              ]],
+            },
+          ]
+        : []),
       {
         name: 'Client Lines',
         headers: [
@@ -456,7 +506,7 @@ export class ReportsService {
     onProgress?: ProgressCallback,
   ): Promise<Buffer> {
     await onProgress?.(0, EXPORT_PHASES, 'Loading roster');
-    const { assayers } = await this.assayerService.findAll(q.page ?? 1, q.limit ?? 5000, q.scope);
+    const { assayers } = await this.assayerService.findAll(q.page ?? 1, q.limit ?? EXPORT_ROW_CAP, q.scope);
     // `rolesOf` reads only `user.roles`, so a queued run can pass a `{ id, roles }` snapshot
     // rather than storing a whole user record — with its PAN, bank and contact columns — in
     // Redis for the life of the job. See `PrincipalSnapshot`.
@@ -479,10 +529,26 @@ export class ReportsService {
       a.averageRating ?? '',
     ]);
 
-    await onProgress?.(1, EXPORT_PHASES, 'Loading rate cards');
-    const profiles = await this.assayerService.getRosterCommercialProfiles();
     const byId = new Map<string, any>();
     for (const a of scoped) byId.set(a.id, a);
+
+    await onProgress?.(1, EXPORT_PHASES, 'Loading rate cards');
+    // `getRosterCommercialProfiles()` takes no scope — it is one query across every active
+    // assayer in the organisation, by design (see its own comment). Filtering to `byId` here is
+    // what actually confines the Pay Roll sheet to the same roster the caller was scoped to see.
+    //
+    // Without this filter, a regionally-scoped caller (e.g. an OPERATIONS user assigned only
+    // `SOUTH`) got a Roster sheet correctly limited to their region but a Pay Roll sheet with
+    // every assayer nationwide — 1164 rows against a 395-row roster on the live database. Every
+    // row for an out-of-scope assayer rendered with a blank code and name (the `byId.get` below
+    // returning `undefined`) but a populated base fee, daily rate and allowances: unnamed rows
+    // are not anonymous once the figures next to them are real compensation data for a specific
+    // person outside the caller's permitted region. `scopeAssayerListForRoles` only redacts
+    // fields — it never drops a record — so `byId`'s key set is exactly the region- and
+    // role-scoped roster `q.scope` and the caller's role already produced, and filtering on it
+    // here confines the payroll sheet to precisely that set.
+    const profiles = (await this.assayerService.getRosterCommercialProfiles())
+      .filter(({ assayerId }) => byId.has(assayerId));
 
     const payrollRows = profiles.map(({ assayerId, profile, hasFutureProfile }) => {
       const a = byId.get(assayerId);

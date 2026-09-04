@@ -1,5 +1,5 @@
 import * as path from 'path';
-import { calculateHaversineDistance } from '@fapoms/shared';
+import { calculateHaversineDistance, canonicalStateName } from '@fapoms/shared';
 import { resolveFreely, pincodeCentroid, districtCentroidOsm, VerificationAnchor, GeoPrecision, networkAllowed } from './osm-geocoder';
 import { JsonFileCache } from './geo-cache-store';
 
@@ -414,46 +414,55 @@ const STATE_CENTROIDS: Record<string, { lat: number; lng: number }> = {
  * cased and punctuated however the branch clerk typed them. OSM knows only the full canonical name,
  * so an un-normalised state silently sinks every tier: the pincode/POI candidates get rejected for
  * a state mismatch, and the district lookup finds nothing, dropping ~150 records onto their shared
- * state centroid. Canonicalising once, up front, lifts them all. Keys are `norm()` output.
+ * state centroid. Canonicalising once, up front, lifts them all.
+ *
+ * This used to be a full alias table duplicating `@fapoms/shared`'s `canonicalStateName`, which
+ * already handles full-name spelling variants, despaced variants ("WESTBENGAL") and misspellings —
+ * that half is deleted in favour of delegating to it. What stays local is the one thing confirmed
+ * (by directly exercising `canonicalStateName`, not assumed) that it does *not* do: expand a bare
+ * two-letter code. `canonicalStateName` serves callers far beyond a state column, so "or", "as",
+ * "ga" resolving to Odisha/Assam/Goa would be wrong for it in general even though it is exactly
+ * right here. Keys are `norm()` output.
  */
-const STATE_ALIASES: Record<string, string> = {
-  ap: 'Andhra Pradesh', andhra: 'Andhra Pradesh', andhrapradesh: 'Andhra Pradesh',
-  mp: 'Madhya Pradesh', madhyapradesh: 'Madhya Pradesh',
-  up: 'Uttar Pradesh', uttarpradesh: 'Uttar Pradesh',
-  tn: 'Tamil Nadu', tamilnadu: 'Tamil Nadu',
-  wb: 'West Bengal', westbengal: 'West Bengal',
-  hp: 'Himachal Pradesh', himachalpradesh: 'Himachal Pradesh',
-  jk: 'Jammu and Kashmir', jammukashmir: 'Jammu and Kashmir', jammuandkashmir: 'Jammu and Kashmir',
-  uk: 'Uttarakhand', uttarakhand: 'Uttarakhand', uttaranchal: 'Uttarakhand',
-  ka: 'Karnataka', karnataka: 'Karnataka',
-  kl: 'Kerala', kerala: 'Kerala',
-  mh: 'Maharashtra', maharashtra: 'Maharashtra',
-  gj: 'Gujarat', gujarat: 'Gujarat',
-  rj: 'Rajasthan', rajasthan: 'Rajasthan',
-  od: 'Odisha', or: 'Odisha', odisha: 'Odisha', orissa: 'Odisha',
-  br: 'Bihar', bihar: 'Bihar',
-  jh: 'Jharkhand', jharkhand: 'Jharkhand',
-  pb: 'Punjab', punjab: 'Punjab',
-  hr: 'Haryana', haryana: 'Haryana',
-  as: 'Assam', assam: 'Assam',
-  cg: 'Chhattisgarh', chhattisgarh: 'Chhattisgarh',
-  ts: 'Telangana', tg: 'Telangana', telangana: 'Telangana',
-  ga: 'Goa', goa: 'Goa',
-  dl: 'Delhi', delhi: 'Delhi', newdelhi: 'Delhi',
-  tr: 'Tripura', tripura: 'Tripura',
-  ml: 'Meghalaya', meghalaya: 'Meghalaya',
-  mn: 'Manipur', manipur: 'Manipur',
-  nl: 'Nagaland', nagaland: 'Nagaland',
-  mz: 'Mizoram', mizoram: 'Mizoram',
-  ar: 'Arunachal Pradesh', arunachalpradesh: 'Arunachal Pradesh',
-  sk: 'Sikkim', sikkim: 'Sikkim',
-  py: 'Puducherry', puducherry: 'Puducherry', pondicherry: 'Puducherry',
+const STATE_ABBREVIATIONS: Record<string, string> = {
+  ap: 'Andhra Pradesh', andhra: 'Andhra Pradesh',
+  mp: 'Madhya Pradesh',
+  up: 'Uttar Pradesh',
+  tn: 'Tamil Nadu',
+  wb: 'West Bengal',
+  hp: 'Himachal Pradesh',
+  jk: 'Jammu and Kashmir',
+  uk: 'Uttarakhand',
+  ka: 'Karnataka',
+  kl: 'Kerala',
+  mh: 'Maharashtra',
+  gj: 'Gujarat',
+  rj: 'Rajasthan',
+  od: 'Odisha', or: 'Odisha',
+  br: 'Bihar',
+  jh: 'Jharkhand',
+  pb: 'Punjab',
+  hr: 'Haryana',
+  as: 'Assam',
+  cg: 'Chhattisgarh',
+  ts: 'Telangana', tg: 'Telangana',
+  ga: 'Goa',
+  dl: 'Delhi',
+  tr: 'Tripura',
+  ml: 'Meghalaya',
+  mn: 'Manipur',
+  nl: 'Nagaland',
+  mz: 'Mizoram',
+  ar: 'Arunachal Pradesh',
+  sk: 'Sikkim',
+  py: 'Puducherry',
 };
 
-/** Canonical full state name OSM will recognise, or the trimmed original if it is not a state we map. */
-function canonicalState(state?: string | null): string {
+/** Canonical full state name OSM will recognise, or the trimmed original if it is not a state we
+ *  map. Exported so this fallback behaviour has a direct regression test. */
+export function canonicalState(state?: string | null): string {
   if (!state) return '';
-  return STATE_ALIASES[norm(state)] ?? state.trim();
+  return STATE_ABBREVIATIONS[norm(state)] ?? canonicalStateName(state) ?? state.trim();
 }
 
 /** Look up a district centroid from the static database.

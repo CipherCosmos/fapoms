@@ -3,14 +3,15 @@ import {
   Edit2, ArrowRightLeft, AlertTriangle, CheckCircle2,
   User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, MapPin, KeyRound, ShieldCheck, FileCheck, Gauge, Info,
 } from 'lucide-react';
-import { nextAssayerLifecycleStates, nextOnboardingStep, AssayerLifecycleStatus, assayerLifecycleLabel, activityEventLabel, employmentTypeLabel, AssayerEngagementType, AssayerUnavailableReason, ASSAYER_RECORD_FIELDS } from '@fapoms/shared';
+import { nextAssayerLifecycleStates, nextOnboardingStep, AssayerLifecycleStatus, assayerLifecycleLabel, activityEventLabel, employmentTypeLabel, AssayerEngagementType, AssayerUnavailableReason, ASSAYER_RECORD_FIELDS, isValidIfsc } from '@fapoms/shared';
 
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../../services/api';
-import { useConfirm, AlertBanner, SkeletonList } from '../../components/ui';
+import { useConfirm, AlertBanner, SkeletonList, Select } from '../../components/ui';
 import { useToast } from '../../components/ui/Toast';
 import { GeoPrecisionBadge, geoNeedsFixing } from '../../components/GeoPrecisionBadge';
 import { PinCoordinateControl } from '../../components/PinCoordinateControl';
+import { Autocomplete } from '../../components/ui/Autocomplete';
 import type { Assayer } from './assayer-shared';
 import {
   STATUS_COLORS, money, missingCriticalFields,
@@ -19,7 +20,10 @@ import {
   isSensitiveKey, maskedIdentifier, type SensitiveRecordKey,
 } from './assayer-shared';
 import { SensitiveValue } from './SensitiveValue';
-import { EDIT_FIELDS, useManagerOptions, type FieldDef } from './AssayerForms';
+import {
+  EDIT_FIELDS, useManagerOptions, useHrOwnerOptions, applyPlace, GEO_AUTO_FIELDS, resolveIfsc,
+  type FieldDef, type IfscInfo,
+} from './AssayerForms';
 import { fmtDate, fmtWhen } from '../../utils/dates';
 import { userMessage } from '../../services/errors';
 import { CommercialProfileModal, type CommercialProfile } from './CommercialProfileModal';
@@ -29,6 +33,7 @@ import { AssayerQualificationTab } from './AssayerQualificationTab';
 import { AssayerSkillsPanel } from './AssayerSkillsPanel';
 import { todayDateKey, localDateKey } from '../../utils/statusLabels';
 import { counted } from '../../utils/plural';
+import { LIFECYCLE_MOVE_REASONS, OTHER_LIFECYCLE_REASON } from './lifecycle-reason-vocabulary';
 
 /**
  * How they are engaged, and why they are not available — the two halves of the roster's
@@ -296,6 +301,7 @@ export const AssayerRecord: React.FC<{
   const [editInitial, setEditInitial] = useState<Record<string, string>>({});
   const [savingEdit, setSavingEdit] = useState(false);
   const managerOpts = useManagerOptions(editing && canManage, assayerId);
+  const hrOwnerOpts = useHrOwnerOptions(editing && canManage);
 
   const snapshotEdit = (rec: Assayer): Record<string, string> => {
     const f: Record<string, string> = {};
@@ -360,8 +366,10 @@ export const AssayerRecord: React.FC<{
     ? {
         form: editForm,
         set: (key, val) => setEditForm((f) => ({ ...f, [key]: val })),
+        setMany: (next) => setEditForm(next),
         reveal: revealSensitive,
         managers: managerOpts.people ? managerOpts.people.map((p) => ({ id: p.value, name: p.label })) : null,
+        hrOwners: hrOwnerOpts.people ? hrOwnerOpts.people.map((p) => p.label) : null,
       }
     : undefined;
 
@@ -1375,6 +1383,11 @@ const StageStep: React.FC<{
   onCancel: () => void;
 }> = ({ to, primary, busy, asking, reason, onReason, onPress, onConfirm, onCancel }) => {
   const stage = assayerLifecycleLabel(to);
+  // Whether the free-text box is showing. Seeded false and reset the moment the box closes, so
+  // reopening this same stage later starts from the dropdown again rather than stranding the
+  // clerk in "Other" from a previous, cancelled attempt.
+  const [other, setOther] = useState(false);
+  useEffect(() => { if (!asking) setOther(false); }, [asking]);
   return (
     <div
       style={{
@@ -1402,19 +1415,45 @@ const StageStep: React.FC<{
           <label style={{ ...label, display: 'block', marginBottom: '4px' }} htmlFor={`reason-${to}`}>
             Why? This is kept on their employment record
           </label>
-          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
-            <input
-              id={`reason-${to}`}
-              autoFocus
-              value={reason}
-              onChange={(e) => onReason(e.target.value)}
-              placeholder="e.g. no longer available for work in their area"
-              style={{
-                flex: '1 1 220px', padding: '7px 10px', fontSize: '12px', borderRadius: '6px',
-                background: 'var(--bg-page)', color: 'inherit',
-                border: `1px solid ${reason.trim() ? 'var(--border-color)' : 'var(--warning)'}`,
-              }}
-            />
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'flex-start' }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', flex: '1 1 220px' }}>
+              {/*
+                A pick from what real departures actually said, queried off `assayers.notes` —
+                the same handful of reasons kept showing up spelled several different ways
+                ("Behaviour issue" alone had at least two misspellings), which is exactly why a
+                notes column full of free text could never be grouped by reason. "Other" still
+                takes anything: the server only ever checked that `reason` was non-blank
+                (`AssayerService.LIFECYCLE_MOVES_NEEDING_A_REASON`), and this dropdown does not
+                add a constraint on top of that — it sends the same free string either way.
+              */}
+              <Select
+                id={`reason-${to}`}
+                value={other ? OTHER_LIFECYCLE_REASON : reason}
+                onChange={(v) => {
+                  if (v === OTHER_LIFECYCLE_REASON) { setOther(true); onReason(''); } else { setOther(false); onReason(String(v)); }
+                }}
+                options={[
+                  { value: '', label: 'Choose a reason…' },
+                  ...LIFECYCLE_MOVE_REASONS.map((r) => ({ value: r, label: r })),
+                  { value: OTHER_LIFECYCLE_REASON, label: 'Other (type it in)' },
+                ]}
+                error={!reason.trim()}
+              />
+              {other && (
+                <input
+                  autoFocus
+                  value={reason}
+                  onChange={(e) => onReason(e.target.value)}
+                  placeholder="e.g. no longer available for work in their area"
+                  aria-label="Reason, in your own words"
+                  style={{
+                    padding: '7px 10px', fontSize: '12px', borderRadius: '6px',
+                    background: 'var(--bg-page)', color: 'inherit',
+                    border: `1px solid ${reason.trim() ? 'var(--border-color)' : 'var(--warning)'}`,
+                  }}
+                />
+              )}
+            </div>
             <button onClick={onCancel} disabled={busy} className="btn btn-secondary" style={{ fontSize: '12px', padding: '6px 12px' }}>
               Cancel
             </button>
@@ -1469,9 +1508,19 @@ const SUMMARY_EDIT_KEYS = [
 interface EditCtx {
   form: Record<string, string>;
   set: (key: string, val: string) => void;
+  /**
+   * Replaces the whole form in one go — what a geo-lookup cross-fill needs, since picking a real
+   * place answers several fields (state/district/city/pincode) at once and `set` only ever
+   * writes one. Takes the WHOLE next form, not a partial patch — the same contract
+   * `applyPlace` in AssayerForms.tsx already has with the wizard's own `setForm`, so this screen
+   * can call that function directly instead of growing a second copy of the cross-fill rule.
+   */
+  setMany: (next: Record<string, string>) => void;
   /** A KYC identifier uncovered on purpose. Seeds the box and the baseline — see `revealSensitive`. */
   reveal: (key: string, full: string) => void;
   managers: { id: string; name: string }[] | null;
+  /** Candidate names for `hrOwnerName` — a free-text column, so just names, not ids. */
+  hrOwners: string[] | null;
 }
 
 const inlineControl: React.CSSProperties = {
@@ -1520,6 +1569,19 @@ const InlineControl: React.FC<{ fieldKey: string; ctx: EditCtx }> = ({ fieldKey,
       </select>
     );
   }
+  if (def.hrOwnerPicker) {
+    // Free text until now, so most values on file will not match anyone in the directory — that
+    // is the normal case here, not an edge case, and the current value must stay selectable or
+    // opening this box would blank out whoever was actually recorded.
+    const known = (ctx.hrOwners ?? []).includes(val);
+    return (
+      <select style={inlineControl} value={val} onChange={(e) => onChange(e.target.value)}>
+        <option value="">{ctx.hrOwners === null ? 'Loading…' : '— none —'}</option>
+        {val && !known && <option value={val}>{val} (recorded earlier)</option>}
+        {(ctx.hrOwners ?? []).map((name) => <option key={name} value={name}>{name}</option>)}
+      </select>
+    );
+  }
   if (def.options) {
     return (
       <select style={inlineControl} value={val} onChange={(e) => onChange(e.target.value)}>
@@ -1527,6 +1589,30 @@ const InlineControl: React.FC<{ fieldKey: string; ctx: EditCtx }> = ({ fieldKey,
         {def.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
     );
+  }
+  /**
+   * City, district and pincode go through the same live geo lookup the registration wizard
+   * uses, instead of a plain box — see `GEO_AUTO_FIELDS`/`applyPlace` in AssayerForms.tsx.
+   *
+   * This is the exact gap the record's Summary editor had: registering somebody filled these
+   * four fields consistently from one pick, and correcting the same person's address afterwards
+   * — which is exactly when a typo is being fixed — fell back to four boxes that could disagree
+   * with each other. `applyPlace` is called directly rather than reimplemented, and `setMany`
+   * gives it the same "replace the whole form" contract it already has with the wizard.
+   */
+  if (GEO_AUTO_FIELDS.has(fieldKey)) {
+    return (
+      <Autocomplete
+        value={val}
+        onChange={onChange}
+        onSelect={(place) => applyPlace(fieldKey, place, ctx.form, ctx.setMany)}
+        placeholder={fieldKey === 'pincode' ? 'Search pincode…' : `Type to search ${def.label.toLowerCase()}…`}
+        filterType={(r) => (fieldKey === 'pincode' ? !!r.pincode : true)}
+      />
+    );
+  }
+  if (fieldKey === 'ifscCode') {
+    return <IfscInlineControl val={val} onChange={onChange} ctx={ctx} />;
   }
   const type = def.type === 'date' ? 'date' : def.type === 'number' ? 'number' : 'text';
   return (
@@ -1539,6 +1625,50 @@ const InlineControl: React.FC<{ fieldKey: string; ctx: EditCtx }> = ({ fieldKey,
       inputMode={type === 'number' || fieldKey === 'pincode' || fieldKey.toLowerCase().includes('phone') ? 'numeric' : fieldKey === 'email' ? 'email' : undefined}
       onChange={(e) => onChange(e.target.value)}
     />
+  );
+};
+
+/**
+ * The IFSC box, plus what it resolved to.
+ *
+ * On blur — the same "finished with the field" moment the wizard's pincode check uses — a
+ * shape-valid code is looked up and, when it resolves, fills `bankName` (still a plain,
+ * overwritable box: nothing here locks it). An invalid or unresolved code clears the supporting
+ * line and changes nothing else; `resolveIfsc` already never throws, so there is no failure path
+ * that could block a save.
+ */
+const IfscInlineControl: React.FC<{ val: string; onChange: (v: string) => void; ctx: EditCtx }> = ({
+  val, onChange, ctx,
+}) => {
+  const [info, setInfo] = useState<IfscInfo | null>(null);
+  const [busy, setBusy] = useState(false);
+  const handleBlur = async () => {
+    if (!isValidIfsc(val)) { setInfo(null); return; }
+    setBusy(true);
+    const result = await resolveIfsc(val);
+    setBusy(false);
+    setInfo(result);
+    if (result) ctx.set('bankName', result.bankName);
+  };
+  return (
+    <>
+      <input
+        type="text"
+        style={{ ...inlineControl, fontFamily: 'monospace', textTransform: 'uppercase' }}
+        value={val}
+        onChange={(e) => onChange(e.target.value)}
+        onBlur={() => { void handleBlur(); }}
+      />
+      {busy && <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>Looking up…</div>}
+      {!busy && info && (
+        <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
+          {info.bankName}
+          {info.branchName ? ` — ${info.branchName}` : ''}
+          {info.city ? `, ${info.city}` : ''}
+          {info.state ? `, ${info.state}` : ''}
+        </div>
+      )}
+    </>
   );
 };
 

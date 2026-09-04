@@ -169,6 +169,48 @@ describe('ImportJobService', () => {
     });
   });
 
+  describe('enqueueRosterImport', () => {
+    beforeEach(() => {
+      mockQueue.add.mockResolvedValue({ id: 7 });
+    });
+
+    /**
+     * `overwrite` used to stop here — `RosterImportJobData` had no field for it, so a caller
+     * could pass it and it would silently vanish before reaching the worker, let alone the
+     * importer. Every operator who never sets it must still get the safe default (fill blanks
+     * only, file a review issue on a disagreement), not an accidental overwrite because the flag
+     * fell out of the object somewhere in the queue.
+     */
+    it('carries overwrite in the queued job data, defaulting to false', async () => {
+      await service.enqueueRosterImport({
+        actorId: 'u-1', fileBuffer: Buffer.from('xlsx'), fileName: 'roster.xlsx', totalRows: 100,
+      });
+
+      const [, data] = mockQueue.add.mock.calls[0];
+      expect(data.overwrite).toBe(false);
+    });
+
+    it('carries overwrite: true through when the caller asks for it', async () => {
+      await service.enqueueRosterImport({
+        actorId: 'u-1', fileBuffer: Buffer.from('xlsx'), fileName: 'roster.xlsx', totalRows: 100,
+        overwrite: true,
+      });
+
+      const [, data] = mockQueue.add.mock.calls[0];
+      expect(data.overwrite).toBe(true);
+    });
+
+    /** The same real-name loss `fileName` had for the branch importer, now fixed here too. */
+    it('carries the real file name in the payload', async () => {
+      await service.enqueueRosterImport({
+        actorId: 'u-1', fileBuffer: Buffer.from('xlsx'), fileName: 'sumeru-roster.xlsx', totalRows: 100,
+      });
+
+      const [, data] = mockQueue.add.mock.calls[0];
+      expect(data.fileName).toBe('sumeru-roster.xlsx');
+    });
+  });
+
   describe('getBranchImportStatus', () => {
     const job = (over: Record<string, any> = {}) => ({
       id: 7,

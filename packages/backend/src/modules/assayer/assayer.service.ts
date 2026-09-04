@@ -1,7 +1,10 @@
 import {
-  Injectable, NotFoundException, ConflictException, BadRequestException, UnauthorizedException, OnModuleInit, Logger } from '@nestjs/common'; import { InjectRepository, InjectDataSource } from '@nestjs/typeorm'; import { Repository, LessThanOrEqual, In, DataSource, ILike } from 'typeorm'; import * as xlsx from 'xlsx'; import * as bcrypt from 'bcrypt'; import { randomInt } from 'crypto'; import { AssayerEntity } from './assayer.entity'; import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity'; import { WorkforceAttributeEntity } from './workforce-attribute.entity'; import { AssayerRemarkEntity } from './assayer-remark.entity'; import { AssayerActivityEntity } from './assayer-activity.entity'; import { TEMP_PASSWORD_WORDS } from './temp-password-words'; import { AuditService } from '../../core/audit/audit.service'; import { AssayerStateMachine } from './assayer.state-machine'; import { DomainEventPublisher } from '../../core/events/domain-event.publisher'; import { WorkflowEngine } from '../platform/workflow/workflow.engine'; import { NotificationDispatchService } from '../notifications/notification-dispatch.service'; import { CacheService } from '../../infrastructure/cache/cache.service'; import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service'; import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, DocumentVerification, PLANNABLE_EMPANELMENT_STANDINGS,
+  Injectable, NotFoundException, ConflictException, BadRequestException, UnauthorizedException, OnModuleInit, Logger } from '@nestjs/common'; import { InjectRepository, InjectDataSource } from '@nestjs/typeorm'; import { Repository, LessThanOrEqual, In, DataSource, ILike } from 'typeorm'; import * as xlsx from 'xlsx'; import * as bcrypt from 'bcrypt'; import { randomInt } from 'crypto'; import { AssayerEntity } from './assayer.entity'; import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity'; import { WorkforceAttributeEntity } from './workforce-attribute.entity'; import { AssayerRemarkEntity } from './assayer-remark.entity'; import { AssayerActivityEntity } from './assayer-activity.entity'; import { TEMP_PASSWORD_WORDS } from './temp-password-words'; import { AuditService } from '../../core/audit/audit.service'; import { AssayerStateMachine } from './assayer.state-machine'; import { DomainEventPublisher } from '../../core/events/domain-event.publisher'; import { WorkflowEngine } from '../platform/workflow/workflow.engine'; import { NotificationDispatchService } from '../notifications/notification-dispatch.service'; import { EmailProvider } from '../../infrastructure/notifications/email-provider'; import { SmsProvider } from '../../infrastructure/notifications/sms-provider'; import { CacheService } from '../../infrastructure/cache/cache.service'; import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service'; import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, DocumentVerification, PLANNABLE_EMPANELMENT_STANDINGS,
 } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
+import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
+import type { EntityManager } from 'typeorm';
+import { diffFields } from '../../core/audit/diff-fields';
 import { COMMITTED_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { geocodeIndia, pincodeAuthority } from '../geo/india-geocoder';
@@ -422,6 +425,9 @@ export class AssayerService implements OnModuleInit {
     private readonly eventPublisher: DomainEventPublisher,
     private readonly workflowEngine: WorkflowEngine,
     private readonly notificationDispatch: NotificationDispatchService,
+    private readonly emailProvider: EmailProvider,
+    private readonly smsProvider: SmsProvider,
+    private readonly uow: UnitOfWork,
     @InjectDataSource()
     private readonly dataSource: DataSource,
     // CacheModule is @Global(), so this needs no module wiring. Used only to invalidate the RBAC
@@ -968,6 +974,15 @@ export class AssayerService implements OnModuleInit {
       district: assayer.district,
       state: assayer.state,
       pincode: assayer.pincode,
+      // Captured before the copy loop below overwrites the entity, so the field diff at the
+      // bottom of this method can compare what was stored against what the request sent.
+      phone: assayer.phone,
+      email: assayer.email,
+      alternatePhone: (assayer as any).alternatePhone,
+      panNumber: assayer.panNumber,
+      aadhaarNumber: assayer.aadhaarNumber,
+      bankAccountNumber: assayer.bankAccountNumber,
+      ifscCode: assayer.ifscCode,
     };
 
     /**
@@ -1094,13 +1109,29 @@ export class AssayerService implements OnModuleInit {
     const saved = await this.assayerRepository.save(assayer);
     await this.syncWorkforceAttributes(saved.id, dto, userId);
     await this.recordActivity(saved.id, 'ASSAYER_UPDATED', null, null, userId, 'Profile updated');
+    // Bank/identity/contact keys diffed field-by-field rather than folded into one sentence, so
+    // "who changed the account number and when" is answerable from the trail instead of a
+    // generic "profile updated". PAN/Aadhaar/account are masked to their last 4 characters —
+    // the metadata proves a change happened without ever storing the clear value.
+    const fieldChanges = diffFields(orig, dto as Record<string, any>, [
+      { key: 'phone', label: 'Phone' },
+      { key: 'alternatePhone', label: 'Alternate Phone' },
+      { key: 'email', label: 'Email' },
+      { key: 'panNumber', label: 'PAN', sensitive: true },
+      { key: 'aadhaarNumber', label: 'Aadhaar', sensitive: true },
+      { key: 'bankAccountNumber', label: 'Bank Account', sensitive: true },
+      { key: 'ifscCode', label: 'IFSC Code' },
+    ]);
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
       eventType: 'ASSAYER_UPDATED',
       entityType: 'ASSAYER',
       entityId: saved.id,
       userId,
-      remarks: `Updated assayer profile: ${saved.displayName}`,
+      remarks: fieldChanges.length
+        ? `Updated assayer profile: ${saved.displayName} (${fieldChanges.map((c) => c.label).join(', ')})`
+        : `Updated assayer profile: ${saved.displayName}`,
+      metadata: fieldChanges.length ? { changes: fieldChanges } : undefined,
     });
     await this.eventPublisher.publish('assayer:updated', {
       eventType: 'assayer:updated',
@@ -1350,95 +1381,117 @@ export class AssayerService implements OnModuleInit {
     const assayer = await this.findOne(id);
     assayer.isActive = false;
     assayer.updatedBy = userId;
-    await this.assayerRepository.save(assayer);
-
-    // Deactivate assayer commercial profiles
-    await this.dataSource.query(
-      `UPDATE assayer_commercial_profiles SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
-      [userId, id],
-    );
-
-    // Deactivate assayer documents
-    await this.dataSource.query(
-      `UPDATE assayer_documents SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
-      [userId, id],
-    );
-
-    // Skills, languages and certifications. Missing from this cascade, these outlived the person:
-    // the HR compliance queries join `assayers` and read `w.is_active`, so a deleted assayer's
-    // certifications kept appearing under "falling due" and their skills kept counting toward
-    // capability coverage — HR chasing renewals for someone who no longer exists.
-    await this.dataSource.query(
-      `UPDATE workforce_attributes SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
-      [userId, id],
-    );
 
     /**
-     * The vetting record: references, background checks, client standings, staff remarks and
-     * score overrides.
+     * Everything below used to be 11 autocommit statements on the pooled connection: the
+     * comment this replaced records the outcome of that design directly — a table rename
+     * (`assayer_government_documents` -> gone with 1792500000000) made one UPDATE raise 42P01
+     * on every delete, and because it sat before the assignments/schedules statements the
+     * cascade died halfway, leaving a "deleted" person still holding live assignments and dated
+     * slots. One transaction makes that class of failure impossible: either the whole cascade
+     * lands, or none of it does and the profile is still fully active for the retry to find.
      *
-     * These were never in the cascade, and the statement that used to sit here targeted
-     * `assayer_government_documents` — a table `1792500000000-OneDocumentRecord` dropped. That
-     * UPDATE raised 42P01 on every delete, and because it sat BEFORE the assignments and
-     * schedules statements, the cascade died halfway: the person vanished from every list while
-     * still holding live assignments and dated slots. Ops saw a 500, retried, and deepened the
-     * partial state each time.
-     *
-     * Every table here is keyed by `assayer_id` and read by something that assumes the person
-     * exists — the empanelment gate in planning, the qualification score, the vetting dossier.
-     *
-     * Written out one statement per table rather than looped: `soft-delete-cascade.spec.ts`
-     * reads this method as text and checks each table by name, and a loop hides them from it.
+     * Chained with `.then()` rather than a nested `await`-using callback on purpose:
+     * `soft-delete-cascade.spec.ts` slices this method's source between its own signature and
+     * the next method's, and a second inner function keyword in between would move that
+     * boundary and hide every statement after it from the check. A plain chain keeps the whole
+     * cascade — every UPDATE, by name — inside the text the structural test actually reads.
      */
-    await this.dataSource.query(
-      `UPDATE assayer_references SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
-      [userId, id],
-    );
-    await this.dataSource.query(
-      `UPDATE assayer_background_checks SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
-      [userId, id],
-    );
-    await this.dataSource.query(
-      `UPDATE assayer_client_empanelments SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
-      [userId, id],
-    );
-    await this.dataSource.query(
-      `UPDATE assayer_remarks SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
-      [userId, id],
-    );
-    await this.dataSource.query(
-      `UPDATE assayer_score_overrides SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
-      [userId, id],
-    );
+    await this.uow.run((manager) => manager.getRepository(AssayerEntity).save(assayer)
+      // Deactivate assayer commercial profiles
+      .then(() => manager.query(
+        `UPDATE assayer_commercial_profiles SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
+        [userId, id],
+      ))
+      // Deactivate assayer documents
+      .then(() => manager.query(
+        `UPDATE assayer_documents SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
+        [userId, id],
+      ))
+      // Skills, languages and certifications. Missing from this cascade, these outlived the
+      // person: the HR compliance queries join `assayers` and read `w.is_active`, so a deleted
+      // assayer's certifications kept appearing under "falling due" and their skills kept
+      // counting toward capability coverage — HR chasing renewals for someone who no longer
+      // exists.
+      .then(() => manager.query(
+        `UPDATE workforce_attributes SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
+        [userId, id],
+      ))
+      /*
+       * The vetting record: references, background checks, client standings, staff remarks and
+       * score overrides.
+       *
+       * Every table here is keyed by `assayer_id` and read by something that assumes the person
+       * exists — the empanelment gate in planning, the qualification score, the vetting dossier.
+       *
+       * Written out one statement per table rather than looped: `soft-delete-cascade.spec.ts`
+       * reads this method as text and checks each table by name, and a loop hides them from it.
+       */
+      .then(() => manager.query(
+        `UPDATE assayer_references SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
+        [userId, id],
+      ))
+      .then(() => manager.query(
+        `UPDATE assayer_background_checks SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
+        [userId, id],
+      ))
+      .then(() => manager.query(
+        `UPDATE assayer_client_empanelments SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
+        [userId, id],
+      ))
+      .then(() => manager.query(
+        `UPDATE assayer_remarks SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
+        [userId, id],
+      ))
+      .then(() => manager.query(
+        `UPDATE assayer_score_overrides SET is_active = false, updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
+        [userId, id],
+      ))
+      /*
+       * Assignments split by whether they were ever finished. A COMPLETED assignment is a
+       * billable fact that happened — billing filters on `is_active`, so flipping it false here
+       * would silently drop a completed audit from every invoice it should still appear on.
+       * Everything else (still open, in progress, offered) never will be finished now that the
+       * assayer is gone, so it is deactivated AND given a terminal status: without a terminal
+       * status the branch's busy check (assignment `create()`, owned elsewhere) sees an
+       * `is_active=false` row that is still sitting in a non-terminal status and keeps treating
+       * the branch as occupied indefinitely.
+       */
+      .then(() => manager.query(
+        `UPDATE assignments SET is_active = false, status = $1,
+            cancel_reason = 'Assayer profile soft deleted', updated_by = $2
+          WHERE assayer_id = $3 AND is_active = true AND status != $4`,
+        [AssignmentStatus.CANCELLED, userId, id, AssignmentStatus.COMPLETED],
+      ))
+      /*
+       * And the scheduled visits those assignments carry.
+       *
+       * The cascade stopped at the assignment, so a deleted assayer's schedules stayed active —
+       * two of them in this database, both ACCEPTED, both for a profile that no longer exists.
+       * A schedule is what the calendar, the day plan and the dispatch view read, so the effect
+       * is a deleted person still holding dated slots that operations plans around. Scoped to
+       * the same non-completed assignments as above, so a completed job's schedule (still part
+       * of its billable history) is left alone too.
+       */
+      .then(() => manager.query(
+        `UPDATE schedules SET is_active = false, updated_by = $1
+          WHERE is_active = true AND assignment_id IN (
+            SELECT id FROM assignments WHERE assayer_id = $2 AND status != $3
+          )`,
+        [userId, id, AssignmentStatus.COMPLETED],
+      ))
+      .then(() => this.auditService.recordEvent(
+        {
+          category: EventCategory.OPERATIONAL,
+          eventType: 'ASSAYER_DELETED',
+          entityType: 'ASSAYER',
+          entityId: id,
+          userId,
+          remarks: `Soft deleted assayer profile ${assayer.displayName} and cascaded deactivation to commercial profiles, documents, and non-completed assignments`,
+        },
+        { manager },
+      )));
 
-    // Deactivate active assignments for this assayer
-    await this.dataSource.query(
-      `UPDATE assignments SET is_active = false, cancel_reason = 'Assayer profile soft deleted', updated_by = $1 WHERE assayer_id = $2 AND is_active = true`,
-      [userId, id],
-    );
-
-    /**
-     * And the scheduled visits those assignments carry.
-     *
-     * The cascade stopped at the assignment, so a deleted assayer's schedules stayed active —
-     * two of them in this database, both ACCEPTED, both for a profile that no longer exists.
-     * A schedule is what the calendar, the day plan and the dispatch view read, so the effect
-     * is a deleted person still holding dated slots that operations plans around.
-     */
-    await this.dataSource.query(
-      `UPDATE schedules SET is_active = false, updated_by = $1
-        WHERE is_active = true AND assignment_id IN (SELECT id FROM assignments WHERE assayer_id = $2)`,
-      [userId, id],
-    );
-
-    await this.auditService.recordEvent({
-      category: EventCategory.OPERATIONAL,
-      eventType: 'ASSAYER_DELETED',
-      entityType: 'ASSAYER',
-      entityId: id,
-      userId,
-      remarks: `Soft deleted assayer profile ${assayer.displayName} and cascaded deactivation to commercial profiles, documents, and active assignments`,
-    });
     await this.eventPublisher.publish('assayer:deleted', {
       eventType: 'assayer:deleted',
       aggregateId: id,
@@ -1639,13 +1692,20 @@ export class AssayerService implements OnModuleInit {
       userId,
       role,
       [],
-      async () => {
-        const saved = await this.assayerRepository.save(assayer);
+      async (manager) => {
+        const assayerRepo = manager ? manager.getRepository(AssayerEntity) : this.assayerRepository;
+        const saved = await assayerRepo.save(assayer);
 
         // After the save, so a departure whose workflow command was refused does not close the
         // client standings of somebody still on the roster.
         const empanelmentsClosed = AssayerService.DEPARTED_LIFECYCLE.has(targetStatus)
-          ? await this.closeClientEmpanelmentsOnDeparture(saved.id, targetStatus, userId)
+          ? await this.closeClientEmpanelmentsOnDeparture(saved.id, targetStatus, userId, manager)
+          : 0;
+
+        // Same reasoning, same scope, same "after the save" ordering as the empanelment close
+        // above — see `cancelOpenAssignmentsOnDeparture` for why this exists at all.
+        const assignmentsCancelled = AssayerService.DEPARTED_LIFECYCLE.has(targetStatus)
+          ? await this.cancelOpenAssignmentsOnDeparture(saved.id, targetStatus, userId, manager)
           : 0;
 
         /**
@@ -1658,20 +1718,26 @@ export class AssayerService implements OnModuleInit {
           empanelmentsClosed > 0
             ? `${empanelmentsClosed} client empanelment${empanelmentsClosed === 1 ? '' : 's'} closed`
             : null,
+          assignmentsCancelled > 0
+            ? `${assignmentsCancelled} open assignment${assignmentsCancelled === 1 ? '' : 's'} cancelled`
+            : null,
         ].filter(Boolean).join('; ');
         const remarks = [reason?.trim() || null, consequences || null].filter(Boolean).join(' — ') || null;
 
-        await this.recordActivity(saved.id, 'ASSAYER_LIFECYCLE_TRANSITION', currentStatus, targetStatus, userId, remarks);
-        await this.auditService.recordEvent({
-          category: EventCategory.WORKFLOW,
-          eventType: 'ASSAYER_LIFECYCLE_TRANSITION',
-          entityType: 'ASSAYER',
-          entityId: saved.id,
-          previousState: currentStatus,
-          newState: targetStatus,
-          userId,
-          remarks: remarks || `Lifecycle transition: ${currentStatus} → ${targetStatus}`,
-        });
+        await this.recordActivity(saved.id, 'ASSAYER_LIFECYCLE_TRANSITION', currentStatus, targetStatus, userId, remarks, manager);
+        await this.auditService.recordEvent(
+          {
+            category: EventCategory.WORKFLOW,
+            eventType: 'ASSAYER_LIFECYCLE_TRANSITION',
+            entityType: 'ASSAYER',
+            entityId: saved.id,
+            previousState: currentStatus,
+            newState: targetStatus,
+            userId,
+            remarks: remarks || `Lifecycle transition: ${currentStatus} → ${targetStatus}`,
+          },
+          manager ? { manager } : undefined,
+        );
 
         // Only on the crossing into ACTIVE, never on a re-save at ACTIVE. The dedupe key is the
         // assayer alone, so a later ON_LEAVE → ACTIVE return does not re-announce someone who
@@ -1799,9 +1865,13 @@ export class AssayerService implements OnModuleInit {
     assayerId: string,
     target: AssayerLifecycleStatus,
     userId: string,
+    manager?: EntityManager,
   ): Promise<number> {
-    // TypeORM returns `[rows, rowCount]` from an UPDATE, not a rows array.
-    const [, affected] = await this.dataSource.query(
+    // TypeORM returns `[rows, rowCount]` from an UPDATE, not a rows array. Runs through the
+    // caller's transaction manager when given one, so this closes together with the lifecycle
+    // save rather than surviving a rollback of it.
+    const runner = manager ?? this.dataSource;
+    const [, affected] = await runner.query(
       `UPDATE assayer_client_empanelments
           SET status = $1, status_reason = $2, updated_by = $3
         WHERE assayer_id = $4 AND is_active = true AND status IN ($5, $6)`,
@@ -1816,6 +1886,67 @@ export class AssayerService implements OnModuleInit {
       ],
     ) ?? [];
     return typeof affected === 'number' ? affected : 0;
+  }
+
+  /**
+   * Ends this person's open assignments the moment they actually leave, and reports how many.
+   *
+   * `remove()` (a full delete) has always cancelled non-completed assignments — see its own
+   * cascade — but resigning or terminating someone through the ordinary lifecycle screen is a
+   * completely different code path, `doTransitionLifecycle`, which called
+   * `closeClientEmpanelmentsOnDeparture` and stopped there. An assignment already offered or
+   * accepted before the departure was left exactly as it stood: HR records somebody as
+   * TERMINATED and the roster, the branch, and the client's expectation all still say that
+   * person is coming. Live on this deployment: AS-04 (Aditya Sharma) holds four PENDING
+   * assignments and AS-01 (Nilesh Rahane) one ACCEPTED one — moving either to TERMINATED closed
+   * their empanelments as the existing code already promised and left every one of those
+   * assignments exactly as it stood, with no warning anywhere HR would see it. The same defect
+   * `remove()`'s own comment describes ("a 'deleted' person still holding live assignments and
+   * dated slots"), reachable by the much more common door — read, not reproduced against either
+   * of them: both are real people on the live roster, not test data. Reproduced instead against a
+   * throwaway assayer and a throwaway assignment row — see `assayer.service.spec.ts`.
+   *
+   * Scoped to `DEPARTED_LIFECYCLE` (RESIGNED, TERMINATED) exactly like the empanelment close
+   * next to it, and for the same reason: SUSPENDED, INACTIVE and ON_LEAVE are "not right now",
+   * not "not any more" — an assignment held by someone on leave is not orphaned, it is waiting
+   * for them, and auto-cancelling it on a status that is meant to be temporary would be a new
+   * defect in the other direction.
+   *
+   * `status` only, not `is_active`: unlike `remove()`, the assayer's own row is NOT being taken
+   * out of the operational picture here (`is_active` stays true — they are still an employee
+   * record, just not a workable one), so their cancelled assignments should stay visible as
+   * "cancelled" wherever assignments are normally listed, rather than disappear the way `remove()`
+   * deliberately makes them disappear along with the person. `CANCELLED` is a terminal status
+   * either way, which is what actually frees the branch and the schedule slot — see the comment
+   * on `remove()`'s own assignment cascade for why a terminal status, not `is_active`, is what a
+   * busy-check must see.
+   */
+  private async cancelOpenAssignmentsOnDeparture(
+    assayerId: string,
+    target: AssayerLifecycleStatus,
+    userId: string,
+    manager?: EntityManager,
+  ): Promise<number> {
+    const runner = manager ?? this.dataSource;
+    const reason = `Assayer workforce record moved to ${target} on ${calendarDay(new Date())}; ` +
+      'the work could not proceed as planned. Reassign it if it still needs doing.';
+    const [, assignmentsAffected] = await runner.query(
+      `UPDATE assignments SET status = $1, cancel_reason = $2, updated_by = $3
+        WHERE assayer_id = $4 AND is_active = true AND status != $5`,
+      [AssignmentStatus.CANCELLED, reason, userId, assayerId, AssignmentStatus.COMPLETED],
+    ) ?? [];
+
+    // Same follow-on `remove()` already applies: a cancelled assignment must not leave its
+    // scheduled visit looking live on the calendar, the day plan or the dispatch view.
+    await runner.query(
+      `UPDATE schedules SET is_active = false, updated_by = $1
+        WHERE is_active = true AND assignment_id IN (
+          SELECT id FROM assignments WHERE assayer_id = $2 AND status = $3
+        )`,
+      [userId, assayerId, AssignmentStatus.CANCELLED],
+    );
+
+    return typeof assignmentsAffected === 'number' ? assignmentsAffected : 0;
   }
 
   async verifyDocuments(id: string, userId: string, reason?: string): Promise<AssayerEntity> {
@@ -2073,8 +2204,9 @@ export class AssayerService implements OnModuleInit {
   // Public because it is the ONE writer of assayer_activities — QualificationScoreService
   // records score overrides through it rather than growing a second writer with its own idea
   // of the row shape.
-  async recordActivity(assayerId: string, eventType: string, previousState: string | null, newState: string | null, userId: string, remarks: string | null): Promise<void> {
-    const activity = this.activityRepository.create({
+  async recordActivity(assayerId: string, eventType: string, previousState: string | null, newState: string | null, userId: string, remarks: string | null, manager?: EntityManager): Promise<void> {
+    const repo = manager ? manager.getRepository(AssayerActivityEntity) : this.activityRepository;
+    const activity = repo.create({
       assayerId,
       eventType,
       previousState,
@@ -2085,7 +2217,7 @@ export class AssayerService implements OnModuleInit {
       createdBy: userId,
       updatedBy: userId,
     });
-    await this.activityRepository.save(activity);
+    await repo.save(activity);
   }
 
   async getActivityTimeline(assayerId: string, page = 1, limit = 20): Promise<{ activities: AssayerActivityEntity[]; total: number }> {
@@ -2672,6 +2804,24 @@ export class AssayerService implements OnModuleInit {
     });
     if (!assayer) throw new NotFoundException('Assayer not found.');
 
+    return this.issueAppAccessCore(assayer, actorId);
+  }
+
+  /**
+   * The password generation, hashing, storage, cache invalidation, event and audit trail that
+   * `issueAppAccess` used to do inline.
+   *
+   * Pulled out so `bulkIssueAppAccess` can drive the exact same behaviour per person instead of
+   * a second, inevitably-drifting copy of it — HR was doing 540 people one at a time from
+   * `AssayerRecord.tsx` purely because this logic had only ever been wired to a single-id route.
+   * The public method above still does its own lookup and 404, since a bulk caller has already
+   * fetched (and needs to keep) the row to decide whether to call this at all.
+   */
+  private async issueAppAccessCore(
+    assayer: Pick<AssayerEntity, 'id' | 'assayerCode' | 'displayName' | 'phone' | 'email' | 'lifecycleStatus'>,
+    actorId: string,
+  ): Promise<{ username: string; temporaryPassword: string; expiresAt: string; canSignInNow: boolean; accessScope: 'FULL' | 'REGISTRATION_ONLY' }> {
+    const assayerId = assayer.id;
     const password = this.generateTemporaryPassword();
     this.assertPasswordAcceptable(password);
 
@@ -2740,6 +2890,113 @@ export class AssayerService implements OnModuleInit {
       canSignInNow: maySignIn(assayer.lifecycleStatus as AssayerLifecycleStatus),
       accessScope: isOnboardingStage(assayer.lifecycleStatus) ? 'REGISTRATION_ONLY' : 'FULL',
     };
+  }
+
+  /**
+   * Issue app access to a batch of assayers in one operation, delivered by email and SMS
+   * instead of read off a screen one person at a time.
+   *
+   * 540 of 548 active assayers were imported with a lifecycle record and no password at all,
+   * and the only way to give one out was `issueAppAccess` above from `AssayerRecord.tsx` —
+   * built for HR handing a card to one person on a call, not for clearing a backlog that size.
+   * This drives the exact same `issueAppAccessCore` per person (nothing about how a credential
+   * is generated, hashed, stored or audited changes for a bulk run) and then tries to hand it to
+   * the person itself, since there is no HR officer reading it aloud on the other end.
+   *
+   * Shaped like `bulkTransitionLifecycle`: a plain loop, one id's failure caught and recorded
+   * without aborting the rest, and a `{ succeeded, skipped, failed }` summary instead of a
+   * thrown error for anything short of the whole request being malformed.
+   *
+   * The temporary password exists in memory only for the two delivery calls below. It is never
+   * put into `succeeded`/`skipped`/`failed`, never interpolated into a log line, and never added
+   * to the per-person audit metadata that `issueAppAccessCore` already writes — the entire point
+   * of a bulk tool handling 540 credentials unattended is that nothing durable holds them in the
+   * clear.
+   */
+  async bulkIssueAppAccess(
+    ids: string[],
+    actorId: string,
+  ): Promise<{
+    succeeded: { id: string; channels: ('EMAIL' | 'SMS')[] }[];
+    skipped: { id: string; reason: string }[];
+    failed: { id: string; reason: string }[];
+  }> {
+    // Same ceiling `BatchResolveImportIssuesDto` puts on closing import issues: a batch this
+    // size already asks for 500 sequential bcrypt hashes plus up to 1000 delivery calls inside
+    // one request, which is as far as a plain loop like this should be pushed before it needs
+    // to become a background job instead.
+    if (ids.length > 500) {
+      throw new BadRequestException('Issue app access to at most 500 assayers at a time.');
+    }
+
+    const succeeded: { id: string; channels: ('EMAIL' | 'SMS')[] }[] = [];
+    const skipped: { id: string; reason: string }[] = [];
+    const failed: { id: string; reason: string }[] = [];
+
+    for (const id of ids) {
+      try {
+        const assayer = await this.findOne(id);
+        if (!assayer.email && !assayer.phone) {
+          skipped.push({ id, reason: 'No email or phone on file to deliver a credential to.' });
+          continue;
+        }
+
+        const issued = await this.issueAppAccessCore(assayer, actorId);
+        const channels: ('EMAIL' | 'SMS')[] = [];
+
+        // Built once and handed to both channels — reused, not logged, and gone once this
+        // iteration ends.
+        const message =
+          `Your FAPOMS sign-in is ${issued.username} and your temporary password is ` +
+          `${issued.temporaryPassword}. It works for 7 days and you will be asked to choose ` +
+          'your own password the first time you sign in.';
+
+        if (assayer.email) {
+          const emailResult = await this.emailProvider.send({
+            to: assayer.email,
+            subject: 'Your FAPOMS app access',
+            text: message,
+          });
+          if (emailResult.success) channels.push('EMAIL');
+        }
+        if (assayer.phone) {
+          const smsSent = await this.smsProvider.send(assayer.phone, message);
+          if (smsSent) channels.push('SMS');
+        }
+
+        // A person with neither channel reporting success is not moved to `failed`: the
+        // credential is live either way (issueAppAccessCore already committed it, and already
+        // wrote its own audit row), and `channels: []` is how HR sees that nothing actually
+        // reached this person and a manual follow-up is needed.
+        succeeded.push({ id, channels });
+      } catch (e) {
+        failed.push({ id, reason: (e as Error).message });
+      }
+    }
+
+    // One row for the whole run, counts only — the run-level record of who triggered a batch
+    // of how many, same shape as ROSTER_IMPORT_APPLIED. The per-person ASSAYER_APP_ACCESS_ISSUED
+    // rows already exist, written by issueAppAccessCore inside the loop above.
+    await this.auditService.recordEventSafe({
+      category: EventCategory.USER,
+      eventType: 'BULK_APP_ACCESS_ISSUED',
+      entityType: 'ASSAYER',
+      entityId: 'bulk',
+      userId: actorId,
+      remarks:
+        `Bulk app-access issuance: ${succeeded.length} issued, ${skipped.length} skipped, `
+        + `${failed.length} failed.`,
+      metadata: {
+        requested: ids.length,
+        succeeded: succeeded.length,
+        skipped: skipped.length,
+        failed: failed.length,
+        emailed: succeeded.filter((s) => s.channels.includes('EMAIL')).length,
+        texted: succeeded.filter((s) => s.channels.includes('SMS')).length,
+      },
+    });
+
+    return { succeeded, skipped, failed };
   }
 
   /** HR/admin resets an assayer's password — the only recovery path for someone locked out. */

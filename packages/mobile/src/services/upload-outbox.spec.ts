@@ -30,6 +30,7 @@ import {
   clearOutbox,
   outboxTitle,
   __resetOutboxForTests,
+  __reviveStaleSendingForTests,
   OutboxUpload,
 } from './upload-outbox';
 
@@ -268,6 +269,151 @@ describe('retry and dismiss', () => {
     await enqueueUpload(packet('kollam'));
     await dismissUpload((await getUploads())[0].id);
     expect(await getUploads()).toHaveLength(0);
+  });
+});
+
+describe('stale SENDING revival', () => {
+  /**
+   * A packet killed mid-upload is the failure this exists to catch: the process dies with the
+   * entry still marked SENDING, and `processOutbox` only ever picks up PENDING/FAILED, so
+   * without this the packet is invisible to every future drain forever.
+   */
+  it('requeues a SENDING entry old enough to be from a dead process', () => {
+    const stuck: OutboxUpload = {
+      ...(packet('kollam') as any),
+      id: '1',
+      status: 'SENDING',
+      progress: 40,
+      createdAt: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+      updatedAt: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+    };
+    const list = [stuck];
+    __reviveStaleSendingForTests(list);
+    expect(list[0].status).toBe('PENDING');
+  });
+
+  it('leaves a SENDING entry alone while it could still be a live transfer', () => {
+    const inFlight: OutboxUpload = {
+      ...(packet('kollam') as any),
+      id: '1',
+      status: 'SENDING',
+      progress: 40,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const list = [inFlight];
+    __reviveStaleSendingForTests(list);
+    expect(list[0].status).toBe('SENDING');
+  });
+
+  it('a drain revives a stuck SENDING packet and resends it', async () => {
+    // Simulate a launch that finds a packet the previous, now-dead process left SENDING —
+    // written straight to the mocked store, the way a real cold start reads it off disk.
+    tokenStore.__store['upload_outbox'] = [
+      {
+        ...packet('kollam'),
+        id: '1',
+        status: 'SENDING',
+        progress: 40,
+        createdAt: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+        updatedAt: new Date(Date.now() - 20 * 60 * 1000).toISOString(),
+      },
+    ];
+
+    await processOutbox(ok);
+    expect((await getUploads())[0].status).toBe('SENT');
+  });
+
+  /**
+   * The gap the two tests above do not cover: a SENDING entry that is only *seconds* old, found
+   * on a genuinely fresh process — force-kill the app mid-upload, reopen it immediately.
+   *
+   * Before this fix, that packet waited out the full fifteen minutes: `reviveStaleSending` only
+   * requeues entries older than `STALE_SENDING_MS`, and a kill-and-reopen a moment later is far
+   * younger than that. Proven live against the real app: the packet sat at SENDING/0%, "Starting…
+   * you can leave this screen, it keeps going", with zero requests reaching the server, and no
+   * Retry button — `UploadRow` only renders one for FAILED — so there was nothing to tap either.
+   *
+   * The fix does not touch `STALE_SENDING_MS` or `reviveStaleSending`; it revives on the very
+   * first disk read of a process's life instead, which is provably safe: nothing has called
+   * `processOutbox` yet at that point, so no live transfer in *this* process can be the one that
+   * SENDING entry belongs to.
+   */
+  it('revives a freshly-stuck SENDING packet on the very first read of a new process, without waiting out the stale timer', async () => {
+    tokenStore.__store['upload_outbox'] = [
+      {
+        ...packet('kollam'),
+        id: '1',
+        status: 'SENDING',
+        progress: 40,
+        // Seconds old, not the twenty minutes the other cold-start test uses — this is the
+        // "killed it and reopened right away" case, not the "left it alone for a while" case.
+        createdAt: new Date(Date.now() - 5000).toISOString(),
+        updatedAt: new Date(Date.now() - 5000).toISOString(),
+      },
+    ];
+    __resetOutboxForTests(); // buffer is null again — the next load() is this process's first.
+
+    // Reading the list at all (no drain yet) must already show it as retriable, not stuck.
+    expect((await getUploads())[0].status).toBe('PENDING');
+
+    await processOutbox(ok);
+    expect(ok).toHaveBeenCalledTimes(1);
+    expect((await getUploads())[0].status).toBe('SENT');
+  });
+
+  it('does not touch a SENDING entry the current process itself just set (no false revival mid-upload)', async () => {
+    await enqueueUpload(packet('kollam'));
+    let release: (v: { success: true }) => void = () => {};
+    const slow = jest.fn(() => new Promise<{ success: true }>((res) => { release = res; }));
+
+    const drain = processOutbox(slow as any);
+    await new Promise((r) => setTimeout(r, 0)); // let it reach SENDING and park inside `slow`
+
+    // A second load() within the same still-running process (e.g. a screen re-reading the list)
+    // must see the transfer as still genuinely in flight, not revive it out from under itself.
+    expect((await getUploads())[0].status).toBe('SENDING');
+
+    release({ success: true });
+    await drain;
+    expect((await getUploads())[0].status).toBe('SENT');
+  });
+
+  /**
+   * The bug the cold-start revival above shipped with, found live rather than in review: on a
+   * real device, `useUploadOutbox` fires two mount-time effects in the same tick — one calls
+   * `getUploads()` to render the list, the other calls `processOutbox()` to drain it — and both
+   * reach `load()` before either's `await readCache(...)` resolves. Each then saw `buffer` as
+   * `null`, each read the same on-disk snapshot, and each ran its own copy of the revival: two
+   * independent arrays, both correctly revived in memory, but only one could become the module's
+   * real `buffer`. The other's revival — and its `persist()` — were silently discarded, so
+   * `processOutbox` sometimes read the losing copy, in which the packet still said SENDING, and
+   * skipped it exactly as if this fix did not exist. Caught by adding a temporary trace and
+   * watching the "first read" branch run twice for one launch.
+   */
+  it('two callers racing the very first read both see the packet revived, not just one of them', async () => {
+    tokenStore.__store['upload_outbox'] = [
+      {
+        ...packet('kollam'),
+        id: '1',
+        status: 'SENDING',
+        progress: 40,
+        createdAt: new Date(Date.now() - 5000).toISOString(),
+        updatedAt: new Date(Date.now() - 5000).toISOString(),
+      },
+    ];
+    __resetOutboxForTests();
+
+    // Fired together, exactly as useUploadOutbox's two mount effects do — neither awaited before
+    // the other starts, so both must reach `readCache` before either's promise settles.
+    const [fromRefresh, fromProcessDrain] = await Promise.all([
+      getUploads(),
+      processOutbox(ok).then(getUploads),
+    ]);
+
+    expect(fromRefresh[0].status).not.toBe('SENDING');
+    expect(fromProcessDrain[0].status).toBe('SENT');
+    expect(ok).toHaveBeenCalledTimes(1);
   });
 });
 

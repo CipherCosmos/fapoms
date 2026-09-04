@@ -49,11 +49,38 @@ export class RedisIoAdapter extends IoAdapter {
       this.logger.error(`Redis sub client error: ${err.message}`),
     );
 
+    // `duplicate()` returns immediately but the underlying socket connects asynchronously. The
+    // base client carries `enableOfflineQueue: false` (deliberately, see RedisClientModule) so a
+    // command issued before the connection reaches `ready` is rejected on the spot rather than
+    // queued. Pinging right after `duplicate()` therefore failed every single boot,
+    // `connectToRedis` always threw, and the caller always fell back to the in-memory adapter
+    // (visible as "adapter unavailable" in every one of 218 boot logs, and `/health/ready`
+    // permanently reporting degraded). Waiting for `ready` first (an already-ready client
+    // resolves immediately) fixes that without touching the fail-fast options themselves.
+    await Promise.all([this.waitForReady(pubClient), this.waitForReady(subClient)]);
+
     // Surface a hard failure at boot so the caller can decide to fall back.
     await Promise.all([pubClient.ping(), subClient.ping()]);
 
     this.adapterConstructor = createAdapter(pubClient, subClient);
     this.logger.log('Socket.IO Redis adapter connected — realtime is now multi-node.');
+  }
+
+  /** Resolve once `client` reaches `ready`; resolve immediately if it already has. */
+  private waitForReady(client: Redis): Promise<void> {
+    if (client.status === 'ready') return Promise.resolve();
+    return new Promise((resolve, reject) => {
+      const onReady = () => {
+        client.off('error', onError);
+        resolve();
+      };
+      const onError = (err: Error) => {
+        client.off('ready', onReady);
+        reject(err);
+      };
+      client.once('ready', onReady);
+      client.once('error', onError);
+    });
   }
 
   createIOServer(port: number, options?: ServerOptions): any {

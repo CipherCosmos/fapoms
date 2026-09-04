@@ -17,6 +17,7 @@ import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { NOTIFICATION_CATALOG, renderTemplate } from './notification-catalog';
 import { NotificationSettingsService, EffectiveNotificationType } from './notification-settings.service';
 import { NOTIFICATION_QUEUE } from './notification.constants';
+import { FAILED_JOB_RETENTION } from '../../infrastructure/queue/queued-job';
 
 export interface EmitOptions {
   /** A key in `NOTIFICATION_CATALOG`. */
@@ -496,8 +497,9 @@ export class NotificationDispatchService {
               attempts: 5,
               backoff: { type: 'exponential', delay: 5000 },
               removeOnComplete: true,
-              // Kept so a failed delivery can still be inspected in the queue.
-              removeOnFail: false,
+              // Kept bounded (not `false`) so a failed delivery can still be inspected without
+              // holding it in Redis forever — see FAILED_JOB_RETENTION.
+              removeOnFail: FAILED_JOB_RETENTION,
             },
           })),
         );
@@ -521,7 +523,7 @@ export class NotificationDispatchService {
               attempts: 5,
               backoff: { type: 'exponential', delay: 5000 },
               removeOnComplete: true,
-              removeOnFail: false,
+              removeOnFail: FAILED_JOB_RETENTION,
             },
           })),
         );

@@ -13,6 +13,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { AuditRepository, AuditWriteScope } from './audit.repository';
 import { AuditEvent, AuditEventPage, RecordAuditEventInput } from './audit-event';
+import { getRequestContext } from '../context/request-context';
 
 export type CreateAuditEventDto = RecordAuditEventInput;
 
@@ -25,9 +26,37 @@ export class AuditService {
   /**
    * Record a business event in the audit trail.
    * This is an append-only operation.
+   *
+   * The event is first enriched from the ambient request context, so who/where/which-session is
+   * captured on every call site without any of them having to pass it. Explicit values on the dto
+   * always win — a call that already knows the actor (login records the user before the guard has
+   * run) or is deliberately anonymous keeps what it set.
    */
   async recordEvent(dto: CreateAuditEventDto, scope?: AuditWriteScope): Promise<{ id: string }> {
-    return this.repository.append(AuditEvent.record(dto), scope);
+    return this.repository.append(AuditEvent.record(this.enrichFromContext(dto)), scope);
+  }
+
+  /**
+   * Fill unset who/where/session fields from the current request context.
+   *
+   * Only fills what the caller left blank (`??`), so an explicit actor, IP, or anonymous intent is
+   * never overwritten. Outside a request (a worker, a cron sweep, boot) there is no context and the
+   * dto passes through unchanged — background events stay correctly actor-less rather than
+   * borrowing whoever happened to trigger the process.
+   */
+  private enrichFromContext(dto: CreateAuditEventDto): CreateAuditEventDto {
+    const ctx = getRequestContext();
+    if (!ctx) return dto;
+    return {
+      ...dto,
+      userId: dto.userId ?? ctx.userId,
+      userDisplayName: dto.userDisplayName ?? ctx.displayName,
+      ipAddress: dto.ipAddress ?? ctx.ipAddress,
+      actorRole: dto.actorRole ?? ctx.role,
+      userAgent: dto.userAgent ?? ctx.userAgent,
+      sessionId: dto.sessionId ?? ctx.sessionId,
+      requestId: dto.requestId ?? ctx.requestId,
+    };
   }
 
   /**

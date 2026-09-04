@@ -406,9 +406,21 @@ export const Projects: React.FC = () => {
     }
   };
 
+  /**
+   * Every client for the dropdown, not the first page of them.
+   *
+   * This asked for `/clients` with no `limit`, so `GET /clients` fell back to its default of 20.
+   * Sorted alphabetically (the endpoint's default order), a roster of 24 clients puts the last
+   * four — including "State Bank of India" at position 22 — past that cutoff. Editing one of
+   * those clients' own projects then opened this dropdown with no way to select the project's
+   * actual client: "Select client..." showed, but searching for it found nothing, and saving
+   * would have overwritten a real project's client link with nothing. `?limit=200` matches the
+   * same "get them all for a dropdown" call already used for clients in `AssayerVettingTab.tsx`
+   * and `ClientsStep.tsx`.
+   */
   const loadClients = async () => {
     try {
-      const response = await api.request<ClientOption[]>('/clients', { method: 'GET' });
+      const response = await api.request<ClientOption[]>('/clients?limit=200', { method: 'GET' });
       setClients(response);
     } catch (err) {
       console.error('Failed to load clients options');

@@ -37,19 +37,27 @@ const openAt = (from: string, roles: SystemRole[], permissions: string[]) =>
  */
 describe('ProtectedRoute', () => {
   const HR_ONLY = ['ASSAYER:VIEW:ORGANIZATION'];
+  /**
+   * The workforce clerk's role is a row built in Admin → Roles, so its name is not a `SystemRole`.
+   * At runtime `useCurrentRoles` returns that name in the roles array, and the permission fallback
+   * runs only for a principal carrying such a name (it must not hand a built-in role a page it was
+   * deliberately left off — see canAccessRoute). So the clerk is modelled by its actual role name,
+   * not by an empty roles array, which would describe a principal that cannot exist.
+   */
+  const HR_OPERATOR = ['HR_OPERATOR'] as unknown as SystemRole[];
 
   it('renders a page the person may open', () => {
-    openAt('/hr', [], HR_ONLY);
+    openAt('/hr', HR_OPERATOR, HR_ONLY);
     expect(screen.getByText('page @ /hr')).toBeInTheDocument();
   });
 
   it('sends a refusal to a page they can use, not to the dashboard', () => {
-    openAt('/billing', [], HR_ONLY);
+    openAt('/billing', HR_OPERATOR, HR_ONLY);
     expect(screen.getByText('page @ /hr')).toBeInTheDocument();
   });
 
   it('does the same for the dashboard itself, which this role cannot load either', () => {
-    openAt('/dashboard', [], HR_ONLY);
+    openAt('/dashboard', HR_OPERATOR, HR_ONLY);
     expect(screen.getByText('page @ /hr')).toBeInTheDocument();
   });
 

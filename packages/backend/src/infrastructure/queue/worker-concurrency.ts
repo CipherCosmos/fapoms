@@ -119,6 +119,14 @@ export const WORKER_CONCURRENCY = {
    * of racing it.
    */
   rosterImports: { rosterImport: 1 },
+  /**
+   * Audit chain sealing, ticked by cron every minute (see `AuditModule`). One slot: `sealOnce`
+   * is already a single-writer pass, serialised cluster-wide by a Redis lock plus a Postgres
+   * advisory lock held for the transaction's duration (see `AuditSealService`) — a second
+   * concurrent tick on the same replica could only block on that lock and gain nothing. The slot
+   * exists solely to stop the every-minute cron from overlapping itself if a pass ever runs long.
+   */
+  auditSeal: { seal: 1 },
   generic: { catchAll: 1 },
   /**
    * Coordinate precision. Three named handlers — an import's targeted backfill, the nightly
@@ -141,6 +149,49 @@ export const WORKER_CONCURRENCY = {
  * path that runs before it, so this is a deliberate duplicate — and `worker-concurrency.spec.ts`
  * reads that file and fails if the two ever disagree.
  */
+/**
+ * Which Bull queue each `WORKER_CONCURRENCY` key actually processes.
+ *
+ * The table above is keyed per `@Processor` class, because that is what the fitness test can
+ * count from the source (one class can watch a queue another class also watches — see
+ * `rosterImports`/`imports` below). Pausing, dead-letter monitoring and the Bull Board dashboard
+ * all care about the *queue*, not the class, so this is the one place that maps class-key to
+ * queue name. Two class-keys are deliberately allowed to point at the same queue name
+ * (`imports` and `rosterImports` both process `import-jobs`); everything else is 1:1.
+ *
+ * This mapping, plus `WORKER_CONCURRENCY`'s own keys, is the single source every consumer
+ * (`pauseLocalQueues` in main.ts, the job-failure monitor, Bull Board) derives its queue list
+ * from — see `ALL_QUEUE_NAMES` below. A queue registered with Bull but missing here is caught by
+ * `queue-registry.spec.ts`, which scans every `BullModule.registerQueue` call site.
+ */
+const QUEUE_NAME_BY_WORKER_KEY: Record<keyof typeof WORKER_CONCURRENCY, string> = {
+  notifications: 'notification-delivery',
+  reports: 'report-jobs',
+  ocr: 'ocr',
+  planning: 'planning-jobs',
+  slaScanner: 'sla-scanner',
+  retention: 'retention',
+  outbox: 'outbox',
+  billing: 'billing-jobs',
+  documents: 'document-dispatch',
+  imports: 'import-jobs',
+  rosterImports: 'import-jobs',
+  auditSeal: 'audit-seal',
+  generic: 'background-jobs',
+  geoPrecision: 'geo-precision',
+};
+
+/**
+ * Every Bull queue in the system, derived from `WORKER_CONCURRENCY` (via
+ * `QUEUE_NAME_BY_WORKER_KEY`) rather than hand-maintained. This is what `pauseLocalQueues`
+ * (main.ts), the job-failure monitor and Bull Board all consume, so a queue that exists in Bull
+ * but was never added to `WORKER_CONCURRENCY` shows up nowhere in this list — which is exactly
+ * the drift `queue-registry.spec.ts` fails the build on.
+ */
+export const ALL_QUEUE_NAMES: readonly string[] = Array.from(
+  new Set(Object.values(QUEUE_NAME_BY_WORKER_KEY)),
+);
+
 export const DEFAULT_DB_POOL_MAX = 20;
 
 /** Every slot in `WORKER_CONCURRENCY`, summed. */
@@ -177,7 +228,11 @@ export function assertConcurrencyWithinPool(
           'DB_CONN_TIMEOUT_MS with nothing slow in the request path itself. '
         : '. ') +
       `Either raise DB_POOL_MAX above ${slots} (and keep replicas x pool under Postgres ` +
-      `max_connections), or split the roles: run PROCESS_ROLE=api replicas for HTTP and ` +
-      `PROCESS_ROLE=worker replicas for jobs. See DEPLOYMENT.md.`,
+      `max_connections), split the roles (run PROCESS_ROLE=api replicas for HTTP and ` +
+      `PROCESS_ROLE=worker replicas for jobs — see DEPLOYMENT.md), or, for a single-process ` +
+      `("all") deployment that must stay on one process, lower the per-queue numbers in the ` +
+      `WORKER_CONCURRENCY table above (worker-concurrency.ts) until their sum is at least 5 ` +
+      `below DB_POOL_MAX — that table, not an env var, is the knob; see .env.production.example's ` +
+      `"AWS saving profile" note.`,
   );
 }

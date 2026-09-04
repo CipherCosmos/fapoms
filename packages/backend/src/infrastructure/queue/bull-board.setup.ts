@@ -4,6 +4,7 @@ import { ExpressAdapter } from '@bull-board/express';
 import { Logger } from '@nestjs/common';
 import type { NextFunction, Request, Response } from 'express';
 import { timingSafeEqual } from 'crypto';
+import { ALL_QUEUE_NAMES } from './worker-concurrency';
 
 const logger = new Logger('BullBoard');
 
@@ -61,9 +62,9 @@ export function setupBullBoard(app: any) {
   const serverAdapter = new ExpressAdapter();
   serverAdapter.setBasePath('/bull-board');
 
-  // Every queue, not three of them: the busiest (notification delivery, document dispatch and
-  // the outbox relay) were invisible on the board that exists to make queues visible.
-  const queues = ['background-jobs', 'ocr', 'sla-scanner', 'document-dispatch', 'notification-delivery', 'outbox']
+  // Every queue, derived from WORKER_CONCURRENCY (ALL_QUEUE_NAMES) rather than a hand-maintained
+  // list, so a queue added there shows up on the board without a second edit.
+  const queues = ALL_QUEUE_NAMES
     .map((name) => {
       try {
         return app.get(`BullQueue_${name}`, { strict: false });

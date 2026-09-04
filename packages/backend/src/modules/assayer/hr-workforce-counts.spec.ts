@@ -130,4 +130,46 @@ describe('HrWorkforceService counts', () => {
       expect(pipeline.inProgress).toBe(1);
     });
   });
+
+  /**
+   * The same "capped list, then counted the cap" defect as `incomplete records` above, found
+   * later: `idleCount: idle.length` against a `LIMIT 50` detail query. Live on this deployment it
+   * read 50 while the true population was 542 — the Overview tile and the Utilisation page's own
+   * headline both understating a real retention signal by more than 10x, silently, because a
+   * value pinned at exactly the LIMIT does not look wrong the way an obviously-truncated list
+   * would.
+   */
+  describe('utilisation — idle and never-assigned', () => {
+    /** The detail query's own cap — 50, not the 100 the other capped panels use. */
+    const fiftyIdleRows = Array.from({ length: 50 }, (_, i) => (
+      { id: `idle-${i}`, lastAssignmentDate: '2026-01-01', daysIdle: 200 }
+    ));
+
+    it('counts the true idle population, not the 50 rows the detail table can show', async () => {
+      query.mockImplementation(async (sql: string) => {
+        if (sql.includes('FROM assayers a') && sql.includes('LIMIT 50')) {
+          // The capped preview: 50 rows, all with SOME prior work (none null), so a bug reading
+          // idleCount/neverAssigned off this array's length would get 50 and 0 — both wrong.
+          return fiftyIdleRows;
+        }
+        if (sql.includes('COUNT(*)::int AS total') && sql.includes('"neverAssigned"')) {
+          // What the database really holds behind those 50 rows.
+          return [{ total: 542, neverAssigned: 542 }];
+        }
+        if (sql.includes('FROM assayers a') && sql.includes('lifecycle_status = \'ACTIVE\'')
+            && sql.includes('currentAllocation')) {
+          return [];
+        }
+        if (sql.includes('avgRating')) return [{}];
+        return [];
+      });
+
+      const utilisation = await (service as any).utilisation();
+
+      expect(utilisation.idle).toHaveLength(50);
+      // The figure that used to read 50 (the LIMIT) no matter how large the real population was.
+      expect(utilisation.idleCount).toBe(542);
+      expect(utilisation.neverAssigned).toBe(542);
+    });
+  });
 });

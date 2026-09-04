@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, Between, MoreThanOrEqual, LessThanOrEqual } from 'typeorm';
 import { DEFAULT_WEEKLY_CAPACITY } from '../assignment/assignment-workload';
 import { branchScopeWhere } from '../../infrastructure/scope/apply-scope';
-import { GlobalScope } from '../../infrastructure/scope/global-scope';
+import { GlobalScope, assertClientAllowed } from '../../infrastructure/scope/global-scope';
 import { ScheduleEntity } from './schedule.entity';
 import { AssignmentService } from '../assignment/assignment.service';
 import { HolidayService } from '../holiday/holiday.service';
@@ -149,7 +149,7 @@ export class SchedulingService {
     });
   }
 
-  async findOne(id: string): Promise<ScheduleEntity> {
+  async findOne(id: string, scope?: Partial<GlobalScope>): Promise<ScheduleEntity> {
     const schedule = await this.scheduleRepository.findOne({
       where: { id, isActive: true },
       relations: ['assignment', 'assignment.projectBranch', 'assignment.projectBranch.branch', 'project', 'assayer'],
@@ -157,6 +157,11 @@ export class SchedulingService {
     if (!schedule) {
       throw new NotFoundException(`Schedule ${id} not found.`);
     }
+    // A client ceiling only narrows a LIST — `findAll`'s `branchScopeWhere` does that already.
+    // This is the by-id counterpart: the id came straight off the URL, not a filtered query, so
+    // without this a CLIENT_USER could fetch any other client's schedule (and everything it
+    // joins in — the assignment, the branch, the assayer's own contact details) by id alone.
+    assertClientAllowed(schedule.project?.clientId, scope);
     return schedule;
   }
 

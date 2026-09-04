@@ -144,11 +144,105 @@ let buffer: OutboxUpload[] | null = null;
 const listeners = new Set<() => void>();
 /** Guards against two overlapping drains — a foreground return and a manual retry can race. */
 let processing = false;
+/** Whether `load()` has read its first snapshot from disk in this process's lifetime. See there. */
+let hydrated = false;
+
+/**
+ * How long an entry may sit in SENDING before it is assumed dead.
+ *
+ * SENDING means "a transfer is in flight right now" — true only while the process that set it
+ * is still alive. If the app is killed (OS pressure, force-close, crash) mid-upload, the entry is
+ * the last thing written to disk and nothing ever flips it back: `processing` resets to `false`
+ * with the process, but the persisted status does not, so every future launch found a packet
+ * "sending" forever and skipped it (`todo` only picks up PENDING/FAILED), silently parking real
+ * evidence with no retry and no visible failure. Fifteen minutes is generously longer than any
+ * real chunk upload takes on the slow end of rural data, so a genuinely-stuck entry is distinct
+ * from one still honestly in flight in this same session.
+ */
+const STALE_SENDING_MS = 15 * 60 * 1000;
+
+/**
+ * Requeue SENDING entries this process could not itself be running, so they resume instead of
+ * sitting invisible. Called at the top of every drain (app start, foreground return, reconnect)
+ * rather than only once at launch, because a reconnect after a long dead spell needs the same
+ * repair and there is no separate "app start" hook to hang it on.
+ */
+function reviveStaleSending(list: OutboxUpload[]): void {
+  const cutoff = Date.now() - STALE_SENDING_MS;
+  for (const entry of list) {
+    if (entry.status === 'SENDING' && new Date(entry.updatedAt).getTime() < cutoff) {
+      entry.status = 'PENDING';
+      entry.updatedAt = new Date().toISOString();
+    }
+  }
+}
+
+/**
+ * The in-flight first read, shared by every concurrent caller.
+ *
+ * `useUploadOutbox` calls into this from two separate mount-time effects — one to `refresh()` the
+ * list for display, one to `process()` the queue — and both fire within the same tick, before
+ * either's `await readCache(...)` below has resolved. Without this, both saw `buffer` as `null`,
+ * both read the same on-disk snapshot, and both ran their own copy of the cold-start revival
+ * below: two independent `OutboxUpload[]` arrays, each correctly revived in memory, but only one
+ * of them ever became the module's real `buffer` — the other's revival, and its `persist()`, were
+ * simply discarded. `processOutbox` would then read whichever copy lost the race, in which the
+ * packet could still say SENDING, and skip it exactly as before this fix. Proven live: the
+ * `[TRACKH-DEBUG]` trace this replaced logged the first-call check running *twice* for one launch,
+ * `hydrated` already `true` on the second run despite `buffer` being reassigned in between — two
+ * racing callers, not one.
+ */
+let loadPromise: Promise<OutboxUpload[]> | null = null;
 
 async function load(): Promise<OutboxUpload[]> {
   if (buffer) return buffer;
-  buffer = ((await readCache<any[]>(OUTBOX_KEY)) ?? []).map(adopt);
-  return buffer;
+  if (loadPromise) return loadPromise;
+
+  loadPromise = (async () => {
+    const list = ((await readCache<any[]>(OUTBOX_KEY)) ?? []).map(adopt);
+    buffer = list;
+
+    /**
+     * The very first read from disk in this process's life needs a stronger rule than
+     * `reviveStaleSending`'s fifteen-minute wait.
+     *
+     * That wait exists to protect a transfer that might still be genuinely running *within the
+     * same live process* — a foreground return or a reconnect while `processOutbox` never
+     * actually stopped. But nothing has called `processOutbox` yet the first time this populates
+     * `buffer`: this is what creates this process's only copy of the list. Any entry already
+     * SENDING in that first read cannot belong to a transfer this process is running — there is
+     * no candidate for it to belong to — so it is, with certainty rather than a timeout's guess,
+     * a leftover from a run that ended without finishing (killed, crashed, OS-reclaimed).
+     *
+     * Left to the fifteen-minute rule alone, that leftover sat there fully invisible: `UploadRow`
+     * gives a SENDING packet a progress bar and "you can leave this screen, it keeps going" with
+     * no Retry and no Dismiss (those only render for FAILED), so an assayer who reopens the app
+     * right after a crash sees a packet that looks like it is transferring — and cannot do
+     * anything but wait, for up to fifteen minutes, while it genuinely is not. Proven live:
+     * force-killing the app mid-upload and relaunching immediately left `trackh_kill_test.pdf`
+     * sitting at SENDING/0%, "Starting…", for minutes with zero requests reaching the server.
+     */
+    if (!hydrated) {
+      hydrated = true;
+      let revived = false;
+      for (const entry of list) {
+        if (entry.status === 'SENDING') {
+          entry.status = 'PENDING';
+          entry.updatedAt = new Date().toISOString();
+          revived = true;
+        }
+      }
+      if (revived) await persist();
+    }
+
+    return list;
+  })();
+
+  try {
+    return await loadPromise;
+  } finally {
+    loadPromise = null;
+  }
 }
 
 function emit(): void {
@@ -273,6 +367,8 @@ export async function processOutbox(
   processing = true;
   try {
     const initial = await load();
+    reviveStaleSending(initial);
+    await persist();
     // Snapshot the ids to work through, so packets enqueued mid-drain wait for the next pass
     // rather than extending this one indefinitely.
     const todo = initial.filter((u) => u.status === 'PENDING' || u.status === 'FAILED').map((u) => u.id);
@@ -319,9 +415,22 @@ export async function clearOutbox(): Promise<void> {
   await persist();
 }
 
-/** Test seam: forget the in-memory buffer and any in-flight guard so the next call re-reads storage. */
+/**
+ * Test seam: forget the in-memory buffer and any in-flight guard so the next call re-reads
+ * storage — "as if the app had been killed and reopened," per the tests that use it. `hydrated`
+ * has to reset here too: it is exactly the per-process state a real kill-and-reopen loses, and
+ * the cold-start SENDING revival in `load()` only fires the first time a process reads the
+ * outbox, so leaving it `true` across a simulated restart would silently skip the case entirely.
+ */
 export function __resetOutboxForTests(): void {
   buffer = null;
   processing = false;
+  hydrated = false;
+  loadPromise = null;
   listeners.clear();
+}
+
+/** Test seam: exercise the stale-SENDING revival without waiting on `STALE_SENDING_MS`. */
+export function __reviveStaleSendingForTests(list: OutboxUpload[]): void {
+  reviveStaleSending(list);
 }

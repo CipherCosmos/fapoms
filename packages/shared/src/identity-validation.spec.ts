@@ -1,6 +1,7 @@
 import {
-  PAN_PATTERN, IFSC_PATTERN, AADHAAR_PATTERN,
-  isValidPan, isValidIfsc, isValidAadhaar, isPlaceholderAadhaar, normalisePhone, verhoeffCheckDigit,
+  PAN_PATTERN, IFSC_PATTERN, AADHAAR_PATTERN, GSTIN_PATTERN,
+  isValidPan, isValidIfsc, isValidAadhaar, isPlaceholderAadhaar, isValidGstin,
+  normalisePhone, verhoeffCheckDigit, gstinCheckDigit,
 } from './identity-validation';
 
 /**
@@ -69,6 +70,84 @@ describe('isValidIfsc', () => {
   it('is the same rule the importer applies (pattern parity)', () => {
     expect(IFSC_PATTERN.source).toBe('^[A-Z]{4}0[A-Z0-9]{6}$');
     expect(IFSC_PATTERN.flags).toContain('i');
+  });
+});
+
+describe('GSTIN mod-36 checksum', () => {
+  /**
+   * "27AAPFU0939F1ZV" is the format-illustration GSTIN that turns up across GST documentation
+   * and tutorials as a real-shaped example. Its checksum is not asserted from memory: this
+   * table's expected characters are what the algorithm itself computes for each 14-character
+   * payload, hard-coded so a broken table edit cannot silently agree with itself — the same
+   * discipline the Verhoeff vectors above use.
+   */
+  it.each([
+    ['27AAPFU0939F1Z', 'V'],
+    ['29AABCU9603R1Z', 'J'],
+    ['07AAACH7409R1Z', '3'],
+    ['06BZAHM6385P6Z', '0'],
+  ])('computes the check character of %s as %s, and the full GSTIN validates', (payload, digit) => {
+    expect(gstinCheckDigit(payload)).toBe(digit);
+    expect(isValidGstin(payload + digit)).toBe(true);
+  });
+
+  it('refuses to compute a check character for input outside the GSTIN alphabet', () => {
+    // Unlike Verhoeff, the GSTIN alphabet includes every letter, so a garbage WORD like
+    // "Inactive" is not a good counter-example here — it throws only on characters neither a
+    // digit nor a letter, or on lowercase-but-otherwise-fine strings it would NOT throw for
+    // (the function upper-cases first, mirroring `isValidGstin`'s case-insensitivity).
+    expect(() => gstinCheckDigit('27AAPFU0939F1@')).toThrow();
+    expect(() => gstinCheckDigit('27AAPFU0939 1Z')).toThrow(); // interior space
+    expect(() => gstinCheckDigit('27aapfu0939f1z')).not.toThrow(); // lower-case is fine
+  });
+});
+
+describe('isValidGstin', () => {
+  it('accepts a real GSTIN, either case, padded or not', () => {
+    expect(isValidGstin('27AAPFU0939F1ZV')).toBe(true);
+    expect(isValidGstin('27aapfu0939f1zv')).toBe(true); // copied off an invoice or a form field
+    expect(isValidGstin('  27AAPFU0939F1ZV  ')).toBe(true);
+  });
+
+  /**
+   * The case a shape-only regex cannot catch: right length, right character classes, wrong
+   * check character. Proves the checksum is actually computed, not skipped — a validator that
+   * only tested `GSTIN_PATTERN` would pass this too.
+   */
+  it('rejects a right-shape GSTIN whose checksum does not hold', () => {
+    expect(GSTIN_PATTERN.test('27AAPFU0939F1ZA')).toBe(true); // shape is fine…
+    expect(isValidGstin('27AAPFU0939F1ZA')).toBe(false); // …checksum is not (correct char is V)
+  });
+
+  it('catches every wrong checksum character for a given payload', () => {
+    const payload = '27AAPFU0939F1Z';
+    const alphabet = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    for (const ch of alphabet) {
+      if (ch === 'V') continue;
+      expect(isValidGstin(payload + ch)).toBe(false);
+    }
+  });
+
+  it('rejects the roster\'s status words and placeholders, and masked values', () => {
+    for (const junk of ['Inactive', 'N.A', '-', 'PENDING', '', '******F1ZV']) {
+      expect(isValidGstin(junk)).toBe(false);
+    }
+  });
+
+  it('rejects wrong lengths and a missing reserved position', () => {
+    expect(isValidGstin('27AAPFU0939F1Z')).toBe(false); // 14 characters, no checksum
+    expect(isValidGstin('27AAPFU0939F1ZVX')).toBe(false); // 16 characters
+    expect(isValidGstin('27AAPFU0939F1XV')).toBe(false); // reserved position is not Z
+  });
+
+  it('rejects a GSTIN whose embedded ten characters are not PAN-shaped', () => {
+    // Digits where the embedded PAN needs letters — shape fails before the checksum is reached.
+    expect(isValidGstin('2712345678901ZV')).toBe(false);
+  });
+
+  it('is the same rule the importer/API would apply (pattern parity)', () => {
+    expect(GSTIN_PATTERN.source).toBe('^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$');
+    expect(GSTIN_PATTERN.flags).toContain('i');
   });
 });
 

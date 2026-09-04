@@ -51,6 +51,16 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         AUTH_ERROR_CODES.ACCOUNT_INACTIVE,
       );
     }
-    return user;
+    /**
+     * Attach the token's session id to the principal for THIS request.
+     *
+     * `validateJwtPayload` caches the principal per user, and one user has many sessions — so `sid`
+     * cannot live on the cached object without leaking one device's session id onto another
+     * device's request. It rides the token instead, and is folded in here on a per-request copy
+     * that never mutates the shared cached principal. This is what lets `RequestContextInterceptor`
+     * put the session on every audit event the request records, and what ties a request to a device.
+     */
+    if (payload.sid === undefined) return user;
+    return Object.assign(Object.create(Object.getPrototypeOf(user)), user, { sid: payload.sid });
   }
 }

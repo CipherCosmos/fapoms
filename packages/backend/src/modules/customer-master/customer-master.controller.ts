@@ -3,9 +3,10 @@ import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagg
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
-import { MAX_UPLOAD_BYTES } from '../document/upload-validation';
+import { assertUploadAllowed, MAX_UPLOAD_BYTES, SPREADSHEET_UPLOAD_TYPES } from '../document/upload-validation';
 import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { AuditRead } from '../../core/audit/audit-read.decorator';
 import { CustomerMasterService } from './customer-master.service';
 
 /** Same shape as `documentUploadMulterOptions` in document.controller.ts — see that file. */
@@ -50,6 +51,18 @@ export class CustomerMasterController {
     // for all branches scheduled that day, so the date is what identifies the run.
     @Query('auditDate') auditDate?: string,
   ) {
+    // Every sibling upload route in document.controller.ts calls this; this one didn't — a
+    // disguised executable (`.exe`, `application/x-msdownload`) was accepted, persisted with its
+    // executable filename intact, and "reconciled" as nonsense rows by the naive XLSX parser.
+    // Narrower than the default allow-list on purpose: this route's whole job is "read an Excel
+    // file", so a PDF or a photo is exactly as wrong here as an executable is.
+    assertUploadAllowed({
+      contentType: file.mimetype,
+      size: file.size,
+      fileName: file.originalname,
+      allowed: SPREADSHEET_UPLOAD_TYPES,
+    });
+
     const savedPath = await this.storage.saveFile(
       file.originalname,
       file.buffer,
@@ -88,7 +101,8 @@ export class CustomerMasterController {
   }
 
   @Get('projects/:projectId/daily-run')
-  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.AUDITOR)
+  // CLIENT_USER named explicitly — see `findByProject` below for why.
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.AUDITOR, SystemRole.CLIENT_USER)
   @RequirePermissions('project:view:organization')
   @ApiOperation({ summary: "A single audit date's run: the client batch, its branches, and where each branch's PDF has reached" })
   async dailyRun(
@@ -100,11 +114,21 @@ export class CustomerMasterController {
   }
 
   @Get('projects/:projectId/versions')
-  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.AUDITOR)
+  // CLIENT_USER named explicitly, not left to the permission fallback: it used to reach these
+  // three routes only by coincidence (its dashboard-only PROJECT:VIEW:PLATFORM grant happening
+  // to satisfy `project:view:organization`), with zero client_id ceiling on any of them — a
+  // client-user could pull another bank's customer-master batches and PII-bearing records by
+  // project/version id alone. `findByProject`/`findRecords`/`dailyRun` now all call
+  // `assertClientAllowed`, so this grant is deliberate: a client reviewing the batch of their
+  // own customers' records they submitted, nothing more.
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.AUDITOR, SystemRole.CLIENT_USER)
   @RequirePermissions('project:view:organization')
   @ApiOperation({ summary: 'List version history for a project mandate' })
-  async findByProject(@Param('projectId', ParseUUIDPipe) projectId: string) {
-    const list = await this.customerMasterService.findByProject(projectId);
+  async findByProject(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    const list = await this.customerMasterService.findByProject(projectId, scope);
     return {
       success: true,
       data: list,
@@ -112,8 +136,12 @@ export class CustomerMasterController {
   }
 
   @Get('versions/:versionId/records')
-  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.AUDITOR)
+  // CLIENT_USER named explicitly — see `findByProject` above for why.
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.AUDITOR, SystemRole.CLIENT_USER)
   @RequirePermissions('project:view:organization')
+  // Bank customer records (account number, name, pledged-gold weight) — data we hold as Processor
+  // for the bank. Reading them is access to personal data; log who opened which version's records.
+  @AuditRead({ resource: 'CUSTOMER_RECORD', idParam: 'versionId' })
   @ApiOperation({ summary: 'Get paginated customer records inside a version, optionally filtered by branchId' })
   async findRecords(
     @Param('versionId', ParseUUIDPipe) versionId: string,

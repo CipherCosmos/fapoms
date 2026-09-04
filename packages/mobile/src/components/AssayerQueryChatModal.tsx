@@ -15,6 +15,8 @@ import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system';
 import { AssayerAssignment } from '../types/mobile-app';
 import { MobileApiService } from '../services/api.service';
+import { enqueueAndRun } from '../services/action-queue';
+import { actionDispatchers } from '../services/action-dispatchers';
 import { connectMobileSocket } from '../services/socket';
 import { DocumentScanner, readAsBase64 } from './DocumentScanner';
 import { QueryThread } from './QueryThread';
@@ -394,17 +396,26 @@ export const AssayerQueryChatModal: React.FC<AssayerQueryChatModalProps> = ({
                 return;
               }
 
-              const res = await MobileApiService.postQueryMessage(activeQueryId, '', uploaded);
-              if (!res.success) {
-                feedback.error(tr('queries.scanNotSentTitle'), serverErrorText(res.error, 'queries.scanNotSentBody'));
+              // Durable: the pages are already safely on the server (uploaded above); only this
+              // last "attach them to the thread" call could still be lost to a dropped
+              // connection, so it goes through the same queue as a typed reply.
+              const result = await enqueueAndRun(
+                'QUERY_MESSAGE',
+                { queryId: activeQueryId, body: '', attachments: uploaded },
+                actionDispatchers.QUERY_MESSAGE,
+              );
+              if (!result.success && !result.queued) {
+                feedback.error(tr('queries.scanNotSentTitle'), serverErrorText(result.error, 'queries.scanNotSentBody'));
                 return;
               }
               setThreadVersion((v) => v + 1);
               feedback.success(
-                tr('queries.scanSentTitle'),
-                doc.pageCount === 1
-                  ? tr('queries.scanSentOne')
-                  : tr('queries.scanSentMany', { count: doc.pageCount }),
+                result.queued ? tr('assignment.serverUnreachableTitle') : tr('queries.scanSentTitle'),
+                result.queued
+                  ? tr('common.willRetry')
+                  : doc.pageCount === 1
+                    ? tr('queries.scanSentOne')
+                    : tr('queries.scanSentMany', { count: doc.pageCount }),
               );
             } catch (err: any) {
               feedback.error(tr('queries.attachFailedTitle'), serverErrorText(err?.message, 'queries.scanSendFailed'));

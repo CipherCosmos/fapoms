@@ -288,9 +288,47 @@ export const ScopeProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   return <ScopeContext.Provider value={value}>{children}</ScopeContext.Provider>;
 };
 
+/**
+ * Used only when `useScope` is called with no `ScopeProvider` above it in the tree.
+ *
+ * That should never happen from a normal render — `ScopeProvider` wraps the whole app in
+ * `main.tsx` and always renders its `Provider` (`options` falls back to `EMPTY_OPTIONS`, never
+ * undefined, even mid-fetch or after `/scope/options` fails). It has happened anyway, live,
+ * during this session's heaviest dev-server churn: a Vite Fast-Refresh hot-update to an
+ * unrelated file can mint a *new* Context object for an already-hot-reloaded module while the
+ * still-mounted `Provider` up the tree keeps providing the old one, so a freshly-refreshed
+ * `<Header>` reads a context nobody is providing — a dev-tooling artifact, not a real absence
+ * of the provider. Previously this threw, taking the whole app down through `ErrorBoundary`
+ * ("The application could not be displayed") for a condition that self-corrects on the next
+ * real render. Returning an inert, unscoped fallback instead means the same moment now shows
+ * a normal page with no filter selected, rather than a crash screen — strictly safer either way
+ * this can happen, real absence included.
+ */
+const FALLBACK_SCOPE: ScopeContextValue = {
+  ...EMPTY_SCOPE,
+  options: EMPTY_OPTIONS,
+  loading: false,
+  setScope: () => {},
+  resetScope: () => {},
+  applies: false,
+  activeCount: 0,
+  isFiltering: false,
+  scopeParams: {},
+  scopeKey: 'ALL',
+  availableStates: [],
+  availableZones: [],
+  projects: [],
+  selectedProjectId: EMPTY_SCOPE.projectId,
+  setSelectedProjectId: () => {},
+  selectedProject: null,
+};
+
 export const useScope = (): ScopeContextValue => {
   const ctx = useContext(ScopeContext);
-  if (!ctx) throw new Error('useScope must be used within a ScopeProvider');
+  if (!ctx) {
+    console.error('[ScopeContext] useScope called with no ScopeProvider above it — rendering unscoped rather than crashing.');
+    return FALLBACK_SCOPE;
+  }
   return ctx;
 };
 

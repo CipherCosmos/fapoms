@@ -1,4 +1,4 @@
-import { fetchWholeAssayerRoster } from './assayer-roster';
+import { fetchWholeAssayerRoster, searchAssayers } from './assayer-roster';
 import { api } from './api';
 
 jest.mock('./api', () => ({ api: { request: jest.fn() } }));
@@ -10,15 +10,19 @@ const mockRequest = api.request as jest.Mock;
  * Every case below is one of the ways the old `?limit=1000` call could be short of the roster
  * without saying so. The rule the tests hold to is the one the screens depend on: whatever comes
  * back, `people.length + missing` accounts for everybody the server said it had.
+ *
+ * Paging is now by the `after` keyset cursor rather than `page` — see `roster-query.service.ts`
+ * on the backend — so these mocks drive it the way the real server now does: each response
+ * carries `meta.pagination.nextCursor`, present only when there is another page to ask for.
  */
 
 const person = (n: number) => ({ id: `a-${n}`, displayName: `Person ${n}` });
 
 /** One page of the list endpoint's envelope, exactly as the controller shapes it. */
-const page = (firstIndex: number, count: number, total: number) => ({
+const page = (firstIndex: number, count: number, total: number, nextCursor: string | null = null) => ({
   success: true,
   data: Array.from({ length: count }, (_, i) => person(firstIndex + i)),
-  meta: { pagination: { total } },
+  meta: { pagination: { total, nextCursor } },
 });
 
 beforeEach(() => mockRequest.mockReset());
@@ -27,8 +31,8 @@ describe('fetchWholeAssayerRoster', () => {
   /** The live bug: 1,155 appraisers, a thousand-row request, 155 people nobody could see. */
   it('returns all 1,155 people, not the first 1,000', async () => {
     mockRequest
-      .mockResolvedValueOnce(page(1, 1000, 1155))
-      .mockResolvedValueOnce(page(1001, 155, 1155));
+      .mockResolvedValueOnce(page(1, 1000, 1155, 'cursor-1'))
+      .mockResolvedValueOnce(page(1001, 155, 1155, null));
 
     const roster = await fetchWholeAssayerRoster<{ id: string; displayName: string }>();
 
@@ -39,44 +43,52 @@ describe('fetchWholeAssayerRoster', () => {
   });
 
   it('asks for the pagination total, without which none of this is detectable', async () => {
-    mockRequest.mockResolvedValueOnce(page(1, 8, 8));
+    mockRequest.mockResolvedValueOnce(page(1, 8, 8, null));
     await fetchWholeAssayerRoster();
     expect(mockRequest).toHaveBeenCalledWith(
-      '/assayers?page=1&limit=1000',
+      '/assayers?limit=1000',
+      expect.objectContaining({ withMeta: true }),
+    );
+  });
+
+  it('carries the cursor forward on the next request', async () => {
+    mockRequest
+      .mockResolvedValueOnce(page(1, 2, 3, 'cursor-a'))
+      .mockResolvedValueOnce(page(3, 1, 3, null));
+    await fetchWholeAssayerRoster();
+    expect(mockRequest).toHaveBeenNthCalledWith(
+      2,
+      '/assayers?limit=1000&after=cursor-a',
       expect.objectContaining({ withMeta: true }),
     );
   });
 
   it('makes one request for a roster that fits in one page', async () => {
-    mockRequest.mockResolvedValueOnce(page(1, 42, 42));
+    mockRequest.mockResolvedValueOnce(page(1, 42, 42, null));
     const roster = await fetchWholeAssayerRoster();
     expect(roster.people).toHaveLength(42);
     expect(roster.missing).toBe(0);
     expect(mockRequest).toHaveBeenCalledTimes(1);
   });
 
-  /**
-   * The pages are ordered newest-first, so somebody enrolled between the two requests shifts every
-   * later row down one: one record arrives twice, and the oldest record is pushed off the end.
-   * The repeat must not be counted as two people, and the one that fell off must be reported.
-   */
-  it('does not count a repeated record twice, and reports the one it displaced', async () => {
+  it('does not count a repeated record twice', async () => {
     mockRequest
-      .mockResolvedValueOnce(page(1, 1000, 1155))
-      .mockResolvedValueOnce(page(1000, 155, 1155)); // starts one row earlier than it should
+      .mockResolvedValueOnce(page(1, 2, 3, 'cursor-a'))
+      // A retried/overlapping page repeating the last row of the previous one.
+      .mockResolvedValueOnce(page(2, 2, 3, null));
 
     const roster = await fetchWholeAssayerRoster<{ id: string }>();
 
     expect(new Set(roster.people.map((p) => p.id)).size).toBe(roster.people.length);
-    expect(roster.people).toHaveLength(1154);
-    expect(roster.missing).toBe(1);
+    expect(roster.people).toHaveLength(3);
   });
 
   /** Past the ceiling the answer is genuinely partial, and has to say so rather than look whole. */
   it('stops at its ceiling and reports how many it never reached', async () => {
-    mockRequest.mockImplementation((url: string) => {
-      const n = Number(new URLSearchParams(url.split('?')[1]).get('page'));
-      return Promise.resolve(page((n - 1) * 1000 + 1, 1000, 25_000));
+    let call = 0;
+    mockRequest.mockImplementation(() => {
+      call += 1;
+      return Promise.resolve(page((call - 1) * 1000 + 1, 1000, 25_000, `cursor-${call}`));
     });
 
     const roster = await fetchWholeAssayerRoster();
@@ -97,23 +109,15 @@ describe('fetchWholeAssayerRoster', () => {
   });
 });
 
-/**
- * The server is allowed to hand back fewer rows than were asked for.
- *
- * `GET /assayers` was unclamped when this loader was written, so a request for 1,000 got 1,000.
- * It is clamped now (max 1,000, `assayer-list-limit.spec.ts`), and three sibling routes were
- * clamped to **200** in the same pass — so the ceiling here moving down one day is a realistic
- * change, not a hypothetical. Paging by the size that was *requested* would then fetch two pages
- * of 200 for a 1,155-person roster and call the other 755 missing.
- */
 describe('fetchWholeAssayerRoster — when the server honours a smaller page than asked for', () => {
-  it('pages by what actually came back, so a tightened server limit costs requests, not people', async () => {
-    // Every page returns 200 rows though 1,000 were requested — a ParseLimitPipe capped at 200.
-    mockRequest.mockImplementation(async (url: string) => {
-      const p = Number(new URLSearchParams(url.split('?')[1]).get('page'));
-      const start = (p - 1) * 200 + 1;
+  it('keeps following the cursor however many rows a page actually returns', async () => {
+    let call = 0;
+    mockRequest.mockImplementation(() => {
+      call += 1;
+      const start = (call - 1) * 200 + 1;
       const count = Math.max(0, Math.min(200, 1155 - start + 1));
-      return page(start, count, 1155);
+      const isLast = start + count - 1 >= 1155;
+      return Promise.resolve(page(start, count, 1155, isLast ? null : `cursor-${call}`));
     });
 
     const result = await fetchWholeAssayerRoster<{ id: string }>();
@@ -125,15 +129,32 @@ describe('fetchWholeAssayerRoster — when the server honours a smaller page tha
   });
 
   it('still reports a shortfall it cannot close, rather than reporting success', async () => {
-    // A server that caps at 10 rows puts 1,155 people beyond the 20-page ceiling.
-    mockRequest.mockImplementation(async (url: string) => {
-      const p = Number(new URLSearchParams(url.split('?')[1]).get('page'));
-      return page((p - 1) * 10 + 1, 10, 1155);
+    let call = 0;
+    mockRequest.mockImplementation(() => {
+      call += 1;
+      return Promise.resolve(page((call - 1) * 10 + 1, 10, 1155, `cursor-${call}`));
     });
 
     const result = await fetchWholeAssayerRoster<{ id: string }>();
 
     expect(result.people.length).toBeLessThan(1155);
     expect(result.people.length + result.missing).toBe(1155);
+  });
+});
+
+describe('searchAssayers', () => {
+  it('hits the typeahead route with the query and a capped limit', async () => {
+    mockRequest.mockResolvedValueOnce({ success: true, data: [{ id: 'a-1', displayName: 'Ravi' }] });
+    const rows = await searchAssayers('ravi', { limit: 10 });
+    expect(mockRequest).toHaveBeenCalledWith(
+      '/assayers/search?q=ravi&limit=10',
+      expect.objectContaining({ withMeta: true }),
+    );
+    expect(rows).toEqual([{ id: 'a-1', displayName: 'Ravi' }]);
+  });
+
+  it('returns an empty list rather than throwing when the server sends no data', async () => {
+    mockRequest.mockResolvedValueOnce({ success: true });
+    expect(await searchAssayers('x')).toEqual([]);
   });
 });

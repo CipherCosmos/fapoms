@@ -180,6 +180,18 @@ export class AssignmentEntity extends BaseEntity {
   @Column({ name: 'negotiation_count', type: 'integer', default: 0 })
   negotiationCount: number;
 
+  /**
+   * The `clientRequestId` of the last counter-offer applied, for idempotency.
+   *
+   * Mobile retries a counter-offer POST on a flaky connection with the same body, and without
+   * this the retry looked identical to a second genuine counter-offer: `negotiationCount`
+   * incremented again and `proposedFee` was recomputed from a `previousFee` that was already
+   * the retried value, silently compounding the travel figure the assayer never actually sent
+   * twice. A repeat of this id is now a no-op that returns the current state.
+   */
+  @Column({ name: 'last_counter_request_id', type: 'uuid', nullable: true })
+  lastCounterRequestId: string | null;
+
   @Column({ name: 'entity_version', type: 'integer', default: 1 })
   entityVersion: number;
 

@@ -1,9 +1,10 @@
 import React from 'react';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { AssayerLifecycleStatus } from '@fapoms/shared';
 
 import { AssayerRecord } from './AssayerRecord';
 import { api } from '../../services/api';
+import { resolveIfsc } from './AssayerForms';
 
 /**
  * The map pin, on the screen that nags about it.
@@ -44,11 +45,44 @@ jest.mock('./AssayerForms', () => ({
     { key: 'phone', label: 'Phone' },
     { key: 'address', label: 'Address' },
     { key: 'city', label: 'City' },
+    { key: 'district', label: 'District' },
+    { key: 'state', label: 'State', options: [{ value: 'Karnataka', label: 'Karnataka' }] },
+    { key: 'pincode', label: 'Pincode' },
+    { key: 'bankName', label: 'Bank Name' },
+    { key: 'ifscCode', label: 'IFSC Code' },
   ],
   useManagerOptions: () => ({ people: [] }),
+  useHrOwnerOptions: () => ({ people: [] }),
+  // The real cross-fill rule and the real field list, not stubs — a test asserting the inline
+  // editor cross-fills the same way the registration wizard does is worthless against a fake
+  // that always agrees with itself. Only `resolveIfsc` is mocked: it is a network call, and its
+  // shape/never-throws contract is covered on its own in AssayerForms.spec.tsx.
+  applyPlace: jest.requireActual('./AssayerForms').applyPlace,
+  GEO_AUTO_FIELDS: jest.requireActual('./AssayerForms').GEO_AUTO_FIELDS,
+  resolveIfsc: jest.fn(),
+}));
+
+/**
+ * A one-button stand-in for the live, debounced typeahead.
+ *
+ * The real `Autocomplete` only calls `onSelect` after a 350ms-debounced network round trip and a
+ * click on a suggestion in its own dropdown — none of which is what these tests are about. What
+ * they need to prove is that InlineControl, given a picked place, cross-fills the same way the
+ * registration wizard does; the button below skips straight to that moment. `placeholder` is
+ * kept so a test can tell the pincode box's Autocomplete from the city/district ones.
+ */
+jest.mock('../../components/ui/Autocomplete', () => ({
+  Autocomplete: ({ placeholder, onSelect }: any) => (
+    <button type="button" onClick={() => onSelect?.({
+      label: 'Whitefield, Bengaluru Urban, Karnataka', state: 'Karnataka', district: 'Bengaluru Urban', pincode: '560066',
+    })}>
+      {placeholder}
+    </button>
+  ),
 }));
 
 const mockRequest = api.request as jest.Mock;
+const mockResolveIfsc = resolveIfsc as jest.Mock;
 
 const record = (over: Record<string, unknown> = {}) => ({
   id: 'a-1',
@@ -94,7 +128,7 @@ const renderRecord = () => render(
   <AssayerRecord assayerId="a-1" canManage onClose={jest.fn()} onChanged={jest.fn()} />,
 );
 
-beforeEach(() => mockRequest.mockReset());
+beforeEach(() => { mockRequest.mockReset(); mockResolveIfsc.mockReset(); });
 
 describe('AssayerRecord — the map pin', () => {
   it('offers the pin control when there is no coordinate at all — the 98-person case', async () => {
@@ -239,16 +273,41 @@ describe('AssayerRecord — the lifecycle as next steps', () => {
     expect(screen.getByLabelText(/Why\? This is kept on their employment record/)).toBeInTheDocument();
     expect(mockRequest).not.toHaveBeenCalledWith('/assayers/a-1/lifecycle', expect.anything());
 
-    fireEvent.change(screen.getByLabelText(/Why\? This is kept on their employment record/), {
-      target: { value: 'moved out of the area' },
-    });
+    // Picking a real cluster from the dropdown — rather than typing it — is what stops "Joined
+    // another company" from turning into a fourth spelling the notes column can't be grouped by.
+    fireEvent.click(screen.getByLabelText(/Why\? This is kept on their employment record/));
+    fireEvent.click(await screen.findByText('Joined another company'));
     fireEvent.click(screen.getByRole('button', { name: 'Move to Inactive' }));
 
     await waitFor(() => expect(mockRequest).toHaveBeenCalledWith('/assayers/a-1/lifecycle', expect.anything()));
     const [, options] = mockRequest.mock.calls.find(([url]) => url.endsWith('/lifecycle'))!;
     expect(JSON.parse(options.body)).toMatchObject({
       targetStatus: AssayerLifecycleStatus.INACTIVE,
-      reason: 'moved out of the area',
+      reason: 'Joined another company',
+    });
+  });
+
+  it('still lets "Other" carry a reason no cluster covers, end to end', async () => {
+    // The dropdown is a shortcut to what people already type, not a constraint on top of it — the
+    // server only ever checked `reason` was non-blank, and "Other" has to keep sending whatever
+    // is typed, unconstrained, the same as the plain box it replaced.
+    serve(record({ lifecycleStatus: AssayerLifecycleStatus.TRAINING }));
+    renderRecord();
+    await waitFor(() => expect(screen.getByText('Person One')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move to Inactive' }));
+    fireEvent.click(screen.getByLabelText(/Why\? This is kept on their employment record/));
+    fireEvent.click(await screen.findByText('Other (type it in)'));
+
+    const freeText = await screen.findByLabelText(/Reason, in your own words/i);
+    fireEvent.change(freeText, { target: { value: 'Moved to Dubai for a factory job' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Move to Inactive' }));
+
+    await waitFor(() => expect(mockRequest).toHaveBeenCalledWith('/assayers/a-1/lifecycle', expect.anything()));
+    const [, options] = mockRequest.mock.calls.find(([url]) => url.endsWith('/lifecycle'))!;
+    expect(JSON.parse(options.body)).toMatchObject({
+      targetStatus: AssayerLifecycleStatus.INACTIVE,
+      reason: 'Moved to Dubai for a factory job',
     });
   });
 
@@ -412,5 +471,120 @@ describe('AssayerRecord — handing over app access', () => {
     expect(screen.getByText(/read it to the assayer now/)).toBeInTheDocument();
     expect(screen.queryByText(/will not work/)).not.toBeInTheDocument();
     expect(screen.queryByText(/finish their own registration/)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * THE INLINE EDITOR, BROUGHT UP TO THE WIZARD'S OWN LEVEL.
+ *
+ * Registering somebody fills city/district/state/pincode from one picked place — the wizard's
+ * `Autocomplete` + `applyPlace`. Correcting the same person's address afterwards, on this page,
+ * used to fall back to four boxes that agreed with nothing but themselves. These hold the inline
+ * editor to producing the exact same cross-fill, by calling the exact same exported function
+ * rather than a second copy of it — a fake that always agreed with itself would prove nothing.
+ */
+describe('AssayerRecord — inline editor geo cross-fill', () => {
+  const findSave = () => screen.getByRole('button', { name: 'Save changes' });
+  const putBody = () => {
+    const call = mockRequest.mock.calls.find(([url, opts]) => url === '/assayers/a-1' && opts?.method === 'PUT');
+    if (!call) throw new Error('no PUT /assayers/a-1 call was made');
+    return JSON.parse(call[1].body);
+  };
+
+  it('fills district, state and pincode from one picked place, same as the registration wizard', async () => {
+    serve(record({ city: '', district: '', state: '', pincode: '' }));
+    renderRecord();
+    await waitFor(() => expect(screen.getByText('Person One')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /^Edit$/ }));
+    // The pincode box's Autocomplete stand-in — see the module mock above.
+    fireEvent.click(screen.getByText('Search pincode…'));
+    fireEvent.click(findSave());
+
+    await waitFor(() => expect(putBody()).toMatchObject({
+      pincode: '560066',
+      district: 'Bengaluru Urban',
+      state: 'Karnataka',
+      // Primary token of the place label, since city was blank before the pick.
+      city: 'Whitefield',
+    }));
+  });
+
+  it('does not overwrite a city the operator already typed', async () => {
+    serve(record({ city: 'Kochi', district: '', state: '', pincode: '' }));
+    renderRecord();
+    await waitFor(() => expect(screen.getByText('Person One')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /^Edit$/ }));
+    fireEvent.click(screen.getByText('Search pincode…'));
+    fireEvent.click(findSave());
+
+    await waitFor(() => expect(putBody()).toMatchObject({ district: 'Bengaluru Urban' }));
+    expect(putBody().city).toBeUndefined(); // unchanged from the record, so not sent at all
+  });
+});
+
+/**
+ * IFSC AUTOFILL — fill `bankName`, never lock it, never block a save on a lookup that fails.
+ */
+describe('AssayerRecord — inline editor IFSC autofill', () => {
+  const editIfscBox = async () => {
+    fireEvent.click(screen.getByRole('button', { name: /^Edit$/ }));
+    const ifscRow = screen.getByText('IFSC').closest('div') as HTMLElement;
+    return within(ifscRow).getByRole('textbox') as HTMLInputElement;
+  };
+  const putBody = () => {
+    const call = mockRequest.mock.calls.find(([url, opts]) => url === '/assayers/a-1' && opts?.method === 'PUT');
+    if (!call) throw new Error('no PUT /assayers/a-1 call was made');
+    return JSON.parse(call[1].body);
+  };
+
+  it('fills bank name from a resolved code, and shows the branch/city/state beside it', async () => {
+    serve(record());
+    mockResolveIfsc.mockResolvedValueOnce({
+      bankName: 'HDFC BANK', branchName: 'Whitefield', city: 'Bengaluru', state: 'Karnataka', address: null,
+    });
+    renderRecord();
+    await waitFor(() => expect(screen.getByText('Person One')).toBeInTheDocument());
+
+    const input = await editIfscBox();
+    fireEvent.change(input, { target: { value: 'HDFC0000001' } });
+    fireEvent.blur(input);
+
+    await waitFor(() => expect(mockResolveIfsc).toHaveBeenCalledWith('HDFC0000001'));
+    await waitFor(() => expect(screen.getByText(/HDFC BANK — Whitefield, Bengaluru, Karnataka/)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(putBody()).toMatchObject({ bankName: 'HDFC BANK' }));
+  });
+
+  it('never asks the lookup about a code that is not IFSC-shaped', async () => {
+    serve(record());
+    renderRecord();
+    await waitFor(() => expect(screen.getByText('Person One')).toBeInTheDocument());
+
+    const input = await editIfscBox();
+    fireEvent.change(input, { target: { value: 'NOT-A-CODE' } });
+    fireEvent.blur(input);
+
+    // Nothing to await for a call that must not happen; a microtask flush is enough.
+    await Promise.resolve();
+    expect(mockResolveIfsc).not.toHaveBeenCalled();
+  });
+
+  it('saves normally when the lookup resolves nothing — a miss is not a save blocker', async () => {
+    serve(record());
+    mockResolveIfsc.mockResolvedValueOnce(null);
+    renderRecord();
+    await waitFor(() => expect(screen.getByText('Person One')).toBeInTheDocument());
+
+    const input = await editIfscBox();
+    fireEvent.change(input, { target: { value: 'HDFC0009999' } });
+    fireEvent.blur(input);
+    await waitFor(() => expect(mockResolveIfsc).toHaveBeenCalled());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
+    await waitFor(() => expect(mockRequest).toHaveBeenCalledWith('/assayers/a-1', expect.objectContaining({ method: 'PUT' })));
+    expect(putBody().bankName).toBeUndefined(); // no resolve, so bankName was never touched
   });
 });

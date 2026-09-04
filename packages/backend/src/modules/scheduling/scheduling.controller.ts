@@ -7,6 +7,58 @@ import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole, ScheduleStatus } from '@fapoms/shared';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { ParsePagePipe } from '../../infrastructure/http/parse-page.pipe';
+import { ScheduleEntity } from './schedule.entity';
+
+/**
+ * What a CLIENT_USER — a bank employee outside FAPOMS — may see of a schedule.
+ *
+ * `findAll`/`findOne` load the schedule with its full relation graph (assignment, the
+ * assignment's assayer, project) because every internal caller (ops, desk, auditor) legitimately
+ * needs all of it. That same raw entity going straight into the HTTP response meant a CLIENT_USER
+ * — whose only ceiling was `clientId`, correctly enforced at the row level — received the full
+ * graph too: the visiting assayer's home address, exact home coordinates, phone, photograph,
+ * performance rating and assignment history (none of it the bank's business), plus FAPOMS's own
+ * internal payout numbers for the visit (`proposedFee`, `agreedFee`, `quotedBaseFee`,
+ * `quotedTravelFee`, `counterTravelFee` — what the assayer is paid, not what the bank is billed).
+ * The client_id scoping this route already does is real and was verified working; this is the
+ * missing other half — field-level, not row-level.
+ *
+ * A schedule and the branch it is for both genuinely belong to this client's own operation, so
+ * nothing there is trimmed. Everything about WHO is doing the visit and WHAT FAPOMS pays them
+ * does not.
+ */
+function toClientSafeSchedule(schedule: ScheduleEntity) {
+  const branch = schedule.assignment?.projectBranch?.branch;
+  return {
+    id: schedule.id,
+    status: schedule.status,
+    scheduledDate: schedule.scheduledDate,
+    remarks: schedule.remarks,
+    completedAt: schedule.completedAt,
+    createdAt: (schedule as any).createdAt,
+    updatedAt: (schedule as any).updatedAt,
+    project: schedule.project ? { id: schedule.project.id, name: schedule.project.name } : null,
+    branch: branch
+      ? {
+          id: branch.id,
+          name: branch.name,
+          address: branch.address,
+          city: branch.city,
+          state: branch.state,
+          district: branch.district,
+          pincode: branch.pincode,
+        }
+      : null,
+  };
+}
+
+function callerIsClientUser(req: any): boolean {
+  const roles: string[] = (req?.user?.roles ?? [])
+    .map((r: any) => (typeof r === 'string' ? r : r?.name))
+    .filter(Boolean);
+  return roles.includes(SystemRole.CLIENT_USER);
+}
 
 class CreateScheduleRequestDto implements CreateScheduleDto {
   @IsUUID()
@@ -60,16 +112,22 @@ export class SchedulingController {
   }
 
   @Get()
-  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.AUDITOR)
+  // CLIENT_USER named explicitly, not left to the permission fallback: it used to reach this
+  // route only by coincidence (its dashboard-only SCHEDULING:VIEW:PLATFORM grant happening to
+  // satisfy the permission below), with no client_id ceiling on the query at all. Both are now
+  // real — `findAll`'s `branchScopeWhere(scope)` enforces `scope.clientId` as a genuine
+  // per-client ceiling (see `global-scope.ts#resolveClientScope`), so this grant is deliberate.
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.AUDITOR, SystemRole.CLIENT_USER)
   @RequirePermissions('scheduling:view:organization')
   @ApiOperation({ summary: 'List all active schedules' })
   async findAll(
-    @Query('page') page = 1,
+    @Query('page', new ParsePagePipe()) page: number,
     @Query('limit') limit = 50,
     @Query('status') status?: ScheduleStatus,
     @Query('dateFrom') dateFrom?: string,
     @Query('dateTo') dateTo?: string,
     @GlobalScopeFilter() scope?: GlobalScope,
+    @Req() req?: any,
   ) {
     const result = await this.schedulingService.findAll(
       Number(page),
@@ -79,9 +137,10 @@ export class SchedulingController {
       dateTo,
       scope,
     );
+    const isClientUser = callerIsClientUser(req);
     return {
       success: true,
-      data: result.schedules,
+      data: isClientUser ? result.schedules.map(toClientSafeSchedule) : result.schedules,
       meta: {
         pagination: {
           page: Number(page),
@@ -118,15 +177,22 @@ export class SchedulingController {
   }
 
   @Get(':id')
-  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.AUDITOR)
+  // Same reasoning as `findAll` above: `SchedulingService.findOne` now asserts the client
+  // ceiling (`assertClientAllowed`), so naming CLIENT_USER here is a deliberate grant, not the
+  // coincidental permission-fallback access this used to be.
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.AUDITOR, SystemRole.CLIENT_USER)
   @RequirePermissions('scheduling:view:organization')
   @ApiOperation({ summary: 'Get details for a single schedule by ID' })
-  async findOne(@Param('id', ParseUUIDPipe) id: string, @GlobalScopeFilter() scope?: GlobalScope) {
+  async findOne(
+    @Param('id', ParseUUIDPipe) id: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
+    @Req() req?: any,
+  ) {
     await this.regionGuard.assertScheduleInScope(id, scope);
-    const schedule = await this.schedulingService.findOne(id);
+    const schedule = await this.schedulingService.findOne(id, scope);
     return {
       success: true,
-      data: schedule,
+      data: callerIsClientUser(req) ? toClientSafeSchedule(schedule) : schedule,
     };
   }
 
@@ -138,7 +204,15 @@ export class SchedulingController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: TransitionScheduleRequestDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    // The region ceiling that `findOne` (the read) already enforces must also gate the write.
+    // Without it a region-restricted operator who is refused READING a schedule in another region
+    // (GET :id calls assertScheduleInScope) could still TRANSITION it — confirmed 2026-09-04, where
+    // a SOUTH-scoped OPERATIONS account got 403 on the read but the transition skipped the check
+    // (its 400 was an incidental state-machine rejection, not a boundary). Same assertion, same
+    // enforcing (non-staged) path scheduling already uses everywhere else.
+    await this.regionGuard.assertScheduleInScope(id, scope);
     const userId = req?.user?.id || '00000000-0000-0000-0000-000000000000';
     const schedule = await this.schedulingService.transition(id, dto.targetStatus, userId, dto.remarks, dto.scheduledDate);
     return {

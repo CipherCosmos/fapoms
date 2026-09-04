@@ -23,6 +23,8 @@ import {
 @Index(['occurredAt'])
 @Index(['userId'])
 @Index(['category'])
+// "Everything that happened in this session" — the per-session history the compliance ask centres on.
+@Index('IDX_audit_events_session_id', ['sessionId'])
 // The inbox's field-issue list reads by event_type on every load; without this it was two full
 // scans of the widest table in the schema per page view. Also in 1790300000000-RestoreScaleIndexes.
 @Index('IDX_audit_events_event_type_occurred', ['eventType', 'occurredAt'])
@@ -99,6 +101,66 @@ export class AuditEventEntity {
     nullable: true,
   })
   ipAddress: string | null;
+
+  @Column({
+    name: 'actor_role',
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+    comment: "Actor's primary role at the time of the event, for non-repudiation.",
+  })
+  actorRole: string | null;
+
+  @Column({
+    name: 'user_agent',
+    type: 'text',
+    nullable: true,
+    comment: 'Raw User-Agent of the actor client, stored unparsed.',
+  })
+  userAgent: string | null;
+
+  @Column({
+    name: 'session_id',
+    type: 'varchar',
+    length: 64,
+    nullable: true,
+    comment: 'Durable session id (access token sid), links the event to a device session.',
+  })
+  sessionId: string | null;
+
+  @Column({
+    name: 'request_id',
+    type: 'varchar',
+    length: 100,
+    nullable: true,
+    comment: 'Correlation/request id shared with logs, to trace one action across services.',
+  })
+  requestId: string | null;
+
+  @Column({
+    name: 'outcome',
+    type: 'varchar',
+    length: 20,
+    nullable: true,
+    comment: 'SUCCESS, FAILURE or DENIED — so refused and failed actions are auditable too.',
+  })
+  outcome: string | null;
+
+  @Column({
+    name: 'before',
+    type: 'jsonb',
+    nullable: true,
+    comment: 'Structured field-level before-values of an edit. Never holds a sensitive value.',
+  })
+  before: Record<string, unknown> | null;
+
+  @Column({
+    name: 'after',
+    type: 'jsonb',
+    nullable: true,
+    comment: 'Structured field-level after-values of an edit. Never holds a sensitive value.',
+  })
+  after: Record<string, unknown> | null;
 
   @Column({
     type: 'text',

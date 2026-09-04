@@ -18,6 +18,8 @@
  * application down.
  */
 
+import { CANONICAL_STATE_NAMES } from '@fapoms/shared';
+
 export type SettingType = 'string' | 'number' | 'boolean' | 'password' | 'select' | 'cron';
 
 export interface SettingDef {
@@ -53,6 +55,7 @@ export const SETTINGS_GROUPS = [
   { key: 'transport', label: 'Transport recommendation', description: 'How the recommended way to travel is chosen — the speed assumed for each mode when no timetable exists, when a mode is ruled out, and how cost is weighed against time.' },
   { key: 'billing', label: 'Billing & claims', description: 'Tax withholding and the ceiling on a single expense claim.' },
   { key: 'retention', label: 'Data retention', description: 'How long movement and operational records are kept.' },
+  { key: 'dpdp', label: 'Data protection (DPDP)', description: 'The Grievance Officer / DPO contact published to Data Principals, and how long the platform has to answer a rights request. Required by the Digital Personal Data Protection Act.' },
   { key: 'feedback', label: 'Feedback SLA', description: 'How long the product team has to answer, and to resolve, before it escalates.' },
   { key: 'field', label: 'In the field', description: 'What the app enforces on an assayer while they are out on a job, and how far a negotiation may run.' },
   { key: 'planning', label: 'Planning', description: 'How the recommendation engine spreads work across the people who are eligible for it.' },
@@ -99,9 +102,13 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
   {
     key: 'company.state',
     label: 'Company state',
-    description: 'The state your GST registration is in, e.g. Karnataka. Used to decide CGST+SGST versus IGST only when the GSTIN above has not been entered — set the GSTIN and this is derived from it.',
+    description: 'The state your GST registration is in. Used to decide CGST+SGST versus IGST only when the GSTIN above has not been entered — set the GSTIN and this is derived from it.',
     group: 'company',
-    type: 'string',
+    type: 'select',
+    // Same closed set every other state-scoped field in this app draws from (see
+    // TransportCosts.tsx), rather than a free string that can drift from the canonical spelling
+    // the rest of the platform matches against.
+    options: CANONICAL_STATE_NAMES.map((s) => ({ value: s, label: s })),
     default: null,
     applies: 'immediately',
   },
@@ -632,6 +639,24 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     min: 1, max: 20, unit: 'rounds',
     applies: 'immediately',
   },
+  {
+    // A safety ceiling, not a real-world cap on travel cost: it exists to catch a malformed or
+    // mistyped figure before it becomes a real payable, not to constrain a genuine long-distance
+    // dispute. Found live 2026-09-04: a mobile UI bug let a pre-filled counter-fee field
+    // concatenate instead of replace ("2200" + "2600" typed over it → 22002600), and the only
+    // check on the way in was `counterTravel < 0` — the server accepted a ₹2.2-crore travel
+    // counter-offer for a routine branch audit with a 201 and no complaint, straight into a real
+    // PENDING offer that would have flowed into billing had it been accepted.
+    key: 'field.maxCounterOfferTravelFee',
+    label: 'Counter-offer travel fee ceiling',
+    description: 'The highest travel figure a counter-offer (from either the assayer or the desk) may propose. Set well above any real dispute — this exists to catch a malformed or mistyped figure, not to limit a genuine one. If a real negotiation is refused for exceeding it, raise the ceiling rather than work around it.',
+    group: 'field',
+    type: 'number',
+    default: 25000,
+    envVar: 'MAX_COUNTER_OFFER_TRAVEL_FEE',
+    min: 1000, max: 500_000, unit: '₹',
+    applies: 'immediately',
+  },
 
   // ── Access boundaries ─────────────────────────────────────────────────────
   {
@@ -643,7 +668,7 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     // already correct and unconditional, and stays that way regardless of this value.
     key: 'security.regionScope.mode',
     label: 'New region boundaries: rollout mode',
-    description: 'Six screens (documents, billing, expenses, customer master, validation queries, clients) had no region boundary at all — a region-restricted account could read every region\'s rows through them. "Log" runs the same check every other screen already enforces, but only records what it would have refused instead of refusing it, so you can watch real traffic before anything changes. "Enforce" makes the refusal real. "Off" skips the check entirely. Start on Log, read the logs for a while, then switch to Enforce.',
+    description: 'Six screens (documents, billing, expenses, customer master, validation queries, clients) had no region boundary at all — a region-restricted account could read every region\'s rows through them. "Enforce" (the default) refuses a cross-region read, exactly as every other screen already does. "Log" runs the same check but only records what it would have refused, letting the request through — use it TEMPORARILY if a data-quality problem is causing false refusals and you need to watch real traffic before tightening. "Off" skips the check entirely. An account with no region assignment is unrestricted and is unaffected by any mode, so enforcing is safe wherever staff are national by default.',
     group: 'security',
     type: 'select',
     options: [
@@ -651,7 +676,11 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
       { value: 'log', label: 'Log — record what would be refused, refuse nothing' },
       { value: 'enforce', label: 'Enforce — actually refuse' },
     ],
-    default: 'log',
+    // Enforce by default. This shipped as 'log' during rollout; the observation phase is complete —
+    // a SOUTH-scoped account was confirmed reading WEST records through all six screens under 'log',
+    // and enforce was confirmed to leave unrestricted (region=NULL) and correctly-scoped accounts
+    // untouched. A fail-open access boundary must not be the default a fresh deployment inherits.
+    default: 'enforce',
     envVar: 'REGION_SCOPE_MODE',
     applies: 'immediately',
   },
@@ -694,6 +723,73 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     max: 3650,
     unit: 'days',
     applies: 'next-run',
+  },
+  {
+    key: 'retention.sessionHistoryDays',
+    label: 'Keep login/session history for',
+    description: 'How long ended (signed-out or expired) login sessions are kept for the sessions & devices history. Blank keeps them indefinitely. The law sets a FLOOR, not a ceiling: a value below 180 days (the CERT-In minimum for access logs) is raised to 180 automatically. Live sessions are never removed, whatever this is set to.',
+    group: 'retention',
+    type: 'number',
+    default: null,
+    envVar: 'SESSION_HISTORY_RETENTION_DAYS',
+    min: 1,
+    max: 3650,
+    unit: 'days',
+    applies: 'next-run',
+  },
+  {
+    key: 'retention.uiTelemetryDays',
+    label: 'Keep UI activity telemetry for',
+    description: 'How long fine-grained UI interaction telemetry (page views, clicks, filters) is kept. Unlike the other records this is analytics, not evidence, so it is purged by default on a short window in the spirit of data-minimisation. Blank uses that default; a value below 90 days is raised to 90; 0 keeps it indefinitely.',
+    group: 'retention',
+    type: 'number',
+    default: null,
+    envVar: 'UI_TELEMETRY_RETENTION_DAYS',
+    min: 1,
+    max: 3650,
+    unit: 'days',
+    applies: 'next-run',
+  },
+
+  // ── Data protection (DPDP) ─────────────────────────────────────────────────
+  {
+    key: 'dpdp.grievanceOfficerName',
+    label: 'Grievance Officer / DPO name',
+    description: 'The person a Data Principal contacts about their personal data. DPDP requires this contact to be published; it appears wherever the platform surfaces a privacy contact.',
+    group: 'dpdp',
+    type: 'string',
+    default: null,
+    applies: 'immediately',
+  },
+  {
+    key: 'dpdp.grievanceOfficerEmail',
+    label: 'Grievance Officer / DPO email',
+    description: 'The email address for data-protection grievances and rights requests.',
+    group: 'dpdp',
+    type: 'string',
+    default: null,
+    applies: 'immediately',
+  },
+  {
+    key: 'dpdp.grievanceOfficerPhone',
+    label: 'Grievance Officer / DPO phone',
+    description: 'A contact number for data-protection grievances (optional).',
+    group: 'dpdp',
+    type: 'string',
+    default: null,
+    applies: 'immediately',
+  },
+  {
+    key: 'dpdp.rightsRequestSlaDays',
+    label: 'Rights-request response SLA',
+    description: 'How many days the platform has to answer a Data Principal rights request (access, correction, erasure, grievance) before it is flagged overdue. Industry standard is 30 days.',
+    group: 'dpdp',
+    type: 'number',
+    default: 30,
+    min: 1,
+    max: 90,
+    unit: 'days',
+    applies: 'immediately',
   },
 
   // ── Planning ────────────────────────────────────────────────────────────

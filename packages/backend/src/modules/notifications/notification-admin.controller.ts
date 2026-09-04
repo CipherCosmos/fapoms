@@ -26,6 +26,7 @@ import { PlatformSettingsService } from '../../infrastructure/settings/platform-
 import { EventCategory } from '@fapoms/shared';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
+import { FAILED_JOB_RETENTION } from '../../infrastructure/queue/queued-job';
 
 export class UpdateNotificationSettingRequestDto {
   @IsOptional() @IsBoolean()
@@ -376,7 +377,7 @@ export class NotificationAdminController {
       await this.scannerQueue.add('digest', {}, {
         jobId: `digest-manual-${minute}`,
         removeOnComplete: true,
-        removeOnFail: false,
+        removeOnFail: FAILED_JOB_RETENTION,
         attempts: 1,
       });
       return { success: true, data: { queued: true } };

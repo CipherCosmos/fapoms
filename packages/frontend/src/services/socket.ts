@@ -1,8 +1,20 @@
 import { io, Socket } from 'socket.io-client';
+import { createManualReconnect } from './manualReconnect';
 
 const WS_URL = import.meta.env.VITE_WS_URL || '/events';
 
 let socket: Socket | null = null;
+
+/**
+ * Handles the one disconnect reason socket.io-client will not retry itself — see
+ * `manualReconnect.ts` for the full story. Module-level, like `socket`, so it is naturally scoped
+ * to the current login: `disconnectSocket()` (real logout) cancels it, and the next
+ * `connectSocket()` builds a fresh one with fresh backoff.
+ */
+let manualReconnect = createManualReconnect(
+  () => !!getSocketToken(),
+  () => socket?.connect(),
+);
 
 type ConnectionListener = (connected: boolean) => void;
 const connectionListeners = new Set<ConnectionListener>();
@@ -60,11 +72,16 @@ export function connectSocket(): Socket | null {
   socket.on('connect', () => {
     console.log('[Socket] Connected:', socket?.id);
     emitConnection(true);
+    manualReconnect.handleConnect();
   });
 
   socket.on('disconnect', (reason: string) => {
     console.log('[Socket] Disconnected:', reason);
     emitConnection(false);
+    // `connectSocket()`'s `auth` callback above already reads the token fresh on every
+    // attempt, so all this needs to do is get `.connect()` called again — see
+    // `manualReconnect.ts` for why that does not already happen on its own.
+    manualReconnect.handleDisconnect(reason);
   });
 
   socket.on('error', (err: any) => {
@@ -81,6 +98,7 @@ export function connectSocket(): Socket | null {
 }
 
 export function disconnectSocket() {
+  manualReconnect.cancel();
   if (socket) {
     socket.disconnect();
     socket = null;

@@ -11,7 +11,19 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { AssayerEntity } from '../assayer/assayer.entity';
-import { isOnboardingStage } from '../auth/auth.service';
+import { isOnboardingStage, maySignIn } from '../auth/auth.service';
+import { AssayerLifecycleStatus } from '@fapoms/shared';
+
+/**
+ * Domain events that mean "this user's authority may have changed" — the gateway drops their live
+ * sockets so the next connection re-authorizes. Published by UserService on role/scope/status
+ * change and password reset; a suspended/terminated/rescoped account must not keep a warm socket.
+ */
+const AUTH_CHANGE_EVENTS = new Set<string>([
+  'user:role-changed',
+  'user:updated',
+  'user:password-changed',
+]);
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { RegionGuardService, RoomVerdict } from '../../infrastructure/scope/region-guard.service';
 import { REGION_ORDER } from '@fapoms/shared';
@@ -65,8 +77,38 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly assayers: Repository<AssayerEntity>,
   ) {
     this.eventPublisher.onPublish((eventName, payload) => {
+      // An authorization change must drop the live socket, not just the HTTP principal cache.
+      // Rooms (user/role/org/staff/region) are joined ONCE at connect from the token+DB and never
+      // re-evaluated, so a role downgrade, region removal, suspension or termination would
+      // otherwise leave an already-connected socket receiving its old rooms' events for the rest
+      // of the connection's life — access the user no longer possesses. Disconnecting forces a
+      // reconnect, which re-runs handleConnection's gates and re-rooms against current authority.
+      if (AUTH_CHANGE_EVENTS.has(eventName) || AUTH_CHANGE_EVENTS.has(payload?.eventType)) {
+        this.disconnectUserForReauth(payload?.userId, eventName);
+        return;
+      }
       this.broadcastEvent(eventName, payload);
     });
+  }
+
+  /**
+   * Drop every live socket for a user whose authorization just changed, so their next request
+   * re-authenticates. Bounded and cheap: one map lookup, disconnect the handful of sockets.
+   */
+  private disconnectUserForReauth(userId: string | undefined, reason: string): void {
+    if (!userId || !this.server) return;
+    const socketIds = this.userSockets.get(userId);
+    if (!socketIds || socketIds.size === 0) return;
+    for (const sid of [...socketIds]) {
+      const s = this.server.sockets.sockets.get(sid) as AuthenticatedSocket | undefined;
+      if (s) {
+        s.emit('error', { message: 'Your access changed; please reconnect.', code: 'REAUTH_REQUIRED' });
+        s.disconnect();
+      }
+    }
+    // handleDisconnect prunes userSockets as each socket goes; clear defensively in case a socket
+    // object was already gone from the server registry.
+    this.userSockets.delete(userId);
   }
 
   afterInit() {
@@ -120,8 +162,22 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
        */
       const assayer = await this.assayers.findOne({
         where: { id: userId },
-        select: { id: true, lifecycleStatus: true, mustChangePassword: true },
+        select: { id: true, lifecycleStatus: true, mustChangePassword: true, isActive: true },
       });
+      /**
+       * The same per-connection status gate `loadPrincipal` applies on the HTTP path.
+       *
+       * The socket handshake verifies the JWT directly (not through `loadPrincipal`), so the
+       * assayer status gate added there did NOT cover this path: a terminated, suspended,
+       * soft-deleted or otherwise non-signable assayer holding a still-valid 15-minute token could
+       * open a socket and join their rooms. Refuse them here too — checked before onboarding so a
+       * closed account is told it is closed, not asked to finish registering.
+       */
+      if (assayer && (!maySignIn(assayer.lifecycleStatus as AssayerLifecycleStatus) || assayer.isActive === false)) {
+        client.emit('error', { message: 'This account is closed.', code: 'ACCOUNT_CLOSED' });
+        client.disconnect();
+        return;
+      }
       if (assayer && (isOnboardingStage(assayer.lifecycleStatus) || assayer.mustChangePassword)) {
         // Same discriminators the HTTP 403s carry, so a client can tell this apart from a dead
         // session and route to the screen that clears it rather than retrying for ever.
@@ -199,11 +255,22 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
          * assignment existed carry no claim, and reading "absent" as "unrestricted" would put
          * the very accounts this protects straight back into the firehose.
          */
-        const regions = await this.regionGuard.getUserRegions(userId).catch(() => null);
-        // An unassigned account is national and joins every region room; an assigned one joins
-        // only its own. Failing to read the assignment (the catch above) yields null → national,
-        // which matches how the account behaved before this room existed.
-        const rooms = regions ?? ALL_REGIONS;
+        // An unassigned account (regions == null, no error) is national and joins every region
+        // room; an assigned one joins only its own. A LOOKUP FAILURE must fail CLOSED — join no
+        // region rooms — not fall back to the national firehose: the old `.catch(() => null)` mapped
+        // a transient DB error to "unrestricted", so a region-restricted operator whose lookup
+        // errored at connect silently received every region's traffic. On failure the socket simply
+        // gets no region events until it reconnects, which is the safe direction.
+        let regions: string[] | null;
+        let regionLookupFailed = false;
+        try {
+          regions = await this.regionGuard.getUserRegions(userId);
+        } catch {
+          regionLookupFailed = true;
+          regions = null;
+          console.warn(`[EventsGateway] region lookup failed for ${userId}; joining no region rooms (fail-closed)`);
+        }
+        const rooms = regionLookupFailed ? [] : (regions ?? ALL_REGIONS);
         for (const r of rooms) await client.join(`region:${r}`);
       }
 

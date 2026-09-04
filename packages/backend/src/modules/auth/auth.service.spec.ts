@@ -5,6 +5,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { AuthService, rbacPrincipalCacheKey } from './auth.service';
+import { SessionService } from './session.service';
 import { UserEntity } from '../user/user.entity';
 import { RefreshTokenEntity } from './refresh-token.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
@@ -19,6 +20,9 @@ describe('AuthService', () => {
   const mockUserRepo = {
     findOne: jest.fn(),
     save: jest.fn(),
+    // Backs the RBAC drift check (runRbacDriftCheck), which runs a raw SQL query via the
+    // repository's manager. Defaults to "no drift found"; individual tests override it.
+    manager: { query: jest.fn().mockResolvedValue([]) },
   };
 
   const mockRefreshTokenRepo = {
@@ -50,15 +54,38 @@ describe('AuthService', () => {
   };
 
   // Cache always misses in tests so validateJwtPayload exercises the real DB path.
+  const mockCacheGetJson = jest.fn().mockResolvedValue(null);
+  const mockCacheSetJson = jest.fn().mockResolvedValue(undefined);
+  // Mirrors the real CacheService.wrap's observable contract (miss -> load -> cache) closely
+  // enough for these tests: always a miss, so every call runs `load`.
+  const mockCacheWrap = jest.fn(async (key: string, ttl: number, load: () => Promise<any>): Promise<any> => {
+    const cached = await mockCacheGetJson(key);
+    if (cached !== null && cached !== undefined) return cached;
+    const fresh = await load();
+    await mockCacheSetJson(key, fresh, ttl);
+    return fresh;
+  });
   const mockCache = {
-    getJson: jest.fn().mockResolvedValue(null),
-    setJson: jest.fn().mockResolvedValue(undefined),
+    getJson: mockCacheGetJson,
+    setJson: mockCacheSetJson,
     del: jest.fn().mockResolvedValue(undefined),
+    wrap: mockCacheWrap,
   };
 
   const mockEvents = {
     subscribe: jest.fn(),
     publish: jest.fn(),
+  };
+
+  // The durable session store. Login mints one; refresh touches it; logout/reuse revoke all.
+  const mockSessionService = {
+    create: jest.fn().mockResolvedValue({ id: 'session-1' }),
+    touch: jest.fn().mockResolvedValue(undefined),
+    revokeAllForUser: jest.fn().mockResolvedValue(undefined),
+    revoke: jest.fn().mockResolvedValue(undefined),
+    listForUser: jest.fn().mockResolvedValue([]),
+    findById: jest.fn(),
+    findOwned: jest.fn(),
   };
 
   beforeEach(async () => {
@@ -74,6 +101,7 @@ describe('AuthService', () => {
         { provide: CacheService, useValue: mockCache },
         { provide: DomainEventPublisher, useValue: mockEvents },
         { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn(), emit: jest.fn() } },
+        { provide: SessionService, useValue: mockSessionService },
       ],
     }).compile();
 
@@ -121,6 +149,34 @@ describe('AuthService', () => {
       });
 
       await expect(service.login('AS-01', 'correct-password')).rejects.toThrow(ForbiddenException);
+    });
+
+    /**
+     * A soft-deleted assayer can sit at any lifecycle status — the delete does not necessarily
+     * touch it — so `maySignIn` alone does not catch it. `isActive: false` must refuse sign-in
+     * even when the lifecycle status would otherwise pass.
+     */
+    it('refuses a correct password when the assayer has been soft-deleted (isActive: false)', async () => {
+      const hash = await bcrypt.hash('correct-password', 4);
+      mockAssayerRepo.findOne.mockResolvedValue({
+        id: 'asr-1', assayerCode: 'AS-01', passwordHash: hash, lifecycleStatus: 'ACTIVE',
+        isActive: false, organizationId: 'org-1',
+      });
+
+      await expect(service.login('AS-01', 'correct-password')).rejects.toThrow(ForbiddenException);
+      // The refusal must also drop any cached principal, so a still-valid access token issued
+      // before the delete does not keep validating from cache past this point.
+      expect(mockCache.del).toHaveBeenCalledWith(expect.stringContaining('asr-1'));
+    });
+
+    it('still admits a correct password when isActive is unset (predates the column / not soft-deleted)', async () => {
+      const hash = await bcrypt.hash('correct-password', 4);
+      mockAssayerRepo.findOne.mockResolvedValue({
+        id: 'asr-1', assayerCode: 'AS-01', passwordHash: hash, lifecycleStatus: 'ACTIVE',
+        organizationId: 'org-1', displayName: 'Meera Iyer',
+      });
+
+      await expect(service.login('AS-01', 'correct-password')).resolves.toBeDefined();
     });
 
     /**
@@ -356,6 +412,19 @@ describe('AuthService', () => {
       await expect(service.refreshAccessToken('some-refresh-token'))
         .rejects.toThrow(/access is on hold/i);
     });
+
+    it('refuses to renew a soft-deleted assayer even though the lifecycle status is ACTIVE', async () => {
+      mockRefreshTokenRepo.findOne.mockResolvedValue(storedToken());
+      mockUserRepo.findOne.mockResolvedValue(null);
+      mockAssayerRepo.findOne.mockResolvedValue({
+        id: 'asr-1', assayerCode: 'AS-01', displayName: 'Meera Iyer', email: null,
+        phone: '9999999999', lifecycleStatus: 'ACTIVE', organizationId: 'org-1', isActive: false,
+      });
+
+      await expect(service.refreshAccessToken('some-refresh-token'))
+        .rejects.toThrow(ForbiddenException);
+      expect(mockCache.del).toHaveBeenCalledWith(expect.stringContaining('asr-1'));
+    });
   });
 
   describe('biometricLogin', () => {
@@ -435,6 +504,7 @@ describe('AuthService', () => {
       mockUserRepo.findOne.mockResolvedValue(null);
       mockAssayerRepo.findOne.mockResolvedValue({
         id: 'asr-1', assayerCode: 'AS-01', displayName: 'Test Assayer', mustChangePassword: true,
+        lifecycleStatus: 'ACTIVE', isActive: true,
       });
 
       const principal = await service.validateJwtPayload(assayerPayload);
@@ -452,11 +522,66 @@ describe('AuthService', () => {
       mockUserRepo.findOne.mockResolvedValue(null);
       mockAssayerRepo.findOne.mockResolvedValue({
         id: 'asr-1', assayerCode: 'AS-01', displayName: 'Test Assayer', mustChangePassword: false,
+        lifecycleStatus: 'ACTIVE', isActive: true,
       });
 
       const principal = await service.validateJwtPayload(assayerPayload);
 
       expect(principal.mustChangePassword).toBe(false);
+    });
+  });
+
+  /**
+   * The per-request status gate on the assayer principal.
+   *
+   * `loadPrincipal` is what every authenticated request resolves through (via the RBAC cache). Its
+   * STAFF branch queries `status: ACTIVE`, so a suspended staff account is cut on the next request.
+   * Its ASSAYER branch had NO such gate — it returned a full principal for any existing row — so a
+   * terminated/suspended/soft-deleted assayer's still-valid access token kept authorising every
+   * route until it expired, even though login and refresh both refuse them (and refresh even
+   * clears the cache expecting this re-load to reject). CONFIRMED-EXPLOITABLE 2026-09-04.
+   */
+  describe('validateJwtPayload — assayer status gate (revocation takes effect immediately)', () => {
+    const assayerPayload = {
+      sub: 'asr-1', username: 'AS-01', email: 'as-01@fapoms.com',
+      roles: ['ASSAYER'], permissions: [], organizationId: 'org-1',
+    } as any;
+
+    beforeEach(() => mockUserRepo.findOne.mockResolvedValue(null));
+
+    it.each(['TERMINATED', 'RESIGNED', 'SUSPENDED', 'INACTIVE', 'ARCHIVED'])(
+      'refuses a %s assayer (principal resolves to null)',
+      async (status) => {
+        mockAssayerRepo.findOne.mockResolvedValue({
+          id: 'asr-1', assayerCode: 'AS-01', displayName: 'X', lifecycleStatus: status, isActive: true,
+        });
+        await expect(service.validateJwtPayload(assayerPayload)).resolves.toBeNull();
+      },
+    );
+
+    it('refuses a soft-deleted (is_active=false) assayer even while lifecycle still says ACTIVE', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue({
+        id: 'asr-1', assayerCode: 'AS-01', displayName: 'X', lifecycleStatus: 'ACTIVE', isActive: false,
+      });
+      await expect(service.validateJwtPayload(assayerPayload)).resolves.toBeNull();
+    });
+
+    it('still admits an ACTIVE assayer and an ON_LEAVE assayer', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue({
+        id: 'asr-1', assayerCode: 'AS-01', displayName: 'X', lifecycleStatus: 'ACTIVE', isActive: true,
+      });
+      await expect(service.validateJwtPayload(assayerPayload)).resolves.toMatchObject({ id: 'asr-1' });
+      mockAssayerRepo.findOne.mockResolvedValue({
+        id: 'asr-1', assayerCode: 'AS-01', displayName: 'X', lifecycleStatus: 'ON_LEAVE', isActive: true,
+      });
+      await expect(service.validateJwtPayload(assayerPayload)).resolves.toMatchObject({ id: 'asr-1' });
+    });
+
+    it('still admits an onboarding-stage assayer (JwtAuthGuard confines those separately)', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue({
+        id: 'asr-1', assayerCode: 'AS-01', displayName: 'X', lifecycleStatus: 'DOCUMENT_VERIFICATION', isActive: true,
+      });
+      await expect(service.validateJwtPayload(assayerPayload)).resolves.toMatchObject({ id: 'asr-1', onboarding: true });
     });
   });
     describe('brute-force lockout', () => {
@@ -536,6 +661,39 @@ describe('AuthService', () => {
         where: { id: 'u-1' },
         select: { id: true, passwordHash: true },
       });
+    });
+
+    /**
+     * One vocabulary: the JWT `permissions` claim must be built by the same
+     * `permissionKeysHeldBy` helper the guards use, not a second hand-rolled walk of
+     * roles -> permissions plus roles -> responsibilities -> capabilities -> permissions.
+     * A permission reachable ONLY via the capability path (nothing in role.permissions grants
+     * it) must NOT appear on the token, because the guard checking that token would refuse it
+     * anyway — a token that claimed it would be a lie the guard catches, but is still a sign the
+     * two computations drifted.
+     */
+    it('omits a permission reachable only through responsibilities/capabilities, never directly granted', async () => {
+      const hash = await bcrypt.hash('correct-password', 4);
+      mockUserRepo.findOne
+        .mockResolvedValueOnce({
+          id: 'u-1', username: 'staff1', email: 'staff1@example.com', status: 'ACTIVE',
+          failedLoginAttempts: 0, lockedUntil: null,
+          roles: [{
+            name: 'OPERATIONS',
+            permissions: [{ resource: 'assignment', action: 'read', scope: 'ORGANIZATION' }],
+            responsibilities: [{
+              capabilities: [{
+                permissions: [{ resource: 'assignment', action: 'delete', scope: 'PLATFORM' }],
+              }],
+            }],
+          }],
+        })
+        .mockResolvedValueOnce({ id: 'u-1', passwordHash: hash });
+
+      const result = await service.login('staff1', 'correct-password');
+
+      expect(result.user.permissions).toEqual(['assignment:read:ORGANIZATION']);
+      expect(result.user.permissions).not.toContain('assignment:delete:PLATFORM');
     });
   });
 
@@ -624,6 +782,41 @@ describe('AuthService', () => {
         expect.objectContaining({ isRevoked: true }),
       );
       expect(mockCache.del).toHaveBeenCalledWith(rbacPrincipalCacheKey('u-42'));
+    });
+  });
+
+  describe('RBAC drift guard (onModuleInit)', () => {
+    it('runs the capability-path-vs-direct-grant query on boot and does not throw when clean', async () => {
+      mockUserRepo.manager.query.mockResolvedValueOnce([]);
+
+      expect(() => service.onModuleInit()).not.toThrow();
+      // The check is fire-and-forget from onModuleInit; let its microtask run.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(mockUserRepo.manager.query).toHaveBeenCalledWith(expect.stringContaining('role_responsibilities'));
+    });
+
+    it('warns, naming the role and the key, when a capability-path grant has no matching direct grant', async () => {
+      mockUserRepo.manager.query.mockResolvedValueOnce([
+        { role_name: 'OPERATIONS', resource: 'assignment', action: 'delete', scope: 'PLATFORM' },
+      ]);
+      const warnSpy = jest.spyOn((service as any).logger, 'warn');
+
+      service.onModuleInit();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('OPERATIONS'));
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('assignment:delete:PLATFORM'));
+    });
+
+    it('never lets the diagnostic query crash boot', async () => {
+      mockUserRepo.manager.query.mockRejectedValueOnce(new Error('db unreachable'));
+
+      expect(() => service.onModuleInit()).not.toThrow();
+      await Promise.resolve();
+      await Promise.resolve();
     });
   });
 });

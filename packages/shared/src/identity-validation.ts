@@ -1,5 +1,6 @@
 /**
- * Identity-number validation: PAN, Aadhaar (with Verhoeff checksum), IFSC, Indian mobile phones.
+ * Identity-number validation: PAN, Aadhaar (with Verhoeff checksum), IFSC, GSTIN (with its own
+ * mod-36 checksum), Indian mobile phones.
  *
  * These rules lived as private regex literals inside the backend's roster importer, so the
  * importer was the ONLY write path that checked anything: `POST /assayers` and `PUT /assayers/:id`
@@ -17,6 +18,21 @@
  * an exact-match duplicate scan cannot see that "abcde1234f" and "ABCDE1234F" are one person.
  */
 export const PAN_PATTERN = /^[A-Z]{5}\d{4}[A-Z]$/i;
+
+/**
+ * GSTIN shape only: two digits (the GST state code), the ten-character PAN of the registrant,
+ * one digit or letter (the entity number for that PAN — 1-9 then A-Z once a PAN has ten-plus
+ * registrations), a literal `Z` (the position GSTN's spec reserves for future use; every GSTIN
+ * issued so far carries `Z` there), and one alphanumeric checksum character. Case-insensitive
+ * for the same reason as PAN — a client's GSTIN often arrives copied off an invoice or a
+ * lowercase form field; store uppercase.
+ *
+ * This is the historical check and, like `AADHAAR_PATTERN`, it is NOT enough on its own — shape
+ * alone accepts any fabricated 15-character string. Use `isValidGstin`, which adds the mod-36
+ * checksum every real GSTIN carries. The bare pattern stays exported for callers that need to
+ * tell "wrong shape entirely" apart from "right shape, failed checksum" in their error messages.
+ */
+export const GSTIN_PATTERN = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/i;
 
 /**
  * IFSC: four letters (the bank), a zero (reserved by RBI), six alphanumerics (the branch).
@@ -108,6 +124,46 @@ export function verhoeffCheckDigit(payload: string): number {
 }
 
 // ---------------------------------------------------------------------------
+// GSTIN checksum — ISO 7064 MOD 37-36, restricted to the 36 characters (digits then A-Z) a
+// GSTIN is actually drawn from. The full scheme reserves a 37th symbol ('*') for a check
+// character that would otherwise collide with a payload character; a GSTIN never produces one
+// in practice; see `gstinCheckDigit`'s throw for what happens if it somehow did.
+// ---------------------------------------------------------------------------
+
+/** Digits then A-Z — index doubles as each character's value in the mod-36 walk below. */
+const GSTIN_ALPHABET = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+/**
+ * The mod-36 checksum character for the first fourteen characters of a GSTIN.
+ *
+ * Right-to-left, Luhn-style: starting from the rightmost payload character, each character's
+ * alphabet position is doubled on odd steps and left alone on even ones (factor 2, 1, 2, 1…),
+ * and a value that overflows the 0-35 range is folded back into it by adding its base-36
+ * "digits" — `Math.floor(doubled / 36) + (doubled % 36)` — which is what a doubled value needs
+ * instead of decimal Luhn's "sum the two digits". The checksum character is whichever alphabet
+ * position brings that running sum to a multiple of 36.
+ *
+ * Exported so tests can build a GSTIN that genuinely checksums, instead of hard-coding a string
+ * nobody can re-derive — same reasoning as `verhoeffCheckDigit` above. Throws on a character
+ * outside the GSTIN alphabet, the same contract `verhoeffCheckDigit` uses for non-digits.
+ */
+export function gstinCheckDigit(payload: string): string {
+  const chars = payload.toUpperCase().split('');
+  let factor = 2;
+  let sum = 0;
+  for (let i = chars.length - 1; i >= 0; i--) {
+    const codePoint = GSTIN_ALPHABET.indexOf(chars[i]);
+    if (codePoint === -1) {
+      throw new Error(`gstinCheckDigit needs GSTIN alphabet characters (0-9, A-Z) only, got "${payload}"`);
+    }
+    const doubled = factor * codePoint;
+    sum += Math.floor(doubled / 36) + (doubled % 36);
+    factor = factor === 2 ? 1 : 2;
+  }
+  return GSTIN_ALPHABET[(36 - (sum % 36)) % 36];
+}
+
+// ---------------------------------------------------------------------------
 // The validators
 // ---------------------------------------------------------------------------
 
@@ -119,6 +175,30 @@ export function isValidPan(value: unknown): boolean {
 /** Trims and shape-tests an IFSC code. Accepts either case; callers store uppercase. */
 export function isValidIfsc(value: unknown): boolean {
   return typeof value === 'string' && IFSC_PATTERN.test(value.trim());
+}
+
+/**
+ * A real GSTIN: fifteen characters, the state/PAN/entity/reserved-digit shape `GSTIN_PATTERN`
+ * checks, and the mod-36 checksum intact.
+ *
+ * Why more than the shape: a shape-only check stores any fifteen-character string a clerk
+ * assembles to fill a required field, the same failure mode `isValidAadhaar` was written to
+ * close for Aadhaar. The checksum makes a mistyped or transposed character fail at entry, while
+ * the invoice or certificate it was copied from is still on the desk to re-check.
+ *
+ * Accepts either case; does not transform — callers store uppercase, same contract as PAN/IFSC.
+ *
+ * Deliberately NOT checked: whether the first two digits are a GST state code actually in use.
+ * That list changes when a new union territory is carved out or a code is reassigned, and
+ * keeping it in step is a maintenance burden the checksum does not need help from — a wrong
+ * state code with a right checksum is still a fabricated GSTIN, but catching it needs the same
+ * "is this a real state" table `regions.ts` already owns, not a second copy of it here.
+ */
+export function isValidGstin(value: unknown): boolean {
+  if (typeof value !== 'string') return false;
+  const s = value.trim();
+  if (!GSTIN_PATTERN.test(s)) return false;
+  return gstinCheckDigit(s.slice(0, 14)) === s[14].toUpperCase();
 }
 
 /**

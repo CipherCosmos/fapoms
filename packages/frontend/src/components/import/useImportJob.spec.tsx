@@ -17,11 +17,11 @@ const mockRequest = api.request as jest.Mock;
  */
 
 /** A harness that renders the hook's phase through the real panel, as the pages do. */
-const Harness: React.FC<{ url: string; file: File }> = ({ url, file }) => {
+const Harness: React.FC<{ url: string; file: File; extraFields?: Record<string, string> }> = ({ url, file, extraFields }) => {
   const job = useImportJob();
   return (
     <div>
-      <button onClick={() => void job.start(url, file)}>upload</button>
+      <button onClick={() => void job.start(url, file, extraFields)}>upload</button>
       <span data-testid="phase">{job.state.phase}</span>
       <span data-testid="busy">{String(job.busy)}</span>
       <ImportProgressPanel state={job.state} onDismiss={job.reset} />
@@ -58,6 +58,21 @@ describe('useImportJob — a small file that finishes inside the request', () =>
 
     expect(screen.getByTestId('phase')).toHaveTextContent('done');
     expect(screen.getByText(/3 row\(s\) read: 2 created, 1 updated/)).toBeInTheDocument();
+  });
+
+  /**
+   * The roster page's "sheet wins conflicts" checkbox has nowhere to go if `start` only ever
+   * sends `file` — this is the one place the checkbox's value actually reaches the request.
+   */
+  it('appends extra fields to the multipart body alongside file', async () => {
+    mockRequest.mockResolvedValueOnce(REPORT);
+    render(<Harness url="/assayers/roster/import" file={file()} extraFields={{ overwrite: 'true' }} />);
+    await click();
+
+    const [, options] = mockRequest.mock.calls[0];
+    const body = options.body as FormData;
+    expect(body.get('overwrite')).toBe('true');
+    expect(body.get('file')).toBeInstanceOf(File);
   });
 });
 

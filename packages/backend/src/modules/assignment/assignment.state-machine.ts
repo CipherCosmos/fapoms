@@ -21,7 +21,12 @@ export class AssignmentStateMachine {
     // after work has already started. Refusing that would fail a legitimate retry, so it is
     // allowed here rather than being a backwards move nobody intended.
     [AssignmentStatus.IN_PROGRESS]: [AssignmentStatus.IN_PROGRESS, AssignmentStatus.CHECKED_IN, AssignmentStatus.COMPLETED, AssignmentStatus.CANCELLED],
-    [AssignmentStatus.COMPLETED]: [],
+    // Reopening exists only for the owner-decision void path: an admin/ops actor voiding the
+    // payable a wrong completion booked needs the assignment back in a state work can resume
+    // from. ACCEPTED, not CHECKED_IN, because `checkedInAt` is the field evidence of a real
+    // visit and a reopen must not manufacture that evidence — the assayer checks in again if
+    // they genuinely return to the branch.
+    [AssignmentStatus.COMPLETED]: [AssignmentStatus.ACCEPTED],
     [AssignmentStatus.REJECTED]: [AssignmentStatus.PENDING],
     [AssignmentStatus.CANCELLED]: [AssignmentStatus.PENDING],
   };
@@ -121,6 +126,23 @@ export class AssignmentStateMachine {
 
     const prev = assignment.status;
     assignment.status = AssignmentStatus.COMPLETED;
+    return { previousState: prev, newState: assignment.status, userId };
+  }
+
+  /**
+   * Undo a completion that should not have booked money — the assignment half of voiding a
+   * payable. Gated by the same roles as `voidPayable` at the call site, because reopening
+   * without also voiding the payable would leave a live obligation for work the record now says
+   * is not finished, and voiding without reopening would leave COMPLETED work with no path back
+   * to being closed correctly.
+   */
+  static reopen(assignment: AssignmentEntity, userId: string, reason: string) {
+    AssignmentStateMachine.validateTransition(assignment.status, AssignmentStatus.ACCEPTED);
+    const prev = assignment.status;
+    assignment.status = AssignmentStatus.ACCEPTED;
+    assignment.completionDate = null;
+    assignment.completedWithoutCheckInReason = null;
+    assignment.remarks = reason;
     return { previousState: prev, newState: assignment.status, userId };
   }
 }

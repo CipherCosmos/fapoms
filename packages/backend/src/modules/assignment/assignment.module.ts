@@ -17,6 +17,7 @@ import { PlanningModule } from '../planning/planning.module';
 
 import { GeoModule } from '../geo/geo.module';
 import { ValidationModule } from '../validation/validation.module';
+import { BillingEngineModule } from '../billing-engine/billing-engine.module';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { ValidationModule } from '../validation/validation.module';
     GeoModule,
     ValidationModule,
     PricingModule,
+    BillingEngineModule,
     forwardRef(() => DocumentModule),
     forwardRef(() => PlanningModule),
   ],

@@ -14,6 +14,26 @@ import { InvoiceStatusPill, LineStatePill, fmtDate, inputStyle, th, td, tdNum } 
 // PayoutsTab. "BANK TRANSFER" is a database value; "Bank Transfer" is a payment method.
 const METHODS = Object.values(PaymentMethod);
 
+/**
+ * Preset reasons for the two write-back actions on an invoice, seeded from context the same way
+ * PayoutsTab's HOLD_REASONS was: this dev database carries almost no billing history (near-empty
+ * invoices/payments), so there is nothing real to mine reasons from yet. "Other…" keeps free text
+ * for anything not covered, and the backend's `ReasonDto` stays a plain required string either way.
+ */
+const CANCEL_INVOICE_REASONS = [
+  'Duplicate invoice',
+  'Wrong client or amount',
+  'Client requested cancellation',
+  'Raised in error',
+];
+
+const REVERSE_PAYMENT_REASONS = [
+  'Wrong amount entered',
+  'Duplicate payment recorded',
+  'Payment bounced or was returned',
+  'Recorded against the wrong invoice',
+];
+
 const Row: React.FC<{ label: string; value: React.ReactNode; strong?: boolean }> = ({ label, value, strong }) => (
   <div style={{ display: 'flex', justifyContent: 'space-between', padding: '7px 0', borderBottom: '1px dashed var(--border-color)' }}>
     <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>{label}</span>
@@ -45,13 +65,21 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
   const [receivedDate, setReceivedDate] = useState(todayDateKey());
   const [payNote, setPayNote] = useState('');
   const [cancelOpen, setCancelOpen] = useState(false);
+  const [cancelPreset, setCancelPreset] = useState('');
   const [cancelReason, setCancelReason] = useState('');
+  // A preset stands on its own; only "Other…" needs anything typed — same rule as PayoutsTab's
+  // HoldModal, so what reaches the API is a plain sentence either way.
+  const isCancelOther = cancelPreset === '__other__';
+  const effectiveCancelReason = isCancelOther ? cancelReason.trim() : cancelPreset;
   // Which payment (if any) the reversal panel is open under, and the reason typed into it.
   // Held per payment id rather than as a boolean so the panel can only ever belong to the row
   // it was opened from — an invoice can carry several payments, and a reason typed against one
   // receipt must never be submitted against another.
   const [reversingId, setReversingId] = useState<string | null>(null);
+  const [reversePreset, setReversePreset] = useState('');
   const [reverseReason, setReverseReason] = useState('');
+  const isReverseOther = reversePreset === '__other__';
+  const effectiveReverseReason = isReverseOther ? reverseReason.trim() : reversePreset;
   const [printing, setPrinting] = useState(false);
 
   /**
@@ -107,10 +135,11 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
   };
 
   const doCancel = async () => {
-    if (!cancelReason.trim()) return;
+    if (!effectiveCancelReason) return;
     try {
-      await cancel.mutateAsync({ id: invoice.id, reason: cancelReason.trim() });
-      toast('success', 'Invoice cancelled — its assignments are invoiceable again'); setCancelOpen(false);
+      await cancel.mutateAsync({ id: invoice.id, reason: effectiveCancelReason });
+      toast('success', 'Invoice cancelled — its assignments are invoiceable again');
+      setCancelOpen(false); setCancelPreset(''); setCancelReason('');
     } catch (e) { toast({ type: 'error', title: 'Could not cancel', message: userMessage(e) }); }
   };
 
@@ -131,12 +160,12 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
    * button, so the reason is required by the handler and not only by the styling.
    */
   const doReverse = async (paymentId: string) => {
-    const reason = reverseReason.trim();
+    const reason = effectiveReverseReason;
     if (!reason) return;
     try {
       await reverse.mutateAsync({ paymentId, reason });
       toast('success', 'Payment reversed — the invoice shows it as outstanding again');
-      setReversingId(null); setReverseReason('');
+      setReversingId(null); setReversePreset(''); setReverseReason('');
     }
     catch (e) { toast({ type: 'error', title: 'Could not reverse', message: userMessage(e) }); }
   };
@@ -170,10 +199,22 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
       {cancelOpen && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8, background: 'var(--bg-tertiary)', padding: 12, borderRadius: 'var(--radius-sm)' }}>
           <div style={{ fontSize: 12.5 }}>Cancelling returns every line to <strong>Unbilled</strong> so the work can be invoiced again. Say why:</div>
-          <textarea value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} rows={2} placeholder="Reason *" style={{ ...inputStyle, width: '100%', resize: 'vertical' }} />
+          <Select
+            value={cancelPreset}
+            onChange={setCancelPreset}
+            options={[
+              { value: '', label: 'Reason *' },
+              ...CANCEL_INVOICE_REASONS.map((r) => ({ value: r, label: r })),
+              { value: '__other__', label: 'Other…' },
+            ]}
+            style={{ width: '100%' }}
+          />
+          {isCancelOther && (
+            <textarea value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} rows={2} placeholder="Reason *" style={{ ...inputStyle, width: '100%', resize: 'vertical' }} />
+          )}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-            <button onClick={() => setCancelOpen(false)} className="btn btn-secondary">Keep</button>
-            <button onClick={doCancel} disabled={cancel.isPending || !cancelReason.trim()} className="btn btn-primary">Cancel invoice</button>
+            <button onClick={() => { setCancelOpen(false); setCancelPreset(''); setCancelReason(''); }} className="btn btn-secondary">Keep</button>
+            <button onClick={doCancel} disabled={cancel.isPending || !effectiveCancelReason} className="btn btn-primary">Cancel invoice</button>
           </div>
         </div>
       )}
@@ -242,7 +283,7 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
                   </div>
                   {canAct && (
                     <button
-                      onClick={() => { setReversingId((cur) => (cur === p.id ? null : p.id)); setReverseReason(''); }}
+                      onClick={() => { setReversingId((cur) => (cur === p.id ? null : p.id)); setReversePreset(''); setReverseReason(''); }}
                       disabled={reverse.isPending}
                       title="Reverse this payment"
                       style={{ background: 'transparent', border: 'none', color: 'var(--danger)', cursor: 'pointer', display: 'inline-flex', gap: 4, alignItems: 'center', fontSize: 11.5 }}
@@ -264,16 +305,28 @@ export const InvoiceDetailDrawer: React.FC<{ invoiceId: string; onClose: () => v
                       {' '}<strong>This cannot be undone here</strong> — the only way back is to record the payment again.
                       {' '}Say why:
                     </div>
-                    <textarea
-                      value={reverseReason}
-                      onChange={(e) => setReverseReason(e.target.value)}
-                      rows={2}
-                      placeholder="Reason *"
-                      style={{ ...inputStyle, width: '100%', resize: 'vertical' }}
+                    <Select
+                      value={reversePreset}
+                      onChange={setReversePreset}
+                      options={[
+                        { value: '', label: 'Reason *' },
+                        ...REVERSE_PAYMENT_REASONS.map((r) => ({ value: r, label: r })),
+                        { value: '__other__', label: 'Other…' },
+                      ]}
+                      style={{ width: '100%' }}
                     />
+                    {isReverseOther && (
+                      <textarea
+                        value={reverseReason}
+                        onChange={(e) => setReverseReason(e.target.value)}
+                        rows={2}
+                        placeholder="Reason *"
+                        style={{ ...inputStyle, width: '100%', resize: 'vertical' }}
+                      />
+                    )}
                     <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
-                      <button onClick={() => { setReversingId(null); setReverseReason(''); }} className="btn btn-secondary">Keep payment</button>
-                      <button onClick={() => doReverse(p.id)} disabled={reverse.isPending || !reverseReason.trim()} className="btn btn-primary">
+                      <button onClick={() => { setReversingId(null); setReversePreset(''); setReverseReason(''); }} className="btn btn-secondary">Keep payment</button>
+                      <button onClick={() => doReverse(p.id)} disabled={reverse.isPending || !effectiveReverseReason} className="btn btn-primary">
                         {reverse.isPending ? 'Reversing…' : 'Reverse payment'}
                       </button>
                     </div>

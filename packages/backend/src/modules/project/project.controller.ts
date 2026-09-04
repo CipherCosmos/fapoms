@@ -36,14 +36,14 @@ const projectBranchUploadMulterOptions = {
 
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsArray, IsObject, ArrayNotEmpty, IsUUID, IsDateString, MaxLength, Min, Validate, ValidatorConstraint, ValidatorConstraintInterface, ValidationArguments } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsArray, IsObject, ArrayNotEmpty, IsUUID, IsDateString, IsEnum, MaxLength, Min, Validate, ValidatorConstraint, ValidatorConstraintInterface, ValidationArguments } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ProjectService, CreateProjectDto } from './project.service';
 import { ImportJobService } from '../import/import-job.service';
 import type { ImportScope } from '../import/import.contract';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
-import { SystemRole } from '@fapoms/shared';
+import { SystemRole, Priority, ProjectStatus } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { UserEntity } from '../user/user.entity';
@@ -84,7 +84,12 @@ export class CreateProjectRequestDto implements CreateProjectDto {
    */
   @IsOptional() @IsString() @MaxLength(2000) description?: string;
   @IsUUID() clientId: string;
-  @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(50) priority: string;
+  // Was @IsString()/@MaxLength(50): any string reached `riskScoreFromCategory`
+  // (project.service.ts), which silently falls through to LOW risk for anything it does not
+  // recognise — a malformed direct API call could create a CRITICAL-sounding project the risk
+  // map quietly treats as the lowest tier. `Projects.tsx`'s own dropdown only ever sends a
+  // `Priority` enum member, so this closes the gap without touching working UI behaviour.
+  @IsEnum(Priority) priority: string;
   @IsOptional() @IsDateString() startDate?: string;
   @IsOptional() @IsDateString() @Validate(EndsAfterStartConstraint) endDate?: string;
   @IsOptional() @IsNumber() @Min(0) budget?: number;
@@ -95,18 +100,21 @@ export class CreateProjectRequestDto implements CreateProjectDto {
   @IsOptional() @IsObject() risks?: Record<string, any>;
   @IsOptional() @IsObject() milestones?: Record<string, any>;
   @IsOptional() @IsObject() dependencies?: Record<string, any>;
-  @IsOptional() @IsString() @MaxLength(50) status?: string;
+  // Never actually read by ProjectService.create — a new project always starts at DRAFT — but
+  // still worth constraining to the real ProjectStatus enum rather than an unchecked string.
+  @IsOptional() @IsEnum(ProjectStatus) status?: string;
 }
 
 /**
  * Partial update. Every field is optional so a caller can change one thing without
  * resending — and without overwriting — the rest of the record.
  */
-class UpdateProjectRequestDto {
+export class UpdateProjectRequestDto {
   @IsOptional() @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(255) name?: string;
   @IsOptional() @IsString() @MaxLength(2000) description?: string;
   @IsOptional() @IsUUID() clientId?: string;
-  @IsOptional() @IsString() @TrimmedString() @IsNotEmpty() @MaxLength(50) priority?: string;
+  // Same reasoning as CreateProjectRequestDto.priority above.
+  @IsOptional() @IsEnum(Priority) priority?: string;
   @IsOptional() @IsDateString() startDate?: string;
   // Same window rule as create — an edit must not be able to invert what create refused.
   @IsOptional() @IsDateString() @Validate(EndsAfterStartConstraint) endDate?: string;

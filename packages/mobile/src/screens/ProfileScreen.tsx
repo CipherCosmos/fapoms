@@ -18,10 +18,32 @@ import {
   canonicalStateName,
   splitMissingByOwnership,
   HR_MAINTAINED_ASSAYER_FIELDS,
+  Region,
+  REGION_ORDER,
+  REGION_LABELS,
 } from '@fapoms/shared';
 import { MapPicker, isPlausibleIndianCoord, INDIA_CENTRE } from '../components/ui/MapPicker';
 import { getPreference, setPreference as setDevicePreference } from '../services/preferences';
 import { MobileApiService, NotificationPreference, getApiBaseUrl } from '../services/api.service';
+import {
+  parsePreferredRegions,
+  composePreferredRegions,
+  toggleRegionSelection,
+  removeLegacyRegionValue,
+} from './profile-preferred-regions';
+import {
+  parseAttributeList,
+  composeAttributeList,
+  addAttributeValue,
+  removeAttributeValue,
+  attributeSuggestions,
+} from './profile-attribute-vocabulary';
+import {
+  EMERGENCY_RELATIONS,
+  EMERGENCY_RELATION_OTHER,
+  resolveEmergencyRelation,
+  composeEmergencyRelation,
+} from './profile-emergency-relation';
 import type { AssayerStatement } from '../types/mobile-app';
 import { probeServerUrl } from '../services/server-config';
 import { registerForPushNotificationsAsync, unregisterPushNotificationsAsync } from '../services/notification.service';
@@ -438,6 +460,301 @@ const StatePicker: React.FC<{ value: string; onChange: (v: string) => void; read
 };
 
 /**
+ * The six operational regions, ticked from a fixed list instead of typed.
+ *
+ * `preferredRegions` looked like free text on this screen (`autoCapitalize="words"` on a plain
+ * box), and it is not: it is a closed six-value enum on the server (`Region` in
+ * `packages/shared/src/regions.ts`), the same list the web's `AssayerForms.tsx` already turned
+ * into a tick-list for HR. A typed value like "Delhi NCR" or "Western India" never matches one of
+ * the six and would previously round-trip as dead free text nothing downstream can use.
+ *
+ * A value already on file that is not one of the six (an old free-text entry, or a state name
+ * typed here before this picker existed) is shown as its own "as recorded" row rather than being
+ * dropped - see `profile-preferred-regions.ts` for why that parsing is deliberately conservative.
+ */
+const RegionMultiSelect: React.FC<{ value: string; onChange: (v: string) => void; readOnly?: boolean }> = ({
+  value, onChange, readOnly,
+}) => {
+  const t = useTheme();
+  const tr = useT();
+  const [open, setOpen] = useState(false);
+  const parsed = useMemo(() => parsePreferredRegions(value), [value]);
+  const summary = useMemo(
+    () => [...parsed.selected.map((r) => REGION_LABELS[r]), ...parsed.legacy].join(', '),
+    [parsed],
+  );
+
+  if (readOnly) {
+    return <FieldInput label={tr('profile.fields.preferredRegions')} value={summary} onChange={() => {}} readOnly />;
+  }
+
+  const toggle = (region: Region) => onChange(composePreferredRegions(toggleRegionSelection(parsed, region)));
+  const removeLegacy = (token: string) => onChange(composePreferredRegions(removeLegacyRegionValue(parsed, token)));
+
+  return (
+    <View style={{ gap: t.space.sm }}>
+      <AppText variant="overline" tone="faint">{tr('profile.fields.preferredRegions').toUpperCase()}</AppText>
+      <Tappable onPress={() => setOpen(true)} accessibilityRole="button" accessibilityLabel={tr('profile.address.chooseRegionsAccessibility')}>
+        <View style={{
+          backgroundColor: t.colors.bg,
+          borderRadius: t.radius.md,
+          borderWidth: 1.5,
+          borderColor: t.colors.border,
+          paddingHorizontal: t.space.lg,
+          minHeight: 50,
+          paddingVertical: t.space.sm,
+          flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+        }}>
+          <AppText variant="small" tone={summary ? 'default' : 'faint'} style={{ flex: 1 }}>
+            {summary || tr('profile.address.chooseRegions')}
+          </AppText>
+          <Icon name="chevron-down" size={14} color={t.colors.textFaint} />
+        </View>
+      </Tappable>
+
+      {parsed.legacy.length > 0 && (
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.xs }}>
+          {parsed.legacy.map((token) => (
+            <View
+              key={token}
+              style={{
+                flexDirection: 'row', alignItems: 'center', gap: 4,
+                paddingVertical: 4, paddingHorizontal: 8, borderRadius: t.radius.pill,
+                backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border,
+              }}
+            >
+              <AppText variant="caption" tone="muted">{token} {tr('profile.address.asRecordedSuffix')}</AppText>
+              <Tappable onPress={() => removeLegacy(token)} accessibilityRole="button" accessibilityLabel={tr('common.remove')}>
+                <Icon name="close-circle" size={14} color={t.colors.textFaint} />
+              </Tappable>
+            </View>
+          ))}
+        </View>
+      )}
+
+      <Modal visible={open} transparent animationType="slide" onRequestClose={() => setOpen(false)}>
+        <View style={{ flex: 1, backgroundColor: t.colors.scrim, justifyContent: 'flex-end' }}>
+          <View style={{
+            backgroundColor: t.colors.surface,
+            borderTopLeftRadius: t.radius['2xl'], borderTopRightRadius: t.radius['2xl'],
+            maxHeight: '75%', paddingTop: t.space.lg,
+          }}>
+            <View style={{
+              flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+              paddingHorizontal: t.space.lg, paddingBottom: t.space.md,
+            }}>
+              <AppText variant="h3">{tr('profile.fields.preferredRegions')}</AppText>
+              <Tappable onPress={() => setOpen(false)} accessibilityRole="button" accessibilityLabel={tr('common.close')}>
+                <AppText variant="bodyStrong" style={{ color: t.colors.primary }}>{tr('common.done')}</AppText>
+              </Tappable>
+            </View>
+            <ScrollView>
+              {REGION_ORDER.map((r) => {
+                const checked = parsed.selected.includes(r);
+                return (
+                  <Tappable key={r} onPress={() => toggle(r)} accessibilityRole="button" accessibilityLabel={REGION_LABELS[r]}>
+                    <View style={{
+                      paddingHorizontal: t.space.lg, paddingVertical: t.space.md,
+                      flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+                      borderBottomWidth: 1, borderBottomColor: t.colors.border,
+                    }}>
+                      <AppText variant="body" tone={checked ? 'primary' : 'default'}>{REGION_LABELS[r]}</AppText>
+                      {checked && <Icon name="checkmark-circle" size={16} color={t.colors.primary} />}
+                    </View>
+                  </Tappable>
+                );
+              })}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+};
+
+/**
+ * `skills` / `languages`, offered as chips with autocomplete instead of a comma-separated box.
+ *
+ * Unlike regions, this is an open vocabulary that legitimately grows - the roster's existing
+ * skills and languages (`vocabulary`, from `MobileApiService.getWorkforceAttributeVocabulary`)
+ * are offered as suggestions so a value the matching engine already knows about gets picked
+ * rather than retyped with a spelling that matches nobody, but a genuinely new one can still be
+ * typed and added: see `profile-attribute-vocabulary.ts`'s `addAttributeValue`.
+ *
+ * `vocabulary` is commonly empty - the endpoint is HR-scoped and every call this screen makes to
+ * it 403s for an ordinary assayer (see `MobileApiService.getWorkforceAttributeVocabulary`'s own
+ * comment) - and an empty list is treated as a normal state, not an error: no suggestions are
+ * offered, and typing a new value still works.
+ */
+const AttributeChipPicker: React.FC<{
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  vocabulary: string[];
+  placeholder?: string;
+  readOnly?: boolean;
+}> = ({ label, value, onChange, vocabulary, placeholder, readOnly }) => {
+  const t = useTheme();
+  const tr = useT();
+  const [query, setQuery] = useState('');
+  const [focus, setFocus] = useState(false);
+  const items = useMemo(() => parseAttributeList(value), [value]);
+
+  if (readOnly) {
+    return <FieldInput label={label} value={composeAttributeList(items)} onChange={() => {}} readOnly />;
+  }
+
+  const suggestions = useMemo(
+    () => attributeSuggestions(vocabulary, items, query).slice(0, 8),
+    [vocabulary, items, query],
+  );
+  const trimmedQuery = query.trim();
+  const alreadyAdded = items.some((i) => i.toLowerCase() === trimmedQuery.toLowerCase());
+
+  const add = (v: string) => { onChange(addAttributeValue(value, v)); setQuery(''); };
+  const remove = (v: string) => onChange(removeAttributeValue(value, v));
+
+  return (
+    <View style={{ gap: t.space.sm }}>
+      <AppText variant="overline" tone="faint">{label.toUpperCase()}</AppText>
+
+      {items.length > 0 && (
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.xs }}>
+          {items.map((item) => (
+            <View
+              key={item}
+              style={{
+                flexDirection: 'row', alignItems: 'center', gap: 4,
+                paddingVertical: 4, paddingHorizontal: 8, borderRadius: t.radius.pill,
+                backgroundColor: t.colors.primarySoft, borderWidth: 1, borderColor: t.colors.primary,
+              }}
+            >
+              <AppText variant="caption" tone="primary">{item}</AppText>
+              <Tappable onPress={() => remove(item)} accessibilityRole="button" accessibilityLabel={tr('common.remove')}>
+                <Icon name="close-circle" size={14} color={t.colors.primary} />
+              </Tappable>
+            </View>
+          ))}
+        </View>
+      )}
+
+      <TextInput
+        value={query}
+        onChangeText={setQuery}
+        onFocus={() => setFocus(true)}
+        onBlur={() => setFocus(false)}
+        onSubmitEditing={() => add(query)}
+        placeholder={placeholder}
+        placeholderTextColor={t.colors.textFaint}
+        style={{
+          backgroundColor: t.colors.bg,
+          borderRadius: t.radius.md,
+          borderWidth: 1.5,
+          borderColor: focus ? t.colors.primary : t.colors.border,
+          paddingHorizontal: t.space.lg,
+          height: 44,
+          color: t.colors.text,
+          fontSize: 14,
+        } as TextStyle}
+      />
+
+      {trimmedQuery.length > 0 && (
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.xs }}>
+          {suggestions.map((s) => (
+            <Tappable key={s} onPress={() => add(s)} accessibilityRole="button" accessibilityLabel={s}>
+              <View style={{
+                paddingVertical: 4, paddingHorizontal: 8, borderRadius: t.radius.pill,
+                backgroundColor: t.colors.surface, borderWidth: 1, borderColor: t.colors.border,
+              }}>
+                <AppText variant="caption" tone="muted">{s}</AppText>
+              </View>
+            </Tappable>
+          ))}
+          {!alreadyAdded && (
+            <Tappable onPress={() => add(query)} accessibilityRole="button" accessibilityLabel={tr('profile.attributes.addNew', { name: trimmedQuery })}>
+              <View style={{
+                paddingVertical: 4, paddingHorizontal: 8, borderRadius: t.radius.pill,
+                backgroundColor: t.colors.primarySoft, borderWidth: 1, borderColor: t.colors.primary,
+              }}>
+                <AppText variant="caption" tone="primary">{tr('profile.attributes.addNew', { name: trimmedQuery })}</AppText>
+              </View>
+            </Tappable>
+          )}
+        </View>
+      )}
+    </View>
+  );
+};
+
+/**
+ * `emergencyRelation`, picked from a fixed list matching the web's `EMERGENCY_CONTACT_RELATIONS`
+ * (`AssayerForms.tsx`), with "Other" revealing a free-text box - the same escape hatch every
+ * other closed choice in this batch of work keeps, and the only way a relationship none of the
+ * six cover (a guardian, a neighbour) still gets recorded.
+ *
+ * A stored value that matches none of the six is treated as "Other" with that value shown in the
+ * box, rather than a blank "Other" - see `resolveEmergencyRelation`.
+ */
+const EmergencyRelationPicker: React.FC<{ value: string; onChange: (v: string) => void; readOnly?: boolean }> = ({
+  value, onChange, readOnly,
+}) => {
+  const t = useTheme();
+  const tr = useT();
+  const selection = useMemo(() => resolveEmergencyRelation(value), [value]);
+
+  if (readOnly) {
+    return <FieldInput label={tr('profile.fields.relation')} value={value} onChange={() => {}} readOnly />;
+  }
+
+  const choose = (choice: string) => {
+    onChange(composeEmergencyRelation(choice, choice === EMERGENCY_RELATION_OTHER ? selection.otherText : ''));
+  };
+  const changeOtherText = (text: string) => onChange(composeEmergencyRelation(EMERGENCY_RELATION_OTHER, text));
+
+  return (
+    <View style={{ gap: t.space.sm }}>
+      <AppText variant="overline" tone="faint">{tr('profile.fields.relation').toUpperCase()}</AppText>
+      <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.xs }}>
+        {[...EMERGENCY_RELATIONS, EMERGENCY_RELATION_OTHER].map((option) => {
+          const active = selection.choice === option;
+          return (
+            <Tappable key={option} onPress={() => choose(option)} accessibilityRole="button" accessibilityLabel={option}>
+              <View style={{
+                paddingVertical: t.space.sm, paddingHorizontal: t.space.md, borderRadius: t.radius.pill,
+                backgroundColor: active ? t.colors.primarySoft : t.colors.surface,
+                borderWidth: 1, borderColor: active ? t.colors.primary : t.colors.border,
+              }}>
+                <AppText variant="caption" tone={active ? 'primary' : 'muted'}>{option}</AppText>
+              </View>
+            </Tappable>
+          );
+        })}
+      </View>
+
+      {selection.choice === EMERGENCY_RELATION_OTHER && (
+        <TextInput
+          value={selection.otherText}
+          onChangeText={changeOtherText}
+          placeholder={tr('profile.fields.relationOtherPlaceholder')}
+          placeholderTextColor={t.colors.textFaint}
+          autoCapitalize="words"
+          style={{
+            backgroundColor: t.colors.bg,
+            borderRadius: t.radius.md,
+            borderWidth: 1.5,
+            borderColor: t.colors.border,
+            paddingHorizontal: t.space.lg,
+            height: 44,
+            color: t.colors.text,
+            fontSize: 14,
+          } as TextStyle}
+        />
+      )}
+    </View>
+  );
+};
+
+/**
  * The assayer's home address, and the coordinate that goes with it.
  *
  * ## Why the pin matters more than it looks
@@ -807,6 +1124,26 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
    */
   const [editing, setEditing] = useState(false);
   useEffect(() => { setEditing(false); }, [stackNav.current]);
+
+  /**
+   * Skills/languages suggestions for the Capability editor, fetched at most once per screen
+   * session and only once that section is actually open - the endpoint is HR-scoped
+   * (`@Roles(ADMIN, OPERATIONS)`) and every call an ordinary assayer makes to it 403s, so there is
+   * no point fetching it on every profile visit. `getWorkforceAttributeVocabulary` turns that 403
+   * into `{ skills: [], languages: [] }` rather than throwing, which `AttributeChipPicker` treats
+   * as "no suggestions yet" - typing and adding a new value still works either way.
+   */
+  const [vocabulary, setVocabulary] = useState<{ skills: string[]; languages: string[] } | null>(null);
+  const [vocabularyLoading, setVocabularyLoading] = useState(false);
+  useEffect(() => {
+    if (stackNav.current !== 'capability' || vocabulary || vocabularyLoading) return;
+    setVocabularyLoading(true);
+    let cancelled = false;
+    void MobileApiService.getWorkforceAttributeVocabulary()
+      .then((v) => { if (!cancelled) setVocabulary(v); })
+      .finally(() => { if (!cancelled) setVocabularyLoading(false); });
+    return () => { cancelled = true; };
+  }, [stackNav.current, vocabulary, vocabularyLoading]);
 
   /**
    * Device settings, seeded from the persisted store rather than from the profile object.
@@ -1292,7 +1629,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
                 <FieldInput label={tr('profile.fields.phone')} value={profile.emergencyPhone} onChange={(v) => onUpdateProfileField('emergencyPhone', v)} keyboardType="phone-pad" readOnly={!editing} />
               </View>
               <View style={{ flex: 1 }}>
-                <FieldInput label={tr('profile.fields.relation')} value={profile.emergencyRelation} onChange={(v) => onUpdateProfileField('emergencyRelation', v)} autoCapitalize="words" readOnly={!editing} />
+                <EmergencyRelationPicker value={profile.emergencyRelation} onChange={(v) => onUpdateProfileField('emergencyRelation', v)} readOnly={!editing} />
               </View>
             </View>
           </Card>
@@ -1305,8 +1642,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       >
         <View style={{ padding: t.space.lg, gap: t.space.lg }}>
           <Card level={1} style={{ gap: t.space.lg }}>
-            <FieldInput label={tr('profile.fields.skills')} value={profile.skills} onChange={(v) => onUpdateProfileField('skills', v)} placeholder={tr('profile.fields.skillsPlaceholder')} readOnly={!editing} />
-            <FieldInput label={tr('profile.fields.languages')} value={profile.languages} onChange={(v) => onUpdateProfileField('languages', v)} placeholder={tr('profile.fields.languagesPlaceholder')} readOnly={!editing} />
+            <AttributeChipPicker label={tr('profile.fields.skills')} value={profile.skills} onChange={(v) => onUpdateProfileField('skills', v)} vocabulary={vocabulary?.skills ?? []} placeholder={tr('profile.fields.skillsPlaceholder')} readOnly={!editing} />
+            <AttributeChipPicker label={tr('profile.fields.languages')} value={profile.languages} onChange={(v) => onUpdateProfileField('languages', v)} vocabulary={vocabulary?.languages ?? []} placeholder={tr('profile.fields.languagesPlaceholder')} readOnly={!editing} />
             <FieldInput label={tr('profile.fields.experienceYears')} value={String(profile.experienceYears ?? '')} onChange={(v) => onUpdateProfileField('experienceYears', Number(v) || 0)} keyboardType="numeric" readOnly={!editing} />
           </Card>
         </View>
@@ -1337,7 +1674,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
               Removed rather than locked, because there is nothing behind it to explain. Making it
               real means a column, a DTO field, and a distance check in the recommendation engine.
             */}
-            <FieldInput label={tr('profile.fields.preferredRegions')} value={profile.preferredRegions} onChange={(v) => onUpdateProfileField('preferredRegions', v)} autoCapitalize="words" readOnly={!editing} />
+            <RegionMultiSelect value={profile.preferredRegions} onChange={(v) => onUpdateProfileField('preferredRegions', v)} readOnly={!editing} />
           </Card>
         </View>
       </SubScreen>

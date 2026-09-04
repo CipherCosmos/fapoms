@@ -13,7 +13,7 @@ import { queryClient } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
 import { useScope, withScope } from '../context/ScopeContext';
 import { useSocketConnection } from '../hooks/useSocketConnection';
-import { useExcelExport } from '../hooks/useExcelExport';
+import { useQueuedExcelExport } from '../hooks/useQueuedExcelExport';
 
 import { assignmentFee } from '../utils/money';
 import { AssignmentMoneyCard } from './billing/AssignmentMoneyCard';
@@ -362,7 +362,11 @@ export const Assignments: React.FC = () => {
 
   // Export mirrors whatever the current view is filtered to (same status/priority axis),
   // so what lands in the spreadsheet matches the rows on screen.
-  const { download: downloadExcel, busy: exporting } = useExcelExport();
+  //
+  // Runs through the queue (POST .../jobs, poll, download) rather than the synchronous
+  // GET this called until 2026-09 — xlsx.write is blocking CPU with no yield point, and the
+  // assignment list is the export most likely to be large. See useQueuedExcelExport.ts.
+  const { download: downloadExcel, busy: exporting } = useQueuedExcelExport();
   const handleExport = () => {
     const params: Record<string, string> = { ...scopeParams };
     if (queryString) {
@@ -371,7 +375,7 @@ export const Assignments: React.FC = () => {
         if (k) params[k] = v;
       }
     }
-    void downloadExcel('/reports/assignments', params);
+    void downloadExcel('/reports/assignments/jobs', params);
   };
 
   const { scopeParams, scopeKey } = useScope();
@@ -1159,7 +1163,11 @@ export const Assignments: React.FC = () => {
                         onClick={() => actionMode === 'ESCALATE'
                           ? runEscalate(actionReason || undefined)
                           : runTransition(actionMode === 'REJECT' ? 'REJECTED' : 'CANCELLED', actionReason || undefined)}
-                        disabled={actionBusy}
+                        // Reject and Cancel both require a real reason server-side (it becomes
+                        // the audit trail whoever plans this branch next reads) — ESCALATE stays
+                        // optional. Disabling here matches that instead of round-tripping to the
+                        // server just to show the same refusal back.
+                        disabled={actionBusy || ((actionMode === 'REJECT' || actionMode === 'CANCEL') && !actionReason.trim())}
                         className="btn btn-primary"
                         style={{ padding: '5px 10px', fontSize: '11px', background: actionMode === 'ESCALATE' ? 'var(--warning)' : 'var(--danger)', borderColor: actionMode === 'ESCALATE' ? 'var(--warning)' : 'var(--danger)' }}
                       >
@@ -1276,7 +1284,13 @@ export const Assignments: React.FC = () => {
                         <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>{anyStatusLabel(e.category)}</span>
                         {e.description && <span style={{ fontSize: '10px', color: 'var(--text-secondary)', flex: 1, minWidth: 0 }}>{e.description}</span>}
                         <span style={{ fontSize: '9px', fontWeight: 700, color: tone }}>{anyStatusLabel(e.status)}</span>
-                        {pending && (
+                        {/* Gated on `canActOnAssignments`, the same flag every other mutating
+                            control on this page already uses — this pair was the one exception,
+                            keyed only on the claim's own status. `POST /expenses/:id/review` is
+                            ADMIN/OPERATIONS-only server-side, so nothing unsafe could actually
+                            happen through it; the gap was a live Approve/Reject pair rendering for
+                            a role (AUDITOR, DESK) that would only ever get a 403 on click. */}
+                        {pending && canActOnAssignments && (
                           <span style={{ display: 'flex', gap: '4px' }}>
                             <button onClick={() => reviewExpense(e.id, true)} disabled={reviewingExpenseId === e.id}
                               className="btn btn-primary" style={{ padding: '2px 8px', fontSize: '9.5px' }}>Approve</button>

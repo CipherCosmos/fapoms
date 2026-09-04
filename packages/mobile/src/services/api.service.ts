@@ -15,6 +15,7 @@ import {
   clearServerUrl,
   normaliseServerUrl,
 } from './server-config';
+import { cleanWorkforceVocabulary, type WorkforceVocabulary } from './workforce-vocabulary';
 
 /** One row of the per-category notification preference set returned by the API. */
 export interface NotificationPreference {
@@ -908,9 +909,42 @@ export class MobileApiService {
     }
   }
 
-  static async rejectAssignment(assignmentId: string, reason: string): Promise<{ success: boolean; error?: string }> {
-    const ok = await this.updateAssignmentStatus(assignmentId, 'REJECTED', reason);
-    return { success: ok, error: ok ? undefined : 'Failed to reject assignment' };
+  /**
+   * The skills and languages already in use across the roster, offered as suggestions instead of
+   * a blank text box - the same source the web's `ChipMultiSelect` reads from
+   * (`useWorkforceVocabulary.ts`).
+   *
+   * `GET /assayers/workforce-attribute/vocabulary` is `@Roles(ADMIN, OPERATIONS)`-gated on the
+   * backend (`assayer.controller.ts`), and an assayer editing their own profile is neither - this
+   * call gets a 403 for every real assayer today. That is not treated as an error here: the web's
+   * own hook already documents the same gap ("the HR-scoped endpoint is not readable by this
+   * role") and degrades to empty lists rather than surfacing a failure, and this method does the
+   * same. An empty result just means no suggestions are offered; the chip picker on `ProfileScreen`
+   * still lets a genuinely new skill or language be typed and added, so nothing is blocked by it.
+   *
+   * The response shape itself is parsed by `cleanWorkforceVocabulary` (services/workforce-vocabulary.ts),
+   * kept in a separate file with no React Native import so it can actually be unit tested - see
+   * that file's own comment for why nothing in THIS file can be.
+   */
+  static async getWorkforceAttributeVocabulary(): Promise<WorkforceVocabulary> {
+    const empty: WorkforceVocabulary = { skills: [], languages: [] };
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/workforce-attribute/vocabulary`);
+      if (!response.ok) return empty;
+      const data = await response.json().catch(() => null);
+      if (!data?.success) return empty;
+      return cleanWorkforceVocabulary(data.data);
+    } catch {
+      return empty;
+    }
+  }
+
+  static async rejectAssignment(
+    assignmentId: string,
+    reason: string,
+  ): Promise<{ success: boolean; error?: string; status?: number }> {
+    const { ok, status } = await this.updateAssignmentStatus(assignmentId, 'REJECTED', reason);
+    return { success: ok, error: ok ? undefined : 'Failed to reject assignment', status };
   }
 
   /**
@@ -962,17 +996,24 @@ export class MobileApiService {
     }
   }
 
+  /**
+   * `clientRequestId` (a v4 UUID, generated once by `action-queue.ts` and reused on every retry
+   * of the same claim) lets the desk recognise a retry after a lost response as the claim that
+   * already landed rather than a second one. Optional so any direct caller that predates the
+   * queue still compiles; the field carries no meaning to this method beyond forwarding it.
+   */
   static async submitExpense(
     assignmentId: string,
-    expense: { category: string; amount: number; description?: string }
-  ): Promise<{ success: boolean; error?: string }> {
+    expense: { category: string; amount: number; description?: string },
+    clientRequestId?: string,
+  ): Promise<{ success: boolean; error?: string; status?: number }> {
     try {
       const response = await this.fetchWithAuth(`${API_BASE_URL}/assignments/${assignmentId}/expenses`, {
         method: 'POST',
-        body: JSON.stringify(expense),
+        body: JSON.stringify(clientRequestId ? { ...expense, clientRequestId } : expense),
       });
       const data = await response.json().catch(() => ({}));
-      return { success: response.ok && data?.success !== false, error: data?.message };
+      return { success: response.ok && data?.success !== false, error: data?.message, status: response.status };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Network error submitting expense' };
     }
@@ -1124,7 +1165,27 @@ export class MobileApiService {
     try {
       const res = await this.fetchWithAuth(
         `${API_BASE_URL}/documents/upload/session/${uploadId}/complete`,
-        { method: 'POST', body: JSON.stringify({ type: 'AUDITED_RETURN_PDF' }) },
+        {
+          method: 'POST',
+          // `assignmentId`, not just `type`, is why this ever finishes the job. The server's
+          // `completeAssignmentForReturn` needs an assignment to complete, and this was the one
+          // call in the whole chunked-upload path that never sent it — verified live against a
+          // running server: four separate packets for the same assignment each uploaded
+          // successfully (marked SENT on the device, a real document row on the server) and the
+          // assignment sat on ACCEPTED through every one of them, hours apart, because this
+          // request's body was `{ type: 'AUDITED_RETURN_PDF' }` and nothing else.
+          //
+          // The server does have two fallbacks once `assignmentId` is absent — by `assessmentId`
+          // and by `projectBranchId` — but neither ever matches here: the session was opened
+          // above with `assessmentId` set to this same assignment's own id (there being no real
+          // assessment id on hand at that call site), so both fallback lookups end up searching
+          // for an assignment by a column holding the *assignment's own id*, which is not what
+          // either column means, and find nothing. `assignmentId` is the one identifier this
+          // upload actually has that is honest about what it names, and the server DTO
+          // (`CompleteUploadSessionRequestDto.assignmentId`, an optional UUID) already exists
+          // specifically to take it — this is the direct, correct lookup path, not a workaround.
+          body: JSON.stringify({ type: 'AUDITED_RETURN_PDF', assignmentId: assignmentId || undefined }),
+        },
       );
       const data = await res.json().catch(() => ({}));
       if (res.ok && data?.success) {
@@ -1278,15 +1339,15 @@ export class MobileApiService {
     queryId: string,
     body: string,
     attachments: { url: string; fileName: string; fileType: string }[] = [],
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<{ success: boolean; error?: string; status?: number }> {
     try {
       const res = await this.fetchWithAuth(`${API_BASE_URL}/validation-queries/${queryId}/messages`, {
         method: 'POST',
         body: JSON.stringify({ body: body || undefined, attachments }),
       });
       const data = await res.json().catch(() => ({}));
-      if (res.ok && data?.success) return { success: true };
-      return { success: false, error: data?.message || 'The message could not be sent.' };
+      if (res.ok && data?.success) return { success: true, status: res.status };
+      return { success: false, error: data?.message || 'The message could not be sent.', status: res.status };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Network error sending the message.' };
     }
@@ -1529,16 +1590,24 @@ export class MobileApiService {
      * travel back out at the quoted figure, so everything asked for landed in the base.
      */
     counterTravelFee?: number,
-  ): Promise<boolean> {
+    /**
+     * Only meaningful for a counter-offer: it is the one transition here that creates a new
+     * negotiation round each time it lands, so it is the one the desk dedupes on. Accept/reject
+     * and plain status moves are already idempotent server-side (repeating one is a no-op), so
+     * sending an id for those would be dead weight on the wire.
+     */
+    clientRequestId?: string,
+  ): Promise<{ ok: boolean; status: number }> {
     const backendStatus = counterTravelFee !== undefined ? 'COUNTER_OFFER' : status;
     const body: any = { targetStatus: backendStatus };
     if (reason) body.reason = reason;
     if (counterTravelFee !== undefined) body.counterTravelFee = counterTravelFee;
+    if (counterTravelFee !== undefined && clientRequestId) body.clientRequestId = clientRequestId;
     const response = await this.fetchWithAuth(`${API_BASE_URL}/assignments/${assignmentId}/transition`, {
       method: 'POST',
       body: JSON.stringify(body),
     });
-    return response.ok;
+    return { ok: response.ok, status: response.status };
   }
 
   /**
@@ -1552,7 +1621,7 @@ export class MobileApiService {
     lng: number,
     accuracy?: number,
     syncToken?: string,
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<{ success: boolean; error?: string; status?: number }> {
     const response = await this.fetchWithAuth(`${API_BASE_URL}/assignments/${assignmentId}/check-in`, {
       method: 'POST',
       body: JSON.stringify({ lat, lng, accuracy, syncToken, timestamp: new Date().toISOString() }),
@@ -1564,6 +1633,7 @@ export class MobileApiService {
       // ("NOT_SCHEDULED_TODAY", "TOO_FAR_FROM_BRANCH") *and* a message explaining what to do;
       // surfacing the code put "TOO_FAR_FROM_BRANCH" in the assayer's toast.
       error: resData.message || resData.error,
+      status: response.status,
     };
   }
 
@@ -1583,7 +1653,7 @@ export class MobileApiService {
     lng: number,
     accuracy?: number,
     syncToken?: string,
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<{ success: boolean; error?: string; status?: number }> {
     const response = await this.fetchWithAuth(`${API_BASE_URL}/assignments/${assignmentId}/check-out`, {
       method: 'POST',
       body: JSON.stringify({ lat, lng, accuracy, syncToken, timestamp: new Date().toISOString() }),
@@ -1593,6 +1663,7 @@ export class MobileApiService {
       success: response.ok && resData.success !== false,
       // The sentence, not the code — same reasoning as check-in above.
       error: resData.message || resData.error,
+      status: response.status,
     };
   }
 

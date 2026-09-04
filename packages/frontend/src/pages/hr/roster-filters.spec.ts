@@ -4,6 +4,7 @@ import {
   ROSTER_FILTERS, ROSTER_SEGMENTS, EMPTY_FILTERS, NOT_RECORDED,
   applyRosterFilters, availableFilters, fieldChoices, ruleChoices, describeFilters,
   toggleChoice, clearFilter, activeFilterCount, parseFilters, writeFilters, pinQuality,
+  toServerQuery,
   type FieldFilter, type RuleFilter, type RosterFilterState, type RosterPerson,
 } from './roster-filters';
 
@@ -389,5 +390,45 @@ describe('at the size of the real roster', () => {
     // Not a benchmark — a guard against an accidental per-row `find` turning the panel into a
     // several-second freeze on the roster it is meant for.
     expect(Date.now() - started).toBeLessThan(2000);
+  });
+});
+
+/**
+ * The bridge to `GET /assayers`'s own filter params (`assayer.controller.ts` /
+ * `roster-query.service.ts`). Only the axes with a real column behind them should cross —
+ * everything else stays client-side over the loaded page, which is what makes the roster's
+ * "instant" promise survive server-side filtering existing at all.
+ */
+describe('toServerQuery', () => {
+  it('sends nothing for a blank filter state', () => {
+    expect(toServerQuery(EMPTY_FILTERS)).toBe('');
+  });
+
+  it('maps the field-kind axes onto the query params the controller reads', () => {
+    const q = toServerQuery(state({
+      choices: { state: ['Kerala', 'Goa'], stage: ['ACTIVE'], engagement: ['REGULAR'] },
+    }));
+    const params = new URLSearchParams(q);
+    expect(params.get('state')).toBe('Kerala,Goa');
+    expect(params.get('lifecycleStatus')).toBe('ACTIVE');
+    expect(params.get('engagementType')).toBe('REGULAR');
+  });
+
+  it('carries search text as q', () => {
+    expect(new URLSearchParams(toServerQuery(state({ search: ' ravi ' }))).get('q')).toBe('ravi');
+  });
+
+  it('carries the joined-date range', () => {
+    const q = toServerQuery(state({ ranges: { joined: { from: '2026-01-01', to: '2026-03-01' } } }));
+    const params = new URLSearchParams(q);
+    expect(params.get('joinedFrom')).toBe('2026-01-01');
+    expect(params.get('joinedTo')).toBe('2026-03-01');
+  });
+
+  it('drops a rule-kind axis — the server has no column for it', () => {
+    // "record" (record completeness) is a rule filter computed from three columns; the server
+    // route does not accept a param for it at all.
+    const q = toServerQuery(state({ choices: { record: ['unpayable'] } }));
+    expect(q).toBe('');
   });
 });

@@ -123,6 +123,7 @@ export const PAYABLE_STATUS_LABELS: Record<AssayerPayableStatus, string> = {
   [AssayerPayableStatus.PENDING]: 'Due',
   [AssayerPayableStatus.APPROVED]: 'Approved',
   [AssayerPayableStatus.PAID]: 'Paid',
+  [AssayerPayableStatus.VOIDED]: 'Voided',
 };
 
 export const INVOICE_STATUS_LABELS: Record<InvoiceStatus, string> = {

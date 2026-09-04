@@ -22,6 +22,16 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
  */
 export const NOT_A_RECORD_ENTITY_ID = '00000000-0000-0000-0000-000000000000';
 
+/**
+ * Whether the action the event records actually happened.
+ *
+ * Most business events are only recorded once they have succeeded, so SUCCESS is the default. The
+ * other two exist because a compliance trail has to answer "who was REFUSED access" and "whose
+ * action FAILED", not only "who succeeded": a 403 on a sensitive read is exactly the signal a
+ * bank/RBI monitor looks for, and it is invisible if only successes are stored.
+ */
+export type AuditOutcome = 'SUCCESS' | 'FAILURE' | 'DENIED';
+
 export interface RecordAuditEventInput {
   /**
    * Which lens the event belongs under, and therefore which filter chip surfaces it.
@@ -54,6 +64,24 @@ export interface RecordAuditEventInput {
   ipAddress?: string;
   remarks?: string;
   metadata?: Record<string, unknown>;
+  /** The actor's primary role at the time of the event (compliance non-repudiation). */
+  actorRole?: string;
+  /** Raw User-Agent of the actor's client, stored unparsed. */
+  userAgent?: string;
+  /** Durable session id (access token `sid`), linking the event to a device session. */
+  sessionId?: string;
+  /** Correlation/request id shared with logs, so one action can be traced across services. */
+  requestId?: string;
+  /** Whether the action succeeded, failed, or was refused. Defaults to SUCCESS. */
+  outcome?: AuditOutcome;
+  /**
+   * Structured field-level before/after for an edit — richer than the coarse
+   * previousState/newState pair. NEVER put a sensitive value here: a diff of a PAN or bank
+   * account is the value, so callers editing sensitive fields record only that the field
+   * changed, not to what (see the sensitive-field reveal audit for the established pattern).
+   */
+  before?: Record<string, unknown> | null;
+  after?: Record<string, unknown> | null;
 }
 
 /**
@@ -87,6 +115,13 @@ export class AuditEvent {
     readonly ipAddress: string | null,
     readonly remarks: string | null,
     readonly metadata: Record<string, unknown> | null,
+    readonly actorRole: string | null,
+    readonly userAgent: string | null,
+    readonly sessionId: string | null,
+    readonly requestId: string | null,
+    readonly outcome: AuditOutcome,
+    readonly before: Record<string, unknown> | null,
+    readonly after: Record<string, unknown> | null,
   ) {
     Object.freeze(this);
   }
@@ -155,6 +190,13 @@ export class AuditEvent {
       input.ipAddress ?? null,
       input.remarks ?? null,
       metadata,
+      input.actorRole ?? null,
+      input.userAgent ?? null,
+      input.sessionId ?? null,
+      input.requestId ?? null,
+      input.outcome ?? 'SUCCESS',
+      input.before ?? null,
+      input.after ?? null,
     );
   }
 }
@@ -180,6 +222,13 @@ export interface RecordedAuditEvent {
   remarks: string | null;
   metadata: Record<string, unknown> | null;
   occurredAt: Date;
+  actorRole: string | null;
+  userAgent: string | null;
+  sessionId: string | null;
+  requestId: string | null;
+  outcome: string | null;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
 }
 
 export interface AuditEventPage {

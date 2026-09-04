@@ -1,6 +1,11 @@
 import { ForbiddenException } from '@nestjs/common';
 import { Region } from '@fapoms/shared';
-import { assignedRegions, resolveGlobalScope, resolveRegionScope } from './global-scope';
+import {
+  assignedRegions,
+  resolveClientScope,
+  resolveGlobalScope,
+  resolveRegionScope,
+} from './global-scope';
 
 describe('global scope', () => {
   describe('assignedRegions', () => {
@@ -59,6 +64,52 @@ describe('global scope', () => {
     // 'ALL' must not widen a restricted account back out.
     it('does not let ALL escape an assignment', () => {
       expect(resolveRegionScope('ALL', { regions: ['WEST'] })).toEqual([Region.WEST]);
+    });
+  });
+
+  describe('resolveClientScope', () => {
+    it('is unrestricted when nothing is requested and nothing is assigned', () => {
+      expect(resolveClientScope(undefined, {})).toBeUndefined();
+      expect(resolveClientScope(undefined, null)).toBeUndefined();
+    });
+
+    it('narrows an unassigned staff account to whatever it asked for', () => {
+      expect(resolveClientScope('c1', { roles: [{ name: 'ADMIN' }] })).toBe('c1');
+    });
+
+    it('falls back to the assignment when no client is requested', () => {
+      expect(resolveClientScope(undefined, { clientId: 'c1' })).toBe('c1');
+    });
+
+    it('refuses a client the account is not assigned to', () => {
+      expect(() => resolveClientScope('other', { clientId: 'c1' })).toThrow(ForbiddenException);
+    });
+
+    it('honours a request that matches the assignment', () => {
+      expect(resolveClientScope('c1', { clientId: 'c1' })).toBe('c1');
+    });
+
+    // The regression this module exists to prevent: a CLIENT_USER account provisioned without a
+    // `clientId` (the admin screen that creates one does not expose the field today) must never
+    // be read as "unrestricted, like staff" — that reading is what let a client account with no
+    // assignment see another bank's project by name. Fail closed instead.
+    it('refuses a CLIENT_USER principal with no client assignment, regardless of what it asks for', () => {
+      expect(() => resolveClientScope(undefined, { roles: [{ name: 'CLIENT_USER' }] })).toThrow(
+        ForbiddenException,
+      );
+      expect(() => resolveClientScope('someClient', { roles: ['CLIENT_USER'] })).toThrow(
+        ForbiddenException,
+      );
+    });
+
+    it('does not refuse a CLIENT_USER principal that does hold an assignment', () => {
+      expect(
+        resolveClientScope(undefined, { clientId: 'c1', roles: [{ name: 'CLIENT_USER' }] }),
+      ).toBe('c1');
+    });
+
+    it('leaves a non-CLIENT_USER external principal (e.g. an assayer token) unrestricted, matching pre-existing behaviour', () => {
+      expect(resolveClientScope('c1', { roles: [{ name: 'ASSAYER' }] })).toBe('c1');
     });
   });
 

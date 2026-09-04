@@ -1,11 +1,15 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import { AppState, AppStateStatus } from 'react-native';
 import { AssayerAssignment } from '../types/mobile-app';
 import { MobileApiService } from '../services/api.service';
 import { flushQueue } from '../services/location-queue';
+import { enqueueAndRun, processActionQueue } from '../services/action-queue';
+import { actionDispatchers } from '../services/action-dispatchers';
 import { connectMobileSocket } from '../services/socket';
 import { scheduleLocalNotification } from '../services/notification.service';
 import { useAuth } from './AuthContext';
 import { readCache, writeCache } from '../services/token-store';
+import { t } from '../i18n/i18n';
 
 interface AssignmentContextType {
   assignments: AssayerAssignment[];
@@ -225,57 +229,80 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     };
   }, [isAuthenticated, loadAssignments, selfUserId]);
 
+  /**
+   * These three all go through the action queue (`services/action-queue.ts`): the request is
+   * written to disk before it is attempted, so an app killed mid-request — a dropped handover in
+   * a strongroom, the OS reclaiming memory — does not silently lose an accept, a counter-offer or
+   * an expense claim the assayer believes they already filed. `enqueueAndRun` attempts it once
+   * immediately so the screen still gets an answer straight away; a transport/timeout failure is
+   * left queued for `processActionQueue` to retry on the next foreground return or reconnect
+   * (wired below), while a validation 4xx is surfaced once and dropped — retrying a refused
+   * request would only fail the same way again.
+   */
   const updateAssignmentStatus = async (
     assignmentId: string,
     status: AssayerAssignment['status'],
     notes?: string,
     reportData?: { pdfName?: string; data?: any; counterTravelFee?: number }
   ) => {
-    try {
-      const success = await MobileApiService.updateAssignmentStatus(
-        assignmentId,
-        status,
-        notes,
-        reportData?.counterTravelFee
-      );
-      if (success) {
-        await loadAssignments();
-        return { success: true };
-      }
-      return { success: false, error: 'Failed to update assignment status' };
-    } catch (err: any) {
-      return { success: false, error: err?.message || 'Network error' };
-    }
+    const payload = { op: 'transition' as const, assignmentId, status, notes, counterTravelFee: reportData?.counterTravelFee };
+    const result = await enqueueAndRun('ASSIGNMENT_STATUS', payload, actionDispatchers.ASSIGNMENT_STATUS);
+    if (result.success) await loadAssignments();
+    if (result.queued) return { success: false, error: t('common.willRetry') };
+    return { success: result.success, error: result.error };
   };
 
   const rejectAssignment = async (assignmentId: string, reason: string) => {
-    try {
-      const result = await MobileApiService.rejectAssignment(assignmentId, reason);
-      if (result.success) {
-        await loadAssignments();
-        return { success: true };
-      }
-      return { success: false, error: result.error || 'Failed to reject assignment' };
-    } catch (err: any) {
-      return { success: false, error: err?.message || 'Network error' };
-    }
+    const result = await enqueueAndRun(
+      'ASSIGNMENT_STATUS',
+      { op: 'reject' as const, assignmentId, reason },
+      actionDispatchers.ASSIGNMENT_STATUS,
+    );
+    if (result.success) await loadAssignments();
+    if (result.queued) return { success: false, error: t('common.willRetry') };
+    return { success: result.success, error: result.error || 'Failed to reject assignment' };
   };
 
   const submitExpense = async (
     assignmentId: string,
     expense: { category: 'TRAVEL_KM' | 'TOLL' | 'FOOD' | 'OTHER'; amount: number; description?: string }
   ) => {
-    try {
-      const result = await MobileApiService.submitExpense(assignmentId, expense);
-      if (result.success) {
-        await loadAssignments();
-        return { success: true };
-      }
-      return { success: false, error: result.error || 'Failed to submit expense' };
-    } catch (err: any) {
-      return { success: false, error: err?.message || 'Network error' };
-    }
+    const result = await enqueueAndRun('EXPENSE_CLAIM', { assignmentId, expense }, actionDispatchers.EXPENSE_CLAIM);
+    if (result.success) await loadAssignments();
+    if (result.queued) return { success: false, error: t('common.willRetry') };
+    return { success: result.success, error: result.error || 'Failed to submit expense' };
   };
+
+  /**
+   * Drain queued actions on mount, on the app coming back to the foreground, and whenever the
+   * connection is re-established — the moments a phone that lost signal mid-branch is most
+   * likely to have it back. Mirrors `flushLocationQueueOnReconnect` immediately below it, and
+   * covers every action kind (check-in/out included, even though those are queued from `App.tsx`
+   * rather than here) because the queue itself is one shared, module-level store.
+   */
+  const drainActionQueue = useCallback(() => {
+    void processActionQueue(actionDispatchers).then(() => loadAssignments().catch(() => {}));
+  }, [loadAssignments]);
+
+  /**
+   * Drain on mount (an app start finds whatever survived the last kill), on the app returning to
+   * the foreground, and on the socket's own `connect` — the moment queued position fixes are also
+   * flushed, for the same reason: a dropped connection is exactly when these actions were left
+   * behind, and the assayer should not have to remember to retry them by hand.
+   */
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    drainActionQueue();
+    const socket = connectMobileSocket();
+    socket?.on('connect', drainActionQueue);
+    const sub = AppState.addEventListener('change', (state: AppStateStatus) => {
+      if (state === 'active') drainActionQueue();
+    });
+    return () => {
+      socket?.off('connect', drainActionQueue);
+      sub.remove();
+    };
+  }, [isAuthenticated, drainActionQueue]);
 
   return (
     <AssignmentContext.Provider

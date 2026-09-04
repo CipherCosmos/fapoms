@@ -3,8 +3,9 @@ import { Shield, ToggleLeft, ToggleRight, UserPlus, Users as UsersIcon, UserChec
 import { REGION_ORDER, REGION_LABELS, Region, roleLabel, userStatusLabel } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
-import { SearchInput, FilterSelect, AlertBanner, PrimaryButton, Modal, DetailDrawer, Select, useConfirm } from '../../components/ui';
+import { SearchInput, FilterSelect, AlertBanner, PrimaryButton, Modal, DetailDrawer, Select, SelectOption, useConfirm } from '../../components/ui';
 import { useCurrentUserId } from '../../hooks/useCurrentRoles';
+import { useClientOptions } from '../../hooks/useClients';
 import { UserActivityList } from './ActivityFeed';
 
 interface UserRole {
@@ -24,11 +25,16 @@ interface UserProfile {
   status: 'INVITED' | 'ACTIVE' | 'SUSPENDED' | 'LOCKED' | 'DISABLED' | 'ARCHIVED';
   /** Operational region assignment; null/empty = national (sees every region). */
   regions: string[] | null;
+  /** The bank/NBFC this account is confined to when it holds CLIENT_USER; null for staff. */
+  clientId: string | null;
   roles: UserRole[];
   lastLoginAt: string | null;
   failedLoginAttempts: number;
   lockedUntil: string | null;
 }
+
+/** `roles` here is the directory's canonical role list — always matched by id, never by name. */
+const CLIENT_USER_ROLE_NAME = 'CLIENT_USER';
 
 const STATUS_TONE: Record<string, string> = {
   ACTIVE: 'var(--status-active)', INVITED: 'var(--accent)', SUSPENDED: 'var(--warning)',
@@ -105,6 +111,7 @@ export const DirectoryPanel: React.FC = () => {
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [selectedRoleIds, setSelectedRoleIds] = useState<string[]>([]);
+  const [selectedClientId, setSelectedClientId] = useState('');
 
   const [editingUser, setEditingUser] = useState<UserProfile | null>(null);
   const [editFirstName, setEditFirstName] = useState('');
@@ -112,6 +119,8 @@ export const DirectoryPanel: React.FC = () => {
   const [editPhone, setEditPhone] = useState('');
   const [editRegions, setEditRegions] = useState<string[]>([]);
   const [editRoleIds, setEditRoleIds] = useState<string[]>([]);
+  const [editClientId, setEditClientId] = useState('');
+  const { data: clientOptions } = useClientOptions();
   const [newPassword, setNewPassword] = useState('');
   const [resetting, setResetting] = useState(false);
   const [unlocking, setUnlocking] = useState(false);
@@ -136,7 +145,7 @@ export const DirectoryPanel: React.FC = () => {
   const openCreateModal = () => {
     setUsername(''); setUsernameEdited(false); setEmail('');
     setPasswordCopied(false);
-    setFirstName(''); setLastName(''); setSelectedRoleIds([]);
+    setFirstName(''); setLastName(''); setSelectedRoleIds([]); setSelectedClientId('');
     setShowCreateModal(true);
   };
 
@@ -170,16 +179,36 @@ export const DirectoryPanel: React.FC = () => {
     }
   };
 
+  /**
+   * Whether the checked role ids include CLIENT_USER — checked against the role checklist's
+   * live selection, not the account's already-saved roles, so this catches the moment CLIENT_USER
+   * is first ticked, before Save is even pressed.
+   *
+   * A CLIENT_USER account with no client assigned is refused read access everywhere by the
+   * backend (`resolveClientScope` in `global-scope.ts`) rather than defaulting to unrestricted —
+   * so skipping this check does not create a data leak, only an account nobody can use until
+   * someone comes back and assigns it a client by hand. Catching it here means that never happens.
+   */
+  const roleIdsIncludeClientUser = (roleIds: string[]): boolean =>
+    roleIds.some((id) => roles.find((r) => r.id === id)?.name === CLIENT_USER_ROLE_NAME);
+
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    if (roleIdsIncludeClientUser(selectedRoleIds) && !selectedClientId) {
+      setError('Pick which client this account belongs to — required whenever Client User is one of the roles.');
+      return;
+    }
     setSubmitting(true);
     try {
       // No `password` in the body: omitting it is what asks the server to issue one, which it
       // returns as `initialPassword` on this response and nowhere else, ever.
       const created = await api.request<{ initialPassword?: string }>('/users', {
         method: 'POST',
-        body: JSON.stringify({ username, email, firstName, lastName, roleIds: selectedRoleIds }),
+        body: JSON.stringify({
+          username, email, firstName, lastName, roleIds: selectedRoleIds,
+          clientId: selectedClientId || undefined,
+        }),
       });
       setShowCreateModal(false);
       if (created?.initialPassword) {
@@ -191,7 +220,7 @@ export const DirectoryPanel: React.FC = () => {
         setNotice(`${firstName} ${lastName} can now sign in as "${username}", but the server returned no initial password. Use "Reset password" on their account to issue one.`);
       }
       setUsername(''); setUsernameEdited(false); setEmail('');
-      setFirstName(''); setLastName(''); setSelectedRoleIds([]);
+      setFirstName(''); setLastName(''); setSelectedRoleIds([]); setSelectedClientId('');
       loadUsers();
     } catch (err: any) {
       setError(`Failed to create user. ${userMessage(err)}`);
@@ -207,6 +236,7 @@ export const DirectoryPanel: React.FC = () => {
     setEditPhone(user.phone || '');
     setEditRegions(user.regions ?? []);
     setEditRoleIds(user.roles.map((r) => r.id));
+    setEditClientId(user.clientId ?? '');
     setNewPassword('');
   };
 
@@ -214,6 +244,10 @@ export const DirectoryPanel: React.FC = () => {
     e.preventDefault();
     if (!editingUser) return;
     setError(null);
+    if (roleIdsIncludeClientUser(editRoleIds) && !editClientId) {
+      setError('Pick which client this account belongs to — required whenever Client User is one of the roles.');
+      return;
+    }
     setSubmitting(true);
     try {
       await api.request(`/users/${editingUser.id}`, {
@@ -225,6 +259,10 @@ export const DirectoryPanel: React.FC = () => {
           // [] is sent as null: "no assignment" and "assigned to nothing" must be the same
           // state, or an account could be accidentally locked out of every region.
           regions: editRegions.length > 0 ? editRegions : null,
+          // Same reasoning: clearing the picker means "unassigned", sent as an explicit null
+          // rather than omitted, so it actually clears a previous assignment instead of the
+          // server reading a missing key as "leave it alone".
+          clientId: editClientId || null,
         }),
       });
     } catch (err: any) {
@@ -613,6 +651,30 @@ export const DirectoryPanel: React.FC = () => {
                   )}
                 </div>
 
+                {(() => {
+                  const needsClient = roleIdsIncludeClientUser(editRoleIds);
+                  return (
+                    <div>
+                      <label className="form-label" style={{ marginBottom: '4px', display: 'block' }}>
+                        Client{needsClient && <span style={{ color: 'var(--danger)' }}> *</span>}
+                      </label>
+                      <p style={{ fontSize: '11.5px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                        Which bank or NBFC this account belongs to. Required whenever Client User is
+                        one of the roles above — an account with that role and no client assigned
+                        cannot read anything at all, by design, rather than seeing every client's data.
+                      </p>
+                      <Select
+                        value={editClientId}
+                        onChange={setEditClientId}
+                        options={(clientOptions ?? []).map((c): SelectOption => ({ value: c.id, label: c.name }))}
+                        placeholder="No client — staff account"
+                        clearable
+                        error={needsClient && !editClientId}
+                      />
+                    </div>
+                  );
+                })()}
+
                 <div style={{ display: 'flex', gap: '12px', marginTop: '4px' }}>
                   <button type="submit" disabled={submitting} style={{ flex: 1, background: 'var(--gradient-neon)', color: 'var(--on-gradient)', border: 'none', padding: '10px', borderRadius: 'var(--radius-md)', fontWeight: 600, cursor: 'pointer' }}>{submitting ? 'Saving…' : 'Save Modifications'}</button>
                   <button type="button" onClick={() => setEditingUser(null)} style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)', color: 'var(--text-primary)', padding: '10px 16px', borderRadius: 'var(--radius-md)', cursor: 'pointer' }}>Cancel</button>
@@ -693,6 +755,28 @@ export const DirectoryPanel: React.FC = () => {
                 })}
               </div>
             </div>
+            {(() => {
+              const needsClient = roleIdsIncludeClientUser(selectedRoleIds);
+              return (
+                <div>
+                  <label className="form-label" style={{ marginBottom: '4px', display: 'block' }}>
+                    Client{needsClient && <span style={{ color: 'var(--danger)' }}> *</span>}
+                  </label>
+                  <p style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                    Which bank or NBFC this account belongs to. Required whenever Client User is one
+                    of the roles above — that role cannot read anything at all until this is set.
+                  </p>
+                  <Select
+                    value={selectedClientId}
+                    onChange={setSelectedClientId}
+                    options={(clientOptions ?? []).map((c): SelectOption => ({ value: c.id, label: c.name }))}
+                    placeholder="No client — staff account"
+                    clearable
+                    error={needsClient && !selectedClientId}
+                  />
+                </div>
+              );
+            })()}
           </div>
         </Modal>
       )}

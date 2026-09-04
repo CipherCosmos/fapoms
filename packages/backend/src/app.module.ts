@@ -25,6 +25,8 @@ import { OrganizationModule } from './modules/organization/organization.module';
 import { ClientModule } from './modules/client/client.module';
 import { BranchModule } from './modules/branch/branch.module';
 import { AssayerModule } from './modules/assayer/assayer.module';
+import { TelemetryModule } from './modules/telemetry/telemetry.module';
+import { ComplianceModule } from './modules/compliance/compliance.module';
 import { HolidayModule } from './modules/holiday/holiday.module';
 import { ZoneModule } from './modules/zone/zone.module';
 import { PlanningModule } from './modules/planning/planning.module';
@@ -199,6 +201,8 @@ import { DataResetModule } from './infrastructure/data-reset/data-reset.module';
     ClientModule,
     BranchModule,
     AssayerModule,
+    TelemetryModule,
+    ComplianceModule,
     HolidayModule,
     ZoneModule,
     PlanningModule,

@@ -74,7 +74,7 @@ class WorkingHoursDto {
 import { AssayerService, CreateAssayerDto, UpdateAssayerDto } from './assayer.service';
 import { LocationTrailService } from './location-trail.service';
 import { LocationPingSource } from './assayer-location-ping.entity';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public, AnyAuthenticated, PasswordChangeExempt, OnboardingAllowed, RoleOnly } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, RolesFallbackPermissions, Public, AnyAuthenticated, PasswordChangeExempt, OnboardingAllowed, RoleOnly, permissionKeysHeldBy } from '../auth/guards';
 import {
   SystemRole,
   AssayerLifecycleStatus,
@@ -92,15 +92,18 @@ import {
   AUTH_ERROR_CODES,
 } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
+import { AuditRead } from '../../core/audit/audit-read.decorator';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { scopeAssayerForRoles, scopeAssayerListForRoles, rolesOf, assertSelfOrPrivileged } from './assayer-visibility';
 import type { Response } from 'express';
 import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
+import { ParsePagePipe } from '../../infrastructure/http/parse-page.pipe';
 import { RosterImportService } from './roster-import.service';
 import { ImportJobService } from '../import/import-job.service';
 import { RosterRecordsService } from './roster-records.service';
 import { QualificationScoreService } from './qualification-score.service';
+import { RosterQueryService, RosterFilters } from './roster-query.service';
 import { STAFF_ROLES } from '../auth/staff-roles';
 
 /** Roles that may edit any assayer's record; everyone else is limited to their own. */
@@ -108,6 +111,30 @@ const STAFF_ASSAYER_EDITORS: string[] = [
   SystemRole.ADMIN,
   SystemRole.OPERATIONS,
 ];
+
+/**
+ * May this caller edit ANY assayer's record, not only one matching their own id?
+ *
+ * `STAFF_ASSAYER_EDITORS` answers that by name for the two built-in roles it was written for.
+ * A role built in Admin -> Roles matches neither name, however wide its grants — so HR_OPERATOR,
+ * holding `ASSAYER:EDIT:ORGANIZATION` specifically so HR can maintain the roster, still read as
+ * "not staff" here and was sent down the self-only branch. For a principal with no assayer row
+ * of their own, `req.user.id` can never equal the record's id, so that branch is not a narrower
+ * permission — it is a permanent refusal, on every route that asks this question: `update`,
+ * `confirmBaseLocation`, `setDocument`'s PAN/Aadhaar gate, and the field list `getEditableFields`
+ * hands back.
+ *
+ * `ASSAYER:EDIT:ORGANIZATION` is not a workaround for that gap; it is the same fact the hardcoded
+ * list encodes, expressed as a grant instead of a name — organisation-wide edit rights, wider than
+ * one person's own record, which is exactly what "staff" means on this route. Checking only the
+ * role list left two mechanisms answering the same question with no way to keep them in step; this
+ * is the same shape `RolesGuard`'s permission fall-through fixed for `@Roles`, applied to the one
+ * in-handler check that fall-through cannot reach because it is not a guard.
+ */
+function isStaffAssayerEditor(user: any): boolean {
+  if (rolesOf(user).some((r) => STAFF_ASSAYER_EDITORS.includes(r))) return true;
+  return permissionKeysHeldBy(user).has('ASSAYER:EDIT:ORGANIZATION');
+}
 
 /**
  * What an assayer may change about themselves from the mobile app.
@@ -784,6 +811,18 @@ export class BulkTransitionLifecycleDto {
   reason?: string;
 }
 
+/**
+ * The 500 ceiling matches the one `AssayerService.bulkIssueAppAccess` itself enforces — declared
+ * again here so a malformed request is rejected by validation before it reaches the service at
+ * all, the same belt-and-braces the import-issue batch route uses.
+ */
+export class BulkIssueAppAccessDto {
+  @IsArray() @IsNotEmpty()
+  @ArrayMaxSize(500, { message: 'Issue app access to at most 500 assayers at a time.' })
+  @IsUUID('4', { each: true })
+  ids: string[];
+}
+
 export class CreateGovernmentDocumentRequestDto {
   @IsString() @IsNotEmpty()
   documentType: string;
@@ -928,7 +967,36 @@ export class AssayerController {
     private readonly regionGuard: RegionGuardService,
     private readonly locationTrail: LocationTrailService,
     private readonly qualificationScores: QualificationScoreService,
+    private readonly rosterQuery: RosterQueryService,
   ) {}
+
+  /**
+   * Read the filter catalogue off the query string into the shape `RosterQueryService` expects.
+   * Comma-separated for the multi-select axes (`?state=Kerala,Goa`) to match how every other
+   * multi-value filter in this API is passed — see `In(scope.regions)` usage elsewhere — rather
+   * than inventing `state[]=` repeated-key syntax for this one route.
+   */
+  private static parseRosterFilters(query: Record<string, unknown>): RosterFilters {
+    const csv = (v: unknown): string[] | undefined => {
+      if (typeof v !== 'string' || !v.trim()) return undefined;
+      const parts = v.split(',').map((s) => s.trim()).filter(Boolean);
+      return parts.length ? parts : undefined;
+    };
+    const str = (v: unknown): string | undefined => (typeof v === 'string' && v.trim() ? v.trim() : undefined);
+
+    return {
+      q: str(query.q),
+      state: csv(query.state),
+      region: csv(query.region),
+      lifecycleStatus: csv(query.lifecycleStatus),
+      engagementType: csv(query.engagementType),
+      unavailableReason: csv(query.unavailableReason),
+      empanelmentStatus: csv(query.empanelmentStatus),
+      empanelmentClientId: str(query.empanelmentClientId),
+      joinedFrom: str(query.joinedFrom),
+      joinedTo: str(query.joinedTo),
+    };
+  }
 
   @Post()
   @HttpCode(201)
@@ -972,7 +1040,13 @@ export class AssayerController {
   @ApiOperation({ summary: 'List all registered assayers' })
   async findAll(
     @Req() req: any,
-    @Query('page') page = 1,
+    /**
+     * `page=0`, `page=-1` and `page=abc` used to reach the query builder unguarded and blow up
+     * as an unhandled 500 (`OFFSET must not be negative` / `Provided "skip" value is not a
+     * number`) — confirmed live. `ParsePagePipe` is `ParseLimitPipe`'s other half: same "not a
+     * trusted number" stance, folds anything invalid down to page 1 instead of erroring.
+     */
+    @Query('page', new ParsePagePipe()) page: number,
     /**
      * Bounded, but generously — this is the route a screen uses to hold the whole roster.
      *
@@ -986,8 +1060,59 @@ export class AssayerController {
      * requests into six for no gain. The default stays 20, so no existing caller changes.
      */
     @Query('limit', new ParseLimitPipe({ default: 20, max: 1000 })) limit: number,
+    /**
+     * Keyset cursor for the roster screen and pickers (task: keyset pagination alongside
+     * page/limit). When present it takes over from `page`/`skip`: offset pagination re-scans
+     * everything before the page on every request, which is fine at 20 pages and expensive at
+     * the far end of an 11k-row filtered roster. `page` stays the default so no existing caller
+     * (which only ever knows page/limit) changes behaviour.
+     */
+    @Query('after') after: string | undefined,
+    @Query() query: Record<string, unknown>,
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    const filters = AssayerController.parseRosterFilters(query);
+    const hasFilters = Object.values(filters).some((v) => v !== undefined);
+
+    if (after || hasFilters) {
+      // Filtered and/or keyset: the new query builder, not `AssayerService.findAll` — that
+      // method only knows `isActive` + region, and only knows offset paging.
+      if (after) {
+        const { assayers, nextCursor } = await this.rosterQuery.findKeyset(filters, after, limit, scope);
+        const total = await this.rosterQuery.count(filters, scope);
+        return {
+          success: true,
+          data: scopeAssayerListForRoles(assayers as any[], rolesOf(req.user), req.user?.id),
+          meta: {
+            pagination: {
+              page: null,
+              limit,
+              total,
+              totalPages: Math.ceil(total / limit),
+              hasNext: nextCursor != null,
+              hasPrevious: false,
+              nextCursor,
+            },
+          },
+        };
+      }
+      const { assayers, total } = await this.rosterQuery.findFiltered(filters, page, limit, scope);
+      return {
+        success: true,
+        data: scopeAssayerListForRoles(assayers as any[], rolesOf(req.user), req.user?.id),
+        meta: {
+          pagination: {
+            page,
+            limit,
+            total,
+            totalPages: Math.ceil(total / limit),
+            hasNext: page * limit < total,
+            hasPrevious: page > 1,
+          },
+        },
+      };
+    }
+
     const { assayers, total } = await this.assayerService.findAll(page, limit, scope);
     return {
       success: true,
@@ -1008,6 +1133,83 @@ export class AssayerController {
         },
       },
     };
+  }
+
+  /**
+   * Typeahead for pickers: id/code/name/state/lifecycle/region only, capped at 50 rows. Same
+   * permission as the list route it exists to replace pickers' fetch-everything loop against —
+   * see `assayer-roster.ts` — declared above `@Get(':id')` for the same reason `roster/import-
+   * issues` is: Nest matches routes in declaration order and `:id`'s `ParseUUIDPipe` would 400
+   * on the literal segment "search" otherwise.
+   */
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+  @RequirePermissions('assayer:view:organization')
+  @Get('/search')
+  @ApiOperation({ summary: 'Typeahead search over the assayer roster' })
+  async searchAssayers(
+    @Req() req: any,
+    @Query('q') q: string | undefined,
+    @Query('limit', new ParseLimitPipe({ default: 20, max: 50 })) limit: number,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    const rows = await this.rosterQuery.search(q ?? '', limit, scope);
+    return {
+      success: true,
+      data: scopeAssayerListForRoles(rows as any[], rolesOf(req.user), req.user?.id),
+    };
+  }
+
+  /**
+   * Grouped counts for the roster's filter panel, over the whole filtered set — not the loaded
+   * window. One axis per call (see `RosterQueryService.countsByLifecycleStatus`); the panel
+   * asks for whichever axis it currently has open.
+   */
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+  @RequirePermissions('assayer:view:organization')
+  @Get('/counts')
+  @ApiOperation({ summary: 'Roster counts by lifecycle status, honouring the active filters' })
+  async rosterCounts(@Query() query: Record<string, unknown>, @GlobalScopeFilter() scope?: GlobalScope) {
+    const filters = AssayerController.parseRosterFilters(query);
+    const [byLifecycleStatus, total] = await Promise.all([
+      this.rosterQuery.countsByLifecycleStatus(filters, scope),
+      this.rosterQuery.count(filters, scope),
+    ]);
+    return { success: true, data: { total, byLifecycleStatus } };
+  }
+
+  /**
+   * Streamed export honouring the active filters — the whole point being that a 50,000-row
+   * export never sits in memory as one array. Chunks of 500 via the keyset cursor
+   * (`RosterQueryService.streamChunks`), each chunk written to the response and flushed before
+   * the next is fetched.
+   */
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+  @RequirePermissions('assayer:view:organization')
+  @Get('/export')
+  @ApiOperation({ summary: 'Export the filtered roster as CSV, streamed' })
+  async exportRoster(
+    @Req() req: any,
+    @Query() query: Record<string, unknown>,
+    @Query('columns') columnsCsv: string | undefined,
+    @Res() res: Response,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    const filters = AssayerController.parseRosterFilters(query);
+    const columns = (columnsCsv ?? 'assayerCode,displayName,state,region,lifecycleStatus,engagementType')
+      .split(',').map((c) => c.trim()).filter(Boolean);
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', 'attachment; filename="assayer-roster.csv"');
+    res.write(`${columns.map(csvCell).join(',')}\n`);
+
+    const roles = rolesOf(req.user);
+    for await (const chunk of this.rosterQuery.streamChunks(filters, 500, scope)) {
+      const rows = scopeAssayerListForRoles(chunk as any[], roles, req.user?.id);
+      for (const row of rows) {
+        res.write(`${columns.map((c) => csvCell((row as any)[c])).join(',')}\n`);
+      }
+    }
+    res.end();
   }
 
   /**
@@ -1039,12 +1241,22 @@ export class AssayerController {
   @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'List cells the roster import could not read' })
   async listImportIssues(
+    /**
+     * `limit=abc` reached `Math.min(options.limit ?? 500, 500)` in `listIssues` as `NaN`
+     * (`??` does not catch `NaN`, only `null`/`undefined`) and `limit=-5` reached it unclamped —
+     * both landed on `.take()` as an invalid value and threw an unhandled 500, the same class of
+     * crash `ParseLimitPipe` already exists to prevent. `max: 500` matches the ceiling
+     * `listIssues` was already enforcing itself, so this changes no in-range caller's behaviour.
+     * Ordered before `includeResolved` (unlike every other route in this file, which puts
+     * `limit` after its other query params) only because a non-optional parameter — which a
+     * piped one carrying a default effectively is — cannot follow an optional one; TS1016.
+     */
+    @Query('limit', new ParseLimitPipe({ default: 500, max: 500 })) limit: number,
     @Query('includeResolved') includeResolved?: string,
-    @Query('limit') limit?: string,
   ) {
     const data = await this.rosterRecords.listIssues({
       includeResolved: String(includeResolved ?? '').toLowerCase() === 'true',
-      limit: limit ? Number(limit) : undefined,
+      limit,
     });
     return { success: true, data };
   }
@@ -1094,6 +1306,11 @@ export class AssayerController {
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
   @RequirePermissions('assayer:view:organization')
   @Get(':id')
+  // Staff opening an appraiser's record is access to personal data (name, code, contact, employment
+  // status, and — via the sensitive routes — PAN/Aadhaar/bank). Log the access, never the values.
+  // The self-read profile route is deliberately NOT logged: a person viewing their own data is not
+  // the access DPDP asks us to trace, and the mobile app polls it.
+  @AuditRead({ resource: 'ASSAYER_RECORD', idParam: 'id' })
   @ApiOperation({ summary: 'Get details for a single assayer by ID' })
   async findOne(@Param('id', ParseUUIDPipe) id: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
     // Field redaction (scopeAssayerForRoles) decides WHICH fields a role sees; this decides
@@ -1165,7 +1382,7 @@ export class AssayerController {
   @OnboardingAllowed()
   @ApiOperation({ summary: 'Fields the current caller may self-edit, and those HR maintains' })
   async getEditableFields(@Req() req: any) {
-    const isStaff = rolesOf(req.user).some((r) => STAFF_ASSAYER_EDITORS.includes(r));
+    const isStaff = isStaffAssayerEditor(req.user);
     return {
       success: true,
       data: {
@@ -1210,6 +1427,21 @@ export class AssayerController {
   // Was @Public(): unauthenticated callers could rewrite any assayer's banking
   // details, contact information and workload limits.
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
+  /**
+   * Named so a role built in Admin -> Roles can actually save an edit here, the same gap
+   * `HrController.workforce()` documents: `@Roles` alone refuses any name it does not
+   * recognise, and this route had nothing for RolesGuard's permission fall-through to check —
+   * so HR_OPERATOR, holding `ASSAYER:EDIT:ORGANIZATION` specifically to maintain the roster,
+   * got "Insufficient role permissions" on the one route that is HR's core job. Confirmed
+   * live: `PUT /assayers/:id` 403'd for the `hr` account while `POST /assayers` (which already
+   * declared `@RequirePermissions`) worked.
+   *
+   * `@RolesFallbackPermissions`, not `@RequirePermissions`: this route's `@Roles` list includes
+   * ASSAYER for the mobile app's own profile edit, and ASSAYER holds no permission ever — see
+   * the decorator's own comment for why `@RequirePermissions` here would refuse every genuine
+   * field assayer instead of widening the route.
+   */
+  @RolesFallbackPermissions('assayer:edit:organization')
   @Put(':id')
   @OnboardingAllowed()
   @ApiOperation({ summary: 'Update assayer contact, banking, or operational details' })
@@ -1222,8 +1454,7 @@ export class AssayerController {
     // Without these two checks that also let any assayer rewrite any *other*
     // assayer's record — including their bank account — which is what the role
     // list alone permitted.
-    const roles = rolesOf(req.user);
-    const isStaff = roles.some((r) => STAFF_ASSAYER_EDITORS.includes(r));
+    const isStaff = isStaffAssayerEditor(req.user);
     if (!isStaff) {
       if (req.user?.id !== id) {
         throw withCode(
@@ -1276,13 +1507,18 @@ export class AssayerController {
   @Put(':id/base-location')
   @OnboardingAllowed()
   @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS)
+  // Same gap as `update` above: "staff may set it for anyone" (see the comment on this handler)
+  // was true only for the two hardcoded roles — nothing here let a custom role reach that
+  // promise regardless of what it was granted. `@RolesFallbackPermissions`, not
+  // `@RequirePermissions`, because ASSAYER is on this route's `@Roles` list too.
+  @RolesFallbackPermissions('assayer:edit:organization')
   @ApiOperation({ summary: 'Confirm the authenticated assayer\'s base location from their device GPS' })
   async confirmBaseLocation(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateLiveLocationDto,
     @Req() req: any,
   ) {
-    const isStaff = rolesOf(req.user).some((r) => STAFF_ASSAYER_EDITORS.includes(r));
+    const isStaff = isStaffAssayerEditor(req.user);
     if (!isStaff && req.user?.id !== id) {
       throw withCode(
         new ForbiddenException('You may only set your own location'),
@@ -1471,10 +1707,13 @@ export class AssayerController {
 
   // Workforce Attribute CRUD APIs
   @Get('workforce-attribute/vocabulary')
-  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
-  // Reads the values off the roster rather than a reference table, so it moves with the roster:
-  // `assayer:view`, not `reference_data:view`.
-  @RequirePermissions('assayer:view:organization')
+  // Was @Roles(ADMIN, OPERATIONS) + assayer:view:organization — which meant the one caller who
+  // most needs this (an assayer typing their own skills/languages into the mobile app) got a
+  // 403 and silently fell back to no suggestions at all. This is aggregate, non-sensitive data —
+  // the distinct set of skill/language words already on the roster, no per-person detail — the
+  // same risk shape as `/geo/autocomplete`, which is `@AnyAuthenticated()` for exactly this
+  // reason. Widened to match.
+  @AnyAuthenticated()
   @ApiOperation({ summary: 'Distinct skills, languages and certifications already in use across the roster' })
   async getWorkforceAttributeVocabulary() {
     return { success: true, data: await this.assayerService.getWorkforceAttributeVocabulary() };
@@ -1748,6 +1987,10 @@ export class AssayerController {
   @Put(':assayerId/document/:requirement')
   @OnboardingAllowed()
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
+  // Same gap as `update`: nothing here meant a custom role such as HR_OPERATOR could record so
+  // much as "the NDA arrived" despite holding this exact permission. `@RolesFallbackPermissions`
+  // because ASSAYER (self-service upload) is on this route's `@Roles` list too.
+  @RolesFallbackPermissions('assayer:edit:organization')
   @ApiOperation({ summary: 'Record progress on one document' })
   async setDocument(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
@@ -1773,8 +2016,7 @@ export class AssayerController {
      */
     const numberIsOnThePerson = ['PAN_CARD', 'AADHAAR_FRONT', 'AADHAAR_BACK'].includes(requirement);
     if (body?.documentNumber !== undefined && numberIsOnThePerson) {
-      const roles = rolesOf(req.user);
-      if (!roles.some((r) => STAFF_ASSAYER_EDITORS.includes(r))) {
+      if (!isStaffAssayerEditor(req.user)) {
         throw withCode(
           new ForbiddenException(
             'Your PAN and Aadhaar numbers are recorded by HR from the document itself. '
@@ -1803,6 +2045,10 @@ export class AssayerController {
   @OnboardingAllowed()
   @HttpCode(201)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
+  // Same gap as `setDocument` next to it: nothing here meant a custom role could record that a
+  // document arrived (once fixed above) but never attach the scan itself.
+  // `@RolesFallbackPermissions` because ASSAYER (self-upload) is on this route's `@Roles` list.
+  @RolesFallbackPermissions('assayer:edit:organization')
   @UseInterceptors(FileInterceptor('file', assayerUploadMulterOptions), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Attach a scan or photograph to a document' })
@@ -1942,8 +2188,10 @@ export class AssayerController {
   @ApiOperation({ summary: 'Get activity timeline for an assayer' })
   async getActivityTimeline(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
-    @Query('page') page = 1,
-    @Query('limit') limit = 20,
+    // Same unguarded-`page` crash as the roster list above (`OFFSET must not be negative` /
+    // `skip` not a number) — this route feeds the same `(page - 1) * limit` shape.
+    @Query('page', new ParsePagePipe()) page: number,
+    @Query('limit', new ParseLimitPipe({ default: 20, max: 200 })) limit: number,
   ) {
     const { activities, total } = await this.assayerService.getActivityTimeline(assayerId, page, limit);
     return {
@@ -2010,6 +2258,9 @@ export class AssayerController {
     // be truthy — the one mistake here would silently turn a rehearsal into a real import.
     const dryRun = String(body?.dryRun ?? '').toLowerCase() === 'true';
     const sheetName = body?.sheetName || undefined;
+    // Same multipart-string caveat as `dryRun` above: absent or "false" must mean the safe
+    // default (fill blanks only, file an issue on a disagreement), not accidentally overwrite.
+    const overwrite = String(body?.overwrite ?? '').toLowerCase() === 'true';
 
     /**
      * The rehearsal stays in the request; the real import is queued.
@@ -2028,6 +2279,7 @@ export class AssayerController {
       const summary = await this.rosterImport.importAssayerSheet(file.buffer, req.user.id, {
         dryRun: true,
         sheetName,
+        overwrite,
       });
       return { success: true, data: summary };
     }
@@ -2054,6 +2306,7 @@ export class AssayerController {
       fileName: file.originalname ?? null,
       totalRows: inspection.rowsRead,
       sheetName: sheetName ?? null,
+      overwrite,
     });
 
     // 202: accepted, not done. The body says where to watch.
@@ -2137,6 +2390,28 @@ export class AssayerController {
    * nothing in activation may require app access to have been issued — see the note on
    * `AssayerService.issueAppAccess`.
    */
+  /**
+   * The bulk version of the route below: HR was issuing access to 540 people one at a time from
+   * `AssayerRecord.tsx` because there was nowhere else to do it. This never returns a plaintext
+   * password to the caller — see the note on `AssayerService.bulkIssueAppAccess` — it is read
+   * out to nobody, so it goes by email and SMS instead.
+   *
+   * Declared ahead of `:assayerId/app-access` for the same reason `bulk/lifecycle` precedes
+   * `:id/lifecycle` above: a literal segment first, even though the two do not actually collide
+   * here (`app-access/bulk`'s second segment is `bulk`, never `app-access`).
+   */
+  @Post('app-access/bulk')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: 'Issue app access to a batch of assayers, delivered by email and SMS' })
+  async bulkIssueAppAccess(
+    @Body() dto: BulkIssueAppAccessDto,
+    @Req() req: any,
+  ) {
+    const data = await this.assayerService.bulkIssueAppAccess(dto.ids, req.user.id);
+    return { success: true, data };
+  }
+
   @Post(':assayerId/app-access')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   // `assayer:edit`, not `user:create`: an assayer signs in from the `assayers` table and has no
@@ -2182,3 +2457,9 @@ export class AssayerController {
 
 }
 
+/** Quote a CSV cell only when it needs it — a comma, quote or newline in the value. */
+function csvCell(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  const s = typeof value === 'string' ? value : String(value);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}

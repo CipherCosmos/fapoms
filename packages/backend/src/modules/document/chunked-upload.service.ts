@@ -51,8 +51,40 @@ export interface UploadSession {
 export class ChunkedUploadService implements OnModuleInit {
   private readonly logger = new Logger(ChunkedUploadService.name);
 
-  /** 512 KB — cheap to re-send on 2G, low per-request overhead. */
-  static readonly DEFAULT_CHUNK_SIZE = 512 * 1024;
+  /**
+   * S3's own hard floor for every part in a multipart upload EXCEPT the last one — "Part size:
+   * 5 MB to 5 GB. There is no minimum size limit on the last part." MinIO enforces the identical
+   * rule (it implements the S3 multipart protocol, not a MinIO-specific one).
+   *
+   * This class's `DEFAULT_CHUNK_SIZE` used to be 512 KB, chosen purely for "cheap to re-send on
+   * 2G" with no regard for this floor. The chunk-level `saveChunk`/`UploadPart` calls succeed
+   * individually regardless of size — S3 does not validate part sizes until assembly — so the
+   * failure was invisible until the very last step. Verified live: a session with 512 KB (in the
+   * repro, an even smaller 2 KB to keep the test file tiny) chunks accepted every single
+   * `UploadPart` call, then `assemble()`'s `CompleteMultipartUpload` failed with a bare
+   * `EntityTooSmall: Your proposed upload is smaller than the minimum allowed object size.` —
+   * after the entire file had already been transferred. For the rural-2G use case this whole
+   * feature exists for (see the class doc comment), that is close to the worst possible failure
+   * shape: the slow part succeeds, and the instant final step is what blows up, discarding a
+   * multi-minute upload's confirmation.
+   *
+   * `Math.max(…, MIN_CHUNK_SIZE)` in `createSession` below applies this floor to *every* session
+   * unconditionally — including a caller-supplied `chunkSize` (the query/body parameter has
+   * always let a caller ask for something smaller than the default; nothing enforced a floor on
+   * that value either, so fixing only the default would still leave this reachable).
+   */
+  static readonly MIN_CHUNK_SIZE = 5 * 1024 * 1024;
+  /**
+   * Kept at the S3 floor rather than the previously-intended 512 KB: a genuinely smaller,
+   * cheaper-to-resend chunk is not a knob this service can turn while still using real S3
+   * multipart upload underneath. The resumability benefit this feature promises still holds at
+   * this size — a dropped 5 MB part on a slow link is a partial re-send measured in tens of
+   * seconds, not a from-scratch restart of the whole file — it simply cannot be smaller than
+   * this without abandoning true multipart semantics (buffering small chunks server-side into
+   * 5 MB+ parts before calling `UploadPart` is a real alternative design, but a materially larger
+   * change than fixing a mis-set default belongs in).
+   */
+  static readonly DEFAULT_CHUNK_SIZE = ChunkedUploadService.MIN_CHUNK_SIZE;
   /**
    * The resumable ceiling, owned by `upload-validation.ts` rather than restated here.
    *
@@ -166,7 +198,14 @@ export class ChunkedUploadService implements OnModuleInit {
       hint: 'Scan at a lower resolution or split the packet, then send it again.',
     });
 
-    const chunkSize = input.chunkSize || ChunkedUploadService.DEFAULT_CHUNK_SIZE;
+    // Floored unconditionally — see MIN_CHUNK_SIZE's comment. A caller-requested `chunkSize`
+    // below the S3 multipart minimum would otherwise reach `CreateMultipartUpload` and every
+    // `UploadPart` call just fine, and only fail at `CompleteMultipartUpload`, after the client
+    // has already sent the whole file.
+    const chunkSize = Math.max(
+      input.chunkSize || ChunkedUploadService.DEFAULT_CHUNK_SIZE,
+      ChunkedUploadService.MIN_CHUNK_SIZE,
+    );
     const uploadId = createHash('md5')
       .update(`${input.assessmentId}:${input.fileName}:${input.fileSize}:${Date.now()}:${Math.random()}`)
       .digest('hex');

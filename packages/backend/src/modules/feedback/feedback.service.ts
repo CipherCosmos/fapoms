@@ -445,6 +445,26 @@ export class FeedbackService {
     const thread = await this.threadRepository.findOne({ where: { id } });
     if (!thread) throw new NotFoundException(`Feedback thread ${id} not found.`);
 
+    /**
+     * A duplicate link has to name a real, different thread.
+     *
+     * Neither was checked: pointing a thread at itself saved happily and closed it as "a
+     * duplicate of itself" — a state with no sensible meaning that the UI then has to render.
+     * Pointing it at an id nobody has ever used was worse — `mergeVotes` below is a raw INSERT
+     * against `feedback_votes.feedback_thread_id`, which carries a foreign key onto
+     * `feedback_threads(id)`; a target that does not exist fails that constraint and surfaces
+     * as an unhandled 500 rather than the 400 a bad request should get.
+     */
+    if (dto.duplicateOfId) {
+      if (dto.duplicateOfId === id) {
+        throw new BadRequestException('A feedback thread cannot be marked a duplicate of itself.');
+      }
+      const canonical = await this.threadRepository.findOne({ where: { id: dto.duplicateOfId } });
+      if (!canonical) {
+        throw new BadRequestException(`Cannot mark this a duplicate of ${dto.duplicateOfId}: that feedback thread does not exist.`);
+      }
+    }
+
     const before = { category: thread.category, severity: thread.severity, status: thread.status, assignedToUserId: thread.assignedToUserId };
     const statusChanged = dto.status && dto.status !== thread.status;
     const newlyAssigned = dto.assignedToUserId !== undefined && dto.assignedToUserId && dto.assignedToUserId !== thread.assignedToUserId;

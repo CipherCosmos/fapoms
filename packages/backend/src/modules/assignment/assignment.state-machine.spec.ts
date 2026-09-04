@@ -96,4 +96,54 @@ describe('AssignmentStateMachine', () => {
       }
     });
   });
+
+  /**
+   * `reopen` is the assignment half of voiding a payable: an admin/ops actor undoing a
+   * completion that should not have booked money. Only reachable from COMPLETED, and lands on
+   * ACCEPTED — not CHECKED_IN — because `checkedInAt` is field evidence of a real visit and a
+   * reopen must not manufacture that evidence.
+   */
+  describe('reopen', () => {
+    const completed = () => ({
+      id: 'assign-1', status: AssignmentStatus.COMPLETED,
+      checkedInAt: new Date('2026-08-01T09:00:00Z'), completionDate: '2026-08-01',
+      completedWithoutCheckInReason: 'phone had no signal', remarks: 'old remarks',
+    } as unknown as AssignmentEntity);
+
+    it('moves COMPLETED back to ACCEPTED and clears completion evidence', () => {
+      const a = completed();
+      const event = AssignmentStateMachine.reopen(a, 'admin-1', 'Completion voided — audit was reopened');
+
+      expect(a.status).toBe(AssignmentStatus.ACCEPTED);
+      expect(event.previousState).toBe(AssignmentStatus.COMPLETED);
+      expect(event.newState).toBe(AssignmentStatus.ACCEPTED);
+      // The mutation this proves: dropping these resets leaves a "reopened" assignment that
+      // still LOOKS completed (a completionDate and a without-check-in reason on an ACCEPTED
+      // record is an internally contradictory row).
+      expect(a.completionDate).toBeNull();
+      expect(a.completedWithoutCheckInReason).toBeNull();
+      expect(a.remarks).toBe('Completion voided — audit was reopened');
+    });
+
+    it('does not fabricate check-in evidence — checkedInAt is untouched', () => {
+      const a = completed();
+      AssignmentStateMachine.reopen(a, 'admin-1', 'reason');
+      // The real geofenced check-in the assayer made is still true and stays on the record;
+      // reopen must not erase genuine evidence, only the completion built on top of it.
+      expect(a.checkedInAt).toEqual(new Date('2026-08-01T09:00:00Z'));
+    });
+
+    // PENDING, ACCEPTED and CHECKED_IN already have their own independent paths to ACCEPTED in
+    // VALID_PATHS (offer acceptance, and a retried check-in respectively) — reopen does not
+    // change that, so they are not exercised here. IN_PROGRESS, REJECTED and CANCELLED have no
+    // path to ACCEPTED at all; only `reopen`'s own COMPLETED entry could make one reachable.
+    it.each([AssignmentStatus.IN_PROGRESS, AssignmentStatus.REJECTED, AssignmentStatus.CANCELLED])(
+      'refuses to reopen from %s',
+      (status) => {
+        const a = { ...completed(), status };
+        expect(() => AssignmentStateMachine.reopen(a as AssignmentEntity, 'admin-1', 'reason')).toThrow(BadRequestException);
+        expect(a.status).toBe(status);
+      },
+    );
+  });
 });

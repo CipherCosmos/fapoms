@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, Logger, BadRequestException, Inject } from '@nestjs/common';
+import { Injectable, NotFoundException, Logger, BadRequestException, ForbiddenException, Inject } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ValidationService } from '../validation/validation.service';
 import { Repository, In, IsNull } from 'typeorm';
@@ -18,7 +18,7 @@ import { RegionGuardService } from '../../infrastructure/scope/region-guard.serv
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import {
   EventCategory, DocumentStatus, DocumentType, DispatchMethod, businessTodayDateKey,
-  DOCUMENT_TRANSITIONS, canTransitionDocument,
+  DOCUMENT_TRANSITIONS, canTransitionDocument, AssignmentStatus,
 } from '@fapoms/shared';
 
 /** Branch rows returned when the caller names no window. */
@@ -197,11 +197,40 @@ export class DocumentService {
     `);
   }
 
+  /**
+   * Statuses `dataEntryQueue` actually shows — a fresh return, one already being worked, or one
+   * already pushed on to external OCR. Reused below as the precondition for delegating a packet,
+   * so a document can never be *assigned* to a state it would then be *invisible* from.
+   */
+  private static readonly DATA_ENTRY_ELIGIBLE_STATUSES = [
+    DocumentStatus.RECEIVED,
+    DocumentStatus.SENT_TO_DATA_ENTRY,
+    DocumentStatus.SENT_TO_EXTERNAL_OCR,
+  ];
+
   /** Head delegates a returned packet to a team member. */
   async assignForDataEntry(documentId: string, assigneeId: string, actorId: string): Promise<DocumentEntity> {
     const doc = await this.findOne(documentId);
     if (doc.type !== DocumentType.AUDITED_RETURN_PDF) {
       throw new BadRequestException('Only returned audit packets are delegated to data entry.');
+    }
+    /**
+     * The packet must actually have come back before anyone can be put to work on it. Verified
+     * live: this endpoint happily wrote `assignedToUserId`/`assignedAt`/`assignedBy` onto a
+     * document still sitting at UPLOADED (an AUDITED_RETURN_PDF filed through the desk's own
+     * generic upload route, never marked received — the same shape as a return whose auto-receive
+     * silently failed, before the try/catch around it was made to log rather than swallow). It
+     * returned 201 as though delegation had happened, but `canTransitionDocument` a few lines down
+     * correctly refused to advance a status that has no path to SENT_TO_DATA_ENTRY from UPLOADED —
+     * so the packet then vanished from both the head's queue and the assignee's "mine" list
+     * (`dataEntryQueue` only surfaces `DATA_ENTRY_ELIGIBLE_STATUSES`) while still holding a live,
+     * now-invisible claim on a real user. Reject up front instead.
+     */
+    if (!DocumentService.DATA_ENTRY_ELIGIBLE_STATUSES.includes(doc.status)) {
+      throw new BadRequestException(
+        `Document ${documentId} is at ${doc.status} — it has not been received back from the assayer yet, `
+        + 'so it cannot be delegated to data entry.',
+      );
     }
     // Captured before the transition below, or the audit row would record the new status
     // as both the previous and the new one.
@@ -287,6 +316,25 @@ export class DocumentService {
     const doc = await this.findOne(documentId);
     if (!doc.assignedToUserId) {
       throw new BadRequestException('This packet has not been delegated to anyone.');
+    }
+    /**
+     * A hand-back is a one-time act, not a status re-statement — unlike `updateStatus`, nothing
+     * here is retried by a background worker, so there is no "retry that lands on the state it
+     * was aiming for" case to accommodate. Verified live: calling this twice in a row on the same
+     * packet silently "succeeded" both times — a fresh `dataEntryCompletedAt`, a fresh
+     * DOCUMENT_DATA_ENTRY_COMPLETED audit row, and a second DATA_ENTRY_COMPLETED notification to
+     * the head for work that was hand-backed once. The notification's own dedupe key includes
+     * `dataEntryCompletedAt`, so a fresh timestamp defeats the dedupe rather than being caught by
+     * it. `assignForDataEntry` already treats `dataEntryCompletedAt` as the "still open" marker —
+     * it is the one place that clears it back to null, specifically so a re-delegated (e.g.
+     * rework-bounced) packet can be completed again — so checking it here is the same rule the
+     * rest of the lifecycle already uses, not a new one.
+     */
+    if (doc.dataEntryCompletedAt) {
+      throw new BadRequestException(
+        `This packet was already handed back on ${doc.dataEntryCompletedAt.toISOString()}. `
+        + 'If it needs more work, re-delegate it first.',
+      );
     }
     doc.dataEntryCompletedAt = new Date();
     doc.updatedBy = actorId;
@@ -543,7 +591,22 @@ export class DocumentService {
 
     const saved = await this.documentRepository.save(doc);
 
-    await this.auditService.recordEvent({
+    /**
+     * `recordEventSafe`, not `recordEvent` — verified live that the difference is not cosmetic.
+     * The row above is already committed and not inside a transaction with this call, so a
+     * throwing `recordEvent` that fails (reproduced live via an unrelated, transient
+     * `audit_events` schema mismatch — column added to the entity a moment before its migration
+     * had actually run) makes `create()` itself throw *after* the document row has already
+     * landed: the caller sees a 500 and reasonably believes nothing was created, while a real,
+     * now-unreferenced `documents` row sits in the database with no id ever handed back to
+     * reference it — for a chunked upload specifically, the S3 object is also already assembled
+     * by this point, so the whole "upload" partially succeeded in a way invisible to the client
+     * that just watched it fail. `assignForDataEntry`/`completeDataEntry` in this same file
+     * already use `recordEventSafe` for exactly this reason (its own doc comment: "a completed
+     * state change shouldn't be undone because its audit row failed to insert") — `create()`
+     * just hadn't been brought in line with that rule yet.
+     */
+    await this.auditService.recordEventSafe({
       category: EventCategory.OPERATIONAL,
       eventType: 'DOCUMENT_UPLOADED',
       entityType: 'DOCUMENT',
@@ -612,7 +675,19 @@ export class DocumentService {
 
     const saved = await this.documentRepository.save(doc);
 
-    await this.auditService.recordEvent({
+    /**
+     * `recordEventSafe`, not `recordEvent` — same reasoning as `create()` above, and more
+     * consequential here: `updateStatus` is the one place every lifecycle transition
+     * (dispatch/receive/OCR-handoff/the direct status route) goes through. If the audit write
+     * throws after the status row above is already saved, the caller — `dispatchDocument`,
+     * `receiveDocument`, etc. — never reaches ITS OWN follow-up save (dispatchedAt/dispatchMethod/
+     * dispatchedBy, or receivedAt) or its notification, yet the document is left sitting at the
+     * new status. Worse than a plain failure: retrying then hits this same method's own forward-
+     * only transition guard above ("only UPLOADED documents can be dispatched") and refuses,
+     * because the status already silently moved — a document stuck claiming a hand-off that
+     * never finished, with no operator-visible error pointing at why a retry won't work.
+     */
+    await this.auditService.recordEventSafe({
       category: EventCategory.WORKFLOW,
       eventType: `DOCUMENT_${status}`,
       entityType: 'DOCUMENT',
@@ -1336,17 +1411,65 @@ export class DocumentService {
       : null;
     if (!assessment) return; // Not branch-scoped (e.g. legacy row) — nothing further to check.
 
+    /**
+     * `a.is_active` is the soft-delete flag, not the assignment's own lifecycle `status` — a
+     * CANCELLED assignment is still `is_active: true`. Verified against a live row: the same
+     * confusion fixed in `dispatchDocument` above (which stopped notifying an assayer about a
+     * cancelled job) also lets that assayer's download-token check succeed here — a raw
+     * reproduction of this exact query, for a real CANCELLED assignment on a real branch with a
+     * dispatched packet, returned `linked = 1`. Whether an assayer is still allowed to reach a
+     * bank branch's paperwork is exactly what "you are not assigned to the branch this document
+     * belongs to" is meant to gate, so a called-off assignment must not count as one.
+     */
     const linked = await this.assignmentRepository
       .createQueryBuilder('a')
       .innerJoin('project_branches', 'pb', 'pb.id = a.project_branch_id')
       .where('a.assayer_id = :assayerId', { assayerId })
       .andWhere('a.is_active = true')
+      .andWhere('a.status NOT IN (:...deadStatuses)', {
+        deadStatuses: [AssignmentStatus.CANCELLED, AssignmentStatus.REJECTED],
+      })
       .andWhere('pb.project_id = :projectId', { projectId: assessment.projectId })
       .andWhere('pb.branch_id = :branchId', { branchId: assessment.branchId })
       .getCount();
 
     if (linked === 0) {
       throw new BadRequestException('You are not assigned to the branch this document belongs to.');
+    }
+  }
+
+  /**
+   * The branch-keyed counterpart to `assertAssayerMayDownload`, for the three routes that address
+   * paperwork by `project_branch_id` rather than by a document id: `download-pdf`, `findByProjectBranch`
+   * and the `assayer-view`.
+   *
+   * Those routes admit `SystemRole.ASSAYER` (the field app collecting its own packet) and were gated
+   * only by the region ceiling, which is a no-op in the default `log` rollout mode — so any signed-in
+   * assayer could stream any branch's audit packet by iterating project-branch UUIDs, with no live
+   * assignment on it. Confirmed exploitable 2026-09-04: assayer AS-01 pulled AS-04's completed-branch
+   * PDF. `assertAssayerMayDownload` already encodes the correct rule for the by-document routes; this
+   * is the same rule expressed straight off the branch, so the two cannot drift.
+   *
+   * `ForbiddenException`, not `BadRequest`: this is an authorization refusal, and the field app's
+   * `validateSession` treats a 403 on these routes as "not yours", not "session dead".
+   *
+   * `a.is_active` is the soft-delete flag, not the lifecycle status, so CANCELLED/REJECTED are
+   * excluded explicitly — a called-off job must not keep a door to the branch open (same reasoning
+   * and the same live CANCELLED-row confirmation as `assertAssayerMayDownload` above).
+   */
+  async assertAssayerAssignedToBranch(projectBranchId: string, assayerId: string): Promise<void> {
+    const linked = await this.assignmentRepository
+      .createQueryBuilder('a')
+      .where('a.project_branch_id = :projectBranchId', { projectBranchId })
+      .andWhere('a.assayer_id = :assayerId', { assayerId })
+      .andWhere('a.is_active = true')
+      .andWhere('a.status NOT IN (:...deadStatuses)', {
+        deadStatuses: [AssignmentStatus.CANCELLED, AssignmentStatus.REJECTED],
+      })
+      .getCount();
+
+    if (linked === 0) {
+      throw new ForbiddenException('You are not assigned to this branch.');
     }
   }
 
@@ -1363,6 +1486,17 @@ export class DocumentService {
       where: { assessmentId: assessment.id, isActive: true },
       order: { createdAt: 'DESC' },
     });
+  }
+
+  /**
+   * Is this storage object already registered as a document? Used by `finalizeUpload` to make
+   * finalizing a presigned direct upload idempotent — see that route's own comment for why a
+   * retry (a flaky connection resending the same finalize POST after the first one actually
+   * succeeded, a common at-least-once client pattern) must not silently double-book one physical
+   * file as two `documents` rows.
+   */
+  async findByFilePath(filePath: string): Promise<DocumentEntity | null> {
+    return this.documentRepository.findOne({ where: { filePath, isActive: true } });
   }
 
   async findByAssessment(assessmentId: string): Promise<DocumentEntity[]> {
@@ -1484,7 +1618,28 @@ export class DocumentService {
       );
     }
 
-    if (assignment?.assayer) {
+    /**
+     * `isActive` above is the soft-delete flag, not the assignment's own lifecycle `status` — a
+     * CANCELLED or REJECTED assignment row is still `isActive: true`, so the lookup finds it just
+     * as readily as a live one. Verified live: dispatching a document filed against a CANCELLED
+     * assignment sent that assignment's assayer a real in-app notification — "Audit PDF ... has
+     * been dispatched to you. Open your schedule to view and download." — for an audit that was
+     * called off. The document itself still moves to DISPATCHED either way (paperwork prep can
+     * legitimately run ahead of an assignment's own state, and the desk already tolerates "no
+     * assignment at all" above without blocking); what must not happen is telling an assayer
+     * their called-off job has paperwork waiting.
+     */
+    const assignmentIsLive = assignment
+      ? assignment.status !== AssignmentStatus.CANCELLED && assignment.status !== AssignmentStatus.REJECTED
+      : false;
+    if (assignment && !assignmentIsLive) {
+      this.logger.warn(
+        `Document ${id} dispatched for assessment ${doc.assessmentId}, but its assignment ${assignment.id} `
+        + `is ${assignment.status} — no assayer was notified.`,
+      );
+    }
+
+    if (assignment?.assayer && assignmentIsLive) {
       try {
         // Was `notificationService.create({ userId: assignment.assayerId })`, which passed an
         // assayer id into a column that foreign-keys to `users` — a FK violation swallowed by
@@ -1785,13 +1940,27 @@ export class DocumentService {
     return stages.map((s) => ({ ...s, done: s.at != null }));
   }
 
-  async findAll(scope?: Partial<GlobalScope>): Promise<DocumentEntity[]> {
-    const list = await this.documentRepository.find({
+  /**
+   * `GET /documents` used to `find()` every active document plus three relations, unbounded —
+   * fine on a demo dataset, a full-table-plus-joins scan and transfer once the document count
+   * tracks branches x doc types x cycles. `limit`/`offset` cap what the database has to
+   * materialise and what crosses the wire; `total` is a separate cheap count so the caller can
+   * still page through everything without ever holding it all at once.
+   */
+  async findAll(
+    scope?: Partial<GlobalScope>,
+    limit = 50,
+    offset = 0,
+  ): Promise<{ data: DocumentEntity[]; total: number; limit: number; offset: number }> {
+    const [list, total] = await this.documentRepository.findAndCount({
       where: { isActive: true },
       relations: ['assessment', 'assessment.branch', 'assessment.project'],
       order: { createdAt: 'DESC' },
+      take: limit,
+      skip: offset,
     });
-    return this.applyRegionScopeToDocs(list, scope, 'document:findAll');
+    const data = await this.applyRegionScopeToDocs(list, scope, 'document:findAll');
+    return { data, total, limit, offset };
   }
 
   async getDocumentStats(scope?: Partial<GlobalScope>): Promise<{ total: number; uploaded: number; dispatched: number; received: number }> {

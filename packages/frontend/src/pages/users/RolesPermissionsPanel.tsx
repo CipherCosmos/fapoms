@@ -154,6 +154,19 @@ export const RolesPermissionsPanel: React.FC = () => {
   const [newName, setNewName] = useState('');
   const [newDisplay, setNewDisplay] = useState('');
   const [newDesc, setNewDesc] = useState('');
+  /**
+   * Whether the admin has typed into "System reference" directly.
+   *
+   * Before this, the auto-derive only checked `!newName` — true for the very first keystroke in
+   * "Name" (reference is still `''`), false for every keystroke after (reference now holds that
+   * first character). So "System reference" tracked "Name" for exactly one letter and then froze:
+   * typing "HR" left it at "H", which is how a role display-named "HR" and a second one that
+   * looked identical ended up with different auto-derived references and never collided against
+   * `name`'s own unique constraint (see the `display_name` uniqueness fix this pairs with).
+   * Tracking an explicit "the admin took over this field" flag instead means it keeps mirroring
+   * "Name" for as long as it hasn't been hand-edited, not just for the first character.
+   */
+  const [newNameEdited, setNewNameEdited] = useState(false);
 
   const createRole = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -166,7 +179,7 @@ export const RolesPermissionsPanel: React.FC = () => {
       });
       setSuccess('Role created. Open it to choose what it can do.');
       setShowCreate(false);
-      setNewName(''); setNewDisplay(''); setNewDesc('');
+      setNewName(''); setNewDisplay(''); setNewDesc(''); setNewNameEdited(false);
       refetch();
     } catch (err: any) {
       setError(`Could not create the role. ${userMessage(err)}`);
@@ -458,12 +471,12 @@ export const RolesPermissionsPanel: React.FC = () => {
             <div>
               <label style={{ ...label, display: 'block', marginBottom: '4px' }}>Name</label>
               <input type="text" required placeholder="Regional Auditor" value={newDisplay}
-                onChange={(e) => { setNewDisplay(e.target.value); if (!newName) setNewName(e.target.value); }} style={input} />
+                onChange={(e) => { setNewDisplay(e.target.value); if (!newNameEdited) setNewName(e.target.value); }} style={input} />
             </div>
             <div>
               <label style={{ ...label, display: 'block', marginBottom: '4px' }}>System reference</label>
               <input type="text" required placeholder="REGIONAL_AUDITOR" value={newName}
-                onChange={(e) => setNewName(e.target.value)} style={input} />
+                onChange={(e) => { setNewName(e.target.value); setNewNameEdited(true); }} style={input} />
               <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px' }}>
                 Saved in capitals. This cannot be changed afterwards.
               </div>

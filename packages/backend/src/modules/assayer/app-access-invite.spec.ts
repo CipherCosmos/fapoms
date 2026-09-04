@@ -1,9 +1,10 @@
 import { Test } from '@nestjs/testing';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
-import { NotFoundException } from '@nestjs/common';
+import { NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import { EventCategory, AssayerLifecycleStatus } from '@fapoms/shared';
 import { AssayerService } from './assayer.service';
+import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity';
 import { WorkforceAttributeEntity } from './workforce-attribute.entity';
@@ -14,6 +15,8 @@ import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
+import { EmailProvider } from '../../infrastructure/notifications/email-provider';
+import { SmsProvider } from '../../infrastructure/notifications/sms-provider';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { rbacPrincipalCacheKey } from '../auth/auth.service';
 
@@ -68,6 +71,9 @@ describe('AssayerService.issueAppAccess', () => {
         { provide: DomainEventPublisher, useValue: events },
         { provide: WorkflowEngine, useValue: { registerWorkflow: jest.fn() } },
         { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn() } },
+        { provide: EmailProvider, useValue: { send: jest.fn().mockResolvedValue({ success: false }) } },
+        { provide: SmsProvider, useValue: { send: jest.fn().mockResolvedValue(false) } },
+        { provide: UnitOfWork, useValue: { run: (work: any) => work(undefined) } },
         { provide: getDataSourceToken(), useValue: { query: jest.fn().mockResolvedValue([]) } },
         { provide: CacheService, useValue: cache },
       ],
@@ -190,5 +196,180 @@ describe('AssayerService.issueAppAccess', () => {
     const a = await service.issueAppAccess(ASSAYER_ID, ACTOR);
     const b = await service.issueAppAccess(ASSAYER_ID, ACTOR);
     expect(a.temporaryPassword).not.toBe(b.temporaryPassword);
+  });
+});
+
+/**
+ * Issuing app access to a batch of assayers in one call, delivered by email and SMS instead of
+ * read off a screen — the tool HR needed to clear the 540-of-548 backlog `issueAppAccess` above
+ * was never built to reach.
+ */
+describe('AssayerService.bulkIssueAppAccess', () => {
+  let service: AssayerService;
+  let assayers: any;
+  let audit: any;
+  let email: any;
+  let sms: any;
+  let people: Map<string, any>;
+
+  const ACTOR = '11111111-1111-4111-8111-111111111111';
+
+  const person = (id: string, over: Record<string, unknown> = {}) => ({
+    id,
+    assayerCode: `AS-${id}`,
+    displayName: `Person ${id}`,
+    phone: '9000000000',
+    email: 'person@example.com',
+    lifecycleStatus: AssayerLifecycleStatus.ACTIVE,
+    ...over,
+  });
+
+  beforeEach(async () => {
+    people = new Map();
+    audit = { recordEvent: jest.fn().mockResolvedValue({ id: 'ev-1' }), recordEventSafe: jest.fn() };
+    email = { send: jest.fn().mockResolvedValue({ success: true }) };
+    sms = { send: jest.fn().mockResolvedValue(true) };
+
+    assayers = {
+      // Keyed on the id in the `where` clause, unlike the single-person suite above, since a
+      // batch needs to answer differently for different ids in the same run.
+      findOne: jest.fn(({ where }: any) => Promise.resolve(people.get(where.id) ?? null)),
+      update: jest.fn().mockResolvedValue({ affected: 1 }),
+      find: jest.fn().mockResolvedValue([]),
+      metadata: { findColumnWithPropertyName: () => ({ isNullable: true }) },
+      manager: { query: jest.fn().mockResolvedValue([]) },
+    };
+
+    const mod = await Test.createTestingModule({
+      providers: [
+        AssayerService,
+        { provide: getRepositoryToken(AssayerEntity), useValue: assayers },
+        { provide: getRepositoryToken(AssayerCommercialProfileEntity), useValue: {} },
+        { provide: getRepositoryToken(WorkforceAttributeEntity), useValue: { find: jest.fn().mockResolvedValue([]) } },
+        { provide: getRepositoryToken(AssayerRemarkEntity), useValue: {} },
+        { provide: getRepositoryToken(AssayerActivityEntity), useValue: { create: jest.fn((r) => r), save: jest.fn() } },
+        { provide: AuditService, useValue: audit },
+        { provide: DomainEventPublisher, useValue: { publish: jest.fn() } },
+        { provide: WorkflowEngine, useValue: { registerWorkflow: jest.fn() } },
+        { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn() } },
+        { provide: EmailProvider, useValue: email },
+        { provide: SmsProvider, useValue: sms },
+        { provide: UnitOfWork, useValue: { run: (work: any) => work(undefined) } },
+        { provide: getDataSourceToken(), useValue: { query: jest.fn().mockResolvedValue([]) } },
+        { provide: CacheService, useValue: { del: jest.fn().mockResolvedValue(undefined) } },
+      ],
+    }).compile();
+    service = mod.get(AssayerService);
+  });
+
+  it('rejects a batch over 500 before touching a single record', async () => {
+    const ids = Array.from({ length: 501 }, (_, i) => `id-${i}`);
+
+    await expect(service.bulkIssueAppAccess(ids, ACTOR)).rejects.toBeInstanceOf(BadRequestException);
+    expect(assayers.findOne).not.toHaveBeenCalled();
+  });
+
+  it('accepts exactly 500', async () => {
+    // None of these ids resolve to a real person, so every one lands in `failed` via the same
+    // not-found path as a single bad id below — the point here is only that 500 itself is not
+    // rejected by the cap.
+    const ids = Array.from({ length: 500 }, (_, i) => `id-${i}`);
+
+    const out = await service.bulkIssueAppAccess(ids, ACTOR);
+
+    expect(out.failed).toHaveLength(500);
+  });
+
+  it('skips a person with neither email nor phone on file, with a reason, and issues no credential', async () => {
+    people.set('no-contact', person('no-contact', { email: null, phone: null }));
+
+    const out = await service.bulkIssueAppAccess(['no-contact'], ACTOR);
+
+    expect(out.succeeded).toEqual([]);
+    expect(out.skipped).toEqual([{ id: 'no-contact', reason: expect.stringContaining('email or phone') }]);
+    expect(assayers.update).not.toHaveBeenCalled();
+  });
+
+  it("isolates one id's failure from the rest of the batch", async () => {
+    people.set('ok-1', person('ok-1'));
+    // 'missing' is never added to `people`, so the lookup 404s for it alone.
+
+    const out = await service.bulkIssueAppAccess(['ok-1', 'missing'], ACTOR);
+
+    expect(out.succeeded.map((s) => s.id)).toEqual(['ok-1']);
+    expect(out.failed).toEqual([{ id: 'missing', reason: expect.any(String) }]);
+  });
+
+  it('records channels per available contact method — both, email-only and phone-only', async () => {
+    people.set('both', person('both', { email: 'a@x.com', phone: '9999999999' }));
+    people.set('email-only', person('email-only', { email: 'b@x.com', phone: null }));
+    people.set('phone-only', person('phone-only', { email: null, phone: '8888888888' }));
+
+    const out = await service.bulkIssueAppAccess(['both', 'email-only', 'phone-only'], ACTOR);
+
+    const channelsOf = (id: string) => out.succeeded.find((s) => s.id === id)?.channels.slice().sort();
+    expect(channelsOf('both')).toEqual(['EMAIL', 'SMS']);
+    expect(channelsOf('email-only')).toEqual(['EMAIL']);
+    expect(channelsOf('phone-only')).toEqual(['SMS']);
+    expect(email.send).toHaveBeenCalledTimes(2);
+    expect(sms.send).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports an empty channel list, not a failure, when every delivery attempt fails', async () => {
+    people.set('p1', person('p1'));
+    email.send.mockResolvedValue({ success: false });
+    sms.send.mockResolvedValue(false);
+
+    const out = await service.bulkIssueAppAccess(['p1'], ACTOR);
+
+    // The credential is live either way — issueAppAccessCore already committed it — so a
+    // channel failure is not a batch failure. `channels: []` is how HR sees nobody was reached.
+    expect(out.succeeded).toEqual([{ id: 'p1', channels: [] }]);
+    expect(out.failed).toEqual([]);
+  });
+
+  /**
+   * The one that matters most: the temporary password reaches exactly two places (the email
+   * body and the SMS body) and nowhere else — not the method's return value, not the summary
+   * audit row, and not any Logger call, however this run happens to fail or succeed.
+   */
+  it('never puts the plaintext password anywhere but the two delivery calls', async () => {
+    people.set('p1', person('p1', { email: 'p1@example.com', phone: '9999999999' }));
+    let captured: string | undefined;
+    email.send.mockImplementation(async (payload: any) => {
+      captured = payload.text.match(/temporary password is (\S+)\./)?.[1];
+      return { success: true };
+    });
+
+    const warnSpy = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const logSpy = jest.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    const errorSpy = jest.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    const debugSpy = jest.spyOn(Logger.prototype, 'debug').mockImplementation(() => undefined);
+
+    const out = await service.bulkIssueAppAccess(['p1'], ACTOR);
+
+    expect(captured).toBeTruthy();
+    expect(JSON.stringify(out)).not.toContain(captured);
+    expect(JSON.stringify(audit.recordEventSafe.mock.calls)).not.toContain(captured);
+    for (const spy of [warnSpy, logSpy, errorSpy, debugSpy]) {
+      for (const call of spy.mock.calls) {
+        for (const arg of call) expect(String(arg)).not.toContain(captured);
+      }
+    }
+    warnSpy.mockRestore(); logSpy.mockRestore(); errorSpy.mockRestore(); debugSpy.mockRestore();
+  });
+
+  it('writes one summary audit row for the whole run, counts only', async () => {
+    people.set('p1', person('p1'));
+    people.set('no-contact', person('no-contact', { email: null, phone: null }));
+
+    await service.bulkIssueAppAccess(['p1', 'no-contact'], ACTOR);
+
+    const summary = audit.recordEventSafe.mock.calls.map((c: any) => c[0])
+      .find((e: any) => e.eventType === 'BULK_APP_ACCESS_ISSUED');
+    expect(summary).toMatchObject({
+      userId: ACTOR,
+      metadata: expect.objectContaining({ requested: 2, succeeded: 1, skipped: 1, failed: 0 }),
+    });
   });
 });

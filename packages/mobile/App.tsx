@@ -4,6 +4,8 @@ import * as haptics from './src/lib/haptics';
 import { AssayerAssignment, AppNotification, AssayerExpense, ExpenseSummary, AssayerStatement } from './src/types/mobile-app';
 import { MobileApiService, initApiBaseUrl } from './src/services/api.service';
 import { uploadScannedAuditPacket } from './src/services/audit-packet-upload';
+import { enqueueAndRun } from './src/services/action-queue';
+import { actionDispatchers } from './src/services/action-dispatchers';
 import { useOverlay } from './src/hooks/useOverlay';
 import { loadPreferences } from './src/services/preferences';
 import { initI18nFromPreferences, useT, t as translate, serverErrorText } from './src/i18n';
@@ -458,31 +460,30 @@ function AppMain() {
 
     setBusyActionId(assignment.id);
     try {
-      const res = await MobileApiService.checkInBranch(assignment.id, fix.latitude, fix.longitude, fix.accuracy ?? undefined);
-      if (res.success) {
+      // Durable: the fix is written to the action queue before the request is attempted, so an
+      // app killed mid-request does not lose it. `queued` means a transport/timeout failure —
+      // the same case the old catch block handled — left it to retry automatically on the next
+      // foreground return or reconnect, rather than a refused request that would fail again.
+      const result = await enqueueAndRun(
+        'CHECK_IN',
+        { assignmentId: assignment.id, lat: fix.latitude, lng: fix.longitude, accuracy: fix.accuracy ?? undefined },
+        actionDispatchers.CHECK_IN,
+      );
+      if (result.success) {
         await loadAssignments();
         feedback.success(
           tr('assignment.checkedInTitle'),
           tr('assignment.checkedInBody', { branch: assignment.branchName }),
         );
+      } else if (result.queued) {
+        feedback.error(tr('assignment.serverUnreachableTitle'), tr('assignment.checkInUnconfirmed'));
+        loadAssignments().catch(() => {});
       } else {
         feedback.error(
           tr('assignment.checkInFailedTitle'),
-          serverErrorText(res.error, 'assignment.checkInFailedBody'),
+          serverErrorText(result.error, 'assignment.checkInFailedBody'),
         );
       }
-    } catch (err) {
-      // There was no catch here: a timeout became an unhandled rejection — the spinner stopped
-      // and nothing was said, and if the server HAD recorded the check-in the assayer could not
-      // tell. Say what happened; the assignment reload will show the true status either way.
-      const transport = MobileApiService.isTransportError(err);
-      feedback.error(
-        tr('assignment.serverUnreachableTitle'),
-        transport
-          ? tr('assignment.checkInUnconfirmed')
-          : serverErrorText((err as Error)?.message, 'assignment.checkInFailedBody'),
-      );
-      loadAssignments().catch(() => {});
     } finally {
       setBusyActionId(null);
     }
@@ -530,28 +531,29 @@ function AppMain() {
 
     setBusyActionId(assignment.id);
     try {
-      const res = await MobileApiService.checkOutBranch(assignment.id, fix.latitude, fix.longitude, fix.accuracy ?? undefined);
-      if (res.success) {
+      // Same durable path as check-in: written to the action queue before it is attempted, so a
+      // transport/timeout failure (`queued`) is retried automatically rather than lost, and a
+      // real refusal is shown once rather than retried forever.
+      const result = await enqueueAndRun(
+        'CHECK_OUT',
+        { assignmentId: assignment.id, lat: fix.latitude, lng: fix.longitude, accuracy: fix.accuracy ?? undefined },
+        actionDispatchers.CHECK_OUT,
+      );
+      if (result.success) {
         await loadAssignments();
         feedback.success(
           tr('assignment.checkedOutTitle'),
           tr('assignment.checkedOutBody', { branch: assignment.branchName }),
         );
+      } else if (result.queued) {
+        feedback.error(tr('assignment.serverUnreachableTitle'), tr('assignment.checkOutUnconfirmed'));
+        loadAssignments().catch(() => {});
       } else {
         feedback.error(
           tr('assignment.checkOutFailedTitle'),
-          serverErrorText(res.error, 'assignment.checkOutFailedBody'),
+          serverErrorText(result.error, 'assignment.checkOutFailedBody'),
         );
       }
-    } catch (err) {
-      const transport = MobileApiService.isTransportError(err);
-      feedback.error(
-        tr('assignment.serverUnreachableTitle'),
-        transport
-          ? tr('assignment.checkOutUnconfirmed')
-          : serverErrorText((err as Error)?.message, 'assignment.checkOutFailedBody'),
-      );
-      loadAssignments().catch(() => {});
     } finally {
       setBusyActionId(null);
     }
@@ -971,11 +973,25 @@ function AppMain() {
             const assignment = scanner.assignment;
             overlay.close();
 
-            // The normal path: ML Kit assembled the pages into a single PDF. Hand it to the durable
-            // outbox and let it carry the packet to the desk in the background — the assayer is free
-            // to move on, and a weak-signal transfer survives them doing so. Only the image-page
-            // fallback (no PDF could be built — iOS/web) still uploads inline below.
+            // The normal path: ML Kit assembled the pages into a single PDF.
             if (doc.pdfUri) {
+              // Reached from inside the Returning Paperwork wizard for this exact assignment
+              // (`onOpenScanner` on `PdfDocsScreen`, as opposed to the Home/Schedule "quick scan"
+              // shortcuts, which have no wizard open to stage into): stage it the same way
+              // "Attach PDF" does, so Step 2 (Review) actually shows what was captured and Step 3
+              // (Submit) is the assayer's own explicit action — instead of the packet silently
+              // going out here while the wizard stayed stuck on "Nothing captured yet, complete
+              // step 1 first" forever, which is what happened before this fix even though the
+              // packet had, in fact, already arrived (confirmed separately via Uploads).
+              if (paperwork.assignment?.id === assignment.id) {
+                paperwork.stageScannedFile(doc.fileName, doc.pdfUri);
+                return;
+              }
+
+              // Otherwise: a quick-scan shortcut with no wizard open. Hand it to the durable
+              // outbox and let it carry the packet to the desk in the background — the assayer is
+              // free to move on, and a weak-signal transfer survives them doing so. Only the
+              // image-page fallback (no PDF could be built — iOS/web) still uploads inline below.
               await outbox.enqueue({
                 target: {
                   kind: 'ASSIGNMENT_PACKET',

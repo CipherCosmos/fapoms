@@ -98,7 +98,9 @@ describe('ExpenseService', () => {
     };
     dispatch = { emitSafe: jest.fn(), emit: jest.fn() };
     billing = { createReimbursementPayable: jest.fn().mockResolvedValue({ id: 'pay-1' }) };
-    txManager = { save: jest.fn((v: any) => expenseRepo.save(v)) };
+    // `findOne` models the FOR UPDATE re-read inside review()'s transaction; by default it returns
+    // the same row the outer (unlocked) read did. Tests that model a lost race override it.
+    txManager = { save: jest.fn((v: any) => expenseRepo.save(v)), findOne: jest.fn(() => expenseRepo.findOne()) };
     // A UnitOfWork double that models ROLLBACK: the callback's writes reach the repository only
     // if the callback resolves. A throw propagates and nothing is "committed".
     uow = { run: jest.fn(async (work: any) => work(txManager, jest.fn())) };
@@ -178,6 +180,51 @@ describe('ExpenseService', () => {
     it('throws when the assignment does not exist', async () => {
       assignmentRepo.findOne.mockResolvedValue(null);
       await expect(service.create('nope', valid, 'u', OWNER)).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  /**
+   * A flaky field connection retries the claim POST with the same body and the same
+   * `clientRequestId`. Without recognising the retry, each attempt raised a distinct row — the
+   * same receipt claimed twice, each one a real reimbursement an approver had to notice and
+   * reject by hand.
+   */
+  describe('create — idempotency by clientRequestId', () => {
+    const REQUEST_ID = '9c8f6d2a-1b3e-4a5c-8f7d-2e1a9b6c4d3f';
+
+    it('returns the existing claim on a repeat submission instead of creating a second', async () => {
+      const first = await service.create('asn-1', { ...valid, clientRequestId: REQUEST_ID }, 'user-1', OWNER);
+      expect(expenseRepo.save).toHaveBeenCalledTimes(1);
+
+      // The retry's read-before-write lookup finds the row the first attempt just wrote.
+      expenseRepo.findOne.mockResolvedValueOnce(first);
+      const second = await service.create('asn-1', { ...valid, clientRequestId: REQUEST_ID }, 'user-1', OWNER);
+
+      expect(second).toEqual(first);
+      // The mutation this proves: without the guard, a second call reaches expenseRepo.save
+      // again. Deleting the `if (dto.clientRequestId) { ... return existingClaim; }` block in
+      // ExpenseService.create makes this assertion fail (save called twice, second !== first).
+      expect(expenseRepo.save).toHaveBeenCalledTimes(1);
+    });
+
+    it('still creates a second claim when no clientRequestId is sent', async () => {
+      await service.create('asn-1', valid, 'user-1', OWNER);
+      await service.create('asn-1', valid, 'user-1', OWNER);
+      // No idempotency key means no dedupe — two genuinely separate claims are still both real.
+      expect(expenseRepo.save).toHaveBeenCalledTimes(2);
+    });
+
+    it('falls back to the existing row when a concurrent retry races past the read and hits the unique index', async () => {
+      const conflict: any = new Error('duplicate key value violates unique constraint');
+      conflict.code = '23505';
+      expenseRepo.save.mockRejectedValueOnce(conflict);
+      const existing = { id: 'exp-existing', assayerId: OWNER, clientRequestId: REQUEST_ID, amount: 240 };
+      expenseRepo.findOne
+        .mockResolvedValueOnce(null) // the pre-check finds nothing — genuinely racing
+        .mockResolvedValueOnce(existing); // the post-conflict lookup finds what the winner wrote
+
+      const result = await service.create('asn-1', { ...valid, clientRequestId: REQUEST_ID }, 'user-1', OWNER);
+      expect(result).toEqual(existing);
     });
   });
 
@@ -279,10 +326,23 @@ describe('ExpenseService', () => {
       );
     });
 
-    it('raises nothing when a claim is rejected, and opens no transaction', async () => {
+    it('raises nothing when a claim is rejected, but still runs inside the transaction (locked CAS)', async () => {
+      // Reject books no payable, but it DOES open the transaction now: the PENDING→REJECTED move is
+      // a compare-and-swap under a row lock, so an APPROVE racing a REJECT cannot interleave into a
+      // REJECTED claim that already has a payable behind it.
       await service.review('exp-1', false, 'reviewer-1', 'Duplicate of ASN-001');
       expect(billing.createReimbursementPayable).not.toHaveBeenCalled();
-      expect(uow.run).not.toHaveBeenCalled();
+      expect(uow.run).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses when the row is no longer PENDING at lock time (loser of a concurrent review)', async () => {
+      // The outer read sees PENDING; by the time this reviewer takes the row lock, a concurrent
+      // review has already moved it. The FOR UPDATE re-read must refuse rather than double-book.
+      expenseRepo.findOne.mockResolvedValueOnce(approved()); // outer pre-check: PENDING
+      txManager.findOne.mockResolvedValueOnce(approved({ status: ExpenseStatus.APPROVED })); // locked: already decided
+      await expect(service.review('exp-1', true, 'reviewer-1')).rejects.toThrow(BadRequestException);
+      expect(billing.createReimbursementPayable).not.toHaveBeenCalled();
+      expect(txManager.save).not.toHaveBeenCalled();
     });
 
     it('rolls the approval back when the payable cannot be raised', async () => {

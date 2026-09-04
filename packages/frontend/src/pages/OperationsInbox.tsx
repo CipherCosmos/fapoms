@@ -80,6 +80,48 @@ interface Candidate {
 import { money as inr } from '../utils/money';
 const age = (h: number) => (h < 1 ? 'just now' : h < 24 ? `${h}h ago` : `${Math.round(h / 24)}d ago`);
 
+/**
+ * Decline / no-show reasons the desk actually gives on a call, seeded from the assignment
+ * controller's own comment on why the reason matters ("the fee was too low, the date impossible,
+ * or the site too far") — there was no real assignment history yet to mine, so this is the same
+ * taxonomy the desk already reasons in, just made pickable instead of retyped every time.
+ *
+ * One list backs all three reason inputs in this file (call-queue decline, negotiation decline,
+ * overdue no-show) so they can never drift into three near-identical-but-different lists.
+ */
+export const ASSIGNMENT_REASON_PRESETS = [
+  'Fee too low',
+  'Date not possible',
+  'Site too far',
+  'Already booked elsewhere',
+  'Assayer unavailable',
+  'No-show',
+  'SLA expired',
+] as const;
+const REASON_OTHER = 'Other';
+
+/**
+ * Preset fast-fill for a reason text box. It writes straight into the same state `miniInput`
+ * renders below it — picking a preset just populates the text, picking "Other" clears it for
+ * free typing, and hand-editing to anything else is exactly what already happens with a plain
+ * text field. The <select> can only ever pre-fill the box; it never gates what gets submitted.
+ *
+ * A standalone, exported component (not an inline closure) so this fast-fill behavior can be
+ * tested directly, without mounting the whole inbox page and its call-queue/negotiation/overdue
+ * data fetching just to reach one <select>.
+ */
+export const ReasonPresetSelect: React.FC<{ value: string; onChange: (v: string) => void }> = ({ value, onChange }) => (
+  <select
+    aria-label="Reason preset"
+    value={(ASSIGNMENT_REASON_PRESETS as readonly string[]).includes(value) ? value : REASON_OTHER}
+    onChange={(e) => onChange(e.target.value === REASON_OTHER ? '' : e.target.value)}
+    style={{ padding: '5px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '6px', color: 'var(--text-primary)', outline: 'none', fontSize: '12px' }}
+  >
+    {ASSIGNMENT_REASON_PRESETS.map((r) => <option key={r} value={r}>{r}</option>)}
+    <option value={REASON_OTHER}>Other…</option>
+  </select>
+);
+
 export const OperationsInbox: React.FC = () => {
   const { maxNegotiationRounds } = usePlatformLimits();
   const navigate = useNavigate();
@@ -105,7 +147,7 @@ export const OperationsInbox: React.FC = () => {
     if (item.projectId) params.set('projectId', item.projectId);
     if (item.projectBranchId) params.set('branchId', item.projectBranchId);
     const qs = params.toString();
-    navigate(qs ? `/planning?${qs}` : '/planning');
+    void navigate(qs ? `/planning?${qs}` : '/planning');
   };
   const { scopeParams, scopeKey } = useScope();
   const scopeQuery = withScope(scopeParams);
@@ -151,8 +193,8 @@ export const OperationsInbox: React.FC = () => {
   const openBookingIdRef = useRef<string | null>(null);
 
   const refresh = () => {
-    queryClient.invalidateQueries({ queryKey: queryKeys.desk.inbox });
-    queryClient.invalidateQueries({ queryKey: ['assignments'] });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.desk.inbox });
+    void queryClient.invalidateQueries({ queryKey: ['assignments'] });
   };
 
   /** Every desk action pairs the assignment transition with a call-log write — the evidence. */
@@ -504,6 +546,7 @@ export const OperationsInbox: React.FC = () => {
                         </>
                       ) : form === 'decline' ? (
                         <>
+                          <ReasonPresetSelect value={reasonInput} onChange={setReasonInput} />
                           {miniInput('Reason…', reasonInput, setReasonInput, 'text')}
                           <button onClick={() => decline(item)} disabled={busy} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px', background: 'var(--danger)', borderColor: 'var(--danger)' }}>
                             {busy ? 'Saving…' : 'Confirm decline'}
@@ -589,6 +632,7 @@ export const OperationsInbox: React.FC = () => {
                     </button>
                     {openForm?.id === item.id && openForm.kind === 'decline' && (
                       <>
+                        <ReasonPresetSelect value={reasonInput} onChange={setReasonInput} />
                         {miniInput('Reason…', reasonInput, setReasonInput, 'text')}
                         <button onClick={() => decline(item)} disabled={busy} className="btn btn-primary" style={{ padding: '5px 12px', fontSize: '11.5px', background: 'var(--danger)', borderColor: 'var(--danger)' }}>Confirm</button>
                       </>
@@ -665,6 +709,7 @@ export const OperationsInbox: React.FC = () => {
                       </div>
                       {form === 'noshow' && (
                         <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                          <ReasonPresetSelect value={reasonInput} onChange={setReasonInput} />
                           {miniInput("Why? e.g. assayer didn't attend", reasonInput, setReasonInput, 'text')}
                           <button onClick={() => markNoShow(item)} disabled={busy} className="btn btn-primary"
                             style={{ padding: '5px 12px', fontSize: '11.5px', background: 'var(--danger)', borderColor: 'var(--danger)' }}>

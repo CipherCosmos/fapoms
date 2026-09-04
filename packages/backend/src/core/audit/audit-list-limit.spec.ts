@@ -69,7 +69,7 @@ describe('audit-log list limit clamps', () => {
     expect(pipesFor('getUnifiedTrail', 'limit')).toHaveLength(0);
 
     const unifiedAuditService = { getTrail: jest.fn().mockResolvedValue({ entries: [], countsBySource: {} }) };
-    const controller = new AuditLogController({} as any, unifiedAuditService as any);
+    const controller = new AuditLogController({} as any, unifiedAuditService as any, {} as any);
 
     await controller.getUnifiedTrail('entity-1', 'USER', 500000);
 

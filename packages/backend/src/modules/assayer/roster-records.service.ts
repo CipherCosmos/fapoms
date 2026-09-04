@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
 import {
@@ -10,8 +10,9 @@ import { AssayerClientEmpanelmentEntity } from './assayer-client-empanelment.ent
 import { AssayerBackgroundCheckEntity } from './assayer-background-check.entity';
 import { AssayerDocumentEntity } from './assayer-document.entity';
 import { AssayerImportIssueEntity } from './assayer-import-issue.entity';
-import { ASSAYER_ERROR_CODES } from '@fapoms/shared';
+import { ASSAYER_ERROR_CODES, EventCategory } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
+import { AuditService } from '../../core/audit/audit.service';
 
 /**
  * The workforce records the roster spreadsheet was holding sideways.
@@ -64,6 +65,11 @@ export class RosterRecordsService {
     @InjectRepository(AssayerBackgroundCheckEntity) private readonly checks: Repository<AssayerBackgroundCheckEntity>,
     @InjectRepository(AssayerDocumentEntity) private readonly onboarding: Repository<AssayerDocumentEntity>,
     @InjectRepository(AssayerImportIssueEntity) private readonly issues: Repository<AssayerImportIssueEntity>,
+    // Optional so existing specs that build this service through Nest's DI without an audit
+    // collaborator still resolve; DI always supplies the real one. The `?` alone only helps
+    // TypeScript — `@Optional()` is what stops Nest throwing when no provider is registered.
+    // Every call site guards with `?.`.
+    @Optional() private readonly auditService?: AuditService,
   ) {}
 
   /** Everything the roster knows about one person beyond their own row, in one round trip. */
@@ -195,6 +201,7 @@ export class RosterRecordsService {
     // Upsert: the unique constraint permits exactly one standing per pair, and this is the
     // decision about it rather than another opinion alongside it.
     const existing = await this.empanelments.findOne({ where: { assayerId, clientId } });
+    const previousStatus = existing?.status ?? null;
     const row = existing ?? this.empanelments.create({ assayerId, clientId, createdBy: actorId });
 
     row.status = dto.status;
@@ -205,15 +212,40 @@ export class RosterRecordsService {
     row.remarks = dto.remarks ?? null;
     row.isActive = true;
     row.updatedBy = actorId;
-    return this.empanelments.save(row);
+    const saved = await this.empanelments.save(row);
+    // Whether this bank will send someone work is a decision, and "who set this and when" has
+    // to be answerable the same way a lifecycle move is — there was previously no trail at all.
+    await this.auditService?.recordEventSafe({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'EMPANELMENT_SET',
+      entityType: 'ASSAYER',
+      entityId: assayerId,
+      previousState: previousStatus ?? undefined,
+      newState: saved.status,
+      userId: actorId,
+      remarks: `Client empanelment set to ${saved.status}${dto.statusReason ? `: ${dto.statusReason}` : ''}`,
+      metadata: { clientId, previousValue: { status: previousStatus }, newValue: { status: saved.status, statusReason: saved.statusReason } },
+    });
+    return saved;
   }
 
   async removeEmpanelment(id: string, actorId: string) {
     const row = await this.empanelments.findOne({ where: { id } });
     if (!row) throw new NotFoundException('No such standing.');
+    const previousStatus = row.status;
     row.isActive = false;
     row.updatedBy = actorId;
     await this.empanelments.save(row);
+    await this.auditService?.recordEventSafe({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'EMPANELMENT_WITHDRAWN',
+      entityType: 'ASSAYER',
+      entityId: row.assayerId,
+      previousState: previousStatus,
+      userId: actorId,
+      remarks: `Client empanelment withdrawn (was ${previousStatus})`,
+      metadata: { clientId: row.clientId, previousValue: { status: previousStatus, isActive: true }, newValue: { isActive: false } },
+    });
   }
 
   // ── Background and credit checks ──────────────────────────────────────
@@ -238,7 +270,20 @@ export class RosterRecordsService {
       createdBy: actorId,
       updatedBy: actorId,
     });
-    return this.checks.save(row);
+    const saved = await this.checks.save(row);
+    // A background/credit check is the grounds for admitting someone to a bank vault, and it had
+    // no trail at all — only the row itself, with no record of who recorded it.
+    await this.auditService?.recordEventSafe({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'BACKGROUND_CHECK_RECORDED',
+      entityType: 'ASSAYER',
+      entityId: assayerId,
+      newState: saved.verdict,
+      userId: actorId,
+      remarks: `Background check recorded: ${saved.verdict}${saved.riskGrade ? ` (${saved.riskGrade})` : ''}`,
+      metadata: { newValue: { verdict: saved.verdict, riskGrade: saved.riskGrade, cibilBand: saved.cibilBand, cibilScore: saved.cibilScore } },
+    });
+    return saved;
   }
 
   // ── Onboarding paperwork ──────────────────────────────────────────────
@@ -492,12 +537,31 @@ export class RosterRecordsService {
         + 'the original.',
       );
     }
+    const previousStatus = row.verificationStatus;
     row.verificationStatus = verdict;
     row.verifiedAt = verdict === DocumentVerification.PENDING ? null : new Date();
     row.verifiedBy = verdict === DocumentVerification.PENDING ? null : actorId;
     if (remarks !== undefined) row.remarks = remarks || null;
     row.updatedBy = actorId;
-    return this.onboarding.save(row);
+    const saved = await this.onboarding.save(row);
+    // Verify/reject/reset (PENDING is a reset) on an identity document had no trail — the only
+    // evidence was the row's current state, with no record of who checked it or when it changed.
+    await this.auditService?.recordEventSafe({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'IDENTITY_DOCUMENT_VERIFICATION_CHANGED',
+      entityType: 'ASSAYER',
+      entityId: saved.assayerId,
+      previousState: previousStatus ?? undefined,
+      newState: verdict,
+      userId: actorId,
+      remarks: `${ONBOARDING_DOCUMENT_LABELS[saved.requirement]} verification set to ${verdict}`,
+      metadata: {
+        requirement: saved.requirement,
+        previousValue: { verificationStatus: previousStatus },
+        newValue: { verificationStatus: verdict },
+      },
+    });
+    return saved;
   }
 
   // ── The import review queue ───────────────────────────────────────────

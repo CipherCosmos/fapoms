@@ -13,6 +13,7 @@ import type { RegionCapture, Region } from './PdfRegionViewer';
 import { ThreadPanel } from './ThreadPanel';
 import { userMessage } from '../../services/errors';
 import { useConfirm } from '../../components/ui';
+import { CORRECTION_NOTE_SUGGESTIONS } from '../../utils/reviewReasonSuggestions';
 
 /**
  * The merged workspace for one branch's returned packet: the PDF, the data
@@ -162,6 +163,16 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
   const canReview = roles.some((r) =>
     [SystemRole.ADMIN, SystemRole.DESK].includes(r));
   const canSubmit = canReview;
+  /**
+   * Deliberately wider than `canReview`: `POST /validation-queries` is
+   * `@Roles(ADMIN, DESK, DESK_OPERATOR)` server-side — a validator can raise a question for the
+   * assayer even though only a desk head can approve/reject the case itself. Reusing `canReview`
+   * here would under-gate relative to what the backend actually allows. The composer previously
+   * had no check of its own at all — rendered live for anyone on this screen, next to the
+   * `canReview`-gated decision controls that already got this right.
+   */
+  const canAskAssayer = roles.some((r) =>
+    [SystemRole.ADMIN, SystemRole.DESK, SystemRole.DESK_OPERATOR].includes(r));
 
   const [docs, setDocs] = useState<DocRow[] | null>(null);
   const [validationCase, setCase] = useState<CaseRow | null | undefined>(undefined);
@@ -206,12 +217,26 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
+  /**
+   * Whether the last case lookup failed, kept apart from its result.
+   *
+   * `validationCase === null` means "this branch genuinely has no validation case", and
+   * `raiseQuery` acts on that by opening one. `POST /validation` creates unconditionally — it
+   * does not upsert on `projectBranchId` — so a failed lookup that reported itself as `null`
+   * (which is what the catch below used to do) is how one branch quietly ends up with two cases,
+   * with the clarifications split across them.
+   */
+  const [caseLoadFailed, setCaseLoadFailed] = useState(false);
+
   const loadCase = useCallback(async () => {
     try {
       const list = await api.request<CaseRow[]>(`/validation?projectBranchId=${projectBranchId}&limit=1`);
       setCase(Array.isArray(list) && list.length > 0 ? list[0] : null);
+      setCaseLoadFailed(false);
     } catch (e) {
       setCase(null);
+      setCaseLoadFailed(true);
+      setErr(userMessage(e));
     }
   }, [projectBranchId]);
 
@@ -225,11 +250,11 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
     api.request<DocRow[]>(`/documents/project-branch/${projectBranchId}`)
       .then((r) => setDocs(Array.isArray(r) ? r : []))
       .catch(() => setDocs([]));
-    loadCase();
+    void loadCase();
   }, [projectBranchId, loadCase]);
 
   useEffect(() => {
-    if (validationCase?.id) loadQueries(validationCase.id);
+    if (validationCase?.id) void loadQueries(validationCase.id);
     else setQueries(validationCase === null ? [] : null);
   }, [validationCase, loadQueries]);
 
@@ -293,6 +318,11 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
     setErr(null);
     try {
       let caseId = validationCase?.id;
+      if (!caseId && caseLoadFailed) {
+        setErr('This branch’s validation case could not be loaded, so a new one cannot be opened here without risking a duplicate. Reload the page and try again.');
+        setBusy(false);
+        return;
+      }
       if (!caseId) {
         // First question on a branch that has no case yet (still being worked) —
         // open one at PENDING so the clarification has somewhere to live.
@@ -451,17 +481,29 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
               {validationCase.ocrResult && <OcrExtraction result={validationCase.ocrResult} />}
               {canReview && status !== 'SUBMITTED' && (
                 <>
-                  <textarea
+                  {/*
+                    Same datalist mechanism as the field-anchor input above: a suggestion list
+                    attached via `list`, never a constraint — free text has always worked here and
+                    still does. This used to be a <textarea>; the `list` attribute only exists on
+                    <input> per the HTML spec (React's own DOM types refuse it on a textarea), and
+                    these notes are short, category-like reasons in practice — the same length as
+                    the suggestions themselves — so a single-line input loses nothing real.
+                  */}
+                  <input
+                    type="text"
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
+                    list="correction-note-suggestions"
                     placeholder="Notes (required if requesting a correction)"
-                    rows={2}
                     style={{
                       width: '100%', boxSizing: 'border-box', padding: '7px 9px', fontSize: '12px',
                       borderRadius: '7px', background: 'var(--bg-input)', color: 'inherit',
-                      border: '1px solid var(--border-color)', resize: 'vertical', marginBottom: '8px',
+                      border: '1px solid var(--border-color)', marginBottom: '8px',
                     }}
                   />
+                  <datalist id="correction-note-suggestions">
+                    {CORRECTION_NOTE_SUGGESTIONS.map((s) => <option key={s} value={s} />)}
+                  </datalist>
                   <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                     {/*
                       Approve is only reachable from HUMAN_REVIEW (see VALIDATION_TRANSITIONS).
@@ -530,18 +572,20 @@ export const CaseWorkspace: React.FC<{ projectBranchId: string; onBack: () => vo
                 Assayer Chat & Clarifications {openCount > 0 && <span style={{ color: 'var(--warning)', marginLeft: '4px' }}>({counted(openCount, 'still open', 'still open')})</span>}
               </span>
             </div>
-            <button onClick={() => setShowNewQuery((v) => !v)} className="btn btn-primary"
-              style={{ fontSize: '11px', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}>
-              <MessageSquarePlus size={13} /> {showNewQuery ? 'Cancel' : 'Ask the assayer'}
-            </button>
+            {canAskAssayer && (
+              <button onClick={() => setShowNewQuery((v) => !v)} className="btn btn-primary"
+                style={{ fontSize: '11px', padding: '5px 10px', display: 'flex', alignItems: 'center', gap: '4px', fontWeight: 600 }}>
+                <MessageSquarePlus size={13} /> {showNewQuery ? 'Cancel' : 'Ask the assayer'}
+              </button>
+            )}
           </div>
 
-          {showNewQuery && (
+          {showNewQuery && canAskAssayer && (
             <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-surface-2)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
               <input
                 value={newQueryText}
                 onChange={(e) => setNewQueryText(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') raiseQuery(); }}
+                onKeyDown={(e) => { if (e.key === 'Enter') void raiseQuery(); }}
                 placeholder="Type your question for the assayer… e.g. Gross weight mismatch on row 3"
                 style={{ padding: '8px 11px', fontSize: '12.5px', borderRadius: '8px', background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)', outline: 'none' }}
               />

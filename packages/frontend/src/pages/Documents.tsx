@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { DocumentControlPanel } from './documents/DocumentControlPanel';
-import type { OverviewData } from './documents/DocumentControlPanel';
+import type { OverviewData, DocRow } from './documents/DocumentControlPanel';
 import { BranchDocumentPanel } from './documents/BranchDocumentPanel';
 import { DocumentModelLegend } from './documents/DocumentModelLegend';
 import { DailyRunPanel } from './documents/DailyRunPanel';
@@ -11,7 +11,8 @@ import { connectSocket, getSocket } from '../services/socket';
 import { fetchWithTimeout } from '../services/http';
 import { api } from '../services/api';
 import { userMessage, AppError } from '../services/errors';
-import { uploadSizeProblem } from '@fapoms/shared';
+import { uploadSizeProblem, SystemRole } from '@fapoms/shared';
+import { useCurrentRoles, useCurrentPermissions, canReadCustomerMaster, hasAnyRole } from '../hooks/useCurrentRoles';
 
 /**
  * The presigned PUT's own budget, longer than the API default because the file, not the network,
@@ -134,7 +135,25 @@ export const Documents: React.FC = () => {
   // The daily run leads: the client's file arrives per audit date and drives that
   // day's work, so that is the view someone opens this page to act on. The
   // branch and file views remain for looking across dates.
-  const [view, setView] = useState<'daily' | 'branch' | 'flat' | 'versions'>('daily');
+  //
+  // Except for a role the customer-master endpoints refuse: a document VIEWER (DESK_OPERATOR) is on
+  // this page to find and read paperwork, not to run the day's dispatch, and both the Daily Run and
+  // Customer Master fetches 403 for it. So those two tabs are hidden and the branch view leads
+  // instead — otherwise the page opened on a panel that could only paint a permission error.
+  const roles = useCurrentRoles();
+  const permissions = useCurrentPermissions();
+  const canCustomerMaster = canReadCustomerMaster(roles, permissions);
+  /**
+   * `DailyRunPanel`'s Dispatch and Send-to-OCR buttons carried no role check of their own —
+   * rendered live for anyone who could see the Daily Run tab at all, which is `canCustomerMaster`
+   * above and therefore includes CLIENT_USER, an external bank account, not just internal staff.
+   * Matches the real server-side gates exactly rather than reusing one flag for both: dispatch is
+   * `@Roles(ADMIN, OPERATIONS, DESK)`, send-to-OCR is narrower, `@Roles(ADMIN, DESK)` — OPERATIONS
+   * can dispatch paperwork but not push it to the external OCR vendor.
+   */
+  const canDispatchDocuments = hasAnyRole(roles, [SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK]);
+  const canSendToExternalOcr = hasAnyRole(roles, [SystemRole.ADMIN, SystemRole.DESK]);
+  const [view, setView] = useState<'daily' | 'branch' | 'flat' | 'versions'>(canCustomerMaster ? 'daily' : 'branch');
   const [projectId, setProjectId] = useState<string>('');
   const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([]);
 
@@ -230,6 +249,24 @@ export const Documents: React.FC = () => {
     };
   }, [loadOverview]);
 
+  /**
+   * Every document row already loaded on this page, wherever it happens to sit — the flat
+   * lists and the per-branch groups alike — so an id `handleDispatchMany` receives (it is
+   * called from three different views) can be traced back to its branch without a network
+   * call. Returns null for an id this page has not loaded a row for (a stale id from a socket
+   * event, say), which just means the lookup below is skipped and the prompt starts blank.
+   */
+  const projectBranchIdOf = useCallback((id: string): string | null => {
+    if (!overview) return null;
+    const pools: DocRow[] = [
+      ...(overview.documents || []),
+      ...(overview.awaitingDispatch || []),
+      ...(overview.blockingFieldWork || []),
+      ...(overview.branches || []).flatMap((b) => Object.values(b.documentsByType || {}).flat()),
+    ];
+    return pools.find((d) => d.id === id)?.projectBranchId ?? null;
+  }, [overview]);
+
   /** Releases one or many documents, then refreshes the console. */
   const handleDispatchMany = async (ids: string[]) => {
     // "Updates the paperwork workflow" was true but told the user nothing they could act
@@ -242,6 +279,29 @@ export const Documents: React.FC = () => {
      * to collect it there — which is how several clients actually work, and had no expression
      * here at all. The desk marked the document sent and then sent it by some other means.
      */
+
+    /**
+     * Pre-fill with the address already on the branch's record, so a desk that has already
+     * typed this once is not asked to retype it — `document.service.ts`'s
+     * `emailDocumentToBranch` writes a working address back onto the branch the first time it
+     * is used specifically so "the desk types it once" (see its own comment there).
+     *
+     * Only when every document in this dispatch traces back to the SAME branch. A batch that
+     * spans several branches (an "all awaiting dispatch" click) has no single address to offer,
+     * and guessing one would risk one branch's paperwork being mailed to another's inbox if the
+     * desk did not notice and clear it — so that case is left blank, exactly as before.
+     */
+    let knownBranchEmail: string | undefined;
+    const branchIds = new Set(ids.map(projectBranchIdOf).filter((v): v is string => !!v));
+    if (ids.length > 0 && branchIds.size === 1) {
+      try {
+        const doc = await api.request<{ assessment?: { branch?: { email?: string | null } } }>(`/documents/${ids[0]}`);
+        knownBranchEmail = doc?.assessment?.branch?.email ?? undefined;
+      } catch {
+        // Advisory only — a failed lookup just leaves the prompt blank, same as before this change.
+      }
+    }
+
     const { confirmed, reason: branchEmail } = await confirmWithReason({
       title: ids.length === 1 ? 'Send this document out?' : `Send ${ids.length} documents out?`,
       message:
@@ -254,6 +314,7 @@ export const Documents: React.FC = () => {
         label: 'Branch email — leave empty to send to the assayer',
         placeholder: 'branch.manager@bank.example',
         optional: true,
+        initialValue: knownBranchEmail,
       },
     });
     if (!confirmed) return;
@@ -373,22 +434,46 @@ export const Documents: React.FC = () => {
 
       {overviewLoading && !overview ? (
         <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 13 }}>Loading document control…</div>
+      ) : !overview && error ? (
+        /*
+         * A failed first load used to fall through to the bare `: null` this ternary ended on —
+         * the tab switcher and every view it gates disappeared with it, leaving only the page
+         * title and the error banner above. No affordance told anyone there was a way back short
+         * of a full page reload, and nothing here retried on its own once the backend recovered.
+         * Gated on `error` specifically, not just `!overview`: the 200ms debounce before the very
+         * first `loadOverview()` call means `overviewLoading` is briefly false with `overview`
+         * still null on every fresh mount too — without the `error` check this branch would flash
+         * "couldn't load" for that window on every normal page load, not only a real failure.
+         * `loadOverview` is already the exact function the header's own Refresh button calls, so
+         * reusing it here is the same recovery path, just reachable from the empty state that
+         * actually needs it.
+         */
+        <div style={{ padding: '32px 20px', textAlign: 'center', color: 'var(--text-muted)', fontSize: 13, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}>
+          <span>Couldn&apos;t load the document workspace.</span>
+          <button onClick={loadOverview} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <RefreshCw size={14} /> Retry
+          </button>
+        </div>
       ) : overview ? (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <DocumentModelLegend />
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            <button onClick={() => setView('daily')} className={view === 'daily' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 12, padding: '6px 12px' }}>
-              Daily Run
-            </button>
+            {canCustomerMaster && (
+              <button onClick={() => setView('daily')} className={view === 'daily' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 12, padding: '6px 12px' }}>
+                Daily Run
+              </button>
+            )}
             <button onClick={() => setView('branch')} className={view === 'branch' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 12, padding: '6px 12px' }}>
               By Branch
             </button>
             <button onClick={() => setView('flat')} className={view === 'flat' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 12, padding: '6px 12px' }}>
               All Files
             </button>
-            <button onClick={() => setView('versions')} className={view === 'versions' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 12, padding: '6px 12px' }}>
-              Customer Master
-            </button>
+            {canCustomerMaster && (
+              <button onClick={() => setView('versions')} className={view === 'versions' ? 'btn btn-primary' : 'btn btn-secondary'} style={{ fontSize: 12, padding: '6px 12px' }}>
+                Customer Master
+              </button>
+            )}
             {view === 'daily' && projects.length > 1 && (
               <Select
                 compact
@@ -409,6 +494,8 @@ export const Documents: React.FC = () => {
               onDownload={(id) => { openDocumentDownload(id).catch((e) => setError(userMessage(e))); }}
               onError={setError}
               onSuccess={setSuccessMsg}
+              canDispatch={canDispatchDocuments}
+              canSendToOcr={canSendToExternalOcr}
             />
           ) : view === 'branch' ? (
             <BranchDocumentPanel

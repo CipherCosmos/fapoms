@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { NotFoundException, BadRequestException } from '@nestjs/common';
+import { NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { Repository } from 'typeorm';
 import { DocumentService } from './document.service';
 import { DocumentEntity } from './document.entity';
@@ -11,7 +11,7 @@ import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { NotificationService } from '../notifications/notification.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { PushNotificationService } from '../notifications/push-notification.service';
-import { DocumentType, DocumentStatus, DispatchMethod } from '@fapoms/shared';
+import { DocumentType, DocumentStatus, DispatchMethod, AssignmentStatus } from '@fapoms/shared';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { LocalStorageService } from '../../infrastructure/storage/local-storage.service';
 import { ValidationService } from '../validation/validation.service';
@@ -33,6 +33,7 @@ describe('DocumentService', () => {
     save: jest.fn(),
     findOne: jest.fn(),
     find: jest.fn(),
+    findAndCount: jest.fn(),
     createQueryBuilder: jest.fn(),
     manager: { query: mockManagerQuery },
   };
@@ -187,6 +188,88 @@ describe('DocumentService', () => {
         andWhere: jest.fn().mockReturnThis(), getCount: jest.fn(async () => 1),
       }));
       await expect(service.assertAssayerMayDownload('doc-1', 'assayer-1')).resolves.toBeUndefined();
+    });
+
+    /**
+     * `a.is_active` (soft-delete) is not the same thing as "this assignment is still live" — a
+     * CANCELLED assignment stays `is_active: true`. Reproduced against a real row before this
+     * fix: an assayer whose assignment for a branch had been cancelled still passed this check
+     * and could reach that branch's dispatched paperwork, the same confusion `dispatchDocument`
+     * had already been fixed for (see the notification test below). This asserts the query
+     * itself carries the exclusion — not just that some mocked `getCount` happens to return 0 —
+     * so a future edit that drops the predicate fails here rather than only against real data.
+     */
+    it('excludes CANCELLED/REJECTED assignments from counting as a branch link', async () => {
+      mockDocumentRepo.findOne.mockResolvedValue(
+        branchDoc(DocumentType.PRE_FIELD_AUDIT_PDF, DocumentStatus.DISPATCHED),
+      );
+      const andWhereCalls: any[] = [];
+      mockAssignmentRepo.createQueryBuilder = jest.fn(() => ({
+        innerJoin: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn(function (this: any, ...args: any[]) {
+          andWhereCalls.push(args);
+          return this;
+        }),
+        // A cancelled-only link resolves to zero once the predicate excludes it.
+        getCount: jest.fn(async () => 0),
+      }));
+
+      await expect(service.assertAssayerMayDownload('doc-1', 'assayer-cancelled'))
+        .rejects.toThrow(BadRequestException);
+
+      const statusFilter = andWhereCalls.find(([clause]) => String(clause).includes('a.status NOT IN'));
+      expect(statusFilter).toBeDefined();
+      expect(statusFilter![1].deadStatuses).toEqual(
+        expect.arrayContaining([AssignmentStatus.CANCELLED, AssignmentStatus.REJECTED]),
+      );
+    });
+  });
+
+  /**
+   * The branch-keyed ownership check the three branch-addressed document routes call for a pure
+   * assayer (`download-pdf`, `findByProjectBranch`, `assayer-view`). Same rule as
+   * `assertAssayerMayDownload`, expressed straight off `project_branch_id`. CONFIRMED-EXPLOITABLE
+   * 2026-09-04 before this existed: AS-01 pulled AS-04's completed-branch audit packet.
+   */
+  describe('assertAssayerAssignedToBranch', () => {
+    it('refuses (403) when the assayer holds no live assignment on the branch', async () => {
+      mockAssignmentRepo.createQueryBuilder = jest.fn(() => ({
+        where: jest.fn().mockReturnThis(), andWhere: jest.fn().mockReturnThis(),
+        getCount: jest.fn(async () => 0),
+      }));
+      await expect(service.assertAssayerAssignedToBranch('pb-victim', 'assayer-other'))
+        .rejects.toThrow(ForbiddenException);
+    });
+
+    it('allows when the assayer holds a live assignment on the branch', async () => {
+      mockAssignmentRepo.createQueryBuilder = jest.fn(() => ({
+        where: jest.fn().mockReturnThis(), andWhere: jest.fn().mockReturnThis(),
+        getCount: jest.fn(async () => 1),
+      }));
+      await expect(service.assertAssayerAssignedToBranch('pb-mine', 'assayer-1')).resolves.toBeUndefined();
+    });
+
+    it('keys on the project branch and excludes CANCELLED/REJECTED and soft-deleted assignments', async () => {
+      const whereCalls: any[] = [];
+      const andWhereCalls: any[] = [];
+      mockAssignmentRepo.createQueryBuilder = jest.fn(() => ({
+        where: jest.fn(function (this: any, ...args: any[]) { whereCalls.push(args); return this; }),
+        andWhere: jest.fn(function (this: any, ...args: any[]) { andWhereCalls.push(args); return this; }),
+        getCount: jest.fn(async () => 0),
+      }));
+
+      await expect(service.assertAssayerAssignedToBranch('pb-victim', 'assayer-cancelled'))
+        .rejects.toThrow(ForbiddenException);
+
+      // Keyed on the branch, not walked through an assessment — the whole point of the by-branch route.
+      expect(whereCalls.some(([c]) => String(c).includes('a.project_branch_id'))).toBe(true);
+      const status = andWhereCalls.find(([c]) => String(c).includes('a.status NOT IN'));
+      expect(status).toBeDefined();
+      expect(status![1].deadStatuses).toEqual(
+        expect.arrayContaining([AssignmentStatus.CANCELLED, AssignmentStatus.REJECTED]),
+      );
+      expect(andWhereCalls.some(([c]) => String(c).includes('a.is_active'))).toBe(true);
     });
   });
 
@@ -859,28 +942,60 @@ describe('DocumentService', () => {
     describe('findAll', () => {
       it('Log: returns the FULL unfiltered result and logs the would-be exclusion', async () => {
         mockRegionGuard.stagedMode.mockResolvedValue('log');
-        mockDocumentRepo.find.mockResolvedValue([
-          { id: 'doc-north', assessment: { branch: { region: 'NORTH' } } },
-          { id: 'doc-south', assessment: { branch: { region: 'SOUTH' } } },
+        mockDocumentRepo.findAndCount.mockResolvedValue([
+          [
+            { id: 'doc-north', assessment: { branch: { region: 'NORTH' } } },
+            { id: 'doc-south', assessment: { branch: { region: 'SOUTH' } } },
+          ],
+          2,
         ]);
         const warnSpy = jest.spyOn((service as any).logger, 'warn').mockImplementation(() => undefined);
 
         const result = await service.findAll(restrictedScope);
 
-        expect(result).toHaveLength(2);
+        expect(result.data).toHaveLength(2);
+        expect(result.total).toBe(2);
         expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('document:findAll'));
       });
 
       it('Enforce: narrows the list', async () => {
         mockRegionGuard.stagedMode.mockResolvedValue('enforce');
-        mockDocumentRepo.find.mockResolvedValue([
-          { id: 'doc-north', assessment: { branch: { region: 'NORTH' } } },
-          { id: 'doc-south', assessment: { branch: { region: 'SOUTH' } } },
+        mockDocumentRepo.findAndCount.mockResolvedValue([
+          [
+            { id: 'doc-north', assessment: { branch: { region: 'NORTH' } } },
+            { id: 'doc-south', assessment: { branch: { region: 'SOUTH' } } },
+          ],
+          2,
         ]);
 
         const result = await service.findAll(restrictedScope);
 
-        expect(result.map((d: any) => d.id)).toEqual(['doc-north']);
+        expect(result.data.map((d: any) => d.id)).toEqual(['doc-north']);
+      });
+
+      it('passes limit/offset through to the repository as take/skip so the result set stays bounded', async () => {
+        mockRegionGuard.stagedMode.mockResolvedValue('off');
+        mockDocumentRepo.findAndCount.mockResolvedValue([[], 0]);
+
+        await service.findAll(undefined, 25, 50);
+
+        expect(mockDocumentRepo.findAndCount).toHaveBeenCalledWith(
+          expect.objectContaining({ take: 25, skip: 50 }),
+        );
+      });
+
+      it('reports total, limit and offset alongside the page of results', async () => {
+        mockRegionGuard.stagedMode.mockResolvedValue('off');
+        mockDocumentRepo.findAndCount.mockResolvedValue([
+          [{ id: 'doc-1' }],
+          137,
+        ]);
+
+        const result = await service.findAll(undefined, 50, 0);
+
+        expect(result).toEqual(
+          expect.objectContaining({ total: 137, limit: 50, offset: 0 }),
+        );
       });
     });
 

@@ -103,8 +103,18 @@ export class AssayerLocationPingEntity extends BaseEntity {
    * Retention anchor: this column is what a purge job would range over, and it is what the
    * verification windows are expressed in. Device-supplied and therefore not authoritative —
    * compare with `receivedAt` before trusting it (see the entity docblock).
+   *
+   * `primary: true` here is not a modelling choice, it is load-bearing. The table underneath is
+   * now RANGE-partitioned by this column (see `1794610000000-PartitionLocationPingsByMonth`), and
+   * Postgres requires the partition key in every unique constraint on a partitioned table,
+   * including the primary key — `PRIMARY KEY (id)` alone is rejected outright. Together with the
+   * inherited `id` from `BaseEntity` this makes the composite PK `(id, recorded_at)` that the
+   * migration created. Removing `primary: true` would not just be a metadata drift: with
+   * `DB_SYNCHRONIZE=true` (the dev default) TypeORM would try to narrow the live PK back to
+   * `(id)` alone, which Postgres refuses on a partitioned table — turning a routine dev boot into
+   * a startup failure instead of a silent one, which is the best that can be said for it.
    */
-  @Column({ name: 'recorded_at', type: 'timestamptz' })
+  @Column({ name: 'recorded_at', type: 'timestamptz', primary: true })
   recordedAt: Date;
 
   /**

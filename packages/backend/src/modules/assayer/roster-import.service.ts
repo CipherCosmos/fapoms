@@ -1,16 +1,18 @@
 import {
-  BadRequestException, Injectable, Logger } from '@nestjs/common'; import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work'; import { isUniqueViolation } from '../../infrastructure/database/unique-violation'; import { GeoPrecisionService } from '../geo/geo-precision.service'; import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import * as xlsx from 'xlsx'; import {   AssayerLifecycleStatus, Region, resolveRegion, readAvailability, readYesNo, readCibilBand, readBackgroundCheck, readEmpanelment, readPhoneNumbers, blankToNull, vocabularyKey, readHardCopyLocation, pincodeFromAddress, readWorkingBanks, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, EmpanelmentStatus, AssayerUnavailableReason, BackgroundCheckVerdict, CibilBand, PAN_PATTERN, AADHAAR_PATTERN, IFSC_PATTERN, isValidAadhaar, isPlaceholderAadhaar, looksMasked,
+  BadRequestException, Injectable, Logger } from '@nestjs/common'; import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work'; import { isUniqueViolation } from '../../infrastructure/database/unique-violation'; import { GeoPrecisionService } from '../geo/geo-precision.service'; import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import { lookupIfsc } from '../geo/ifsc-lookup.helper'; import * as xlsx from 'xlsx'; import {   AssayerLifecycleStatus, Region, resolveRegion, readAvailability, readYesNo, readCibilBand, readBackgroundCheck, readEmpanelment, readPhoneNumbers, blankToNull, vocabularyKey, readHardCopyLocation, pincodeFromAddress, stateFromAddressAndPincode, canonicalStateName, canonicalState, readWorkingBanks, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, EmpanelmentStatus, AssayerUnavailableReason, BackgroundCheckVerdict, CibilBand, PAN_PATTERN, AADHAAR_PATTERN, IFSC_PATTERN, isValidAadhaar, isPlaceholderAadhaar, looksMasked, canTransitionAssayerLifecycle, EventCategory,
 } from '@fapoms/shared';
 import {
   rowReader, parseSheet, describeMissingColumn, normaliseHeader, BLANK_HEADER, ParsedSheet,
 } from '../../core/excel/sheet-reader';
 import { AssayerEntity } from './assayer.entity';
+import { AssayerService } from './assayer.service';
 import { AssayerReferenceEntity } from './assayer-reference.entity';
 import { AssayerClientEmpanelmentEntity } from './assayer-client-empanelment.entity';
 import { AssayerBackgroundCheckEntity } from './assayer-background-check.entity';
 import { AssayerDocumentEntity } from './assayer-document.entity';
 import { AssayerImportIssueEntity } from './assayer-import-issue.entity';
 import { ClientEntity } from '../client/client.entity';
+import { AuditService } from '../../core/audit/audit.service';
 
 export interface RosterImportSummary {
   rowsRead: number;
@@ -123,6 +125,18 @@ export class RosterImportService {
     private readonly uow: UnitOfWork,
     private readonly geoPrecision: GeoPrecisionService,
     private readonly platformSettings: PlatformSettingsService,
+    // Optional so the many existing unit specs that construct this service with three mocked
+    // collaborators keep compiling; DI always supplies the real one. Every call site guards
+    // with `?.` for the same reason.
+    private readonly auditService?: AuditService,
+    /**
+     * Runs a legal lifecycle move through `bulkTransitionLifecycle` after the row is saved, so
+     * a sheet-implied departure gets the same departure-date reconciliation, empanelment
+     * close-out and audit trail an HR-initiated transition gets — not just a status column
+     * flip. Optional for the same reason as `auditService`: existing specs construct this
+     * service without it, and every call site guards with `?.`.
+     */
+    private readonly assayerService?: AssayerService,
   ) {}
 
   /**
@@ -221,13 +235,28 @@ export class RosterImportService {
   async importAssayerSheet(
     file: Buffer,
     actorId: string,
-    options: { dryRun?: boolean; sheetName?: string } = {},
+    options: { dryRun?: boolean; sheetName?: string; overwrite?: boolean; fileName?: string } = {},
   ): Promise<RosterImportSummary> {
     const dryRun = options.dryRun ?? false;
+    // Default OFF: a sheet value that disagrees with what is already on file is filed as a
+    // review issue rather than applied. See `resolveOverwritableField`.
+    const overwrite = options.overwrite ?? false;
 
     const { sheet, parsed } = this.resolveRosterSheet(file, options.sheetName);
     const sheetName = parsed.sheetName;
     const rows: Record<string, any>[] = parsed.rows;
+
+    // Whether this file carries an availability/status column at all. `read()` cannot tell "no
+    // such column" apart from "this row's cell in it is blank" — both come back as `''` — so the
+    // "blank cell on a new row needs review" rule below has to be decided from the header list,
+    // not from a single row's read. A file that never had the column (a partial PAN-only
+    // correction sheet, say) is not the same problem as a roster that has the column and left
+    // one row empty.
+    const hasAvailabilityColumn = parsed.headers.some((h) => {
+      const key = normaliseHeader(h ?? '');
+      return key === normaliseHeader('Active / Inactive') || key === normaliseHeader('Active/Inactive')
+        || key === normaliseHeader('Status');
+    });
 
     /**
      * Every column heading this import actually looks at, recorded as it reads.
@@ -271,6 +300,14 @@ export class RosterImportService {
 
     /** Everyone a real run saved — handed to the geo precision queue after the commit. */
     const importedIds: string[] = [];
+
+    /**
+     * Legal lifecycle moves the sheet implies for existing records, run through
+     * `bulkTransitionLifecycle` after this transaction commits — see the constructor's
+     * `assayerService` docblock for why that has to happen outside this transaction rather
+     * than as a plain field write here.
+     */
+    const pendingTransitions: { id: string; to: AssayerLifecycleStatus }[] = [];
 
     // Whether a bank named in the roster but unknown to this system becomes a client stub on
     // the spot. Default ON: "create the client yourself and re-import" turned out to mean the
@@ -382,9 +419,12 @@ export class RosterImportService {
         const assayer = existing ?? manager.create(AssayerEntity, { assayerCode: code });
         const isNew = !existing;
 
-        this.applyIdentity(assayer, read, sourceRow, sheetName, issues);
-        this.applyContact(assayer, read, sourceRow, sheetName, code, issues);
-        this.applyEmployment(assayer, read, sourceRow, sheetName, code, issues);
+        this.applyIdentity(assayer, read, sourceRow, sheetName, issues, overwrite);
+        await this.applyContact(assayer, read, sourceRow, sheetName, code, issues, overwrite);
+        this.applyEmployment(
+          assayer, read, sourceRow, sheetName, code, issues, isNew, overwrite, hasAvailabilityColumn,
+          pendingTransitions,
+        );
 
         this.fillRequiredBlanks(assayer);
 
@@ -526,6 +566,41 @@ export class RosterImportService {
       if (!(err instanceof DryRunComplete)) throw err;
     });
 
+    /**
+     * Run the transitions queued above through `bulkTransitionLifecycle`, grouped by target
+     * status so a sheet reporting the same move for many rows makes one call per status rather
+     * than one per person. Each id was already checked reachable by `canTransitionAssayerLifecycle`
+     * before being queued, so a skip or failure here means something changed between that check
+     * and this call (e.g. another transition landed on the same person in between) — rare enough
+     * that it is logged rather than re-filed as a per-row issue, since the row context (sheet,
+     * column, raw cell value) that `saveIssues` keys on is gone by this point in the run.
+     * A rehearsal never reaches here: `dryRun` throws `DryRunComplete` before this line, so the
+     * queued moves were checked for reachability but never actually run.
+     */
+    if (!dryRun && pendingTransitions.length > 0 && this.assayerService) {
+      const idsByTarget = new Map<AssayerLifecycleStatus, string[]>();
+      for (const { id, to } of pendingTransitions) {
+        const ids = idsByTarget.get(to) ?? [];
+        ids.push(id);
+        idsByTarget.set(to, ids);
+      }
+      for (const [to, ids] of idsByTarget) {
+        const result = await this.assayerService.bulkTransitionLifecycle(
+          ids, to, actorId,
+          `Roster import from ${options.fileName ?? 'an uploaded file'}: the sheet reports a move to ${to}.`,
+        );
+        // Not added to `summary.updated`: every id here is an existing row already counted
+        // there when its own save landed (line ~470) — this only reports transitions that
+        // did not land as this run expected.
+        for (const { id, current, reason } of result.skipped) {
+          this.logger.warn(`Roster import: queued transition of ${id} to ${to} was skipped after the row saved (${current}, ${reason}).`);
+        }
+        for (const { id, reason } of result.failed) {
+          this.logger.warn(`Roster import: queued transition of ${id} to ${to} failed after the row saved: ${reason}`);
+        }
+      }
+    }
+
     // Freshly imported people get coordinates now, not at the 03:30 nightly sweep — the same
     // hand-off the branch importer makes. The worker's own query skips rows already precise and
     // never touches manual pins, so enqueueing everyone saved is safe. Fire-and-forget: if the
@@ -533,6 +608,36 @@ export class RosterImportService {
     // it hands off nothing.
     if (!dryRun && importedIds.length > 0) {
       void this.geoPrecision.enqueueBackfill('assayer', importedIds, 'roster import');
+    }
+
+    // One row per real run, not per person — the per-row facts already land as their own
+    // events (or issues) as they happen; this is the run-level record HR asks for later:
+    // who ran which file, when, and what it did in aggregate. A rehearsal writes nothing, so
+    // it gets no row either.
+    if (!dryRun) {
+      await this.auditService?.recordEventSafe({
+        category: EventCategory.OPERATIONAL,
+        eventType: 'ROSTER_IMPORT_APPLIED',
+        entityType: 'ASSAYER_ROSTER_IMPORT',
+        entityId: sheetName,
+        userId: actorId,
+        remarks: `Roster import from ${options.fileName ?? 'an uploaded file'}: `
+          + `${summary.created} created, ${summary.updated} updated, ${summary.skipped} skipped, `
+          + `${summary.issues} issue(s) filed.`,
+        metadata: {
+          fileName: options.fileName ?? null,
+          sheetName,
+          rowsRead: summary.rowsRead,
+          created: summary.created,
+          updated: summary.updated,
+          skipped: summary.skipped,
+          issues: summary.issues,
+          references: summary.references,
+          onboardingDocuments: summary.onboardingDocuments,
+          backgroundChecks: summary.backgroundChecks,
+          empanelments: summary.empanelments,
+        },
+      });
     }
 
     this.logger.log(
@@ -604,6 +709,7 @@ export class RosterImportService {
   private applyIdentity(
     a: AssayerEntity, read: ReturnType<typeof rowReader>,
     sourceRow: number, sheet: string, issues: Partial<AssayerImportIssueEntity>[],
+    overwrite: boolean,
   ): void {
     const fullName = blankToNull(read('Appraiser Name', 'Assayer Name', 'Name'));
     if (fullName) {
@@ -625,9 +731,14 @@ export class RosterImportService {
      * `POST/PUT /assayers`: an importer and an API that disagree about what a PAN looks like
      * would let the form store what the import refuses.
      */
-    a.panNumber = this.readShaped(read('PAN Number'), PAN_PATTERN,
-      'Not a PAN (expected five letters, four digits, one letter).',
-      { issues, sourceRow, sheet, column: 'PAN Number' }) ?? a.panNumber ?? null;
+    a.panNumber = this.resolveOverwritableField(
+      a.panNumber,
+      this.readShaped(read('PAN Number'), PAN_PATTERN,
+        'Not a PAN (expected five letters, four digits, one letter).',
+        { issues, sourceRow, sheet, column: 'PAN Number' }),
+      overwrite,
+      { issues, sourceRow, sheet, column: 'PAN Number', label: 'PAN' },
+    );
     {
       /**
        * Aadhaar in three steps: shape (report-don't-throw, as every cell here), then the
@@ -691,14 +802,75 @@ export class RosterImportService {
     return null;
   }
 
-  private applyContact(
+  /**
+   * "Sheet wins" made opt-in for the fields a re-imported, HR-edited export could plausibly
+   * clobber: PAN, phone, address, bank/IFSC, joining/exit dates, notes.
+   *
+   * The default before this was "every readable non-blank cell overwrites the stored value",
+   * which is right for filling a blank but wrong for a field somebody corrected on the record
+   * since the last export — the roster is frequently exported, hand-edited and re-imported, and
+   * a stale sheet value would silently erase the correction. Filling a blank is always safe (the
+   * record had nothing to lose) and always happens; overwriting a value that is actually
+   * DIFFERENT from what is on file only happens when the caller opted in via `overwrite`, and
+   * otherwise becomes a review issue naming both values so a person decides which is current.
+   */
+  private resolveOverwritableField<T>(
+    current: T | null, incoming: T | null, overwrite: boolean,
+    ctx: { issues: Partial<AssayerImportIssueEntity>[]; sourceRow: number; sheet: string; column: string; label: string },
+    equal: (a: T, b: T) => boolean = (a, b) => a === b,
+  ): T | null {
+    if (incoming === null || incoming === undefined) return current ?? null;
+    if (current === null || current === undefined) return incoming;
+    if (equal(current, incoming)) return current;
+    if (overwrite) return incoming;
+    ctx.issues.push({
+      sourceSheet: ctx.sheet, sourceRow: ctx.sourceRow, sourceColumn: ctx.column,
+      rawValue: String(incoming).slice(0, 200),
+      reason: `Sheet differs from record: ${ctx.label} on file is "${String(current)}", the sheet `
+        + `says "${String(incoming)}". Left as it was — re-import with "overwrite" on to replace it.`,
+    });
+    return current;
+  }
+
+  /** Case/spelling-tolerant equality for two state names, used only to decide whether to file a review issue — never to choose which one is stored. */
+  private statesAgree(x: string, y: string): boolean {
+    const norm = (v: string) => canonicalStateName(v) ?? v.trim().toUpperCase();
+    return norm(x) === norm(y);
+  }
+
+  /**
+   * Loose equality for two bank names, used only to decide whether an IFSC-derived name is
+   * worth preferring over a typed one — not a general fuzzy matcher. Tolerates case and the
+   * common "Bank" / "Bank Ltd" / "Bank Limited" suffix noise a lookup and a typed cell disagree
+   * on even when they name the same institution.
+   */
+  private bankNamesAgree(x: string, y: string): boolean {
+    const norm = (v: string) => v
+      .toUpperCase()
+      .replace(/[.,]/g, '')
+      .replace(/\bLIMITED\b/g, 'LTD')
+      .replace(/\bLTD\b/g, '')
+      .replace(/\bBANK\b/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const nx = norm(x);
+    const ny = norm(y);
+    if (!nx || !ny) return nx === ny;
+    return nx === ny || nx.includes(ny) || ny.includes(nx);
+  }
+
+  private async applyContact(
     a: AssayerEntity, read: ReturnType<typeof rowReader>,
     sourceRow: number, sheet: string, code: string, issues: Partial<AssayerImportIssueEntity>[],
-  ): void {
+    overwrite: boolean,
+  ): Promise<void> {
     // The two phone columns hold up to three numbers between them, several per cell.
     const phones = readPhoneNumbers(read('Phone Number 1'), read('Phone Number 2'));
     if (phones.length) {
-      a.phone = phones[0];
+      a.phone = this.resolveOverwritableField(
+        a.phone, phones[0], overwrite,
+        { issues, sourceRow, sheet, column: 'Phone Number 1 / 2', label: 'Phone' },
+      );
       a.alternatePhone = phones[1] ?? a.alternatePhone ?? null;
     } else {
       const raw = `${read('Phone Number 1')} ${read('Phone Number 2')}`.trim();
@@ -736,10 +908,51 @@ export class RosterImportService {
       }
       a.email = a.email ?? null;
     }
-    a.address = blankToNull(read('Residence Address', 'Address')) ?? a.address ?? null;
+    a.address = this.resolveOverwritableField(
+      a.address, blankToNull(read('Residence Address', 'Address')), overwrite,
+      { issues, sourceRow, sheet, column: 'Residence Address', label: 'Address' },
+    ) ?? '';
     a.city = blankToNull(read('Location', 'City')) ?? a.city ?? null;
     a.district = blankToNull(read('District')) ?? a.district ?? null;
-    a.state = blankToNull(read('State')) ?? a.state ?? null;
+
+    /**
+     * State canonicalisation, run only on a value the sheet actually supplies this row — the
+     * `?? a.state` fallback for a blank cell has nothing new to canonicalise, and running it
+     * anyway would launder an already-stored raw value on every unrelated re-import.
+     *
+     * `canonicalStateName` is the thorough canonicaliser, and the one built to refuse a guess
+     * (it returns null on anything it does not recognise). `canonicalState` is the cruder,
+     * comparison-only normaliser `pincode.ts`'s `stateForms` also chains in: for input outside
+     * its small alias table it does not signal "unrecognised" the way its name suggests — it
+     * just echoes back the same upper-cased, punctuation-stripped string it would produce for
+     * anything. So a `canonicalState` result only counts as a second opinion here when it
+     * differs from that echo; when it doesn't, both canonicalisers agree they don't know this
+     * one, and the raw text is kept with a review issue rather than silently dropped or
+     * laundered into a fake canonical form.
+     */
+    const rawState = blankToNull(read('State'));
+    if (rawState) {
+      const echo = rawState.toUpperCase().replace(/[^A-Z ]/g, '').replace(/\s+/g, ' ').trim();
+      const viaSecondary = canonicalState(rawState);
+      // `canonicalState`'s own alias table stores its answers ALL CAPS ("ANDHRA PRADESH"), unlike
+      // `canonicalStateName`'s title case ("Kerala") — title-cased here so the two paths agree on
+      // how a canonical value looks in this column, not just on which value it is.
+      const viaSecondaryHit = viaSecondary !== 'UNKNOWN' && viaSecondary !== echo
+        ? viaSecondary.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase())
+        : null;
+      const canonical = canonicalStateName(rawState) ?? viaSecondaryHit;
+      if (canonical) {
+        a.state = canonical;
+      } else {
+        a.state = rawState;
+        issues.push({
+          sourceSheet: sheet, sourceRow, sourceColumn: 'State', rawValue: rawState,
+          reason: 'Could not recognize this as a state — stored as written; please confirm.',
+        });
+      }
+    } else {
+      a.state = a.state ?? null;
+    }
 
     /**
      * The pincode the file writes at the end of the address rather than in a column.
@@ -756,6 +969,25 @@ export class RosterImportService {
         issues.push({
           sourceSheet: sheet, sourceRow, sourceColumn: 'Residence Address', rawValue: a.address ?? '',
           reason: reading.reason,
+        });
+      }
+    }
+
+    /**
+     * A second, independent check on the same state value: does it agree with what the pincode's
+     * own postal circle says the address names? `stateFromAddressAndPincode` only answers when
+     * the address text unambiguously names exactly one state from the pincode's circle — anything
+     * less (none named, or two candidates) returns null, so this never invents a disagreement out
+     * of a coincidence. Filed as a review issue only — the sheet's own state column is not
+     * overwritten by this check, since it may equally be the pincode that is wrong.
+     */
+    if (a.pincode && a.state) {
+      const suggested = stateFromAddressAndPincode(a.address, a.pincode);
+      if (suggested && !this.statesAgree(suggested, a.state)) {
+        issues.push({
+          sourceSheet: sheet, sourceRow, sourceColumn: 'State', rawValue: a.state,
+          reason: `The address and pincode point to ${suggested}, but the State column says `
+            + `"${a.state}". Left as the sheet had it — please confirm which is correct.`,
         });
       }
     }
@@ -784,7 +1016,49 @@ export class RosterImportService {
      */
     a.region ??= (resolveRegion(a.state ?? '') as Region) ?? null;
 
-    a.bankName = blankToNull(read('Bank Name')) ?? a.bankName ?? null;
+    /**
+     * The IFSC shape is checked up front, before the bank name is resolved, because a
+     * shaped-valid code is what makes an IFSC-lookup cross-check possible below — the code
+     * itself is still written to `a.ifscCode` in the same place as before, at the end of this
+     * method.
+     */
+    const rawIfsc = this.readShaped(read('IFSC Code'), IFSC_PATTERN,
+      'Not an IFSC code (expected 4 letters, a zero, then 6 characters) — payments to this account would fail.',
+      { issues, sourceRow, sheet, column: 'IFSC Code' });
+    const rawBankName = blankToNull(read('Bank Name'));
+    let incomingBankName = rawBankName;
+
+    /**
+     * An IFSC code fixes a bank uniquely; a typed name does not (typos, abbreviations, an old
+     * name after a merger — "AXIS" vs "Axis Bank Ltd" on this same sheet). When both are present,
+     * prefer the code's answer over a disagreeing typed one and say so, so HR can see what was
+     * overridden and why rather than finding a changed bank name with no explanation.
+     *
+     * A short timeout of our own wraps the call rather than trusting `lookupIfsc`'s own (8s):
+     * that is fine for one form field, but this runs once per row of a thousand-row import, and
+     * a network hiccup must not turn a bulk import into a multi-hour one. Swallowed identically
+     * either way — network down, unknown code, or timeout all fall back to the sheet's own value
+     * exactly as before this change, never blocking or skipping the row.
+     */
+    if (rawIfsc && rawBankName) {
+      const resolved = await Promise.race([
+        lookupIfsc(rawIfsc).catch(() => null),
+        new Promise<null>((resolve) => { setTimeout(() => resolve(null), 3000); }),
+      ]);
+      if (resolved?.bankName && !this.bankNamesAgree(resolved.bankName, rawBankName)) {
+        incomingBankName = resolved.bankName;
+        issues.push({
+          sourceSheet: sheet, sourceRow, sourceColumn: 'Bank Name', rawValue: rawBankName,
+          reason: `The IFSC code resolves to "${resolved.bankName}", which differs from the `
+            + `sheet's "${rawBankName}" — the IFSC-derived name was used instead.`,
+        });
+      }
+    }
+
+    a.bankName = this.resolveOverwritableField(
+      a.bankName, incomingBankName, overwrite,
+      { issues, sourceRow, sheet, column: 'Bank Name', label: 'Bank Name' },
+    );
     /**
      * The one identity column with no shape to check, so the mask check has to be explicit.
      *
@@ -812,23 +1086,43 @@ export class RosterImportService {
           + 'record and copy the full number if it needs changing.',
       });
     } else {
-      a.bankAccountNumber = rawAccount ?? a.bankAccountNumber ?? null;
+      a.bankAccountNumber = this.resolveOverwritableField(
+        a.bankAccountNumber, rawAccount, overwrite,
+        { issues, sourceRow, sheet, column: 'A/c Number', label: 'Bank Account' },
+      );
     }
-    a.ifscCode = this.readShaped(read('IFSC Code'), IFSC_PATTERN,
-      'Not an IFSC code (expected 4 letters, a zero, then 6 characters) — payments to this account would fail.',
-      { issues, sourceRow, sheet, column: 'IFSC Code' }) ?? a.ifscCode ?? null;
+    a.ifscCode = this.resolveOverwritableField(
+      a.ifscCode, rawIfsc, overwrite,
+      { issues, sourceRow, sheet, column: 'IFSC Code', label: 'IFSC Code' },
+    );
   }
 
   private applyEmployment(
     a: AssayerEntity, read: ReturnType<typeof rowReader>,
     sourceRow: number, sheet: string, code: string, issues: Partial<AssayerImportIssueEntity>[],
+    isNew: boolean, overwrite: boolean, hasAvailabilityColumn: boolean,
+    pendingTransitions: { id: string; to: AssayerLifecycleStatus }[],
   ): void {
-    a.joiningDate = this.readDate(read('Joining Date'), { issues, sourceRow, sheet, column: 'Joining Date' })
-      ?? a.joiningDate ?? null;
-    a.exitDate = this.readDate(read('Exit Date'), { issues, sourceRow, sheet, column: 'Exit Date' })
-      ?? a.exitDate ?? null;
+    const sameDay = (x: Date, y: Date) => x.getTime() === y.getTime();
+    a.joiningDate = this.resolveOverwritableField(
+      a.joiningDate,
+      this.readDate(read('Joining Date'), { issues, sourceRow, sheet, column: 'Joining Date' }),
+      overwrite,
+      { issues, sourceRow, sheet, column: 'Joining Date', label: 'Joining Date' },
+      sameDay,
+    );
+    a.exitDate = this.resolveOverwritableField(
+      a.exitDate,
+      this.readDate(read('Exit Date'), { issues, sourceRow, sheet, column: 'Exit Date' }),
+      overwrite,
+      { issues, sourceRow, sheet, column: 'Exit Date', label: 'Exit Date' },
+      sameDay,
+    );
     a.hrOwnerName = blankToNull(read('HR NAME', 'HR Name')) ?? a.hrOwnerName ?? null;
-    a.notes = blankToNull(read('Remarks')) ?? a.notes ?? null;
+    a.notes = this.resolveOverwritableField(
+      a.notes, blankToNull(read('Remarks')), overwrite,
+      { issues, sourceRow, sheet, column: 'Remarks', label: 'Notes' },
+    );
 
     const experience = blankToNull(read('Total Expierence', 'Total Experience'));
     if (experience) {
@@ -856,22 +1150,88 @@ export class RosterImportService {
      * the availability column when it says one of them, because "Inactive / Not Interested"
      * and "Resigned in Sumeru" on the same row are the same event described twice, and the
      * second is the more precise.
+     *
+     * This used to write straight onto `a.lifecycleStatus`, bypassing the state machine that
+     * gates every other lifecycle move in the product — HR's `PUT` for the same transition goes
+     * through `doTransitionLifecycle`, closes empanelments on departure, reconciles departure
+     * dates and leaves a workflow history row; the importer did none of that and could also
+     * force a transition the state machine would refuse outright (e.g. jumping a still-INVITED
+     * row straight to TERMINATED). The desired value is computed here as before; when it is
+     * reachable from where the record currently stands, the move is queued in
+     * `pendingTransitions` and run through `bulkTransitionLifecycle` once this row is saved (see
+     * the caller after the transaction commits), so a sheet-implied departure gets the same
+     * reconciliation and audit trail an HR-initiated one gets. `a.lifecycleStatus` is left
+     * untouched here on purpose — writing it directly would flip the column without any of
+     * that, which is the exact bug this replaces. When the move is not reachable, the row keeps
+     * its current status and the disagreement is filed as a review issue instead.
      */
+    const currentStatus = a.lifecycleStatus;
+    let desiredStatus: AssayerLifecycleStatus | null = null;
+    // What the row's status will actually become once this transaction commits and any queued
+    // transition runs — `a.lifecycleStatus` itself is not updated for an existing row (see
+    // above), so the exit-date contradiction check below needs this, not the stored field.
+    let queuedStatus: AssayerLifecycleStatus = a.lifecycleStatus;
     const outcome = vocabularyKey(read('Status'));
-    if (outcome.includes('terminated')) a.lifecycleStatus = AssayerLifecycleStatus.TERMINATED;
-    else if (outcome.includes('resigned')) a.lifecycleStatus = AssayerLifecycleStatus.RESIGNED;
+    if (outcome.includes('terminated')) desiredStatus = AssayerLifecycleStatus.TERMINATED;
+    else if (outcome.includes('resigned')) desiredStatus = AssayerLifecycleStatus.RESIGNED;
     else if (outcome.includes('expired')) {
-      a.lifecycleStatus = AssayerLifecycleStatus.INACTIVE;
+      desiredStatus = AssayerLifecycleStatus.INACTIVE;
       a.unavailableReason = AssayerUnavailableReason.DECEASED;
-    } else if (availability.available === true) a.lifecycleStatus = AssayerLifecycleStatus.ACTIVE;
-    else if (availability.onHold) a.lifecycleStatus = AssayerLifecycleStatus.SUSPENDED;
-    else if (availability.available === false) a.lifecycleStatus = AssayerLifecycleStatus.INACTIVE;
-    // else: left as it was. An unknown availability is not a reason to change somebody's status.
+    } else if (availability.available === true) desiredStatus = AssayerLifecycleStatus.ACTIVE;
+    else if (availability.onHold) desiredStatus = AssayerLifecycleStatus.SUSPENDED;
+    else if (availability.available === false) desiredStatus = AssayerLifecycleStatus.INACTIVE;
+    // else: nothing readable in either column — see the isNew branch below for what that means
+    // for a brand new row; for an existing one it is not a reason to change their status.
+
+    if (desiredStatus === null) {
+      /**
+       * A blank or wholly-unreadable availability cell used to leave a new row silently sitting
+       * at the entity default (INVITED) with nothing on file to say the cell was ever looked at
+       * — indistinguishable from a person genuinely just invited. HR working the review queue
+       * needs to see this row, not the roster's normal "everything read fine" silence.
+       */
+      if (isNew && hasAvailabilityColumn) {
+        issues.push({
+          sourceSheet: sheet, sourceRow, sourceColumn: 'Active / Inactive',
+          rawValue: String(read('Active / Inactive', 'Active/Inactive') ?? ''),
+          reason: 'No usable status could be read from the availability or Status columns for a '
+            + 'new appraiser, so they were left at INVITED for manual review rather than assumed.',
+        });
+      }
+    } else if (isNew) {
+      // A brand new row is being CREATED at this status, not transitioned into it — there is no
+      // prior state for the state machine to validate a move from. The roster's own onboarding
+      // pipeline (INVITED -> DOCUMENT_VERIFICATION -> ... -> ACTIVE) is a workflow for people
+      // entering it through this system; someone the sheet reports as already active in the
+      // business they were hired into is not re-run through it on the way in.
+      a.lifecycleStatus = desiredStatus;
+      queuedStatus = desiredStatus;
+    } else if (desiredStatus !== currentStatus) {
+      /**
+       * An EXISTING record moving status is a real transition. `a.id` is guaranteed set here —
+       * this branch only runs for `!isNew` rows, which came from `existingByCode` — so the move
+       * can be queued now and run through `bulkTransitionLifecycle` once this row's own save
+       * commits, the same helper HR's own transition endpoint uses.
+       */
+      if (canTransitionAssayerLifecycle(currentStatus, desiredStatus)) {
+        pendingTransitions.push({ id: a.id, to: desiredStatus });
+        queuedStatus = desiredStatus;
+      } else {
+        issues.push({
+          sourceSheet: sheet, sourceRow, sourceColumn: 'Status',
+          rawValue: String(read('Status') ?? ''),
+          reason: `The sheet implies a move to ${desiredStatus}, but ${currentStatus} cannot move `
+            + `there directly — the record was left at ${currentStatus} for a manual transition.`,
+        });
+      }
+    }
 
     // An exit date on someone the same sheet marks Active is a contradiction only a person can
     // settle — either the exit is stale or the availability is (both occur on the real file).
-    // The availability wins for the stored status; the disagreement goes to review.
-    if (a.exitDate && a.lifecycleStatus === AssayerLifecycleStatus.ACTIVE) {
+    // The availability wins for the stored status; the disagreement goes to review. Checked
+    // against `queuedStatus`, not `a.lifecycleStatus`: for an existing row moving to ACTIVE via
+    // a queued transition, the stored field will not read ACTIVE until after this save commits.
+    if (a.exitDate && queuedStatus === AssayerLifecycleStatus.ACTIVE) {
       issues.push({
         sourceSheet: sheet, sourceRow, sourceColumn: 'Exit Date',
         rawValue: String(read('Exit Date') ?? ''),

@@ -49,6 +49,15 @@ export class UserEntity extends BaseEntity {
   departmentId: string | null;
 
   /**
+   * The client (bank) this account is confined to — set on CLIENT_USER accounts, `null` for
+   * every staff account. `null` means unrestricted, the same convention `regions` uses, so
+   * this column being absent on every pre-existing account changes nothing until an admin
+   * deliberately assigns one. Enforced by `resolveClientScope` in `global-scope.ts`.
+   */
+  @Column({ name: 'client_id', type: 'uuid', nullable: true })
+  clientId: string | null;
+
+  /**
    * Operational regions this account may read.
    *
    * `null` or `[]` means every region — the pre-existing behaviour, so accounts that predate
@@ -83,7 +92,7 @@ export class UserEntity extends BaseEntity {
   mustChangePassword: boolean;
 
 
-  @ManyToMany(() => RoleEntity, { eager: true })
+  @ManyToMany(() => RoleEntity)
   @JoinTable({
     name: 'user_roles',
     joinColumn: { name: 'user_id' },

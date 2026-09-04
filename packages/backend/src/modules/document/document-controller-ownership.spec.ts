@@ -127,6 +127,85 @@ describe('DocumentController — download-token region scope, and upload multer 
     });
   });
 
+  /**
+   * Audited-return completion ownership — the money-bearing IDOR.
+   *
+   * `completeAssignmentForReturn` (reached by `mobileUpload`, `mobileUploadBinary` and the resumable
+   * `completeUpload`) drives `AssignmentService.completeAssignment`, which books the assayer payable
+   * AND the client invoice line and records the branch as audited. The two mobile paths pre-checked
+   * ownership on the client-supplied `assignmentId`, but the method then resolves a target through
+   * two further fallbacks (by assessment, then by project branch), and the chunked `completeUpload`
+   * had no check at all — so a pure assayer could complete SOMEONE ELSE'S assignment. The fix
+   * enforces ownership on the RESOLVED assignment inside the shared method. Same class as the
+   * branch-PDF IDOR confirmed live 2026-09-04.
+   *
+   * Exercised through the public `completeUpload` handler (the path that had no pre-check), driving
+   * the private method with a fully mocked service graph.
+   */
+  describe('audited-return completion enforces ownership on the resolved assignment (completeUpload)', () => {
+    const VICTIM_ASN = 'asn-victim';
+    const victimAssignment = { id: VICTIM_ASN, assayerId: 'assayer-OTHER', status: 'PENDING', projectBranch: {} };
+
+    const svc: any = {
+      create: jest.fn(async () => ({ id: 'doc-new', assessmentId: 'assess-1' })),
+      receiveDocument: jest.fn(async () => ({ id: 'doc-new', assessmentId: 'assess-1' })),
+    };
+    const chunked: any = {
+      assemble: jest.fn(async () => ({ s3Key: 'k', session: { assessmentId: 'assess-1', fileName: 'r.pdf', fileSize: 10 } })),
+      discard: jest.fn(async () => undefined),
+    };
+    const storage: any = { getFileStream: jest.fn(async () => [Buffer.from('%PDF-1.4')]), deleteFile: jest.fn() };
+    const scanner: any = { scanOrThrow: jest.fn(async () => undefined) };
+    const assignmentRepo: any = { findOne: jest.fn(async () => victimAssignment) };
+    const assignmentService: any = { completeAssignment: jest.fn(async () => undefined) };
+
+    const ctrl = new DocumentController(
+      svc,            // documentService
+      storage,        // storage
+      null as any,    // ocrProcessingService
+      assignmentRepo, // assignmentRepository
+      null as any,    // assessmentRepository
+      null as any,    // validationService
+      assignmentService, // assignmentService
+      { issue: jest.fn().mockReturnValue({ token: 't', expiresAt: '' }) } as any,
+      chunked,        // chunkedUploadService
+      scanner,        // fileScanner
+      { assertRegionAllowed: jest.fn(), assertRegionAllowedStaged: jest.fn() } as any,
+    );
+
+    beforeEach(() => {
+      jest.clearAllMocks();
+      assignmentRepo.findOne.mockResolvedValue(victimAssignment);
+    });
+
+    const req = (roles: any[], id: string) => ({ user: { id, assayerId: id, roles } });
+
+    it('refuses a pure assayer completing another assayer\'s assignment — and does NOT book money', async () => {
+      await expect(
+        ctrl.completeUpload('sess-1', { type: 'AUDITED_RETURN_PDF', assignmentId: VICTIM_ASN } as any, req([{ name: SystemRole.ASSAYER }], 'assayer-ME')),
+      ).rejects.toThrow(ForbiddenException);
+      expect(assignmentService.completeAssignment).not.toHaveBeenCalled();
+    });
+
+    it('refuses even when assignmentId is omitted and the assessment fallback resolves to another\'s assignment', async () => {
+      await expect(
+        ctrl.completeUpload('sess-1', { type: 'AUDITED_RETURN_PDF' } as any, req([{ name: SystemRole.ASSAYER }], 'assayer-ME')),
+      ).rejects.toThrow(ForbiddenException);
+      expect(assignmentService.completeAssignment).not.toHaveBeenCalled();
+    });
+
+    it('allows the owning assayer to complete their own assignment (books money)', async () => {
+      assignmentRepo.findOne.mockResolvedValue({ ...victimAssignment, assayerId: 'assayer-ME' });
+      await ctrl.completeUpload('sess-1', { type: 'AUDITED_RETURN_PDF', assignmentId: VICTIM_ASN } as any, req([{ name: SystemRole.ASSAYER }], 'assayer-ME'));
+      expect(assignmentService.completeAssignment).toHaveBeenCalledWith(VICTIM_ASN, 'assayer-ME', expect.stringContaining('Audited return'));
+    });
+
+    it('allows staff to complete on an assayer\'s behalf (back-office scan-by-email workflow)', async () => {
+      await ctrl.completeUpload('sess-1', { type: 'AUDITED_RETURN_PDF', assignmentId: VICTIM_ASN } as any, req([{ name: SystemRole.OPERATIONS }], 'staff-1'));
+      expect(assignmentService.completeAssignment).toHaveBeenCalledWith(VICTIM_ASN, 'staff-1', expect.any(String));
+    });
+  });
+
   describe('upload routes cap the multer-level file size, agreeing with assertUploadAllowed', () => {
     function multerLimitsFor(method: Function): { fileSize?: number; files?: number } | undefined {
       const interceptors: any[] = Reflect.getMetadata(INTERCEPTORS_METADATA, method) || [];

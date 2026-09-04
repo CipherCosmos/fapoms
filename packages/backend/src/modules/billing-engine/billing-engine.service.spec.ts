@@ -442,6 +442,54 @@ describe('BillingEngineService', () => {
       expect(spy).toHaveBeenCalledWith(expect.stringContaining('completion_date >= $1::date'), ['2026-08-01']);
       assignmentRepo.manager.query = managerQuery;
     });
+
+    /**
+     * An assayer's delete cascade deactivates their assignments — including ones already
+     * COMPLETED. A COMPLETED audit that happened does not stop needing to be billed because the
+     * assayer who did it was later removed; filtering on `is_active` hid exactly the work most
+     * likely to still need reconciling (a deleted assayer's outstanding payable).
+     */
+    it('does not filter on assignment is_active — a COMPLETED assignment must be billed even after the assayer is deleted', async () => {
+      let capturedSql = '';
+      assignmentRepo.manager.query = jest.fn(async (sql: string, params?: any[]) => {
+        if (sql.includes('LEFT JOIN billing_entries')) { capturedSql = sql; return []; }
+        return managerQuery(sql, params);
+      });
+
+      await service.reconcilePreview({});
+
+      // The mutation this proves: adding back `AND a.is_active = true` to the WHERE clause in
+      // unbookedAssignmentIds makes this assertion match. Matches the actual filter, not the
+      // explanatory SQL comment beside it that also mentions "is_active".
+      expect(capturedSql).toMatch(/WHERE a\.status = 'COMPLETED'/);
+      expect(capturedSql).not.toMatch(/a\.is_active\s*=\s*true/);
+      assignmentRepo.manager.query = managerQuery;
+    });
+  });
+
+  /**
+   * The finance overview's "needs attention" list — same is_active concern as reconcile, on the
+   * query that surfaces unbooked completed work to a human rather than an automated repair.
+   */
+  describe('attentionItems (via overview) — UNBOOKED includes inactive assignments', () => {
+    it('does not filter the UNBOOKED query on assignment is_active', async () => {
+      let capturedSql = '';
+      entryRepo.manager.query = jest.fn(async (sql: string, params?: any[]) => {
+        if (sql.includes("kind: 'UNBOOKED'") || (sql.includes('FROM assignments a') && sql.includes('no_entry'))) {
+          capturedSql = sql;
+        }
+        return managerQuery(sql, params);
+      });
+
+      await (service as any).attentionItems();
+
+      expect(capturedSql).toContain("a.status = 'COMPLETED'");
+      // The mutation this proves: adding back `AND a.is_active = true` after the status check in
+      // the UNBOOKED branch of attentionItems makes this assertion match. Matches the actual
+      // filter clause, not the explanatory SQL comment above it that also says "is_active".
+      expect(capturedSql).not.toMatch(/a\.is_active\s*=\s*true/);
+      entryRepo.manager.query = managerQuery;
+    });
   });
 
   describe('repriceAssignment — the safety net for a fee that moved', () => {
@@ -711,6 +759,83 @@ describe('BillingEngineService', () => {
     });
   });
 
+  /**
+   * The owner decision: a payable that should never be paid, voided with a reason and an audit
+   * trail. Follows the approve/disburse pattern exactly — lock, mutate, history, audit — and
+   * additionally voids the matching client line in the same transaction when it has not been
+   * invoiced yet, so a job that is un-billed on the assayer side does not stay billed on the
+   * client side.
+   */
+  describe('voidPayable', () => {
+    it('requires a reason', async () => {
+      await expect(service.voidPayable('payable-1', '  ', 'admin-1')).rejects.toThrow(BadRequestException);
+    });
+
+    it('refuses a payable already PAID — that money already left', async () => {
+      payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.PAID }));
+      await expect(service.voidPayable('payable-1', 'audit reopened', 'admin-1')).rejects.toThrow(ConflictException);
+      // The mutation this proves: removing the PAID guard lets a disbursed payable be voided,
+      // making the ledger claim money that already went out never happened.
+      expect(committed.filter((row) => row.action === 'PAYABLE_STATUS_CHANGED')).toHaveLength(0);
+    });
+
+    it('voids a PENDING payable, clears any hold, and writes history + audit', async () => {
+      payableRepo.findOne.mockImplementation(async () => payable({ onHold: true, holdReason: 'stale' }));
+      const voided = await service.voidPayable('payable-1', 'Completion reopened by ops', 'admin-1');
+
+      expect(voided).toMatchObject({ status: AssayerPayableStatus.VOIDED, onHold: false, holdReason: null });
+      expect(recordEvent).toHaveBeenCalledWith(
+        expect.objectContaining({ eventType: 'PAYABLE_VOIDED', newState: AssayerPayableStatus.VOIDED }),
+        expect.objectContaining({ manager: expect.anything() }),
+      );
+      expect(committed.some((row) => row.action === 'PAYABLE_STATUS_CHANGED' && row.toState === AssayerPayableStatus.VOIDED)).toBe(true);
+    });
+
+    it('is a no-op on a payable already VOIDED', async () => {
+      payableRepo.findOne.mockImplementation(async () => payable({ status: AssayerPayableStatus.VOIDED }));
+      const result = await service.voidPayable('payable-1', 'again', 'admin-1');
+      expect(result.status).toBe(AssayerPayableStatus.VOIDED);
+      expect(committed.filter((row) => row.action === 'PAYABLE_STATUS_CHANGED')).toHaveLength(0);
+    });
+
+    it("voids the matching client line in the same transaction when it has not been invoiced", async () => {
+      payableRepo.findOne.mockImplementation(async () => payable());
+      entryRepo.findOne.mockImplementation(async () => line({ state: BillingState.UNBILLED }));
+
+      await service.voidPayable('payable-1', 'Completion reopened by ops', 'admin-1');
+
+      const voidedLine = committed.find((row) => row.entryNumber && row.state === BillingState.CANCELLED);
+      expect(voidedLine).toBeDefined();
+      // The mutation this proves: skipping the client-line lookup/void leaves the line
+      // UNBILLED-and-orphaned — billed on neither side is fine, billed on the client side alone
+      // (after the assayer side was voided) is the bug this closes.
+    });
+
+    it('does not touch an already-invoiced client line — that needs a credit note, not a void', async () => {
+      payableRepo.findOne.mockImplementation(async () => payable());
+      entryRepo.findOne.mockImplementation(async () => line({ state: BillingState.INVOICED, invoiceId: 'invoice-9' }));
+
+      await service.voidPayable('payable-1', 'Completion reopened by ops', 'admin-1');
+
+      expect(committed.some((row) => row.entryNumber && row.state === BillingState.CANCELLED)).toBe(false);
+    });
+
+    it('runs on the caller-supplied manager/emit instead of opening its own transaction, when given one', async () => {
+      payableRepo.findOne.mockImplementation(async () => payable());
+      const callerManager = makeManager([], []);
+      const callerEmit = jest.fn();
+
+      const result = await service.voidPayable('payable-1', 'reopened', 'admin-1', { manager: callerManager as any, emit: callerEmit });
+
+      expect(result.status).toBe(AssayerPayableStatus.VOIDED);
+      // The mutation this proves: ignoring `ctx` and always calling `this.inTx(work)` would open
+      // a SECOND, independent transaction here — undetectable by this assertion alone, but the
+      // dataSource.transaction spy call count below catches it: no new transaction was opened.
+      expect(dataSource.transaction).not.toHaveBeenCalled();
+      expect(callerEmit).toHaveBeenCalledWith('billing:payout-changed', expect.objectContaining({ payableId: 'payable-1' }));
+    });
+  });
+
   describe('assayerTotals — the one predicate', () => {
     it('maps the SQL to the statement shape and keeps earned = paid + outstanding + held', async () => {
       totalsRow = { earned: '5000.00', paid: '1800.00', outstanding: '2000.00', awaiting_approval: '2000.00', on_hold: '1200.00', tds_withheld: '500.00', payable_count: 3 };
@@ -934,6 +1059,23 @@ describe('BillingEngineService', () => {
       expect(e).toMatchObject({ adjustmentAmount: -300, adjustmentReason: 'Goodwill', taxableAmount: 3000, taxAmount: 540, tdsAmount: 300, totalAmount: 3240 });
     });
 
+    // The fixture's line is baseAmount 3000 + travelAmount 300 = 3300, so a credit cannot reduce
+    // it by more than 3300 without a negative taxable amount reaching the tax calc — which would
+    // store negative GST/TDS and corrupt the payment allocator's proportional split (see the
+    // `adjustmentFloor` comment in the source). This was implemented but had no regression test.
+    it('refuses a credit larger than the line, stating the floor', async () => {
+      entryRepo.findOne.mockImplementation(async () => line());
+      await expect(
+        service.editClientLine('asn-1', { adjustmentAmount: -3301, adjustmentReason: 'Goodwill' }, 'f'),
+      ).rejects.toThrow(/exceeds the line.*3300\.00/s);
+    });
+
+    it('allows a credit that exactly zeroes the line — the floor itself is not refused', async () => {
+      entryRepo.findOne.mockImplementation(async () => line());
+      const e = await service.editClientLine('asn-1', { adjustmentAmount: -3300, adjustmentReason: 'Goodwill' }, 'f');
+      expect(e).toMatchObject({ adjustmentAmount: -3300, taxableAmount: 0, taxAmount: 0, tdsAmount: 0, totalAmount: 0 });
+    });
+
     it('requires a reason for a non-zero adjustment and for a hold', async () => {
       entryRepo.findOne.mockImplementation(async () => line());
       await expect(service.editClientLine('asn-1', { adjustmentAmount: 100 }, 'f')).rejects.toThrow(BadRequestException);
@@ -1102,6 +1244,42 @@ describe('BillingEngineService', () => {
       const lines = await service.listClientLines({}, restricted);
       expect(qb.andWhere).toHaveBeenCalledWith('rg_b.region IN (:...regions)', { regions: ['NORTH'] });
       expect(lines).toHaveLength(1);
+    });
+
+    /**
+     * `GET /billing/lines` used to hand back every line matching whatever filter was given —
+     * `?state=UNBILLED` alone was a single request asking for the entire, ever-growing
+     * `billing_entries` table. `paginate: true` (what the controller always passes) opts into
+     * the same `billingPageWindow` clamp `listPayouts`/`findInvoicesPage` already use.
+     */
+    describe('listClientLines — bounding GET /billing/lines', () => {
+      it('is unbounded by default — the one internal caller (the billing export) needs every row', async () => {
+        entryRepo.find.mockResolvedValueOnce(Array.from({ length: 250 }, (_, i) => line({ id: `entry-${i}` })));
+        const lines = await service.listClientLines({});
+        expect(Array.isArray(lines)).toBe(true);
+        expect((lines as any[]).length).toBe(250);
+        expect(entryRepo.find).toHaveBeenCalledWith(expect.not.objectContaining({ skip: expect.anything(), take: expect.anything() }));
+      });
+
+      it('paginate:true clamps to the page window and returns items + total, not a bare array', async () => {
+        entryRepo.findAndCount.mockResolvedValueOnce([[line({ id: 'entry-1' })], 137]);
+        const page = await service.listClientLines({ limit: 10 }, undefined, true);
+
+        expect(entryRepo.findAndCount).toHaveBeenCalledWith(expect.objectContaining({ skip: 0, take: 10 }));
+        expect(page).toMatchObject({ total: 137, page: 1, limit: 10 });
+        expect((page as any).items).toHaveLength(1);
+      });
+
+      it('paginate:true clamps a runaway ?limit= to the same ceiling listPayouts uses', async () => {
+        entryRepo.findAndCount.mockResolvedValueOnce([[], 0]);
+        await service.listClientLines({ limit: 5_000_000 }, undefined, true);
+        // The mutation this proves: calling `listClientLines(q, scope)` from the controller
+        // (dropping the third argument) makes this assertion fail — `findAndCount` is never
+        // called with a `take` at all, because the unpaginated branch runs `entryRepository
+        // .find()` instead, which is exactly the unbounded query this fix closes.
+        const call = entryRepo.findAndCount.mock.calls[0][0];
+        expect(call.take).toBeLessThanOrEqual(100);
+      });
     });
 
     it('listInvoiceable adds the region column to the SAME query only when restricted and not off, and filters only in enforce', async () => {

@@ -98,6 +98,8 @@ class LinesQuery {
   @IsOptional() @IsUUID() assignmentId?: string;
   @IsOptional() @IsUUID() assayerId?: string;
   @IsOptional() @IsEnum(BillingState) state?: BillingState;
+  @IsOptional() @Type(() => Number) @IsNumber() page?: number;
+  @IsOptional() @Type(() => Number) @IsNumber() limit?: number;
 }
 
 class InvoiceableQuery {
@@ -322,12 +324,20 @@ export class BillingEngineController {
     return { success: true, data: await this.service.editClientLine(id, dto, this.userId(req)) };
   }
 
+  /**
+   * Paged, like `payouts` and `invoices` beside it. This used to hand back every line matching
+   * whatever filter was given — `?state=UNBILLED` with nothing else was a single request asking
+   * for the entire, ever-growing `billing_entries` table. `listClientLines(..., true)` opts into
+   * the same `billingPageWindow` clamp those two already use; the one caller that genuinely needs
+   * an unbounded pull (the billing export in `reports.service.ts`, which self-caps separately)
+   * calls the service directly and never sets `paginate`.
+   */
   @Get('lines')
   @Roles(...BILLING_READ_ROLES)
   @RequirePermissions('billing:view:organization')
-  @ApiOperation({ summary: 'Client lines with labels (unpaged; for exports and filters)' })
+  @ApiOperation({ summary: 'Client lines with labels, paged' })
   async lines(@Query() q: LinesQuery, @GlobalScopeFilter() scope?: GlobalScope) {
-    return { success: true, data: await this.service.listClientLines(q, scope) };
+    return { success: true, data: await this.service.listClientLines(q, scope, true) };
   }
 
   // ── Reconcile (admin repair) ──────────────────────────────────────────────

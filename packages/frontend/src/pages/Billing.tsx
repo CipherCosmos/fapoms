@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { FileSpreadsheet, RefreshCw } from 'lucide-react';
 import { SystemRole } from '@fapoms/shared';
 import { Modal, StyledInput, useToast } from '../components/ui';
-import { useExcelExport } from '../hooks/useExcelExport';
+import { useQueuedExcelExport } from '../hooks/useQueuedExcelExport';
 import { useCurrentRoles, hasAnyRole } from '../hooks/useCurrentRoles';
 import { useReconcile, useReconcilePreview } from '../hooks/useBilling';
 import { billingApi } from '../services/billing';
@@ -53,7 +53,7 @@ export const Billing: React.FC = () => {
     setParams(next, { replace: false });
   };
 
-  const { download: downloadExcel, busy: exporting } = useExcelExport();
+  const { download: downloadExcel, busy: exporting } = useQueuedExcelExport();
   const [reconcileOpen, setReconcileOpen] = useState(false);
 
   return (
@@ -64,10 +64,14 @@ export const Billing: React.FC = () => {
           <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginTop: 2 }}>Every completed assignment books a payout to the assayer and a line to invoice the client.</div>
         </div>
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {/* The billing sheet is built over the whole book, so it can take a while and the
-              browser shows nothing until the file lands. Disabled while it runs — a second
-              click used to start a second full build. */}
-          <button onClick={() => void downloadExcel('/reports/billing', {})} disabled={exporting}
+          {/* The billing sheet is built over the whole book, so it can take a while — now on a
+              queue rather than blocking the request, and capped at the first 5,000 client lines
+              (the sheet's own "Notice" tab says so if a filter combination is that wide).
+              Disabled while it runs — a second click used to start a second full build. */}
+          <button
+            onClick={() => void downloadExcel('/reports/billing/jobs', {})}
+            disabled={exporting}
+            title="Excel export, capped at the first 5,000 client lines. Narrow the filters if your book is larger."
             className="btn btn-secondary" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
             <FileSpreadsheet size={14} /> {exporting ? 'Preparing…' : 'Export'}
           </button>

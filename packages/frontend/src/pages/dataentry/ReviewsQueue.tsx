@@ -10,6 +10,7 @@ import { Select, useConfirm } from '../../components/ui';
 import { validationStatusLabel } from '@fapoms/shared';
 import { counted } from '../../utils/plural';
 import { visibleSelection, hiddenSelectionNote } from '../../utils/selection';
+import { CORRECTION_NOTE_SUGGESTIONS } from '../../utils/reviewReasonSuggestions';
 
 /**
  * The review queue: validation cases as a server-paginated table.
@@ -220,8 +221,15 @@ export const ReviewsQueue: React.FC = () => {
             and the case-level "Request correction" control has always required notes, so the same
             decision had opposite rules depending on which screen you made it from.
           */}
+          {/* Same taxonomy as CaseWorkspace's case-level correction note — one reviewer, one
+              vocabulary, whichever screen they happen to be sending work back from. A datalist,
+              so a reason the list hasn't seen yet is still one keystroke away, same as before. */}
           <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Note for the decision (required to send back)"
+            list="rework-note-suggestions"
             style={{ flex: '1 1 220px', padding: '6px 10px', fontSize: '12px', borderRadius: '7px', background: 'var(--bg-input)', color: 'inherit', border: '1px solid var(--border-color)', outline: 'none' }} />
+          <datalist id="rework-note-suggestions">
+            {CORRECTION_NOTE_SUGGESTIONS.map((s) => <option key={s} value={s} />)}
+          </datalist>
           <button onClick={() => bulkDecide('APPROVED')} disabled={selectedIds.length === 0 || busy === '__bulk__'} className="btn btn-primary"
             style={{ fontSize: '11.5px', padding: '6px 12px', width: 'auto' }}>
             {busy === '__bulk__' ? 'Saving…' : 'Approve selected'}

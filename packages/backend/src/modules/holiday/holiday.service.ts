@@ -5,7 +5,7 @@
  * Avoids audits scheduling on holiday dates.
  */
 
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 
@@ -44,8 +44,40 @@ export class HolidayService {
     await this.cache.delByPattern('ref:holidays:*');
   }
 
+  /**
+   * Refuse the same holiday twice — same name, same date, same client scope.
+   *
+   * Nothing stopped this before: a double-click on "Save", or two people running "Copy last
+   * year's holidays" at once (`Holidays.tsx`'s bulk action loops one `POST` per row client-side,
+   * with no server-side lock between them), silently produced two identical active rows for the
+   * one date. `isHoliday()` only cares whether at least one match exists, so scheduling itself
+   * was never wrong — but the admin calendar screen then showed the same holiday listed twice,
+   * each independently editable and deletable, with nothing to say they were the same day.
+   *
+   * Scoped narrowly to an exact match, the same way `ZoneService.assertNameIsFree` scopes to
+   * name-within-client: two holidays with genuinely different names landing on the same date
+   * (a state event alongside a bank-specific one, say) are not duplicates and stay unblocked.
+   */
+  private async assertNotDuplicate(dto: CreateHolidayDto, holidayDate: Date, excludeId?: string): Promise<void> {
+    const formattedDate = holidayDate.toISOString().split('T')[0];
+    const clash = await this.holidayRepository
+      .createQueryBuilder('holiday')
+      .where('holiday.is_active = :isActive', { isActive: true })
+      .andWhere('holiday.name ILIKE :name', { name: dto.name.trim() })
+      .andWhere('holiday.date = :date', { date: formattedDate })
+      .andWhere(dto.clientId ? 'holiday.client_id = :clientId' : 'holiday.client_id IS NULL', dto.clientId ? { clientId: dto.clientId } : {})
+      .andWhere(excludeId ? 'holiday.id != :excludeId' : '1=1', excludeId ? { excludeId } : {})
+      .getOne();
+    if (clash) {
+      throw new ConflictException(
+        `"${clash.name}" is already registered for this date${dto.clientId ? ' and client' : ''}. Edit that entry instead of adding a duplicate.`,
+      );
+    }
+  }
+
   async create(dto: CreateHolidayDto, userId: string): Promise<HolidayEntity> {
     const holidayDate = new Date(dto.date);
+    await this.assertNotDuplicate(dto, holidayDate);
     const holiday = this.holidayRepository.create({
       name: dto.name,
       date: holidayDate,
@@ -195,7 +227,7 @@ export class HolidayService {
 
     const formattedDate = date.toISOString().split('T')[0];
     // Scheduling checks the same dates repeatedly; cache the registered-holiday lookup for
-    // this exact date + client. Only .length and .applicableStates are read below, both of
+    // this exact date + client. .length, .applicableStates and .clientId are read below, all of
     // which survive a JSON round-trip, so a cache hit behaves identically to a fresh query.
     const holidaysCacheKey = `ref:holidays:${clientId ?? 'all'}:${formattedDate}`;
     const holidays = await this.cache.wrap(holidaysCacheKey, HOLIDAY_CACHE_TTL_SECONDS, () => {
@@ -212,6 +244,23 @@ export class HolidayService {
 
     if (holidays.length === 0) return false;
 
+    /**
+     * A holiday applies to this caller only if it is either genuinely global (`clientId` null on
+     * the row) or scoped to the client actually asking.
+     *
+     * The SQL `WHERE` above already enforces this — but only when a `clientId` was passed in the
+     * first place. Omit it (as `GET /holidays/check` legitimately allows — nothing requires a
+     * caller to know which bank it is asking about) and the query drops that clause entirely,
+     * returning every client's holidays for the date mixed together with genuinely global ones.
+     * The two checks below never looked at `clientId` at all, so a bank-specific holiday with no
+     * `applicableStates` (the ordinary case — most client holidays are not also state-restricted)
+     * read as "no state restriction" and was treated as nationwide: querying without a `clientId`
+     * reported every OTHER bank's private holiday as a holiday for everyone, everywhere. Applying
+     * the same rule here as the SQL — global-or-mine — makes this correct regardless of whether
+     * the DB filter ran, rather than depending on it.
+     */
+    const appliesToCaller = (h: HolidayEntity): boolean => h.clientId == null || h.clientId === clientId;
+
     // If a state is specified, check if any holiday applies to it. Branch and
     // holiday state names come from different sources and disagree on casing and
     // abbreviation ("MAHARASHTRA" vs "Maharashtra" vs "MH") — comparing raw
@@ -220,13 +269,15 @@ export class HolidayService {
     if (stateCode) {
       const target = canonicalState(stateCode);
       return holidays.some(
-        h => !h.applicableStates || h.applicableStates.length === 0
+        h => appliesToCaller(h) && (
+          !h.applicableStates || h.applicableStates.length === 0
           || h.applicableStates.some(s => canonicalState(s) === target)
+        )
       );
     }
 
     // Otherwise, if any national/universal holiday exists on that date, it's a holiday
-    return holidays.some(h => !h.applicableStates || h.applicableStates.length === 0);
+    return holidays.some(h => appliesToCaller(h) && (!h.applicableStates || h.applicableStates.length === 0));
   }
 
   async remove(id: string, userId: string): Promise<void> {

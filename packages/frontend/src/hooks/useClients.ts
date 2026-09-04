@@ -159,7 +159,13 @@ export interface ClientOption {
 export function useClientOptions() {
   return useQuery({
     queryKey: queryKeys.clients.options,
-    queryFn: () => api.request<ClientOption[]>('/clients'),
+    // `GET /clients` defaults to a 20-row page — silently invisible in every picker built on
+    // this hook once a 21st client is onboarded (confirmed: 24 seeded clients, and the missing
+    // 4 included the one client every demo/test record in this system is written against). A
+    // picker has to offer the whole list or it isn't a picker, so ask for all of it explicitly —
+    // the same `?limit=200` headroom Holidays.tsx and Branches.tsx already use for their own
+    // client pickers, now centralised here instead of needing to be remembered at each call site.
+    queryFn: () => api.request<ClientOption[]>('/clients?limit=200'),
     // A picker list changes when someone onboards a client — rare, and a stale entry costs an
     // extra scroll, not a wrong answer.
     staleTime: 5 * 60_000,

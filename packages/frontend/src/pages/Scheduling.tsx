@@ -20,6 +20,30 @@ import { suggestAuditDate, describeSuggestedDate } from '../services/planning';
 
 import { assignmentFee, assignmentFeeValue } from '../utils/money';
 import { visibleSelection, hiddenSelectionNote } from '../utils/selection';
+
+/**
+ * Why an audit gets moved — previously not captured at all: `handleConfirmReschedule` only ever
+ * wrote the machine-generated "Rescheduled to <date>" into `remarks`, discarding the actual reason
+ * the coordinator had in mind. Seeded from context (no real reschedule history to mine yet).
+ */
+export const RESCHEDULE_REASON_PRESETS = [
+  'Assayer unavailable',
+  'Client requested a different date',
+  'Bank holiday',
+  'Logistics/travel issue',
+] as const;
+export const RESCHEDULE_REASON_OTHER = 'Other';
+
+/**
+ * What the preset select should show for the reason currently typed into the text box below it.
+ * Pulled out as a pure function, not left inline in the JSX, so this codebase's "preset-select
+ * pre-fills a free-text box, never gates it" rule can be proven directly against a plain string
+ * in `Scheduling.spec.tsx` — without mounting the reschedule modal and everything the page needs
+ * to reach it (schedules, documents, socket connection).
+ */
+export const rescheduleReasonSelectValue = (reason: string): string =>
+  (RESCHEDULE_REASON_PRESETS as readonly string[]).includes(reason) ? reason : RESCHEDULE_REASON_OTHER;
+
 interface Schedule {
   id: string;
   projectId: string;
@@ -115,14 +139,24 @@ export const Scheduling: React.FC = () => {
   useEffect(() => {
     const wanted = searchParams.get('assignmentId');
     if (!wanted) return;
-    setSelectedAssignmentId(wanted);
-    setShowCreateModal(true);
+    // Every other path to this modal (line ~651 and siblings) is gated on `canManageSchedules` —
+    // this deep link was not, so a viewer role following an inbox/assignment-panel link that
+    // still carries `?assignmentId=` (e.g. a bookmarked or shared URL, or the query string
+    // surviving a back-navigation) landed on a write modal with no button to have clicked. The
+    // backend still refuses the actual `POST /schedules` (ops-only), so nothing unsafe could
+    // happen through it — but opening a form someone cannot submit, silently, is exactly the
+    // "control that doesn't say what it will do" this audit is watching for. Consumed the same
+    // way either way, so a stale param never lingers for either role.
+    if (canManageSchedules) {
+      setSelectedAssignmentId(wanted);
+      setShowCreateModal(true);
+    }
     setSearchParams((current) => {
       const next = new URLSearchParams(current);
       next.delete('assignmentId');
       return next;
     }, { replace: true });
-  }, [searchParams, setSearchParams]);
+  }, [searchParams, setSearchParams, canManageSchedules]);
   const [scheduleDate, setScheduleDate] = useState(todayDateKey());
   /**
    * The plain-language "why this date" note under the picker, and whether the operator has
@@ -143,8 +177,12 @@ export const Scheduling: React.FC = () => {
   const [showRescheduleModal, setShowRescheduleModal] = useState(false);
   const [rescheduleSchId, setRescheduleSchId] = useState<string | null>(null);
   const [rescheduleNewDate, setRescheduleNewDate] = useState(todayDateKey());
+  const [rescheduleReason, setRescheduleReason] = useState('');
   const [isRescheduling, setIsRescheduling] = useState(false);
   const [documents, setDocuments] = useState<any[]>([]);
+  // A failed fetch used to leave `documents` empty, which the panel below reports as "No audit
+  // files attached." — the opposite of what is true, on the list a desk checks before dispatch.
+  const [documentsError, setDocumentsError] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('ALL');
   // Bulk dispatch: pick several unscheduled offers and put them on one date in a single action —
   // a 40-branch rollout was previously 40 modal round-trips.
@@ -232,15 +270,23 @@ export const Scheduling: React.FC = () => {
     if (successMsg) { const t = setTimeout(() => setSuccessMsg(null), 3000); return () => clearTimeout(t); }
   }, [successMsg]);
 
+  /**
+   * Keyed on the branch, not on the schedule id.
+   *
+   * `selectedSch` is looked up out of a React Query list, so the row behind a given `selectedSchId`
+   * can change underneath this effect — a reschedule invalidates the query, and if the booking came
+   * back pointing at a different branch the id never moved, the effect never re-ran, and the
+   * previous branch's paperwork stayed on screen beside the new one. The branch id is what the
+   * effect actually reads, so it is what the effect should watch.
+   */
+  const selectedSchBranchId = selectedSch?.assignment?.projectBranch?.id;
   useEffect(() => {
-    if (selectedSch?.assignment?.projectBranch?.id) {
-      loadDocumentsForSchedule(selectedSch.assignment.projectBranch.id);
-    }
-  }, [selectedSchId]);
+    if (selectedSchBranchId) void loadDocumentsForSchedule(selectedSchBranchId);
+  }, [selectedSchBranchId]);
 
   const invalidateAll = () => {
-    queryClient.invalidateQueries({ queryKey: queryKeys.schedules.all });
-    queryClient.invalidateQueries({ queryKey: [...queryKeys.assignments.all, 'available'] });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.schedules.all });
+    void queryClient.invalidateQueries({ queryKey: [...queryKeys.assignments.all, 'available'] });
   };
 
   const loadAssayerWorkload = async (assayerId: string, date: string) => {
@@ -251,10 +297,11 @@ export const Scheduling: React.FC = () => {
   };
 
   const loadDocumentsForSchedule = async (branchId: string) => {
+    setDocumentsError(false);
     try {
       const data = await api.request<any[]>(`/documents/project-branch/${branchId}`);
       setDocuments(Array.isArray(data) ? data : []);
-    } catch { setDocuments([]); }
+    } catch { setDocuments([]); setDocumentsError(true); }
   };
 
   const openDocumentDownload = async (documentId: string) => {
@@ -322,7 +369,7 @@ export const Scheduling: React.FC = () => {
     if (planned && planned >= businessTodayDateKey()) {
       if (!dateChosenByUser) {
         setScheduleDate(planned);
-        if (sel?.assayerId) loadAssayerWorkload(sel.assayerId, planned);
+        if (sel?.assayerId) void loadAssayerWorkload(sel.assayerId, planned);
       }
       setSuggestedDateNote("This branch's audit is already planned for this date.");
       return;
@@ -336,7 +383,7 @@ export const Scheduling: React.FC = () => {
       // The operator wins any race: once they have touched the date, the suggestion is only a note.
       setScheduleDate(prev => (dateChosenByUser ? prev : res.date));
       setSuggestedDateNote(describeSuggestedDate(res.date, res.skipped ?? []));
-      if (sel?.assayerId && !dateChosenByUser) loadAssayerWorkload(sel.assayerId, res.date);
+      if (sel?.assayerId && !dateChosenByUser) void loadAssayerWorkload(sel.assayerId, res.date);
     } catch {
       // Silent by design — the date field still works, so there is nothing for the desk to act on.
       setSuggestedDateNote(null);
@@ -363,7 +410,7 @@ export const Scheduling: React.FC = () => {
     setDateChosenByUser(false);
     setSuggestedDateNote(null);
     const sel = scopedAssignments.find(a => a.id === assignmentId);
-    if (sel?.assayerId) loadAssayerWorkload(sel.assayerId, selectedDate);
+    if (sel?.assayerId) void loadAssayerWorkload(sel.assayerId, selectedDate);
   };
 
   /** Schedule every selected queue offer on one date; failures stay selected for retry. */
@@ -413,6 +460,7 @@ export const Scheduling: React.FC = () => {
       // stands; defaulting to today made a mis-click silently pull a future audit to today.
       const sch = schedules.find(s => s.id === id);
       setRescheduleNewDate(sch?.scheduledDate ? localDateKey(sch.scheduledDate) : todayDateKey());
+      setRescheduleReason('');
       setShowRescheduleModal(true);
       return;
     }
@@ -450,11 +498,15 @@ export const Scheduling: React.FC = () => {
     setError(null);
     setIsRescheduling(true);
     try {
+      const reason = rescheduleReason.trim();
       await api.request(`/schedules/${rescheduleSchId}/transition`, {
         method: 'POST',
         body: JSON.stringify({
           targetStatus: ScheduleStatus.RESCHEDULED,
-          remarks: `Rescheduled to ${rescheduleNewDate}`,
+          // Keep the machine-generated "moved to X" fact AND the human reason in the one `remarks`
+          // column — there is no separate reason field on the schedule, so both have to live here
+          // or the why gets silently dropped again, same as before this change.
+          remarks: reason ? `Rescheduled to ${rescheduleNewDate}: ${reason}` : `Rescheduled to ${rescheduleNewDate}`,
           scheduledDate: rescheduleNewDate,
         }),
       });
@@ -638,7 +690,7 @@ export const Scheduling: React.FC = () => {
           <span style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
             {schedulesError ? 'Could not load schedules.' : 'Could not load the unscheduled queue.'} Check your connection and try again.
             <button
-              onClick={() => { if (schedulesError) refetchSchedules(); if (assignmentsError) refetchAssignments(); }}
+              onClick={() => { if (schedulesError) void refetchSchedules(); if (assignmentsError) void refetchAssignments(); }}
               className="btn btn-secondary" style={{ padding: '3px 10px', fontSize: '11px' }}
             >
               Retry
@@ -700,7 +752,7 @@ export const Scheduling: React.FC = () => {
                           // Adds or removes the offers listed in the queue right now; anything the
                           // queue no longer shows keeps whatever state the user gave it.
                           const next = new Set(prev);
-                          for (const a of scopedAssignments) e.target.checked ? next.add(a.id) : next.delete(a.id);
+                          for (const a of scopedAssignments) { if (e.target.checked) next.add(a.id); else next.delete(a.id); }
                           return next;
                         })}
                       />
@@ -740,7 +792,7 @@ export const Scheduling: React.FC = () => {
                         checked={bulkQueueIds.has(a.id)}
                         onChange={(e) => setBulkQueueIds(prev => {
                           const next = new Set(prev);
-                          e.target.checked ? next.add(a.id) : next.delete(a.id);
+                          if (e.target.checked) next.add(a.id); else next.delete(a.id);
                           return next;
                         })}
                         style={{ marginTop: '1px', flexShrink: 0, cursor: 'pointer' }}
@@ -1083,8 +1135,8 @@ export const Scheduling: React.FC = () => {
                 {/* Document Downloads */}
                 <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 700, marginBottom: '4px' }}>ATTACHED PDF DOCUMENTS</div>
                 {documents.length === 0 ? (
-                  <div style={{ fontSize: '10px', color: 'var(--text-muted)', padding: '6px', border: '1px dashed var(--border-color)', borderRadius: '4px' }}>
-                    No audit files attached.
+                  <div style={{ fontSize: '10px', color: documentsError ? 'var(--danger)' : 'var(--text-muted)', padding: '6px', border: '1px dashed var(--border-color)', borderRadius: '4px' }}>
+                    {documentsError ? 'The attached files could not be loaded — this branch may still have some.' : 'No audit files attached.'}
                   </div>
                 ) : (
                   documents.map(doc => (
@@ -1130,7 +1182,7 @@ export const Scheduling: React.FC = () => {
               onChange={(v) => {
                 setSelectedAssignmentId(v);
                 const sel = scopedAssignments.find(a => a.id === v);
-                if (sel?.assayerId && scheduleDate) loadAssayerWorkload(sel.assayerId, scheduleDate);
+                if (sel?.assayerId && scheduleDate) void loadAssayerWorkload(sel.assayerId, scheduleDate);
                 // Changing the assignment changes which branch's calendar applies, so the previous
                 // branch's suggestion must not be left standing next to the new one's date.
                 setSuggestedDateNote(null);
@@ -1182,7 +1234,7 @@ export const Scheduling: React.FC = () => {
               setSuggestedDateNote(null);
               if (selectedAssignmentId) {
                 const sel = scopedAssignments.find(a => a.id === selectedAssignmentId);
-                if (sel?.assayerId) loadAssayerWorkload(sel.assayerId, e.target.value);
+                if (sel?.assayerId) void loadAssayerWorkload(sel.assayerId, e.target.value);
               }
             }} required
               style={{ width: '100%', padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '12px' }} />
@@ -1214,7 +1266,7 @@ export const Scheduling: React.FC = () => {
           footer={
             <>
               <button type="button" onClick={() => setShowRescheduleModal(false)} className="btn btn-secondary" style={{ padding: '6px 12px', fontSize: '11px' }} disabled={isRescheduling}>Cancel</button>
-              <button type="submit" className="btn btn-primary" disabled={isRescheduling} style={{ padding: '6px 12px', fontSize: '11px', background: 'var(--accent)', borderColor: 'var(--accent)', color: 'var(--on-accent)' }}>
+              <button type="submit" className="btn btn-primary" disabled={isRescheduling || !rescheduleReason.trim()} style={{ padding: '6px 12px', fontSize: '11px', background: 'var(--accent)', borderColor: 'var(--accent)', color: 'var(--on-accent)' }}>
                 {isRescheduling ? 'Rescheduling…' : 'Confirm Reschedule'}
               </button>
             </>
@@ -1233,6 +1285,25 @@ export const Scheduling: React.FC = () => {
             <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>New Audit Date *</label>
             <input type="date" value={rescheduleNewDate} min={todayDateKey()} onChange={e => setRescheduleNewDate(e.target.value)} required
               style={{ width: '100%', padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px' }} />
+
+            <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Reason for reschedule *</label>
+            {/*
+              Was entirely absent before: `remarks` only ever held the machine-generated "Rescheduled
+              to <date>" string, so the actual why was lost. The preset just fast-fills the text box
+              below; "Other…" clears it for free typing, and either way it is `rescheduleReason`,
+              not the select, that ends up on the wire (see `handleConfirmReschedule`).
+            */}
+            <Select
+              aria-label="Reschedule reason preset"
+              value={rescheduleReasonSelectValue(rescheduleReason)}
+              onChange={(v) => setRescheduleReason(v === RESCHEDULE_REASON_OTHER ? '' : v)}
+              options={[
+                ...RESCHEDULE_REASON_PRESETS.map((r) => ({ value: r, label: r })),
+                { value: RESCHEDULE_REASON_OTHER, label: 'Other…' },
+              ]}
+            />
+            <input type="text" value={rescheduleReason} onChange={e => setRescheduleReason(e.target.value)} placeholder="Why is this being moved?" required
+              style={{ width: '100%', padding: '8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '12px' }} />
           </div>
         </Modal>
       )}

@@ -836,3 +836,38 @@ export function clearFilter(state: RosterFilterState, key: string, value?: strin
   delete ranges[key];
   return { ...state, choices, ranges };
 }
+
+/**
+ * The subset of this filter state the server can actually apply, as a query string for
+ * `GET /assayers` — see `RosterQueryService`/`AssayerController.parseRosterFilters` on the
+ * backend, which reads exactly these param names.
+ *
+ * Only the `field`-kind axes with a real column behind them map across: `stage` ->
+ * `lifecycleStatus`, `engagement` -> `engagementType`, `unavailable` -> `unavailableReason`,
+ * plus `state`, `region` and the `joined` date range. Every `rule`-kind axis (record
+ * completeness, documents, certificates, pin quality, attendance) and the qualification band
+ * stay client-side only: they are computed from several columns or from a compute-on-read score,
+ * not stored, so there is no single WHERE clause for the server to run. That is not a compromise
+ * peculiar to this screen — `applyRosterFilters` still runs on whatever page comes back, so
+ * those axes keep working exactly as before; only the axes that can be pushed down are.
+ */
+const SERVER_FILTER_PARAM: Record<string, string> = {
+  stage: 'lifecycleStatus',
+  engagement: 'engagementType',
+  unavailable: 'unavailableReason',
+  state: 'state',
+  region: 'region',
+};
+
+export function toServerQuery(filters: RosterFilterState): string {
+  const params = new URLSearchParams();
+  if (filters.search.trim()) params.set('q', filters.search.trim());
+  for (const [key, param] of Object.entries(SERVER_FILTER_PARAM)) {
+    const values = filters.choices[key];
+    if (values?.length) params.set(param, values.join(','));
+  }
+  const joined = filters.ranges.joined;
+  if (joined?.from) params.set('joinedFrom', joined.from);
+  if (joined?.to) params.set('joinedTo', joined.to);
+  return params.toString();
+}

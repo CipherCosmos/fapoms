@@ -1,9 +1,9 @@
 import React, { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { CheckCircle2, Banknote, PauseCircle, PlayCircle, Receipt, FileDown, Percent } from 'lucide-react';
+import { CheckCircle2, Banknote, PauseCircle, PlayCircle, Receipt, FileDown, Percent, RotateCcw } from 'lucide-react';
 import { AssayerPayableStatus, PaymentMethod, payableStatusLabel, paymentMethodLabel } from '@fapoms/shared';
 import { Modal, Pagination, Select, StyledInput, useConfirm, useToast } from '../../components/ui';
-import { usePayouts, useApprovePayouts, usePayPayouts, useHoldPayout } from '../../hooks/useBilling';
+import { usePayouts, useApprovePayouts, usePayPayouts, useHoldPayout, useReopenAssignment } from '../../hooks/useBilling';
 import { BILLING_PAGE_SIZE, billingApi } from '../../services/billing';
 import type { PayoutRow } from '../../services/billing';
 import { userMessage } from '../../services/errors';
@@ -31,6 +31,7 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [payOpen, setPayOpen] = useState(false);
   const [holding, setHolding] = useState<PayoutRow | null>(null);
+  const [reopeningRow, setReopeningRow] = useState<PayoutRow | null>(null);
   const [bankBusy, setBankBusy] = useState(false);
   const [tdsOpen, setTdsOpen] = useState(false);
 
@@ -43,6 +44,7 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
   const approve = useApprovePayouts();
   const pay = usePayPayouts();
   const hold = useHoldPayout();
+  const reopen = useReopenAssignment();
 
   const rows = payouts.data?.items ?? [];
   const total = payouts.data?.total ?? 0;
@@ -210,7 +212,9 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
         </div>
       )}
 
-      {payouts.isLoading ? <Empty>Loading payouts…</Empty> : groups.length === 0 ? (
+      {payouts.isLoading ? <Empty>Loading payouts…</Empty> : payouts.isError ? (
+        <Empty>Could not load payouts — this is not saying there are none. Check your connection and try again.</Empty>
+      ) : groups.length === 0 ? (
         <Empty>{filter === 'ALL' ? 'No payouts yet. They appear here the moment an assignment completes.' : 'Nothing here.'}</Empty>
       ) : (
         <Card>
@@ -257,9 +261,20 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
                           <td style={td}>{fmtDate(r.createdAt)}</td>
                           {canAct && (
                             <td style={{ ...td, whiteSpace: 'nowrap' }}>
-                              {r.status !== AssayerPayableStatus.PAID && (
+                              {r.status !== AssayerPayableStatus.PAID && r.status !== AssayerPayableStatus.VOIDED && (
                                 <button onClick={() => setHolding(r)} title={r.onHold ? 'Release hold' : 'Put on hold'} style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: r.onHold ? 'var(--success)' : 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5 }}>
                                   {r.onHold ? <><PlayCircle size={13} /> Release</> : <><PauseCircle size={13} /> Hold</>}
+                                </button>
+                              )}
+                              {/*
+                                Expense reimbursements have no assignment to reopen — this is
+                                the fee payable a completion booked, and the assignment it came
+                                from is what actually gets reopened; the server refuses once a
+                                payable is DISBURSED, which PAID/VOIDED already cover here.
+                              */}
+                              {!isReimb && r.status !== AssayerPayableStatus.PAID && r.status !== AssayerPayableStatus.VOIDED && (
+                                <button onClick={() => setReopeningRow(r)} title="Reopen the assignment and void this payable" style={{ background: 'transparent', border: 'none', cursor: 'pointer', color: 'var(--danger)', display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 11.5, marginLeft: 8 }}>
+                                  <RotateCcw size={13} /> Reopen
                                 </button>
                               )}
                             </td>
@@ -318,6 +333,21 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
         />
       )}
 
+      {reopeningRow && (
+        <ReopenModal
+          row={reopeningRow}
+          busy={reopen.isPending}
+          onClose={() => setReopeningRow(null)}
+          onSubmit={async (reason) => {
+            try {
+              await reopen.mutateAsync({ assignmentId: reopeningRow.assignmentId, reason });
+              toast('success', 'Assignment reopened and payable voided');
+              setReopeningRow(null);
+            } catch (e) { toast({ type: 'error', title: 'Could not reopen', message: userMessage(e) }); }
+          }}
+        />
+      )}
+
       {tdsOpen && <TdsReportModal onClose={() => setTdsOpen(false)} />}
 
       {confirmDialog}
@@ -370,8 +400,12 @@ const PayModal: React.FC<{
  * wrong", "wrong acct") until the assayer statement, where this text is shown, read like a
  * different person wrote each line. These cover what is actually typed; "Other…" keeps the free
  * text for everything else, so nothing that could be said before can no longer be said.
+ *
+ * Exported because `AssignmentMoneyCard`'s client-line hold is the other side of this same
+ * action — the client line and the payout are held for the same reasons — so it imports this
+ * list rather than keeping a second copy that could drift from it.
  */
-const HOLD_REASONS = [
+export const HOLD_REASONS = [
   'Bank details missing or incorrect',
   'Waiting for the assayer\u2019s invoice',
   'Report still being checked',
@@ -418,6 +452,34 @@ const HoldModal: React.FC<{ row: PayoutRow; busy: boolean; onClose: () => void; 
           )}
         </>
       )}
+    </Modal>
+  );
+};
+
+/**
+ * The undo of a wrong completion — puts the assignment back to ACCEPTED and voids the payable
+ * it booked. Free text, not a preset list like `HoldModal`: a hold is routine and its reasons
+ * repeat, but a completion getting reopened is rare enough that each one is its own story, and
+ * that story is what the assignment's history shows afterward.
+ */
+const ReopenModal: React.FC<{ row: PayoutRow; busy: boolean; onClose: () => void; onSubmit: (reason: string) => Promise<void> }> = ({ row, busy, onClose, onSubmit }) => {
+  const [reason, setReason] = useState('');
+  const ready = reason.trim().length > 0;
+  return (
+    <Modal open onClose={onClose} title="Reopen assignment" width="460px" asForm
+      onSubmit={(e) => { e.preventDefault(); if (!ready) return; void onSubmit(reason.trim()); }}
+      footer={<>
+        <button type="button" onClick={onClose} className="btn btn-secondary">Cancel</button>
+        <button type="submit" disabled={busy || !ready} className="btn btn-primary">Reopen</button>
+      </>}>
+      <div style={{ fontSize: 13 }}>
+        <strong>{row.assignmentNumber ?? row.payableNumber}</strong> · {row.assayerName} · {money(Number(r(row.totalAmount)) - Number(r(row.paidAmount)))}
+      </div>
+      <div style={{ fontSize: 12.5, color: 'var(--text-secondary)' }}>
+        This puts the assignment back to Accepted and voids this payable — it will not be paid
+        until the assignment is completed again. Say why; it goes on the assignment's record.
+      </div>
+      <textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Why is this being reopened? *" rows={3} style={{ ...inputStyle, width: '100%', resize: 'vertical' }} />
     </Modal>
   );
 };

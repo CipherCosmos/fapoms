@@ -1,5 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ForbiddenException } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { ROLES_KEY, PERMISSIONS_KEY, ANY_AUTHENTICATED_KEY } from '../auth/guards';
 import { AssayerController } from './assayer.controller';
 import { AssayerService } from './assayer.service';
 import { RosterImportService } from './roster-import.service';
@@ -8,6 +10,7 @@ import { RosterRecordsService } from './roster-records.service';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { LocationTrailService } from './location-trail.service';
 import { QualificationScoreService } from './qualification-score.service';
+import { RosterQueryService } from './roster-query.service';
 import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
 import { FileScanService } from '../../infrastructure/security/file-scan.service';
 
@@ -49,6 +52,7 @@ describe('AssayerController — getProfile', () => {
         { provide: RegionGuardService, useValue: regionGuard },
         { provide: LocationTrailService, useValue: {} },
         { provide: QualificationScoreService, useValue: {} },
+        { provide: RosterQueryService, useValue: {} },
         // The document-upload routes carry @UseInterceptors(FileScanInterceptor) at the class
         // level's method decorators; Nest resolves it through DI when the module compiles even
         // though this suite never exercises those routes.
@@ -93,5 +97,25 @@ describe('AssayerController — getProfile', () => {
 
     expect(result.success).toBe(true);
     expect(assayerService.getProfile).toHaveBeenCalledWith('assayer-1');
+  });
+});
+
+/**
+ * `GET workforce-attribute/vocabulary` — was `@Roles(ADMIN, OPERATIONS)` +
+ * `assayer:view:organization`, which meant an ASSAYER-role principal (the mobile app, calling
+ * this on the assayer's own behalf to suggest skills/languages) got a 403 by construction: an
+ * ASSAYER token never carries that permission and never holds those roles. This is aggregate,
+ * non-sensitive roster data, the same risk shape as `/geo/autocomplete`, so it moved to
+ * `@AnyAuthenticated()` — checked here directly against the real decorator metadata, the same
+ * way `RolesGuard` itself reads it, rather than standing up a full request pipeline for one
+ * decorator check.
+ */
+describe('AssayerController — getWorkforceAttributeVocabulary access', () => {
+  it('carries @AnyAuthenticated() and no @Roles/@RequirePermissions gate', () => {
+    const reflector = new Reflector();
+    const handler = AssayerController.prototype.getWorkforceAttributeVocabulary;
+    expect(reflector.get(ANY_AUTHENTICATED_KEY, handler)).toBe(true);
+    expect(reflector.get(ROLES_KEY, handler)).toBeUndefined();
+    expect(reflector.get(PERMISSIONS_KEY, handler)).toBeUndefined();
   });
 });

@@ -67,11 +67,13 @@ export const hi: PartialCatalogue<typeof en> = {
     edit: 'बदलें',
     close: 'बंद करें',
     back: 'वापस',
+    remove: 'हटाएं',
     notNow: 'अभी नहीं',
     tryAgain: 'फिर कोशिश करें',
     signOut: 'साइन आउट करें',
     retry: 'दोबारा कोशिश करें',
     notOnFile: 'दर्ज नहीं है',
+    willRetry: 'सेव हो गया। नेटवर्क वापस आते ही यह अपने आप भेज दिया जाएगा।',
   },
 
   login: {
@@ -796,6 +798,7 @@ export const hi: PartialCatalogue<typeof en> = {
       approved: 'मंज़ूर',
       paid: 'मिल गया',
       onHold: 'रोका गया',
+      voided: 'रद्द किया गया',
     },
     expenseReimbursement: 'खर्च की वापसी',
     outstanding: '%{amount} बाक़ी',
@@ -1027,8 +1030,16 @@ export const hi: PartialCatalogue<typeof en> = {
   decline: {
     title: 'यह काम मना करें',
     reasonLabel: 'मना करने की वजह',
-    reasonPlaceholder: 'बहुत दूर है, फ़ीस कम है, तारीख़ नहीं बनती…',
+    detailsLabel: 'अतिरिक्त जानकारी (वैकल्पिक)',
+    reasonPlaceholder: 'कुछ और बताना हो तो यहाँ लिखें…',
     confirm: 'काम मना करें',
+    categories: {
+      tooFar: 'बहुत दूर है',
+      feeTooLow: 'फ़ीस कम है',
+      scheduleConflict: 'समय नहीं मिल रहा',
+      uncomfortableBranch: 'इस शाखा में असहज',
+      other: 'अन्य',
+    },
   },
 
   feedback: {

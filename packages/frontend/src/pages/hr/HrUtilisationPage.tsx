@@ -153,7 +153,14 @@ const UtilisationTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate:
 
       <Section
         title={noWorkYet ? 'Waiting for their first job' : 'Idle and never-deployed'}
-        count={d.utilisation.idle.length}
+        // The true total, not the length of the table beneath it — the table is capped at 50
+        // rows server-side (see hr-workforce.service.ts's `utilisation()`), and a count that only
+        // ever reads "however many rows fit" is how HR's own dashboard once understated this by
+        // more than 10x (50 shown, 542 real) with nothing on screen suggesting it was capped.
+        count={d.utilisation.idleCount}
+        hint={d.utilisation.idle.length < d.utilisation.idleCount
+          ? `Showing the longest-idle ${d.utilisation.idle.length} of ${d.utilisation.idleCount}.`
+          : undefined}
       >
         {d.utilisation.idle.length === 0 ? (
           <Empty>Everyone on the active roster has had work in the last {d.utilisation.idleAfterDays} days.</Empty>

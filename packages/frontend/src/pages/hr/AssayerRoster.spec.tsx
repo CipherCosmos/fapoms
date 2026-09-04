@@ -26,7 +26,7 @@ jest.mock('../../hooks/useCurrentRoles', () => ({
   // roster import are gated on create, everything else on edit.
   canCreateAssayers: () => true,
 }));
-jest.mock('../../hooks/useExcelExport', () => ({ useExcelExport: () => ({ download: jest.fn(), busy: false }) }));
+jest.mock('../../hooks/useQueuedExcelExport', () => ({ useQueuedExcelExport: () => ({ download: jest.fn(), busy: false }) }));
 // The panel reads the review queue through react-query; the roster's own tests are not about it.
 jest.mock('./ImportIssuesPanel', () => ({ ImportIssuesPanel: () => null }));
 // The registration flow is its own screen with its own tests; stubbed so this file stays about

@@ -129,6 +129,14 @@ const IMPORTER_DUPLICATE_COLUMNS = ['Duplicate PAN', 'Duplicate phone', 'Duplica
 /** The importer's key for "exit date on an Active row" (roster-import.service.ts ~764-771). */
 const IMPORTER_EXIT_DATE_COLUMN = 'Exit Date';
 
+interface DuplicateKind {
+  title: string;
+  word: string;
+  value: (p: Pick<AssayerEntity, 'panNumber' | 'aadhaarNumber' | 'bankAccountNumber' | 'phone' | 'email'>) => string | null;
+  importerColumn: string | null;
+  note: string;
+}
+
 interface Finding {
   title: string;
   /** Appraiser code for per-person findings; null for the two aggregate checks. */
@@ -228,6 +236,22 @@ function humanDay(iso: string): string {
 
 const EARLIEST_REAL_DATE = 19000101; // 1900-01-01 — nobody on a working roster predates it.
 
+/**
+ * Every column a check actually reads. The full entity carries ~80 columns, three of them
+ * (`panNumber`, `aadhaarNumber`, `bankAccountNumber`) behind the AES-GCM `encryptedColumn`
+ * transformer that decrypts on every row it touches — loading the other ~75 unused columns for
+ * 1,163 rows on every 15-minute tick, and now on every incremental rescan too, buys nothing.
+ * `select` still goes through the repository (not raw SQL), so the transformer runs exactly as
+ * it does today; only the column list narrows. Add a field here the moment a check starts
+ * reading it, or that check silently sees `undefined`.
+ */
+const PERSON_SELECT_COLUMNS = [
+  'id', 'assayerCode', 'displayName', 'lifecycleStatus', 'unavailableReason',
+  'dateOfBirth', 'joiningDate', 'exitDate', 'terminationDate',
+  'region', 'panNumber', 'aadhaarNumber', 'bankAccountNumber', 'phone', 'email',
+  'latitude', 'longitude', 'geoAccuracyMeters', 'address',
+] as const satisfies ReadonlyArray<keyof AssayerEntity>;
+
 @Injectable()
 export class DataIntegrityService {
   private readonly logger = new Logger(DataIntegrityService.name);
@@ -265,7 +289,7 @@ export class DataIntegrityService {
      * archiving lives, so filtering them out was also narrowing the checks against their own
      * titles. All 1,163 rows are active today, so this changes no current count.
      */
-    const people = await this.assayers.find();
+    const people = await this.assayers.find({ select: PERSON_SELECT_COLUMNS as unknown as (keyof AssayerEntity)[] });
 
     // The business day, not the database session's UTC day — between midnight and 05:30 IST
     // the two disagree, and "a date of birth in the future" must not flicker with the clock.
@@ -295,14 +319,66 @@ export class DataIntegrityService {
     ];
     summary.findings = findings.length;
 
-    const claimed = new Set<string>();
-    for (const finding of findings) {
-      const outcome = await this.writeFinding(finding);
-      claimed.add(this.columnFor(finding));
-      summary[outcome] += 1;
-    }
+    const claimed = new Set(findings.map((f) => this.columnFor(f)));
+    await this.writeFindings(findings, summary);
+    await this.autoClose(claimed, summary, null);
+    return summary;
+  }
 
-    await this.autoClose(claimed, summary);
+  /**
+   * The incremental path. Runs after a single assayer is created/edited/imported — one person's
+   * worth of per-row checks, plus that person's identifiers compared against the roster for the
+   * duplicate checks, instead of recomputing all ~19 checks over all ~1,163 rows. Every check
+   * used here is the SAME function `scan()` calls (just over a one-person array, or in
+   * `duplicatesForPerson`'s case, the same group-building logic `duplicates` uses) — this method
+   * owns no business logic of its own, only which slice of the roster it hands to them.
+   *
+   * Deliberately excludes the three aggregate checks (`noHomeCoordinate`, `claimedWithoutScan`,
+   * `documentsNeverVerified`): their answer is a fact about the whole population, not this person,
+   * so nothing about editing one record can change them correctly — only the 15-minute full sweep,
+   * the unchanged backstop, may write those rows.
+   *
+   * `autoClose` here is scoped to this person's own findings only (`sourceAssayerCode`) so an
+   * incremental run can never touch — or wrongly close — anyone else's open row.
+   */
+  async incrementalScan(assayerId: string): Promise<DataIntegrityScanSummary> {
+    const summary: DataIntegrityScanSummary = {
+      findings: 0, inserted: 0, reopened: 0, updated: 0,
+      unchanged: 0, skippedResolved: 0, suppressed: 0, autoClosed: 0,
+    };
+
+    const person = await this.assayers.findOne({
+      where: { id: assayerId },
+      select: PERSON_SELECT_COLUMNS as unknown as (keyof AssayerEntity)[],
+    });
+    // Deleted between the event firing and the debounce elapsing: nothing to check against —
+    // the 15-minute sweep is the backstop that reconciles everything else about them.
+    if (!person) return summary;
+
+    const today = businessTodayDateKey();
+    const todayNum = dayNumber(today);
+    const futureLimitNum = todayNum + 5 * 10000;
+    const backup = await this.loadRepairBackup(person.assayerCode);
+
+    const findings: Finding[] = [
+      ...this.corruptDates([person], todayNum, futureLimitNum),
+      ...this.joinedAfterLeft([person], futureLimitNum),
+      ...this.leftWithNoDate([person], backup),
+      ...(await this.leavingDateButActive([person])),
+      ...(await this.leftButStillEmpanelled([person])),
+      ...this.noRegion([person]),
+      ...this.impossibleAge([person], todayNum),
+      ...this.noDateOfBirth([person], backup),
+      ...(await this.duplicatesForPerson(person, summary)),
+      ...this.placeholderPin([person]),
+      ...this.blankAddress([person]),
+      ...this.noPhone([person]),
+    ];
+    summary.findings = findings.length;
+
+    const claimed = new Set(findings.map((f) => this.columnFor(f)));
+    await this.writeFindings(findings, summary);
+    await this.autoClose(claimed, summary, person.assayerCode);
     return summary;
   }
 
@@ -326,52 +402,103 @@ export class DataIntegrityService {
    * not a decision — skip it and a defect that was fixed and then reintroduced (a leaving date
    * cleared, set, cleared again) would be invisible forever behind a closure nobody made.
    */
-  private async writeFinding(finding: Finding): Promise<'inserted' | 'updated' | 'unchanged' | 'skippedResolved' | 'reopened'> {
-    const sourceColumn = this.columnFor(finding);
-    const latest = await this.issues.findOne({
-      where: { sourceSheet: DATA_INTEGRITY_SHEET, sourceColumn },
-      order: { sourceRow: 'DESC' },
-    });
+  /**
+   * The write algorithm, applied to a whole batch of findings in a FIXED number of queries —
+   * one read plus at most two writes — instead of one `findOne` + one `save` PER finding. That
+   * used to be 2 queries × every finding computed (7,719 calls on the dev DB for 133 findings,
+   * because every check recomputes every finding on every 15-minute tick even when nothing
+   * changed); the query count below is the same whether this batch holds 0 findings or 10,000.
+   *
+   * Same decision rules as before, just evaluated in memory against one bulk read:
+   *   - no row                              → insert at generation 0;
+   *   - latest open                         → refresh raw_value/reason in place;
+   *   - latest resolved BY A PERSON, same raw_value → skip;
+   *   - latest resolved, raw_value changed, or SYSTEM auto-closed → insert at generation + 1.
+   */
+  private async writeFindings(findings: Finding[], summary: DataIntegrityScanSummary): Promise<void> {
+    if (findings.length === 0) return;
 
-    if (!latest) {
-      await this.insertGeneration(finding, sourceColumn, 0);
-      return 'inserted';
+    const columns = [...new Set(findings.map((f) => this.columnFor(f)))];
+    // DISTINCT ON picks the highest source_row per column in one query — the in-memory
+    // equivalent of the old per-column `findOne(..., order: { sourceRow: 'DESC' })`.
+    const latestRows: Array<{
+      id: string; source_column: string; source_row: number; raw_value: string; reason: string;
+      assayer_id: string | null; source_assayer_code: string | null;
+      resolved_at: Date | null; resolved_by: string | null; resolution: string | null;
+    }> = await this.issues.manager.query(
+      'SELECT DISTINCT ON (source_column) id, source_column, source_row, raw_value, reason, '
+      + 'assayer_id, source_assayer_code, resolved_at, resolved_by, resolution '
+      + 'FROM assayer_import_issues WHERE source_sheet = $1 AND source_column = ANY($2::varchar[]) '
+      + 'ORDER BY source_column, source_row DESC',
+      [DATA_INTEGRITY_SHEET, columns],
+    );
+    const latestByColumn = new Map(latestRows.map((r) => [r.source_column, r]));
+
+    const toInsert: Array<{ sourceColumn: string; sourceRow: number; finding: Finding }> = [];
+    const toUpdate: Array<{ id: string; finding: Finding }> = [];
+
+    for (const finding of findings) {
+      const sourceColumn = this.columnFor(finding);
+      const latest = latestByColumn.get(sourceColumn);
+
+      if (!latest) {
+        toInsert.push({ sourceColumn, sourceRow: 0, finding });
+        summary.inserted += 1;
+        continue;
+      }
+
+      if (!latest.resolved_at) {
+        if (
+          latest.raw_value === finding.rawValue
+          && latest.reason === finding.reason
+          && latest.assayer_id === finding.assayerId
+        ) { summary.unchanged += 1; continue; }
+        toUpdate.push({ id: latest.id, finding });
+        summary.updated += 1;
+        continue;
+      }
+
+      const wasAutoClosed = latest.resolved_by == null && latest.resolution === AUTO_CLOSE_RESOLUTION;
+      if (!wasAutoClosed && latest.raw_value === finding.rawValue) { summary.skippedResolved += 1; continue; }
+
+      toInsert.push({ sourceColumn, sourceRow: latest.source_row + 1, finding });
+      summary.reopened += 1;
     }
 
-    if (!latest.resolvedAt) {
-      if (
-        latest.rawValue === finding.rawValue
-        && latest.reason === finding.reason
-        && latest.assayerId === finding.assayerId
-      ) return 'unchanged';
-      latest.rawValue = finding.rawValue;
-      latest.reason = finding.reason;
-      latest.assayerId = finding.assayerId;
-      latest.sourceAssayerCode = finding.sourceAssayerCode;
-      latest.updatedBy = SYSTEM_ACTOR;
-      await this.issues.save(latest);
-      return 'updated';
+    if (toInsert.length > 0) {
+      await this.issues.insert(toInsert.map(({ sourceColumn, sourceRow, finding }) => ({
+        sourceSheet: DATA_INTEGRITY_SHEET,
+        sourceRow,
+        sourceColumn,
+        rawValue: finding.rawValue,
+        reason: finding.reason,
+        assayerId: finding.assayerId,
+        sourceAssayerCode: finding.sourceAssayerCode,
+        createdBy: SYSTEM_ACTOR,
+        updatedBy: SYSTEM_ACTOR,
+      })));
     }
 
-    const wasAutoClosed = latest.resolvedBy == null && latest.resolution === AUTO_CLOSE_RESOLUTION;
-    if (!wasAutoClosed && latest.rawValue === finding.rawValue) return 'skippedResolved';
-
-    await this.insertGeneration(finding, sourceColumn, latest.sourceRow + 1);
-    return 'reopened';
-  }
-
-  private async insertGeneration(finding: Finding, sourceColumn: string, generation: number): Promise<void> {
-    await this.issues.save(this.issues.create({
-      sourceSheet: DATA_INTEGRITY_SHEET,
-      sourceRow: generation,
-      sourceColumn,
-      rawValue: finding.rawValue,
-      reason: finding.reason,
-      assayerId: finding.assayerId,
-      sourceAssayerCode: finding.sourceAssayerCode,
-      createdBy: SYSTEM_ACTOR,
-      updatedBy: SYSTEM_ACTOR,
-    }));
+    if (toUpdate.length > 0) {
+      // One UPDATE ... FROM (VALUES ...) covers every row in the batch — TypeORM's `save()` on
+      // an array of entities-with-ids still issues one UPDATE per row, which is exactly the
+      // per-finding query count this method exists to remove.
+      const valueRows: string[] = [];
+      const params: unknown[] = [];
+      let i = 1;
+      for (const { id, finding } of toUpdate) {
+        valueRows.push(`($${i++}::uuid, $${i++}, $${i++}, $${i++}::uuid, $${i++})`);
+        params.push(id, finding.rawValue, finding.reason, finding.assayerId, finding.sourceAssayerCode);
+      }
+      await this.issues.manager.query(
+        'UPDATE assayer_import_issues AS t SET '
+        + 'raw_value = v.raw_value, reason = v.reason, assayer_id = v.assayer_id, '
+        + "source_assayer_code = v.source_assayer_code, updated_by = 'SYSTEM', updated_at = now() "
+        + `FROM (VALUES ${valueRows.join(', ')}) AS v(id, raw_value, reason, assayer_id, source_assayer_code) `
+        + 'WHERE t.id = v.id',
+        params,
+      );
+    }
   }
 
   /**
@@ -381,19 +508,41 @@ export class DataIntegrityService {
    * which get corrected. Scoped hard to this scan's own sheet: importer rows are untouched.
    * This closes a report, not the data — no appraiser row is written.
    */
-  private async autoClose(claimed: Set<string>, summary: DataIntegrityScanSummary): Promise<void> {
+  /**
+   * `scopeToAssayerCode` narrows this to one person's own rows for the incremental path — so
+   * editing one record can never close somebody else's open finding, or one of the two
+   * population-wide aggregate rows, which carry no `sourceAssayerCode` at all and so never match
+   * a scope. `null` (the full sweep) closes across the whole "Data integrity" sheet, as before.
+   *
+   * The close itself is one UPDATE covering every row this call closes, not one `save()` per
+   * row — the query count no longer grows with how many findings got auto-closed.
+   */
+  private async autoClose(
+    claimed: Set<string>,
+    summary: DataIntegrityScanSummary,
+    scopeToAssayerCode: string | null,
+  ): Promise<void> {
     const open = await this.issues.find({
-      where: { sourceSheet: DATA_INTEGRITY_SHEET, resolvedAt: IsNull() },
+      where: {
+        sourceSheet: DATA_INTEGRITY_SHEET,
+        resolvedAt: IsNull(),
+        ...(scopeToAssayerCode ? { sourceAssayerCode: scopeToAssayerCode } : {}),
+      },
     });
-    for (const row of open) {
-      if (claimed.has(row.sourceColumn)) continue;
-      row.resolvedAt = new Date();
-      row.resolvedBy = null;
-      row.resolution = AUTO_CLOSE_RESOLUTION;
-      row.updatedBy = SYSTEM_ACTOR;
-      await this.issues.save(row);
-      summary.autoClosed += 1;
-    }
+    const toClose = open.filter((row) => !claimed.has(row.sourceColumn)).map((row) => row.id);
+    if (toClose.length === 0) return;
+
+    await this.issues.createQueryBuilder()
+      .update(AssayerImportIssueEntity)
+      .set({
+        resolvedAt: () => 'now()',
+        resolvedBy: null,
+        resolution: AUTO_CLOSE_RESOLUTION,
+        updatedBy: SYSTEM_ACTOR,
+      })
+      .whereInIds(toClose)
+      .execute();
+    summary.autoClosed += toClose.length;
   }
 
   // ── The checks ──────────────────────────────────────────────────────────────
@@ -747,21 +896,15 @@ export class DataIntegrityService {
     return parent != null && find(parent, a) === find(parent, b);
   }
 
-  private async duplicates(people: AssayerEntity[], summary: DataIntegrityScanSummary): Promise<Finding[]> {
-    const importerRows = await this.issues.find({
-      where: { sourceColumn: In([...IMPORTER_DUPLICATE_COLUMNS]) },
-    });
-    // Resolved or not: a resolved importer pair was decided, and re-raising the same pair under
-    // a scanner key would undo that decision from the side.
-    const importerGroups = this.importerDuplicateGroups(importerRows);
-
-    const kinds: Array<{
-      title: string;
-      word: string;
-      value: (p: AssayerEntity) => string | null;
-      importerColumn: string | null;
-      note: string;
-    }> = [
+  /**
+   * The five duplicate checks' definitions. Pulled out to its own method so the full sweep
+   * (`duplicates`, over everyone) and the incremental path (`duplicatesForPerson`, over one
+   * person's identifiers against the roster) read the same title/wording/importer-suppression
+   * rule from one place — a discrepancy here would mean the same collision reads differently
+   * depending only on which of the two paths happened to notice it first.
+   */
+  private duplicateKinds(): DuplicateKind[] {
+    return [
       {
         title: CHECK_TITLES.duplicatePan, word: 'PAN', importerColumn: 'Duplicate PAN',
         value: (p) => p.panNumber,
@@ -796,9 +939,54 @@ export class DataIntegrityService {
           + "destroys a real person's history.",
       },
     ];
+  }
 
+  /**
+   * One group of ≥2 people sharing one identity value, turned into the finding(s) about it. The
+   * shared core of both duplicate paths — see `duplicateKinds`'s comment for why it must be one
+   * function, not two copies that could drift.
+   */
+  private findingsForDuplicateGroup(
+    kind: DuplicateKind,
+    members: Array<Pick<AssayerEntity, 'id' | 'assayerCode'>>,
+    importerGroups: Map<string, Map<string, string>>,
+    summary: DataIntegrityScanSummary,
+  ): Finding[] {
+    if (members.length < 2) return [];
+    const sorted = [...members].sort((a, b) => a.assayerCode.localeCompare(b.assayerCode));
+    const holder = sorted[0];
     const findings: Finding[] = [];
-    for (const kind of kinds) {
+    for (const other of sorted.slice(1)) {
+      const pair = `${holder.assayerCode} and ${other.assayerCode}`;
+      if (kind.importerColumn
+        && this.importerAlreadySaid(importerGroups, kind.importerColumn, holder.assayerCode, other.assayerCode)) {
+        summary.suppressed += 1;
+        continue;
+      }
+      findings.push({
+        title: kind.title,
+        suffix: other.assayerCode,
+        rawValue: pair,
+        reason: `${holder.assayerCode} carries the same ${kind.word} as ${other.assayerCode}. ${kind.note}`,
+        assayerId: other.id,
+        sourceAssayerCode: other.assayerCode,
+      });
+    }
+    return findings;
+  }
+
+  /** The importer's duplicate-pair rows, resolved or not (see `duplicateKinds`'s callers). */
+  private async loadImporterDuplicateGroups(): Promise<Map<string, Map<string, string>>> {
+    const importerRows = await this.issues.find({
+      where: { sourceColumn: In([...IMPORTER_DUPLICATE_COLUMNS]) },
+    });
+    return this.importerDuplicateGroups(importerRows);
+  }
+
+  private async duplicates(people: AssayerEntity[], summary: DataIntegrityScanSummary): Promise<Finding[]> {
+    const importerGroups = await this.loadImporterDuplicateGroups();
+    const findings: Finding[] = [];
+    for (const kind of this.duplicateKinds()) {
       const groups = new Map<string, AssayerEntity[]>();
       for (const p of people) {
         const value = kind.value(p);
@@ -808,26 +996,39 @@ export class DataIntegrityService {
         (groups.get(key) ?? groups.set(key, []).get(key)!).push(p);
       }
       for (const members of groups.values()) {
-        if (members.length < 2) continue;
-        members.sort((a, b) => a.assayerCode.localeCompare(b.assayerCode));
-        const holder = members[0];
-        for (const other of members.slice(1)) {
-          const pair = `${holder.assayerCode} and ${other.assayerCode}`;
-          if (kind.importerColumn
-            && this.importerAlreadySaid(importerGroups, kind.importerColumn, holder.assayerCode, other.assayerCode)) {
-            summary.suppressed += 1;
-            continue;
-          }
-          findings.push({
-            title: kind.title,
-            suffix: other.assayerCode,
-            rawValue: pair,
-            reason: `${holder.assayerCode} carries the same ${kind.word} as ${other.assayerCode}. ${kind.note}`,
-            assayerId: other.id,
-            sourceAssayerCode: other.assayerCode,
-          });
-        }
+        findings.push(...this.findingsForDuplicateGroup(kind, members, importerGroups, summary));
       }
+    }
+    return findings;
+  }
+
+  /**
+   * The incremental half of the duplicate checks: this one person's identifiers against the
+   * roster, not a full recompute of every group. Encryption is exactly why this cannot be a
+   * `WHERE panNumber = $1` — see the comment on `scan()` — so it still reads every row, but only
+   * the five narrow identifier columns rather than the ~80-column full entity `scan()` needs,
+   * and it is only paid on the debounced rescan of an edited record, not on every 15-minute tick.
+   */
+  private async duplicatesForPerson(
+    person: Pick<AssayerEntity, 'id' | 'assayerCode' | 'panNumber' | 'aadhaarNumber' | 'bankAccountNumber' | 'phone' | 'email'>,
+    summary: DataIntegrityScanSummary,
+  ): Promise<Finding[]> {
+    const roster = await this.assayers.find({
+      select: ['id', 'assayerCode', 'panNumber', 'aadhaarNumber', 'bankAccountNumber', 'phone', 'email'],
+    });
+    const importerGroups = await this.loadImporterDuplicateGroups();
+
+    const findings: Finding[] = [];
+    for (const kind of this.duplicateKinds()) {
+      const myValue = kind.value(person);
+      if (myValue == null) continue;
+      const key = String(myValue).trim().toLowerCase();
+      if (key === '') continue;
+      const members = roster.filter((p) => {
+        const v = kind.value(p);
+        return v != null && String(v).trim().toLowerCase() === key;
+      });
+      findings.push(...this.findingsForDuplicateGroup(kind, members, importerGroups, summary));
     }
     return findings;
   }
@@ -1104,8 +1305,11 @@ export class DataIntegrityService {
    * `to_regclass` guard: `_fix_backup_corrupt_dates` is a repair artifact, and production
    * service code must not hard-depend on it — if it is ever dropped, the findings stand and
    * only this clause quietly disappears.
+   *
+   * `onlyAssayerCode` narrows the second query to one row for the incremental path — the full
+   * sweep still reads the whole (small, one-off) table.
    */
-  private async loadRepairBackup(): Promise<RepairBackup> {
+  private async loadRepairBackup(onlyAssayerCode?: string): Promise<RepairBackup> {
     const backup: RepairBackup = new Map();
     try {
       const guard: Array<{ t: string | null }> = await this.issues.manager.query(
@@ -1114,7 +1318,9 @@ export class DataIntegrityService {
       if (!guard[0]?.t) return backup;
       const rows: Array<{ assayer_code: string; old_date_of_birth: unknown; old_exit_date: unknown }> =
         await this.issues.manager.query(
-          'SELECT assayer_code, old_date_of_birth, old_exit_date FROM _fix_backup_corrupt_dates',
+          'SELECT assayer_code, old_date_of_birth, old_exit_date FROM _fix_backup_corrupt_dates'
+          + (onlyAssayerCode ? ' WHERE assayer_code = $1' : ''),
+          onlyAssayerCode ? [onlyAssayerCode] : [],
         );
       for (const row of rows) {
         backup.set(row.assayer_code, {

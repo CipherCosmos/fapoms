@@ -1,8 +1,13 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Save, CreditCard, AlertTriangle, Percent, Truck } from 'lucide-react';
-import { Toggle, useToast } from '../../components/ui';
+import { Toggle, Select, useToast } from '../../components/ui';
+import { Autocomplete } from '../../components/ui/Autocomplete';
 import { useClientBilling, useClientDetail, useUpdateBilling, useUpdateClient } from '../../hooks/useClients';
 import { userMessage } from '../../services/errors';
+import { api } from '../../services/api';
+import { isValidIfsc } from '@fapoms/shared';
+import { applyPlaceToAddressGroup, composeAddress, emptyAddressGroup, stateOptionsFor, type AddressGroup } from './address-group';
+import { taxIdHint, taxIdGstinConsequenceHint } from './field-hints';
 
 /**
  * A client's billing, in one place: what they are billed per audit (the rate card), the tax
@@ -15,8 +20,20 @@ import { userMessage } from '../../services/errors';
  */
 const num = (v: string): number | undefined => (v.trim() === '' ? undefined : Number(v));
 
+// Fixed vocabulary, plus the "Other…" escape hatch below — this is an Indian platform, so INR
+// covers the overwhelming majority of clients; USD/EUR/GBP cover the rest without pretending to
+// be an exhaustive ISO-4217 list.
+const CURRENCY_OPTIONS = ['INR', 'USD', 'EUR', 'GBP'].map((v) => ({ value: v, label: v }));
+const PAYMENT_TERMS_OPTIONS = ['NET15', 'NET30', 'NET45', 'NET60'].map((v) => ({ value: v, label: v }));
+const INVOICE_CYCLE_OPTIONS = ['WEEKLY', 'MONTHLY', 'QUARTERLY', 'ANNUALLY'].map((v) => ({
+  value: v, label: v.charAt(0) + v.slice(1).toLowerCase(),
+}));
+const OTHER = '__other__';
+
+type IfscBankInfo = { branchName: string; city: string; state: string; address: string };
+
 export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
-  const { data: billing, isLoading } = useClientBilling(clientId);
+  const { data: billing, isLoading, isError: billingIsError } = useClientBilling(clientId);
   const detail = useClientDetail(clientId);
   const updateBilling = useUpdateBilling();
   const updateClient = useUpdateClient();
@@ -30,6 +47,14 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
   // Tax, terms, identity (client_billing)
   const [form, setForm] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
+  // Billing address is its own breakdown group for the same reason the client address is (see
+  // address-group.ts): `client_billing.billing_address` is one text column, so the existing
+  // value seeds the free-text line verbatim and pincode/city/district/state start blank.
+  const [billingAddr, setBillingAddr] = useState(emptyAddressGroup());
+  // Read-only supporting text next to IFSC — branch/city/state from the lookup, not extra
+  // inputs of their own (Task 4: "not extra input fields").
+  const [ifscInfo, setIfscInfo] = useState<IfscBankInfo | null>(null);
+  const ifscDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const c = detail.data;
@@ -48,15 +73,45 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
       invoiceCycle: billing?.invoiceCycle ?? 'MONTHLY',
       currency: billing?.currency ?? 'INR',
       taxIdentifier: billing?.taxIdentifier ?? '',
-      billingAddress: billing?.billingAddress ?? '',
       bankAccount: billing?.bankAccount ?? '',
       bankName: billing?.bankName ?? '',
       ifscCode: billing?.ifscCode ?? '',
       notes: billing?.notes ?? '',
     });
+    setBillingAddr(emptyAddressGroup(billing?.billingAddress ?? ''));
   }, [billing]);
 
   const set = (k: string, v: string) => setForm((f) => ({ ...f, [k]: v }));
+  const setBillingAddrField = (k: keyof AddressGroup) => (v: string) => setBillingAddr((a) => ({ ...a, [k]: v }));
+  const billingStateOptions = useMemo(() => stateOptionsFor(billingAddr.state), [billingAddr.state]);
+
+  // IFSC autofill (Task 4): once the code is shape-valid, resolve it and fill Bank name — still
+  // a plain, overwritable input, never locked. Debounced and keyed only on the code itself, so
+  // editing Bank name afterwards does not get overwritten again on the next render.
+  useEffect(() => {
+    const code = (form.ifscCode || '').trim();
+    if (!isValidIfsc(code)) { setIfscInfo(null); return undefined; }
+    if (ifscDebounce.current) clearTimeout(ifscDebounce.current);
+    ifscDebounce.current = setTimeout(async () => {
+      try {
+        // `api.request` already unwraps the controller's `{ success, data }` envelope (see
+        // services/api.ts), so this resolves directly to the lookup result or null — the same
+        // shape Autocomplete's own `/geo/autocomplete` call relies on.
+        const data = await api.request<(IfscBankInfo & { bankName: string }) | null>(`/geo/ifsc/${code.toUpperCase()}`);
+        if (data) {
+          setForm((f) => ({ ...f, bankName: data.bankName }));
+          setIfscInfo({ branchName: data.branchName, city: data.city, state: data.state, address: data.address });
+        } else {
+          setIfscInfo(null);
+        }
+      } catch {
+        // A lookup failure (network, provider unreachable) is not a form error — the field
+        // stays a plain input and the operator can still type the bank name themselves.
+        setIfscInfo(null);
+      }
+    }, 400);
+    return () => { if (ifscDebounce.current) clearTimeout(ifscDebounce.current); };
+  }, [form.ifscCode]);
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -75,7 +130,7 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
         payload: {
           gstRate: num(form.gstRate), tdsRate: num(form.tdsRate),
           paymentTerms: form.paymentTerms || undefined, invoiceCycle: form.invoiceCycle || undefined, currency: form.currency || undefined,
-          taxIdentifier: form.taxIdentifier || undefined, billingAddress: form.billingAddress,
+          taxIdentifier: form.taxIdentifier || undefined, billingAddress: composeAddress(billingAddr),
           bankAccount: form.bankAccount || undefined, bankName: form.bankName || undefined, ifscCode: form.ifscCode || undefined,
           notes: form.notes || undefined,
         },
@@ -88,9 +143,70 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
     }
   };
 
+  /**
+   * A fixed-vocabulary field with an escape hatch, one step past the branch state field's
+   * "(as recorded)" pattern: picking "Other…" — or already holding a value outside the list,
+   * e.g. an existing client billed on "45 days from invoice" — swaps in a plain text box
+   * instead of silently replacing or blocking a value the dropdown does not recognise.
+   */
+  const vocabField = (value: string, onChange: (v: string) => void, options: { value: string; label: string }[], placeholder: string) => {
+    const isOther = !options.some((o) => o.value === value);
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        <Select
+          value={isOther ? OTHER : value}
+          onChange={(v) => onChange(v === OTHER ? '' : v)}
+          options={[...options, { value: OTHER, label: 'Other…' }]}
+          style={{ width: 200, maxWidth: '100%' }}
+        />
+        {isOther && (
+          <input value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} style={inputStyle} />
+        )}
+      </div>
+    );
+  };
+
   if (isLoading || detail.isLoading) return <div style={{ padding: 20, textAlign: 'center', color: 'var(--text-muted)', fontSize: 13 }}>Loading…</div>;
 
+  /**
+   * A failed fetch must not fall through to the form below: `form` was seeded from `billing`
+   * being `undefined` (the shape a failed query and a genuinely-empty profile share), so without
+   * this check the operator sees the exact same screen — including, on a client that DOES have a
+   * profile, the platform-default 18%/10% *in place of* whatever their real rates are — with Save
+   * fully enabled and no signal that what's on screen is a fetch failure, not this client's data.
+   * That is a real production reproduction, not a hypothetical: this client's own billing row
+   * loaded fine moments earlier and then failed on a later fetch during a live backend restart,
+   * and the panel briefly claimed the profile "isn't saved" while it plainly was. `billing` below
+   * is only ever read once this returns, so a genuine absence and a failed load can no longer be
+   * confused for each other in what follows.
+   */
+  if (billingIsError) {
+    return (
+      <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start', padding: '12px 14px', borderLeft: '3px solid var(--danger)', background: 'var(--bg-surface-2)', borderRadius: 'var(--radius-md)', fontSize: 12.5 }}>
+        <AlertTriangle size={15} style={{ color: 'var(--danger)', flexShrink: 0, marginTop: 1 }} />
+        <span style={{ color: 'var(--text-secondary)' }}>
+          Could not load this client's billing profile — this is not saying it's unset, the request failed.
+          Reload before editing, so a save here does not overwrite real rates with a guess.
+        </span>
+      </div>
+    );
+  }
+
   const hasRate = baseFee.trim() !== '' && Number(baseFee) > 0;
+  /**
+   * `billing` is `null` (not an object with defaulted fields) when this client has never had a
+   * billing profile saved — `ClientService.findBilling` returns exactly what the row is, and the
+   * error case that shares its "no object" shape was already returned above. The form still has
+   * to show *something* in the GST/TDS/terms inputs meanwhile (blank number inputs read as zero,
+   * which would be worse), so it fills them with the platform defaults. But filled with a
+   * plausible number is indistinguishable from actually saved, in a screen whose whole job is
+   * showing what will print on a real GST tax invoice: unlike the rate card just below (which
+   * shows a genuinely blank field, plus its own warning here), the tax fields gave no signal at
+   * all that "18" and "10" are a guess nobody has confirmed for this client, rather than a
+   * decision — the kind of gap 'billing-relevant fields' review for this project called for
+   * surfacing, not just correctly computing.
+   */
+  const hasBillingProfile = billing != null;
 
   return (
     <form onSubmit={save} style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -99,6 +215,18 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
           <AlertTriangle size={15} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: 1 }} />
           <span style={{ color: 'var(--text-secondary)' }}>
             No rate set. Until one is, this client's audits are billed at what the assayer is paid — every audit earns zero margin.
+          </span>
+        </div>
+      )}
+
+      {!hasBillingProfile && (
+        <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start', padding: '10px 12px', borderLeft: '3px solid var(--warning)', background: 'var(--bg-surface-2)', borderRadius: 'var(--radius-md)', fontSize: 12.5 }}>
+          <AlertTriangle size={15} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: 1 }} />
+          <span style={{ color: 'var(--text-secondary)' }}>
+            No billing profile saved for this client yet. The GST, TDS and terms below are the platform
+            defaults shown so the form isn't blank — not a decision made for this client. Review them (SEZ
+            or exempt clients and lower-deduction certificates are common) and save to confirm before this
+            client is invoiced for real.
           </span>
         </div>
       )}
@@ -128,23 +256,92 @@ export const BillingPanel: React.FC<{ clientId: string }> = ({ clientId }) => {
           <input type="number" value={form.tdsRate ?? ''} onChange={(e) => set('tdsRate', e.target.value)} style={inputStyle} />
         </Field>
         <Field label="Payment terms" hint="e.g. NET30 — sets the due date when an invoice is created.">
-          <input value={form.paymentTerms ?? ''} onChange={(e) => set('paymentTerms', e.target.value)} placeholder="NET30" style={inputStyle} />
+          {vocabField(form.paymentTerms ?? '', (v) => set('paymentTerms', v), PAYMENT_TERMS_OPTIONS, 'e.g. 45 days from invoice')}
         </Field>
         <Field label="Invoice cycle" hint="How often this client is invoiced.">
-          <input value={form.invoiceCycle ?? ''} onChange={(e) => set('invoiceCycle', e.target.value)} placeholder="MONTHLY" style={inputStyle} />
+          {vocabField(form.invoiceCycle ?? '', (v) => set('invoiceCycle', v), INVOICE_CYCLE_OPTIONS, 'e.g. Per project milestone')}
         </Field>
       </section>
 
       <section style={sectionStyle}>
         <h4 style={sectionTitle}><Truck size={14} /> Invoice details</h4>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
-          <label style={labelStyle}>GSTIN / tax identifier<input style={{ ...inputStyle, width: '100%' }} value={form.taxIdentifier ?? ''} onChange={(e) => set('taxIdentifier', e.target.value)} /></label>
-          <label style={labelStyle}>Currency<input style={{ ...inputStyle, width: '100%' }} value={form.currency ?? ''} onChange={(e) => set('currency', e.target.value)} /></label>
+          <label style={labelStyle}>
+            GSTIN / tax identifier
+            <input style={{ ...inputStyle, width: '100%' }} value={form.taxIdentifier ?? ''} onChange={(e) => set('taxIdentifier', e.target.value)} />
+            {/* Advisory only — the column already holds either a GSTIN or a bare PAN for
+                clients not GST-registered, and this must not block either. */}
+            {taxIdHint(form.taxIdentifier ?? '') && (
+              <span style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>{taxIdHint(form.taxIdentifier ?? '')}</span>
+            )}
+            {/* A bare PAN is a valid, accepted shape (the hint above stays silent for it) but it
+                carries no GST state prefix, so it has a real tax-invoice consequence the operator
+                should see now rather than discover on a printed invoice later. */}
+            {taxIdGstinConsequenceHint(form.taxIdentifier ?? '') && (
+              <span style={{ fontSize: '10.5px', color: 'var(--warning)' }}>{taxIdGstinConsequenceHint(form.taxIdentifier ?? '')}</span>
+            )}
+          </label>
+          <label style={labelStyle}>Currency{vocabField(form.currency ?? '', (v) => set('currency', v), CURRENCY_OPTIONS, 'e.g. AED')}</label>
           <label style={labelStyle}>Bank account<input style={{ ...inputStyle, width: '100%' }} value={form.bankAccount ?? ''} onChange={(e) => set('bankAccount', e.target.value)} /></label>
-          <label style={labelStyle}>Bank name<input style={{ ...inputStyle, width: '100%' }} value={form.bankName ?? ''} onChange={(e) => set('bankName', e.target.value)} /></label>
-          <label style={labelStyle}>IFSC<input style={{ ...inputStyle, width: '100%' }} value={form.ifscCode ?? ''} onChange={(e) => set('ifscCode', e.target.value)} /></label>
+          <label style={labelStyle}>
+            Bank name
+            <input style={{ ...inputStyle, width: '100%' }} value={form.bankName ?? ''} onChange={(e) => set('bankName', e.target.value)} />
+          </label>
+          <label style={labelStyle}>
+            IFSC
+            <input style={{ ...inputStyle, width: '100%' }} value={form.ifscCode ?? ''} onChange={(e) => set('ifscCode', e.target.value)} />
+            {/* Read-only supporting text from the lookup — not extra input fields of their own. */}
+            {ifscInfo && (
+              <span style={{ fontSize: '10.5px', color: 'var(--text-muted)' }}>
+                {[ifscInfo.branchName, ifscInfo.city, ifscInfo.state].filter(Boolean).join(', ')}
+              </span>
+            )}
+          </label>
         </div>
-        <label style={labelStyle}>Billing address<textarea rows={2} style={{ ...inputStyle, width: '100%' }} value={form.billingAddress ?? ''} onChange={(e) => set('billingAddress', e.target.value)} /></label>
+
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+          {/* Pincode first and geo-backed, same pattern as the client address and the branch
+              form: picking a result fills district, city and state together. */}
+          <label style={labelStyle}>
+            Pincode
+            <Autocomplete
+              value={billingAddr.pincode}
+              onChange={setBillingAddrField('pincode')}
+              onSelect={(place) => setBillingAddr((a) => applyPlaceToAddressGroup('pincode', place, a))}
+              placeholder="Type a pincode — the rest fills in"
+              filterType={(r) => !!r.pincode}
+            />
+          </label>
+          <label style={labelStyle}>
+            City
+            <Autocomplete
+              value={billingAddr.city}
+              onChange={setBillingAddrField('city')}
+              onSelect={(place) => setBillingAddr((a) => applyPlaceToAddressGroup('city', place, a))}
+              placeholder="Type to search city…"
+            />
+          </label>
+          <label style={labelStyle}>
+            District
+            <Autocomplete
+              value={billingAddr.district}
+              onChange={setBillingAddrField('district')}
+              onSelect={(place) => setBillingAddr((a) => applyPlaceToAddressGroup('district', place, a))}
+              placeholder="Type to search district…"
+            />
+          </label>
+          <label style={labelStyle}>
+            State
+            <Select
+              value={billingAddr.state}
+              onChange={setBillingAddrField('state')}
+              options={billingStateOptions}
+              placeholder="Select…"
+              style={{ width: '100%' }}
+            />
+          </label>
+        </div>
+        <label style={labelStyle}>Billing address<textarea rows={2} style={{ ...inputStyle, width: '100%' }} value={billingAddr.address} onChange={(e) => setBillingAddrField('address')(e.target.value)} /></label>
         <label style={labelStyle}>Notes<textarea rows={2} style={{ ...inputStyle, width: '100%' }} value={form.notes ?? ''} onChange={(e) => set('notes', e.target.value)} /></label>
       </section>
 

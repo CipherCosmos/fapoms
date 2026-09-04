@@ -146,8 +146,14 @@ const LEGACY_REGION_ALIASES: Record<string, Region> = {
 /**
  * Despaced initials → the state they abbreviate (keys as they look AFTER normalisation and
  * despacing, so "A.P", "A P" and "AP" are all one entry). Two-letter initials cannot collide
- * with a real despaced state name, and each resolves through STATE_TO_REGION — never directly
- * to a region — so there is exactly one place a state's region is declared.
+ * with a real despaced state name, and each resolves through STATE_TO_REGION or
+ * STATE_CANONICAL_NAMES — never directly to a region or a display name — so there is exactly
+ * one place a state's spelling is declared.
+ *
+ * This used to be read only by `resolveRegion`. `canonicalStateName` now consults it too (that
+ * is what let `utils.ts:canonicalState` retire its own 13-entry copy of the same codes — ap, ts,
+ * tn, kl, ka, mh, od, rj, up, py, dl, gj, wb — in favour of delegating here), so every code below
+ * has to resolve through both tables, not just the one `resolveRegion` originally needed.
  */
 const STATE_ABBREVIATIONS: Record<string, string> = {
   ap: 'andhra pradesh',
@@ -158,6 +164,15 @@ const STATE_ABBREVIATIONS: Record<string, string> = {
   wb: 'west bengal',
   tn: 'tamil nadu',
   jk: 'jammu and kashmir',
+  ts: 'telangana',
+  kl: 'kerala',
+  ka: 'karnataka',
+  mh: 'maharashtra',
+  od: 'odisha',
+  rj: 'rajasthan',
+  py: 'puducherry',
+  dl: 'delhi',
+  gj: 'gujarat',
 };
 
 /**
@@ -391,6 +406,13 @@ export function canonicalStateName(value: string | null | undefined): string | n
 
   const exact = STATE_CANONICAL_NAMES[key];
   if (exact) return exact;
+
+  // Two-letter codes ("AP", "MH", "J&K") never survive `normalizeStateKey` into anything the
+  // exact or despaced lookups below can find — they are too short for `STATE_CANONICAL_NAMES`
+  // and too short for `fuzzyStateMatch` to risk guessing at. Same table `resolveRegion` uses, so
+  // a code that identifies a region here identifies the same state's proper name.
+  const abbreviated = STATE_ABBREVIATIONS[key.replace(/\s/g, '')];
+  if (abbreviated) return STATE_CANONICAL_NAMES[abbreviated] ?? null;
 
   const despaced = key.replace(/\s/g, '');
   for (const [candidate, canonical] of Object.entries(STATE_CANONICAL_NAMES)) {

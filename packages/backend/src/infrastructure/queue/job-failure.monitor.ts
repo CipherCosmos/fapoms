@@ -3,19 +3,11 @@ import { ModuleRef } from '@nestjs/core';
 import { getQueueToken } from '@nestjs/bull';
 import type { Job, Queue } from 'bull';
 import { MetricsService } from '../observability/metrics.service';
+import { ALL_QUEUE_NAMES } from './worker-concurrency';
 
-// Kept in step with ALL_QUEUE_NAMES in main.ts. Duplicated deliberately rather than imported,
-// so this file does not pull in the bootstrap module.
-const QUEUE_NAMES = [
-  'background-jobs',
-  'ocr',
-  'sla-scanner',
-  'document-dispatch',
-  'notification-delivery',
-  // The outbox relay was missing, so a relay job that exhausted its retries — meaning domain
-  // events had stopped being recovered — dead-lettered with nothing watching.
-  'outbox',
-];
+// Derived from WORKER_CONCURRENCY (via ALL_QUEUE_NAMES), so a queue added there is watched here
+// automatically instead of needing a second hand-maintained list.
+const QUEUE_NAMES = ALL_QUEUE_NAMES;
 
 /** A job is dead-lettered once it has used up every configured attempt. */
 export function isExhausted(attemptsMade: number | undefined, maxAttempts: number | undefined): boolean {

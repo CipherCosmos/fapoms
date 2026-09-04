@@ -32,6 +32,15 @@ describe('PlanningAntiCorruptionLayer', () => {
     // No branch is already covered by an active assignment in this fixture.
     find: jest.fn().mockResolvedValue([]),
   };
+  const inPlayRegionsQb: any = {
+    innerJoin: jest.fn().mockReturnThis(),
+    where: jest.fn().mockReturnThis(),
+    andWhere: jest.fn().mockReturnThis(),
+    select: jest.fn().mockReturnThis(),
+    // Default: no in-play region resolvable (empty plannable set), so getAvailableAssayers
+    // falls back to the unscoped roster in tests that don't override this.
+    getRawMany: jest.fn().mockResolvedValue([]),
+  };
   const mockProjectBranchRepo = {
     find: jest.fn().mockResolvedValue([
       {
@@ -39,6 +48,7 @@ describe('PlanningAntiCorruptionLayer', () => {
         branch: { id: 'b-1', solId: 'B01', name: 'Pune Central', latitude: 18.5, longitude: 73.8, city: 'Pune', state: 'MH', requiredCompetencies: ['Gold'] },
       },
     ]),
+    createQueryBuilder: jest.fn().mockReturnValue(inPlayRegionsQb),
   };
 
   beforeEach(async () => {
@@ -69,6 +79,47 @@ describe('PlanningAntiCorruptionLayer', () => {
     expect(assayers.length).toBe(1);
     expect(assayers[0].displayName).toBe('Vijay Shankar');
     expect(assayers[0].location.latitude).toBe(19.0);
+  });
+
+  /**
+   * getAvailableAssayers used to load the entire national roster whenever the caller had no
+   * scope.regions (a national desk, or no scope at all). It now falls back to the regions of
+   * branches actually still awaiting coverage, and only loads the whole roster when even that
+   * can't be resolved.
+   */
+  describe('getAvailableAssayers region scoping', () => {
+    it('uses the caller-supplied scope regions directly, without touching in-play regions', async () => {
+      mockAssayerRepo.find.mockClear();
+      inPlayRegionsQb.getRawMany.mockClear();
+
+      await acl.getAvailableAssayers(new Date(), { regions: ['NORTH'] as any });
+
+      expect(mockAssayerRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ region: expect.anything() }) }),
+      );
+      expect(inPlayRegionsQb.getRawMany).not.toHaveBeenCalled();
+    });
+
+    it('falls back to the regions of still-plannable branches when the caller has no scope', async () => {
+      mockAssayerRepo.find.mockClear();
+      inPlayRegionsQb.getRawMany.mockResolvedValueOnce([{ region: 'SOUTH' }, { region: 'WEST' }]);
+
+      await acl.getAvailableAssayers(new Date());
+
+      expect(inPlayRegionsQb.getRawMany).toHaveBeenCalled();
+      const call = mockAssayerRepo.find.mock.calls[0][0];
+      expect(call.where.region).toBeDefined();
+    });
+
+    it('falls back to the full national roster only when no in-play region can be resolved', async () => {
+      mockAssayerRepo.find.mockClear();
+      inPlayRegionsQb.getRawMany.mockResolvedValueOnce([]);
+
+      await acl.getAvailableAssayers(new Date());
+
+      const call = mockAssayerRepo.find.mock.calls[0][0];
+      expect(call.where.region).toBeUndefined();
+    });
   });
 
   /**

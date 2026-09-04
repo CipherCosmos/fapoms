@@ -18,6 +18,8 @@ export interface CreateExpenseDto {
   amount: number;
   description?: string;
   receiptUrl?: string;
+  /** Mobile's idempotency key: a retried submission of the same claim carries the same id. */
+  clientRequestId?: string;
 }
 
 /** An assayer cannot claim an unbounded amount against a single visit without review. */
@@ -78,6 +80,19 @@ export class ExpenseService {
       throw new ForbiddenException('You can only claim expenses against an assignment of your own.');
     }
 
+    // Idempotency: a retried submission (flaky field connection) carries the same
+    // clientRequestId as the attempt it is retrying. Returning the existing claim here — rather
+    // than letting the unique index reject the insert — keeps the retry a 200 with the same
+    // shape a first-time success gets, which is what a client-side retry loop expects.
+    if (dto.clientRequestId) {
+      const existingClaim = await this.expenseRepository.findOne({
+        where: { assayerId: assignment.assayerId, clientRequestId: dto.clientRequestId },
+      });
+      if (existingClaim) {
+        return existingClaim;
+      }
+    }
+
     const amount = Number(dto.amount);
     if (!Number.isFinite(amount) || amount <= 0) {
       throw new BadRequestException('Expense amount must be a positive number.');
@@ -117,11 +132,25 @@ export class ExpenseService {
       description: dto.description?.trim() || null,
       receiptUrl: dto.receiptUrl || null,
       status: ExpenseStatus.PENDING,
+      clientRequestId: dto.clientRequestId || null,
       createdBy: userId,
       updatedBy: userId,
     });
 
-    const saved = await this.expenseRepository.save(expense);
+    let saved: ExpenseEntity;
+    try {
+      saved = await this.expenseRepository.save(expense);
+    } catch (err: any) {
+      // A concurrent retry can lose the read-then-check race above and hit the partial unique
+      // index instead; treat that the same as finding it up front rather than surfacing a 500.
+      if (dto.clientRequestId && err?.code === '23505') {
+        const existingClaim = await this.expenseRepository.findOne({
+          where: { assayerId: assignment.assayerId, clientRequestId: dto.clientRequestId },
+        });
+        if (existingClaim) return existingClaim;
+      }
+      throw err;
+    }
 
     await this.auditService.recordEvent({
       category: EventCategory.OPERATIONAL,
@@ -372,30 +401,46 @@ export class ExpenseService {
       );
     }
 
-    expense.status = approve ? ExpenseStatus.APPROVED : ExpenseStatus.REJECTED;
-    expense.reviewedBy = userId;
-    expense.reviewedAt = new Date();
-    expense.reviewNotes = notes?.trim() || null;
-    expense.updatedBy = userId;
-
     /**
-     * The approval and the money are one act.
+     * The approval and the money are one act — AND the PENDING→APPROVED/REJECTED transition is a
+     * compare-and-swap under a row lock, not a check-then-write around the read above.
      *
-     * Reimbursement goes through `assayer_payables` rather than a mechanism of its own: that
-     * table already knows how to approve, pay and record a payment history, and an expense payout
-     * is the same act as a fee payout. The approval and the payable are written in ONE
-     * transaction, so an approved claim with no money behind it cannot exist — the failure mode
-     * that previously needed an "unpaid approvals" queue and a retry button, and that opened a
-     * double-payment window on the retry. If the payable cannot be written, the approval rolls
-     * back and the reviewer sees the error.
+     * The status/maker-checker checks above run on a row read with no lock, so two concurrent
+     * reviews both saw PENDING. The unique index `UQ_assayer_payables_expense` stops a second
+     * APPROVE from booking a second payable, but an APPROVE racing a REJECT does not collide on
+     * that index — the reject writes no payable — so the two could interleave to leave the claim
+     * REJECTED with a reimbursement payable already booked against it: money out for a refused
+     * claim. Re-reading the row `FOR UPDATE` inside the transaction and re-asserting PENDING there
+     * makes the loser fail cleanly with "already <status>", exactly as a second sequential review
+     * would, whichever verb it carried.
+     *
+     * Reimbursement goes through `assayer_payables` rather than a mechanism of its own: that table
+     * already knows how to approve, pay and record a payment history, and an expense payout is the
+     * same act as a fee payout. Approval and payable are written in ONE transaction, so an approved
+     * claim with no money behind it cannot exist.
      */
-    const saved = approve
-      ? await this.uow.run(async (m) => {
-          const payable = await this.billing.createReimbursementPayable(expense, m, userId);
-          expense.reimbursementPayableId = payable.id;
-          return m.save(expense);
-        })
-      : await this.expenseRepository.save(expense);
+    const saved = await this.uow.run(async (m) => {
+      const locked = await m.findOne(ExpenseEntity, {
+        where: { id: expenseId },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!locked) throw new NotFoundException(`Expense ${expenseId} not found.`);
+      if (locked.status !== ExpenseStatus.PENDING) {
+        throw new BadRequestException(`This claim has already been ${locked.status.toLowerCase()}.`);
+      }
+
+      locked.status = approve ? ExpenseStatus.APPROVED : ExpenseStatus.REJECTED;
+      locked.reviewedBy = userId;
+      locked.reviewedAt = new Date();
+      locked.reviewNotes = notes?.trim() || null;
+      locked.updatedBy = userId;
+
+      if (approve) {
+        const payable = await this.billing.createReimbursementPayable(locked, m, userId);
+        locked.reimbursementPayableId = payable.id;
+      }
+      return m.save(locked);
+    });
 
     await this.auditService.recordEvent({
       category: EventCategory.WORKFLOW,

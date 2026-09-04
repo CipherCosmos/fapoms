@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { InteractivePlanningMap } from '../components/InteractivePlanningMap';
 import { TerritoryTable, POSTURE } from './executive/TerritoryTable';
 import type { Territory } from './executive/TerritoryTable';
@@ -10,8 +11,9 @@ import { api } from '../services/api';
 import { userMessage } from '../services/errors';
 import { useScope, withScope } from '../context/ScopeContext';
 import { useUrlSelection } from '../hooks/useUrlSelection';
+import { queryKeys } from '../hooks/queryKeys';
 import { formatRupees as money } from '@fapoms/shared';
-import { useExcelExport } from '../hooks/useExcelExport';
+import { useQueuedExcelExport } from '../hooks/useQueuedExcelExport';
 import { Select } from '../components/ui';
 
 interface BranchPoint {
@@ -64,12 +66,14 @@ interface CommandCenter {
  * coverage from real coordinates rather than by matching state names — the names
  * disagree between client branch lists and internal rosters, and distance is what
  * actually decides whether an assayer can service a branch.
+ *
+ * The query is kept live by `useSocketInvalidation` (mounted once in `Layout`), the same way
+ * `Dashboard` is: `queryKeys.commandCenter.all` sits in that hook's `SLOW_ROOTS` tier, since the
+ * call behind it scans every active branch and assayer and is already behind a 20s server cache —
+ * an assignment or branch event coalesces into one refetch rather than a per-event hit.
  */
 export const ExecutiveMap: React.FC = () => {
   const navigate = useNavigate();
-  const [data, setData] = useState<CommandCenter | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [clientId, setClientId] = useState('');
   const [clients, setClients] = useState<Array<{ id: string; name: string }>>([]);
   const [selectedState, setSelectedState] = useState<string | null>(null);
@@ -79,27 +83,27 @@ export const ExecutiveMap: React.FC = () => {
   const [selectedBranchId, setSelectedBranchId] = useUrlSelection('branchId');
   const [lens, setLens] = useState<'ALL' | 'GAPS' | 'UNASSIGNED'>('ALL');
 
-  const { download: downloadExcel, busy: exporting } = useExcelExport();
+  // Queued (POST .../jobs, poll, download) rather than the synchronous GET — see
+  // useQueuedExcelExport.ts. The Command Center sheet is built across every branch and assayer,
+  // so it is squarely one of the exports the blocking xlsx.write cost was measured on.
+  const { download: downloadExcel, busy: exporting } = useQueuedExcelExport();
   const handleExport = () => {
-    void downloadExcel('/reports/command-center', { ...scopeParams, clientId: clientId || undefined });
+    void downloadExcel('/reports/command-center/jobs', { ...scopeParams, clientId: clientId || undefined });
   };
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      // The page's own client picker still wins when set; everything else comes from the
-      // header's global scope, so the map draws the same slice the rest of the app is showing.
+  const { data, isPending, isFetching, error, refetch } = useQuery({
+    queryKey: [...queryKeys.commandCenter.all, scopeKey, clientId],
+    // The page's own client picker still wins when set; everything else comes from the header's
+    // global scope, so the map draws the same slice the rest of the app is showing. `signal`
+    // forwarded so a scope/client change cancels the superseded request rather than letting a
+    // late reply repaint the map with a slice the operator has since filtered away from.
+    queryFn: ({ signal }) => {
       const q = withScope(scopeParams, { clientId: clientId || undefined });
-      setData(await api.request<CommandCenter>(`/planning/command-center${q ? `?${q}` : ''}`));
-    } catch (e: any) {
-      setError(`Failed to load command centre. ${userMessage(e)}`);
-    } finally {
-      setLoading(false);
-    }
-  }, [clientId, scopeKey]);
+      return api.request<CommandCenter>(`/planning/command-center${q ? `?${q}` : ''}`, { signal });
+    },
+    staleTime: 30_000,
+  });
 
-  useEffect(() => { load(); }, [load]);
   useEffect(() => {
     api.request<any[]>('/clients?limit=100')
       .then((list) => setClients((list || []).map((c: any) => ({ id: c.id, name: c.name }))))
@@ -134,6 +138,12 @@ export const ExecutiveMap: React.FC = () => {
   // Capacity is expressed per day; demand in assayer-days. Dividing gives the
   // number of working days the current book would take at full utilisation.
   const daysToClear = t && t.dailyCapacity > 0 ? (t.demandAssayerDays / t.dailyCapacity).toFixed(1) : null;
+  // The map now refreshes on its own (live socket-driven invalidation, below) with no visible
+  // motion when it does — the grid of numbers just changes. Without this, "as of when" was
+  // unanswerable short of clicking Refresh and hoping. Same clock format Dashboard uses.
+  const updatedAt = data?.generatedAt
+    ? new Date(data.generatedAt).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+    : null;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
@@ -153,8 +163,17 @@ export const ExecutiveMap: React.FC = () => {
             onChange={(v) => { setClientId(v); setSelectedState(null); }}
             options={[{ value: '', label: 'All clients' }, ...clients.map((c) => ({ value: c.id, label: c.name }))]}
           />
-          <button onClick={load} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
-            <RefreshCw size={14} className={loading ? 'spin' : ''} /> Refresh
+          {updatedAt && (
+            <span style={{
+              fontSize: 11.5, fontWeight: 600, color: 'var(--text-muted)',
+              padding: '5px 11px', borderRadius: 'var(--radius-full)',
+              background: 'var(--bg-secondary)', border: '1px solid var(--border-hair)',
+            }}>
+              {isFetching ? 'Updating…' : `As of ${updatedAt}`}
+            </span>
+          )}
+          <button onClick={() => refetch()} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+            <RefreshCw size={14} className={isFetching ? 'spin' : ''} /> Refresh
           </button>
           {/* The command-centre sheet covers every branch in scope — slow enough that the
               button looked dead and got clicked twice. */}
@@ -166,10 +185,10 @@ export const ExecutiveMap: React.FC = () => {
 
       {error && (
         <div style={{ padding: 14, background: 'var(--status-cancelled-bg)', border: '1px solid var(--status-cancelled-bg)', borderRadius: 'var(--radius-md)', color: 'var(--danger)', fontSize: 13 }}>
-          {error}
+          Failed to load command centre. {userMessage(error)}
         </div>
       )}
-      {loading && !data && <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 13 }}>Loading geographic intelligence…</div>}
+      {isPending && <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 13 }}>Loading geographic intelligence…</div>}
 
       {data && t && (
         <>

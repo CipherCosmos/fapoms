@@ -32,6 +32,24 @@ import { WORK_TAB_STRIP_HEIGHT } from './work/workTabs';
 import { money } from '../utils/money';
 import { visibleSelection, hiddenSelectionNote } from '../utils/selection';
 import { counted } from '../utils/plural';
+
+/**
+ * "Unable to cover" reasons, seeded from context rather than mined from real history (no
+ * assignment has hit this path yet on this database). This is the desk-side equivalent of the
+ * assignment controller's own decline-reason comment (`assignment.controller.ts`, ~line 620) —
+ * "Assayer unavailable" is kept as the exact same string on purpose since it names the same real
+ * event there. The rest of the two lists genuinely differ: a decline is the assayer's own reason
+ * for turning down one offer, this is the desk's reason nobody could be found or sent at all, so
+ * they are not merged into a single shared list.
+ */
+const UNABLE_TO_COVER_REASON_PRESETS = [
+  'No assayer in this area',
+  'Distance/logistics infeasible',
+  'Client access denied',
+  'Assayer unavailable',
+] as const;
+const UNABLE_REASON_OTHER = 'Other';
+
 /** Mirrors FeeBreakdown from packages/backend/src/modules/pricing/fee-policy.service.ts. */
 interface FeeQuote {
   baseFee: number;
@@ -653,7 +671,12 @@ export const PlanningWorkspace: React.FC = () => {
   useEffect(() => {
     if (projects.length === 0) return;
     if (!selectedProjectId) setSelectedProjectId(projects[0].id);
-  }, [projects, selectedProjectId]);
+    // `setSelectedProjectId` is useUrlSelection's setter, which is rebuilt when the query string
+    // changes (react-router keys `setSearchParams` on `searchParams`). Listing it is still safe, and
+    // cheaper than it looks: the guard above reads `projectIdParam` out of that same query string,
+    // so the moment this writes a project the guard closes and every later re-run is a no-op. It
+    // cannot feed itself.
+  }, [projects, selectedProjectId, setSelectedProjectId]);
 
   /** Set when the chosen project contradicts the header's project, rather than narrowing under it. */
   const scopeMismatch = useMemo(
@@ -901,6 +924,16 @@ export const PlanningWorkspace: React.FC = () => {
    */
   const [dayPlanProjectIds, setDayPlanProjectIds] = useState<string[]>([]);
   const [isLoadingDayPlans, setIsLoadingDayPlans] = useState(false);
+  /**
+   * Why the day plans are not on screen, when they are not.
+   *
+   * A failed generate used to reach `console.error` and nowhere else, and because the loader
+   * clears `dayPlanData` first, the panel fell back to its untouched prompt — "Click Generate
+   * Day Plans to cluster branches…" — to a planner who had just clicked exactly that. Kept out
+   * of the page-wide `message` banner because that one carries the result of the last commit,
+   * which runs a reload immediately afterwards and would otherwise overwrite itself.
+   */
+  const [dayPlanError, setDayPlanError] = useState<string | null>(null);
   const [expandedCluster, setExpandedCluster] = useState<string | null>(null);
   // Day plans previously had no date picker at all — always locked to the backend's default
   // of "right now", with no way to ask "what would tomorrow's coverage look like". Defaults to
@@ -1000,6 +1033,7 @@ export const PlanningWorkspace: React.FC = () => {
     if (!selectedProjectId) return;
     setIsLoadingDayPlans(true);
     setDayPlanData(null);
+    setDayPlanError(null);
     try {
       // Reuses the exact "Min Radius Filter" control already on this page (slaEnabled/
       // slaRadius) instead of a separate day-plans-only control — one setting, consistent
@@ -1018,7 +1052,7 @@ export const PlanningWorkspace: React.FC = () => {
       });
       setDayPlanData(data);
       if (data.clusters?.length > 0) setExpandedCluster(data.clusters[0].cluster.clusterId);
-    } catch (err) { console.error('Failed to load day plans', err); }
+    } catch (err) { setDayPlanError(userMessage(err)); }
     finally { setIsLoadingDayPlans(false); }
   };
 
@@ -1118,7 +1152,7 @@ export const PlanningWorkspace: React.FC = () => {
       });
     }
     refreshBranches();
-    loadDayPlans();
+    void loadDayPlans();
   };
 
   const toggleBulkSelect = (id: string) => {
@@ -1142,7 +1176,7 @@ export const PlanningWorkspace: React.FC = () => {
     setBulkSelectedIds((prev) => {
       const allShownTicked = selectable.every((b) => prev.has(b.id));
       const next = new Set(prev);
-      for (const b of selectable) allShownTicked ? next.delete(b.id) : next.add(b.id);
+      for (const b of selectable) { if (allShownTicked) next.delete(b.id); else next.add(b.id); }
       return next;
     });
   };
@@ -1733,14 +1767,30 @@ export const PlanningWorkspace: React.FC = () => {
           projectBranchId: selectedPb.id,
           assayerId: candidate.assayerId,
           // Date-bound exclusions (booked / on leave today) are assigned FOR a chosen date the
-          // assayer is free — the whole point of surfacing them instead of hiding them.
-          scheduledDate: scheduledDate || undefined,
+          // assayer is free — the whole point of surfacing them instead of hiding them. Every
+          // other exclusion kind (POLICY/SKILLS/ROTATION/DISTANCE) leaves the panel's own
+          // `scheduledDate` empty, so this used to fall through to `undefined` and let the
+          // server default the assignment to its own idea of "today" — silently different from
+          // the "Audit on" date the whole candidate list on screen was being evaluated against
+          // (`scheduledAuditDate`, the date this override decision was actually made for). That
+          // could dispatch someone for a day their availability was never checked. Falling back
+          // to it here matches the regular (non-override) assign flow a few hundred lines up,
+          // which has always sent `scheduledAuditDate` — the override path was the one path that
+          // forgot to.
+          scheduledDate: scheduledDate || scheduledAuditDate || undefined,
           remarks: `Filter override — bypassed "${candidate.reason}". Reason: ${reason}`,
+          // The server now enforces this itself (an ineligible assayer 400s without it) and
+          // records it on its own audit event — this was previously folded only into free-text
+          // `remarks`, which nothing server-side read or required, so a direct API call could
+          // omit it entirely. Sent alongside `remarks`, not instead of it: `remarks` still carries
+          // the human-readable "why", `overrideReason` is what the eligibility check itself reads.
+          overrideReason: reason,
         }),
       });
+      const effectiveDate = scheduledDate || scheduledAuditDate;
       setMessage({
         type: 'success',
-        text: `${candidate.displayName} assigned to ${selectedPb.branch?.name || 'branch'}${scheduledDate ? ` for ${scheduledDate}` : ''} (override recorded).`,
+        text: `${candidate.displayName} assigned to ${selectedPb.branch?.name || 'branch'}${effectiveDate ? ` for ${effectiveDate}` : ''} (override recorded).`,
       });
       refreshBranches();
       // The candidate list has to move too: the assayer just assigned now shows as pending on
@@ -2554,7 +2604,7 @@ export const PlanningWorkspace: React.FC = () => {
                     onClick={() => {
                       setLayoutMode(k);
                       setLayoutMenuOpen(false);
-                      if (k === 'day-plans' && selectedProjectId && !dayPlanData) loadDayPlans();
+                      if (k === 'day-plans' && selectedProjectId && !dayPlanData) void loadDayPlans();
                     }}
                     style={{
                       background: layout === k ? 'rgba(216,174,71,0.2)' : 'transparent',
@@ -3339,7 +3389,7 @@ export const PlanningWorkspace: React.FC = () => {
                         onClick={() => {
                           const next = on ? dayPlanProjectIds.filter((x) => x !== p.id) : [...dayPlanProjectIds, p.id];
                           setDayPlanProjectIds(next);
-                          loadDayPlans(next);
+                          void loadDayPlans(next);
                         }}
                         title={`${on ? 'Exclude' : 'Include'} ${p.name} when clustering branches for this day`}
                         style={{ padding: '3px 8px', fontSize: '10.5px', fontWeight: on ? 700 : 500, cursor: 'pointer',
@@ -3369,7 +3419,7 @@ export const PlanningWorkspace: React.FC = () => {
                   style={{ fontSize: '10px', padding: '2px 5px', background: 'var(--bg-primary)', borderRadius: '4px', color: 'var(--warning)' }}
                 />
               )}
-              <button onClick={() => loadDayPlans()} disabled={isLoadingDayPlans}
+              <button onClick={() => void loadDayPlans()} disabled={isLoadingDayPlans}
                 className="btn btn-primary" style={{ padding: '6px 14px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '5px' }}>
                 <Route size={13} /> {isLoadingDayPlans ? 'Generating...' : 'Generate Day Plans'}
               </button>
@@ -3393,9 +3443,20 @@ export const PlanningWorkspace: React.FC = () => {
           )}
 
           {!isLoadingDayPlans && !dayPlanData && (
-            <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--text-muted)', fontSize: '13px' }}>
+            <div style={{ textAlign: 'center', padding: '60px 20px', color: dayPlanError ? 'var(--danger)' : 'var(--text-muted)', fontSize: '13px' }}>
               <Layers size={40} style={{ color: 'var(--border-color)', margin: '0 auto 12px', display: 'block' }} />
-              Click "Generate Day Plans" to cluster branches and find optimal assayer assignments.
+              {dayPlanError ? (
+                <>
+                  Day plans could not be generated. {dayPlanError}
+                  <div style={{ marginTop: '10px' }}>
+                    <button onClick={() => void loadDayPlans()} className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: '11px', width: 'auto' }}>
+                      Try again
+                    </button>
+                  </div>
+                </>
+              ) : (
+                'Click "Generate Day Plans" to cluster branches and find optimal assayer assignments.'
+              )}
             </div>
           )}
 
@@ -3784,6 +3845,21 @@ export const PlanningWorkspace: React.FC = () => {
               Recorded against <b>{unableModal.label}</b> and reported to the client. Be specific
               (e.g. "No certified assayer within 150km for the SLA window").
             </div>
+            {/*
+              A fast-fill preset, not a constraint: choosing one writes its text into the same
+              textarea below, and "Other…" clears it for free typing. Whatever ends up in the
+              textarea — preset, edited preset, or fully free text — is exactly what gets posted;
+              the select can never gate it.
+            */}
+            <Select
+              aria-label="Reason preset"
+              value={(UNABLE_TO_COVER_REASON_PRESETS as readonly string[]).includes(unableReason) ? unableReason : UNABLE_REASON_OTHER}
+              onChange={(v) => setUnableReason(v === UNABLE_REASON_OTHER ? '' : v)}
+              options={[
+                ...UNABLE_TO_COVER_REASON_PRESETS.map((r) => ({ value: r, label: r })),
+                { value: UNABLE_REASON_OTHER, label: 'Other…' },
+              ]}
+            />
             <textarea
               autoFocus
               value={unableReason}

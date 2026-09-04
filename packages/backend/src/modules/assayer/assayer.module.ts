@@ -25,6 +25,7 @@ import { HrWorkforceService } from './hr-workforce.service';
 import { AssayerService } from './assayer.service';
 import { LocationTrailService } from './location-trail.service';
 import { AssayerController } from './assayer.controller';
+import { RosterQueryService } from './roster-query.service';
 import { AssayerSelfServiceController } from './assayer-self-service.controller';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { GeoModule } from '../geo/geo.module';
@@ -62,7 +63,7 @@ import { GeoModule } from '../geo/geo.module';
   // routes in registration order, and the two share the `assayers` prefix; keeping the
   // long-established routes first means a new self-service path can never shadow one of them.
   controllers: [AssayerController, HrController, AssayerSelfServiceController],
-  providers: [AssayerService, HrWorkforceService, LocationTrailService, RosterImportService, RosterImportWorker, RosterRecordsService, QualificationScoreService, DataIntegrityService],
-  exports: [AssayerService, HrWorkforceService, LocationTrailService, RosterImportService, RosterRecordsService, QualificationScoreService, DataIntegrityService, TypeOrmModule],
+  providers: [AssayerService, HrWorkforceService, LocationTrailService, RosterImportService, RosterImportWorker, RosterRecordsService, QualificationScoreService, DataIntegrityService, RosterQueryService],
+  exports: [AssayerService, HrWorkforceService, LocationTrailService, RosterImportService, RosterRecordsService, QualificationScoreService, DataIntegrityService, RosterQueryService, TypeOrmModule],
 })
 export class AssayerModule {}

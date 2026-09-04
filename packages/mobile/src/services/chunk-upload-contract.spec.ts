@@ -58,4 +58,31 @@ describe('resumable chunk upload contract', () => {
     // "No chunk content received." with a 400 that reads like a client bug.
     expect(chunkUpload).toMatch(/fieldName:\s*'chunk'/);
   });
+
+  /**
+   * The `/upload/session/:uploadId/complete` call that finalises a resumable audited-return
+   * upload must carry `assignmentId`, not just `type`.
+   *
+   * Without it, the server's `completeAssignmentForReturn` falls back to matching an assignment
+   * by `assessmentId`/`projectBranchId` against a value this upload's session was opened with
+   * that is actually the assignment's own id — neither fallback can ever match, the lookup comes
+   * back empty, and the assignment is never completed. Silently: no exception, no error toast, no
+   * log line, nothing the assayer or anyone reading the server console would see.
+   *
+   * Verified live against a running server before this was fixed: an assignment
+   * (ASN-2026-000004) had four separate audited-return packets uploaded successfully over
+   * several hours — each one marked SENT on the device, each one a real document row on the
+   * server — and its status never once moved off ACCEPTED. Adding `assignmentId` to this body is
+   * what closed the gap; this test is a structural guard (same rationale as the rest of this
+   * file — there is no server here to actually complete an assignment against) so the field
+   * cannot be quietly dropped again by an edit that touches this call.
+   */
+  it('sends assignmentId when finalising a resumable audited-return upload', () => {
+    const start = source.indexOf(
+      "`${API_BASE_URL}/documents/upload/session/${uploadId}/complete`",
+    );
+    expect(start).toBeGreaterThan(-1);
+    const completeCall = source.slice(start, source.indexOf('});', start));
+    expect(completeCall).toMatch(/body:\s*JSON\.stringify\(\{[^)]*assignmentId/);
+  });
 });

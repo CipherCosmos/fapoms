@@ -118,6 +118,11 @@ export function useHoldPayout() {
     billingApi.holdPayout(id, onHold, reason));
 }
 
+export function useReopenAssignment() {
+  return useBillingMutation(({ assignmentId, reason }: { assignmentId: string; reason: string }) =>
+    billingApi.reopenAssignment(assignmentId, reason));
+}
+
 export function useCreateBillingInvoice() {
   return useBillingMutation((payload: CreateInvoicePayload) => billingApi.createInvoice(payload));
 }

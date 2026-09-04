@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import {
-  User, Lock, Palette, Check, Save, KeyRound, AlertCircle, CheckCircle2,
+  User, Lock, Palette, Check, Save, KeyRound, AlertCircle, CheckCircle2, MonitorSmartphone,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { userMessage } from '../services/errors';
+import { SessionsPanel } from './account/SessionsPanel';
 import {
   THEMES,
   ACCENTS,
@@ -11,7 +12,7 @@ import {
   useTheme,
 } from '../hooks/useTheme';
 
-type SettingsTab = 'PROFILE' | 'SECURITY' | 'APPEARANCE';
+type SettingsTab = 'PROFILE' | 'SECURITY' | 'SESSIONS' | 'APPEARANCE';
 
 interface UserProfileData {
   id: string;
@@ -157,6 +158,14 @@ export const Settings: React.FC = () => {
         >
           <Lock size={16} />
           <span>Security & Password</span>
+        </button>
+        <button
+          onClick={() => setActiveTab('SESSIONS')}
+          className={`btn ${activeTab === 'SESSIONS' ? 'btn-primary' : 'btn-ghost'}`}
+          style={{ gap: '8px', padding: '8px 16px', fontSize: '13px', borderRadius: 'var(--radius-md) var(--radius-md) 0 0' }}
+        >
+          <MonitorSmartphone size={16} />
+          <span>Sessions & Devices</span>
         </button>
         <button
           onClick={() => setActiveTab('APPEARANCE')}
@@ -424,7 +433,19 @@ export const Settings: React.FC = () => {
         </div>
       )}
 
-      {/* TAB 3: APPEARANCE */}
+      {/* TAB 3: SESSIONS & DEVICES */}
+      {activeTab === 'SESSIONS' && (
+        <div className="glass-card" style={{ padding: '28px', borderRadius: 'var(--radius-lg)' }}>
+          <h3 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '6px', color: 'var(--text-primary)' }}>Sessions & Devices</h3>
+          <p style={{ fontSize: '13px', color: 'var(--text-secondary)', marginBottom: '24px' }}>
+            Every device signed in to your account, with the address and when it was last active.
+            If you don’t recognise one, sign it out — that device will be signed out and cannot refresh.
+          </p>
+          <SessionsPanel />
+        </div>
+      )}
+
+      {/* TAB 4: APPEARANCE */}
       {activeTab === 'APPEARANCE' && (
         <div className="glass-card" style={{ padding: '28px', borderRadius: 'var(--radius-lg)' }}>
           <h3 style={{ fontSize: '18px', fontWeight: 700, marginBottom: '6px', color: 'var(--text-primary)' }}>Theme & Visual Style</h3>

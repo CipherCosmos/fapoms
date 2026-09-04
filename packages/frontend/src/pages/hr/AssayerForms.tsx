@@ -4,6 +4,7 @@ import {
   isValidPan, isValidIfsc, isValidAadhaar, AADHAAR_PATTERN, CRITICAL_ASSAYER_RECORD_FIELDS,
 } from '@fapoms/shared';
 import { fetchWholeAssayerRoster } from '../../services/assayer-roster';
+import { fetchStaffDirectory } from '../../services/staff-directory';
 import { Select } from '../../components/ui';
 import { Autocomplete } from '../../components/ui/Autocomplete';
 import { ChipMultiSelect } from '../../components/ui/ChipMultiSelect';
@@ -11,6 +12,7 @@ import { asOptions } from '../../hooks/useWorkforceVocabulary';
 import { blocksPhrase, type Assayer } from './assayer-shared';
 import { userMessage } from '../../services/errors';
 import { fetchWithTimeout } from '../../services/http';
+import { api } from '../../services/api';
 
 /**
  * Assayer field definitions and the one renderer that draws them.
@@ -132,6 +134,15 @@ export interface FieldDef {
    * Used for the reporting manager, which is an id nobody can be expected to know by heart.
    */
   people?: true;
+  /**
+   * Renders the same searchable list, but stores the picked NAME rather than an id. Used for
+   * `hrOwnerName`, which is a plain text column (`assayers.hr_owner_name`) naming a staff
+   * member, not a foreign key — there is nothing on the record to look an id back up against,
+   * so the column has to hold what a human reads. The candidate list still comes from a real
+   * roster (`useHrOwnerOptions`) rather than a free box, so the value on file is a name that
+   * roster actually recognises.
+   */
+  hrOwnerPicker?: true;
   hint?: string;
 }
 
@@ -178,6 +189,39 @@ export const useManagerOptions = (enabled: boolean, excludeId?: string) => {
     return () => { alive = false; };
   }, [enabled, excludeId]);
   return { people, failed, incomplete };
+};
+
+/**
+ * The staff who can be named as "who in HR looks after this person".
+ *
+ * `GET /users/directory` (`fetchStaffDirectory`) rather than `GET /assayers`: this is an
+ * internal staff member, not an appraiser, and the assayer roster this screen already holds for
+ * `useManagerOptions` would not contain them. It is also not `GET /users` — that route needs
+ * `user:view:organization`, which a desk clerk filling in this form does not hold; the directory
+ * route is gated the same way `/hr` itself is, so whoever can reach this screen can call it.
+ *
+ * One request, no `missing`/`incomplete` tracking: the server itself returns everyone up to its
+ * own 5,000-row ceiling rather than paging, so there is no partial page for this hook to detect.
+ */
+export const useHrOwnerOptions = (enabled: boolean) => {
+  const [people, setPeople] = useState<{ value: string; label: string }[] | null>(null);
+  const [failed, setFailed] = useState<string | null>(null);
+  useEffect(() => {
+    if (!enabled) return;
+    let alive = true;
+    fetchStaffDirectory()
+      .then(({ people: staff }) => {
+        if (!alive) return;
+        setPeople(
+          staff
+            .map((u) => ({ value: u.displayName, label: u.displayName }))
+            .sort((x, y) => x.label.localeCompare(y.label)),
+        );
+      })
+      .catch((e) => { if (alive) { setPeople([]); setFailed(userMessage(e)); } });
+    return () => { alive = false; };
+  }, [enabled]);
+  return { people, failed };
 };
 
 /**
@@ -265,6 +309,32 @@ export const resolvePincode = async (pincode: string): Promise<{ state: string; 
     const po = ok && ok.Status === 'Success' ? ok.PostOffice?.[0] : null;
     return po ? { state: String(po.State || ''), district: String(po.District || '') } : null;
   } catch { return null; /* can't verify client-side; backend enforces */ }
+};
+
+/** A bank/branch/city/state lookup for a shape-valid IFSC code — see `resolveIfsc`. */
+export interface IfscInfo {
+  bankName: string;
+  branchName: string;
+  city: string | null;
+  state: string | null;
+  address: string | null;
+}
+
+/**
+ * IFSC → bank/branch lookup, on the same "advisory, never blocking" terms as `resolvePincode`.
+ *
+ * Unlike the pincode check this goes through OUR backend (`GET /geo/ifsc/:code`, not a third
+ * party this browser talks to directly) — the server holds the 8-second budget and the "never
+ * throws" contract with the actual provider, and hands back `null` for a malformed code, an
+ * unknown one, or a provider outage. So the shape check here is only to avoid spending a request
+ * on a code that is obviously still being typed; the server would refuse it anyway.
+ */
+export const resolveIfsc = async (code: string): Promise<IfscInfo | null> => {
+  const v = (code || '').trim().toUpperCase();
+  if (!isValidIfsc(v)) return null;
+  try {
+    return await api.request<IfscInfo | null>(`/geo/ifsc/${encodeURIComponent(v)}`);
+  } catch { return null; /* a lookup failure must never block the form */ }
 };
 
 /** A contradiction between what the directory says and what the operator typed, in plain words. */
@@ -423,7 +493,7 @@ export const EDIT_FIELDS: FieldDef[] = [
   { key: 'qualification', label: 'Qualification', placeholder: 'e.g. B.Com, C.A Final' },
   { key: 'bankName', label: 'Bank Name' },
   { key: 'vstsCode', label: 'VSTS Code', placeholder: 'Their code in the vault system' },
-  { key: 'hrOwnerName', label: 'HR Owner', placeholder: 'Who in HR looks after this person' },
+  { key: 'hrOwnerName', label: 'HR Owner', hrOwnerPicker: true, hint: 'Who in HR looks after this person.' },
   { key: 'engagementType', label: 'Engaged As', options: ENGAGEMENT_OPTIONS },
   { key: 'unavailableReason', label: 'Unavailable Because', options: UNAVAILABLE_OPTIONS },
   { key: 'emergencyContactName', label: 'Emergency Contact Name' },
@@ -434,10 +504,23 @@ export const EDIT_FIELDS: FieldDef[] = [
   { key: 'notes', label: 'Notes', full: true },
 ];
 
-const GEO_AUTO_FIELDS = new Set(['district', 'city', 'pincode']);
+/**
+ * Which fields route through the live geo lookup rather than a plain box.
+ *
+ * Exported so a second screen editing the same address facts — the record's inline Summary
+ * editor — can ask this list rather than growing its own idea of which three fields those are.
+ */
+export const GEO_AUTO_FIELDS = new Set(['district', 'city', 'pincode']);
 
-/** Apply a selected real place to the whole address group so state/district/city/pincode stay consistent. */
-const applyPlace = (fieldKey: string, place: { label: string; state: string; district: string; pincode: string }, form: Record<string, string>, setForm: (v: Record<string, string>) => void) => {
+/**
+ * Apply a selected real place to the whole address group so state/district/city/pincode stay
+ * consistent.
+ *
+ * Exported (rather than kept private to the wizard's own render call) so the record page's
+ * inline Summary editor — a second screen editing these same four fields — can call this
+ * directly instead of growing a second, drifting copy of the cross-fill rule.
+ */
+export const applyPlace = (fieldKey: string, place: { label: string; state: string; district: string; pincode: string }, form: Record<string, string>, setForm: (v: Record<string, string>) => void) => {
   const primary = (place.label || '').split(',')[0].trim();
   const next = { ...form };
   if (fieldKey === 'city' || fieldKey === 'pincode') {
@@ -471,6 +554,18 @@ export const renderFormField = (
     /** Present only when some of the roster could not be loaded — see `useManagerOptions`. */
     incomplete?: { shown: number; total: number } | null;
   },
+  /** The HR-owner picker's own candidate list — see `useHrOwnerOptions`. */
+  hrOwners?: {
+    options: { value: string; label: string }[] | null;
+    failed: string | null;
+  },
+  /**
+   * The last successful `resolveIfsc` lookup for THIS form's `ifscCode` box, if any — shown as
+   * small read-only supporting text under that one field. Never under `bankName`: that field
+   * stays a plain, overwritable input, and the caller (not this renderer) is what actually calls
+   * `resolveIfsc` and writes the resolved bank name into `bankName` on blur.
+   */
+  ifscInfo?: IfscInfo | null,
 ) => {
   const val = form[field.key] || '';
   const isTextarea = FIELD_TEXTAREA.has(field.key);
@@ -563,6 +658,37 @@ export const renderFormField = (
                   Only {people.incomplete.shown} of the {people.incomplete.total} people on the
                   roster could be loaded, so {people.incomplete.total - people.incomplete.shown} are
                   not in this list. Reload the page to try again.
+                </div>
+              )}
+            </>
+          );
+        })()
+      ) : field.hrOwnerPicker ? (
+        /**
+         * Same picker shape as `field.people` above, but the value stored is the picked NAME —
+         * `hrOwnerName` is free text, not a foreign key, so there is no id to store instead. A
+         * value already on file that matches nobody in the directory (someone who has since left,
+         * or a name typed before this field was a picker) is still offered back rather than
+         * silently dropped, exactly as an orphaned manager id is above.
+         */
+        (() => {
+          const opts = hrOwners?.options ?? null;
+          const known = (opts || []).some((o) => o.value === val);
+          return (
+            <>
+              <ChipMultiSelect
+                single
+                options={val && !known ? [...(opts || []), { value: val, label: 'Recorded earlier' }] : (opts || [])}
+                value={val ? [val] : []}
+                onChange={(next) => setForm({ ...form, [field.key]: next[0] || '' })}
+                searchPlaceholder="Search by name…"
+                searchThreshold={5}
+                emptyText={opts === null ? 'Loading staff…' : 'No staff found.'}
+                aria-label={field.label}
+              />
+              {hrOwners?.failed && (
+                <div style={{ fontSize: '12px', color: 'var(--warning)', marginTop: '4px' }}>
+                  Could not load the staff list. {hrOwners.failed}
                 </div>
               )}
             </>
@@ -686,6 +812,20 @@ export const renderFormField = (
       {(formatHint(field.key, val) || field.hint) && (
         <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
           {formatHint(field.key, val) || field.hint}
+        </div>
+      )}
+      {/*
+        What the code resolved to, printed beside the code rather than turned into new input
+        boxes — `bankName` is the only field this is allowed to change, and it stays a plain,
+        overwritable box even after this fires. Branch/city/state are shown so the operator can
+        tell a wrong code from a right one before saving, not stored anywhere new.
+      */}
+      {field.key === 'ifscCode' && ifscInfo && (
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
+          {ifscInfo.bankName}
+          {ifscInfo.branchName ? ` — ${ifscInfo.branchName}` : ''}
+          {ifscInfo.city ? `, ${ifscInfo.city}` : ''}
+          {ifscInfo.state ? `, ${ifscInfo.state}` : ''}
         </div>
       )}
     </div>

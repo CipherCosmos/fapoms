@@ -365,9 +365,21 @@ export class DayPlannerService {
       unassigned.map((pb) => [pb.id, clientForProject(pb.projectId)] as const),
     );
 
-    // 4. Get all active assayers
+    // 4. Get active assayers, scoped to the regions of the branches actually in this run.
+    // A run's clusters only ever draw from branches in `unassigned`, so pulling the whole
+    // national roster here (as before) loaded thousands of rows the run could never use.
+    // Fall back to the unscoped roster only when no region can be resolved from the branches
+    // in scope (e.g. branches missing a region), matching the region-scoping desk model used
+    // elsewhere in planning (see planning-acl.adapter.ts).
+    const regionsInScope = Array.from(
+      new Set(unassigned.map((pb) => pb.branch?.region).filter((r): r is string => !!r)),
+    );
     const assayers = await this.assayerRepository.find({
-      where: { isActive: true, status: AssayerStatus.ACTIVE },
+      where: {
+        isActive: true,
+        status: AssayerStatus.ACTIVE,
+        ...(regionsInScope.length ? { region: In(regionsInScope) } : {}),
+      },
     });
     await this.assayerService.hydrateAllWorkforceAttributes(assayers);
 

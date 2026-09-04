@@ -31,11 +31,15 @@ export const en = {
     edit: 'Edit',
     close: 'Close',
     back: 'Back',
+    remove: 'Remove',
     notNow: 'Not now',
     tryAgain: 'Try again',
     signOut: 'Sign out',
     retry: 'Retry',
     notOnFile: 'Not on file',
+    // Shown when a network/timeout failure leaves an action queued for automatic retry, rather
+    // than a plain "failed" that implies the assayer must act again themselves.
+    willRetry: "Saved. We'll send it automatically once you're back online.",
   },
 
   login: {
@@ -333,6 +337,11 @@ export const en = {
       body: "You'll need your password to sign back in.",
       accessibility: 'Sign out of Orbit',
     },
+    attributes: {
+      /** Chip offered under a skill/language search box for a value typed that is not already
+       *  on the roster's vocabulary - the "add a genuinely new one" escape hatch. */
+      addNew: 'Add "%{name}"',
+    },
     fields: {
       phone: 'Phone',
       alternatePhone: 'Alternate phone',
@@ -348,10 +357,11 @@ export const en = {
       stateLabel: 'STATE',
       name: 'Name',
       relation: 'Relation',
+      relationOtherPlaceholder: 'Who are they to you?',
       skills: 'Skills',
-      skillsPlaceholder: 'Gold assaying, purity testing',
+      skillsPlaceholder: 'Search or type to add a skill…',
       languages: 'Languages',
-      languagesPlaceholder: 'English, Hindi',
+      languagesPlaceholder: 'Search or type to add a language…',
       experienceYears: 'Experience (years)',
       maxPerDay: 'Max per day',
       maxPerWeek: 'Max per week',
@@ -362,6 +372,11 @@ export const en = {
     address: {
       chooseState: 'Choose a state',
       chooseStateAccessibility: 'Choose state',
+      chooseRegions: 'Choose the regions you can work in',
+      chooseRegionsAccessibility: 'Choose preferred regions',
+      /** Suffix after an off-list region value this screen still shows rather than drops - see
+       *  `RegionMultiSelect` in ProfileScreen.tsx and `profile-preferred-regions.ts`. */
+      asRecordedSuffix: '(as recorded)',
       homeLocation: 'HOME LOCATION',
       finding: 'Finding you…',
       useCurrent: 'Use my current location',
@@ -857,6 +872,7 @@ export const en = {
       approved: 'Approved',
       paid: 'Paid',
       onHold: 'On hold',
+      voided: 'Reversed',
     },
     expenseReimbursement: 'Expense reimbursement',
     outstanding: '%{amount} outstanding',
@@ -1114,14 +1130,23 @@ export const en = {
   decline: {
     title: 'Decline this assignment',
     reasonLabel: 'REASON FOR DECLINING',
+    detailsLabel: 'ADDITIONAL DETAIL (OPTIONAL)',
     /**
      * Says what to write, not "provide context for operations".
      *
-     * The decline is refused without a real reason (see `assignment.reasonRequiredBody`), so the
-     * placeholder has to teach what counts as one before the assayer is stopped for it.
+     * A preset chip alone is a complete reason now, so this box is for whatever a chip does not
+     * already say - the decline is still refused without SOME reason (see
+     * `assignment.reasonRequiredBody`), which is why "Other" needs this box filled in.
      */
-    reasonPlaceholder: 'Too far, fee too low, date impossible…',
+    reasonPlaceholder: 'Anything else operations should know…',
     confirm: 'Decline assignment',
+    categories: {
+      tooFar: 'Too far',
+      feeTooLow: 'Fee too low',
+      scheduleConflict: 'Schedule conflict',
+      uncomfortableBranch: 'Not comfortable with this branch',
+      other: 'Other',
+    },
   },
 
   feedback: {

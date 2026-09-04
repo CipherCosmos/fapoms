@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { Send, X, Image as ImageIcon, CornerUpLeft, CheckCircle2, Loader2, AlertTriangle, MessageSquare, RotateCcw, Phone } from 'lucide-react';
 
 import { api } from '../../services/api';
@@ -8,6 +8,7 @@ import type { RegionCapture, Region } from './PdfRegionViewer';
 import { userMessage } from '../../services/errors';
 import { fmtWhen } from '../../utils/dates';
 import { safeHttpUrl } from '../../utils/url';
+import { REGION_FLAG_SUGGESTIONS } from '../../utils/reviewReasonSuggestions';
 
 /**
  * One clarification thread: messages, composer, resolve.
@@ -65,13 +66,16 @@ export const ThreadPanel: React.FC<Props> = ({
   const [signed, setSigned] = useState<Record<string, string>>({});
   const endRef = useRef<HTMLDivElement>(null);
 
-  const load = () => {
+  // Pinned to `queryId` so both effects below can depend on it honestly. As a plain arrow it was a
+  // new function on every render, and either effect listing it would have re-fetched the thread —
+  // and, for the socket effect, torn down and re-joined the room — on every state change it caused.
+  const load = useCallback(() => {
     api.request<ThreadMessage[]>(`/validation-queries/${queryId}/messages`)
       .then((m) => setMessages(Array.isArray(m) ? m : []))
       .catch(() => setMessages([]));
-  };
+  }, [queryId]);
 
-  useEffect(() => { setMessages(null); setSigned({}); load(); }, [queryId]);
+  useEffect(() => { setMessages(null); setSigned({}); load(); }, [load]);
 
   // Live thread: join this query's socket room and reload on every posted message.
   // Without this the desk only sees an assayer's reply after closing and reopening
@@ -90,7 +94,7 @@ export const ThreadPanel: React.FC<Props> = ({
       socket.off('query:message', onThreadEvent);
       socket.off('query:responded', onThreadEvent);
     };
-  }, [queryId]);
+  }, [queryId, load]);
 
   // Exchange every crop/attachment key for a signed URL so the browser can actually load it.
   useEffect(() => {
@@ -103,7 +107,7 @@ export const ThreadPanel: React.FC<Props> = ({
     const pending = [...raw].filter((u) => signed[u] === undefined && attachmentKey(u));
     if (pending.length === 0) return;
     let cancelled = false;
-    (async () => {
+    void (async () => {
       const entries = await Promise.all(
         pending.map(async (u) => {
           const key = attachmentKey(u)!;
@@ -375,18 +379,48 @@ export const ThreadPanel: React.FC<Props> = ({
             </div>
           )}
           <div style={{ display: 'flex', gap: '7px' }}>
-            <textarea
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
-              placeholder={pending ? 'What is wrong with this area?' : 'Ask the assayer…'}
-              rows={2}
-              style={{
-                flex: 1, resize: 'none', padding: '8px 10px', fontSize: '12.5px', borderRadius: '8px',
-                background: 'var(--bg-input)', color: 'inherit',
-                border: '1px solid var(--border-color)', outline: 'none',
-              }}
-            />
+            {/*
+              Flagging a marked region and asking a free-form question are the same `draft` state
+              but different controls: the region-flag note gets a datalist of common defects, and
+              `list` only exists on <input> per the HTML spec (React's DOM types refuse it on a
+              textarea) — so that path renders as a single-line input. The general "Ask the
+              assayer…" composer is unrelated prose with no fixed vocabulary to suggest, and stays
+              the original multi-line textarea (Shift+Enter for a newline) so a longer question
+              still wraps instead of scrolling sideways.
+            */}
+            {pending ? (
+              <input
+                type="text"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); void send(); } }}
+                placeholder="What is wrong with this area?"
+                list="region-flag-suggestions"
+                style={{
+                  flex: 1, padding: '8px 10px', fontSize: '12.5px', borderRadius: '8px',
+                  background: 'var(--bg-input)', color: 'inherit',
+                  border: '1px solid var(--border-color)', outline: 'none',
+                }}
+              />
+            ) : (
+              <textarea
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }}
+                placeholder="Ask the assayer…"
+                rows={2}
+                style={{
+                  flex: 1, resize: 'none', padding: '8px 10px', fontSize: '12.5px', borderRadius: '8px',
+                  background: 'var(--bg-input)', color: 'inherit',
+                  border: '1px solid var(--border-color)', outline: 'none',
+                }}
+              />
+            )}
+            {pending && (
+              <datalist id="region-flag-suggestions">
+                {REGION_FLAG_SUGGESTIONS.map((s) => <option key={s} value={s} />)}
+              </datalist>
+            )}
             <button onClick={send} disabled={busy || (!draft.trim() && !pending)} className="btn btn-primary"
               style={{ padding: '8px 13px', alignSelf: 'stretch' }}>
               {busy ? <Loader2 size={14} className="spin" /> : <Send size={14} />}

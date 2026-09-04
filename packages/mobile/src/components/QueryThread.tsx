@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, ScrollView, TextInput, Image, Linking, Platform, ActivityIndicator } from 'react-native';
 import { MobileApiService } from '../services/api.service';
+import { enqueueAndRun, processActionQueue } from '../services/action-queue';
+import { actionDispatchers } from '../services/action-dispatchers';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Badge, Button, Card, Icon, IconButton, Tappable } from './ui/primitives';
 import { useFeedback } from './ui/Feedback';
@@ -143,15 +145,25 @@ export const QueryThread: React.FC<QueryThreadProps> = ({ query, refreshKey, onA
 
     setSending(true);
     /**
-     * The draft clears only after the server accepts it. Clearing optimistically loses what the
-     * assayer typed when the branch has no signal — the exact moment it is hardest to retype.
+     * Durable: written to the action queue before it is sent, so a reply typed at a branch with
+     * no signal is not lost with the app. The draft clears once the reply is either delivered or
+     * safely queued for automatic retry (`queued`) — only a genuine refusal (a validation 4xx)
+     * leaves it in the box, since that is the one case retyping might actually change the
+     * outcome.
      */
-    const res = await MobileApiService.postQueryMessage(query.id, body, pending);
+    const result = await enqueueAndRun(
+      'QUERY_MESSAGE',
+      { queryId: query.id, body, attachments: pending },
+      actionDispatchers.QUERY_MESSAGE,
+    );
     setSending(false);
 
-    if (!res.success) {
-      feedback.error(tr('queries.sendFailedTitle'), serverErrorText(res.error, 'queries.sendFailedBody'));
+    if (!result.success && !result.queued) {
+      feedback.error(tr('queries.sendFailedTitle'), serverErrorText(result.error, 'queries.sendFailedBody'));
       return;
+    }
+    if (result.queued) {
+      feedback.error(tr('assignment.serverUnreachableTitle'), translate('common.willRetry'));
     }
     setDraft('');
     setPending([]);

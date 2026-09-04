@@ -782,6 +782,14 @@ export class HrWorkforceService implements OnModuleInit {
   // ── Utilisation and wellbeing ────────────────────────────────────────────
 
   private async utilisation() {
+    // Deliberately NOT factored into a shared predicate string: `hr-workforce-soft-delete.spec.ts`
+    // statically scans each query's OWN text for its guard (`is_active` / `ON_ROSTER`) — a query
+    // that instead references a constant defined elsewhere is, in that test's own words, "reading
+    // its neighbour's text", which is invisible to a scanner built to catch exactly this kind of
+    // drift. The two queries below must still agree with each other, so they are kept textually
+    // identical on this line by eye rather than by the compiler — the same trade this file makes
+    // everywhere else (`ON_ROSTER_A` is itself a shared constant, but every query still writes
+    // `${ON_ROSTER_A}` inline rather than composing a bigger shared clause on top of it).
     const idle = await this.dataSource.query(
       `
       SELECT a.id, a.assayer_code AS "assayerCode", a.display_name AS "displayName",
@@ -796,6 +804,32 @@ export class HrWorkforceService implements OnModuleInit {
         AND (a.last_assignment_date IS NULL OR a.last_assignment_date < NOW() - ($1 || ' days')::interval)
       ORDER BY a.last_assignment_date ASC NULLS FIRST
       LIMIT 50
+    `,
+      [IDLE_AFTER_DAYS],
+    );
+
+    /**
+     * The true population, not the preview.
+     *
+     * `idle` above is capped at 50 rows on purpose — it backs a detail table, and shipping 542
+     * rows into a dashboard payload to answer "how many" is not what that table is for. The bug
+     * was reading the tile's own headline number off that same capped array: `idleCount:
+     * idle.length` could never read above 50 no matter how large the real population was. Live on
+     * this deployment it read 50 while the true count was 542 — HR's "no work in 30 days" tile
+     * understating a real retention signal by more than 10x, silently, because nothing about a
+     * value pinned at exactly 50 looks wrong on a dashboard. Counted here with the identical
+     * predicate and no LIMIT, so the tile and the table can disagree on WHICH 50 people are shown
+     * but never on how many there are in total.
+     */
+    const [idleCounts] = await this.dataSource.query(
+      `
+      SELECT COUNT(*)::int AS total,
+             COUNT(*) FILTER (WHERE a.last_assignment_date IS NULL)::int AS "neverAssigned"
+      FROM assayers a
+      WHERE a.lifecycle_status = 'ACTIVE'
+        AND ${ON_ROSTER_A}
+        AND a.is_active = true
+        AND (a.last_assignment_date IS NULL OR a.last_assignment_date < NOW() - ($1 || ' days')::interval)
     `,
       [IDLE_AFTER_DAYS],
     );
@@ -872,11 +906,12 @@ export class HrWorkforceService implements OnModuleInit {
 
     return {
       idleAfterDays: IDLE_AFTER_DAYS,
+      // Up to 50 of them, for the detail table — see `idleCount` for how many there really are.
       idle,
-      idleCount: idle.length,
+      idleCount: HrWorkforceService.num(idleCounts?.total),
       // "Never assigned" is a different problem from "went quiet": one is an
       // onboarding failure, the other is a deployment or retention issue.
-      neverAssigned: idle.filter((r: any) => r.lastAssignmentDate === null).length,
+      neverAssigned: HrWorkforceService.num(idleCounts?.neverAssigned),
       utilization,
       utilizationCounts,
       performance: {

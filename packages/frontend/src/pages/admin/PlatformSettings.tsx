@@ -5,6 +5,7 @@ import {
   RotateCcw, Info, CheckCircle2, XCircle, Eye, EyeOff, AlertTriangle,
 } from 'lucide-react';
 import { Link, useSearchParams } from 'react-router-dom';
+import { isValidPan } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { useToast, Select, useConfirm } from '../../components/ui';
@@ -88,6 +89,59 @@ const APPLIES_LABEL: Record<string, string> = {
   'next-run': 'Takes effect at the next scheduled run',
   restart: 'Needs a server restart',
 };
+
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// email.from is a header value ("FAPOMS <it@sumeruglobal.in>"), not necessarily a bare
+// address — a plain email is also accepted, this is only the second shape.
+const FROM_HEADER_SHAPE = /^[^<>]*<[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+>$/;
+const HOSTNAME_SHAPE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/i;
+
+const isValidHttpUrl = (v: string): boolean => {
+  try {
+    const u = new URL(v);
+    return u.protocol === 'http:' || u.protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * Advisory-only shape checks for the handful of settings whose value has a real, checkable
+ * format — a PAN, an email address, a URL, a fixed-length numeric code.
+ *
+ * Mirrors the soft-hint convention `AssayerForms.tsx` uses for identity fields: this is never a
+ * reason to refuse a save, only a flag that what was typed does not look like what the field is
+ * documented to hold. A settings screen exists precisely so an operator can put in an unusual
+ * value for an edge case — the whole point is to assist, not restrict.
+ */
+const formatWarning = (s: Setting, raw: any): string | null => {
+  const v = typeof raw === 'string' ? raw.trim() : '';
+  if (!v) return null;
+  switch (s.key) {
+    case 'company.pan':
+      return isValidPan(v) ? null : 'Does not look like a PAN — expected ABCDE1234F (five letters, four digits, one letter).';
+    case 'invoice.defaultSac':
+      return /^\d{4,8}$/.test(v) ? null : 'An HSN/SAC code is digits only, usually 6 (e.g. 998222).';
+    case 'email.gmailUser':
+    case 'email.smtpUser':
+      return EMAIL_SHAPE.test(v) ? null : 'Does not look like an email address.';
+    case 'email.from':
+      return (EMAIL_SHAPE.test(v) || FROM_HEADER_SHAPE.test(v))
+        ? null
+        : 'Expected an email address, or "Name <email@domain>".';
+    case 'app.publicUrl':
+      return isValidHttpUrl(v) ? null : 'Expected a full address starting with http:// or https://.';
+    case 'email.smtpHost':
+      return HOSTNAME_SHAPE.test(v) ? null : 'Expected a server name, e.g. smtp.yourprovider.com — not a full URL or IP with a path.';
+    default:
+      return null;
+  }
+};
+
+// No cron-parsing utility exists anywhere in this codebase (Bull is handed the raw string and
+// parses it internally), and pulling one in just to print a "next run" time for one field is not
+// worth the new dependency — so this explains the syntax instead of computing an occurrence.
+const CRON_SYNTAX_HINT = 'Five fields, in order: minute hour day-of-month month day-of-week (0–6, Sunday is 0). E.g. "30 8 * * 1-6" runs at 08:30 every day except Sunday.';
 
 export const PlatformSettings: React.FC = () => {
   const roles = useCurrentRoles();
@@ -318,17 +372,31 @@ export const PlatformSettings: React.FC = () => {
       );
     }
 
+    const warning = formatWarning(s, value);
+    const cronHint = s.type === 'cron' ? CRON_SYNTAX_HINT : null;
+
     return (
-      <input
-        type={s.type === 'number' ? 'number' : 'text'}
-        value={value ?? ''}
-        disabled={disabled}
-        min={s.min}
-        max={s.max}
-        placeholder={s.default != null ? String(s.default) : 'Not set'}
-        onChange={(e) => set(s.type === 'number' ? e.target.value : e.target.value)}
-        style={controlStyle}
-      />
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+        <input
+          type={s.type === 'number' ? 'number' : 'text'}
+          value={value ?? ''}
+          disabled={disabled}
+          min={s.min}
+          max={s.max}
+          placeholder={s.default != null ? String(s.default) : 'Not set'}
+          onChange={(e) => set(e.target.value)}
+          style={controlStyle}
+        />
+        {/* Advisory only — see `formatWarning`. Never disables the Save button above. */}
+        {warning && (
+          <span style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--warning)' }}>
+            <AlertTriangle size={11} aria-hidden /> {warning}
+          </span>
+        )}
+        {cronHint && (
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{cronHint}</span>
+        )}
+      </div>
     );
   };
 

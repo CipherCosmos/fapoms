@@ -13,25 +13,14 @@ import { setupBullBoard } from './infrastructure/queue/bull-board.setup';
 import { RedisIoAdapter } from './infrastructure/realtime/redis-io.adapter';
 import { realtimeHealth } from './infrastructure/realtime/realtime-health';
 import { correlationIdMiddleware } from './infrastructure/http/correlation-id.middleware';
+import { requestContextMiddleware } from './core/context/request-context.middleware';
+import { RequestContextInterceptor } from './core/context/request-context.interceptor';
 import { GlobalExceptionFilter } from './infrastructure/http/global-exception.filter';
 import { CodedValidationPipe } from './infrastructure/http/coded-validation.pipe';
 import { ResponseInterceptor } from './infrastructure/http/response.interceptor';
 import { AssayerRedactionInterceptor } from './infrastructure/http/assayer-redaction.interceptor';
 import { TrimStringsPipe } from './infrastructure/http/trim-strings.pipe';
 import { Reflector } from '@nestjs/core';
-
-/**
- * Every Bull queue in the system. Used only to pause local processing on API-role
- * replicas; unknown names are skipped rather than fatal (see pauseLocalQueues).
- */
-const ALL_QUEUE_NAMES = [
-  'background-jobs',
-  'ocr',
-  'sla-scanner',
-  'document-dispatch',
-  'notification-delivery',
-  'outbox',
-];
 
 import * as express from 'express';
 import * as compression from 'compression';
@@ -40,6 +29,7 @@ import { createProxyMiddleware } from 'http-proxy-middleware';
 import {
   assertConcurrencyWithinPool,
   DEFAULT_DB_POOL_MAX,
+  ALL_QUEUE_NAMES,
 } from './infrastructure/queue/worker-concurrency';
 import { DataSource } from 'typeorm';
 import { ROLE_PERMISSIONS } from './modules/auth/role-permissions';
@@ -266,12 +256,26 @@ async function bootstrap() {
   );
 
   if (processRole === 'worker') {
-    // Dedicated worker: runs Bull processors + scheduled crons, serves no HTTP, so
-    // heavy jobs (OCR, dispatch, SLA sweeps, notification delivery) never contend
-    // with request handling. init() runs the module lifecycle hooks that register
+    // Dedicated worker: runs Bull processors + scheduled crons and skips the request-serving
+    // middleware stack below (compression, LiveKit proxy, body parsers, Swagger) because nothing
+    // here ever takes a real user request. init() runs the module lifecycle hooks that register
     // the processors and repeatable jobs.
     await app.init();
-    logger.log('PROCESS_ROLE=worker — processing background jobs and schedules; not serving HTTP.');
+
+    // Still needs ONE thing HTTP-shaped: liveness. The prod healthcheck (deploy/docker-compose.prod.yml)
+    // wgets /api/v1/health on every container in the compose file, worker included — a worker with
+    // no listener there fails its healthcheck forever and the orchestrator kills a process that was
+    // never actually broken. HealthController is already registered on this app (AppModule), so
+    // this is the global prefix plus app.listen and nothing else — not a second Express app, not a
+    // duplicate of the health logic, just skipping the api-only middleware above.
+    app.setGlobalPrefix('api/v1');
+    const workerPort = process.env.WORKER_HEALTH_PORT || process.env.PORT || 3000;
+    await app.listen(workerPort);
+
+    logger.log(
+      `PROCESS_ROLE=worker — processing background jobs and schedules; ` +
+        `serving only /api/v1/health on port ${workerPort} for the container healthcheck.`,
+    );
     return;
   }
 
@@ -301,6 +305,12 @@ async function bootstrap() {
   // Correlation id first — before anything can fail — so every request (including one that
   // errors before it reaches a handler) carries an id the exception filter and logs share.
   app.use(correlationIdMiddleware);
+
+  // Immediately after: open the ambient request context (IP, user-agent, request id) and keep it
+  // open for the whole request, so every audit event recorded downstream names who acted, from
+  // where, on which request — without threading those values through every service. The
+  // authenticated actor is added later by RequestContextInterceptor once the JWT guard has run.
+  app.use(requestContextMiddleware);
 
   // ── Response compression ──────────────────────────────────────────────────────
   // Field assayers work on rural 2G/weak-3G links, and the app polls JSON constantly
@@ -368,7 +378,7 @@ async function bootstrap() {
       forbidNonWhitelisted: true,
       transform: true,
       transformOptions: {
-        enableImplicitConversion: true,
+        enableImplicitConversion: false,
       },
     }),
   );
@@ -386,6 +396,9 @@ async function bootstrap() {
    * response the handler actually returned rather than an `{ success, data }` shell.
    */
   app.useGlobalInterceptors(
+    // First: fold the authenticated actor into the ambient request context, before any handler
+    // runs, so audit events recorded during the request carry userId/role/session.
+    new RequestContextInterceptor(),
     new AssayerRedactionInterceptor(),
     new ResponseInterceptor(app.get(Reflector)),
   );

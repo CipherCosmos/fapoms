@@ -135,6 +135,53 @@ function allowed(
   return heldPermissions(permissions).includes(permission);
 }
 
+/**
+ * Like `allowed`, but the permission arm is a fallback for CUSTOM roles only — a role built in
+ * Admin → Roles whose name is not a `SystemRole`.
+ *
+ * This is the rule `canAccessRoute` and the backend `RolesGuard` both apply: a built-in role reaches
+ * a capability iff it is NAMED, never because it happens to hold a permission granted for something
+ * else. `allowed` above stays for the write-button checks whose `named` list already equals the set
+ * of permission holders — there the two rules coincide. Use THIS one wherever a UI gate mirrors a
+ * backend `@Roles(...)` list that deliberately excludes a role which nonetheless holds the fallback
+ * permission for an unrelated reason, so the control shows exactly when the request behind it will
+ * be served rather than 403.
+ */
+function allowedByNameOrCustomPermission(
+  roles: SystemRole[],
+  named: SystemRole[],
+  permission: string,
+  permissions?: string[],
+): boolean {
+  if (roles.some((r) => named.includes(r))) return true;
+  const known = new Set<string>(Object.values(SystemRole));
+  const hasCustomRole = roles.some((r) => !known.has(r));
+  if (!hasCustomRole) return false;
+  return heldPermissions(permissions).includes(permission);
+}
+
+/**
+ * The customer-master read surface behind the Branch Paperwork page's "Daily Run" and "Customer
+ * Master" tabs — GET /customer-master/projects/:id/daily-run, /versions and /versions/:id/records,
+ * all gated identically on the backend by @Roles(ADMIN, OPERATIONS, DESK, AUDITOR, CLIENT_USER) plus
+ * project:view:organization.
+ *
+ * DESK_OPERATOR is on that page as a document VIEWER, not a dispatcher, so it is excluded from the
+ * list by name — even though its project:view:platform grant widens to satisfy the permission.
+ * Mounting either tab for it therefore fired a request that 403s and painted a permission banner the
+ * instant the page opened. Gating both tabs on the same named-role-OR-custom-permission rule means
+ * each view appears exactly when the fetch behind it will succeed, and a document viewer lands on
+ * the branch view instead.
+ */
+export function canReadCustomerMaster(roles: SystemRole[], permissions?: string[]): boolean {
+  return allowedByNameOrCustomPermission(
+    roles,
+    [SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK, SystemRole.AUDITOR, SystemRole.CLIENT_USER],
+    'PROJECT:VIEW:ORGANIZATION',
+    permissions,
+  );
+}
+
 /** HR own the assayer workforce record; admins retain override. */
 export function canManageAssayers(roles: SystemRole[], permissions?: string[]): boolean {
   return allowed(roles, [SystemRole.ADMIN, SystemRole.OPERATIONS], 'ASSAYER:EDIT:ORGANIZATION', permissions);
@@ -295,6 +342,18 @@ export function canManageRules(roles: SystemRole[]): boolean {
 
 export function canDeleteClients(roles: SystemRole[]): boolean {
   return roles.some((r) => [SystemRole.ADMIN].includes(r));
+}
+
+/**
+ * Create, edit, and bulk lifecycle-transition a client — `POST /clients`, `PUT /clients/:id` and
+ * `PATCH /clients/bulk/lifecycle` are all `@Roles(ADMIN, OPERATIONS)` server-side
+ * (`client.controller.ts`). Unlike Delete just above, nothing on `Clients.tsx` read a role here
+ * before today: the Create/Edit buttons and the bulk-transition toolbar rendered live for every
+ * role that could reach the page, AUDITOR included — a live 403 on submit, not a leak, but a
+ * control that invites a click it can never honour.
+ */
+export function canManageClients(roles: SystemRole[]): boolean {
+  return roles.some((r) => [SystemRole.ADMIN, SystemRole.OPERATIONS].includes(r));
 }
 
 /** The signed-in user's own id, from the same cache App.tsx populates on login. */
