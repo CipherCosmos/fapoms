@@ -38,10 +38,33 @@ export interface NotificationTypeDef {
    * (see `usersHoldingPermission` in `permission-audience.ts`). Additive: it never narrows who
    * `roles` already reaches, only widens past a name a custom role will never match.
    *
-   * Populated so far only where a live case proved the gap and the right permission was
-   * unambiguous — the three workforce/HR types below, matched to the exact permission `/hr`'s
-   * own route requires. Left unset elsewhere rather than guessed; a wrong permission here would
-   * either leak an event to the wrong desk or silently claim a fix that misses its audience.
+   * Set to whatever permission gates the frontend page this type's own `link` points at
+   * (`route-permissions.ts`'s `requiredPermissions` for that path) — never invented. That
+   * match is deliberately the reachability question, not the narrower action one: a custom
+   * role that can already open the screen a notification points to should hear about the
+   * event, whether or not it also holds the stricter permission needed to act on it (the same
+   * relationship the shipped `/hr` fix established — `ASSAYER:VIEW:ORGANIZATION`, not a
+   * hypothetical `ASSAYER:EDIT:ORGANIZATION`, earns the workforce types below).
+   *
+   * Left unset — not an oversight — wherever this reasoning doesn't produce an unambiguous
+   * answer:
+   *  - `roles: []` with only `special` (`ASSIGNED_ASSAYER`/`RECORD_OWNER`): there is no role
+   *    audience to widen in the first place.
+   *  - The linked page's own `route-permissions.ts` entry declares NO `requiredPermissions`
+   *    at all (e.g. `/assignments`, `/documents`, `/feedback`) — `canAccessRoute`'s permission
+   *    fallback treats an empty required-list as fail-closed (see that function's own comment),
+   *    so literally no custom role could ever open the page regardless of what is written here;
+   *    adding a permission would notify someone about a screen they still cannot reach.
+   *  - The audience is ADMIN-only by an explicit product decision unrelated to any resource
+   *    permission (`ACCOUNT_LOCKED` is the one exception — see its own comment — everything
+   *    under `FEEDBACK_TEAM_ROLE_NAMES` is the rule: "super administrators only... and nobody
+   *    else", feedback-roles.ts).
+   *  - The event's own audience is genuinely ambiguous between two plausible screens (e.g.
+   *    `ASSIGNMENT_ATTENDED_NOT_CLOSED` is computed by `BillingEngineService` but its `link`
+   *    and its actual fix — completing the assignment — live on `/assignments`, which has no
+   *    permission either way).
+   * A wrong guess here would either leak an event to the wrong desk or silently claim a fix
+   * that misses its real audience — same discipline as the rest of this file.
    */
   fallbackPermissions?: string[];
   /** Non-role recipients resolved from the payload. */
@@ -209,6 +232,9 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     // recipients on a deployment with no active OPERATIONS_MANAGER/EXECUTIVE — a stalled
     // branch nobody was told about. SLA_BREACHED and ESCALATED already carry this fallback.
     roles: [...OPS, ...ADMINS],
+    // Same permission /planning's own route requires (planning.controller.ts) — a custom
+    // role that can already open the planning queue a decline needs a replacement from.
+    fallbackPermissions: ['PLANNING:VIEW:ORGANIZATION'],
     channels: BOTH_CHANNELS,
     title: 'Assignment declined',
     body: '${assayerName} declined ${branchName}. Reason: ${reason}. A replacement is needed.',
@@ -326,6 +352,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     category: NotificationCategory.ASSIGNMENT,
     priority: NotificationPriority.HIGH,
     roles: OPS,
+    fallbackPermissions: ['PLANNING:VIEW:ORGANIZATION'],
     special: ['ASSIGNED_ASSAYER'],
     channels: ALL_CHANNELS,
     title: 'Offer expired',
@@ -366,6 +393,9 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     category: NotificationCategory.VALIDATION,
     priority: NotificationPriority.NORMAL,
     roles: VALIDATION,
+    // Same permission /data-entry's own route requires (validation.controller.ts) — a
+    // custom role built to run the data desk holds this without holding DESK by name.
+    fallbackPermissions: ['VALIDATION:VIEW:ORGANIZATION'],
     channels: IN_APP,
     title: 'Clarification answered',
     body: '${assayerName} responded on ${branchName}.',
@@ -381,6 +411,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     category: NotificationCategory.VALIDATION,
     priority: NotificationPriority.HIGH,
     roles: ['DESK'],
+    fallbackPermissions: ['VALIDATION:VIEW:ORGANIZATION'],
     special: ['RECORD_OWNER'],
     channels: IN_APP,
     title: 'Correction required',
@@ -412,6 +443,9 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     category: NotificationCategory.DOCUMENT,
     priority: NotificationPriority.HIGH,
     roles: ['DESK', 'DESK'],
+    // Same VALIDATION:VIEW:ORGANIZATION as VALIDATION_QUERY_ANSWERED above — every entry in
+    // this SLA-escalation block links into /data-entry, the same permission gates all of them.
+    fallbackPermissions: ['VALIDATION:VIEW:ORGANIZATION'],
     channels: IN_APP,
     title: 'Packet waiting for assignment',
     body: '${branchName} has been at the desk ${hours}h with nobody assigned.',
@@ -422,6 +456,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     category: NotificationCategory.DOCUMENT,
     priority: NotificationPriority.NORMAL,
     roles: ['DESK', 'DESK'],
+    fallbackPermissions: ['VALIDATION:VIEW:ORGANIZATION'],
     special: ['RECORD_OWNER'],
     channels: IN_APP,
     title: 'Data entry running late',
@@ -433,6 +468,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     category: NotificationCategory.VALIDATION,
     priority: NotificationPriority.HIGH,
     roles: ['DESK', 'DESK'],
+    fallbackPermissions: ['VALIDATION:VIEW:ORGANIZATION'],
     special: ['RECORD_OWNER'],
     channels: IN_APP,
     title: 'Rework not picked up',
@@ -444,6 +480,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     category: NotificationCategory.VALIDATION,
     priority: NotificationPriority.NORMAL,
     roles: ['DESK', 'DESK'],
+    fallbackPermissions: ['VALIDATION:VIEW:ORGANIZATION'],
     channels: IN_APP,
     title: 'Review pending too long',
     body: '${branchName} has been awaiting a review decision for ${hours}h.',
@@ -454,6 +491,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     category: NotificationCategory.VALIDATION,
     priority: NotificationPriority.HIGH,
     roles: ['DESK', 'DESK'],
+    fallbackPermissions: ['VALIDATION:VIEW:ORGANIZATION'],
     channels: IN_APP_AND_EMAIL,
     title: 'Approved report not sent to client',
     body: '${branchName} was approved ${hours}h ago and still has not been submitted.',
@@ -464,6 +502,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     category: NotificationCategory.DOCUMENT,
     priority: NotificationPriority.NORMAL,
     roles: ['DESK', 'DESK'],
+    fallbackPermissions: ['VALIDATION:VIEW:ORGANIZATION'],
     channels: IN_APP,
     title: 'Packet stuck at external OCR',
     body: '${branchName} went to the OCR application ${hours}h ago and has not come back.',
@@ -474,6 +513,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     category: NotificationCategory.VALIDATION,
     priority: NotificationPriority.NORMAL,
     roles: ['DESK', 'DESK'],
+    fallbackPermissions: ['VALIDATION:VIEW:ORGANIZATION'],
     channels: IN_APP,
     title: 'Clarification unresolved',
     body: 'A clarification on ${branchName} is ${hours}h old with no resolution — the report cannot ship until it closes.',
@@ -523,6 +563,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     category: NotificationCategory.DOCUMENT,
     priority: NotificationPriority.NORMAL,
     roles: ['DESK'],
+    fallbackPermissions: ['VALIDATION:VIEW:ORGANIZATION'],
     channels: IN_APP,
     title: 'Data entry ready for review',
     body: '${userName} finished data entry on ${branchName}.',
@@ -561,6 +602,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     category: NotificationCategory.PLANNING,
     priority: NotificationPriority.CRITICAL,
     roles: [...OPS, ...ADMINS],
+    fallbackPermissions: ['PLANNING:VIEW:ORGANIZATION'],
     channels: ALL_CHANNELS,
     title: 'Branch cannot be covered',
     body: '${branchName} has no available assayer and needs a decision.',
@@ -576,6 +618,11 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     category: NotificationCategory.BILLING,
     priority: NotificationPriority.NORMAL,
     roles: [...OPS, ...ADMINS, 'OPERATIONS'],
+    // Same permission the expense-review screen requires (GET expenses/pending,
+    // expense.controller.ts) — that route's own comment says it plainly: "there is no EXPENSE
+    // resource... reads take billing:view". A custom role built to run that review queue
+    // holds this without holding OPERATIONS/ADMIN by name.
+    fallbackPermissions: ['BILLING:VIEW:ORGANIZATION'],
     channels: IN_APP,
     title: 'Expense claim submitted',
     body: '₹${amount} (${category}) claimed against ${branchName}.',
@@ -649,6 +696,9 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     category: NotificationCategory.BILLING,
     priority: NotificationPriority.NORMAL,
     roles: [...OPS, ...ADMINS],
+    // Same BILLING:VIEW:ORGANIZATION as EXPENSE_CLAIMED above — this links straight into
+    // /billing?tab=payouts, which asks for the same permission (billing-engine.controller.ts).
+    fallbackPermissions: ['BILLING:VIEW:ORGANIZATION'],
     channels: BOTH_CHANNELS,
     title: 'Payouts waiting for approval',
     body: '${count} payout(s) worth ₹${amount} have been waiting ${days}+ day(s) for approval.',
@@ -844,6 +894,11 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     category: NotificationCategory.SYSTEM,
     priority: NotificationPriority.CRITICAL,
     roles: ADMINS,
+    // Same permission /users' own route requires (user.controller.ts findAll) — a custom
+    // role that can already see the account list should be told why one just got locked,
+    // even without holding ADMIN itself. Unlocking still needs USER:EDIT:ORGANIZATION
+    // (unlockAccount) — this only widens who hears, never who can act.
+    fallbackPermissions: ['USER:VIEW:ORGANIZATION'],
     channels: IN_APP_AND_EMAIL,
     title: 'Account locked after failed sign-ins',
     body: '${accountLabel} was locked for 15 minutes after ${attempts} failed sign-in attempts. Repeated lockouts may indicate someone probing credentials.',
