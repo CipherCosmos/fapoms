@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { Building2, Plus, ExternalLink, ArrowLeftRight, RefreshCw, Pencil, Trash2 } from 'lucide-react';
-import { SearchInput, FilterSelect, DataTable, Pagination, DetailDrawer, StatusBadge, Modal, Select, PageHeader } from '../components/ui';
+import { SearchInput, FilterSelect, DataTable, Pagination, DetailDrawer, StatusBadge, Modal, Select, PageHeader, FilterBar } from '../components/ui';
 import { useClientsList } from '../hooks/useClients';
 import type { Column } from '../components/ui';
 import type { Client } from '@fapoms/shared';
@@ -308,7 +308,7 @@ const Clients: React.FC = () => {
         </>}
       />
 
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+      <FilterBar>
         <div style={{ width: 260, maxWidth: '100%', flex: '1 1 200px' }}><SearchInput value={search} onChange={setSearch} placeholder="Search clients..." /></div>
         {/*
           Each filter leads with an explicit "All …" whose value is the empty string the state
@@ -324,7 +324,7 @@ const Clients: React.FC = () => {
         {(status || clientType || priority || debouncedSearch) && (
           <button onClick={() => { setStatus(''); setClientType(''); setPriority(''); setSearch(''); setDebouncedSearch(''); setPage(1); }} className="btn btn-secondary" style={{ fontSize: 12 }}>Clear</button>
         )}
-      </div>
+      </FilterBar>
 
       {/* Selecting rows is harmless with nothing that can act on the selection; the toolbar
           that actually moves clients between lifecycle stages is what needs the gate — the
