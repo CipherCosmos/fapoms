@@ -55,6 +55,17 @@ export interface FeeRates {
   defaultBaseFee: number;
   /** False when the client had no configuration row and platform defaults were used. */
   clientConfigured: boolean;
+  /**
+   * Whether `defaultBaseFee` above is actually a number the client negotiated, not just a row
+   * existing. A client can have an active `client_configurations` row (so `clientConfigured` is
+   * true) whose `defaultBaseFee` column is still null — a contract being set up, or one that
+   * only ever priced travel — and `defaultBaseFee` then quietly holds the platform fallback.
+   * `quote()`'s `feeSource` reads THIS, not `clientConfigured`, so a fee is never labelled
+   * CLIENT_RATE_CARD when the client supplied no such figure.
+   */
+  baseFeeFromClient: boolean;
+  /** Same distinction as `baseFeeFromClient`, for `travelFeePerKm`/`freeTravelAllowanceKm` and `quote()`'s `travelSource`. */
+  travelRatesFromClient: boolean;
 }
 
 export interface FeeBreakdown {
@@ -230,13 +241,25 @@ export class FeePolicyService implements OnModuleInit {
       return Number.isFinite(n) ? n : null;
     };
 
+    // Resolved once so `defaultBaseFee`/`travelFeePerKm`/`freeTravelAllowanceKm` below and the
+    // "did this actually come from the client" flags can never disagree about the same column.
+    const configuredBaseFee = num(config?.defaultBaseFee);
+    const configuredPerKm = num(config?.travelFeePerKm);
+    const configuredFreeKm = num(config?.freeTravelAllowanceKm);
+
     return {
-      travelFeePerKm: num(config?.travelFeePerKm) ?? fb.perKm,
+      travelFeePerKm: configuredPerKm ?? fb.perKm,
       // 0 is a legitimate value here ("charge from the first kilometre"), so this must
       // distinguish null from zero — `??`, never `||`.
-      freeTravelAllowanceKm: num(config?.freeTravelAllowanceKm) ?? fb.freeKm,
-      defaultBaseFee: num(config?.defaultBaseFee) ?? fb.baseFee,
+      freeTravelAllowanceKm: configuredFreeKm ?? fb.freeKm,
+      defaultBaseFee: configuredBaseFee ?? fb.baseFee,
       clientConfigured: !!config,
+      // A row can exist (clientConfigured: true) with these columns still null — a contract
+      // being set up, or one that only ever priced one side of the quote — in which case the
+      // figure above is quietly the platform fallback despite `clientConfigured` saying "yes,
+      // this client has a rate card". See the interface doc.
+      baseFeeFromClient: configuredBaseFee !== null,
+      travelRatesFromClient: configuredPerKm !== null || configuredFreeKm !== null,
     };
   }
 
@@ -421,14 +444,18 @@ export class FeePolicyService implements OnModuleInit {
       const legacy = this.calculateTravelFee(params.distanceKm, rates);
       chargeableKm = legacy.chargeableKm;
       travelFee = legacy.travelFee;
-      travelSource = rates.clientConfigured ? 'CLIENT_RATE_CARD' : 'PLATFORM_DEFAULT';
+      // Not `rates.clientConfigured`: a client can have an active configuration row with its
+      // travel columns still null, in which case `rates.travelFeePerKm`/`freeTravelAllowanceKm`
+      // above are already the platform fallback and calling that CLIENT_RATE_CARD would be
+      // exactly the anonymous-number problem this field exists to prevent.
+      travelSource = rates.travelRatesFromClient ? 'CLIENT_RATE_CARD' : 'PLATFORM_DEFAULT';
     }
 
     const baseComponent = baseFee * branchCount;
 
     const feeSource: FeeBreakdown['feeSource'] = !usedFallback
       ? 'ASSAYER_CONTRACT'
-      : rates.clientConfigured
+      : rates.baseFeeFromClient
       ? 'CLIENT_RATE_CARD'
       : 'PLATFORM_DEFAULT';
     const reference = rates.defaultBaseFee > 0 ? rates.defaultBaseFee : baseFee;

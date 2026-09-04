@@ -106,10 +106,57 @@ describe('FeePolicyService', () => {
       const rates = service.ratesFromConfiguration({ travelFeePerKm: 'abc' as any });
       expect(rates.travelFeePerKm).toBe(PLATFORM_DEFAULT_TRAVEL_FEE_PER_KM);
     });
+
+    /**
+     * The live shape this guards: SBI and HDFC (per the shared dev database) each have an
+     * active `client_configurations` row — `clientConfigured` is correctly true — but every
+     * numeric column on it is null (the contract is on file, the rates were never entered). All
+     * three figures above are, correctly, the platform fallback; what used to be wrong is that
+     * `quote()` read `clientConfigured` alone and reported this fully-fallback quote as
+     * CLIENT_RATE_CARD. `baseFeeFromClient`/`travelRatesFromClient` are the fix: they say
+     * whether THIS number came from the client, independent of whether the row exists.
+     */
+    it('reports no figure as client-sourced when a configuration row exists but every column is null', () => {
+      const rates = service.ratesFromConfiguration({
+        travelFeePerKm: null as any,
+        freeTravelAllowanceKm: null as any,
+        defaultBaseFee: null as any,
+      });
+      expect(rates.clientConfigured).toBe(true);
+      expect(rates.travelFeePerKm).toBe(PLATFORM_DEFAULT_TRAVEL_FEE_PER_KM);
+      expect(rates.defaultBaseFee).toBe(PLATFORM_DEFAULT_BASE_FEE);
+      expect(rates.baseFeeFromClient).toBe(false);
+      expect(rates.travelRatesFromClient).toBe(false);
+    });
+
+    /** A contract that only ever priced the base fee — travel columns still null. */
+    it('tracks base-fee and travel provenance independently for a partial contract', () => {
+      const rates = service.ratesFromConfiguration({
+        defaultBaseFee: 1800 as any,
+        travelFeePerKm: null as any,
+        freeTravelAllowanceKm: null as any,
+      });
+      expect(rates.baseFeeFromClient).toBe(true);
+      expect(rates.travelRatesFromClient).toBe(false);
+    });
+
+    /** The mirror case — travel negotiated, base fee left to the assayer's own contract. */
+    it('treats either travel column alone as client-sourced travel', () => {
+      const rates = service.ratesFromConfiguration({
+        defaultBaseFee: null as any,
+        travelFeePerKm: null as any,
+        freeTravelAllowanceKm: 25 as any,
+      });
+      expect(rates.baseFeeFromClient).toBe(false);
+      expect(rates.travelRatesFromClient).toBe(true);
+    });
   });
 
   describe('calculateTravelFee', () => {
-    const rates = { travelFeePerKm: 8, freeTravelAllowanceKm: 10, defaultBaseFee: 1200, clientConfigured: true };
+    const rates = {
+      travelFeePerKm: 8, freeTravelAllowanceKm: 10, defaultBaseFee: 1200,
+      clientConfigured: true, baseFeeFromClient: true, travelRatesFromClient: true,
+    };
 
     it('exempts the local commute allowance', () => {
       // The exact case the two implementations disagreed on: at 25 km the day planner
@@ -128,7 +175,10 @@ describe('FeePolicyService', () => {
   });
 
   describe('resolveBaseFee', () => {
-    const rates = { travelFeePerKm: 8, freeTravelAllowanceKm: 10, defaultBaseFee: 1200, clientConfigured: true };
+    const rates = {
+      travelFeePerKm: 8, freeTravelAllowanceKm: 10, defaultBaseFee: 1200,
+      clientConfigured: true, baseFeeFromClient: true, travelRatesFromClient: true,
+    };
 
     it("uses the assayer's active commercial profile when one exists", async () => {
       qb.getOne.mockResolvedValue({ baseFee: '1650.00' });
@@ -229,6 +279,40 @@ describe('FeePolicyService', () => {
       const assignLike = await service.quote({ assayerId: 'a1', clientId: null, distanceKm: 25 });
       const planLike = await service.quote({ assayerId: 'a1', clientId: null, distanceKm: 25, branchCount: 1 });
       expect(assignLike.total).toBe(planLike.total);
+    });
+
+    /**
+     * The live bug this pins: SBI and HDFC each have an active `client_configurations` row
+     * with every numeric column null. Before the `baseFeeFromClient`/`travelRatesFromClient`
+     * fix, a quote against either — for an assayer with no commercial profile of their own —
+     * reported `feeSource`/`travelSource: 'CLIENT_RATE_CARD'` while charging the platform's own
+     * ₹1,000 base fee and ₹8/km, because `quote()` read `rates.clientConfigured` (row exists)
+     * instead of asking whether THIS number came from the client. `configuration` here stands
+     * in for exactly that row, loaded the way `PricingController` pre-loads it.
+     */
+    it('labels a fully-empty client configuration row as PLATFORM_DEFAULT, not CLIENT_RATE_CARD', async () => {
+      qb.getOne.mockResolvedValue(null); // no commercial profile either — full fallback
+      const q = await service.quote({
+        assayerId: 'a1',
+        distanceKm: 100,
+        configuration: { defaultBaseFee: null as any, travelFeePerKm: null as any, freeTravelAllowanceKm: null as any },
+      });
+      expect(q.baseFee).toBe(PLATFORM_DEFAULT_BASE_FEE);
+      expect(q.feeSource).toBe('PLATFORM_DEFAULT');
+      expect(q.travelSource).toBe('PLATFORM_DEFAULT');
+    });
+
+    /** Same empty row, but the assayer has their own contracted fee — only travelSource was wrong. */
+    it("still credits the assayer's own contract as ASSAYER_CONTRACT against an empty client row, and travel as PLATFORM_DEFAULT", async () => {
+      qb.getOne.mockResolvedValue({ baseFee: '1800.00' });
+      const q = await service.quote({
+        assayerId: 'a1',
+        distanceKm: 30,
+        configuration: { defaultBaseFee: null as any, travelFeePerKm: null as any, freeTravelAllowanceKm: null as any },
+      });
+      expect(q.baseFee).toBe(1800);
+      expect(q.feeSource).toBe('ASSAYER_CONTRACT');
+      expect(q.travelSource).toBe('PLATFORM_DEFAULT');
     });
   });
 
