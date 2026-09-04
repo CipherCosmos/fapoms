@@ -420,6 +420,10 @@ async function bootstrap() {
       contentSecurityPolicy: false,
       crossOriginResourcePolicy: { policy: 'cross-origin' },
       crossOriginEmbedderPolicy: false,
+      // Explicit HSTS (defense in depth behind the Caddy edge, which also sets it): one year,
+      // includeSubDomains, NO preload — preload is an irreversible commitment and is added at the
+      // edge/preload-list level only after every subdomain is verified HTTPS-only.
+      hsts: { maxAge: 31536000, includeSubDomains: true, preload: false },
     }),
   );
 

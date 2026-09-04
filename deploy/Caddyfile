@@ -29,6 +29,31 @@
 :8080 {
 	encode gzip
 
+	# --- Security headers (edge) --------------------------------------------------------------
+	# Set here, at the single origin in front of everything, so the SPA's HTML responses carry them
+	# too (the backend already sets these on its own API responses via Helmet). The public
+	# connection is HTTPS at the Funnel edge, so HSTS is honoured by the browser even though this
+	# hop is plain HTTP.
+	header {
+		# One year. NO `preload` — preload is an irreversible commitment that every current and
+		# future subdomain is HTTPS-only; add it only after that is verified and you submit to the
+		# preload list (see the deployment checklist). includeSubDomains is safe here because the
+		# whole surface is served through this one HTTPS origin.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		# Do not advertise the server software.
+		-Server
+		# CSP ships REPORT-ONLY first (per the hardening plan): it breaks nothing, but a browser
+		# reports any resource the policy would have blocked, so the real allowlist can be confirmed
+		# against the PRODUCTION build before enforcing. To enforce, rename this header to
+		# `Content-Security-Policy` after confirming the web app loads, authenticates, shows map
+		# tiles/documents, and opens a call with no violations. `connect-src` is deliberately broad
+		# (wss:/https:) for Socket.IO and the LiveKit SFU; tighten to explicit origins when enforcing.
+		Content-Security-Policy-Report-Only "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; img-src 'self' data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self' https: wss:"
+	}
+
 	# --- API and realtime --------------------------------------------------------------------
 	# WebSockets need no special directive in Caddy v2 — reverse_proxy upgrades automatically.
 	handle /api/* {
