@@ -165,6 +165,17 @@ const IMPORTS_TYPEORM = [
   'modules/validation-query/validation-query.service.ts',
   'modules/validation/validation.service.ts',
   'modules/zone/zone.service.ts',
+  // The second-factor store behind MFA login (user_mfa + hashed recovery codes). Repository-only
+  // access via @InjectRepository; no DataSource, no transactions. The TOTP secret rides the
+  // field-encryption transformer, so the decrypting repository read is the only way to see it.
+  'modules/auth/mfa.service.ts',
+  // Compliance: the DPDP data-rights request log and the security-incident register. Each owns its
+  // one table and reaches it through @InjectRepository only -- config/record tables with no
+  // domain aggregate to sit behind.
+  'modules/compliance/data-rights-request.service.ts',
+  'modules/compliance/security-incident.service.ts',
+  // Append-only activity telemetry. One table it alone owns; repository writes/reads, no transactions.
+  'modules/telemetry/telemetry.service.ts',
 ];
 
 /**

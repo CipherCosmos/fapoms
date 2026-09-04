@@ -92,7 +92,7 @@ export class AuditSealService {
         .createQueryBuilder('e')
         .leftJoin(AuditChainEntity, 'c', 'c.audit_event_id = e.id')
         .where('c.seq IS NULL')
-        .orderBy('e.occurred_at', 'ASC')
+        .orderBy('e.occurredAt', 'ASC')
         .addOrderBy('e.id', 'ASC')
         .limit(AuditSealService.SEAL_BATCH)
         .getMany();

@@ -8,14 +8,11 @@ import {
   Controller,
   Get,
   Post,
-  Delete,
-  Param,
   Body,
   UseGuards,
   Req,
   HttpCode,
   HttpStatus,
-  ParseUUIDPipe,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsNotEmpty } from 'class-validator';
@@ -31,6 +28,16 @@ class LoginDto {
   @IsString()
   @IsNotEmpty()
   password: string;
+}
+
+class MfaVerifyDto {
+  @IsString()
+  @IsNotEmpty()
+  challengeId: string;
+
+  @IsString()
+  @IsNotEmpty()
+  code: string;
 }
 
 class VerifyAssayerDto {
@@ -140,6 +147,43 @@ export class AuthController {
       userAgent,
     );
 
+    // The account has a confirmed second factor: the password was right but there is NO session yet.
+    // Return the stable MFA-challenge contract; the client collects a code and calls /auth/mfa/verify.
+    if ('mfaRequired' in result) {
+      return {
+        success: true,
+        data: { mfaRequired: true, challengeId: result.challengeId, factors: result.factors },
+      };
+    }
+
+    return {
+      success: true,
+      data: {
+        accessToken: result.accessToken,
+        refreshToken: result.refreshToken,
+        expiresIn: result.expiresIn,
+        user: {
+          ...result.user,
+          roles: Array.isArray(result.user.roles)
+            ? result.user.roles.map((r: any) => (typeof r === 'string' ? r : r.name))
+            : [],
+        },
+      },
+    };
+  }
+
+  /**
+   * Second step of an MFA login: exchange the challenge id + a code (TOTP or a recovery code) for a
+   * real session. Rate-limited like login. No session is issued unless the code is correct.
+   */
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @Post('mfa/verify')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Complete an MFA login by verifying a code against the challenge' })
+  async verifyMfa(@Body() dto: MfaVerifyDto, @Req() req: any) {
+    const ipAddress = req.ip || req.connection?.remoteAddress;
+    const userAgent = req.headers['user-agent'];
+    const result = await this.authService.verifyMfaChallenge(dto.challengeId, dto.code, ipAddress, userAgent);
     return {
       success: true,
       data: {
@@ -238,43 +282,4 @@ export class AuthController {
     };
   }
 
-  /**
-   * The devices/sessions screen: every session on the account, newest first, with the current one
-   * flagged. `sid` rides the token and is attached per-request by the JWT strategy.
-   */
-  @Get('sessions')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'List my active sessions/devices' })
-  async listSessions(@Req() req: any) {
-    return { success: true, data: await this.authService.listMySessions(req.user.id, req.user.sid) };
-  }
-
-  /**
-   * "Log out all my devices" — the control for a lost/stolen laptop that still holds a live session.
-   * Revokes every session AND every refresh token for the account and drops the cached principal, so
-   * each device is refused on its next request. Left reachable during a forced password change so a
-   * user who suspects compromise can pull the plug before anything else.
-   */
-  @Post('sessions/revoke-all')
-  @OnboardingAllowed()
-  @PasswordChangeExempt()
-  @HttpCode(HttpStatus.OK)
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Revoke every session on my account (log out all devices)' })
-  async revokeAllSessions(@Req() req: any) {
-    await this.authService.revokeAllSessions(req.user.id);
-    return { success: true, data: { message: 'All sessions signed out.' } };
-  }
-
-  /** Sign out ONE of my devices by session id. Ownership-checked; takes effect on that device's next request. */
-  @Delete('sessions/:id')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Revoke one of my sessions/devices' })
-  async revokeSession(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
-    await this.authService.revokeOwnSession(req.user.id, id);
-    return { success: true, data: { message: 'Session signed out.' } };
-  }
 }

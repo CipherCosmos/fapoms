@@ -1,10 +1,13 @@
 import {
   Controller,
   Get,
+  Post,
   Delete,
   Param,
   Query,
   Req,
+  HttpCode,
+  HttpStatus,
   UseGuards,
   ParseUUIDPipe,
   NotFoundException,
@@ -58,9 +61,24 @@ export class SessionController {
   }
 
   /**
-   * Revoke one session. A person may revoke their own; an administrator may revoke anyone's. The
-   * revoked device can no longer refresh, and is signed out once its short-lived access token
-   * expires.
+   * "Log out all my devices" — the control for a lost or stolen laptop that still holds a live
+   * session. Revokes every session on the caller's own account; because the per-request session
+   * gate refuses a revoked session on its very NEXT request, every device is signed out at once,
+   * not after the access token expires. Reachable by any signed-in principal for their own account.
+   */
+  @Post('me/revoke-all')
+  @AnyAuthenticated()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Sign out ALL my devices (revoke every session on my account)' })
+  async revokeAllMine(@Req() req: any) {
+    await this.sessions.revokeAllForUser(req.user.id, req.user.id, 'USER_REVOKED_ALL');
+    return { success: true, data: { message: 'All your devices have been signed out.' } };
+  }
+
+  /**
+   * Revoke one session. A person may revoke their own; an administrator may revoke anyone's.
+   * The revoked device is refused on its very next request (the per-request session gate), not
+   * only once its access token expires.
    */
   @Delete(':id')
   @AnyAuthenticated()

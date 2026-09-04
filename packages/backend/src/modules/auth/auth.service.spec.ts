@@ -6,6 +6,7 @@ import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcrypt';
 import { AuthService, rbacPrincipalCacheKey } from './auth.service';
 import { SessionService } from './session.service';
+import { MfaService } from './mfa.service';
 import { UserEntity } from '../user/user.entity';
 import { RefreshTokenEntity } from './refresh-token.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
@@ -77,6 +78,14 @@ describe('AuthService', () => {
     publish: jest.fn(),
   };
 
+  // MFA gate. Defaults to "no second factor enrolled" so existing login tests are unaffected;
+  // the MFA-specific tests flip isChallengeRequired on.
+  const mockMfaService = {
+    isChallengeRequired: jest.fn().mockResolvedValue(false),
+    verify: jest.fn().mockResolvedValue(true),
+    status: jest.fn(), beginEnrol: jest.fn(), confirmEnrol: jest.fn(), disable: jest.fn(), regenerateRecoveryCodes: jest.fn(),
+  };
+
   // The durable session store. Login mints one; refresh touches it; logout/reuse revoke all.
   const mockSessionService = {
     create: jest.fn().mockResolvedValue({ id: 'session-1' }),
@@ -105,6 +114,7 @@ describe('AuthService', () => {
         { provide: DomainEventPublisher, useValue: mockEvents },
         { provide: NotificationDispatchService, useValue: { emitSafe: jest.fn(), emit: jest.fn() } },
         { provide: SessionService, useValue: mockSessionService },
+        { provide: MfaService, useValue: mockMfaService },
       ],
     }).compile();
 
@@ -369,7 +379,7 @@ describe('AuthService', () => {
         passwordHash: hash, lifecycleStatus: 'ACTIVE', organizationId: 'org-1',
       });
 
-      const result = await service.login('AS-01', 'correct-password');
+      const result: any = await service.login('AS-01', 'correct-password');
 
       expect(result.user.id).toBe('asr-1');
       expect(result.accessToken).toBe('signed.jwt.token');
@@ -692,7 +702,7 @@ describe('AuthService', () => {
         })
         .mockResolvedValueOnce({ id: 'u-1', passwordHash: hash });
 
-      const result = await service.login('staff1', 'correct-password');
+      const result: any = await service.login('staff1', 'correct-password');
 
       expect(result.user.id).toBe('u-1');
       expect(result.accessToken).toBe('signed.jwt.token');
@@ -730,7 +740,7 @@ describe('AuthService', () => {
         })
         .mockResolvedValueOnce({ id: 'u-1', passwordHash: hash });
 
-      const result = await service.login('staff1', 'correct-password');
+      const result: any = await service.login('staff1', 'correct-password');
 
       expect(result.user.permissions).toEqual(['assignment:read:ORGANIZATION']);
       expect(result.user.permissions).not.toContain('assignment:delete:PLATFORM');
@@ -857,6 +867,102 @@ describe('AuthService', () => {
       expect(() => service.onModuleInit()).not.toThrow();
       await Promise.resolve();
       await Promise.resolve();
+    });
+  });
+
+  /**
+   * MFA challenge flow at the AuthService boundary. Verifies the security contract the login gate
+   * depends on: a confirmed second factor yields a challenge and NO session; a session is minted
+   * only by verifyMfaChallenge after a correct code; the challenge is single-use, bound to its own
+   * account, expiring, and attempt-capped. Backed by a small stateful cache so the real Redis
+   * get/set/del branching runs.
+   */
+  describe('MFA challenge flow (password proven, second factor required)', () => {
+    let store: Map<string, any>;
+
+    beforeEach(() => {
+      store = new Map();
+      mockCacheGetJson.mockImplementation(async (k: string) => (store.has(k) ? store.get(k) : null));
+      mockCacheSetJson.mockImplementation(async (k: string, v: any) => { store.set(k, v); });
+      mockCache.del.mockImplementation(async (k: string) => { store.delete(k); });
+      mockMfaService.isChallengeRequired.mockResolvedValue(true);
+    });
+
+    afterEach(() => {
+      // Restore the module-wide defaults so no other suite sees the stateful cache.
+      mockCacheGetJson.mockResolvedValue(null);
+      mockCacheSetJson.mockResolvedValue(undefined);
+      mockCache.del.mockResolvedValue(undefined);
+      mockMfaService.isChallengeRequired.mockResolvedValue(false);
+    });
+
+    it('login returns a challenge (never a session) when the account has a confirmed factor', async () => {
+      const hash = await bcrypt.hash('correct-password', 4);
+      mockUserRepo.findOne
+        .mockResolvedValueOnce({ id: 'u-1', username: 'staff1', email: 'staff1@example.com', roles: [], status: 'ACTIVE', failedLoginAttempts: 0, lockedUntil: null })
+        .mockResolvedValueOnce({ id: 'u-1', passwordHash: hash });
+
+      const result: any = await service.login('staff1', 'correct-password');
+
+      expect(result.mfaRequired).toBe(true);
+      expect(result.challengeId).toBeTruthy();
+      expect(result.accessToken).toBeUndefined();
+      expect(result.refreshToken).toBeUndefined();
+      // No session or token was minted at the password step.
+      expect(mockSessionService.create).not.toHaveBeenCalled();
+      // The challenge is bound to this user, and starts un-attempted.
+      expect(store.get(`mfa:challenge:${result.challengeId}`)).toMatchObject({ userId: 'u-1', principalType: 'USER', attempts: 0 });
+    });
+
+    it('verifyMfaChallenge issues a session on a correct code and consumes the challenge (single-use)', async () => {
+      store.set('mfa:challenge:c1', { userId: 'u-1', principalType: 'USER', ip: null, ua: null, attempts: 0 });
+      mockMfaService.verify.mockResolvedValue(true);
+      mockUserRepo.findOne.mockResolvedValue({ id: 'u-1', username: 'staff1', email: 'staff1@example.com', status: 'ACTIVE', roles: [] });
+
+      const tokens: any = await service.verifyMfaChallenge('c1', '123456');
+
+      expect(tokens.accessToken).toBe('signed.jwt.token');
+      expect(mockSessionService.create).toHaveBeenCalledTimes(1);
+      // Single-use: the challenge is gone, so a replay of the exact same id + code fails.
+      expect(store.has('mfa:challenge:c1')).toBe(false);
+      await expect(service.verifyMfaChallenge('c1', '123456')).rejects.toThrow(UnauthorizedException);
+    });
+
+    it('a wrong code yields no session, does NOT consume the challenge, and counts the attempt', async () => {
+      store.set('mfa:challenge:c2', { userId: 'u-1', principalType: 'USER', ip: null, ua: null, attempts: 0 });
+      mockMfaService.verify.mockResolvedValue(false);
+
+      await expect(service.verifyMfaChallenge('c2', '000000')).rejects.toThrow(UnauthorizedException);
+
+      expect(mockSessionService.create).not.toHaveBeenCalled();
+      expect(store.has('mfa:challenge:c2')).toBe(true);       // not consumed — the user can retry
+      expect(store.get('mfa:challenge:c2').attempts).toBe(1);  // but the attempt was counted
+    });
+
+    it('an unknown or expired challenge id is refused', async () => {
+      await expect(service.verifyMfaChallenge('does-not-exist', '123456')).rejects.toThrow(UnauthorizedException);
+      expect(mockSessionService.create).not.toHaveBeenCalled();
+    });
+
+    it('caps attempts: the 6th try burns the challenge and refuses, without even checking the code', async () => {
+      store.set('mfa:challenge:c3', { userId: 'u-1', principalType: 'USER', ip: null, ua: null, attempts: 5 });
+
+      await expect(service.verifyMfaChallenge('c3', '000000')).rejects.toThrow(/Too many attempts/);
+
+      expect(mockMfaService.verify).not.toHaveBeenCalled(); // short-circuits before verifying
+      expect(store.has('mfa:challenge:c3')).toBe(false);    // challenge destroyed — no more tries
+    });
+
+    it('routes an ASSAYER challenge to the assayer account (multi-principal)', async () => {
+      store.set('mfa:challenge:c4', { userId: 'asr-1', principalType: 'ASSAYER', ip: null, ua: null, attempts: 0 });
+      mockMfaService.verify.mockResolvedValue(true);
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'asr-1', assayerCode: 'AS-01', displayName: 'Assayer One', email: null, phone: null, lifecycleStatus: 'ACTIVE', organizationId: 'org-1' });
+
+      const tokens: any = await service.verifyMfaChallenge('c4', '123456');
+
+      expect(tokens.accessToken).toBe('signed.jwt.token');
+      expect(tokens.user.username).toBe('AS-01');
+      expect(mockAssayerRepo.findOne).toHaveBeenCalledWith({ where: { id: 'asr-1' } });
     });
   });
 });

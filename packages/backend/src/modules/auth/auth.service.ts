@@ -29,6 +29,7 @@ import { ConfigService } from '@nestjs/config';
 import { UserEntity } from '../user/user.entity';
 import { RefreshTokenEntity } from './refresh-token.entity';
 import { SessionService } from './session.service';
+import { MfaService } from './mfa.service';
 import { AuditService } from '../../core/audit/audit.service';
 import { AssayerEntity } from '../assayer/assayer.entity';
 import { AssayerLifecycleStatus, AUTH_ERROR_CODES, EventCategory, UserStatus } from '@fapoms/shared';
@@ -177,6 +178,16 @@ export interface TokenPair {
   expiresIn: number;
 }
 
+/** Returned by `login` when the account has a confirmed second factor: no session yet, prove MFA. */
+export interface MfaChallengeResult {
+  mfaRequired: true;
+  challengeId: string;
+  factors: string[];
+}
+
+/** Login either signs the user in (tokens + user) or demands a second factor first. */
+export type LoginResult = (TokenPair & { user: any }) | MfaChallengeResult;
+
 @Injectable()
 export class AuthService implements OnModuleInit {
   private readonly logger = new Logger(AuthService.name);
@@ -198,6 +209,7 @@ export class AuthService implements OnModuleInit {
     private readonly events: DomainEventPublisher,
     private readonly notificationDispatch: NotificationDispatchService,
     private readonly sessionService: SessionService,
+    private readonly mfaService: MfaService,
   ) {
     this.accessExpiration = AuthService.expirationSeconds(
       this.configService.get<any>('JWT_ACCESS_EXPIRATION'),
@@ -328,7 +340,7 @@ export class AuthService implements OnModuleInit {
     password: string,
     ipAddress?: string,
     userAgent?: string,
-  ): Promise<TokenPair & { user: any }> {
+  ): Promise<LoginResult> {
     // 1. Find user by username or email in UserEntity
     const user = await this.userRepository.findOne({
       where: [
@@ -470,6 +482,11 @@ export class AuthService implements OnModuleInit {
         organizationId: assayer.organizationId,
       };
 
+      // MFA GATE (assayer path) — see the staff branch below. No session before the second factor.
+      if (await this.mfaService.isChallengeRequired(assayer.id)) {
+        return this.createMfaChallenge(assayer.id, 'ASSAYER', ipAddress, userAgent);
+      }
+
       const session = await this.sessionService.create({
         userId: assayer.id,
         principalType: 'ASSAYER',
@@ -549,6 +566,14 @@ export class AuthService implements OnModuleInit {
     user.lockedUntil = null;
     user.lastLoginAt = new Date();
     await this.userRepository.save(user);
+
+    // MFA GATE: password is proven, but if this account has a confirmed second factor we must NOT
+    // issue a session yet. Return a short-lived, single-use challenge instead; the real session is
+    // minted only by `verifyMfaChallenge` after the code checks out. A no-op for everyone until they
+    // enrol, so un-enrolled login is byte-identical to before.
+    if (await this.mfaService.isChallengeRequired(user.id)) {
+      return this.createMfaChallenge(user.id, 'USER', ipAddress, userAgent);
+    }
 
     // Mint the durable session this sign-in belongs to; its id rides every token as `sid`.
     const session = await this.sessionService.create({
@@ -891,20 +916,121 @@ export class AuthService implements OnModuleInit {
    * let the old access token keep resolving its permissions — including a stale
    * `mustChangePassword: false` — until the cache TTL expired.
    */
-  /** The devices/sessions list for the signed-in user, marking which one is the current request's. */
-  async listMySessions(userId: string, currentSessionId?: string) {
-    return this.sessionService.listForUser(userId, currentSessionId);
+  /**
+   * Mint a single-use MFA challenge after a correct password. Stored in Redis (5-min TTL), keyed by
+   * a random id; NO session or token exists yet. The client presents `challengeId` + a code to
+   * `verifyMfaChallenge`. Nothing here identifies the account to the client beyond the opaque id.
+   */
+  private async createMfaChallenge(
+    userId: string,
+    principalType: 'USER' | 'ASSAYER',
+    ipAddress?: string,
+    userAgent?: string,
+  ): Promise<MfaChallengeResult> {
+    const challengeId = crypto.randomUUID();
+    await this.cache.setJson(
+      `mfa:challenge:${challengeId}`,
+      { userId, principalType, ip: ipAddress ?? null, ua: userAgent ?? null, attempts: 0 },
+      300,
+    );
+    return { mfaRequired: true, challengeId, factors: ['TOTP'] };
   }
 
   /**
-   * Self-service revoke of ONE of the caller's own sessions (the "sign out that device" button).
-   * Ownership-checked so a user can only end their own sessions. The revoked session is refused on
-   * its very next request by the per-request session gate — no waiting for a token to expire.
+   * Second step of an MFA login: verify the code against the challenge and, only then, issue the
+   * real session. The challenge is SINGLE-USE (deleted on success, so it cannot be replayed),
+   * short-lived (5-min TTL), and attempt-capped (5) — layered over MfaService's own per-account
+   * lockout. A wrong code never yields a session. Bound to the challenge's own user; the client
+   * cannot substitute another account.
    */
-  async revokeOwnSession(userId: string, sessionId: string): Promise<void> {
-    const owned = await this.sessionService.findOwned(sessionId, userId);
-    if (!owned) throw new UnauthorizedException('That session was not found on your account.');
-    await this.sessionService.revoke(sessionId, userId, 'USER_REVOKED');
+  async verifyMfaChallenge(
+    challengeId: string,
+    code: string,
+    ipAddress?: string,
+    userAgent?: string,
+  ): Promise<TokenPair & { user: any }> {
+    const key = `mfa:challenge:${challengeId}`;
+    const chal = await this.cache.getJson<{ userId: string; principalType: 'USER' | 'ASSAYER'; attempts: number }>(key);
+    if (!chal) {
+      throw withCode(new UnauthorizedException('This sign-in step has expired. Please sign in again.'), AUTH_ERROR_CODES.INVALID_CREDENTIALS);
+    }
+    const attempts = (chal.attempts ?? 0) + 1;
+    if (attempts > 5) {
+      await this.cache.del(key);
+      throw withCode(new UnauthorizedException('Too many attempts. Please sign in again.'), AUTH_ERROR_CODES.INVALID_CREDENTIALS);
+    }
+
+    const ok = await this.mfaService.verify(chal.userId, code);
+    if (!ok) {
+      // Record the attempt on the challenge (do NOT reset it — that would defeat the cap); the code
+      // was wrong, so no session is issued and the challenge is NOT consumed until it succeeds or expires.
+      await this.cache.setJson(key, { ...chal, attempts }, 300);
+      throw withCode(new UnauthorizedException('That code is not valid.'), AUTH_ERROR_CODES.INVALID_CREDENTIALS);
+    }
+
+    // Correct code: single-use — consume the challenge so it can never be replayed — then issue.
+    await this.cache.del(key);
+    if (chal.principalType === 'ASSAYER') {
+      const assayer = await this.assayerRepository.findOne({ where: { id: chal.userId } });
+      if (!assayer) throw new UnauthorizedException('Account not found.');
+      return this.issueAssayerSession(assayer, ipAddress, userAgent);
+    }
+    const user = await this.userRepository.findOne({ where: { id: chal.userId, status: UserStatus.ACTIVE }, relations: ['roles', 'roles.permissions'] });
+    if (!user) throw new UnauthorizedException('Account not found or inactive.');
+    return this.issueUserSession(user, ipAddress, userAgent);
+  }
+
+  /**
+   * Issue a staff session + tokens after authentication has fully succeeded (password AND, where
+   * enrolled, MFA). Used by the MFA-verify path. NOTE: the password-only login path still issues
+   * inline above; this deliberately mirrors that shape. The web app re-reads /users/me after login,
+   * so the user object here carries the essentials the client needs to route.
+   */
+  private async issueUserSession(user: UserEntity, ipAddress?: string, userAgent?: string): Promise<TokenPair & { user: any }> {
+    const session = await this.sessionService.create({
+      userId: user.id, principalType: 'USER', ipAddress, userAgent, loginMethod: 'PASSWORD',
+      expiresAt: new Date(Date.now() + this.sessionAbsoluteMs),
+    });
+    const tokens = await this.generateTokenPair(user, ipAddress, userAgent, session.id);
+    await this.auditService.recordEventSafe({
+      category: EventCategory.USER, eventType: 'USER_LOGIN', entityType: 'USER',
+      entityId: user.id, userId: user.id, userDisplayName: user.displayName, ipAddress: ipAddress ?? undefined,
+      remarks: 'Signed in (MFA verified)',
+    });
+    return {
+      ...tokens,
+      user: {
+        id: user.id, username: user.username, email: user.email, displayName: user.displayName,
+        roles: user.roles, permissions: [...permissionKeysHeldBy(user)], mustChangePassword: !!user.mustChangePassword,
+      },
+    };
+  }
+
+  /** Issue an assayer session + tokens after password + MFA. Mirrors the assayer login return shape. */
+  private async issueAssayerSession(assayer: AssayerEntity, ipAddress?: string, userAgent?: string): Promise<TokenPair & { user: any }> {
+    const payload: JwtPayload = {
+      sub: assayer.id, username: assayer.assayerCode,
+      email: assayer.email || `${assayer.assayerCode.toLowerCase()}@fapoms.com`,
+      roles: ['ASSAYER'], permissions: ['assignment:read:organization', 'assignment:update:organization'],
+      organizationId: assayer.organizationId,
+    };
+    const session = await this.sessionService.create({
+      userId: assayer.id, principalType: 'ASSAYER', ipAddress, userAgent, loginMethod: 'PASSWORD',
+      expiresAt: new Date(Date.now() + this.sessionAbsoluteMs),
+    });
+    const tokens = await this.generateTokenPair(payload, ipAddress, userAgent, session.id);
+    await this.auditService.recordEventSafe({
+      category: EventCategory.USER, eventType: 'USER_LOGIN', entityType: 'ASSAYER',
+      entityId: assayer.id, userId: assayer.id, userDisplayName: assayer.displayName, ipAddress: ipAddress ?? undefined,
+      remarks: 'Signed in (MFA verified)',
+    });
+    return {
+      ...tokens,
+      user: {
+        id: assayer.id, username: assayer.assayerCode, name: assayer.displayName, email: assayer.email,
+        phone: assayer.phone, status: assayer.lifecycleStatus, mustChangePassword: !!assayer.mustChangePassword,
+      },
+    };
   }
 
   async revokeAllSessions(userId: string): Promise<void> {

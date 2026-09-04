@@ -14,6 +14,10 @@ import { JwtStrategy } from './jwt.strategy';
 import { SessionService } from './session.service';
 import { SessionController } from './session.controller';
 import { UserSessionEntity } from './user-session.entity';
+import { MfaService } from './mfa.service';
+import { MfaController } from './mfa.controller';
+import { UserMfaEntity } from './user-mfa.entity';
+import { MfaRecoveryCodeEntity } from './mfa-recovery-code.entity';
 import { UserEntity } from '../user/user.entity';
 import { RefreshTokenEntity } from './refresh-token.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
@@ -32,13 +36,13 @@ import { NotificationsModule } from '../notifications/notifications.module';
         },
       }),
     }),
-    TypeOrmModule.forFeature([UserEntity, RefreshTokenEntity, AssayerEntity, UserSessionEntity]),
+    TypeOrmModule.forFeature([UserEntity, RefreshTokenEntity, AssayerEntity, UserSessionEntity, UserMfaEntity, MfaRecoveryCodeEntity]),
     // For the lockout alert. Safe direction: NotificationsModule pulls guards as plain
     // class imports, never this module.
     NotificationsModule,
   ],
-  controllers: [AuthController, SessionController],
-  providers: [AuthService, JwtStrategy, SessionService],
+  controllers: [AuthController, SessionController, MfaController],
+  providers: [AuthService, JwtStrategy, SessionService, MfaService],
   exports: [AuthService, JwtStrategy, PassportModule, SessionService],
 })
 export class AuthModule {}
