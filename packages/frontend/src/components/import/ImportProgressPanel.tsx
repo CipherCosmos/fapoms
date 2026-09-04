@@ -109,8 +109,67 @@ export function ImportProgressPanel<TReport = ImportReport>({
   }
 
   if (state.phase === 'running') {
-    const done = state.progress?.processed ?? 0;
-    const total = state.progress?.total || state.totalRows || 0;
+    /**
+     * Some importers never have a partial count to show.
+     *
+     * The roster importer's own job status always reports `progress: null` — its work per row
+     * spans five tables inside one transaction, so there is no partial count that means anything
+     * until the whole thing commits (see `ImportJobService.getRosterImportStatus`). Rendered
+     * through the determinate branch below, that read as `done = 0`, `total = state.totalRows`
+     * (the row count the server already told us up front) — a progress bar frozen at a
+     * confidently wrong 0% and a static "0 of 1,155 rows" for however long the import actually
+     * takes. That is the exact failure this panel's own file docblock says the whole redesign
+     * exists to end: an operator watching what looks like a stalled bar, concluding the page has
+     * hung, and uploading the file a second time. A branch import can be in the same state
+     * briefly too, in the moment between being queued and the worker's first reported batch —
+     * `getBranchImportStatus` hands back `null` there for the same reason (Bull's own
+     * `progress()` returns `0` for a job that has never reported, which is not a real progress
+     * object either). Either way, "no count yet" has to look different from "0 of N done", not
+     * be silently drawn as it.
+     */
+    if (!state.progress) {
+      return shell(
+        'info',
+        <Loader2 size={20} className="spin" />,
+        <>
+          <strong>Importing {state.fileName}</strong>
+          <div style={{ color: 'var(--text-muted)', marginTop: 2 }}>{state.message}</div>
+
+          {/* Indeterminate: a moving segment rather than a filled width, and no `aria-valuenow`
+              — the WAI-ARIA shape for "working, no measurable fraction yet" rather than "0%". */}
+          <div
+            style={{
+              marginTop: 10, height: 8, borderRadius: 4,
+              background: 'var(--bg-subtle, rgba(127,127,127,0.15))', overflow: 'hidden',
+            }}
+            role="progressbar"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-label={`Importing ${state.fileName}, in progress`}
+          >
+            <div className="import-progress-indeterminate" style={{ height: '100%', width: '35%', borderRadius: 4, background: 'var(--primary)' }} />
+          </div>
+
+          <div style={{ marginTop: 6, fontSize: 13, color: 'var(--text-muted)' }}>
+            Working — this can take a while for a large file, and does not need this page kept open.
+          </div>
+          <style>{`
+            @keyframes importProgressIndeterminate {
+              0% { transform: translateX(-100%); }
+              100% { transform: translateX(385%); }
+            }
+            .import-progress-indeterminate { animation: importProgressIndeterminate 1.3s ease-in-out infinite; }
+            @media (prefers-reduced-motion: reduce) {
+              .import-progress-indeterminate { animation: none; width: 100%; opacity: 0.5; }
+            }
+          `}</style>
+        </>,
+        false,
+      );
+    }
+
+    const done = state.progress.processed ?? 0;
+    const total = state.progress.total || state.totalRows || 0;
     const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 0;
 
     return shell(

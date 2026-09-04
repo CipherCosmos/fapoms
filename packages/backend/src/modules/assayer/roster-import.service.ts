@@ -886,19 +886,34 @@ export class RosterImportService {
      * Email cells on the real file hold two addresses ("a@x / b@y") or typos ("!"; ","). The
      * first valid address is kept — losing the second is the note-to-review's job to fix —
      * and a cell with no readable address at all goes to review.
+     *
+     * Gated through `resolveOverwritableField`, like every other contact field here (phone,
+     * address). It used not to be: this unconditionally wrote `a.email = firstValid...`, so a
+     * re-imported roster silently replaced a correction made on the live record — even with
+     * "Sheet wins conflicts" left OFF, the setting whose own description promises exactly the
+     * opposite ("a disagreeing value is left alone and filed for review"). Proved live: two
+     * rows for the same appraiser code, differing only in email, PAN and phone — PAN and phone
+     * both correctly stayed put with a "Sheet differs from record" issue filed; email silently
+     * took the second row's value with no issue at all. Filling a still-blank email (the
+     * ordinary case for a new person) is unaffected — `resolveOverwritableField` always accepts
+     * an incoming value when nothing is on file yet.
      */
     {
       const rawEmail = blankToNull(read('Email ID', 'Email'));
       if (rawEmail) {
         const firstValid = rawEmail.split(/[\s/,;]+/).find((t) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(t)) ?? null;
         if (firstValid) {
-          a.email = firstValid.toLowerCase();
+          const cleaned = firstValid.toLowerCase();
           if (firstValid.length < rawEmail.replace(/\s+/g, '').length) {
             issues.push({
               sourceSheet: sheet, sourceRow, sourceColumn: 'Email ID', rawValue: rawEmail.slice(0, 150),
-              reason: `The cell holds more than one address; "${firstValid.toLowerCase()}" was kept.`,
+              reason: `The cell holds more than one address; "${cleaned}" was kept.`,
             });
           }
+          a.email = this.resolveOverwritableField(
+            a.email, cleaned, overwrite,
+            { issues, sourceRow, sheet, column: 'Email ID', label: 'Email' },
+          );
         } else {
           issues.push({
             sourceSheet: sheet, sourceRow, sourceColumn: 'Email ID', rawValue: rawEmail.slice(0, 150),
@@ -1103,7 +1118,50 @@ export class RosterImportService {
     isNew: boolean, overwrite: boolean, hasAvailabilityColumn: boolean,
     pendingTransitions: { id: string; to: AssayerLifecycleStatus }[],
   ): void {
-    const sameDay = (x: Date, y: Date) => x.getTime() === y.getTime();
+    /**
+     * Same calendar day for two values that are supposed to both be `Date`s, but only one of
+     * them reliably is.
+     *
+     * `incoming` always is: it comes straight out of `readDate`. `current` — `a.joiningDate` /
+     * `a.exitDate` off an EXISTING row the prefetch loaded — is not: `joining_date`/`exit_date`
+     * are Postgres `date` columns with no transformer (`assayer.entity.ts`), and node-postgres
+     * hands a plain `date` column back as a string ("2024-04-01"), never a `Date`, unlike a
+     * `timestamptz` column. Calling `.getTime()` on it unconditionally crashed — not just this
+     * row, the whole transaction it sat inside, since nothing here catches it — the moment a
+     * re-imported sheet supplied a joining or exit date for anyone who already had one on file.
+     * Confirmed live: a second import of a file already imported once threw
+     * `TypeError: x.getTime is not a function` out of `sameDay`, 500'd the whole request, and
+     * rolled back every row in the batch, not only the one that hit it. A brand-new row never
+     * reached this at all — `resolveOverwritableField` returns from its own null-check on
+     * `current` before ever calling `equal` — which is exactly why this went unnoticed: nothing
+     * about a first import, real or rehearsed, exercises it. A second import of the same roster
+     * is the ordinary case this importer exists for ("re-running the import updates rather than
+     * duplicating" — this class's own doc comment), so this was reachable on nearly every row of
+     * nearly every re-import, not an edge case.
+     *
+     * Compared as a calendar-date STRING, not by `.getTime()` — an earlier fix that coerced the
+     * string side with `new Date(v)` stopped the crash but broke equality itself: a bare
+     * `"2024-04-01"` parses as UTC midnight, while `readDate`'s incoming `Date` is built with
+     * local fields (`new Date(yr, month - 1, day)`), and this deployment runs in IST — so the
+     * two timestamps disagreed by the zone offset on every row, and a re-import of an EXACTLY
+     * unchanged joining date filed a false "Sheet differs from record" every single time.
+     * Extracting `YYYY-MM-DD` sidesteps both problems at once: `isoOf` (this file's own helper,
+     * already used to keep every other date message in local terms) reads a real `Date`, and a
+     * Postgres `date` column's string form already IS `YYYY-MM-DD` with no time or zone in it to
+     * misread — no `Date` construction, no offset, on either side.
+     *
+     * Typed `(x: Date, y: Date)` still, deliberately — not `Date | string` — so
+     * `resolveOverwritableField<T>` keeps inferring `T = Date` at both call sites below and
+     * `a.joiningDate`/`a.exitDate` (declared `Date | null` on the entity) still type-check.
+     */
+    const sameDay = (x: Date, y: Date) => {
+      const calendarKey = (v: Date): string => {
+        if (v instanceof Date) return isoOf(v);
+        const match = /^(\d{4}-\d{2}-\d{2})/.exec(String(v));
+        return match ? match[1] : String(v);
+      };
+      return calendarKey(x) === calendarKey(y);
+    };
     a.joiningDate = this.resolveOverwritableField(
       a.joiningDate,
       this.readDate(read('Joining Date'), { issues, sourceRow, sheet, column: 'Joining Date' }),

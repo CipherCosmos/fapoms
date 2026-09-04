@@ -248,3 +248,178 @@ describe('roster import — "sheet wins" is opt-in per field', () => {
     expect(h.savedIssues.find((i) => i.sourceAssayerCode === 'AS103')).toBeUndefined();
   });
 });
+
+/**
+ * `joining_date`/`exit_date` are Postgres `date` columns with no TypeORM transformer, so an
+ * EXISTING row's value comes back from a real query as a plain string ("2024-04-01"), never a
+ * `Date` — `existing` below sets it as a string for exactly that reason, matching what the
+ * prefetch in `importAssayerSheet` actually hands `applyEmployment`, not what the entity's TS
+ * type (`Date | null`) claims. `sameDay` used to call `.getTime()` on it unconditionally and
+ * crashed the whole transaction — proved live first: re-importing an already-imported file threw
+ * `TypeError: x.getTime is not a function` out of `sameDay` and 500'd the request, rolling back
+ * every row in the batch. A brand-new row never reached it (`resolveOverwritableField` returns
+ * before calling `equal` when `current` is null/undefined), which is why a first import never
+ * caught this — only a second one, which is the ordinary way this importer is used.
+ */
+describe('roster import — re-importing a joining/exit date does not crash the transaction', () => {
+  const HEADERS = ['Appraiser Name', 'Appraiser code', 'Joining Date', 'Residence Address', 'Location', 'District', 'State'];
+
+  const row = (code: string, joiningDate: string) =>
+    [`Person ${code}`, code, joiningDate, 'Main Road', 'Town', 'District', 'Kerala'];
+
+  const book = (rows: any[][]): Buffer => {
+    const wb = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(wb, xlsx.utils.aoa_to_sheet([HEADERS, ...rows]), 'Assayer');
+    return Buffer.from(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+  };
+
+  const harness = (existing: Array<Record<string, any>>) => {
+    const savedAssayers: any[] = [];
+    const savedIssues: any[] = [];
+    let n = 1;
+    const manager: any = {
+      find: async () => [],
+      createQueryBuilder: (entity: any) => {
+        let codes: string[] = [];
+        const qb: any = {
+          where: (_sql: string, params?: any) => { codes = params?.codes ?? codes; return qb; },
+          getMany: async () => (entity?.name === 'AssayerEntity' ? existing.filter((a) => codes.includes(a.assayerCode)) : []),
+        };
+        qb.andWhere = qb.where;
+        return qb;
+      },
+      findOne: async () => undefined,
+      query: async () => undefined,
+      create: (_entity: any, obj: any) => ({ ...obj }),
+      save: async (entity: any, obj: any) => {
+        if (obj && obj.id == null) obj.id = `id-${n++}`;
+        if (entity?.name === 'AssayerEntity') savedAssayers.push(obj);
+        if (entity?.name === 'AssayerImportIssueEntity') savedIssues.push(obj);
+        return obj;
+      },
+    };
+
+    const service = new RosterImportService(
+      { run: (work: any) => work(manager, () => {}) } as any,
+      { enqueueBackfill: jest.fn().mockResolvedValue(undefined) } as any,
+      { get: jest.fn().mockResolvedValue(false) } as any,
+    );
+
+    return { service, savedAssayers, savedIssues };
+  };
+
+  it('does not throw, and keeps the stored date, when the sheet reports the same joining date again', async () => {
+    const h = harness([{ id: 'a-1', assayerCode: 'AS301', joiningDate: '2024-04-01' }]);
+
+    await expect(
+      h.service.importAssayerSheet(book([row('AS301', '01-04-2024')]), 'user-1', { dryRun: true }),
+    ).resolves.not.toThrow();
+
+    expect(h.savedAssayers[0].joiningDate).toBe('2024-04-01');
+    expect(h.savedIssues.find((i) => i.sourceAssayerCode === 'AS301')).toBeUndefined();
+  });
+
+  it('files a review issue rather than crashing when the sheet disagrees, with overwrite off', async () => {
+    const h = harness([{ id: 'a-1', assayerCode: 'AS302', joiningDate: '2024-04-01' }]);
+
+    await h.service.importAssayerSheet(book([row('AS302', '15-06-2024')]), 'user-1', { dryRun: true });
+
+    expect(h.savedAssayers[0].joiningDate).toBe('2024-04-01');
+    const issue = h.savedIssues.find((i) => i.sourceAssayerCode === 'AS302');
+    expect(issue).toBeDefined();
+    expect(issue.reason).toMatch(/Sheet differs from record/);
+  });
+
+  it('overwrites the stored joining date when the caller opts in', async () => {
+    const h = harness([{ id: 'a-1', assayerCode: 'AS303', joiningDate: '2024-04-01' }]);
+
+    await h.service.importAssayerSheet(book([row('AS303', '15-06-2024')]), 'user-1', { dryRun: true, overwrite: true });
+
+    expect(h.savedAssayers[0].joiningDate).toEqual(new Date(2024, 5, 15));
+    expect(h.savedIssues.find((i) => i.sourceAssayerCode === 'AS303')).toBeUndefined();
+  });
+});
+
+/**
+ * Email used to be the one contact field `applyContact` wrote unconditionally
+ * (`a.email = firstValid...`), bypassing `resolveOverwritableField` entirely — so a re-imported
+ * roster silently replaced a corrected email address even with `overwrite` off, unlike its
+ * neighbours PAN/phone/address in the describe block above. Proved live on the real stack first
+ * (two rows for the same appraiser code differing only in PAN, phone and email: PAN and phone
+ * both correctly stayed put with a review issue, email silently took the second row's value with
+ * none) before being fixed here and pinned with the same three-test shape PAN already has.
+ */
+describe('roster import — email is gated exactly like PAN/phone/address', () => {
+  const HEADERS = ['Appraiser Name', 'Appraiser code', 'Email ID', 'Residence Address', 'Location', 'District', 'State'];
+
+  const row = (code: string, email: string) =>
+    [`Person ${code}`, code, email, 'Main Road', 'Town', 'District', 'Kerala'];
+
+  const book = (rows: any[][]): Buffer => {
+    const wb = xlsx.utils.book_new();
+    xlsx.utils.book_append_sheet(wb, xlsx.utils.aoa_to_sheet([HEADERS, ...rows]), 'Assayer');
+    return Buffer.from(xlsx.write(wb, { type: 'buffer', bookType: 'xlsx' }));
+  };
+
+  const harness = (existing: Array<Record<string, any>>) => {
+    const savedAssayers: any[] = [];
+    const savedIssues: any[] = [];
+    let n = 1;
+    const manager: any = {
+      find: async () => [],
+      createQueryBuilder: (entity: any) => {
+        let codes: string[] = [];
+        const qb: any = {
+          where: (_sql: string, params?: any) => { codes = params?.codes ?? codes; return qb; },
+          getMany: async () => (entity?.name === 'AssayerEntity' ? existing.filter((a) => codes.includes(a.assayerCode)) : []),
+        };
+        qb.andWhere = qb.where;
+        return qb;
+      },
+      findOne: async () => undefined,
+      query: async () => undefined,
+      create: (_entity: any, obj: any) => ({ ...obj }),
+      save: async (entity: any, obj: any) => {
+        if (obj && obj.id == null) obj.id = `id-${n++}`;
+        if (entity?.name === 'AssayerEntity') savedAssayers.push(obj);
+        if (entity?.name === 'AssayerImportIssueEntity') savedIssues.push(obj);
+        return obj;
+      },
+    };
+
+    const service = new RosterImportService(
+      { run: (work: any) => work(manager, () => {}) } as any,
+      { enqueueBackfill: jest.fn().mockResolvedValue(undefined) } as any,
+      { get: jest.fn().mockResolvedValue(false) } as any,
+    );
+
+    return { service, savedAssayers, savedIssues };
+  };
+
+  it('leaves a stored email alone when the sheet disagrees, and files a review issue, with overwrite off (the default)', async () => {
+    const h = harness([{ id: 'a-1', assayerCode: 'AS201', email: 'original@example.com' }]);
+    await h.service.importAssayerSheet(book([row('AS201', 'sheet@example.com')]), 'user-1', { dryRun: true });
+
+    expect(h.savedAssayers[0].email).toBe('original@example.com');
+    const issue = h.savedIssues.find((i) => i.sourceAssayerCode === 'AS201');
+    expect(issue).toBeDefined();
+    expect(issue.reason).toMatch(/Sheet differs from record/);
+  });
+
+  it('overwrites the stored email when the caller opts in', async () => {
+    const h = harness([{ id: 'a-1', assayerCode: 'AS202', email: 'original@example.com' }]);
+    await h.service.importAssayerSheet(book([row('AS202', 'sheet@example.com')]), 'user-1', { dryRun: true, overwrite: true });
+
+    expect(h.savedAssayers[0].email).toBe('sheet@example.com');
+    expect(h.savedIssues.find((i) => i.sourceAssayerCode === 'AS202')).toBeUndefined();
+  });
+
+  /** Filling a blank is always safe and always happens, overwrite setting notwithstanding. */
+  it('fills a blank email from the sheet even with overwrite off', async () => {
+    const h = harness([{ id: 'a-1', assayerCode: 'AS203', email: null }]);
+    await h.service.importAssayerSheet(book([row('AS203', 'new@example.com')]), 'user-1', { dryRun: true });
+
+    expect(h.savedAssayers[0].email).toBe('new@example.com');
+    expect(h.savedIssues.find((i) => i.sourceAssayerCode === 'AS203')).toBeUndefined();
+  });
+});

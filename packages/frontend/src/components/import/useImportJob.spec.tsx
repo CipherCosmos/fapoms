@@ -95,6 +95,31 @@ describe('useImportJob — a large file the server queues', () => {
     expect(screen.getByTestId('busy')).toHaveTextContent('true');
   });
 
+  /**
+   * `progress: null` used to render through the same determinate bar as real counters — `done`
+   * defaulted to 0 and `total` to the row count the 202 response already carried, so the panel
+   * drew a confident, frozen "0 of 3759 rows" at a 0%-filled bar for as long as the job had no
+   * counters to report. For the roster importer that is not a brief in-between moment, it is the
+   * WHOLE run (`getRosterImportStatus` always returns `progress: null` — see its own doc comment
+   * — because the roster's per-row work only resolves inside one commit at the very end), so an
+   * operator watching it would see what looks exactly like a stalled import for however long a
+   * real roster takes. Proved on the real stack first: polling a genuine queued roster job showed
+   * `state: 'active', progress: null` throughout. No `aria-valuenow` is the point — that is the
+   * WAI-ARIA shape for "working, no fraction yet" instead of a wrong one.
+   */
+  it('shows an indeterminate bar, not a false 0%, when the job has no counters yet', async () => {
+    mockRequest.mockResolvedValueOnce(queued).mockResolvedValue({
+      state: 'active', progress: null, result: null, error: null, totalRows: 3759,
+    });
+    render(<Harness url="/assayers/roster/import" file={file()} />);
+    await click();
+
+    expect(screen.queryByText(/0 of 3759 rows/)).not.toBeInTheDocument();
+    const bar = screen.getByRole('progressbar');
+    expect(bar).not.toHaveAttribute('aria-valuenow');
+    expect(screen.getByText(/does not need this page kept open/)).toBeInTheDocument();
+  });
+
   it('shows how far it has got, from the job\'s own counters', async () => {
     mockRequest.mockResolvedValueOnce(queued).mockResolvedValue({
       state: 'active',
