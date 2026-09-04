@@ -280,15 +280,38 @@ export class ValidationQueryService {
       .findOne({ where: { id: saved.validationCaseId } })
       .catch(() => null);
 
-    const assignment = valCase?.projectBranchId
+    // Branch identity only — deliberately NOT filtered by the answering assayer. Whichever
+    // assignment is currently active on this branch names the same branch regardless of who
+    // holds it, so this stays the "whatever's active" lookup it always was.
+    const branchAssignment = valCase?.projectBranchId
       ? await this.assignmentRepository
           .findOne({
             where: { projectBranchId: valCase.projectBranchId, isActive: true },
-            relations: ['assayer', 'projectBranch', 'projectBranch.branch'],
+            relations: ['projectBranch', 'projectBranch.branch'],
             order: { createdAt: 'DESC' },
           })
           .catch(() => null)
       : null;
+
+    /**
+     * The assayer who actually answered — NOT "whoever the branch's active assignment happens
+     * to name today." Those are the same person on a branch's first audit cycle and silently
+     * different people on any branch re-assigned since (the ordinary case, not an edge case).
+     * Reproduced live 2026-09-04: a query raised against and answered by one assayer produced a
+     * notification naming a completely different, real assayer — whoever the branch's *current*
+     * assignment happened to be — because this used to reuse the branch lookup above instead of
+     * looking up the querying assayer directly. `query.assayerId` is always a real, saved UUID
+     * (`createQuery()` throws before saving if it cannot resolve one), so this lookup needs no
+     * branch or active-status filter — any assignment row this assayer has ever held names them
+     * correctly.
+     */
+    const answeringAssayerAssignment = await this.assignmentRepository
+      .findOne({
+        where: { assayerId: query.assayerId },
+        relations: ['assayer'],
+        order: { createdAt: 'DESC' },
+      })
+      .catch(() => null);
 
     this.notificationDispatch.emitSafe({
       type: 'VALIDATION_QUERY_ANSWERED',
@@ -302,8 +325,8 @@ export class ValidationQueryService {
       payload: {
         queryId: saved.id,
         validationCaseId: saved.validationCaseId,
-        assayerName: assignment?.assayer?.displayName ?? 'The assayer',
-        branchName: assignment?.projectBranch?.branch?.name ?? 'a branch',
+        assayerName: answeringAssayerAssignment?.assayer?.displayName ?? 'The assayer',
+        branchName: branchAssignment?.projectBranch?.branch?.name ?? 'a branch',
       },
     });
 

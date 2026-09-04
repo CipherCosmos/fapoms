@@ -187,6 +187,27 @@ export function canManageAssayers(roles: SystemRole[], permissions?: string[]): 
   return allowed(roles, [SystemRole.ADMIN, SystemRole.OPERATIONS], 'ASSAYER:EDIT:ORGANIZATION', permissions);
 }
 
+/**
+ * The role editor (RolesPermissionsPanel.tsx): create, rename, re-permission or delete a role.
+ *
+ * There is no dedicated `role:*` permission — UserController's own comment explains why: every
+ * write here rides on `user:edit:organization`, the same grant `PUT /users/:id/roles` already
+ * requires to change who holds which role, because granting one half without the other would
+ * describe an access model nobody could actually administer. So a custom role built in
+ * Admin -> Roles that holds `user:edit:organization` can administer roles too — the backend
+ * genuinely allows it (`RolesGuard`'s fallback, same as everywhere else this hook mirrors it) —
+ * and this screen must say so, rather than showing a permanent "requires an Administrator role"
+ * notice to someone who could actually save a change.
+ *
+ * Named by name only (not `allowed()`, which would also admit any OTHER built-in role that
+ * happens to hold this permission for an unrelated reason): today only ADMIN is granted
+ * `USER:EDIT:PLATFORM`, so the two helpers agree, but a role editor is exactly the wrong screen
+ * to have that stop being true silently.
+ */
+export function canManageRoles(roles: SystemRole[], permissions?: string[]): boolean {
+  return allowedByNameOrCustomPermission(roles, [SystemRole.ADMIN], 'USER:EDIT:ORGANIZATION', permissions);
+}
+
 export function hasAnyRole(roles: SystemRole[], allowed: SystemRole[]): boolean {
   return roles.some((r) => allowed.includes(r));
 }
