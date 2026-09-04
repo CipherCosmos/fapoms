@@ -15,7 +15,7 @@ import { userMessage } from '../services/errors';
 import { queryClient } from '../queryClient';
 import { queryKeys } from '../hooks/queryKeys';
 import { useScope, withScope } from '../context/ScopeContext';
-import { Modal, FilterSelect, AlertBanner, Select, useConfirm } from '../components/ui';
+import { Modal, FilterSelect, AlertBanner, Select, useConfirm, PageHeader } from '../components/ui';
 import { suggestAuditDate, describeSuggestedDate } from '../services/planning';
 
 import { assignmentFee, assignmentFeeValue } from '../utils/money';
@@ -573,22 +573,11 @@ export const Scheduling: React.FC = () => {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', height: '100%', minHeight: 0, padding: '0 8px 8px' }}>
       {/* ── UNIFIED COMMAND HEADER BAR ── */}
       <div style={{ background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', padding: '10px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '10px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-          <div style={{ width: '36px', height: '36px', borderRadius: '8px', background: 'linear-gradient(135deg, var(--accent), var(--accent))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--on-accent)' }}>
-            <Calendar size={20} />
-          </div>
-          <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <h3 style={{ fontSize: '15px', fontWeight: 800, color: 'var(--text-primary)', margin: 0 }}>SCHEDULING WORKSPACE</h3>
-              <span style={{ fontSize: '10px', padding: '2px 7px', borderRadius: '4px', background: 'rgba(216,174,71,0.2)', color: 'var(--accent)', fontWeight: 700 }}>
-                STAGE 2: CALENDAR DISPATCH
-              </span>
-            </div>
-            <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '2px' }}>
-              {scopedSchedules.length} Active Schedules • {scopedAssignments.length} Unscheduled Confirmed Offers
-            </div>
-          </div>
-        </div>
+        <PageHeader
+          icon={<Calendar size={20} />}
+          title="Scheduling Workspace"
+          subtitle={`${scopedSchedules.length} active schedules · ${scopedAssignments.length} unscheduled confirmed offers`}
+        />
 
         {/* Action Controls & Navigation Shortcuts */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>

@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { useUrlSelection } from '../hooks/useUrlSelection';
 import { useQuery } from '@tanstack/react-query';
 import { ClipboardList, RefreshCw, Calendar, MessageSquare, Clock, Send, CheckCircle, XCircle, ExternalLink, GitCommit, Circle, MapPin, FileText, Lock, ChevronLeft, ChevronRight, AlertTriangle, Hourglass, Flame, FileSpreadsheet } from 'lucide-react';
-import { StatusBadge, SearchInput, AlertBanner, useConfirm } from '../components/ui';
+import { StatusBadge, SearchInput, AlertBanner, useConfirm, PageHeader } from '../components/ui';
 import { ProjectBranchStatus, SystemRole, activityEventLabel } from '@fapoms/shared';
 import { useCurrentRoles, hasAnyRole } from '../hooks/useCurrentRoles';
 import { anyStatusLabel, branchStatusLabel, branchStatusTone } from '../utils/statusLabels';
@@ -709,32 +709,31 @@ export const Assignments: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
-        <div>
-          <h2 style={{ fontSize: '24px', fontWeight: 700, fontFamily: 'var(--font-display)' }}>Field Execution Workspace</h2>
-          <p style={{ color: 'var(--text-secondary)', fontSize: '14px', marginTop: '4px' }}>
-            Track and manage live field audits — acceptance through check-in, submission, and closure.
-          </p>
-        </div>
-        <button
-          onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.assignments.all })}
-          className="btn btn-secondary"
-          style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
-        >
-          <RefreshCw size={16} /> Refresh
-        </button>
-        <button
-          onClick={handleExport}
-          disabled={exporting}
-          className="btn btn-secondary"
-          style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--success)' }}
-        >
-          {/* Building the sheet server-side takes as long as the filtered set is large, and
-              nothing on screen moves meanwhile. Say so, and refuse the repeat click that
-              would queue a second identical report. */}
-          <FileSpreadsheet size={16} /> {exporting ? 'Preparing…' : 'Export'}
-        </button>
-      </div>
+      <PageHeader
+        icon={<ClipboardList size={20} />}
+        title="Field Execution Workspace"
+        subtitle="Track and manage live field audits from acceptance through check-in, submission, and closure."
+        actions={<>
+          <button
+            onClick={() => queryClient.invalidateQueries({ queryKey: queryKeys.assignments.all })}
+            className="btn btn-secondary"
+            style={{ display: 'flex', alignItems: 'center', gap: '8px' }}
+          >
+            <RefreshCw size={16} /> Refresh
+          </button>
+          <button
+            onClick={handleExport}
+            disabled={exporting}
+            className="btn btn-secondary"
+            style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--success)' }}
+          >
+            {/* Building the sheet server-side takes as long as the filtered set is large, and
+                nothing on screen moves meanwhile. Say so, and refuse the repeat click that
+                would queue a second identical report. */}
+            <FileSpreadsheet size={16} /> {exporting ? 'Preparing…' : 'Export'}
+          </button>
+        </>}
+      />
 
       {isError && (
         <AlertBanner type="error">
