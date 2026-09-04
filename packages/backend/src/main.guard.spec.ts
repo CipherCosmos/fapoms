@@ -16,6 +16,7 @@ describe('assertProductionSafeConfig', () => {
     DB_PASSWORD: 'a-genuinely-random-production-password',
     STORAGE_DRIVER: 's3',
     PII_ENCRYPTION_KEY: 'b'.repeat(64),
+    FILE_SCAN_REQUIRED: 'true',
   };
 
   beforeEach(() => {
@@ -77,6 +78,15 @@ describe('assertProductionSafeConfig', () => {
     delete env.STORAGE_DRIVER;
     process.env = env;
     expect(() => assertProductionSafeConfig()).toThrow(/STORAGE_DRIVER/);
+  });
+
+  it('refuses to start in production with malware scanning off — KYC/audit uploads must be scanned', () => {
+    const env: any = { ...process.env, ...safeProduction };
+    delete env.FILE_SCAN_REQUIRED; // not "true"
+    process.env = env;
+    expect(() => assertProductionSafeConfig()).toThrow(/FILE_SCAN_REQUIRED/);
+    process.env = { ...process.env, ...safeProduction, FILE_SCAN_REQUIRED: 'false' };
+    expect(() => assertProductionSafeConfig()).toThrow(/FILE_SCAN_REQUIRED/);
   });
 
   it('refuses to start without a PII encryption key — PAN and bank numbers would be plaintext', () => {

@@ -409,6 +409,12 @@ export class DocumentController {
       hint: 'Scan at a lower quality, or split it.',
     });
 
+    // Malware scan BEFORE the file is stored — this JSON base64 route bypassed the
+    // FileScanInterceptor that guards every multipart upload route (the interceptor reads a
+    // multipart file, not a base64 body), so an audited-return PDF arriving here reached storage
+    // and the data-entry pipeline unscanned. `scanOrThrow` fails closed when scanning is required.
+    await this.fileScanner.scanOrThrow(buffer, fileName);
+
     const savedFilePath = await this.storage.saveFile(fileName, buffer, 'application/pdf');
 
     let doc = await this.documentService.create({

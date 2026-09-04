@@ -15,7 +15,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsOptional, IsBoolean, IsArray, IsInt, IsEmail, Min, Max, IsObject } from 'class-validator';
 import { SystemRole, NotificationChannel, NotificationPriority, NotificationCategory } from '@fapoms/shared';
 
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, RoleOnly } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { NotificationSettingsService, EffectiveNotificationType } from './notification-settings.service';
 import { NOTIFICATION_CATALOG } from './notification-catalog';
@@ -99,6 +99,23 @@ export class TestEmailRequestDto {
  * platform settings and feedback) to be visible to the super administrator and nobody else, so
  * both lists collapse to that one role. Kept as two names because the read/write split is a
  * real seam — if the desk is ever widened again, it is the read list that widens first.
+ *
+ * "And nobody else" turned out to need saying twice. Every write below pairs `@Roles(ADMIN)`
+ * with `@RequirePermissions('configuration:edit:platform')` — the ordinary shape almost every
+ * admin route in this app takes — which is exactly what `RolesGuard`'s custom-role fallback
+ * looks for: a role built in Admin -> Roles that merely holds the matching permission is let in,
+ * on the reasoning that a role the route never named by name should still get in if it holds
+ * what the route asks for. That reasoning is correct almost everywhere. It is wrong here, for
+ * the same reason it is wrong on `admin/rule-bypass`'s `enable`/`disable` (see that controller):
+ * `configuration:edit:platform` is a checkbox in a role-editor matrix, and rewriting who gets
+ * told what across the whole organisation — or sending a real email, or firing the morning
+ * digest at 6 real recipients on demand — should not follow from ticking it. Confirmed live,
+ * 2026-09-04: a role holding nothing else reached `PUT`/`DELETE catalog/:type`,
+ * `POST email/test` and `POST digest/run`, and the digest call sent a real, unscheduled,
+ * duplicate digest to 6 real recipients. `@RoleOnly()` on those four routes is what makes this
+ * comment true; `GET catalog`, `GET email/status` and `POST preview` need no such marker because
+ * they declare no `@RequirePermissions` at all and were already fail-closed to any role this
+ * class-level `@Roles(ADMIN)` does not name.
  */
 const NOTIFICATION_ADMIN_ROLES = [SystemRole.ADMIN] as const;
 const NOTIFICATION_ADMIN_READ_ROLES = [...NOTIFICATION_ADMIN_ROLES];
@@ -203,6 +220,7 @@ export class NotificationAdminController {
 
   @Put('catalog/:type')
   @Roles(...NOTIFICATION_ADMIN_ROLES)
+  @RoleOnly()
   @RequirePermissions('configuration:edit:platform')
   @ApiOperation({ summary: 'Override one notification type — channels, roles, wording, on/off' })
   async update(
@@ -224,6 +242,7 @@ export class NotificationAdminController {
   /** Drops the override row entirely, so the type follows the shipped default again. */
   @Delete('catalog/:type')
   @Roles(...NOTIFICATION_ADMIN_ROLES)
+  @RoleOnly()
   @RequirePermissions('configuration:edit:platform')
   @ApiOperation({ summary: 'Reset one notification type to its shipped default' })
   async reset(@Param('type') type: string, @Req() req: any): Promise<{ success: boolean; data: EffectiveNotificationType }> {
@@ -328,6 +347,10 @@ export class NotificationAdminController {
   // `edit` rather than `view`, on both this and the digest run below: neither changes a setting,
   // but both send real mail to real people, which is not something a read-only holder should fire.
   @RequirePermissions('configuration:edit:platform')
+  // See the class comment: without this, a custom role holding only configuration:edit:platform
+  // can send real email through the platform's own transport to any address it names. Confirmed
+  // live — this is the one that actually matters most to close.
+  @RoleOnly()
   @ApiOperation({ summary: 'Send a test email through the configured transport' })
   async testEmail(@Body() dto: TestEmailRequestDto, @Req() req: any): Promise<{ success: boolean; data: any }> {
     if (!this.email.isEnabled()) {
@@ -364,6 +387,10 @@ export class NotificationAdminController {
   @Post('digest/run')
   @Roles(...NOTIFICATION_ADMIN_ROLES)
   @RequirePermissions('configuration:edit:platform')
+  // See the class comment. Confirmed live without this: a role holding only
+  // configuration:edit:platform fired a real, unscheduled digest at every real candidate
+  // recipient — not a drill.
+  @RoleOnly()
   @ApiOperation({ summary: 'Assemble and send the morning digest immediately' })
   async runDigest(): Promise<{ success: boolean; data: { queued: boolean } }> {
     try {

@@ -209,6 +209,26 @@ services:
       driver: json-file
       options: { max-size: "10m", max-file: "3" }
 
+  # ClamAV malware scanner (clamd, INSTREAM on :3310). Every field-uploaded KYC scan and audit PDF
+  # is streamed here before it is stored; with FILE_SCAN_REQUIRED=true the backend fails CLOSED when
+  # this is unreachable, so a file is never accepted unscanned. First boot is slow — freshclam has to
+  # download the signature database — hence the long start_period; the deploy gate waits on health.
+  clamav:
+    image: docker.io/clamav/clamav:1.4
+    restart: unless-stopped
+    volumes:
+      - clamavdata:/var/lib/clamav
+    mem_limit: ${CLAMAV_MEM_LIMIT:-2g}
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "clamdcheck.sh"]
+      interval: 15s
+      retries: 20
+      start_period: 180s
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   # HTTP replica. Runs no Bull processors (PROCESS_ROLE=api pauses them locally at boot, in
   # main.ts) so a request handler never contends with a job for the pool below. Split from
   # backend-worker on 2026-09-03 so the two roles scale, and get sized, independently — see
@@ -258,6 +278,7 @@ services:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
       minio: {condition: service_healthy}
+      clamav: {condition: service_healthy}
     logging:
       driver: json-file
       options: { max-size: "50m", max-file: "5" }
@@ -293,6 +314,7 @@ services:
       postgres: {condition: service_healthy}
       redis: {condition: service_healthy}
       minio: {condition: service_healthy}
+      clamav: {condition: service_healthy}
     logging:
       driver: json-file
       options: { max-size: "50m", max-file: "5" }
@@ -342,3 +364,4 @@ volumes:
   miniodata:
   caddydata:
   backupsdata:
+  clamavdata:

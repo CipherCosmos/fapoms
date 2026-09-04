@@ -116,6 +116,18 @@ export function assertProductionSafeConfig(): void {
     fatal.push('STORAGE_DRIVER must be "s3" in production. Local-disk storage loses audit evidence on every container replacement and 404s across replicas.');
   }
 
+  /**
+   * Malware scanning must be REQUIRED in production. This system stores KYC scans and audit PDFs
+   * uploaded from the field; accepting a file it cannot scan is the wrong default for that content.
+   * A ClamAV sidecar now ships in deploy/docker-compose.prod.yml, so this is a one-line config the
+   * operator can satisfy (set FILE_SCAN_REQUIRED=true, point CLAMAV_HOST at the sidecar) rather than
+   * a demand to stand up new infrastructure. With it true, every upload path fails CLOSED when the
+   * scanner is unreachable (FileScanService.scanBuffer throws), which is the intended posture.
+   */
+  if (process.env.FILE_SCAN_REQUIRED !== 'true') {
+    fatal.push('FILE_SCAN_REQUIRED must be "true" in production so KYC/audit uploads are malware-scanned and the upload path fails closed when the scanner is unavailable. Set it and point CLAMAV_HOST at the ClamAV sidecar.');
+  }
+
 
 
 /**
@@ -126,12 +138,11 @@ export function assertProductionSafeConfig(): void {
    * lives in git history) when the env var is unset, so "unset in production" and "using the
    * burned dev password" are the same failure.
    *
-   * Deliberately does NOT check LIVEKIT_API_SECRET or FILE_SCAN_REQUIRED here even though both
-   * are known-weak in the current deployment: LiveKit is not in deploy/docker-compose.prod.yml
-   * at all today, and no ClamAV sidecar is deployed either, so making either fatal would not
-   * catch a misconfiguration — it would simply stop the API from booting until that
-   * infrastructure exists. A fatal check here has to name a config value the operator can fix in
-   * one line without standing up a new service first; those two currently can't.
+   * Deliberately does NOT check LIVEKIT_API_SECRET here: LiveKit is not in
+   * deploy/docker-compose.prod.yml at all today, so making it fatal would not catch a
+   * misconfiguration — it would simply stop the API from booting until that infrastructure exists.
+   * (FILE_SCAN_REQUIRED IS now checked above, because the ClamAV sidecar it needs now ships in the
+   * prod compose, so it is a one-line config the operator can satisfy.)
    */
   const minioPassword = process.env.MINIO_ROOT_PASSWORD;
   if (process.env.STORAGE_DRIVER === 's3' && process.env.S3_ENDPOINT && !/amazonaws\.com/.test(process.env.S3_ENDPOINT)) {
