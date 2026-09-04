@@ -9,10 +9,12 @@ import { RegionGuardService } from './region-guard.service';
 
 /**
  * Serves the global scope filter's option lists, and exports `RegionGuardService` — the region
- * ceiling, which has two callers:
+ * ceiling, which has three callers:
  *
  *   - detail endpoints across the operations modules, after loading a single record;
- *   - the realtime gateway, before letting a socket join an `assignment:`/`query:` room.
+ *   - the realtime gateway, before letting a socket join an `assignment:`/`query:` room;
+ *   - notification dispatch, narrowing a role/permission-resolved audience to the event's own
+ *     region before it becomes a recipient list.
  *
  * HTTP list-side enforcement stays where it was: plain functions and a param decorator in
  * `global-scope.ts`, with nothing to inject.

@@ -17,6 +17,8 @@ import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { NOTIFICATION_CATALOG, renderTemplate } from './notification-catalog';
 import { NotificationSettingsService, EffectiveNotificationType } from './notification-settings.service';
 import { NOTIFICATION_QUEUE } from './notification.constants';
+import { usersHoldingPermission } from './permission-audience';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { FAILED_JOB_RETENTION } from '../../infrastructure/queue/queued-job';
 
 export interface EmitOptions {
@@ -77,31 +79,48 @@ export class NotificationDispatchService {
     @InjectQueue(NOTIFICATION_QUEUE)
     private readonly deliveryQueue: Queue,
     private readonly settings: NotificationSettingsService,
+    private readonly regionGuard: RegionGuardService,
   ) {}
 
   /**
    * Who receives an event whose own desk has nobody in it. The platform administrators — the
-   * only roles guaranteed to exist on a running deployment, and the people who can either act
+   * only role guaranteed to exist on a running deployment, and the people who can either act
    * on the work or create the account that should have received it.
    */
-  private static readonly FALLBACK_ROLES = ['ADMIN', 'ADMIN'];
+  private static readonly FALLBACK_ROLES = ['ADMIN'];
 
   /**
-   * Every active user holding any of these roles.
+   * Every active user holding any of `roleNames`, unioned with every active user who holds
+   * `fallbackPermissions` through a role that name list has never heard of.
    *
-   * Locked and inactive accounts are excluded — notifying a suspended user
+   * The permission half mirrors `RolesGuard`'s own fall-through: a role built in Admin -> Roles
+   * matches nothing in `roleNames` — that is a closed set of built-in `SystemRole` strings — so
+   * without this it was invisible to every notification and digest section however precisely
+   * its permissions matched the event. See `usersHoldingPermission` for the exact mirrored
+   * semantics (only the unrecognised role's own grants count, so a built-in role already on
+   * `roleNames` cannot also sneak in a second, coincidental way).
+   *
+   * Locked and inactive accounts are excluded from both halves — notifying a suspended user
    * creates an unread count nobody will ever clear, and for the auditor role in
    * particular it would leak operational detail to a disabled account.
    */
-  private async usersInRoles(roleNames: string[]): Promise<UserEntity[]> {
-    if (!roleNames.length) return [];
-    return this.userRepository
-      .createQueryBuilder('u')
-      .innerJoin('u.roles', 'r')
-      .where('r.name IN (:...roleNames)', { roleNames })
-      .andWhere('u.is_active = true')
-      .andWhere('u.status = :status', { status: 'ACTIVE' })
-      .getMany();
+  private async usersInRoles(roleNames: string[], fallbackPermissions?: string[]): Promise<UserEntity[]> {
+    const byName = roleNames.length
+      ? await this.userRepository
+          .createQueryBuilder('u')
+          .innerJoin('u.roles', 'r')
+          .where('r.name IN (:...roleNames)', { roleNames })
+          .andWhere('u.is_active = true')
+          .andWhere('u.status = :status', { status: 'ACTIVE' })
+          .getMany()
+      : [];
+
+    if (!fallbackPermissions?.length) return byName;
+
+    const byPermission = await usersHoldingPermission(this.userRepository, fallbackPermissions);
+    const merged = new Map<string, UserEntity>();
+    for (const u of [...byName, ...byPermission]) merged.set(u.id, u);
+    return [...merged.values()];
   }
 
   /**
@@ -262,8 +281,31 @@ export class NotificationDispatchService {
     const dedupeKey = opts.dedupeKey ?? (opts.entityId ? `${opts.type}:${opts.entityId}` : null);
 
     // ── Resolve recipients ────────────────────────────────────────────────
-    const roleUsers = await this.usersInRoles(def.roles);
+    const roleUsers = await this.usersInRoles(def.roles, def.fallbackPermissions);
     const userIds = new Set(roleUsers.map((u) => u.id));
+
+    /**
+     * Region ceiling on the role/permission audience — the same rule the read side enforces
+     * (`RegionGuardService.assertRegionAllowed`): a region-assigned account hears only about its
+     * own region's events, an unassigned (national) account hears about all of them. Applied
+     * before the empty-audience fallback below, so an audience a region filter empties out is
+     * treated exactly like one that started empty — routed to an administrator, not silently
+     * dropped.
+     *
+     * `resolveEventRegion` reads `payload.assayerId` among other ids; `assayerId` is commonly a
+     * top-level `EmitOptions` field rather than inside `payload` (every workforce/HR sweep is
+     * exactly this shape), so it is merged in here rather than requiring every call site to
+     * duplicate it into the payload.
+     */
+    if (userIds.size > 0) {
+      const eventRegion = await this.regionGuard.resolveEventRegion({
+        ...opts.payload,
+        assayerId: opts.payload?.assayerId ?? opts.assayerId,
+      });
+      const inRegion = await this.regionGuard.filterUsersByRegion([...userIds], eventRegion);
+      userIds.clear();
+      for (const id of inRegion) userIds.add(id);
+    }
 
     /**
      * A staffed-desk event must never reach nobody.
@@ -284,8 +326,12 @@ export class NotificationDispatchService {
      * (`roles: []` with `special: ['ASSIGNED_ASSAYER']`) — a missing assayer there is a
      * different fault, and routing every offer to an administrator would be noise. Nor does it
      * override a type that reached somebody, however few.
+     *
+     * `fallbackPermissions` counts as "names an audience" too, alongside `roles` — a type with
+     * an empty `roles` list that named only a permission must not be treated as the
+     * individual-audience case above and left to resolve to nobody silently.
      */
-    if (def.roles.length > 0 && userIds.size === 0) {
+    if ((def.roles.length > 0 || (def.fallbackPermissions?.length ?? 0) > 0) && userIds.size === 0) {
       const fallback = await this.usersInRoles(NotificationDispatchService.FALLBACK_ROLES);
       for (const u of fallback) userIds.add(u.id);
       if (fallback.length > 0) {

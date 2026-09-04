@@ -220,4 +220,44 @@ describe('RegionGuardService', () => {
       ).resolves.toBeUndefined();
     });
   });
+
+  /**
+   * The notification-dispatch ceiling: narrows a candidate id list to the accounts whose region
+   * assignment covers one event's region. Same `regionAllowed` predicate as `assertRegionAllowed`
+   * above, applied to a list instead of thrown for one record.
+   */
+  describe('filterUsersByRegion', () => {
+    it('passes everyone through, without querying, when the event region could not be resolved', async () => {
+      const result = await guard.filterUsersByRegion(['u1', 'u2'], null);
+      expect(result).toEqual(['u1', 'u2']);
+      expect(dataSource.query).not.toHaveBeenCalled();
+    });
+
+    it('passes an empty candidate list through without querying', async () => {
+      const result = await guard.filterUsersByRegion([], Region.WEST);
+      expect(result).toEqual([]);
+      expect(dataSource.query).not.toHaveBeenCalled();
+    });
+
+    it('keeps a national account and one assigned to the event region; drops one assigned elsewhere', async () => {
+      dataSource.query.mockResolvedValue([
+        { id: 'national', regions: null },
+        { id: 'same-region', regions: [Region.WEST] },
+        { id: 'other-region', regions: [Region.SOUTH] },
+      ]);
+
+      const result = await guard.filterUsersByRegion(
+        ['national', 'same-region', 'other-region'],
+        Region.WEST,
+      );
+
+      expect(result).toEqual(['national', 'same-region']);
+    });
+
+    it('treats an empty regions array the same as unassigned — national, not scoped to nothing', async () => {
+      dataSource.query.mockResolvedValue([{ id: 'u1', regions: [] }]);
+      const result = await guard.filterUsersByRegion(['u1'], Region.WEST);
+      expect(result).toEqual(['u1']);
+    });
+  });
 });

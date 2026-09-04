@@ -8,6 +8,8 @@ import { HrWorkforceService } from '../../modules/assayer/hr-workforce.service';
 import { FEEDBACK_TEAM_ROLE_NAMES } from '../../modules/feedback/feedback-roles';
 import { EmailProvider, appPublicUrl, renderEmailHtml } from '../notifications/email-provider';
 import { PlatformSettingsService } from '../settings/platform-settings.service';
+import { UserEntity } from '../../modules/user/user.entity';
+import { usersHoldingPermission } from '../../modules/notifications/permission-audience';
 
 /**
  * The morning email: everything that needs a decision, one message per person, only when
@@ -35,11 +37,23 @@ interface DigestSection {
 
 /** Which roles receive which sections. A user with several roles gets the union, once. */
 const SECTION_AUDIENCES: Record<string, string[]> = {
-  desk: ['DESK', 'DESK'],
+  desk: ['DESK', 'DESK_OPERATOR'],
   // Whoever owns the feedback desk — one list, see feedback-roles.ts (super administrators only).
   feedback: FEEDBACK_TEAM_ROLE_NAMES,
   finance: ['OPERATIONS'],
   hr: ['OPERATIONS'],
+};
+
+/**
+ * A permission that also earns a section, for a role built in Admin -> Roles that
+ * `SECTION_AUDIENCES` has never heard of by name — same mirrored-fallback mechanism as the
+ * notification catalog's `fallbackPermissions` (see `usersHoldingPermission` and the comment on
+ * `NotificationDispatchService.usersInRoles`). Populated only for `hr`, matched to the exact
+ * permission `/hr`'s own route requires — the other sections are left as they were rather than
+ * guessed.
+ */
+const SECTION_FALLBACK_PERMISSIONS: Record<string, string[]> = {
+  hr: ['ASSAYER:VIEW:ORGANIZATION'],
 };
 
 @Injectable()
@@ -235,33 +249,68 @@ export class EmailDigestService {
       }
     }
     const roles = [...roleToSections.keys()];
-    if (!roles.length) return [];
-
-    const rows: Array<{ id: string; email: string; role_name: string }> = await this.dataSource.query(
-      `SELECT u.id, u.email, r.name AS role_name
-         FROM users u
-         JOIN user_roles ur ON ur.user_id = u.id
-         JOIN roles r ON r.id = ur.role_id
-        WHERE r.name = ANY($1)
-          AND u.is_active = true
-          AND u.status = 'ACTIVE'
-          AND u.email IS NOT NULL
-          AND NOT EXISTS (
-            SELECT 1 FROM notification_preferences np
-             WHERE np.user_id = u.id AND np.category = 'SYSTEM' AND np.email = false
-          )`,
-      [roles],
-    ).catch((err) => {
-      this.logger.warn(`Digest audience query failed: ${err?.message}`);
-      return [];
-    });
 
     const byUser = new Map<string, { email: string; sectionKeys: Set<string> }>();
-    for (const row of rows) {
-      const entry = byUser.get(row.id) ?? { email: row.email, sectionKeys: new Set<string>() };
-      for (const key of roleToSections.get(row.role_name) ?? []) entry.sectionKeys.add(key);
-      byUser.set(row.id, entry);
+
+    if (roles.length) {
+      const rows: Array<{ id: string; email: string; role_name: string }> = await this.dataSource.query(
+        `SELECT u.id, u.email, r.name AS role_name
+           FROM users u
+           JOIN user_roles ur ON ur.user_id = u.id
+           JOIN roles r ON r.id = ur.role_id
+          WHERE r.name = ANY($1)
+            AND u.is_active = true
+            AND u.status = 'ACTIVE'
+            AND u.email IS NOT NULL
+            AND NOT EXISTS (
+              SELECT 1 FROM notification_preferences np
+               WHERE np.user_id = u.id AND np.category = 'SYSTEM' AND np.email = false
+            )`,
+        [roles],
+      ).catch((err) => {
+        this.logger.warn(`Digest audience query failed: ${err?.message}`);
+        return [];
+      });
+
+      for (const row of rows) {
+        const entry = byUser.get(row.id) ?? { email: row.email, sectionKeys: new Set<string>() };
+        for (const key of roleToSections.get(row.role_name) ?? []) entry.sectionKeys.add(key);
+        byUser.set(row.id, entry);
+      }
     }
+
+    /**
+     * A role built in Admin -> Roles, for each section `SECTION_FALLBACK_PERMISSIONS` names —
+     * see the constant's own comment. One query per populated section carrying a fallback
+     * (at most a handful), each honouring the same active-account and email-opt-out rules as
+     * the role-based query above.
+     */
+    const fallbackSections = populatedKeys.filter((key) => SECTION_FALLBACK_PERMISSIONS[key]?.length);
+    if (fallbackSections.length) {
+      const optedOut = new Set<string>(
+        (await this.dataSource
+          .query(`SELECT user_id FROM notification_preferences WHERE category = 'SYSTEM' AND email = false`)
+          .catch((err: any) => {
+            this.logger.warn(`Digest opt-out lookup failed: ${err?.message}`);
+            return [];
+          }))
+          .map((r: any) => r.user_id),
+      );
+      const userRepository = this.dataSource.getRepository(UserEntity);
+      for (const key of fallbackSections) {
+        const holders = await usersHoldingPermission(userRepository, SECTION_FALLBACK_PERMISSIONS[key]).catch((err) => {
+          this.logger.warn(`Digest permission-fallback for "${key}" failed: ${err?.message}`);
+          return [] as UserEntity[];
+        });
+        for (const u of holders) {
+          if (!u.email || optedOut.has(u.id)) continue;
+          const entry = byUser.get(u.id) ?? { email: u.email, sectionKeys: new Set<string>() };
+          entry.sectionKeys.add(key);
+          byUser.set(u.id, entry);
+        }
+      }
+    }
+
     return [...byUser.values()];
   }
 }
