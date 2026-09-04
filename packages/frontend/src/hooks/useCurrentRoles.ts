@@ -251,15 +251,25 @@ export function canManageHolidays(roles: SystemRole[], permissions?: string[]): 
 }
 
 /**
- * Platform configuration — fees, tax, schedules, the mailbox the platform sends from.
+ * Platform configuration — fees, tax, schedules, the mailbox the platform sends from, the
+ * empanelment policy, the CERT-In/DPDP retention floors.
  *
  * Deliberately its own helper rather than reusing the notification one it happens to match
  * today: they gate different backends (SETTINGS_ADMIN_ROLES vs NOTIFICATION_ADMIN_ROLES), and
  * a page whose permission check is named after a different feature is a trap for whoever
  * changes either list next.
+ *
+ * Deliberately NOT permission-aware, as of 2026-09-04 — like `canAdministerDataReset` just
+ * below, and for the matching reason: the backend write routes (`PUT`/`DELETE /platform-
+ * settings/:key`) were tightened to `@RoleOnly()` the same day, after a role holding only
+ * `configuration:edit:platform` was confirmed live to write and reset an arbitrary setting —
+ * mail credentials, geofence distance, retention floors — with no ADMIN role on the account.
+ * This helper used to admit that same permission via `allowed()`, which would have shown the
+ * Save controls to exactly the account the backend now correctly refuses. `permissions` stays
+ * an accepted (ignored) second argument only so existing call sites need no edit.
  */
-export function canAdministerPlatformSettings(roles: SystemRole[], permissions?: string[]): boolean {
-  return allowed(roles, [SystemRole.ADMIN], 'CONFIGURATION:EDIT:ORGANIZATION', permissions);
+export function canAdministerPlatformSettings(roles: SystemRole[], _permissions?: string[]): boolean {
+  return hasAnyRole(roles, [SystemRole.ADMIN]);
 }
 
 /**

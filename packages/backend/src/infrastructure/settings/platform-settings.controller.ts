@@ -14,7 +14,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Allow } from 'class-validator';
 import { SystemRole } from '@fapoms/shared';
 
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AnyAuthenticated } from '../../modules/auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AnyAuthenticated, RoleOnly } from '../../modules/auth/guards';
 import { PlatformSettingsService, ResolvedSetting } from './platform-settings.service';
 import { SETTINGS_GROUPS } from './settings.registry';
 import { AuditService } from '../../core/audit/audit.service';
@@ -145,8 +145,19 @@ export class PlatformSettingsController {
     };
   }
 
+  /**
+   * `@RoleOnly()` closes the same gap fixed 2026-09-04 in `rule-bypass.controller.ts` and
+   * `notification-admin.controller.ts`: `RolesGuard`'s custom-role permission fallback treated
+   * this pairing (`@Roles(ADMIN)` + `@RequirePermissions`) like any other, so a role holding
+   * nothing but `configuration:edit:platform` could write ANY platform setting — the mail
+   * transport credentials, the geofence distance, the empanelment "no row" policy, the CERT-In/
+   * DPDP retention floors — with no ADMIN role on the account. Confirmed live, then reverted.
+   * `@RoleOnly()` removes the fallback; the class-level `@Roles` name-match this route also
+   * carries is untouched, so `admin2`/every real administrator is unaffected.
+   */
   @Put(':key')
   @Roles(...SETTINGS_ADMIN_ROLES)
+  @RoleOnly()
   @RequirePermissions('configuration:edit:platform')
   @ApiOperation({ summary: 'Save one setting' })
   async set(
@@ -184,8 +195,10 @@ export class PlatformSettingsController {
     return { success: true, data: await this.settings.describeAll() };
   }
 
+  /** Same reasoning and the same `@RoleOnly()` fix as `set()` immediately above. */
   @Delete(':key')
   @Roles(...SETTINGS_ADMIN_ROLES)
+  @RoleOnly()
   @RequirePermissions('configuration:edit:platform')
   @ApiOperation({ summary: 'Clear a saved setting so it follows the environment or shipped default again' })
   async reset(@Param('key') key: string, @Req() req: any): Promise<{ success: boolean; data: ResolvedSetting[] }> {

@@ -1,0 +1,125 @@
+import { readFileSync } from 'fs';
+import { join } from 'path';
+import { ExecutionContext, ForbiddenException } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { RolesGuard, ROLES_KEY, PERMISSIONS_KEY, ROLE_ONLY_KEY } from '../../modules/auth/guards';
+
+/**
+ * `set()`/`reset()` (`PUT`/`DELETE /platform-settings/:key`) must stay reachable by the ADMIN
+ * role ONLY — never by a custom role that merely holds `configuration:edit:platform`.
+ *
+ * Confirmed LIVE, 2026-09-04, before this suite existed: a role holding nothing but
+ * `configuration:edit:platform` wrote and reset a real setting (`digest.cron`) with no ADMIN
+ * role on the account — the same shape as the two sibling fixes this session
+ * (`rule-bypass.controller.ts`, `notification-admin.controller.ts`; see `RELAY/findings/L.md`
+ * and `RELAY/handoffs/L.md`). This file's own docstring says writing is "administrators only,
+ * because these values price work and address mail for the whole organisation" — `@RoleOnly()`
+ * is what makes that true against the custom-role permission fallback.
+ *
+ * Two layers, both needed — same reasoning as `rule-bypass.controller.spec.ts`, which this
+ * mirrors closely:
+ *  1. A behavioural test proves `RolesGuard` actually refuses this shape of caller when
+ *     `ROLE_ONLY_KEY` is set.
+ *  2. A source check confirms `@RoleOnly()` decorates the real `set`/`reset` handlers in the
+ *     real controller file, so deleting the decorator would fail this suite even though the
+ *     behavioural test alone would not notice.
+ */
+describe('PlatformSettingsController — set/reset resist the custom-role permission fallback', () => {
+  const ctx = (user: any): ExecutionContext => ({
+    switchToHttp: () => ({ getRequest: () => ({ user }) }),
+    getHandler: () => function handler() {},
+    getClass: () => class Controller {},
+  }) as any;
+
+  const reflectorReturning = (map: Record<string, any>) =>
+    ({ getAllAndOverride: (key: string) => map[key] }) as unknown as Reflector;
+
+  /** Shaped like Track L's live QATRACK_L_CONFIG_EDITOR probe role. */
+  const configEditorOnly = {
+    id: 'u-config-editor',
+    roles: [{
+      name: 'QATRACK_L_CONFIG_EDITOR',
+      permissions: [{ resource: 'CONFIGURATION', action: 'EDIT', scope: 'PLATFORM' }],
+    }],
+  };
+
+  const admin = { id: 'u-admin', roles: [{ name: 'ADMIN', permissions: [] }] };
+
+  /** The metadata `set()`/`reset()` carry as of this fix. */
+  const ROUTE_AS_FIXED = {
+    [ROLES_KEY]: ['ADMIN'],
+    [PERMISSIONS_KEY]: ['configuration:edit:platform'],
+    [ROLE_ONLY_KEY]: true,
+  };
+
+  it('refuses a custom role holding only configuration:edit:platform', () => {
+    const guard = new RolesGuard(reflectorReturning(ROUTE_AS_FIXED));
+    expect(() => guard.canActivate(ctx(configEditorOnly))).toThrow(ForbiddenException);
+  });
+
+  it('still admits ADMIN by name, unaffected by the fix', () => {
+    const guard = new RolesGuard(reflectorReturning(ROUTE_AS_FIXED));
+    expect(guard.canActivate(ctx(admin))).toBe(true);
+  });
+
+  it(
+    'sanity check: the exact same custom role WOULD have gotten in without @RoleOnly — proving ' +
+      'the two tests above are actually exercising the decorator, not passing for an unrelated reason',
+    () => {
+      const routeWithoutRoleOnly = {
+        [ROLES_KEY]: ['ADMIN'],
+        [PERMISSIONS_KEY]: ['configuration:edit:platform'],
+        // No ROLE_ONLY_KEY — this is the pre-fix shape, reproducing the live finding.
+      };
+      const guard = new RolesGuard(reflectorReturning(routeWithoutRoleOnly));
+      expect(guard.canActivate(ctx(configEditorOnly))).toBe(true);
+    },
+  );
+
+  describe('the real controller file', () => {
+    const source = readFileSync(join(__dirname, 'platform-settings.controller.ts'), 'utf8');
+
+    /**
+     * The decorator block immediately above a given handler's `async name(` line. Same
+     * line-walking technique `rule-bypass.controller.spec.ts` uses, for the same reason: a raw
+     * `lastIndexOf('}', ...)` is fooled by an object literal inside a prior method's own body.
+     */
+    const decoratorsAbove = (handlerName: string): string => {
+      const lines = source.split('\n');
+      const target = lines.findIndex((l) => l.includes(`async ${handlerName}(`));
+      expect(target).toBeGreaterThan(-1); // the handler must exist at all
+
+      let start = 0;
+      for (let i = target - 1; i >= 0; i--) {
+        if (/^ {2}\}\s*$/.test(lines[i]) || /^export class /.test(lines[i])) {
+          start = i + 1;
+          break;
+        }
+      }
+      return lines.slice(start, target).join('\n');
+    };
+
+    it('set() is decorated with @RoleOnly()', () => {
+      expect(decoratorsAbove('set')).toMatch(/@RoleOnly\(\)/);
+    });
+
+    it('reset() is decorated with @RoleOnly()', () => {
+      expect(decoratorsAbove('reset')).toMatch(/@RoleOnly\(\)/);
+    });
+
+    it('set() and reset() still declare the ADMIN role and the permission, unchanged', () => {
+      for (const handler of ['set', 'reset']) {
+        const block = decoratorsAbove(handler);
+        expect(block).toMatch(/@Roles\(\.\.\.SETTINGS_ADMIN_ROLES\)/);
+        expect(block).toMatch(/@RequirePermissions\('configuration:edit:platform'\)/);
+      }
+    });
+
+    it('findAll()/limits() are NOT decorated with @RoleOnly() (unchanged, intended reach)', () => {
+      // findAll() is the class-level-gated read (ADMIN/OPERATIONS/AUDITOR); limits() is
+      // deliberately @AnyAuthenticated — neither is a write, and this fix must not spread to either.
+      expect(decoratorsAbove('findAll')).not.toMatch(/@RoleOnly\(\)/);
+      expect(decoratorsAbove('limits')).not.toMatch(/@RoleOnly\(\)/);
+    });
+  });
+});
