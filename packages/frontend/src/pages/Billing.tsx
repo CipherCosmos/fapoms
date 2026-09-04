@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { FileSpreadsheet, RefreshCw } from 'lucide-react';
+import { FileSpreadsheet, RefreshCw, IndianRupee } from 'lucide-react';
 import { SystemRole } from '@fapoms/shared';
-import { Modal, StyledInput, useToast } from '../components/ui';
+import { Modal, StyledInput, useToast, PageHeader } from '../components/ui';
 import { useQueuedExcelExport } from '../hooks/useQueuedExcelExport';
 import { useCurrentRoles, hasAnyRole } from '../hooks/useCurrentRoles';
 import { useReconcile, useReconcilePreview } from '../hooks/useBilling';
@@ -58,12 +58,11 @@ export const Billing: React.FC = () => {
 
   return (
     <div style={{ padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: 16 }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <div>
-          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Billing</h1>
-          <div style={{ fontSize: 12.5, color: 'var(--text-muted)', marginTop: 2 }}>Every completed assignment books a payout to the assayer and a line to invoice the client.</div>
-        </div>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+      <PageHeader
+        icon={<IndianRupee size={20} />}
+        title="Billing"
+        subtitle="Every completed assignment books a payout to the assayer and a line to invoice the client."
+        actions={<>
           {/* The billing sheet is built over the whole book, so it can take a while — now on a
               queue rather than blocking the request, and capped at the first 5,000 client lines
               (the sheet's own "Notice" tab says so if a filter combination is that wide).
@@ -80,8 +79,8 @@ export const Billing: React.FC = () => {
               <RefreshCw size={14} /> Reconcile
             </button>
           )}
-        </div>
-      </div>
+        </>}
+      />
 
       <div style={{ display: 'flex', gap: 6, borderBottom: '1px solid var(--border-color)', paddingBottom: 8 }}>
         {TABS.map((t) => (

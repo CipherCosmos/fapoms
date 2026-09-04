@@ -14,7 +14,7 @@ import { getRecommendations, suggestAuditDate, describeSuggestedDate } from '../
 import { userMessage } from '../services/errors';
 import { todayDateKey, formatDateOnly } from '../utils/statusLabels';
 import { formatRouteDistance, type RouteSource, callOutcomeLabel, describeAssignmentFee, previewFeeChange } from '@fapoms/shared';
-import { AlertBanner, useConfirm } from '../components/ui';
+import { AlertBanner, useConfirm, PageHeader } from '../components/ui';
 
 import { usePlatformLimits } from '../hooks/usePlatformLimits';
 /**
@@ -469,15 +469,11 @@ export const OperationsInbox: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', padding: '0 8px 16px' }}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
-        <div>
-          <h1 style={{ margin: 0, fontSize: '22px' }}>Operations Inbox</h1>
-          <p style={{ margin: '4px 0 0', fontSize: '12.5px', color: 'var(--text-secondary)' }}>
-            Every assignment waiting on a desk decision. Phone-channel assayers appear as call tasks — record the
-            call's outcome and the system does the rest. An empty inbox is a healthy operation.
-          </p>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+      <PageHeader
+        icon={<InboxIcon size={20} />}
+        title="Operations Inbox"
+        subtitle="Every assignment waiting on a desk decision. Phone-channel assayers appear as call tasks — record the call's outcome and the system does the rest. An empty inbox is a healthy operation."
+        actions={<>
           {data0.waitingOnApp > 0 && (
             <span style={{ fontSize: '11.5px', color: 'var(--text-muted)' }}>
               {data0.waitingOnApp} offer{data0.waitingOnApp > 1 ? 's' : ''} awaiting in-app response
@@ -486,8 +482,8 @@ export const OperationsInbox: React.FC = () => {
           <button onClick={() => refetch()} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <RefreshCw size={14} className={isFetching ? 'spin' : undefined} /> Refresh
           </button>
-        </div>
-      </div>
+        </>}
+      />
 
       {message && <AlertBanner type={message.type} message={message.text} onClose={() => setMessage(null)} />}
       {isError && (

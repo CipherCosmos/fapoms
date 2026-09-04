@@ -7,7 +7,7 @@ import { queryKeys } from '../hooks/queryKeys';
 import { useScope, withScope } from '../context/ScopeContext';
 import { useSocketConnection } from '../hooks/useSocketConnection';
 import { counted } from '../utils/plural';
-import { AlertBanner } from '../components/ui';
+import { AlertBanner, PageHeader } from '../components/ui';
 
 /**
  * "Falling behind" — the chase list.
@@ -86,15 +86,11 @@ export const FallingBehind: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', padding: '0 8px 16px' }}>
-      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: '12px', flexWrap: 'wrap' }}>
-        <div>
-          <h1 style={{ margin: 0, fontSize: '22px' }}>Falling behind</h1>
-          <p style={{ margin: '4px 0 0', fontSize: '12.5px', color: 'var(--text-secondary)' }}>
-            Everything past a deadline or its audit date, most overdue first. Nothing here drops off
-            until it is dealt with.
-          </p>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+      <PageHeader
+        icon={<AlertTriangle size={20} />}
+        title="Falling behind"
+        subtitle="Everything past a deadline or its audit date, most overdue first. Nothing here drops off until it is dealt with."
+        actions={<>
           {items.length > 0 && (
             <span style={{ fontSize: '12px', fontWeight: 700, color: 'var(--danger)' }}>
               {counted(items.length, 'item')} to chase
@@ -103,8 +99,8 @@ export const FallingBehind: React.FC = () => {
           <button onClick={() => refetch()} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <RefreshCw size={14} className={isFetching ? 'spin' : undefined} /> Refresh
           </button>
-        </div>
-      </div>
+        </>}
+      />
 
       {isError && (
         <AlertBanner type="error">
