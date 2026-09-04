@@ -340,6 +340,15 @@ export class RosterImportService {
     const rowCodes = rows.map((row) => blankToNull(rowReader(row, askedFor)(...CODE_COLUMNS)));
 
     await this.uow.run(async (manager) => {
+      // A full 1,155-row commit does ~10 writes per row inside this single transaction, and under
+      // concurrent load a contested-row insert can cross the global 30s statement_timeout and be
+      // cancelled ("canceling statement due to statement timeout" → a 500 the operator sees as a
+      // failed import, even though the rehearsal passed). Lift the per-statement cap for THIS
+      // transaction only: SET LOCAL is scoped to the transaction and reverts on commit/rollback,
+      // so the interactive 30s default still guards every other query. Bounded generously (5 min)
+      // rather than disabled, so a genuinely stuck statement still fails eventually.
+      await manager.query("SET LOCAL statement_timeout = '300s'");
+
       // Resolved once, inside the transaction so it reads the same snapshot the import writes
       // against: a lookup per row over 1,155 rows would be 1,155 queries for two answers.
       const clients = await this.buildClientResolver(manager, autoCreateClients, actorId);
