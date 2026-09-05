@@ -3,6 +3,8 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull } from 'typeorm';
 import {
   EmpanelmentStatus, BackgroundCheckVerdict, RiskGrade, CibilBand, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, DocumentVerification, isIdentityDocument, maskTail, looksMasked, isValidPan, isValidAadhaar, isPlaceholderAadhaar,
+  DocumentRejectionReason, DOCUMENT_PRINTED_FIELDS, PRINTED_FIELD_LABELS,
+  DOCUMENTS_PRINTING_A_NAME, IDENTITY_NAME_PRECEDENCE, compareNames, type NameMatchGrade,
 } from '@fapoms/shared';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerReferenceEntity } from './assayer-reference.entity';
@@ -319,6 +321,7 @@ export class RosterRecordsService {
            documentNumber?: string; expiryDate?: string | null },
     actorId: string,
   ) {
+    let withdrewVerification = false;
     this.assertKnownRequirement(requirement);
     const existing = await this.onboarding.findOne({ where: { assayerId, requirement } });
     const row = existing ?? this.onboarding.create({ assayerId, requirement, createdBy: actorId });
@@ -409,16 +412,16 @@ export class RosterRecordsService {
       if (dto.expiryDate !== undefined) row.expiryDate = dto.expiryDate ? new Date(dto.expiryDate) : null;
       // Changing what the document says undoes any verification of it: somebody checked the old
       // number against the original, and that is no longer the number on the record.
-      if (row.verificationStatus === DocumentVerification.VERIFIED) {
-        row.verificationStatus = DocumentVerification.PENDING;
-        row.verifiedAt = null;
-        row.verifiedBy = null;
-      }
+      withdrewVerification = this.undoVerification(row, 'the document details changed');
     }
 
     row.isActive = true;
     row.updatedBy = actorId;
-    return this.onboarding.save(row);
+    const saved = await this.onboarding.save(row);
+    // Only when something was actually withdrawn: the name of record follows the verifications, so
+    // an ordinary clerical edit has no bearing on it and should not pay for a re-derivation.
+    if (withdrewVerification) await this.deriveLegalName(assayerId, actorId);
+    return saved;
   }
 
   /**
@@ -436,8 +439,34 @@ export class RosterRecordsService {
     this.assertKnownRequirement(requirement);
     const existing = await this.onboarding.findOne({ where: { assayerId, requirement } });
     const row = existing ?? this.onboarding.create({ assayerId, requirement, createdBy: actorId });
-    row.filePaths = [...(row.filePaths ?? []), key];
+
+    /**
+     * A photograph is replaced; a document accumulates.
+     *
+     * Every other requirement keeps its history — an earlier Aadhaar scan is evidence of what was
+     * checked and when, and a re-upload is a second page or a better picture of the same card. A
+     * face is not evidence of anything except what somebody looked like, and appending would grow
+     * the array without bound every time a person retakes their photo while
+     * `assayers.photograph` silently followed the last one anyway.
+     */
+    row.filePaths = requirement === OnboardingDocument.PHOTOGRAPH
+      ? [key]
+      : [...(row.filePaths ?? []), key];
     if (row.softCopyReceived !== true) row.softCopyReceived = true;
+
+    /**
+     * A new scan on a verified document undoes the verification.
+     *
+     * Somebody checked the picture that was there. This is a different picture — and the commonest
+     * reason for sending one is that the last was refused, so leaving VERIFIED standing would mark
+     * the replacement as already checked without anybody looking at it.
+     */
+    const withdrawn = this.undoVerification(row, 'a new scan was uploaded');
+    // A rejection is answered by the new scan, so it stops being the current state of this row.
+    if (row.verificationStatus === DocumentVerification.REJECTED) {
+      row.verificationStatus = DocumentVerification.PENDING;
+      row.rejectionReason = null;
+    }
     row.isActive = true;
     row.updatedBy = actorId;
     const saved = await this.onboarding.save(row);
@@ -452,6 +481,28 @@ export class RosterRecordsService {
      */
     if (requirement === OnboardingDocument.PHOTOGRAPH) {
       await this.assayers.update({ id: assayerId }, { photograph: key, updatedBy: actorId });
+    }
+
+    if (withdrawn) await this.deriveLegalName(assayerId, actorId);
+
+    /**
+     * Recording that a scan arrived left no trail at all, unlike verifying it.
+     *
+     * Only for the documents that establish who somebody is — writing an audit row for each of the
+     * twelve clerical requirements would add eleven thousand entries of "the NDA arrived" and teach
+     * every reader to scroll past the trail.
+     */
+    if (isIdentityDocument(requirement) || requirement === OnboardingDocument.PHOTOGRAPH) {
+      await this.auditService?.recordEventSafe({
+        category: EventCategory.OPERATIONAL,
+        eventType: 'IDENTITY_DOCUMENT_FILE_ATTACHED',
+        entityType: 'ASSAYER',
+        entityId: assayerId,
+        userId: actorId,
+        remarks: `A scan of ${ONBOARDING_DOCUMENT_LABELS[requirement]} was uploaded.`,
+        // The key, never the image, and never the number the image shows.
+        metadata: { requirement, fileCount: row.filePaths.length, withdrewVerification: withdrawn },
+      });
     }
     return saved;
   }
@@ -498,11 +549,116 @@ export class RosterRecordsService {
    * or did not, and a code-of-conduct letter reading "Pending verification" for ever is an alarm
    * nobody can clear — which is why the register this replaced had every row start there.
    */
+  /**
+   * What a reviewer is attesting to, beyond the verdict itself.
+   *
+   * Optional as a whole so every existing caller still compiles, and checked field by field
+   * against what the card in question actually prints.
+   */
+  /**
+   * Undo a verification whose evidence no longer stands, wherever that happens.
+   *
+   * One place, because the ways a verification stops being true are not obvious and were not all
+   * covered: the number changing was, but a new scan landing on a verified row was not, and neither
+   * was the *other* side of the comparison moving — somebody could verify a document against one
+   * name and then rename the record, leaving an attestation that no longer says anything.
+   *
+   * Deliberately not triggered by the clock. A passport passing its expiry must not flip a stored
+   * column: that would be a write nobody made, and expiry is already derived where it is read.
+   */
+  private undoVerification(row: AssayerDocumentEntity, because: string): boolean {
+    if (row.verificationStatus !== DocumentVerification.VERIFIED) return false;
+    row.verificationStatus = DocumentVerification.PENDING;
+    row.verifiedAt = null;
+    row.verifiedBy = null;
+    row.nameMatchGrade = null;
+    row.nameMatchNote = null;
+    row.remarks = [row.remarks, `Verification withdrawn — ${because}.`].filter(Boolean).join(' ');
+    return true;
+  }
+
+  /**
+   * The person's name changed, so every verification that was checked against it is stale.
+   *
+   * Called from `AssayerService.update`. Without it the guard on the name comparison is defeated by
+   * doing the two steps in order: verify a genuine document under the name it matches, then edit
+   * the record to any other name. The attestation would survive, still saying VERIFIED, having
+   * compared a name that is no longer there.
+   */
+  async revalidateAfterNameChange(assayerId: string, actorId: string): Promise<number> {
+    const rows = await this.onboarding.find({
+      where: { assayerId, isActive: true, verificationStatus: DocumentVerification.VERIFIED },
+    });
+    const affected = rows.filter((row) =>
+      DOCUMENTS_PRINTING_A_NAME.includes(row.requirement as OnboardingDocument));
+    for (const row of affected) {
+      this.undoVerification(row, 'the name on the record was changed');
+      row.updatedBy = actorId;
+      await this.onboarding.save(row);
+      await this.auditService?.recordEventSafe({
+        category: EventCategory.OPERATIONAL,
+        eventType: 'IDENTITY_DOCUMENT_VERIFICATION_INVALIDATED',
+        entityType: 'ASSAYER',
+        entityId: assayerId,
+        userId: actorId,
+        remarks: `${ONBOARDING_DOCUMENT_LABELS[row.requirement]} needs checking again — the name on `
+          + 'the record was changed after it was verified.',
+        metadata: { requirement: row.requirement, cause: 'NAME_CHANGED' },
+      });
+    }
+    if (affected.length > 0) await this.deriveLegalName(assayerId, actorId);
+    return affected.length;
+  }
+
+  /**
+   * The name of record, taken from whichever identity document established it.
+   *
+   * One writer, so `assayers.legal_name` can always be traced back to a card somebody checked. It
+   * re-derives rather than accumulating: when a verification is undone the name has to fall back
+   * to the next document that still holds one, and when none does it has to disappear — a legal
+   * name outliving the evidence for it is exactly the sort of confident, unfounded fact this whole
+   * exercise exists to remove.
+   *
+   * `displayName` is untouched. That is what the organisation calls this person; this is what a
+   * bank's branch would find on their Aadhaar, and the two are allowed to differ until somebody
+   * reconciles them deliberately.
+   */
+  private async deriveLegalName(assayerId: string, actorId: string): Promise<void> {
+    const rows = await this.onboarding.find({ where: { assayerId, isActive: true } });
+    const verified = new Map(
+      rows
+        .filter((r) => r.verificationStatus === DocumentVerification.VERIFIED && r.holderName)
+        .map((r) => [r.requirement as OnboardingDocument, r]),
+    );
+
+    const source = IDENTITY_NAME_PRECEDENCE.find((requirement) => verified.has(requirement));
+    const row = source ? verified.get(source)! : null;
+
+    await this.assayers.update({ id: assayerId }, {
+      legalName: row?.holderName ?? null,
+      legalNameSource: source ?? null,
+      // Null again when the last verification is undone: "identity was established" must not
+      // survive the evidence being withdrawn.
+      identityVerifiedAt: row ? (row.verifiedAt ?? new Date()) : null,
+      updatedBy: actorId,
+    } as any);
+  }
+
   async verifyDocument(
     id: string,
     verdict: DocumentVerification,
     actorId: string,
     remarks?: string,
+    attested?: {
+      holderName?: string | null;
+      holderDateOfBirth?: string | null;
+      holderGender?: string | null;
+      holderGuardianName?: string | null;
+      holderAddress?: string | null;
+      rejectionReason?: DocumentRejectionReason | null;
+      /** The reviewer has seen that the name does not agree, and says why they accepted it. */
+      nameMismatchNote?: string | null;
+    },
   ) {
     const row = await this.onboarding.findOne({ where: { id } });
     if (!row) throw new NotFoundException('No such document.');
@@ -561,13 +717,100 @@ export class RosterRecordsService {
         + 'is nothing to have checked against the original. Upload the document first.',
       );
     }
+    /**
+     * A rejection has to say why, because the sentence has somewhere to go.
+     *
+     * It reaches the appraiser's phone in their own language and tells them whether to photograph
+     * the same card again or find a different one. "Sent back" on its own is a dead end for the
+     * person who has to act on it, and the database CHECK refuses it too.
+     */
+    if (verdict === DocumentVerification.REJECTED && !attested?.rejectionReason) {
+      throw new BadRequestException(
+        'Say why the document was sent back. The reason is shown to the appraiser, and it is what '
+        + 'tells them whether to photograph the same card again or send a different one.',
+      );
+    }
+
+    let nameMatch: NameMatchGrade | null = null;
+
+    if (verdict === DocumentVerification.VERIFIED) {
+      /**
+       * The reviewer types what the card says, and only what the card actually carries.
+       *
+       * Asking for a field the document does not print — an address on the Aadhaar *front*, which
+       * is the photo side — teaches people that the form asks for things that are not there, and a
+       * form that does that gets ignored wholesale.
+       */
+      const prints = DOCUMENT_PRINTED_FIELDS[row.requirement as OnboardingDocument];
+      if (prints) {
+        const supplied: Record<string, unknown> = {
+          name: attested?.holderName ?? row.holderName,
+          dateOfBirth: attested?.holderDateOfBirth ?? row.holderDateOfBirth,
+          gender: attested?.holderGender ?? row.holderGender,
+          guardianName: attested?.holderGuardianName ?? row.holderGuardianName,
+          address: attested?.holderAddress ?? row.holderAddress,
+        };
+        const missing = (Object.keys(prints) as Array<keyof typeof prints>)
+          .filter((field) => prints[field] && !String(supplied[field] ?? '').trim())
+          .map((field) => PRINTED_FIELD_LABELS[field]);
+        if (missing.length > 0) {
+          throw new BadRequestException(
+            `Before this ${ONBOARDING_DOCUMENT_LABELS[row.requirement]} can be marked verified, `
+            + `record what it says: ${missing.join(', ')}. That is what the record is checked `
+            + 'against — a verification that compares nothing attests to nothing.',
+          );
+        }
+      }
+
+      if (attested?.holderName !== undefined) row.holderName = attested.holderName || null;
+      if (attested?.holderDateOfBirth !== undefined) {
+        row.holderDateOfBirth = attested.holderDateOfBirth ? new Date(attested.holderDateOfBirth) : null;
+      }
+      if (attested?.holderGender !== undefined) row.holderGender = attested.holderGender || null;
+      if (attested?.holderGuardianName !== undefined) row.holderGuardianName = attested.holderGuardianName || null;
+      if (attested?.holderAddress !== undefined) row.holderAddress = attested.holderAddress || null;
+
+      /**
+       * Does the name on the card agree with the name on the record?
+       *
+       * A MISMATCH is refused rather than warned about, but it is not a wall: the reviewer may go
+       * ahead by saying why, and that sentence is stored beside the grade as evidence that a human
+       * saw the disagreement. The roster's names are the unreliable side of this comparison — they
+       * were hand-typed over years and split on the last space — so refusing outright would stop a
+       * legitimate estate rather than catching a fraudulent one.
+       */
+      if (DOCUMENTS_PRINTING_A_NAME.includes(row.requirement as OnboardingDocument)) {
+        const person = await this.assayers.findOne({ where: { id: row.assayerId } });
+        nameMatch = compareNames(person?.displayName, row.holderName).grade;
+        const note = String(attested?.nameMismatchNote ?? '').trim();
+        if (nameMatch === 'MISMATCH' && note.length < 10) {
+          throw new BadRequestException(
+            `The name on this document ("${row.holderName}") does not match the name on the record `
+            + `("${person?.displayName ?? '—'}"). If it is the same person, say why in a sentence `
+            + 'and it will be recorded with the verification. If it is not, send the document back.',
+          );
+        }
+        row.nameMatchGrade = nameMatch;
+        row.nameMatchNote = note || null;
+      }
+    }
+
     const previousStatus = row.verificationStatus;
     row.verificationStatus = verdict;
     row.verifiedAt = verdict === DocumentVerification.PENDING ? null : new Date();
     row.verifiedBy = verdict === DocumentVerification.PENDING ? null : actorId;
+    // Carried only on a rejection: a reason left behind on a later verification would describe a
+    // decision that has been reversed.
+    row.rejectionReason = verdict === DocumentVerification.REJECTED
+      ? (attested?.rejectionReason ?? null)
+      : null;
     if (remarks !== undefined) row.remarks = remarks || null;
     row.updatedBy = actorId;
     const saved = await this.onboarding.save(row);
+
+    // The name of record follows the documents, so it has to be re-derived whenever one of them
+    // changes verdict — in either direction.
+    await this.deriveLegalName(row.assayerId, actorId);
     // Verify/reject/reset (PENDING is a reset) on an identity document had no trail — the only
     // evidence was the row's current state, with no record of who checked it or when it changed.
     await this.auditService?.recordEventSafe({

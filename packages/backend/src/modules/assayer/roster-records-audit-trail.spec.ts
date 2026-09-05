@@ -36,9 +36,11 @@ describe('RosterRecordsService — audit trail for previously-silent writes', ()
     };
     onboarding = {
       findOne: jest.fn(),
+      // `deriveLegalName` re-reads this person's documents after every verdict change.
+      find: jest.fn().mockResolvedValue([]),
       save: jest.fn((v: any) => Promise.resolve(v)),
     };
-    assayers = { findOne: jest.fn() };
+    assayers = { findOne: jest.fn(), update: jest.fn() };
 
     const mod = await Test.createTestingModule({
       providers: [
@@ -97,9 +99,13 @@ describe('RosterRecordsService — audit trail for previously-silent writes', ()
       // covers the refusal; this test is about the trail the write leaves behind.
       filePaths: ['scans/a-1/pan.jpg'],
     });
-    assayers.findOne.mockResolvedValue({ id: 'a-1', panNumber: 'ABCDE1234F' });
+    assayers.findOne.mockResolvedValue({ id: 'a-1', panNumber: 'ABCDE1234F', displayName: 'Test Assayer' });
 
-    await service.verifyDocument('doc-1', DocumentVerification.VERIFIED, 'user-1');
+    // A verification now attests to what the card says; `set-document-guards.spec.ts` covers the
+    // refusals, and this test is about the trail the write leaves behind.
+    await service.verifyDocument('doc-1', DocumentVerification.VERIFIED, 'user-1', undefined, {
+      holderName: 'Test Assayer', holderDateOfBirth: '1985-06-15', holderGuardianName: 'Parent Name',
+    });
 
     expect(audit.recordEventSafe).toHaveBeenCalledTimes(1);
     const dto = audit.recordEventSafe.mock.calls[0][0];

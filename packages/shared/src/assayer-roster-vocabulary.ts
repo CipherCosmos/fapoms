@@ -216,6 +216,138 @@ export enum DocumentVerification {
   REJECTED = 'REJECTED',
 }
 
+/**
+ * The documents that print a person's NAME, which is not the same list as `IDENTITY_DOCUMENTS`.
+ *
+ * `AADHAAR_BACK` is the address side. It carries the same number as the front — both map to
+ * `aadhaarNumber` on the person — and it prints no name at all, so demanding a name before it can
+ * be verified would ask a reviewer for something that is not on the card in front of them.
+ */
+export const DOCUMENTS_PRINTING_A_NAME: readonly OnboardingDocument[] =
+  IDENTITY_DOCUMENTS.filter((d) => d !== OnboardingDocument.AADHAAR_BACK);
+
+/**
+ * What each card actually prints, and therefore what a reviewer can be asked to type from it.
+ *
+ * Getting this wrong in either direction costs something real. Ask for a field the card does not
+ * carry — an address on the Aadhaar *front*, which is the photo side — and the reviewer either
+ * invents one or learns that the form asks for things that are not there, which is how a form
+ * teaches people to ignore it. Ask for too little and the verification records less than the
+ * person holding the card could see.
+ *
+ * The Aadhaar split is the load-bearing case: name, date of birth and gender are on the front, the
+ * address is on the back, and the two are separate requirements precisely because they are
+ * separate photographs.
+ */
+export interface PrintedIdentityFields {
+  name: boolean;
+  dateOfBirth: boolean;
+  gender: boolean;
+  guardianName: boolean;
+  address: boolean;
+}
+
+const PRINTS = (over: Partial<PrintedIdentityFields>): PrintedIdentityFields => ({
+  name: false, dateOfBirth: false, gender: false, guardianName: false, address: false, ...over,
+});
+
+export const DOCUMENT_PRINTED_FIELDS: Partial<Record<OnboardingDocument, PrintedIdentityFields>> = {
+  [OnboardingDocument.AADHAAR_FRONT]: PRINTS({ name: true, dateOfBirth: true, gender: true }),
+  [OnboardingDocument.AADHAAR_BACK]: PRINTS({ address: true }),
+  // A PAN card prints the father's name where other documents print an address.
+  [OnboardingDocument.PAN_CARD]: PRINTS({ name: true, dateOfBirth: true, guardianName: true }),
+  [OnboardingDocument.PASSPORT]: PRINTS({ name: true, dateOfBirth: true, gender: true }),
+  [OnboardingDocument.VOTER_ID]: PRINTS({ name: true, guardianName: true }),
+  [OnboardingDocument.DRIVING_LICENCE]: PRINTS({ name: true, dateOfBirth: true, address: true }),
+  [OnboardingDocument.ID_PROOF]: PRINTS({ name: true }),
+  [OnboardingDocument.ADDRESS_PROOF]: PRINTS({ name: true, address: true }),
+};
+
+/** Human names for the printed fields, used to say what is still missing. */
+export const PRINTED_FIELD_LABELS: Record<keyof PrintedIdentityFields, string> = {
+  name: 'the name as printed',
+  dateOfBirth: 'the date of birth',
+  gender: 'the gender',
+  guardianName: "the father's or guardian's name",
+  address: 'the address as printed',
+};
+
+/**
+ * Which document's name becomes the name of record, in order of preference.
+ *
+ * Aadhaar leads because it is the document a client's branch actually asks for at the vault door.
+ * PAN is second and deliberately not first: its name field is whatever the PAN *application*
+ * carried, it expands initials inconsistently, and it is a tax identifier rather than an identity
+ * record.
+ *
+ * Not configurable. Which document establishes a legal name is a compliance fact, not an operator
+ * preference — the same reasoning that keeps the identity list itself out of the settings screen.
+ */
+export const IDENTITY_NAME_PRECEDENCE: readonly OnboardingDocument[] = [
+  OnboardingDocument.AADHAAR_FRONT,
+  OnboardingDocument.PAN_CARD,
+  OnboardingDocument.PASSPORT,
+  OnboardingDocument.VOTER_ID,
+  OnboardingDocument.DRIVING_LICENCE,
+];
+
+/**
+ * Why a scan was sent back.
+ *
+ * Structured rather than free text because this sentence has to travel: it is shown to the
+ * appraiser on their phone, in their language, and it is what tells them whether to photograph the
+ * same card again or find a different one. A reviewer's typed note cannot be translated and
+ * frequently would not survive being read on a small screen by somebody who did not write it.
+ */
+export enum DocumentRejectionReason {
+  ILLEGIBLE = 'ILLEGIBLE',
+  INCOMPLETE_CAPTURE = 'INCOMPLETE_CAPTURE',
+  WRONG_DOCUMENT = 'WRONG_DOCUMENT',
+  NAME_MISMATCH = 'NAME_MISMATCH',
+  NUMBER_MISMATCH = 'NUMBER_MISMATCH',
+  EXPIRED = 'EXPIRED',
+  NOT_THE_PERSON = 'NOT_THE_PERSON',
+  ALTERED_OR_SUSPECT = 'ALTERED_OR_SUSPECT',
+}
+
+/** What the reviewer picks from. Written at the reviewer, who is deciding. */
+export const DOCUMENT_REJECTION_LABELS: Record<DocumentRejectionReason, string> = {
+  [DocumentRejectionReason.ILLEGIBLE]: 'Too blurred or dark to read',
+  [DocumentRejectionReason.INCOMPLETE_CAPTURE]: 'Part of the document is cut off',
+  [DocumentRejectionReason.WRONG_DOCUMENT]: 'This is a different document',
+  [DocumentRejectionReason.NAME_MISMATCH]: 'The name does not match the record',
+  [DocumentRejectionReason.NUMBER_MISMATCH]: 'The number does not match the record',
+  [DocumentRejectionReason.EXPIRED]: 'The document has expired',
+  [DocumentRejectionReason.NOT_THE_PERSON]: 'This does not belong to this person',
+  [DocumentRejectionReason.ALTERED_OR_SUSPECT]: 'The document looks altered',
+};
+
+/**
+ * What the APPRAISER is told, which is a different sentence from what the reviewer picked.
+ *
+ * The reviewer's label states a finding; this states what to do about it. "Too blurred or dark to
+ * read" is an observation; "photograph it again in better light" is an instruction somebody can
+ * act on without having to work out what is being asked of them.
+ */
+export const DOCUMENT_REJECTION_GUIDANCE: Record<DocumentRejectionReason, string> = {
+  [DocumentRejectionReason.ILLEGIBLE]:
+    'The photo was too blurred or too dark to read. Please take it again in better light, holding the phone steady.',
+  [DocumentRejectionReason.INCOMPLETE_CAPTURE]:
+    'Part of the document was cut off. Please take it again with all four corners inside the frame.',
+  [DocumentRejectionReason.WRONG_DOCUMENT]:
+    'This was a different document from the one asked for. Please check which one is needed and send that.',
+  [DocumentRejectionReason.NAME_MISMATCH]:
+    'The name on this document does not match the name on your record. Please send the correct document, or contact your HR desk if your name is recorded wrongly.',
+  [DocumentRejectionReason.NUMBER_MISMATCH]:
+    'The number on this document does not match the one on your record. Please contact your HR desk.',
+  [DocumentRejectionReason.EXPIRED]:
+    'This document has expired. Please send a current one.',
+  [DocumentRejectionReason.NOT_THE_PERSON]:
+    'This document does not appear to belong to you. Please send your own.',
+  [DocumentRejectionReason.ALTERED_OR_SUSPECT]:
+    'We could not accept this document. Please contact your HR desk.',
+};
+
 /** Which spreadsheet column carries each requirement, so the importer needs no second list. */
 /**
  * The spreadsheet's own column headings, spelling included.

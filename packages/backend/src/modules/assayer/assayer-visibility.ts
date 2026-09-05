@@ -27,6 +27,15 @@ const IDENTITY_FIELDS = [
   'panNumber', 'aadhaarNumber', 'dateOfBirth',
   'emergencyContactName', 'emergencyContactPhone', 'emergencyContactRelation',
   'governmentDocuments',
+  /**
+   * The name established from an identity document, and when.
+   *
+   * Listed the moment the columns existed rather than after somebody noticed them in a payload.
+   * This interceptor exists because decrypted PAN and bank numbers were reaching every screen that
+   * joined an assayer — schedules, assignments, the operations inbox — and a legal name read off
+   * an Aadhaar belongs to the same category of fact as the Aadhaar number itself.
+   */
+  'legalName', 'legalNameSource', 'identityVerifiedAt',
 ];
 
 /** Banking details. Read to pay someone, and for no other reason. */

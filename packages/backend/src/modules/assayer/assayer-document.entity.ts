@@ -75,6 +75,63 @@ export class AssayerDocumentEntity extends BaseEntity {
   @Column({ name: 'expiry_date', type: 'date', nullable: true })
   expiryDate: Date | null;
 
+  /**
+   * What the card actually says, typed by the reviewer who is holding it.
+   *
+   * These are the point of the whole verification step. Before them the record's name could not be
+   * compared with the document's name, because the document's name was never written down — and a
+   * verification that compares nothing is a signature on a blank page.
+   *
+   * Per document rather than per person, because a person has both an Aadhaar row and a PAN row
+   * and the two are allowed to disagree; that disagreement is a finding, and one set of columns on
+   * `assayers` would have nowhere to keep the second card's version.
+   *
+   * Plaintext: `assayers.display_name` and `assayers.address` already are, so encrypting the same
+   * facts here would protect nothing while making them uncomparable. They are still identity data
+   * and are stripped by role in `assayer-visibility.ts`.
+   */
+  @Column({ name: 'holder_name', type: 'varchar', length: 200, nullable: true })
+  holderName: string | null;
+
+  @Column({ name: 'holder_date_of_birth', type: 'date', nullable: true })
+  holderDateOfBirth: Date | null;
+
+  @Column({ name: 'holder_gender', type: 'varchar', length: 20, nullable: true })
+  holderGender: string | null;
+
+  /** Father's or guardian's name — what a PAN card prints, and the usual disambiguator. */
+  @Column({ name: 'holder_guardian_name', type: 'varchar', length: 200, nullable: true })
+  holderGuardianName: string | null;
+
+  /** The address as printed, which an Aadhaar carries and the roster's own address may contradict. */
+  @Column({ name: 'holder_address', type: 'text', nullable: true })
+  holderAddress: string | null;
+
+  /**
+   * How well `holderName` agreed with the person's name at the moment somebody verified this.
+   *
+   * Stored rather than recomputed, because it is evidence: it records that a human was shown the
+   * disagreement and went ahead anyway. Recomputing it later would answer a different question,
+   * since the record's name may have been corrected since.
+   */
+  @Column({ name: 'name_match_grade', type: 'varchar', length: 10, nullable: true })
+  nameMatchGrade: string | null;
+
+  /** Why the reviewer accepted a name that did not agree. Required when they override. */
+  @Column({ name: 'name_match_note', type: 'text', nullable: true })
+  nameMatchNote: string | null;
+
+  /**
+   * Why the scan was sent back.
+   *
+   * Structured, not free text, because this sentence travels to the appraiser's phone in their own
+   * language and tells them whether to photograph the same card again or find a different one. A
+   * database CHECK requires it whenever the status is REJECTED — a rejection with no reason is a
+   * dead end for the person who has to act on it.
+   */
+  @Column({ name: 'rejection_reason', type: 'varchar', length: 40, nullable: true })
+  rejectionReason: string | null;
+
   /** Null for anything that is not an identity document — see the class comment. */
   @Column({ name: 'verification_status', type: 'varchar', length: 20, nullable: true })
   verificationStatus: DocumentVerification | null;

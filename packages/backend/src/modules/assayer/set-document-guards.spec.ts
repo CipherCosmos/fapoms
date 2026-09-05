@@ -24,6 +24,7 @@ describe('recording a document number', () => {
     svc.assayers = { findOne: jest.fn().mockResolvedValue(row), save: jest.fn(async (p: any) => p) };
     svc.onboarding = {
       findOne: jest.fn().mockResolvedValue(null),
+      find: jest.fn().mockResolvedValue([]),
       create: jest.fn((d: any) => ({ ...d })),
       save: jest.fn(async (d: any) => d),
     };
@@ -158,7 +159,11 @@ describe('verifying an identity document', () => {
 
   const serviceFor = (row: any, person: any = { id: 'asr-1', panNumber: 'ABCDE1234F' }) => {
     const svc: any = Object.create(RosterRecordsService.prototype);
-    svc.onboarding = { findOne: jest.fn().mockResolvedValue(row), save: jest.fn(async (d: any) => d) };
+    svc.onboarding = {
+      findOne: jest.fn().mockResolvedValue(row),
+      find: jest.fn().mockResolvedValue([]),
+      save: jest.fn(async (d: any) => d),
+    };
     svc.assayers = { findOne: jest.fn().mockResolvedValue(person), update: jest.fn() };
     svc.auditService = { recordEventSafe: jest.fn() };
     return svc;
@@ -172,14 +177,20 @@ describe('verifying an identity document', () => {
    */
   it('rejects a scan whose number could not be read', async () => {
     const svc = serviceFor(rowWith(), { id: 'asr-1', panNumber: null });
-    await expect(svc.verifyDocument('doc-1', 'REJECTED', 'actor-1')).resolves.toMatchObject({
+    await expect(svc.verifyDocument('doc-1', 'REJECTED', 'actor-1', undefined,
+      { rejectionReason: 'ILLEGIBLE' as any })).resolves.toMatchObject({
       verificationStatus: 'REJECTED',
     });
   });
 
+  /** What a PAN card prints, so the attestation rules are satisfied and the number rule is isolated. */
+  const printed = {
+    holderName: 'Ramesh Kumar', holderDateOfBirth: '1980-04-01', holderGuardianName: 'Suresh Kumar',
+  };
+
   it('still refuses to VERIFY without a number, because there is nothing to have checked', async () => {
-    const svc = serviceFor(rowWith(), { id: 'asr-1', panNumber: null });
-    await expect(svc.verifyDocument('doc-1', 'VERIFIED', 'actor-1'))
+    const svc = serviceFor(rowWith(), { id: 'asr-1', panNumber: null, displayName: 'Ramesh Kumar' });
+    await expect(svc.verifyDocument('doc-1', 'VERIFIED', 'actor-1', undefined, printed))
       .rejects.toBeInstanceOf(BadRequestException);
   });
 
@@ -191,20 +202,199 @@ describe('verifying an identity document', () => {
    */
   it('refuses to verify a document with no scan on file', async () => {
     const svc = serviceFor(rowWith({ filePaths: [] }));
-    await expect(svc.verifyDocument('doc-1', 'VERIFIED', 'actor-1'))
+    await expect(svc.verifyDocument('doc-1', 'VERIFIED', 'actor-1', undefined, printed))
       .rejects.toThrow(/no scan of this/i);
   });
 
-  it('verifies when the scan and the number are both there', async () => {
-    const svc = serviceFor(rowWith());
-    await expect(svc.verifyDocument('doc-1', 'VERIFIED', 'actor-1')).resolves.toMatchObject({
-      verificationStatus: 'VERIFIED',
-    });
+  it('verifies when the scan, the number and the printed details are all there', async () => {
+    const svc = serviceFor(rowWith(), { id: 'asr-1', panNumber: 'ABCDE1234F', displayName: 'Ramesh Kumar' });
+    await expect(svc.verifyDocument('doc-1', 'VERIFIED', 'actor-1', undefined, printed))
+      .resolves.toMatchObject({ verificationStatus: 'VERIFIED' });
   });
 
   /** A rejection needs no scan either — "nothing arrived" is a thing a reviewer must be able to say. */
   it('rejects a document with no scan', async () => {
     const svc = serviceFor(rowWith({ filePaths: [] }), { id: 'asr-1', panNumber: null });
-    await expect(svc.verifyDocument('doc-1', 'REJECTED', 'actor-1')).resolves.toBeTruthy();
+    await expect(svc.verifyDocument('doc-1', 'REJECTED', 'actor-1', undefined,
+      { rejectionReason: 'INCOMPLETE_CAPTURE' as any })).resolves.toBeTruthy();
+  });
+});
+
+/**
+ * What a verification actually attests to.
+ *
+ * Before these rules a verification recorded that somebody had pressed a button. It compared
+ * nothing, because the name printed on the card was never written down anywhere — so the record
+ * could carry a confident VERIFIED against a document belonging to a different person entirely.
+ */
+describe('attesting to what the document says', () => {
+  const docRow = (over: Record<string, unknown> = {}) => ({
+    id: 'doc-1', assayerId: 'asr-1', requirement: OnboardingDocument.PAN_CARD,
+    filePaths: ['scans/pan.jpg'], verificationStatus: null, documentNumber: 'ABCDE1234F',
+    holderName: null, holderDateOfBirth: null, holderGender: null,
+    holderGuardianName: null, holderAddress: null, remarks: null, rejectionReason: null,
+    ...over,
+  });
+
+  const svcFor = (row: any, displayName = 'Ramesh Kumar') => {
+    const svc: any = Object.create(RosterRecordsService.prototype);
+    svc.onboarding = {
+      findOne: jest.fn().mockResolvedValue(row),
+      find: jest.fn().mockResolvedValue([]),
+      save: jest.fn(async (d: any) => d),
+    };
+    svc.assayers = {
+      findOne: jest.fn().mockResolvedValue({
+        id: 'asr-1', displayName, panNumber: 'ABCDE1234F', aadhaarNumber: '234123412346',
+      }),
+      update: jest.fn(),
+    };
+    svc.auditService = { recordEventSafe: jest.fn() };
+    return svc;
+  };
+
+  const attest = (over: Record<string, unknown> = {}) => ({
+    holderName: 'Ramesh Kumar', holderDateOfBirth: '1980-04-01',
+    holderGuardianName: 'Suresh Kumar', ...over,
+  });
+
+  it('refuses to verify until the reviewer records what the card says', async () => {
+    const svc = svcFor(docRow());
+    await expect(svc.verifyDocument('doc-1', 'VERIFIED', 'actor-1'))
+      .rejects.toThrow(/record what it says/i);
+  });
+
+  /**
+   * A PAN prints the father's name where other documents print an address, and an Aadhaar's
+   * address is on the back. Asking for a field the card does not carry teaches a reviewer that the
+   * form asks for things that are not there.
+   */
+  it('asks only for the fields this document actually prints', async () => {
+    const svc = svcFor(docRow());
+    await expect(svc.verifyDocument('doc-1', 'VERIFIED', 'actor-1', undefined, attest()))
+      .resolves.toMatchObject({ verificationStatus: 'VERIFIED' });
+
+    const front = svcFor(docRow({ requirement: OnboardingDocument.AADHAAR_FRONT }));
+    // No address: it is on the back, and the back is its own requirement.
+    await expect(front.verifyDocument('doc-1', 'VERIFIED', 'actor-1', undefined, {
+      holderName: 'Ramesh Kumar', holderDateOfBirth: '1980-04-01', holderGender: 'M',
+    })).resolves.toBeTruthy();
+  });
+
+  it('records how well the name agreed, as evidence a human saw it', async () => {
+    const svc = svcFor(docRow(), 'R Kumar');
+    const saved = await svc.verifyDocument('doc-1', 'VERIFIED', 'actor-1', undefined, attest());
+    expect(saved.nameMatchGrade).toBe('STRONG');
+  });
+
+  it('refuses a name that does not agree, unless the reviewer says why', async () => {
+    const svc = svcFor(docRow(), 'Suresh Kumar');
+    await expect(svc.verifyDocument('doc-1', 'VERIFIED', 'actor-1', undefined, attest()))
+      .rejects.toThrow(/does not match the name on the record/i);
+
+    const withReason = svcFor(docRow(), 'Suresh Kumar');
+    const saved = await withReason.verifyDocument('doc-1', 'VERIFIED', 'actor-1', undefined,
+      attest({ nameMismatchNote: 'Married name; deed poll on file with HR.' }));
+    expect(saved.nameMatchGrade).toBe('MISMATCH');
+    expect(saved.nameMatchNote).toMatch(/deed poll/);
+  });
+
+  it('refuses a rejection that does not say why', async () => {
+    const svc = svcFor(docRow());
+    await expect(svc.verifyDocument('doc-1', 'REJECTED', 'actor-1'))
+      .rejects.toThrow(/say why/i);
+  });
+
+  it('keeps the reason on a rejection and clears it on a later verification', async () => {
+    const svc = svcFor(docRow());
+    const rejected = await svc.verifyDocument('doc-1', 'REJECTED', 'actor-1', undefined,
+      { rejectionReason: 'ILLEGIBLE' });
+    expect(rejected.rejectionReason).toBe('ILLEGIBLE');
+
+    const again = svcFor(docRow({ verificationStatus: 'REJECTED', rejectionReason: 'ILLEGIBLE' }));
+    const verified = await again.verifyDocument('doc-1', 'VERIFIED', 'actor-1', undefined, attest());
+    expect(verified.rejectionReason).toBeNull();
+  });
+});
+
+/**
+ * The ways a verification stops being true.
+ *
+ * The number changing was covered. A new scan landing on a verified row was not, and neither was
+ * the other side of the comparison moving — which is the one that matters, because it is reachable
+ * in two ordinary steps.
+ */
+describe('withdrawing a verification whose evidence no longer stands', () => {
+  const verifiedRow = (over: Record<string, unknown> = {}) => ({
+    id: 'doc-1', assayerId: 'asr-1', requirement: OnboardingDocument.AADHAAR_FRONT,
+    filePaths: ['scans/aadhaar.jpg'], verificationStatus: 'VERIFIED',
+    holderName: 'Ramesh Kumar', nameMatchGrade: 'EXACT', nameMatchNote: null,
+    verifiedAt: new Date(), verifiedBy: 'actor-0', remarks: null, ...over,
+  });
+
+  const svc = (rows: any[]) => {
+    const s: any = Object.create(RosterRecordsService.prototype);
+    s.onboarding = {
+      find: jest.fn().mockResolvedValue(rows),
+      findOne: jest.fn().mockResolvedValue(rows[0]),
+      create: jest.fn((d: any) => d),
+      save: jest.fn(async (d: any) => d),
+    };
+    s.assayers = { findOne: jest.fn().mockResolvedValue({ id: 'asr-1' }), update: jest.fn() };
+    s.auditService = { recordEventSafe: jest.fn() };
+    return s;
+  };
+
+  /**
+   * Verify a genuine document under the name it matches, then rename the record to anything at all.
+   * Without this the attestation survives, still saying VERIFIED, having compared a name that is no
+   * longer on the record.
+   */
+  it('undoes a verification when the name it was checked against changes', async () => {
+    const s = svc([verifiedRow()]);
+    const count = await s.revalidateAfterNameChange('asr-1', 'actor-1');
+
+    expect(count).toBe(1);
+    expect(s.onboarding.save.mock.calls[0][0]).toMatchObject({
+      verificationStatus: 'PENDING', verifiedAt: null, nameMatchGrade: null,
+    });
+    expect(s.auditService.recordEventSafe).toHaveBeenCalledWith(
+      expect.objectContaining({ eventType: 'IDENTITY_DOCUMENT_VERIFICATION_INVALIDATED' }),
+    );
+  });
+
+  it('leaves the address side alone, because it never carried a name', async () => {
+    const s = svc([verifiedRow({ requirement: OnboardingDocument.AADHAAR_BACK })]);
+    expect(await s.revalidateAfterNameChange('asr-1', 'actor-1')).toBe(0);
+  });
+
+  it('undoes a verification when a different scan replaces the one that was checked', async () => {
+    const s = svc([verifiedRow()]);
+    const saved = await s.attachFile('asr-1', OnboardingDocument.AADHAAR_FRONT, 'scans/new.jpg', 'actor-1');
+    expect(saved.verificationStatus).toBe('PENDING');
+  });
+
+  /** A retake answers the rejection, so the row stops saying "sent back". */
+  it('clears a rejection when the replacement arrives', async () => {
+    const s = svc([verifiedRow({ verificationStatus: 'REJECTED', rejectionReason: 'ILLEGIBLE' })]);
+    const saved = await s.attachFile('asr-1', OnboardingDocument.AADHAAR_FRONT, 'scans/new.jpg', 'actor-1');
+    expect(saved.verificationStatus).toBe('PENDING');
+    expect(saved.rejectionReason).toBeNull();
+  });
+
+  /**
+   * A face is not evidence with a history. Appending would grow the array every time somebody
+   * retakes their photo, while `assayers.photograph` silently followed the last one anyway.
+   */
+  it('replaces a photograph rather than accumulating every retake', async () => {
+    const s = svc([verifiedRow({ requirement: OnboardingDocument.PHOTOGRAPH, filePaths: ['old.jpg'] })]);
+    const saved = await s.attachFile('asr-1', OnboardingDocument.PHOTOGRAPH, 'new.jpg', 'actor-1');
+    expect(saved.filePaths).toEqual(['new.jpg']);
+  });
+
+  it('still keeps every page of a document that is not a photograph', async () => {
+    const s = svc([verifiedRow({ filePaths: ['page1.jpg'] })]);
+    const saved = await s.attachFile('asr-1', OnboardingDocument.AADHAAR_FRONT, 'page2.jpg', 'actor-1');
+    expect(saved.filePaths).toEqual(['page1.jpg', 'page2.jpg']);
   });
 });

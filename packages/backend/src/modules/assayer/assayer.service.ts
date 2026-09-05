@@ -1,5 +1,6 @@
 import {
-  Injectable, NotFoundException, ConflictException, BadRequestException, UnauthorizedException, OnModuleInit, Logger } from '@nestjs/common'; import { InjectRepository, InjectDataSource } from '@nestjs/typeorm'; import { Repository, LessThanOrEqual, In, DataSource, ILike } from 'typeorm'; import * as xlsx from 'xlsx'; import * as bcrypt from 'bcrypt'; import { randomInt } from 'crypto'; import { AssayerEntity } from './assayer.entity'; import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity'; import { WorkforceAttributeEntity } from './workforce-attribute.entity'; import { AssayerRemarkEntity } from './assayer-remark.entity'; import { AssayerActivityEntity } from './assayer-activity.entity'; import { TEMP_PASSWORD_WORDS } from './temp-password-words'; import { AuditService } from '../../core/audit/audit.service'; import { AssayerStateMachine } from './assayer.state-machine'; import { DomainEventPublisher } from '../../core/events/domain-event.publisher'; import { WorkflowEngine } from '../platform/workflow/workflow.engine'; import { NotificationDispatchService } from '../notifications/notification-dispatch.service'; import { EmailProvider } from '../../infrastructure/notifications/email-provider'; import { SmsProvider } from '../../infrastructure/notifications/sms-provider'; import { CacheService } from '../../infrastructure/cache/cache.service'; import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service'; import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, DocumentVerification, PLANNABLE_EMPANELMENT_STANDINGS,
+  Injectable, NotFoundException, ConflictException, BadRequestException, UnauthorizedException, OnModuleInit, Logger, Optional } from '@nestjs/common'; import { InjectRepository, InjectDataSource } from '@nestjs/typeorm'; import { Repository, LessThanOrEqual, In, DataSource, ILike } from 'typeorm'; import * as xlsx from 'xlsx'; import * as bcrypt from 'bcrypt'; import { randomInt } from 'crypto'; import { AssayerEntity } from './assayer.entity';
+import { RosterRecordsService } from './roster-records.service'; import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity'; import { WorkforceAttributeEntity } from './workforce-attribute.entity'; import { AssayerRemarkEntity } from './assayer-remark.entity'; import { AssayerActivityEntity } from './assayer-activity.entity'; import { TEMP_PASSWORD_WORDS } from './temp-password-words'; import { AuditService } from '../../core/audit/audit.service'; import { AssayerStateMachine } from './assayer.state-machine'; import { DomainEventPublisher } from '../../core/events/domain-event.publisher'; import { WorkflowEngine } from '../platform/workflow/workflow.engine'; import { NotificationDispatchService } from '../notifications/notification-dispatch.service'; import { EmailProvider } from '../../infrastructure/notifications/email-provider'; import { SmsProvider } from '../../infrastructure/notifications/sms-provider'; import { CacheService } from '../../infrastructure/cache/cache.service'; import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service'; import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, DocumentVerification, PLANNABLE_EMPANELMENT_STANDINGS,
   calculateHaversineDistance,
 } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
@@ -445,6 +446,18 @@ export class AssayerService implements OnModuleInit {
     // CacheModule is @Global(), so this needs no module wiring. Used only to invalidate the RBAC
     // principal cache synchronously on a password change — see changeOwnPassword/resetPasswordByStaff.
     private readonly cache: CacheService,
+    /**
+     * The documents side of a person's record.
+     *
+     * Injected for one job: a verified identity document is checked against this person's NAME, so
+     * renaming them has to withdraw that verification. `RosterRecordsService` owns
+     * `assayer_documents` and takes only repositories itself, so this direction introduces no cycle.
+     *
+     * Last in the list, and `@Optional()`, on purpose: a dozen specs build this service by passing
+     * positional arguments, so a dependency inserted anywhere else silently shifts every one of
+     * them onto the wrong parameter.
+     */
+    @Optional() private readonly rosterRecords?: RosterRecordsService
   ) {}
 
   onModuleInit() {
@@ -1048,6 +1061,7 @@ export class AssayerService implements OnModuleInit {
       }
       (assayer as any)[key] = incoming === '' && column?.isNullable ? null : incoming;
     });
+    const nameBefore = assayer.displayName;
     if (dto.firstName || dto.lastName) {
       assayer.displayName = `${dto.firstName ?? assayer.firstName} ${dto.lastName ?? assayer.lastName}`;
     }
@@ -1119,6 +1133,25 @@ export class AssayerService implements OnModuleInit {
 
     assayer.updatedBy = userId;
     const saved = await this.assayerRepository.save(assayer);
+
+    /**
+     * A verified identity document was checked against the name this record used to carry.
+     *
+     * Without this the name check is defeated in two ordinary steps: verify a genuine document
+     * under the name it matches, then edit the record to any other name. The attestation would
+     * survive, still reading VERIFIED, having compared a name that is no longer here.
+     */
+    if (saved.displayName !== nameBefore) {
+      const withdrawn = await this.rosterRecords?.revalidateAfterNameChange(saved.id, userId) ?? 0;
+      if (withdrawn > 0) {
+        await this.recordActivity(
+          saved.id, 'ASSAYER_UPDATED', null, null, userId,
+          `${withdrawn} identity document(s) need checking again — they were verified against the `
+          + `previous name ("${nameBefore}").`,
+        ).catch(() => undefined);
+      }
+    }
+
     await this.syncWorkforceAttributes(saved.id, dto, userId);
     await this.recordActivity(saved.id, 'ASSAYER_UPDATED', null, null, userId, 'Profile updated');
     // Bank/identity/contact keys diffed field-by-field rather than folded into one sentence, so

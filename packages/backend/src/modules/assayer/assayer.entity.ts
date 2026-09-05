@@ -259,6 +259,24 @@ export class AssayerEntity extends BaseEntity {
   @Column({ name: 'bank_name', type: 'varchar', length: 150, nullable: true })
   bankName: string | null;
 
+  /**
+   * The name established by a verified identity document, and which document established it.
+   *
+   * Derived, never typed: `RosterRecordsService.deriveLegalName` is the only writer and re-runs
+   * whenever a verification is recorded or undone. `displayName` remains what the organisation
+   * calls this person day to day; this is what a bank's branch would find on their Aadhaar, and
+   * the two are allowed to differ until somebody reconciles them.
+   */
+  @Column({ name: 'legal_name', type: 'varchar', length: 200, nullable: true })
+  legalName: string | null;
+
+  @Column({ name: 'legal_name_source', type: 'varchar', length: 40, nullable: true })
+  legalNameSource: string | null;
+
+  /** When identity was last established from a document. Null means never — the case for 1,163. */
+  @Column({ name: 'identity_verified_at', type: 'timestamptz', nullable: true })
+  identityVerifiedAt: Date | null;
+
   @Column({ name: 'date_of_birth', type: 'date', nullable: true })
   dateOfBirth: Date | null;
 
