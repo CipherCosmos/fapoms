@@ -736,6 +736,32 @@ export function gradeNominatimCandidate(entry: any, parts: AddressParts): GeoPre
    * same discipline as everywhere else here: never state a precision the data has not earned.
    */
   if (entry?.category === 'highway' && LOCAL_ROAD_TYPES.has(entry?.type)) {
+    /**
+     * The ROAD's name has to be the thing that matched, not the neighbourhood around it.
+     *
+     * Measured on the live roster: an appraiser on "S P W Road, Thaikkattukara, Aluva" was matched
+     * to **Aluva Park Road** — the right locality, a different road — and graded 120 m. The
+     * corroboration above is satisfied by any part of the place hierarchy, which is right for
+     * deciding *whether* this is the same area and far too loose for claiming which street. When
+     * only the area agrees, the area is what we know, so the locality grade is the honest one.
+     */
+    /**
+     * And it has to be the road's OWN name, not the town the road is named after.
+     *
+     * Indian roads are routinely named for the place they lead to or sit in — "Aluva Park Road" in
+     * Aluva, "Hotgi Road" out of Solapur. An appraiser living anywhere in Aluva therefore
+     * corroborates "Aluva Park Road" on the town's name alone, which is how one on "S P W Road"
+     * kept a 120 m claim on a road he does not live on. Subtracting the answer's own place
+     * hierarchy leaves the distinguishing part — `park` here, `ratanada` in the case that is
+     * genuinely right — and that is what has to appear in the address.
+     */
+    const theirHierarchy = tokenise(
+      address.suburb, address.neighbourhood, address.village, address.town,
+      address.city, address.city_district, address.county, address.state_district,
+    );
+    const theirRoad = without(without(tokenise(address.road, entry?.name), noise), theirHierarchy);
+    if (!corroborates(ourPlace, theirRoad)) return 'osm_locality';
+
     const extent = matchedExtentMeters(entry);
     if (extent !== null && extent <= PRECISION_METERS.osm_street) return 'osm_street';
   }

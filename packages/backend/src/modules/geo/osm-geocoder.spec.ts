@@ -303,6 +303,27 @@ describe('gradeNominatimCandidate — a home address, not a business', () => {
    * number is therefore telling us about a building we did not ask about. The street it is on is
    * the finest thing this evidence supports.
    */
+  it('drops to locality when the right area matched but a different road did', () => {
+    // The live case: an appraiser on "S P W Road, Thaikkattukara, Aluva" matched Aluva Park Road.
+    // The area is right and that is all we know, so 120 m is not ours to claim.
+    expect(gradeNominatimCandidate(
+      // The suburb corroborates — this IS the right neighbourhood — and the road does not. The
+      // town name inside the road name must not be what carries the match: "Aluva" is in the
+      // address, in the road's name, and in the answer's own town field.
+      { category: 'highway', type: 'residential', name: 'Aluva Park Road', boundingbox: box(80),
+        address: { road: 'Aluva Park Road', suburb: 'Thaikkattukara', town: 'Aluva' } },
+      { address: 'Alamparambil House, S P W Road, Thaikkattukara, Aluva', city: 'Aluva', state: 'Kerala' },
+    )).toBe('osm_locality');
+  });
+
+  it('keeps street level when the road itself is the thing that matched', () => {
+    expect(gradeNominatimCandidate(
+      { category: 'highway', type: 'residential', name: 'Ratanada Road', boundingbox: box(80),
+        address: { road: 'Ratanada Road', suburb: 'Rai Ka Bagh' } },
+      { address: 'Gayatri Vihar, Bhaskar Circle, Ratanada, Jodhpur', city: 'Jodhpur', state: 'Rajasthan' },
+    )).toBe('osm_street');
+  });
+
   it('does not claim building level for a home, because we never asked about a building', () => {
     expect(gradeNominatimCandidate(
       { category: 'place', type: 'house', name: null, boundingbox: box(15),
