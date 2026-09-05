@@ -81,6 +81,36 @@ type DateKind = 'birth' | 'employment';
 const FUTURE_EMPLOYMENT_YEARS = 5;
 
 /**
+ * A date cell Excel never formatted as a date arrives as its underlying day count.
+ *
+ * Excel stores dates as days since 1899-12-30 (that epoch, and not the 31st, absorbs the
+ * fictitious 29 February 1900 the format has carried since Lotus). A cell holding a real date
+ * reaches the reader as a `Date` — but only when the sheet marked the cell as a date. Where the
+ * column was left as General or Number, the same value arrives as the bare integer, and
+ * `new Date("44200")` reads a bare number as a YEAR, so it became the year 44200 and was refused
+ * as "not a real date for a person". On the live 1,155-person roster that silently discarded
+ * **159 dates**: 75 dates of birth, 58 joining dates and 26 exit dates.
+ *
+ * Five digits, deliberately, and nothing shorter. A four-digit number in a date column is far
+ * more likely a year ("1974") or a code, and as a serial it would mean 1902-1927 — a range no
+ * living employee's birth or joining date occupies, so reading it as a date could only ever be
+ * wrong. Every one of the 159 real values was five digits, spanning 22859 (25 Jul 1962, a date of
+ * birth) to 46362 (3 Nov 2026, an exit date).
+ *
+ * The result is not trusted on its own: it goes back through `isPlausibleHumanDate` with every
+ * other shape, so a five-digit code that is not a date lands outside the window and still becomes
+ * a review item rather than a confident wrong answer.
+ */
+const EXCEL_EPOCH_UTC = Date.UTC(1899, 11, 30);
+const excelSerialToDate = (serial: number): Date | null => {
+  const utc = new Date(EXCEL_EPOCH_UTC + Math.floor(serial) * 86400000);
+  if (Number.isNaN(utc.getTime())) return null;
+  // Rebuilt from the UTC fields as a LOCAL midnight — the rest of this file compares dates by
+  // local calendar fields (see `dayNumber`), and a UTC midnight is the previous day in IST.
+  return new Date(utc.getUTCFullYear(), utc.getUTCMonth(), utc.getUTCDate());
+};
+
+/**
  * yyyymmdd from the LOCAL fields, never `toISOString()`: this deployment runs in IST, where
  * converting a local midnight back to UTC lands on the previous day and would make "is this in
  * the future" flip for every date between midnight and 05:30.
@@ -1825,6 +1855,12 @@ export class RosterImportService {
       const yr = Number(dMonY[3].length === 2 ? `20${dMonY[3]}` : dMonY[3]);
       const d = new Date(`${dMonY[2]} ${dMonY[1]}, ${yr}`);
       if (!Number.isNaN(d.getTime())) return d;
+    }
+    // A bare five-digit number: an Excel day serial from a cell that was never formatted as a
+    // date. Must be tried BEFORE the `new Date(s)` fallback below, which would read it as a year.
+    if (/^\d{5}(?:\.\d+)?$/.test(s)) {
+      const serial = excelSerialToDate(Number(s));
+      if (serial) return serial;
     }
     /**
      * The last resort, and the one that did real damage.

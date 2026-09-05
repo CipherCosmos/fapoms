@@ -790,6 +790,54 @@ describe('RosterImportService — dates that are not dates', () => {
   });
 
   /**
+   * The mirror image: a bare FIVE-digit number is a date, and refusing it threw away real data.
+   *
+   * Excel stores a date as days since 1899-12-30, and hands the reader a `Date` only when the cell
+   * was formatted as a date. Where the column was left as General, the same value arrives as the
+   * bare integer — which `new Date(s)` reads as a year, so the bound added above (correctly)
+   * refused it. On the live 1,155-person roster that discarded **159 real dates**: 75 dates of
+   * birth, 58 joining dates, 26 exit dates. The values below are taken from that file.
+   *
+   * Four digits stay refused, and the block above still proves it: as a serial, a four-digit
+   * number means 1902-1927 — a range no living employee's birth or joining date occupies — so it
+   * is far likelier a year or a code, and reading it as a date could only ever be wrong.
+   */
+  it.each([
+    ['41275', 2013, 0, 1],
+    ['44200', 2021, 0, 4],
+    ['45484', 2024, 6, 11],
+  ])('reads %s as the Excel date serial it is', (raw, year, month, day) => {
+    const { value, issues } = read(raw);
+    expect(value).not.toBeNull();
+    expect([value!.getFullYear(), value!.getMonth(), value!.getDate()]).toEqual([year, month, day]);
+    expect(issues).toHaveLength(0);
+  });
+
+  it('reads a date-of-birth serial as a local midnight, not a UTC one', () => {
+    // 22859 is the oldest date of birth on the real file. Built from local fields on purpose: a
+    // UTC midnight is the previous day in IST, which would shift every date by one.
+    const { value, issues } = read('22859');
+    expect([value!.getFullYear(), value!.getMonth(), value!.getDate()]).toEqual([1962, 7, 1]);
+    expect(value!.getHours()).toBe(0);
+    expect(issues).toHaveLength(0);
+  });
+
+  it('still refuses a five-digit number that is not a plausible date', () => {
+    // 99999 is a five-digit code, not a serial: as a date it is year 2173, outside the window, so
+    // it stays a review item rather than becoming a confident wrong answer.
+    const { value, issues } = read('99999');
+    expect(value).toBeNull();
+    expect(issues).toHaveLength(1);
+  });
+
+  it('refuses a serial that would put a date of birth in the future', () => {
+    const future = Math.floor((Date.now() - Date.UTC(1899, 11, 30)) / 86400000) + 400;
+    const { value, issues } = readBirth(String(future));
+    expect(value).toBeNull();
+    expect(issues[0].reason).toMatch(/not been born|in the future/);
+  });
+
+  /**
    * The bound covers every shape, not only the bare number that prompted it.
    *
    * It was written for `new Date("5484")` and applied at that one call site, so the two shapes

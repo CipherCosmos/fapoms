@@ -172,16 +172,72 @@ const sleep = (ms: number) => new Promise<void>((r) => {
 });
 
 /**
+ * How many lookups may be in flight at once against a host with no rate limit — i.e. a
+ * self-hosted geocoder. Six is a working default rather than a measured optimum: enough to hide
+ * the round trip on a server answering in ~0.2s, small enough that a backfill cannot monopolise
+ * the database pool the completed lookups write through. `GEOCODER_CONCURRENCY` overrides it.
+ */
+const UNTHROTTLED_HOST_CONCURRENCY = Math.max(1, Number(process.env.GEOCODER_CONCURRENCY || 6));
+
+/** In-flight count and the queue of callers waiting for a slot, per host. */
+const hostInFlight = new Map<string, number>();
+const hostWaiters = new Map<string, Array<() => void>>();
+
+/**
+ * Run `fn`, but never more than `limit` at once for this host.
+ *
+ * The `while` (rather than `if`) re-checks after being woken: a caller arriving synchronously
+ * between a release and the woken waiter resuming would otherwise slip past the limit.
+ */
+async function withHostLimit<T>(host: string, limit: number, fn: () => Promise<T>): Promise<T> {
+  while ((hostInFlight.get(host) ?? 0) >= limit) {
+    await new Promise<void>((resolve) => {
+      const queue = hostWaiters.get(host) ?? [];
+      queue.push(resolve);
+      hostWaiters.set(host, queue);
+    });
+  }
+  hostInFlight.set(host, (hostInFlight.get(host) ?? 0) + 1);
+  try {
+    return await fn();
+  } finally {
+    hostInFlight.set(host, Math.max(0, (hostInFlight.get(host) ?? 1) - 1));
+    hostWaiters.get(host)?.shift()?.();
+  }
+}
+
+/**
  * Serialise calls to one host and space them by `minIntervalMs`.
+ *
+ * Exported only so the spec can exercise the scheduling itself: whether calls chain or overlap is
+ * the whole behaviour here, and it is not observable through the provider functions without
+ * making real network requests.
  *
  * Chained rather than merely delayed: two concurrent callers that each independently waited
  * would still fire together, which is precisely the burst the policy forbids.
  */
-function politely<T>(host: string, minIntervalMs: number, fn: () => Promise<T>): Promise<T> {
+export function politely<T>(host: string, minIntervalMs: number, fn: () => Promise<T>): Promise<T> {
   // Nothing to be polite to when the network is off: `getJson` returns null without making a
   // request, so the rate-limit wait is pure delay. It was charged anyway — several seconds per
   // record for specs that create an assayer or branch, which is most of the slow ones.
   if (!networkAllowed()) return fn();
+
+  /**
+   * A host with no rate limit is bounded, not chained.
+   *
+   * The chain below exists to honour the public providers' "about one request per second" rule,
+   * and serialising is the only way to keep concurrent callers from bursting past it. A
+   * self-hosted Nominatim (`NOMINATIM_URL`) has no such rule — `NOMINATIM_MIN_INTERVAL_MS` is
+   * already 0 for it — but it was still inheriting the chain, so every geocode in the process
+   * queued behind every other one. A roster import that placed 1,155 people therefore trickled
+   * onto the map one address at a time: measured at ~0.23s per call against the self-hosted
+   * instance, that is ~20 minutes of pure queueing against a server answering in milliseconds.
+   *
+   * So when there is no interval to respect, run a bounded number at once instead. Bounded rather
+   * than unbounded because the far side is still one machine, and because each in-flight lookup
+   * eventually writes a row through the same database pool.
+   */
+  if (minIntervalMs <= 0) return withHostLimit(host, UNTHROTTLED_HOST_CONCURRENCY, fn);
 
   const previous = hostChains.get(host) ?? Promise.resolve();
   const next = previous.then(async () => {

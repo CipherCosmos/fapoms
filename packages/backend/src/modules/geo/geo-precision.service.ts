@@ -74,6 +74,26 @@ export interface BackfillReport {
   movedKm: { name: string; km: number; from: string; to: string }[];
 }
 
+/**
+ * How many rows a coordinate backfill resolves at once. Six by default — see the note at the loop
+ * in `backfill`. `GEO_BACKFILL_CONCURRENCY` overrides it.
+ */
+const BACKFILL_ROW_CONCURRENCY = Math.max(1, Number(process.env.GEO_BACKFILL_CONCURRENCY || 6));
+
+/** Run `fn` over `items`, at most `limit` in flight, in no guaranteed order. */
+async function mapWithConcurrency<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let next = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      await fn(items[index]);
+    }
+  });
+  await Promise.all(runners);
+}
+
+
 @Injectable()
 export class GeoPrecisionService {
   private readonly logger = new Logger(GeoPrecisionService.name);
@@ -319,13 +339,22 @@ export class GeoPrecisionService {
 
     const rows: any[] = await qb.getMany();
 
-    for (const row of rows) {
+    /**
+     * Rows are worked a few at a time, not strictly one after another.
+     *
+     * Each row is independent — one failure never stops the run — so the only thing that made
+     * this serial was the public geocoders' ~1-request-per-second budget. `politely()` still
+     * enforces that for them, so against a public provider these tasks simply queue there and
+     * this behaves as it did. Against a self-hosted instance there is no such budget, and a
+     * 1,155-row import no longer trickles onto the map one address at a time.
+     */
+    await mapWithConcurrency(rows, BACKFILL_ROW_CONCURRENCY, async (row: any) => {
       // Belt and braces against a stale row: the query already excluded these.
       if (row.geoSource === 'manual') {
         report.protectedManual++;
-        continue;
+        return;
       }
-      if (!needsBetterFix(row.geoSource, row.geoAccuracyMeters)) continue;
+      if (!needsBetterFix(row.geoSource, row.geoAccuracyMeters)) return;
 
       report.examined++;
       const before = { lat: Number(row.latitude), lng: Number(row.longitude), tier: row.geoSource ?? 'unknown' };
@@ -339,7 +368,24 @@ export class GeoPrecisionService {
             district: row.district,
             state: row.state,
             pincode: row.pincode,
-            name: target === 'branch' ? row.name : row.displayName,
+            /**
+             * A person's name is not a place name, and must never be sent as one.
+             *
+             * `name` and `brand` feed the POI ladder — a Photon search for the named place, then
+             * an Overpass search for `amenity=bank|atm` near the anchor, matched on this name.
+             * That is exactly right for a branch and wrong by construction for an appraiser's
+             * home: nobody's house is mapped in OSM under their name, and it is certainly not a
+             * bank. Sending `displayName` here asked both providers to find "Ramesh Kumar" among
+             * the ATMs near his pincode, and anything they returned that passed verification
+             * would have been stamped onto him as a precise home address.
+             *
+             * It was also most of the cost. Those two providers are public and rate-limited, so
+             * `politely` chains them globally — 1.1s for Photon and 2.5s for Overpass on every
+             * row, in a queue shared by the whole process. Dropping two lookups that could only
+             * ever be wrong is what makes the sweep finish; the address and pincode tiers, which
+             * are how a home is actually placed, are untouched.
+             */
+            name: target === 'branch' ? row.name : null,
             // The client's name is how the branch is tagged in OSM, if it is tagged at all.
             brand: target === 'branch' ? await this.clientNameFor(row.clientId) : null,
           },
@@ -347,7 +393,7 @@ export class GeoPrecisionService {
         );
       } catch (err: any) {
         this.logger.warn(`Backfill failed for ${target} ${row.id}: ${err?.message ?? err}`);
-        continue;
+        return;
       }
 
       // No improvement is a perfectly good outcome — many rows genuinely cannot be placed more
@@ -355,7 +401,7 @@ export class GeoPrecisionService {
       // churn coordinates that other things have already been planned against.
       if (!geo || (geo.geoAccuracyMeters ?? Infinity) >= (row.geoAccuracyMeters ?? Infinity)) {
         report.unchanged++;
-        continue;
+        return;
       }
 
       const km = isPlausibleIndianCoord(before.lat, before.lng)
@@ -373,7 +419,7 @@ export class GeoPrecisionService {
         from: before.tier,
         to: geo.geoSource!,
       });
-    }
+    });
 
     if (report.improved > 0) {
       await this.auditService.recordEventSafe({

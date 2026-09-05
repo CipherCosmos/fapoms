@@ -33,8 +33,11 @@ jest.mock('./ImportIssuesPanel', () => ({ ImportIssuesPanel: () => null }));
 // the queues. Mocking the wizard rather than `AssayerForms` keeps `EDIT_FIELDS` real for the
 // registration module that derives its steps from it.
 jest.mock('./registration/RegistrationWizard', () => ({ RegistrationWizard: () => null }));
+// Mutable so the import-lifecycle tests below can move the job from `idle` to `done` between
+// renders — the transition is the whole behaviour being checked.
+let mockImportJobState: any = { phase: 'idle' };
 jest.mock('../../components/import/useImportJob', () => ({
-  useImportJob: () => ({ state: { phase: 'idle' }, start: jest.fn(), reset: jest.fn() }),
+  useImportJob: () => ({ state: mockImportJobState, start: jest.fn(), reset: jest.fn() }),
 }));
 jest.mock('../../components/import/ImportProgressPanel', () => ({ ImportProgressPanel: () => null }));
 jest.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({ invalidateQueries: jest.fn() }) }));
@@ -84,7 +87,7 @@ const renderRoster = () => render(<MemoryRouter><AssayerRoster /></MemoryRouter>
 /** The chip whose label starts with `name`, counted by the number printed inside it. */
 const chip = (name: string) => screen.getByRole('tab', { name: new RegExp(`^${name}`) });
 
-beforeEach(() => mockRequest.mockReset());
+beforeEach(() => { mockRequest.mockReset(); mockImportJobState = { phase: 'idle' }; });
 
 describe('AssayerRoster — the joining queues', () => {
   const roster = [
@@ -496,5 +499,48 @@ describe('finishing a registration somebody abandoned', () => {
     renderRoster();
     const btn = await screen.findByLabelText('Finish registering Half Done');
     expect(btn.getAttribute('aria-label')).toContain('Half Done');
+  });
+});
+
+/**
+ * A finished import has to reach the list under it.
+ *
+ * When the roster import moved onto the server's queue, this was left behind: the progress panel
+ * counted up to "1,155 created" while the table beneath it still showed the rows from before the
+ * upload, so a successful import looked like it had done nothing until the page was reloaded by
+ * hand. That is exactly what it looked like from the outside — "its processing on background but
+ * on UI its not showing".
+ */
+describe('AssayerRoster — when a queued import finishes', () => {
+  const roster = [person({ id: 'a-1', displayName: 'Already Here' })];
+
+  it('re-reads the roster once the job reports done', async () => {
+    serve(roster);
+    const view = renderRoster();
+    await screen.findByText('Already Here');
+    const beforeImport = mockRequest.mock.calls.length;
+
+    mockImportJobState = { phase: 'done', fileName: 'roster.xlsx', report: { totalRows: 2 } };
+    view.rerender(<MemoryRouter><AssayerRoster /></MemoryRouter>);
+
+    await waitFor(() => expect(mockRequest.mock.calls.length).toBeGreaterThan(beforeImport));
+  });
+
+  it('re-reads it once, not on every render while the panel sits on its result', async () => {
+    // The state object stays `done` until dismissed, so an effect without the guard would refetch
+    // on every render and hold the list in a loop.
+    serve(roster);
+    const view = renderRoster();
+    await screen.findByText('Already Here');
+
+    mockImportJobState = { phase: 'done', fileName: 'roster.xlsx', report: { totalRows: 2 } };
+    view.rerender(<MemoryRouter><AssayerRoster /></MemoryRouter>);
+    await waitFor(() => expect(mockRequest.mock.calls.length).toBeGreaterThan(1));
+
+    const afterRefresh = mockRequest.mock.calls.length;
+    view.rerender(<MemoryRouter><AssayerRoster /></MemoryRouter>);
+    view.rerender(<MemoryRouter><AssayerRoster /></MemoryRouter>);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(mockRequest.mock.calls.length).toBe(afterRefresh);
   });
 });

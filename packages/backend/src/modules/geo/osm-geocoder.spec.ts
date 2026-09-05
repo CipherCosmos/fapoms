@@ -1,4 +1,4 @@
-import { verifyCandidate, PRECISION_METERS } from './osm-geocoder';
+import { verifyCandidate, PRECISION_METERS, politely } from './osm-geocoder';
 import { isPlausibleIndianCoord, needsBetterFix, resolveCoordinates } from './coordinate-resolution';
 
 /**
@@ -148,5 +148,64 @@ describe('resolveCoordinates', () => {
       city: 'Pune', district: 'Pune', state: 'Maharashtra', precise: false,
     });
     expect(result?.geoSource).not.toBe('manual');
+  });
+});
+
+/**
+ * Whether lookups queue or overlap is the difference between an import that lands on the map in a
+ * minute and one that trickles in over twenty.
+ *
+ * The public providers ask for about one request per second, so `politely` chains them: two
+ * concurrent callers that each merely waited would still fire together, which is the burst the
+ * policy forbids. A self-hosted Nominatim has no such rule — `NOMINATIM_MIN_INTERVAL_MS` is
+ * already 0 for it — but it inherited the chain anyway, so every geocode in the process queued
+ * behind every other one. Measured at ~0.23s a call, placing 1,155 people meant ~20 minutes of
+ * pure queueing against a server answering in milliseconds.
+ */
+describe('politely — how lookups are scheduled per host', () => {
+  const original = process.env.GEOCODER_ALLOW_NETWORK_IN_TESTS;
+
+  // `politely` short-circuits to `fn` when the network is off, which would bypass the scheduling
+  // this describes. The fakes below make no requests, so switching the gate on is safe here.
+  beforeAll(() => { process.env.GEOCODER_ALLOW_NETWORK_IN_TESTS = 'true'; });
+  afterAll(() => { process.env.GEOCODER_ALLOW_NETWORK_IN_TESTS = original; });
+
+  /** Records the highest number of calls that were ever in flight together. */
+  const overlapProbe = () => {
+    const state = { inFlight: 0, peak: 0 };
+    const call = async () => {
+      state.inFlight += 1;
+      state.peak = Math.max(state.peak, state.inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      state.inFlight -= 1;
+    };
+    return { state, call };
+  };
+
+  it('runs several at once against a host with no rate limit', async () => {
+    const { state, call } = overlapProbe();
+    await Promise.all(Array.from({ length: 6 }, () => politely('self-hosted-test', 0, call)));
+    expect(state.peak).toBeGreaterThan(1);
+  });
+
+  it('never exceeds the bound, so one machine is not flooded', async () => {
+    const { state, call } = overlapProbe();
+    await Promise.all(Array.from({ length: 40 }, () => politely('bounded-host-test', 0, call)));
+    // The default is 6; the assertion is on the bound existing, not on its exact value.
+    expect(state.peak).toBeLessThanOrEqual(6);
+    expect(state.inFlight).toBe(0);
+  });
+
+  it('still runs one at a time against a rate-limited host', async () => {
+    const { state, call } = overlapProbe();
+    await Promise.all(Array.from({ length: 3 }, () => politely('rate-limited-test', 1, call)));
+    expect(state.peak).toBe(1);
+  });
+
+  it('releases a waiting caller when the one ahead of it throws', async () => {
+    // A failed lookup that never released its slot would deadlock every later call on the host.
+    const boom = politely('failing-host-test', 0, async () => { throw new Error('provider down'); });
+    await expect(boom).rejects.toThrow('provider down');
+    await expect(politely('failing-host-test', 0, async () => 'ok')).resolves.toBe('ok');
   });
 });

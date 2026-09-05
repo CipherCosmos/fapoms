@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import {
   useNavigate } from 'react-router-dom'; import { useQueryClient } from '@tanstack/react-query'; import { Plus, Search, Edit2, Trash2, AlertTriangle, Download, ArrowRightLeft, MapPin, CheckCircle2, Users, SlidersHorizontal, Upload, FileSpreadsheet, PlayCircle, KeyRound } from 'lucide-react'; import { AssayerLifecycleStatus, assayerLifecyclePath, assayerLifecycleLabel, isOnboardingStage,
 } from '@fapoms/shared';
@@ -294,6 +294,31 @@ export const AssayerRoster: React.FC<{
     // The record is its own page now and re-reads itself on entry, so there is nothing open
     // behind this list holding a stale copy.
   }, [load, queryClient]);
+
+  /**
+   * The list has to catch up when the queued import finishes.
+   *
+   * Moving the import onto the server's queue left this behind: the panel counted up to "1,155
+   * created" and the roster underneath it still showed the rows from before the upload, so the
+   * import looked like it had done nothing until the operator reloaded the page by hand. The
+   * import commits in one transaction, so there is nothing to see before it finishes — `done` is
+   * the only moment worth reacting to.
+   *
+   * The ref is what keeps this to one refresh: the effect re-runs on every render while the state
+   * object stays `done`, and refreshing on each of those would put the list in a loop.
+   */
+  const refreshedForImport = useRef<string | null>(null);
+  useEffect(() => {
+    if (rosterImport.state.phase !== 'done') {
+      // Cleared so a second upload of the same file in the same visit refreshes again.
+      if (rosterImport.state.phase === 'idle') refreshedForImport.current = null;
+      return;
+    }
+    const key = rosterImport.state.fileName;
+    if (refreshedForImport.current === key) return;
+    refreshedForImport.current = key;
+    refresh();
+  }, [rosterImport.state, refresh]);
 
   // Lifecycle changes can come from anywhere — a bulk action here, an admin
   // elsewhere, a backend job. Keep the roster live rather than stale until reload.

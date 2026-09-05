@@ -17,6 +17,7 @@ describe('GeoPrecisionService', () => {
   let service: GeoPrecisionService;
   let qb: any;
   let branchRepo: any;
+  let assayerRepo: any;
   let queue: { add: jest.Mock };
 
   const chain = () => {
@@ -33,7 +34,7 @@ describe('GeoPrecisionService', () => {
 
   beforeEach(() => {
     branchRepo = { createQueryBuilder: jest.fn(() => chain()), save: jest.fn(async (r: any) => r) };
-    const assayerRepo = { createQueryBuilder: jest.fn(() => chain()), save: jest.fn(async (r: any) => r) };
+    assayerRepo = { createQueryBuilder: jest.fn(() => chain()), save: jest.fn(async (r: any) => r) };
     const zoneRepo = { findOne: jest.fn().mockResolvedValue(null), create: jest.fn((d: any) => d), save: jest.fn(async (z: any) => ({ id: 'z-1', ...z })) };
     queue = { add: jest.fn().mockResolvedValue(undefined) };
     service = new GeoPrecisionService(
@@ -125,6 +126,62 @@ describe('GeoPrecisionService', () => {
 
       expect(report).toMatchObject({ examined: 1, improved: 0, unchanged: 1 });
       expect(branchRepo.save).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * What a record IS decides which providers may be asked about it.
+   *
+   * `name`/`brand` feed the POI ladder: a Photon search for the named place, then an Overpass
+   * search for `amenity=bank|atm` near the anchor, ranked against that name. Right for a branch,
+   * wrong by construction for an appraiser's home — nobody's house is mapped in OSM under their
+   * name, and it is not a bank. The backfill was sending `displayName` there, which asked both
+   * providers to find a person among the ATMs near their pincode; anything that came back and
+   * passed verification would have been written onto them as a precise home address.
+   *
+   * It was also where the time went. Both providers are public and rate-limited, so `politely`
+   * chains them process-wide — 1.1s and 2.5s on every row, however many rows run at once.
+   */
+  describe('backfill — who the providers are asked about', () => {
+    const person = () => ({
+      id: 'a-1', displayName: 'Ramesh Kumar', address: '12 Kadavanthra Rd', city: 'Kochi',
+      district: 'Ernakulam', state: 'Kerala', pincode: '682020',
+      latitude: null, longitude: null, geoSource: null, geoAccuracyMeters: null,
+    });
+
+    const placed = {
+      latitude: 9.97, longitude: 76.3, location: { type: 'Point', coordinates: [76.3, 9.97] },
+      geoSource: 'pincode', geoAccuracyMeters: 2000, geoMatchedName: '682020', geoResolvedAt: new Date(),
+    };
+
+    it("never sends an appraiser's own name as a place name", async () => {
+      assayerRepo.createQueryBuilder = jest.fn(() => { const c = chain(); c.getMany.mockResolvedValue([person()]); return c; });
+      mockResolve.mockResolvedValue(placed);
+
+      await service.backfill('assayer', 10);
+
+      const parts = mockResolve.mock.calls[0][0];
+      expect(parts.name).toBeNull();
+      expect(parts.brand).toBeNull();
+      // The address tiers are how a home is actually placed, and must still be sent.
+      expect(parts).toMatchObject({ address: '12 Kadavanthra Rd', pincode: '682020', city: 'Kochi' });
+    });
+
+    it("still sends a branch's name and its client's brand, which is what the POI ladder is for", async () => {
+      branchRepo.createQueryBuilder = jest.fn(() => {
+        const c = chain();
+        c.getMany.mockResolvedValue([{
+          id: 'b-1', name: 'Aundh Branch', solId: 'BR-1', address: '1 Main Rd', city: 'Pune',
+          district: 'Pune', state: 'Maharashtra', pincode: '411007', clientId: null,
+          latitude: 18.5, longitude: 73.8, geoSource: 'locality', geoAccuracyMeters: 15000,
+        }]);
+        return c;
+      });
+      mockResolve.mockResolvedValue({ ...placed, geoSource: 'osm_building', geoAccuracyMeters: 10 });
+
+      await service.backfill('branch', 10);
+
+      expect(mockResolve.mock.calls[0][0].name).toBe('Aundh Branch');
     });
   });
 
