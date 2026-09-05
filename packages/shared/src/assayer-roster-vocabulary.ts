@@ -273,6 +273,23 @@ export const PRINTED_FIELD_LABELS: Record<keyof PrintedIdentityFields, string> =
 };
 
 /**
+ * The documents that must be verified before somebody can be activated.
+ *
+ * Aadhaar and PAN, because those are the two a client's branch asks for at the vault door. The
+ * front of the Aadhaar rather than both sides: the back carries the address, which is worth
+ * recording and is not what establishes who a person is.
+ *
+ * Deliberately not a setting. Which documents constitute identity is a compliance fact rather than
+ * an operator preference — the same reasoning that keeps `PLANNABLE_EMPANELMENT_STANDINGS` out of
+ * the settings screen. How strictly the rule is applied IS a setting
+ * (`onboarding.identityGate.mode`), because that is a rollout decision.
+ */
+export const IDENTITY_GATE_DOCUMENTS: readonly OnboardingDocument[] = [
+  OnboardingDocument.AADHAAR_FRONT,
+  OnboardingDocument.PAN_CARD,
+];
+
+/**
  * Which document's name becomes the name of record, in order of preference.
  *
  * Aadhaar leads because it is the document a client's branch actually asks for at the vault door.

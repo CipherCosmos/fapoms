@@ -92,6 +92,14 @@ export const AUTH_ERROR_CODES = {
  * precisely what an untranslated sentence prevents.
  */
 export const ASSAYER_ERROR_CODES = {
+  /**
+   * Activation refused because no identity document has been checked against its original.
+   *
+   * Its own code because the client's remedy is specific and unlike every other refusal on this
+   * route: go to the Documents tab and verify a scan. A generic bad-request leaves the desk
+   * guessing which of a dozen rules stopped them.
+   */
+  IDENTITY_NOT_VERIFIED: 'IDENTITY_NOT_VERIFIED',
   /** The request claimed a file but carried none. */
   UPLOAD_NO_FILE: 'UPLOAD_NO_FILE',
   /** Over the size ceiling. The message names the limit. */

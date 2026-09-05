@@ -4,7 +4,8 @@ import { Repository, IsNull } from 'typeorm';
 import {
   EmpanelmentStatus, BackgroundCheckVerdict, RiskGrade, CibilBand, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, DocumentVerification, isIdentityDocument, maskTail, looksMasked, isValidPan, isValidAadhaar, isPlaceholderAadhaar,
   DocumentRejectionReason, DOCUMENT_PRINTED_FIELDS, PRINTED_FIELD_LABELS,
-  DOCUMENTS_PRINTING_A_NAME, IDENTITY_NAME_PRECEDENCE, compareNames, type NameMatchGrade,
+  DOCUMENTS_PRINTING_A_NAME, IDENTITY_NAME_PRECEDENCE, IDENTITY_GATE_DOCUMENTS,
+  compareNames, type NameMatchGrade,
 } from '@fapoms/shared';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerReferenceEntity } from './assayer-reference.entity';
@@ -608,6 +609,46 @@ export class RosterRecordsService {
     }
     if (affected.length > 0) await this.deriveLegalName(assayerId, actorId);
     return affected.length;
+  }
+
+  /**
+   * Has this person's identity actually been established, and if not, what is missing?
+   *
+   * One home for the question, because it is asked from three places that must not be able to
+   * disagree: the activation gate, the workforce review queue, and the roster's own filter. It is
+   * deliberately expressed in documents rather than in a flag on the person — a flag would have to
+   * be maintained, and the thing it would be maintained from is right here.
+   *
+   * "Verified" means a scan exists AND somebody attested to it. Neither half is enough on its own:
+   * the roster import wrote 11,160 rows saying a document arrived with no file behind any of them,
+   * so a count of rows would report this estate as fully documented.
+   */
+  async identityStanding(assayerId: string): Promise<{
+    verified: OnboardingDocument[];
+    missing: OnboardingDocument[];
+    rejected: OnboardingDocument[];
+    ok: boolean;
+  }> {
+    const rows = await this.onboarding.find({ where: { assayerId, isActive: true } });
+    const byRequirement = new Map(rows.map((r) => [r.requirement as OnboardingDocument, r]));
+
+    const verified: OnboardingDocument[] = [];
+    const missing: OnboardingDocument[] = [];
+    const rejected: OnboardingDocument[] = [];
+
+    for (const requirement of IDENTITY_GATE_DOCUMENTS) {
+      const row = byRequirement.get(requirement);
+      const hasEvidence = (row?.filePaths ?? []).length > 0;
+      if (row?.verificationStatus === DocumentVerification.VERIFIED && hasEvidence) {
+        verified.push(requirement);
+      } else if (row?.verificationStatus === DocumentVerification.REJECTED) {
+        rejected.push(requirement);
+      } else {
+        missing.push(requirement);
+      }
+    }
+
+    return { verified, missing, rejected, ok: missing.length === 0 && rejected.length === 0 };
   }
 
   /**

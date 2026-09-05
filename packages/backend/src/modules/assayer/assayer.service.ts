@@ -1,6 +1,7 @@
 import {
   Injectable, NotFoundException, ConflictException, BadRequestException, UnauthorizedException, OnModuleInit, Logger, Optional } from '@nestjs/common'; import { InjectRepository, InjectDataSource } from '@nestjs/typeorm'; import { Repository, LessThanOrEqual, In, DataSource, ILike } from 'typeorm'; import * as xlsx from 'xlsx'; import * as bcrypt from 'bcrypt'; import { randomInt } from 'crypto'; import { AssayerEntity } from './assayer.entity';
-import { RosterRecordsService } from './roster-records.service'; import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity'; import { WorkforceAttributeEntity } from './workforce-attribute.entity'; import { AssayerRemarkEntity } from './assayer-remark.entity'; import { AssayerActivityEntity } from './assayer-activity.entity'; import { TEMP_PASSWORD_WORDS } from './temp-password-words'; import { AuditService } from '../../core/audit/audit.service'; import { AssayerStateMachine } from './assayer.state-machine'; import { DomainEventPublisher } from '../../core/events/domain-event.publisher'; import { WorkflowEngine } from '../platform/workflow/workflow.engine'; import { NotificationDispatchService } from '../notifications/notification-dispatch.service'; import { EmailProvider } from '../../infrastructure/notifications/email-provider'; import { SmsProvider } from '../../infrastructure/notifications/sms-provider'; import { CacheService } from '../../infrastructure/cache/cache.service'; import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service'; import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, DocumentVerification, PLANNABLE_EMPANELMENT_STANDINGS,
+import { RosterRecordsService } from './roster-records.service';
+import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity'; import { WorkforceAttributeEntity } from './workforce-attribute.entity'; import { AssayerRemarkEntity } from './assayer-remark.entity'; import { AssayerActivityEntity } from './assayer-activity.entity'; import { TEMP_PASSWORD_WORDS } from './temp-password-words'; import { AuditService } from '../../core/audit/audit.service'; import { AssayerStateMachine } from './assayer.state-machine'; import { DomainEventPublisher } from '../../core/events/domain-event.publisher'; import { WorkflowEngine } from '../platform/workflow/workflow.engine'; import { NotificationDispatchService } from '../notifications/notification-dispatch.service'; import { EmailProvider } from '../../infrastructure/notifications/email-provider'; import { SmsProvider } from '../../infrastructure/notifications/sms-provider'; import { CacheService } from '../../infrastructure/cache/cache.service'; import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service'; import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, DocumentVerification, PLANNABLE_EMPANELMENT_STANDINGS,
   calculateHaversineDistance,
 } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
@@ -457,7 +458,15 @@ export class AssayerService implements OnModuleInit {
      * positional arguments, so a dependency inserted anywhere else silently shifts every one of
      * them onto the wrong parameter.
      */
-    @Optional() private readonly rosterRecords?: RosterRecordsService
+    @Optional() private readonly rosterRecords?: RosterRecordsService,
+    /**
+     * Runtime settings, for the identity gate's three-position rollout mode.
+     *
+     * Optional and last for the same reason as `rosterRecords` above: a dozen specs construct this
+     * service positionally, and the gate must degrade to its default rather than throw when a
+     * spec builds the service without one.
+     */
+    @Optional() private readonly platformSettings?: PlatformSettingsService
   ) {}
 
   onModuleInit() {
@@ -1751,6 +1760,47 @@ export class AssayerService implements OnModuleInit {
   ): Promise<{ saved: AssayerEntity; event: any }> {
     const assayer = await this.findOne(id);
     const currentStatus = assayer.lifecycleStatus;
+
+    /**
+     * Nobody becomes active until somebody has established who they are.
+     *
+     * Here rather than in `AssayerStateMachine`, which is static and holds no repository, and here
+     * rather than at the caller: `doTransitionLifecycle` is the one funnel every path runs through
+     * — the single move, the bulk action, and the multi-hop walk `assayerLifecyclePath` produces.
+     * A guard anywhere else is routed around by a bulk INVITED→ACTIVE move, which passes through
+     * this edge as an intermediate step.
+     *
+     * Three positions, defaulting to warn. On the day this shipped not one document in the estate
+     * had ever been verified, so enforcing from the first boot would have refused every activation
+     * in the company against a process the desk had never operated — which is how a control gets
+     * switched off permanently rather than adopted. See `onboarding.identityGate.mode`.
+     */
+    if (targetStatus === AssayerLifecycleStatus.ACTIVE && this.rosterRecords) {
+      const mode = await this.platformSettings?.get<string>('onboarding.identityGate.mode') ?? 'warn';
+      if (mode !== 'off') {
+        const standing = await this.rosterRecords.identityStanding(id);
+        if (!standing.ok) {
+          const outstanding = [...standing.missing, ...standing.rejected]
+            .map((d) => ONBOARDING_DOCUMENT_LABELS[d]).join(' and ');
+          const sentence = `${assayer.displayName} cannot be activated yet: ${outstanding} `
+            + (standing.rejected.length > 0
+              ? 'was sent back and has not been replaced. '
+              : 'has not been checked against the original. ')
+            + 'Open their Documents tab, check the scan against what is recorded, and mark it '
+            + 'verified.';
+          if (mode === 'enforce') {
+            throw withCode(new BadRequestException(sentence), ASSAYER_ERROR_CODES.IDENTITY_NOT_VERIFIED);
+          }
+          // Warn: let it through, but leave the fact on the record rather than nowhere.
+          this.logger.warn(`Identity gate (warn only): ${sentence}`);
+          await this.recordActivity(
+            id, 'ASSAYER_UPDATED', null, null, userId,
+            `Activated without a verified identity — ${outstanding} still unchecked. The identity `
+            + 'check is set to warn; switch it to Enforce in Settings once the queue is being worked.',
+          ).catch(() => undefined);
+        }
+      }
+    }
 
     let event: any;
     if (targetStatus === AssayerLifecycleStatus.DOCUMENT_VERIFICATION) {

@@ -57,6 +57,7 @@ export const SETTINGS_GROUPS = [
   { key: 'retention', label: 'Data retention', description: 'How long movement and operational records are kept.' },
   { key: 'dpdp', label: 'Data protection (DPDP)', description: 'The Grievance Officer / DPO contact published to Data Principals, and how long the platform has to answer a rights request. Required by the Digital Personal Data Protection Act.' },
   { key: 'feedback', label: 'Feedback SLA', description: 'How long the product team has to answer, and to resolve, before it escalates.' },
+  { key: 'onboarding', label: 'Joining and identity', description: 'What an appraiser must prove about who they are before they can be activated, and how strictly it is enforced.' },
   { key: 'field', label: 'In the field', description: 'What the app enforces on an assayer while they are out on a job, and how far a negotiation may run.' },
   { key: 'planning', label: 'Planning', description: 'How the recommendation engine spreads work across the people who are eligible for it.' },
   { key: 'roster', label: 'Roster import', description: 'How the appraiser roster spreadsheet is brought in.' },
@@ -666,6 +667,39 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     // already called the region ceiling (branch, assignment, project, planning, scheduling,
     // assayer, reports, search, system-dashboard) is untouched by this setting: their check was
     // already correct and unconditional, and stays that way regardless of this value.
+    key: 'onboarding.identityGate.mode',
+    label: 'Identity check before activation',
+    description: 'Whether an appraiser can be activated before their identity documents have been '
+      + 'checked against the originals. "Enforce" refuses to move anyone from Training to Active '
+      + 'until their Aadhaar and PAN are verified — so the person who values a vault of pledged '
+      + 'gold is somebody the company has actually identified. "Warn" runs the same check, records '
+      + 'what it would have refused, and lets the activation through; that is the DEFAULT, because '
+      + 'on the day this shipped not one document in the estate had ever been verified and '
+      + 'enforcing immediately would have blocked every new joiner against a process the desk had '
+      + 'never operated once. Move it to Enforce as soon as the identity queue on the roster is '
+      + 'being worked. "Off" skips the check entirely. Nothing here stops work already assigned, '
+      + 'and no earlier joining stage is affected.',
+    group: 'onboarding',
+    type: 'select',
+    options: [
+      { value: 'off', label: 'Off — no check' },
+      { value: 'warn', label: 'Warn — record what would be refused, activate anyway' },
+      { value: 'enforce', label: 'Enforce — refuse to activate an unverified person' },
+    ],
+    /**
+     * Warn, not enforce, and the difference is a backlog rather than a principle.
+     *
+     * `security.regionScope.mode` below shipped as 'log' for exactly this reason and earned
+     * 'enforce' after an observation phase. This is the same rollout against a much larger
+     * backlog — 1,163 people and, on the day it shipped, not one verified document anywhere.
+     * Enforcing from the first boot would refuse every activation in the company against a process
+     * nobody had run once, which is how a control gets switched off permanently instead of adopted.
+     */
+    default: 'warn',
+    envVar: 'IDENTITY_GATE_MODE',
+    applies: 'immediately',
+  },
+  {
     key: 'security.regionScope.mode',
     label: 'New region boundaries: rollout mode',
     description: 'Six screens (documents, billing, expenses, customer master, validation queries, clients) had no region boundary at all — a region-restricted account could read every region\'s rows through them. "Enforce" (the default) refuses a cross-region read, exactly as every other screen already does. "Log" runs the same check but only records what it would have refused, letting the request through — use it TEMPORARILY if a data-quality problem is causing false refusals and you need to watch real traffic before tightening. "Off" skips the check entirely. An account with no region assignment is unrestricted and is unaffected by any mode, so enforcing is safe wherever staff are national by default.',
