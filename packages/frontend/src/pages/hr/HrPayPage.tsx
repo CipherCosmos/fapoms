@@ -13,6 +13,7 @@ import { counted } from '../../utils/plural';
 import { useHr } from './HrLayout';
 import { queryKeys } from '../../hooks/queryKeys';
 import { CommercialProfileModal, formatMoney, type CommercialProfile } from './CommercialProfileModal';
+import type { SummaryGroupKey } from './record-sections';
 
 /**
  * Pay & terms.
@@ -54,18 +55,22 @@ interface AssayerLite {
 }
 
 /**
- * What to tell a clerk is missing, per row — bank details, PAN, or both. Named from the same
- * `PAYOUT_BLOCKING_ASSAYER_FIELDS` labels `@fapoms/shared` scores the roster's own "Cannot be
- * paid" gaps by, so this sentence and that chip can never name a different set of columns.
+ * What to tell a clerk is missing, per row — bank details, PAN, or both — and where on the
+ * record the fix lives. The message is named from the same `PAYOUT_BLOCKING_ASSAYER_FIELDS`
+ * labels `@fapoms/shared` scores the roster's own "Cannot be paid" gaps by, so this sentence
+ * and that chip can never name a different set of columns. `section` is the Summary group the
+ * link should land on (see record-sections.ts): bank details live under "How they are paid"
+ * (`financial`), the PAN under "Who they are" (`identity`); with both missing the bank group
+ * wins — the PAN panel sits alongside it, and `edit=1` has every box open anyway.
  * `null` when nothing payout-blocking is missing, in which case the row says nothing at all.
  */
-const payGapMessage = (a: AssayerLite): string | null => {
+const payGap = (a: AssayerLite): { message: string; section: SummaryGroupKey } | null => {
   const gaps = new Set(payoutBlockingGaps(a as unknown as Record<string, unknown>).map((f) => f.key));
   const bankGap = gaps.has('bankAccountNumber') || gaps.has('ifscCode');
   const panGap = gaps.has('panNumber');
-  if (bankGap && panGap) return 'No bank details or PAN on file — add them';
-  if (bankGap) return 'No bank details — add them';
-  if (panGap) return 'No PAN on file — add it';
+  if (bankGap && panGap) return { message: 'No bank details or PAN on file — add them', section: 'financial' };
+  if (bankGap) return { message: 'No bank details — add them', section: 'financial' };
+  if (panGap) return { message: 'No PAN on file — add it', section: 'identity' };
   return null;
 };
 
@@ -360,48 +365,49 @@ export const HrPayPage: React.FC = () => {
             {
               key: 'person',
               header: 'Person',
-              render: (a) => (
-                <>
-                  <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{a.displayName}</div>
-                  <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{a.assayerCode}{a.district ? ` · ${a.district}` : ''}</div>
-                  {/*
-                    Somebody still joining is not a pricing omission, and this page had no way of
-                    saying so: `lifecycleStatus` was fetched, typed, and then read by nothing, so a
-                    trainee sat in the table beside working assayers with the same amber "paid the
-                    client default" against them and no hint that they cannot be sent anywhere yet.
+              render: (a) => {
+                const gap = payGap(a);
+                return (
+                  <>
+                    <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{a.displayName}</div>
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{a.assayerCode}{a.district ? ` · ${a.district}` : ''}</div>
+                    {/*
+                      Somebody still joining is not a pricing omission, and this page had no way of
+                      saying so: `lifecycleStatus` was fetched, typed, and then read by nothing, so a
+                      trainee sat in the table beside working assayers with the same amber "paid the
+                      client default" against them and no hint that they cannot be sent anywhere yet.
 
-                    The words are `ONBOARDING_NEXT_STEP` from @fapoms/shared — the same sentence the
-                    planner prints when it refuses this person work, so a clerk who arrives here
-                    from that refusal reads the instruction they were already given rather than a
-                    second wording of it.
-                  */}
-                  {onboardingNextStep(a.lifecycleStatus) && (
-                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px' }}>
-                      Still joining — {onboardingNextStep(a.lifecycleStatus)}
-                    </div>
-                  )}
-                  {payGapMessage(a) && (
-                    <Link
-                      /**
-                       * `?section=financial` was meant to open the edit form on the Financial tab
-                       * directly — written when there still was a single-record edit modal that
-                       * read it. That modal is gone (editing is in place on the record's own page
-                       * now; see AssayerRecord.tsx), nothing reads `section` any more, and
-                       * `?assayer=` itself is forwarded straight to `/hr/roster/:id` by
-                       * AssayerRoster's own redirect effect, which drops every other query param
-                       * in the process — so this link already lands on the record's Summary tab
-                       * either way, one click short of the Financial section rather than zero.
-                       * Left as-is rather than guessed at here: wiring the record page to actually
-                       * open on a named section is a real, separate change.
-                       */
-                      to={`/hr/roster?assayer=${a.id}&section=financial`}
-                      style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', fontWeight: 600, color: 'var(--danger)', marginTop: '3px' }}
-                    >
-                      <AlertTriangle size={11} /> {payGapMessage(a)}
-                    </Link>
-                  )}
-                </>
-              ),
+                      The words are `ONBOARDING_NEXT_STEP` from @fapoms/shared — the same sentence the
+                      planner prints when it refuses this person work, so a clerk who arrives here
+                      from that refusal reads the instruction they were already given rather than a
+                      second wording of it.
+                    */}
+                    {onboardingNextStep(a.lifecycleStatus) && (
+                      <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px' }}>
+                        Still joining — {onboardingNextStep(a.lifecycleStatus)}
+                      </div>
+                    )}
+                    {gap && (
+                      <Link
+                        /**
+                         * Lands on the record with editing open and the page scrolled to the
+                         * ringed Summary group holding the boxes this row says are empty —
+                         * "How they are paid" for bank details, "Who they are" for the PAN —
+                         * not on the top of a forty-field Summary. The roster's `?assayer=`
+                         * redirect forwards `section` and `edit` (RECORD_LINK_PARAMS) and the
+                         * record consumes them once on arrival; what `section` may name lives
+                         * in record-sections.ts. For a reader who cannot edit, `edit=1` is
+                         * ignored and the scroll-and-ring still answers "where is the gap".
+                         */
+                        to={`/hr/roster?assayer=${a.id}&edit=1&section=${gap.section}`}
+                        style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', fontWeight: 600, color: 'var(--danger)', marginTop: '3px' }}
+                      >
+                        <AlertTriangle size={11} /> {gap.message}
+                      </Link>
+                    )}
+                  </>
+                );
+              },
             },
             {
               key: 'base',

@@ -28,6 +28,7 @@ import { RosterFilterPanel, AppliedFilterBar } from './RosterFilterPanel';
 import { RosterExportDialog } from './RosterExportDialog';
 import { ToolbarMenu, MenuAction } from './ToolbarMenu';
 import { STAGE_CONSEQUENCE, HARD_TO_REVERSE_STAGES } from './AssayerRecord';
+import { RECORD_LINK_PARAMS } from './record-sections';
 import { LIFECYCLE_MOVE_REASONS, OTHER_LIFECYCLE_REASON } from './lifecycle-reason-vocabulary';
 import { fmtDate } from '../../utils/dates';
 import { queryKeys } from '../../hooks/queryKeys';
@@ -177,6 +178,15 @@ export const AssayerRoster: React.FC<{
    * `?assayer=<id>` is still honoured because it is in bookmarks, in notification payloads, and
    * in links from global search and the planning screen's excluded-candidates list. It now
    * forwards to the record's own URL rather than opening a drawer over the list.
+   *
+   * The parameters in RECORD_LINK_PARAMS (`section`, `edit`) ride along: those links may say
+   * which part of the record they mean — HR Pay's payout-gap link sends `section=financial`
+   * with `edit=1` — and building a bare `/hr/roster/:id` here silently dropped them, which left
+   * `section=` written at the call sites, forwarded nowhere, read by nobody. Only those named
+   * parameters are forwarded, not "everything but ours": this list owns a growing query
+   * vocabulary of its own (`q`, `segment`, the `f.*` filters, `register`, `view`), and a
+   * deny-list would quietly start forwarding each new filter param onto record URLs, where
+   * they dangle meaning nothing.
    */
   const openRecord = useCallback(
     (id: string) => navigate(`/hr/roster/${id}`),
@@ -185,7 +195,14 @@ export const AssayerRoster: React.FC<{
 
   useEffect(() => {
     const wanted = searchParams.get('assayer');
-    if (wanted) navigate(`/hr/roster/${wanted}`, { replace: true });
+    if (!wanted) return;
+    const forwarded = new URLSearchParams();
+    for (const key of RECORD_LINK_PARAMS) {
+      const value = searchParams.get(key);
+      if (value !== null) forwarded.set(key, value);
+    }
+    const qs = forwarded.toString();
+    navigate(`/hr/roster/${encodeURIComponent(wanted)}${qs ? `?${qs}` : ''}`, { replace: true });
   }, [searchParams, navigate]);
   const [creating, setCreating] = useState(false);
   /**

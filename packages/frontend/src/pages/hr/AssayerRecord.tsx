@@ -34,6 +34,7 @@ import { AssayerSkillsPanel } from './AssayerSkillsPanel';
 import { todayDateKey, localDateKey } from '../../utils/statusLabels';
 import { counted } from '../../utils/plural';
 import { LIFECYCLE_MOVE_REASONS, OTHER_LIFECYCLE_REASON } from './lifecycle-reason-vocabulary';
+import { resolveRecordSection, type SummaryGroupKey } from './record-sections';
 
 /**
  * How they are engaged, and why they are not available — the two halves of the roster's
@@ -289,7 +290,9 @@ export const AssayerRecord: React.FC<{
   const { confirm, confirmDialog } = useConfirm();
   const { toast } = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
-  const autoEditRef = React.useRef(false);
+  const arrivedRef = React.useRef(false);
+  /** The Summary group a link (or the Pay tab's button) pointed at — scrolled to and ringed. */
+  const [flashGroup, setFlashGroup] = useState<SummaryGroupKey | null>(null);
 
   /**
    * Editing the Summary in place. `editForm` is the boxes; `editInitial` is what they held when
@@ -420,20 +423,55 @@ export const AssayerRecord: React.FC<{
     return () => { cancelled = true; };
   }, [assayerId, reloadKey]);
 
-  // Arriving with `?edit=1` (the roster's edit pencil links here) drops straight into editing,
-  // once, then strips the flag so a refresh does not re-trigger it.
+  /**
+   * What the URL asked this record to do on arrival — honoured once, then stripped, so a
+   * refresh or a copied link does not replay the jump.
+   *
+   * `?edit=1` (the roster's edit pencil) drops straight into editing, for those who may.
+   * `?section=` names the part of the record the sending screen means — a tab, or one of the
+   * Summary's fact groups, which is scrolled to and briefly ringed; the vocabulary is
+   * record-sections.ts, and both parameters survive the roster's `?assayer=` redirect and the
+   * `/assayers/:id` deep link. HR Pay's payout-gap link sends both, so the clerk lands with
+   * the boxes it names open in front of them instead of at the top of the Summary.
+   *
+   * One effect for both parameters, deliberately: each strip rewrites the whole query from
+   * the render it closed over, so two effects stripping one parameter apiece would each put
+   * the other's back.
+   */
   useEffect(() => {
-    if (autoEditRef.current || !a || !canManage) return;
-    if (searchParams.get('edit') === '1') {
-      autoEditRef.current = true;
-      startEdit();
+    if (arrivedRef.current || !a) return;
+    arrivedRef.current = true;
+    const target = resolveRecordSection(searchParams.get('section'));
+    if (target) {
+      setTab(target.tab);
+      if (target.group) setFlashGroup(target.group);
+    }
+    // After the section, so that with both present editing's own tab (the Summary) wins.
+    if (searchParams.get('edit') === '1' && canManage) startEdit();
+    if (searchParams.has('edit') || searchParams.has('section')) {
       const next = new URLSearchParams(searchParams);
       next.delete('edit');
+      next.delete('section');
       setSearchParams(next, { replace: true });
     }
     // startEdit is stable enough for this one-shot; deps kept minimal on purpose.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [a, canManage]);
+
+  /**
+   * The pointed-at group brought into view, ringed, and let go. The element always exists by
+   * now — the groups render with the Summary, and the ring outlives the scroll just long
+   * enough to say "here" before fading, so it does not read as a permanent state of the panel.
+   */
+  useEffect(() => {
+    if (!flashGroup) return;
+    const raf = requestAnimationFrame(() => {
+      // Optional-called: jsdom has no scrollIntoView, and the ring alone still answers "here".
+      document.getElementById(`record-group-${flashGroup}`)?.scrollIntoView?.({ behavior: 'smooth', block: 'center' });
+    });
+    const fade = setTimeout(() => setFlashGroup(null), 2400);
+    return () => { cancelAnimationFrame(raf); clearTimeout(fade); };
+  }, [flashGroup]);
 
   // The per-tab panels are cached in `loaded`; a change to the record invalidates that cache
   // too, or the Pay tab keeps serving what it fetched before the edit.
@@ -1117,7 +1155,7 @@ export const AssayerRecord: React.FC<{
                     </section>
                   )}
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
-                  <FactGroup edit={editCtx} title="How to reach them" rows={[
+                  <FactGroup edit={editCtx} anchor="contact" flash={flashGroup} title="How to reach them" rows={[
                     ['Phone', a.phone, 'phone'],
                     ['Alternate phone', a.alternatePhone, 'alternatePhone'],
                     ['Email', a.email, 'email'],
@@ -1127,6 +1165,8 @@ export const AssayerRecord: React.FC<{
                   ]} />
                   <FactGroup
                     edit={editCtx}
+                    anchor="location"
+                    flash={flashGroup}
                     title="Where they are"
                     rows={[
                       ['Address', a.address, 'address'],
@@ -1208,7 +1248,7 @@ export const AssayerRecord: React.FC<{
                     read as a deliberate decision to show `INTERNAL` and `2019-04-01T00:00:00Z`
                     to a clerk — the next person to add a row here would have copied it.
                   */}
-                  <FactGroup edit={editCtx} title="Their job" rows={[
+                  <FactGroup edit={editCtx} anchor="job" flash={flashGroup} title="Their job" rows={[
                     ['Employment', employmentTypeLabel(a.employmentType), 'employmentType'],
                     ['Employee ID', a.employeeId, 'employeeId'],
                     ['Department', a.department, 'department'],
@@ -1251,6 +1291,8 @@ export const AssayerRecord: React.FC<{
                   ]} />
                   <FactGroup
                     edit={editCtx}
+                    anchor="identity"
+                    flash={flashGroup}
                     title="Who they are"
                     /*
                       THE PRODUCT DECISION, WRITTEN WHERE THE FIELDS ARE.
@@ -1282,14 +1324,14 @@ export const AssayerRecord: React.FC<{
                       ? <a href={a.documentsLink} target="_blank" rel="noreferrer" style={{ color: 'var(--accent-primary)' }}>Open folder</a>
                       : null],
                   ]} />
-                  <FactGroup edit={editCtx} title="How they are paid" rows={[
+                  <FactGroup edit={editCtx} anchor="financial" flash={flashGroup} title="How they are paid" rows={[
                     ['Bank', a.bankName, 'bankName'],
                     ['Account', maskedIdentifier(a.bankAccountNumber), 'bankAccountNumber'],
                     // Not masked, and deliberately so: an IFSC identifies a bank branch, not a
                     // person or an account. Covering it would say something untrue about what it is.
                     ['IFSC', a.ifscCode, 'ifscCode'],
                   ]} />
-                  <FactGroup edit={editCtx} title="How much work they can take" rows={[
+                  <FactGroup edit={editCtx} anchor="workload" flash={flashGroup} title="How much work they can take" rows={[
                     ['Most jobs in a day', a.maxDailyWorkload, 'maxDailyWorkload'],
                     ['Most jobs in a week', a.maxWeeklyWorkload, 'maxWeeklyWorkload'],
                   ]} />
@@ -1322,7 +1364,10 @@ export const AssayerRecord: React.FC<{
                         : `Account ${maskedIdentifier(a.bankAccountNumber)} · IFSC ${a.ifscCode}`}
                     </div>
                     {canManage && bankMissing && (
-                      <button onClick={startEdit} className="btn btn-secondary" style={{ fontSize: '12px', padding: '5px 10px', marginTop: '9px' }}>
+                      /* Editing opens on the Summary — so also scroll to the bank boxes there,
+                         or the button teleports to the top of a forty-field form and leaves
+                         finding the three relevant ones to the clerk. */
+                      <button onClick={() => { startEdit(); setFlashGroup('financial'); }} className="btn btn-secondary" style={{ fontSize: '12px', padding: '5px 10px', marginTop: '9px' }}>
                         Add bank details
                       </button>
                     )}
@@ -1773,20 +1818,35 @@ const FIELD_MONO_KEYS = new Set(['panNumber', 'aadhaarNumber', 'bankAccountNumbe
  * opens into a two-input panel, and a cell in a `minmax(150px, 1fr)` grid is not a place to put
  * one.
  */
-const FactGroup: React.FC<{ title: string; rows: Fact[]; edit?: EditCtx; footer?: React.ReactNode }> = ({
-  title, rows, edit, footer,
-}) => (
-  <section
-    style={{
-      background: 'var(--bg-card)', border: '1px solid var(--border-color)',
-      borderRadius: '10px', padding: '14px 16px', flex: '1 1 340px', minWidth: 0,
-    }}
-  >
-    <div style={{ ...label, marginBottom: '10px' }}>{title}</div>
-    <Facts rows={rows} edit={edit} />
-    {footer && <div style={{ marginTop: '10px' }}>{footer}</div>}
-  </section>
-);
+/**
+ * `anchor` is the group's name in the `?section=` vocabulary (record-sections.ts), so links
+ * from other screens can mean this panel and not just this person; `flash` is whichever group
+ * such a link pointed at, and the match wears a ring for a moment so the reader knows which of
+ * six look-alike panels they were sent to.
+ */
+const FactGroup: React.FC<{
+  title: string; rows: Fact[]; edit?: EditCtx; footer?: React.ReactNode;
+  anchor?: SummaryGroupKey; flash?: SummaryGroupKey | null;
+}> = ({
+  title, rows, edit, footer, anchor, flash,
+}) => {
+  const ringed = !!anchor && flash === anchor;
+  return (
+    <section
+      id={anchor ? `record-group-${anchor}` : undefined}
+      style={{
+        background: 'var(--bg-card)', border: `1px solid ${ringed ? 'var(--accent)' : 'var(--border-color)'}`,
+        boxShadow: ringed ? '0 0 0 2px var(--accent)' : 'none',
+        transition: 'border-color 0.6s ease, box-shadow 0.6s ease',
+        borderRadius: '10px', padding: '14px 16px', flex: '1 1 340px', minWidth: 0,
+      }}
+    >
+      <div style={{ ...label, marginBottom: '10px' }}>{title}</div>
+      <Facts rows={rows} edit={edit} />
+      {footer && <div style={{ marginTop: '10px' }}>{footer}</div>}
+    </section>
+  );
+};
 
 const Facts: React.FC<{ rows: Fact[]; edit?: EditCtx }> = ({ rows, edit }) => {
   const sensitive = React.useContext(SensitiveCtx);

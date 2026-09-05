@@ -123,10 +123,15 @@ const PostLoginRedirect: React.FC<{ fallback: string }> = ({ fallback }) => {
   return <Navigate to={returnTo ?? fallback} replace />;
 };
 
-/** Turns `/assayers/:id` into the roster's own deep link, so the record opens where it lives. */
+/**
+ * Turns `/assayers/:id` into the roster's own deep link, so the record opens where it lives.
+ * The query string rides along — `?section=`/`?edit=` address a part of the record (see
+ * record-sections.ts), and a redirect that strips them turns a precise link into a vague one.
+ */
 const AssayerDeepLink: React.FC = () => {
   const { id } = useParams<{ id: string }>();
-  return <Navigate to={id ? `/hr/roster/${encodeURIComponent(id)}` : '/hr/roster'} replace />;
+  const { search } = useLocation();
+  return <Navigate to={id ? `/hr/roster/${encodeURIComponent(id)}${search}` : '/hr/roster'} replace />;
 };
 
 const RememberAndRedirectToLogin: React.FC = () => {
