@@ -233,6 +233,63 @@ services:
   # main.ts) so a request handler never contends with a job for the pool below. Split from
   # backend-worker on 2026-09-03 so the two roles scale, and get sized, independently — see
   # worker-concurrency.ts for why that used to matter (33 job slots sharing one pool with HTTP).
+  # ---------------------------------------------------------------------------------------------
+  # Read-only container API, so administrators can read service logs from /admin/logs.
+  #
+  # The socket is mounted HERE and nowhere else. Handing it to the backend would be shorter and
+  # considerably worse: that socket is the container engine's full control plane, and the backend
+  # is the process that parses uploaded spreadsheets and renders PDFs. This proxy permits GET on
+  # /containers and refuses everything else, including every POST.
+  #
+  # No `ports:` — reachable only from this compose network, never the host.
+  #
+  # DOCKER_SOCKET_PATH is the one thing that differs between the two deployments. On Docker it is
+  # /var/run/docker.sock and the default is right. This host runs ROOTLESS PODMAN, whose
+  # Docker-compatible socket lives at /run/user/<uid>/podman/podman.sock and exists only while
+  # `podman.socket` is enabled for that user — so the value is set in .env.docker there.
+  #
+  # `label=disable` rather than a `:z` mount: relabelling the podman socket would change the
+  # SELinux type of a socket podman itself depends on, for every other consumer on the box. This
+  # container's whole job is to read that one socket, so exempting it is the narrower change.
+  dockerproxy:
+    image: docker.io/tecnativa/docker-socket-proxy:0.3.0
+    environment:
+      # Allowlist: containers only. Every other section of the API stays denied by default.
+      CONTAINERS: 1
+      # Explicitly denied rather than merely left unset — these are the ones that would turn
+      # "read logs" into "control this host".
+      POST: 0
+      EXEC: 0
+      IMAGES: 0
+      VOLUMES: 0
+      NETWORKS: 0
+      SERVICES: 0
+      TASKS: 0
+      SECRETS: 0
+      CONFIGS: 0
+      SWARM: 0
+      NODES: 0
+      SYSTEM: 0
+      INFO: 0
+      AUTH: 0
+      BUILD: 0
+      COMMIT: 0
+      DISTRIBUTION: 0
+      PLUGINS: 0
+      SESSION: 0
+    volumes:
+      - ${DOCKER_SOCKET_PATH:-/var/run/docker.sock}:/var/run/docker.sock:ro
+    restart: unless-stopped
+    # `read_only: true` is deliberately NOT set: this image renders its haproxy config from a
+    # template on every start, and a read-only root crash-loops on it.
+    security_opt:
+      - no-new-privileges:true
+      - label=disable
+    mem_limit: 128m
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
   backend:
     build:
       context: ..
@@ -240,6 +297,9 @@ services:
     restart: unless-stopped
     env_file: [../.env.docker]
     environment:
+      # The read-only container API that backs the admin service-log viewer. The socket itself
+      # is never mounted into this container.
+      DOCKER_API_URL: http://dockerproxy:2375
       PROCESS_ROLE: api
       # Postgres default max_connections is 100. Reserved ~10 for psql/migrations/superuser,
       # leaving 90 to split between this replica and backend-worker below: 20 here (HTTP
