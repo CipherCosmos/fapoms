@@ -87,8 +87,30 @@ export const databaseConfig = (
   // (transaction pooling) and keep this modest.
   extra: {
     max: configService.get<number>('DB_POOL_MAX', 20),
-    min: configService.get<number>('DB_POOL_MIN', 2),
-    idleTimeoutMillis: configService.get<number>('DB_IDLE_TIMEOUT_MS', 30000),
+    /**
+     * How many connections stay warm, and how long an idle one survives.
+     *
+     * These are not only about the cost of a TCP handshake. A brand-new backend has an empty
+     * relation and catalog cache, and the planning screen's candidate pre-filter is a PostGIS
+     * query — its first plan on a fresh connection touches 561 catalog buffers. Measured on this
+     * database:
+     *
+     *     cold connection   planning 29.4 ms · execution 57.2 ms
+     *     warm connection   planning  0.23 ms · execution  0.22 ms
+     *
+     * `pg_stat_statements` put that query second in the whole system by total time (500 calls,
+     * 29.2 ms mean) — and the mean is almost exactly the cold planning cost, because with a
+     * floor of 2 and a 30-second idle window, connections were being closed and reopened
+     * constantly by the background workers alone (the audit seal runs every minute, the SLA
+     * scanner every fifteen). Nearly every geo query was paying for a cold planner.
+     *
+     * Five and five minutes, not more: `max` is unchanged at 20 and Postgres here allows 100, so
+     * a single API instance holding five idle backends is comfortable, and both remain
+     * overridable. Beyond a handful of replicas this belongs behind PgBouncer, as the note above
+     * already says.
+     */
+    min: configService.get<number>('DB_POOL_MIN', 5),
+    idleTimeoutMillis: configService.get<number>('DB_IDLE_TIMEOUT_MS', 300000),
     connectionTimeoutMillis: configService.get<number>('DB_CONN_TIMEOUT_MS', 10000),
     // A single runaway query must not be able to pin a pooled connection forever —
     // that is how one slow query cascades into pool exhaustion and a full outage.
