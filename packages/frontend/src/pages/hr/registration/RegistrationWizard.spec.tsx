@@ -495,3 +495,80 @@ describe('the progress rail', () => {
     expect(window.location.search || document.location.search).toBeDefined();
   });
 });
+
+/**
+ * A review that can only agree is not a review.
+ *
+ * Both screens hard-coded `verdict: 'VERIFIED'`, so a photograph too dark to read had no outcome
+ * except being left alone forever — and the person who sent it was told nothing and waited.
+ */
+describe('the papers step — sending a scan back', () => {
+  const AADHAAR_FRONT = {
+    requirement: 'AADHAAR_FRONT', label: 'Aadhaar — front', identity: true,
+    id: 'doc-1', softCopyReceived: true, hardCopyReceived: null,
+    documentNumber: '234567890124', expiryDate: null, verificationStatus: null,
+    filePaths: ['uploads/a.png'],
+    prints: { name: true, dateOfBirth: true, gender: true, guardianName: false, address: false },
+  };
+
+  const reachPapers = async () => {
+    await mount();
+    type(/^First Name/, 'Ramesh');
+    type(/^Last Name/, 'Iyer');
+    await choose(/^State they work in/, 'Kerala');
+    await click(/Save and continue/);
+    await click(/^Continue/);
+    await click(/^Continue/);
+  };
+
+  it('asks only for the details this card actually prints', async () => {
+    // An Aadhaar's address is on the BACK, so the front must not ask for one.
+    wireApi({ 'GET /assayers/asr-1/dossier': { onboarding: [AADHAAR_FRONT], references: [] } });
+    await reachPapers();
+
+    expect(screen.getByLabelText(/Name exactly as printed/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/Date of birth on the card/i)).toBeInTheDocument();
+    expect(screen.queryByLabelText(/Address as printed/i)).not.toBeInTheDocument();
+  });
+
+  it('sends what the reviewer read off the card with the verdict', async () => {
+    wireApi({ 'GET /assayers/asr-1/dossier': { onboarding: [AADHAAR_FRONT], references: [] } });
+    await reachPapers();
+
+    type(/Name exactly as printed/i, 'Ramesh Iyer');
+    await click(/I have checked this against the original/i);
+    await click(/Yes, I checked it/i);
+
+    await waitFor(() => {
+      expect(callsTo('POST', (u) => u === '/assayers/document/doc-1/verify')).toHaveLength(1);
+    });
+    expect(bodyOf(callsTo('POST', (u) => u === '/assayers/document/doc-1/verify')[0]))
+      .toMatchObject({ verdict: 'VERIFIED', holderName: 'Ramesh Iyer' });
+  });
+
+  it('sends a scan back with a reason, which is what reaches their phone', async () => {
+    wireApi({ 'GET /assayers/asr-1/dossier': { onboarding: [AADHAAR_FRONT], references: [] } });
+    const prompt = jest.spyOn(window, 'prompt').mockReturnValue('1');
+    await reachPapers();
+
+    await click(/Send it back/i);
+
+    await waitFor(() => {
+      expect(callsTo('POST', (u) => u === '/assayers/document/doc-1/verify')).toHaveLength(1);
+    });
+    expect(bodyOf(callsTo('POST', (u) => u === '/assayers/document/doc-1/verify')[0]))
+      .toEqual({ verdict: 'REJECTED', rejectionReason: 'ILLEGIBLE' });
+    prompt.mockRestore();
+  });
+
+  it('sends nothing when the reviewer backs out of choosing a reason', async () => {
+    wireApi({ 'GET /assayers/asr-1/dossier': { onboarding: [AADHAAR_FRONT], references: [] } });
+    const prompt = jest.spyOn(window, 'prompt').mockReturnValue(null);
+    await reachPapers();
+
+    await click(/Send it back/i);
+
+    expect(callsTo('POST', (u) => u === '/assayers/document/doc-1/verify')).toHaveLength(0);
+    prompt.mockRestore();
+  });
+});

@@ -138,13 +138,110 @@ const Scans: React.FC<{
  * writes is the same column the ID step writes, so leaving it unsaved would mean the two screens
  * disagree about the same person's Aadhaar.
  */
+/**
+ * Ask which of the fixed reasons applies.
+ *
+ * A native prompt rather than a modal, deliberately and temporarily: the value has to be one of a
+ * known set — it is translated and shown to the appraiser as an instruction, so free text would
+ * reach them as a blank space — and a numbered list satisfies that in eight lines while the proper
+ * picker is designed. It is refused by the server if it is not a known reason, so the worst a
+ * mistyped answer can do is nothing.
+ */
+async function chooseRejectionReason(label: string): Promise<string | null> {
+  const reasons = Object.entries(REJECTION_LABELS);
+  const menu = reasons.map(([, text], i) => `${i + 1}. ${text}`).join('\n');
+  const answer = window.prompt(
+    `Why is ${label} being sent back?\n\n${menu}\n\nType the number. They are told this, with what to do about it.`,
+  );
+  const index = Number(answer) - 1;
+  return reasons[index]?.[0] ?? null;
+}
+
+/** What a reviewer types off the card. Held per row until the verdict is sent with it. */
+export interface PrintedValues {
+  holderName: string;
+  holderDateOfBirth: string;
+  holderGender: string;
+  holderGuardianName: string;
+  holderAddress: string;
+}
+
+/** Why a scan was sent back, in the words the reviewer picks from. */
+const REJECTION_LABELS: Record<string, string> = {
+  ILLEGIBLE: 'Too blurred or dark to read',
+  INCOMPLETE_CAPTURE: 'Part of the document is cut off',
+  WRONG_DOCUMENT: 'This is a different document',
+  NAME_MISMATCH: 'The name does not match the record',
+  NUMBER_MISMATCH: 'The number does not match the record',
+  EXPIRED: 'The document has expired',
+  NOT_THE_PERSON: 'This does not belong to this person',
+  ALTERED_OR_SUSPECT: 'The document looks altered',
+};
+
+const PRINTED_LABELS: Record<keyof PrintedValues, string> = {
+  holderName: 'Name exactly as printed',
+  holderDateOfBirth: 'Date of birth on the card',
+  holderGender: 'Gender',
+  holderGuardianName: "Father's / guardian's name",
+  holderAddress: 'Address as printed',
+};
+
+const PRINTED_KEYS: Array<[keyof PrintedValues, 'name' | 'dateOfBirth' | 'gender' | 'guardianName' | 'address']> = [
+  ['holderName', 'name'],
+  ['holderDateOfBirth', 'dateOfBirth'],
+  ['holderGender', 'gender'],
+  ['holderGuardianName', 'guardianName'],
+  ['holderAddress', 'address'],
+];
+
+/**
+ * The details a reviewer reads off the document, and the only place in this system where identity
+ * data is not self-asserted.
+ *
+ * Everything else about a person came from a spreadsheet or from the person. These come from a card
+ * somebody is holding, which is what makes the name comparison mean anything: until the document's
+ * name was written down, the record's name could not be checked against it, because there was
+ * nothing to check it against.
+ */
+const PrintedDetails: React.FC<{
+  prints: NonNullable<DossierDocument['prints']>;
+  value: PrintedValues;
+  onChange: (next: PrintedValues) => void;
+  requirement: string;
+}> = ({ prints, value, onChange, requirement }) => (
+  <div style={{ marginTop: '10px', display: 'grid', gap: '8px' }}>
+    <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)' }}>
+      What the document says
+    </div>
+    {PRINTED_KEYS.filter(([, flag]) => prints[flag]).map(([key]) => (
+      <div key={key}>
+        <label
+          htmlFor={`printed-${requirement}-${key}`}
+          style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', marginBottom: '3px' }}
+        >
+          {PRINTED_LABELS[key]}
+        </label>
+        <input
+          id={`printed-${requirement}-${key}`}
+          type={key === 'holderDateOfBirth' ? 'date' : 'text'}
+          value={value[key]}
+          onChange={(e) => onChange({ ...value, [key]: e.target.value })}
+          placeholder={key === 'holderName' ? 'Copy it letter for letter, initials included' : undefined}
+          style={numberInputStyle}
+        />
+      </div>
+    ))}
+  </div>
+);
+
 const RequirementRow: React.FC<{
   doc: DossierDocument;
   assayerId: string;
   onChanged: () => void;
   onBusy: (busy: boolean) => void;
-  onVerify: (doc: DossierDocument) => void;
-}> = ({ doc, assayerId, onChanged, onBusy, onVerify }) => {
+  onVerify: (doc: DossierDocument, printed: PrintedValues) => void;
+  onReject: (doc: DossierDocument) => void;
+}> = ({ doc, assayerId, onChanged, onBusy, onVerify, onReject }) => {
   /**
    * What is on file, and whether it is covered.
    *
@@ -160,6 +257,21 @@ const RequirementRow: React.FC<{
   const boxFor = (value: string) => (looksLikeMask(value) ? '' : value);
 
   const [number, setNumber] = useState(() => boxFor(onFile));
+  /**
+   * What the card says, held here until the reviewer presses the button.
+   *
+   * Not saved on blur like the number is. The number is a fact about the record that the ID step
+   * also writes; these are an attestation, and they mean "I read this off the document in my hand"
+   * — so they are sent with the verdict, in one action, rather than accumulating on a row nobody
+   * has yet vouched for.
+   */
+  const [printed, setPrinted] = useState({
+    holderName: doc.holderName ?? '',
+    holderDateOfBirth: (doc.holderDateOfBirth ?? '').slice(0, 10),
+    holderGender: doc.holderGender ?? '',
+    holderGuardianName: doc.holderGuardianName ?? '',
+    holderAddress: doc.holderAddress ?? '',
+  });
   const [uploading, setUploading] = useState(false);
   const [rowError, setRowError] = useState<string | null>(null);
   const { toast } = useToast();
@@ -303,21 +415,59 @@ const RequirementRow: React.FC<{
             */}
           {/* `onFile` as well as the box: a number already stored is still a number, and the box
               is deliberately empty while it is covered. */}
+          {/*
+            * What the card says, asked for only where the card says it.
+            *
+            * An Aadhaar's address is on the BACK, so the front asks for name, date of birth and
+            * gender and nothing else; a PAN prints the father's name where other documents print
+            * an address. `prints` comes from the server so the two cannot drift, and asking for a
+            * field that is not on the document in front of somebody is how a form teaches people
+            * to stop reading it.
+            */}
+          {doc.prints && scans > 0 && !verified && (
+            <PrintedDetails prints={doc.prints} value={printed} onChange={setPrinted} requirement={doc.requirement} />
+          )}
+
           {doc.id && (number.trim() || onFile) && scans > 0 && (
             verified ? (
               <div style={{ fontSize: '12px', color: 'var(--success)', marginTop: '6px', display: 'flex', alignItems: 'center', gap: '5px' }}>
                 <Check size={13} aria-hidden /> Checked against the original.
+                {doc.holderName && <span style={{ color: 'var(--text-muted)' }}>Reads “{doc.holderName}”.</span>}
               </div>
             ) : (
-              <button
-                type="button"
-                onClick={() => onVerify(doc)}
-                className="btn btn-secondary"
-                style={{ marginTop: '8px', fontSize: '12px', padding: '6px 12px', width: 'auto', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
-              >
-                <ShieldCheck size={13} aria-hidden /> I have checked this against the original
-              </button>
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => onVerify(doc, printed)}
+                  className="btn btn-secondary"
+                  style={{ fontSize: '12px', padding: '6px 12px', width: 'auto', display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+                >
+                  <ShieldCheck size={13} aria-hidden /> I have checked this against the original
+                </button>
+                {/*
+                  * The other half of a review, which did not exist.
+                  *
+                  * Both screens hard-coded VERIFIED, so a reviewer could only ever agree — a scan
+                  * too dark to read had no outcome except being left alone forever, and the person
+                  * who sent it was told nothing. The reason picked here is what reaches their phone.
+                  */}
+                <button
+                  type="button"
+                  onClick={() => onReject(doc)}
+                  className="btn btn-ghost"
+                  style={{ fontSize: '12px', padding: '6px 12px', width: 'auto', color: 'var(--danger)' }}
+                >
+                  Send it back
+                </button>
+              </div>
             )
+          )}
+
+          {doc.verificationStatus === 'REJECTED' && (
+            <div style={{ fontSize: '12px', color: 'var(--danger)', marginTop: '8px' }}>
+              Sent back{doc.rejectionReason ? ` — ${REJECTION_LABELS[doc.rejectionReason] ?? doc.rejectionReason}` : ''}.
+              Waiting for them to send it again.
+            </div>
           )}
         </div>
       )}
@@ -373,12 +523,23 @@ export const DocumentsStep: React.FC<{
    * than one per row — twenty-one hidden dialogs is twenty-one portals for one button's worth of
    * use.
    */
-  const verify = async (doc: DossierDocument) => {
+  const verify = async (doc: DossierDocument, printed: PrintedValues) => {
     if (!doc.id) return;
+    /**
+     * Only the fields this card prints, and only where something was typed.
+     *
+     * Sending `holderGender: ''` for a PAN card — which does not carry one — would write an empty
+     * string over whatever is there and tell the server the reviewer looked at a field that is not
+     * on the document.
+     */
+    const attested = Object.fromEntries(
+      Object.entries(printed).filter(([, v]) => String(v ?? '').trim() !== ''),
+    );
     const ok = await confirm({
       title: `Confirm ${doc.label} against the original?`,
-      message: `This records that you compared ${doc.documentNumber ?? 'the number on file'} with the `
-        + 'document itself, under your name and today’s date.',
+      message: `This records that you compared ${doc.documentNumber ?? 'the number on file'} and the `
+        + `name “${printed.holderName || '—'}” with the document itself, under your name and today’s `
+        + 'date.',
       confirmLabel: 'Yes, I checked it',
     });
     if (!ok) return;
@@ -386,9 +547,63 @@ export const DocumentsStep: React.FC<{
     setVerifyError(null);
     try {
       await api.request(`/assayers/document/${doc.id}/verify`, {
-        method: 'POST', body: JSON.stringify({ verdict: 'VERIFIED' }),
+        method: 'POST',
+        body: JSON.stringify({ verdict: 'VERIFIED', ...attested }),
       });
       toast({ type: 'success', title: `${doc.label} checked`, message: 'Recorded against your name.' });
+      onChanged();
+    } catch (e) {
+      /**
+       * The server refuses a name that does not agree, and that refusal is the useful part.
+       *
+       * It comes back naming both names, so it is shown as-is rather than replaced with something
+       * generic. If they are genuinely the same person the reviewer answers the follow-up and it
+       * goes through with their reason recorded beside the grade.
+       */
+      const message = userMessage(e);
+      if (/does not match the name on the record/i.test(message)) {
+        const why = window.prompt(`${message}\n\nIf it is the same person, say why:`);
+        if (why && why.trim().length >= 10) {
+          try {
+            await api.request(`/assayers/document/${doc.id}/verify`, {
+              method: 'POST',
+              body: JSON.stringify({ verdict: 'VERIFIED', ...attested, nameMismatchNote: why.trim() }),
+            });
+            toast({ type: 'success', title: `${doc.label} checked`, message: 'Recorded with your note.' });
+            onChanged();
+            return;
+          } catch (retry) { setVerifyError(userMessage(retry)); return; }
+        }
+        setVerifyError(message);
+        return;
+      }
+      setVerifyError(message);
+    } finally { onBusy(false); }
+  };
+
+  /**
+   * Sending a scan back, which nothing in this application could do.
+   *
+   * Both review screens hard-coded `verdict: 'VERIFIED'`, so a reviewer could only ever agree: a
+   * photograph too dark to read had no outcome except being left alone, and the person who sent it
+   * was told nothing and waited. The reason chosen here is translated and shown on their phone with
+   * an instruction, which is why it is a fixed list rather than a free-text note.
+   */
+  const reject = async (doc: DossierDocument) => {
+    if (!doc.id) return;
+    const reason = await chooseRejectionReason(doc.label);
+    if (!reason) return;
+    onBusy(true);
+    setVerifyError(null);
+    try {
+      await api.request(`/assayers/document/${doc.id}/verify`, {
+        method: 'POST', body: JSON.stringify({ verdict: 'REJECTED', rejectionReason: reason }),
+      });
+      toast({
+        type: 'success',
+        title: `${doc.label} sent back`,
+        message: 'They have been told on their phone, with what to do about it.',
+      });
       onChanged();
     } catch (e) {
       setVerifyError(userMessage(e));
@@ -427,7 +642,7 @@ export const DocumentsStep: React.FC<{
         />
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           {groups.identity.map((doc) => (
-            <RequirementRow key={doc.requirement} doc={doc} assayerId={assayerId} onChanged={onChanged} onBusy={onBusy} onVerify={(d) => void verify(d)} />
+            <RequirementRow key={doc.requirement} doc={doc} assayerId={assayerId} onChanged={onChanged} onBusy={onBusy} onVerify={(d, printed) => void verify(d, printed)} onReject={(d) => void reject(d)} />
           ))}
         </div>
       </div>
@@ -442,7 +657,7 @@ export const DocumentsStep: React.FC<{
         />
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           {groups.joining.map((doc) => (
-            <RequirementRow key={doc.requirement} doc={doc} assayerId={assayerId} onChanged={onChanged} onBusy={onBusy} onVerify={(d) => void verify(d)} />
+            <RequirementRow key={doc.requirement} doc={doc} assayerId={assayerId} onChanged={onChanged} onBusy={onBusy} onVerify={(d, printed) => void verify(d, printed)} onReject={(d) => void reject(d)} />
           ))}
         </div>
       </div>

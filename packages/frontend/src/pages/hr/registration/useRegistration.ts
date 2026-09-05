@@ -323,6 +323,25 @@ export interface DossierDocument {
   expiryDate: string | null;
   verificationStatus: string | null;
   filePaths: string[];
+  /**
+   * What the card itself says, as typed by whoever last held it.
+   *
+   * Unmasked, unlike `documentNumber` beside it: the number is masked because the screen only
+   * needs enough of it to tell one card from another, while the name is the thing being compared
+   * — four characters of it would defeat the point of having written it down.
+   */
+  holderName?: string | null;
+  holderDateOfBirth?: string | null;
+  holderGender?: string | null;
+  holderGuardianName?: string | null;
+  holderAddress?: string | null;
+  /** Which fields this document prints, so the form asks for those and no others. */
+  prints?: {
+    name: boolean; dateOfBirth: boolean; gender: boolean; guardianName: boolean; address: boolean;
+  } | null;
+  nameMatchGrade?: string | null;
+  nameMatchNote?: string | null;
+  rejectionReason?: string | null;
 }
 
 export interface DossierReference {

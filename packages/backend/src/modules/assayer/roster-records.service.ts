@@ -142,6 +142,24 @@ export class RosterRecordsService {
         expiryDate: row?.expiryDate ?? null,
         verificationStatus: row?.verificationStatus ?? null,
         verifiedAt: row?.verifiedAt ?? null,
+        /**
+         * What the card says, unmasked, unlike the number above.
+         *
+         * The number is masked because the screen only needs enough of it to tell one card from
+         * another, and the whole value has its own audited route. A name is not that kind of
+         * secret — it is the thing the reviewer is comparing, so showing four characters of it
+         * would defeat the entire purpose of having written it down.
+         */
+        holderName: row?.holderName ?? null,
+        holderDateOfBirth: row?.holderDateOfBirth ?? null,
+        holderGender: row?.holderGender ?? null,
+        holderGuardianName: row?.holderGuardianName ?? null,
+        holderAddress: row?.holderAddress ?? null,
+        /** Which fields this card prints, so the form asks for those and no others. */
+        prints: DOCUMENT_PRINTED_FIELDS[requirement] ?? null,
+        nameMatchGrade: row?.nameMatchGrade ?? null,
+        nameMatchNote: row?.nameMatchNote ?? null,
+        rejectionReason: row?.rejectionReason ?? null,
         filePaths: row?.filePaths ?? [],
         remarks: row?.remarks ?? null,
       };
