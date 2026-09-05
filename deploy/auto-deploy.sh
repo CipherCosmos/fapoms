@@ -70,6 +70,56 @@ COMPOSE=("$CLI" compose)
 for f in "${COMPOSE_FILES[@]}"; do COMPOSE+=(-f "$f"); done
 COMPOSE+=(--env-file "$ENVFILE")
 
+# Attempt to bring back a stack that is down for a reason a deploy would have fixed.
+#
+# Deliberately narrow. It acts only when it can NAME the cause — a declared dependency the
+# container cannot see — and otherwise reports that the stack is unhealthy for some other reason
+# and changes nothing. An unhealthy backend has many causes and most are not repaired by a
+# rebuild; guessing would turn a two-minute timer into a rebuild loop against a database outage.
+#
+# Rate-limited by a marker file. If a repair does not work, the next attempt is not for
+# REPAIR_COOLDOWN_S, so a genuinely broken image cannot rebuild itself every two minutes forever.
+REPAIR_COOLDOWN_S="${FAPOMS_REPAIR_COOLDOWN_S:-1800}"
+
+repair_if_unhealthy() {
+  $SOURCE_MOUNTED || return 0
+  curl -fsS -m 5 "$HEALTH_URL" >/dev/null 2>&1 && return 0
+
+  local marker="$OPS_DIR/.last-repair" now last
+  now=$(date +%s)
+  if [ -f "$marker" ]; then
+    last=$(cat "$marker" 2>/dev/null || echo 0)
+    if [ $((now - last)) -lt "$REPAIR_COOLDOWN_S" ]; then
+      log "stack still unhealthy; last repair attempt $(( (now - last) / 60 ))m ago, waiting out the cooldown"
+      return 0
+    fi
+  fi
+
+  local repaired=false svc pkgdir gone
+  for entry in "backend:/app/packages/backend" "frontend:/app/packages/frontend" "mobile:/app/packages/mobile"; do
+    svc="${entry%%:*}"; pkgdir="${entry#*:}"
+    "${COMPOSE[@]}" ps --services 2>/dev/null | grep -qx "$svc" || continue
+    gone="$(missing_deps "$svc" "$pkgdir")"
+    [ -n "$gone" ] || continue
+    log "REPAIR: stack is unhealthy and $svc cannot see ($gone) — rebuilding it with a fresh node_modules"
+    echo "$now" > "$marker"
+    "${COMPOSE[@]}" build "$svc" >> "$LOG" 2>&1
+    "${COMPOSE[@]}" up -d --renew-anon-volumes "$svc" >> "$LOG" 2>&1
+    repaired=true
+  done
+
+  if ! $repaired; then
+    log "stack is unhealthy, but every container can see its declared dependencies — not a rebuild"
+    return 0
+  fi
+
+  for _ in $(seq 1 30); do
+    if curl -fsS -m 5 "$HEALTH_URL" >/dev/null 2>&1; then log "REPAIR: healthy again"; return 0; fi
+    sleep 4
+  done
+  log "REPAIR: still unhealthy two minutes after rebuilding — the cause is something else."
+}
+
 # Which of a package's declared dependencies are not actually present inside its container.
 #
 # Answers the question the deploy could not otherwise ask: "does what is installed match what the
@@ -165,7 +215,18 @@ git fetch -q origin "$BRANCH"
 
 LOCAL=$(git rev-parse HEAD)
 REMOTE=$(git rev-parse "origin/$BRANCH")
-[ "$LOCAL" = "$REMOTE" ] && exit 0
+if [ "$LOCAL" = "$REMOTE" ]; then
+  # Nothing new to deploy — but a stack that is ALREADY broken should not have to wait for
+  # somebody to push before anything looks at it.
+  #
+  # The dependency repair below used to sit after this line, so it only ever ran as part of a
+  # deploy. That left the exact case it was written for unreachable: a backend that will not start
+  # because its node_modules predates a library, on a box whose owner has no shell. The API was
+  # down, every request through the dev-server proxy answered 500, and the timer woke every two
+  # minutes, found no new commits, and went back to sleep.
+  repair_if_unhealthy
+  exit 0
+fi
 
 log "new commits on $BRANCH: ${LOCAL:0:8} -> ${REMOTE:0:8}"
 
