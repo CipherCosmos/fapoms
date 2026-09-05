@@ -42,6 +42,15 @@ export interface SessionView {
  * person recognises ("my old phone"), and revoking it must revoke exactly that session's tokens and
  * leave the others alone — which the pre-existing all-sessions logout could not do.
  */
+/**
+ * How often an in-use session records that it was seen. See `touchIntervalMs`.
+ *
+ * Not a platform setting: it is a correctness-constrained internal (it must stay below the idle
+ * window) whose only visible effect is how precise a minutes-scale timeout is, and a knob nobody
+ * can reason about is worse than a constant with the reasoning written down.
+ */
+const TOUCH_WRITE_INTERVAL_MS = 60_000;
+
 @Injectable()
 export class SessionService {
   private readonly logger = new Logger(SessionService.name);
@@ -112,19 +121,64 @@ export class SessionService {
    */
   async touchIfUsable(sessionId: string | undefined | null, idleMs: number): Promise<boolean> {
     if (!sessionId) return true;
-    const qb = this.sessions
-      .createQueryBuilder()
-      .update(UserSessionEntity)
-      .set({ lastSeenAt: () => 'now()' })
-      .where('id = :id', { id: sessionId })
-      .andWhere('revoked_at IS NULL')
-      .andWhere('expires_at > now()');
-    if (idleMs > 0) {
-      // Postgres interval arithmetic in ms, so the idle window is exact and set-side.
-      qb.andWhere('last_seen_at > now() - (:idleMs || \' milliseconds\')::interval', { idleMs: String(idleMs) });
-    }
-    const result = await qb.execute();
-    return (result.affected ?? 0) > 0;
+    /**
+     * The verdict every request needs, and a write only when the clock has actually moved.
+     *
+     * This was a plain UPDATE, so **every authenticated request committed a row**. Measured on the
+     * live database: 10,151 calls at a 3.63 ms mean — 36.8 seconds of database time, the single
+     * largest consumer in the system, and on the critical path of every request. The cost is not
+     * the plan: every other write in the same statistics view runs at 0.09–0.28 ms because it sits
+     * inside a transaction. This one paid a commit fsync of its own, per request
+     * (`synchronous_commit=on`, `fdatasync`), for a column whose only reader is a timeout measured
+     * in minutes.
+     *
+     * So the write now happens at most once per `touchIntervalMs` per session, while the verdict is
+     * still computed on every call. When the row is fresh the DML arm matches nothing, the
+     * statement is effectively read-only, and there is no commit to flush.
+     *
+     * One statement rather than a read followed by a conditional write, which keeps the property
+     * the original comment argued for: the same predicate that would refuse the request also
+     * guards the write, so a stale write still cannot revive an expired or revoked session.
+     */
+    const result: Array<{ usable: boolean }> = await this.sessions.query(
+      `WITH candidate AS (
+         SELECT id, last_seen_at,
+                (revoked_at IS NULL
+                 AND expires_at > now()
+                 AND ($2::bigint <= 0
+                      OR last_seen_at > now() - ($2::text || ' milliseconds')::interval)) AS usable
+           FROM user_sessions
+          WHERE id = $1::uuid
+       ),
+       touched AS (
+         UPDATE user_sessions s
+            SET last_seen_at = now()
+           FROM candidate c
+          WHERE s.id = c.id
+            AND c.usable
+            AND c.last_seen_at < now() - ($3::text || ' milliseconds')::interval
+          RETURNING 1
+       )
+       SELECT COALESCE((SELECT usable FROM candidate), false) AS usable`,
+      [sessionId, String(idleMs), String(this.touchIntervalMs(idleMs))],
+    );
+    return result[0]?.usable === true;
+  }
+
+  /**
+   * How stale `last_seen_at` may get before the next request writes it.
+   *
+   * A minute by default: the only thing that reads this column is the idle timeout, which is
+   * configured in minutes, so a minute of imprecision cannot change a decision.
+   *
+   * The `idleMs / 2` clamp is the part that matters. Without it, an idle window shorter than the
+   * write interval would let an *actively used* session go unwritten for longer than the window
+   * that judges it, and the next request would find `last_seen_at` outside the idle boundary and
+   * refuse a session that had been in continuous use. Halving guarantees at least one write inside
+   * every idle window.
+   */
+  private touchIntervalMs(idleMs: number): number {
+    return idleMs > 0 ? Math.min(TOUCH_WRITE_INTERVAL_MS, Math.floor(idleMs / 2)) : TOUCH_WRITE_INTERVAL_MS;
   }
 
   /**

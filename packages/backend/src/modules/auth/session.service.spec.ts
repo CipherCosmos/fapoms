@@ -89,45 +89,71 @@ describe('SessionService', () => {
   });
 
   /**
-   * The per-request gate. `touchIfUsable` is ONE atomic conditional UPDATE (not revoked, not past
-   * absolute expiry, not idle) that also moves last-seen forward: affected>0 means usable+touched,
-   * 0 means dead. `isUsable` is its read-only twin for the refresh path.
+   * The per-request gate, and the reason it stopped being a plain UPDATE.
+   *
+   * It ran on every authenticated request and committed a row every time. Measured on the live
+   * database: 10,151 calls at a 3.63 ms mean — 36.8 seconds, the largest single consumer of
+   * database time in the system. Not the plan: every other write in the same view runs at
+   * 0.09–0.28 ms because it sits inside a transaction; this one paid its own commit fsync, per
+   * request, for a column read only by a timeout measured in minutes.
+   *
+   * It is now one statement that always computes the verdict and only writes when the row has
+   * actually gone stale.
    */
-  describe('touchIfUsable — atomic per-request check + touch', () => {
-    const qbFor = (affected: number) => {
-      const qb: any = {};
-      for (const m of ['update', 'set', 'where', 'andWhere']) qb[m] = jest.fn(() => qb);
-      qb.execute = jest.fn(async () => ({ affected }));
-      return qb;
-    };
+  describe('touchIfUsable — verdict every time, write only when stale', () => {
+    const answering = (usable: boolean) => jest.fn(async () => [{ usable }]);
 
-    it('returns true and touches when the atomic update affects a row', async () => {
-      const qb = qbFor(1);
-      sessions.createQueryBuilder = jest.fn(() => qb);
+    it('returns true when the session is usable', async () => {
+      sessions.query = answering(true);
       await expect(service.touchIfUsable('sess-1', 60_000)).resolves.toBe(true);
-      // idle arm present when idleMs > 0
-      expect(qb.andWhere).toHaveBeenCalledWith(expect.stringContaining('last_seen_at'), expect.anything());
-      expect(qb.andWhere).toHaveBeenCalledWith(expect.stringContaining('expires_at'));
     });
 
-    it('returns false when the update affects no row (revoked / absolute-expired / idle)', async () => {
-      sessions.createQueryBuilder = jest.fn(() => qbFor(0));
+    it('returns false when it is revoked, absolutely expired, or idle', async () => {
+      sessions.query = answering(false);
       await expect(service.touchIfUsable('sess-1', 60_000)).resolves.toBe(false);
     });
 
-    it('omits the idle predicate when idleMs is 0 (idle disabled), still checks revoked + absolute', async () => {
-      const qb = qbFor(1);
-      sessions.createQueryBuilder = jest.fn(() => qb);
-      await service.touchIfUsable('sess-1', 0);
-      const idleCalls = qb.andWhere.mock.calls.filter((c: any[]) => String(c[0]).includes('last_seen_at'));
-      expect(idleCalls).toHaveLength(0);
-      expect(qb.andWhere).toHaveBeenCalledWith(expect.stringContaining('expires_at'));
+    it('returns false for a session id that does not exist', async () => {
+      // No row means no verdict, and the statement coalesces that to "not usable" rather than
+      // letting an unknown id through.
+      sessions.query = jest.fn(async () => [{ usable: false }]);
+      await expect(service.touchIfUsable('gone', 60_000)).resolves.toBe(false);
     });
 
-    it('a token with no sid is not gated (returns true, no query)', async () => {
-      sessions.createQueryBuilder = jest.fn();
+    it('still checks revoked and absolute expiry, and gates idle only when it is enabled', async () => {
+      sessions.query = answering(true);
+      await service.touchIfUsable('sess-1', 60_000);
+      const [sql, params] = sessions.query.mock.calls[0];
+      expect(sql).toMatch(/revoked_at IS NULL/);
+      expect(sql).toMatch(/expires_at > now\(\)/);
+      // The idle arm is inside the statement, disabled by passing 0 rather than by string surgery.
+      expect(sql).toMatch(/\$2::bigint <= 0/);
+      expect(params[1]).toBe('60000');
+    });
+
+    it('writes at most once a minute for a session in continuous use', async () => {
+      sessions.query = answering(true);
+      await service.touchIfUsable('sess-1', 0);
+      expect(sessions.query.mock.calls[0][1][2]).toBe('60000');
+    });
+
+    /**
+     * The clamp that keeps the saving from breaking the feature it saves on.
+     *
+     * With an idle window shorter than the write interval, an actively used session would go
+     * unwritten for longer than the window that judges it — and the next request would find
+     * `last_seen_at` outside the boundary and refuse a session that had been in continuous use.
+     */
+    it('never lets the write interval reach the idle window', async () => {
+      sessions.query = answering(true);
+      await service.touchIfUsable('sess-1', 40_000);
+      expect(sessions.query.mock.calls[0][1][2]).toBe('20000');
+    });
+
+    it('a token with no sid is not gated, and asks the database nothing', async () => {
+      sessions.query = jest.fn();
       await expect(service.touchIfUsable(undefined, 60_000)).resolves.toBe(true);
-      expect(sessions.createQueryBuilder).not.toHaveBeenCalled();
+      expect(sessions.query).not.toHaveBeenCalled();
     });
   });
 
