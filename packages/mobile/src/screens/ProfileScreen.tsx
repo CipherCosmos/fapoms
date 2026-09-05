@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, TextInput, TextStyle, Modal, Alert, Dimensions, ScrollView, ActivityIndicator } from 'react-native';
 import * as Location from 'expo-location';
+import { ProfilePhoto } from '../components/ProfilePhoto';
 import { useTheme, ThemePreference } from '../theme/ThemeProvider';
 import {
   AppText, Avatar, Badge, Button, Card, GroupedRow, GroupedSection, GroupedSwitch,
@@ -170,7 +171,6 @@ export interface ProfileDataState {
   locationNeedsConfirmation?: boolean;
 }
 
-interface ProfileScreenProps {
   /** Clarification counts for the Stats tab, derived from the assayer's live assignments. */
   openQueries?: number;
   resolvedQueries?: number;
@@ -1098,6 +1098,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   onLogout,
   onOpenFeedback,
   onOpenAvailability,
+  assayerId,
+  onCapturePhoto,
 }) => {
   const [changePasswordVisible, setChangePasswordVisible] = useState(false);
   const t = useTheme();
@@ -1288,7 +1290,24 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       */}
       <Card level={2} style={{ gap: t.space.lg }}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.lg }}>
-          <Avatar name={assayerName || tr('profile.identity.avatarFallback')} size={72} />
+          {/*
+            * Their own face, and the only place they can put one there.
+            *
+            * The record has always had somewhere to keep a photograph and the web has always drawn
+            * it — but 0 of 1,163 people had one, because the sole route to it was an onboarding
+            * checklist that is unmounted the moment somebody becomes active. Here it is reachable
+            * for the whole of their time on the roster.
+            */}
+          {assayerId && onCapturePhoto ? (
+            <ProfilePhoto
+              assayerId={assayerId}
+              name={assayerName || tr('profile.identity.avatarFallback')}
+              onCapture={onCapturePhoto}
+              size={72}
+            />
+          ) : (
+            <Avatar name={assayerName || tr('profile.identity.avatarFallback')} size={72} />
+          )}
           <View style={{ flex: 1, minWidth: 0, gap: 6 }}>
             {/* Large-title weight, not h1 — Apple's Settings/Contacts headers show your name at
                 the same scale as a screen's own title, not as a subordinate label under the

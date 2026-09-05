@@ -155,10 +155,32 @@ export const en = {
     photosReceived: '%{count} photos received',
     haveThis: 'We have this.',
     state: {
+      verified: 'Checked',
       received: 'Done',
+      rejected: 'Sent back',
       sending: 'Sending',
       failed: 'Did not send',
       needed: 'Needed',
+    },
+    checkedAgainstOriginal: 'Checked against the original. Nothing more needed.',
+    takeItAgain: 'Take it again',
+    /**
+     * What to DO, not what was wrong.
+     *
+     * The person reading this is holding the card, not grading it. "Too blurred" is a verdict;
+     * "take it again in better light, holding the phone steady" is something they can act on
+     * without having to work out what is being asked of them.
+     */
+    rejected: {
+      ILLEGIBLE: 'The photo was too blurred or too dark to read. Please take it again in better light, holding the phone steady.',
+      INCOMPLETE_CAPTURE: 'Part of the document was cut off. Please take it again with all four corners inside the frame.',
+      WRONG_DOCUMENT: 'This was a different document from the one asked for. Please check which one is needed and send that.',
+      NAME_MISMATCH: 'The name on this document does not match the name on your record. Please send the correct document, or contact your HR desk if your name is recorded wrongly.',
+      NUMBER_MISMATCH: 'The number on this document does not match the one on your record. Please contact your HR desk.',
+      EXPIRED: 'This document has expired. Please send a current one.',
+      NOT_THE_PERSON: 'This document does not appear to belong to you. Please send your own.',
+      ALTERED_OR_SUSPECT: 'We could not accept this document. Please contact your HR desk.',
+      GENERIC: 'The office could not accept this. Please take a clear photo of the whole document and send it again.',
     },
     home: {
       title: 'Where you live',
@@ -250,6 +272,13 @@ export const en = {
   },
 
   profile: {
+    photo: {
+      label: 'Photograph',
+      add: 'Add your photo',
+      change: 'Change your photo',
+      addHint: 'Tap to add your photo. Branches use it to know who has arrived.',
+      changeHint: 'Tap to change your photo.',
+    },
     status: { active: 'ACTIVE', incomplete: 'INCOMPLETE' },
     employment: { inHouse: 'In-house', contract: 'Contract' },
     editing: { edit: 'Edit', done: 'Done editing' },

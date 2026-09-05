@@ -202,3 +202,69 @@ describe('what the home banner is told', () => {
     });
   });
 });
+
+/**
+ * A rejection the person can actually see, and the ordering that makes it usable.
+ *
+ * This checklist returned RECEIVED on `hasScan` alone, so a refused Aadhaar read "Received ✓" on
+ * the appraiser's phone for ever while the desk waited for a replacement nobody had asked them
+ * for. The whole verdict was already in the payload and simply never read.
+ */
+describe('a scan the office sent back', () => {
+  const REJECTED_AT = '2026-09-01T09:00:00.000Z';
+  const rejected = (over = {}) => item({
+    hasScan: true, fileCount: 1, verificationStatus: 'REJECTED',
+    rejectionReason: 'ILLEGIBLE', rejectedAt: REJECTED_AT, ...over,
+  });
+
+  it('says it was sent back, rather than that it was received', () => {
+    expect(rowStateFor(rejected(), undefined)).toBe('REJECTED');
+  });
+
+  /**
+   * The ordering that matters. Somebody whose card was refused photographs it again immediately,
+   * and the checklist in front of them still carries the rejection because it was fetched before
+   * the retake existed. Reading the server first tells them it was refused while the replacement
+   * is in their own outbox — and the obvious response to that is to send it a third time.
+   */
+  it('shows the replacement already going, not the verdict that asked for it', () => {
+    const retake = upload({ createdAt: '2026-09-01T09:05:00.000Z', status: 'PENDING' });
+    expect(rowStateFor(rejected(), retake)).toBe('SENDING');
+  });
+
+  it('still says sent back when the only upload predates the rejection', () => {
+    // The upload that WAS refused. It is not a replacement, and treating it as one would hide the
+    // rejection behind the very file that caused it.
+    const original = upload({ createdAt: '2026-09-01T08:00:00.000Z', status: 'SENT' });
+    expect(rowStateFor(rejected(), original)).toBe('REJECTED');
+  });
+
+  it('reports a failed replacement as failed, so they know to try again', () => {
+    const retake = upload({ createdAt: '2026-09-01T09:05:00.000Z', status: 'FAILED' });
+    expect(rowStateFor(rejected(), retake)).toBe('FAILED');
+  });
+
+  it('counts a sent-back document as still outstanding on the home banner', () => {
+    // A file that was refused is not a file the office has. Counting it as done would leave the
+    // banner reading "complete" over a document somebody is waiting for.
+    const rows = buildChecklistRows([rejected()], []);
+    expect(checklistProgress(rows).outstanding).toBe(1);
+  });
+});
+
+/**
+ * Checked is not the same as received, and saying so is the difference between "we have your
+ * photograph" and "you are done".
+ */
+describe('a scan the office has checked', () => {
+  it('says it was checked against the original', () => {
+    expect(rowStateFor(item({ hasScan: true, fileCount: 1, verificationStatus: 'VERIFIED' }), undefined))
+      .toBe('VERIFIED');
+  });
+
+  it('does not claim a check when no scan is on file', () => {
+    // A verdict with no file behind it is the shape of the 11,160 rows the roster import wrote.
+    expect(rowStateFor(item({ hasScan: false, verificationStatus: 'VERIFIED' }), undefined))
+      .toBe('NEEDED');
+  });
+});

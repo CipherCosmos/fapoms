@@ -926,6 +926,8 @@ function AppMain() {
         */}
         {selectedTab === 'MY_PROFILE' && (
           <ProfileScreen
+            assayerId={user?.id ?? ''}
+            onCapturePhoto={captureRegistrationDocument}
             assayerName={assayerName}
             assayerCode={user?.assayerCode || profile.assayerCode}
             profile={profile}

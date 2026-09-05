@@ -250,6 +250,7 @@ describe('attesting to what the document says', () => {
       update: jest.fn(),
     };
     svc.auditService = { recordEventSafe: jest.fn() };
+    svc.notifications = { emitSafe: jest.fn() };
     return svc;
   };
 
@@ -297,6 +298,28 @@ describe('attesting to what the document says', () => {
       attest({ nameMismatchNote: 'Married name; deed poll on file with HR.' }));
     expect(saved.nameMatchGrade).toBe('MISMATCH');
     expect(saved.nameMatchNote).toMatch(/deed poll/);
+  });
+
+  /**
+   * A rejection only the office can see is a queue of one: the appraiser carries on believing their
+   * paperwork is in, and the desk waits for a replacement nobody has asked for.
+   */
+  it('tells the person whose document it is, in words they can act on', async () => {
+    const svc = svcFor(docRow());
+    await svc.verifyDocument('doc-1', 'REJECTED', 'actor-1', undefined, { rejectionReason: 'ILLEGIBLE' });
+
+    expect(svc.notifications.emitSafe).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'ASSAYER_IDENTITY_DOCUMENT_REJECTED',
+      assayerId: 'asr-1',
+      // What to DO, not what was wrong — the person is holding the card, not grading it.
+      payload: expect.objectContaining({ guidance: expect.stringMatching(/take it again in better light/i) }),
+    }));
+  });
+
+  it('says nothing when a document is accepted, because that is noise', async () => {
+    const svc = svcFor(docRow());
+    await svc.verifyDocument('doc-1', 'VERIFIED', 'actor-1', undefined, attest());
+    expect(svc.notifications.emitSafe).not.toHaveBeenCalled();
   });
 
   it('refuses a rejection that does not say why', async () => {

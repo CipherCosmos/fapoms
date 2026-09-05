@@ -182,7 +182,10 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     special: ['ASSIGNED_ASSAYER'],
     channels: BOTH_CHANNELS,
     title: 'Assignment confirmed',
-    body: '${branchName} on ${scheduledDate} is confirmed for ${assayerName} at ₹${agreedFee}, agreed by phone. No acceptance needed.',
+    // No ₹ in the body: the assayer sees no money in the app until the invoicing step, and a
+    // push on a lock screen is the least private surface of all. The desk's agreed figure is
+    // still on the ops record; this sentence only has to say the commitment exists.
+    body: '${branchName} on ${scheduledDate} is confirmed for ${assayerName}, agreed by phone. No acceptance needed.',
     link: '/assignments?id=${assignmentId}',
     skipActor: true,
     // Reached by the same bulk-assign path as ASSIGNMENT_OFFERED, so it bursts the same way.
@@ -234,23 +237,9 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     link: '/assignments?id=${assignmentId}',
     skipActor: true,
   },
-  /**
-   * The assayer wants a different fee — ops has to answer before the branch stalls.
-   *
-   * Also to ADMINS, same reasoning as ASSIGNMENT_REJECTED just above: an OPS-only audience
-   * resolves to zero recipients wherever no OPERATIONS_MANAGER/EXECUTIVE is active, which
-   * silently drops the one notification a negotiation actually depends on.
-   */
-  ASSIGNMENT_COUNTER_OFFERED: {
-    category: NotificationCategory.ASSIGNMENT,
-    priority: NotificationPriority.HIGH,
-    roles: [...OPS, ...ADMINS],
-    channels: BOTH_CHANNELS,
-    title: 'Counter-offer received',
-    body: '${assayerName} proposed ₹${proposedFee} for ${branchName}. Reason: ${reason}',
-    link: '/assignments?id=${assignmentId}',
-    skipActor: true,
-  },
+  // ASSIGNMENT_COUNTER_OFFERED lived here until in-app fee negotiation was removed: the
+  // assayer no longer sees or proposes fees, so there is no counter-offer left to announce.
+  // Fee questions are settled by phone; the desk records the outcome via acceptOnBehalf.
   /**
    * The SLA clock ran out. This was written to the audit log and nowhere else, so the
    * one event whose entire purpose is to provoke a human response provoked none.
@@ -612,6 +601,9 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
    * decision but said nothing when their actual fee was approved or paid — the two
    * events they most want to hear and cannot poll for.
    */
+  // Both payable bodies below carry NO ₹: the assayer's app is money-blind until the invoicing
+  // step, and a lock-screen push is the least private surface there is. The amounts are one tap
+  // away inside the app's (gated) earnings view, where they belong.
   PAYABLE_APPROVED: {
     category: NotificationCategory.BILLING,
     priority: NotificationPriority.NORMAL,
@@ -619,7 +611,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     special: ['ASSIGNED_ASSAYER'],
     channels: BOTH_CHANNELS,
     title: 'Payment approved',
-    body: 'Your ₹${amount} payment for ${branchName} has been approved.',
+    body: 'Your payment for ${branchName} has been approved.',
     link: '/earnings',
     skipActor: true,
   },
@@ -630,7 +622,47 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     special: ['ASSIGNED_ASSAYER'],
     channels: BOTH_CHANNELS,
     title: 'Payment sent',
-    body: '₹${amount} for ${branchName} has been paid. Reference: ${paymentReference}',
+    body: 'Your payment for ${branchName} has been sent. Reference: ${paymentReference}',
+    link: '/earnings',
+    skipActor: true,
+  },
+
+  // ── Assayer invoicing ───────────────────────────────────────────────────
+  //
+  // The one place an assayer is ever shown money is the in-app invoice review, so none of
+  // these three bodies may name an amount. The INVITED push is the doorbell — the reveal
+  // happens after they open the app, behind their own sign-in, not on a lock screen.
+  ASSAYER_INVOICE_INVITED: {
+    category: NotificationCategory.BILLING,
+    priority: NotificationPriority.HIGH,
+    roles: [],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'Ready to invoice',
+    body: 'You have ${count} completed audits ready to invoice. Review and submit in the app.',
+    link: '/earnings',
+    skipActor: true,
+  },
+  ASSAYER_INVOICE_SUBMITTED: {
+    category: NotificationCategory.BILLING,
+    priority: NotificationPriority.NORMAL,
+    // Ops bodies may carry ₹ (staff screens show money everywhere); ADMINS fallback for the
+    // same zero-recipient reason ASSIGNMENT_REJECTED documents.
+    roles: [...OPS, ...ADMINS],
+    channels: IN_APP,
+    title: 'Assayer invoice submitted',
+    body: '${assayerName} submitted invoice ${invoiceNumber}: ${count} lines, ₹${total}. Review and approve.',
+    link: '/billing?tab=assayer-invoices',
+    skipActor: true,
+  },
+  ASSAYER_INVOICE_APPROVED: {
+    category: NotificationCategory.BILLING,
+    priority: NotificationPriority.HIGH,
+    roles: [],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'Invoice approved',
+    body: 'Your invoice ${invoiceNumber} (${count} audits) has been approved. Your earnings are updated in the app.',
     link: '/earnings',
     skipActor: true,
   },
@@ -728,6 +760,31 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     body: "${assayerName}'s ${certificationName} certification expires on ${expiryDate}. Once it lapses they cannot be assigned to work that requires it, so please start the renewal.",
     link: '/hr',
   },
+  /**
+   * The office could not accept a document, and the person who sent it needs to know.
+   *
+   * Named for the identity document rather than just DOCUMENT_REJECTED, which already exists on
+   * this catalogue for the audit-packet pipeline and is a different resource entirely.
+   *
+   * Addressed to nobody in the office: `roles: []`. Every other workforce notification goes to the
+   * desk, and this one goes the other way — it is the only thing in the system that asks an
+   * appraiser to do something about their own paperwork. There is no `link`, because the web route
+   * table governs staff routes and the app routes off the type.
+   *
+   * Worth saying plainly: push is dead in production behind a placeholder `google-services.json`,
+   * so the in-app bell and the checklist row are the channel that actually works today. That is
+   * why the checklist row carries the whole message on its own rather than relying on this.
+   */
+  ASSAYER_IDENTITY_DOCUMENT_REJECTED: {
+    category: NotificationCategory.WORKFORCE,
+    priority: NotificationPriority.HIGH,
+    roles: [],
+    special: ['ASSIGNED_ASSAYER'],
+    channels: BOTH_CHANNELS,
+    title: 'Please send ${documentName} again',
+    body: '${guidance}',
+    skipActor: true,
+  },
   ASSAYER_ONBOARDED: {
     category: NotificationCategory.WORKFORCE,
     priority: NotificationPriority.LOW,
@@ -758,12 +815,17 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
   // new items and reporter replies; the reporter hears about team replies and status changes. RECORD_OWNER carries a
   // user reporter/assignee, ASSIGNED_ASSAYER carries a field-assayer reporter —
   // only the id that was set on the emit resolves.
+  //
+  // User-facing name is "Support" / "Help & Support" — the `title` copy below says so. The
+  // event keys, the NotificationCategory.FEEDBACK value and the /feedback link all keep the
+  // historical name on purpose (see feedback.service.ts for the full note); only the strings a
+  // person reads have changed.
   FEEDBACK_SUBMITTED: {
     category: NotificationCategory.FEEDBACK,
     priority: NotificationPriority.NORMAL,
     roles: [...FEEDBACK_TEAM_ROLE_NAMES],
     channels: IN_APP,
-    title: 'New feedback',
+    title: 'New support request',
     body: '${reporterName} reported a ${category}: "${title}".',
     link: '/feedback?id=${threadId}',
     skipActor: true,
@@ -774,7 +836,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     roles: [],
     special: ['RECORD_OWNER', 'ASSIGNED_ASSAYER'],
     channels: IN_APP,
-    title: 'Reply on your feedback',
+    title: 'Reply on your support request',
     body: 'The product team replied on "${title}".',
     link: '/feedback?id=${threadId}',
     skipActor: true,
@@ -785,7 +847,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     roles: [...FEEDBACK_TEAM_ROLE_NAMES],
     special: ['RECORD_OWNER'],
     channels: IN_APP,
-    title: 'New reply on feedback',
+    title: 'New reply on a support request',
     body: '${reporterName} replied on "${title}".',
     link: '/feedback?id=${threadId}',
     skipActor: true,
@@ -796,8 +858,8 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     roles: [],
     special: ['RECORD_OWNER', 'ASSIGNED_ASSAYER'],
     channels: IN_APP,
-    title: 'Feedback updated',
-    body: 'Your feedback "${title}" is now ${status}.',
+    title: 'Support request updated',
+    body: 'Your support request "${title}" is now ${status}.',
     link: '/feedback?id=${threadId}',
     skipActor: true,
   },
@@ -807,7 +869,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     roles: [],
     special: ['RECORD_OWNER'],
     channels: IN_APP,
-    title: 'Feedback assigned to you',
+    title: 'Support request assigned to you',
     body: 'You now own "${title}" (${category}).',
     link: '/feedback?id=${threadId}',
     skipActor: true,
@@ -819,7 +881,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     priority: NotificationPriority.HIGH,
     roles: [...FEEDBACK_TEAM_ROLE_NAMES],
     channels: IN_APP_AND_EMAIL,
-    title: 'Feedback awaiting first response',
+    title: 'Support request awaiting first response',
     body: '"${title}" has waited ${hours}h with no reply from the team.',
     link: '/feedback?id=${threadId}',
   },
@@ -829,7 +891,7 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     roles: [...FEEDBACK_TEAM_ROLE_NAMES],
     special: ['RECORD_OWNER'],
     channels: IN_APP_AND_EMAIL,
-    title: 'Feedback past its resolution SLA',
+    title: 'Support request past its resolution SLA',
     body: '${severity} item "${title}" has been open ${hours}h, past its resolution target.',
     link: '/feedback?id=${threadId}',
   },

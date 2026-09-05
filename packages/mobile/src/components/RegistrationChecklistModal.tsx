@@ -36,7 +36,9 @@ interface RegistrationChecklistModalProps {
  * where a translated string would freeze at whatever locale happened to be active at import.
  */
 const ROW_STATE: Record<ChecklistRowState, { labelKey: TranslationKey; tone: 'success' | 'info' | 'warning' | 'danger'; icon: string }> = {
+  VERIFIED: { labelKey: 'registration.state.verified', tone: 'success', icon: 'shield-checkmark' },
   RECEIVED: { labelKey: 'registration.state.received', tone: 'success', icon: 'checkmark-circle' },
+  REJECTED: { labelKey: 'registration.state.rejected', tone: 'danger', icon: 'close-circle-outline' },
   SENDING: { labelKey: 'registration.state.sending', tone: 'info', icon: 'cloud-upload-outline' },
   FAILED: { labelKey: 'registration.state.failed', tone: 'danger', icon: 'alert-circle-outline' },
   NEEDED: { labelKey: 'registration.state.needed', tone: 'warning', icon: 'ellipse-outline' },
@@ -50,7 +52,7 @@ const DocumentRow: React.FC<{
   const t = useTheme();
   const tr = useT();
   const s = ROW_STATE[row.state];
-  const done = row.state === 'RECEIVED';
+  const done = row.state === 'RECEIVED' || row.state === 'VERIFIED';
 
   return (
     <Card level={1} style={{ gap: t.space.sm }}>
@@ -84,6 +86,28 @@ const DocumentRow: React.FC<{
         <AppText variant="caption" tone="faint">
           {row.fileCount > 1 ? tr('registration.photosReceived', { count: row.fileCount }) : tr('registration.haveThis')}
         </AppText>
+      )}
+      {row.state === 'VERIFIED' && (
+        <AppText variant="caption" tone="faint">{tr('registration.checkedAgainstOriginal')}</AppText>
+      )}
+
+      {/*
+        * The one row that asks for something back, and the reason it asks.
+        *
+        * A bare "sent back" is a dead end: the commonest reasons are a dark photograph and a cut-off
+        * corner, and somebody who is not told which will send the same picture again. The guidance
+        * sentence says what to do rather than what was wrong — "photograph it again in better light"
+        * instead of "too blurred" — because the person is holding the card, not grading it.
+        */}
+      {row.state === 'REJECTED' && (
+        <>
+          <AppText variant="caption" tone="danger">
+            {row.rejectionReason
+              ? tr(`registration.rejected.${row.rejectionReason}` as TranslationKey)
+              : tr('registration.rejected.GENERIC')}
+          </AppText>
+          <Button label={tr('registration.takeItAgain')} icon="camera-outline" onPress={() => onTake(row)} full />
+        </>
       )}
     </Card>
   );

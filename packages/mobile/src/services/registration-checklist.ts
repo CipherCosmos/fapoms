@@ -19,12 +19,23 @@ import type { TranslationKey } from '../i18n/i18n';
 
 /** Where one requirement has got to, once both sources are taken into account. */
 export type ChecklistRowState =
+  /** Checked against the original by the office. Finished, and worth saying so. */
+  | 'VERIFIED'
   /** The office has the scan. Nothing more to do. */
   | 'RECEIVED'
   /** Captured on this phone and on its way, or waiting for signal. */
   | 'SENDING'
   /** Captured, tried, and did not arrive. The one state that needs the person to act. */
   | 'FAILED'
+  /**
+   * The office looked at it and could not accept it.
+   *
+   * The state this checklist could not previously express, which is why it existed for months
+   * without anybody being able to use it: the row returned RECEIVED on `hasScan` alone, so a
+   * refused Aadhaar read "Received ✓" on the appraiser's phone for ever while the desk waited for
+   * a replacement that the person had no idea was wanted.
+   */
+  | 'REJECTED'
   /** Nothing has been sent. */
   | 'NEEDED';
 
@@ -91,10 +102,34 @@ function inFlightByRequirement(uploads: OutboxUpload[]): Map<string, OutboxUploa
 }
 
 export function rowStateFor(item: RegistrationChecklistItem, pending: OutboxUpload | undefined): ChecklistRowState {
-  // The server's word is final and beats anything local: `hasScan` means a file is genuinely
-  // attached to the HR record, which is the only definition of "received" this feature has.
-  if (item.hasScan) return 'RECEIVED';
-  if (!pending) return 'NEEDED';
+  /**
+   * A replacement already on its way outranks the verdict that asked for it.
+   *
+   * This is the ordering that matters and the one that is easy to get wrong. Somebody whose card
+   * was refused photographs it again immediately; the checklist they are looking at still carries
+   * the rejection, because it was fetched before the retake existed. Reading the server first
+   * would tell them their document was refused while the replacement was in their own outbox, and
+   * the obvious response to that is to send it a third time.
+   */
+  const retakenSinceRejection = Boolean(
+    pending && item.rejectedAt && pending.createdAt.localeCompare(item.rejectedAt) > 0,
+  );
+
+  if (item.verificationStatus === 'REJECTED' && !retakenSinceRejection) return 'REJECTED';
+
+  /**
+   * Verified beats received, and both beat the outbox.
+   *
+   * `hasScan` used to be the first thing tested, and it short-circuited everything: it is the only
+   * definition of "received" this feature has, but it says nothing about whether anybody looked at
+   * the scan afterwards. A document that has been checked against its original is finished in a
+   * way that "we have your photograph" is not, and a document that was refused is not finished at
+   * all — neither could be said while `hasScan` answered first.
+   */
+  if (item.verificationStatus === 'VERIFIED' && item.hasScan) return 'VERIFIED';
+  if (item.hasScan && !retakenSinceRejection) return 'RECEIVED';
+  if (!pending) return item.hasScan ? 'RECEIVED' : 'NEEDED';
+
   switch (pending.status) {
     // Accepted by the server but this checklist was fetched before that happened. Showing
     // "still needed" here would tell somebody their upload had failed when it had just worked.
@@ -137,8 +172,16 @@ export function checklistProgress(rows: ChecklistRow[]): {
   const required = rows.filter((r) => !r.optional);
   return {
     required: required.length,
-    done: required.filter((r) => r.state === 'RECEIVED').length,
-    outstanding: required.filter((r) => r.state === 'NEEDED').length,
+    // Checked counts as done as surely as received does — more so.
+    done: required.filter((r) => r.state === 'RECEIVED' || r.state === 'VERIFIED').length,
+    /**
+     * A document that was sent back is outstanding, not finished.
+     *
+     * It has a file, so a count keyed on "has a scan" reads it as done — which would leave the
+     * home banner saying the file is complete over a document the office is actively waiting for,
+     * and the person would never open the checklist to find out.
+     */
+    outstanding: required.filter((r) => r.state === 'NEEDED' || r.state === 'REJECTED').length,
     failed: rows.filter((r) => r.state === 'FAILED').length,
   };
 }

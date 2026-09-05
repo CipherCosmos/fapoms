@@ -33,6 +33,7 @@ import {
   OnboardingDocument,
   ONBOARDING_DOCUMENT_LABELS,
   isIdentityDocument,
+  DocumentVerification,
 } from '@fapoms/shared';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, OnboardingAllowed } from '../auth/guards';
 import { assertSelfOrPrivileged } from './assayer-visibility';
@@ -147,6 +148,18 @@ export class AssayerSelfServiceController {
         // their own PAN, but a checklist has no use for it, and a payload that never carries it
         // cannot leak it through a log, a crash report or a cached response on a shared handset.
         hasNumber: Boolean(row?.documentNumber),
+        /**
+         * Why a scan was sent back, and when.
+         *
+         * The enum, never a sentence: this app is bilingual and the wording belongs in its own
+         * catalogue, the same rule `server-errors.ts` already applies. `rejectedAt` is here so the
+         * client can tell a stale verdict from a live one — somebody who has just re-photographed
+         * a refused card must not still be told it was refused while their upload is in flight.
+         */
+        rejectionReason: row?.rejectionReason ?? null,
+        rejectedAt: row?.verificationStatus === DocumentVerification.REJECTED
+          ? (row?.verifiedAt ?? null)
+          : null,
       };
     };
 

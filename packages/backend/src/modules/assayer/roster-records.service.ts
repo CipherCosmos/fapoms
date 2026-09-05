@@ -5,6 +5,7 @@ import {
   EmpanelmentStatus, BackgroundCheckVerdict, RiskGrade, CibilBand, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, DocumentVerification, isIdentityDocument, maskTail, looksMasked, isValidPan, isValidAadhaar, isPlaceholderAadhaar,
   DocumentRejectionReason, DOCUMENT_PRINTED_FIELDS, PRINTED_FIELD_LABELS,
   DOCUMENTS_PRINTING_A_NAME, IDENTITY_NAME_PRECEDENCE, IDENTITY_GATE_DOCUMENTS,
+  DOCUMENT_REJECTION_GUIDANCE,
   compareNames, type NameMatchGrade,
 } from '@fapoms/shared';
 import { AssayerEntity } from './assayer.entity';
@@ -15,6 +16,7 @@ import { AssayerDocumentEntity } from './assayer-document.entity';
 import { AssayerImportIssueEntity } from './assayer-import-issue.entity';
 import { ASSAYER_ERROR_CODES, EventCategory } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
+import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { AuditService } from '../../core/audit/audit.service';
 
 /**
@@ -73,6 +75,11 @@ export class RosterRecordsService {
     // TypeScript — `@Optional()` is what stops Nest throwing when no provider is registered.
     // Every call site guards with `?.`.
     @Optional() private readonly auditService?: AuditService,
+    /**
+     * Optional for the same reason the audit collaborator is: specs build this service directly,
+     * and a document that cannot be announced must still be able to be rejected.
+     */
+    @Optional() private readonly notifications?: NotificationDispatchService,
   ) {}
 
   /** Everything the roster knows about one person beyond their own row, in one round trip. */
@@ -870,6 +877,37 @@ export class RosterRecordsService {
     // The name of record follows the documents, so it has to be re-derived whenever one of them
     // changes verdict — in either direction.
     await this.deriveLegalName(row.assayerId, actorId);
+
+    /**
+     * Tell the person whose document it is.
+     *
+     * A rejection that only the office can see is a queue of one: the appraiser carries on
+     * believing their paperwork is in, and the desk waits for a replacement nobody has asked for.
+     * The body is the guidance sentence — what to DO — rather than the reviewer's label, which
+     * states a finding: "photograph it again in better light" instead of "too blurred".
+     *
+     * Nothing on a VERIFIED verdict. Telling somebody their PAN was accepted is noise, and a
+     * channel that carries noise stops being read before it carries something that matters.
+     */
+    if (verdict === DocumentVerification.REJECTED) {
+      const reason = attested?.rejectionReason;
+      this.notifications?.emitSafe({
+        type: 'ASSAYER_IDENTITY_DOCUMENT_REJECTED',
+        entityType: 'ASSAYER',
+        entityId: saved.assayerId,
+        actorUserId: actorId,
+        assayerId: saved.assayerId,
+        // Keyed on the verdict's moment, so a second rejection of a replacement is its own message
+        // rather than being swallowed as a duplicate of the first.
+        dedupeKey: `IDENTITY_REJECTED:${saved.id}:${saved.verifiedAt?.toISOString() ?? ''}`,
+        payload: {
+          documentName: ONBOARDING_DOCUMENT_LABELS[saved.requirement],
+          guidance: reason
+            ? DOCUMENT_REJECTION_GUIDANCE[reason]
+            : 'The office could not accept this. Please take a clear photo of the whole document and send it again.',
+        },
+      });
+    }
     // Verify/reject/reset (PENDING is a reset) on an identity document had no trail — the only
     // evidence was the row's current state, with no record of who checked it or when it changed.
     await this.auditService?.recordEventSafe({

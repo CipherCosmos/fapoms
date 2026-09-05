@@ -44,6 +44,16 @@ export interface RegistrationChecklistItem {
   hasScan: boolean;
   fileCount: number;
   verificationStatus: 'PENDING' | 'VERIFIED' | 'REJECTED' | null;
+  /**
+   * Why the office could not accept the scan, as a key rather than a sentence.
+   *
+   * The app is bilingual, so the wording lives in the catalogue next to everything else a person
+   * reads. `rejectedAt` is what lets the checklist tell a live verdict from a stale one: somebody
+   * who has just re-photographed a refused card must not still be told it was refused while their
+   * replacement is sitting in the outbox.
+   */
+  rejectionReason?: string | null;
+  rejectedAt?: string | null;
   expiryDate: string | null;
   hasNumber: boolean;
 }
@@ -838,6 +848,30 @@ export class MobileApiService {
    * What IS specific to this route: it is the one an assayer reaches from the home screen when
    * the server flags their coordinate, taking the fix straight from device GPS.
    */
+  /**
+   * The appraiser's own photograph, as a data URI ready for `<Image>`.
+   *
+   * Fetched rather than linked: the route needs an Authorization header and deliberately never
+   * issues a signed URL, because a signed URL is a bearer credential for that image that survives
+   * being pasted anywhere. A 404 is the ordinary answer — most records have no photograph — so it
+   * returns null rather than throwing, and the caller draws initials instead.
+   */
+  static async fetchAssayerPhoto(assayerId: string): Promise<string | null> {
+    try {
+      const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/${assayerId}/photo`);
+      if (!response.ok) return null;
+      const blob = await response.blob();
+      return await new Promise<string | null>((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+        reader.onerror = () => resolve(null);
+        reader.readAsDataURL(blob);
+      });
+    } catch {
+      return null;
+    }
+  }
+
   static async confirmBaseLocation(
     assayerId: string,
     latitude: number,
