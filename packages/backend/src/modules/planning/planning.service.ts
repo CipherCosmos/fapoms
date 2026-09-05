@@ -71,6 +71,8 @@ export interface AssayerRecommendation {
    * the operator discovering it in a refusal.
    */
   exceedsClientRange?: number | null;
+  /** The client standing this candidate was let through on, when the operator relaxed that rule. */
+  clientStandingIssue?: string | null;
   /**
    * What staff have said about this person, exactly as the `remarksScore` dimension read it:
    * how many rated remarks in the last year, their recency-weighted mean (−2…+2), and the most
@@ -174,7 +176,14 @@ export class PlanningService {
      * row as `dateConflict`. Ops asked for it because the first question they ask a branch is
      * "who could cover this at all", which the date filter answers too narrowly.
      */
-    options?: { relaxAvailability?: boolean; searchRadiusKm?: number },
+    options?: {
+      relaxAvailability?: boolean;
+      searchRadiusKm?: number;
+      /** Rank people the client has not empanelled, tagged rather than hidden. */
+      relaxClientEligibility?: boolean;
+      /** Search the whole workforce instead of a disc around the branch. */
+      relaxDistancePrefilter?: boolean;
+    },
   ): Promise<AssayerRecommendation[]> {
     const branch = await this.branchQueryService.findOne(branchId);
 
@@ -287,6 +296,7 @@ export class PlanningService {
         // planned date. Null/absent means genuinely free.
         dateConflict: r.dateConflict ?? null,
         exceedsClientRange: (r as any).exceedsClientRange ?? null,
+        clientStandingIssue: (r as any).clientStandingIssue ?? null,
         remarkSummary: r.remarkSummary,
       });
     }

@@ -425,6 +425,28 @@ export class PlanningController {
      * draws inside the operator's radius are the same ones the engine actually considers.
      */
     @Query('radiusKm') radiusKm?: string,
+    /**
+     * Rank people the client has not empanelled, instead of excluding them.
+     *
+     * The standing is still computed and still travels back on the candidate
+     * (`clientStandingIssue`), and `AssignmentService` still refuses to create the assignment
+     * without a stated reason — this changes what the operator can SEE, not what they may do
+     * unrecorded. It exists because on this estate a compliance-strict list is frequently an
+     * empty one: more than half the active workforce has no Active or Recommended standing
+     * recorded with any client, and an empty candidate list gets worked around outside the
+     * system rather than inside it.
+     */
+    @Query('ignoreClientPolicy') ignoreClientPolicy?: string,
+    /**
+     * Search the whole workforce rather than a disc around the branch.
+     *
+     * Turns off the distance PRE-FILTER, which is the only distance rule that removes somebody
+     * without producing a reason — it runs before every filter, so anyone it drops is simply
+     * absent from both lists. The client's conflict-of-interest floor is untouched and always
+     * will be: relaxing it here would only put candidates on screen that the write path refuses
+     * outright, which is the dead end this whole area was just fixed to remove.
+     */
+    @Query('ignoreDistancePolicy') ignoreDistancePolicy?: string,
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     // Ranked candidate assayers for an arbitrary branch id — the same data the scoped
@@ -434,6 +456,8 @@ export class PlanningController {
     const recommendations = await this.planningService.getRecommendedCandidates(branchId, {}, date, {
       relaxAvailability: includeUnavailable === 'true' || includeUnavailable === '1',
       searchRadiusKm: Number.isFinite(parsedRadius) && parsedRadius > 0 ? parsedRadius : undefined,
+      relaxClientEligibility: ignoreClientPolicy === 'true' || ignoreClientPolicy === '1',
+      relaxDistancePrefilter: ignoreDistancePolicy === 'true' || ignoreDistancePolicy === '1',
     });
     return {
       success: true,

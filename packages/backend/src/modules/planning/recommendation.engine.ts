@@ -100,6 +100,28 @@ export interface PlanningContext {
    */
   relaxAvailability?: boolean;
   /**
+   * Rank people the client has not empanelled, instead of excluding them.
+   *
+   * The standing rule stays a fact about the person — it is still computed, still shown on the
+   * card, and still needs a stated reason to assign — but it stops emptying the list. Ops asked
+   * for this because on most branches it is the only thing standing between them and a plan:
+   * more than half of the active workforce has no Active or Recommended standing recorded with
+   * any client, so a compliance-strict list is frequently an empty one, and an empty list is
+   * worked around outside the system rather than inside it.
+   *
+   * Deliberately NOT the same as ignoring the rule: `AssignmentService` still refuses to create
+   * the assignment without a reason, and records the waiver against it.
+   */
+  relaxClientEligibility?: boolean;
+  /**
+   * Stop the distance pre-filter removing people before any rule has run.
+   *
+   * The conflict-of-interest floor is untouched by this and always will be — it is the one
+   * distance rule that is not an operator's to set aside, and relaxing it here would only put
+   * candidates on screen that `AssignmentService` refuses outright.
+   */
+  relaxDistancePrefilter?: boolean;
+  /**
    * Facts about the branch itself, resolved once per recommendation rather than once per
    * candidate.
    *
@@ -506,6 +528,17 @@ export class ClientEligibilityFilter implements CandidateFilter {
   async evaluate(assayer: AssayerEntity, context: PlanningContext): Promise<boolean> {
     const barred = await this.exclusionReason(assayer, context);
     if (barred === null) return true;
+    /**
+     * The operator asked to see people the client has not empanelled.
+     *
+     * Kept rather than hidden, exactly as `relaxAvailability` keeps a booked candidate: the
+     * standing is still computed, still travels to the card, and still needs a stated reason
+     * before `AssignmentService` will create anything. What changes is that a compliance-strict
+     * list stops being an empty one — on this estate more than half the active workforce has no
+     * recorded standing with any client, and an empty candidate list gets worked around outside
+     * the system rather than inside it.
+     */
+    if (context.relaxClientEligibility) return true;
     if (this.ruleBypass.isBypassedSync(BypassableRule.CLIENT_ELIGIBILITY)) {
       this.ruleBypass.noteBypass(BypassableRule.CLIENT_ELIGIBILITY, {
         entityType: 'ASSAYER', entityId: assayer.id, detail: barred,
@@ -1486,6 +1519,10 @@ export interface RecommendOptions {
    * is only there to stop one request scanning a national workforce.
    */
   searchRadiusKm?: number;
+  /** See `PlanningContext.relaxClientEligibility` — carried through so the filter can read it. */
+  relaxClientEligibility?: boolean;
+  /** See `PlanningContext.relaxDistancePrefilter`. */
+  relaxDistancePrefilter?: boolean;
 }
 
 /**
@@ -1897,6 +1934,8 @@ export class RecommendationEngine {
       scheduledDate,
       weights: resolvedConfig.weights,
       relaxAvailability: options?.relaxAvailability === true,
+      relaxClientEligibility: options?.relaxClientEligibility === true,
+      relaxDistancePrefilter: options?.relaxDistancePrefilter === true,
     };
 
     // Bound the candidate pool by geography before any scoring — see CANDIDATE_PREFILTER_RADIUS_KM.
@@ -1912,7 +1951,45 @@ export class RecommendationEngine {
      * which is what makes the map's radius control and the candidate list agree.
      */
     const requestedRadius = Number(options?.searchRadiusKm);
-    const prefilterRadiusKm = Math.min(
+    /**
+     * "Ignore distance policy" searches the whole workforce rather than a disc around the branch.
+     *
+     * The pre-filter is the only distance rule that removes somebody *silently* — it runs before
+     * any filter, so anyone it drops produces no exclusion reason and simply is not there. That
+     * is what an operator is actually turning off here. The conflict-of-interest floor still
+     * applies, and still excludes, with its reason on the panel.
+     */
+    const prefilterRadiusKm = options?.relaxDistancePrefilter ? MAX_SEARCH_RADIUS_KM : Math.min(
+      MAX_SEARCH_RADIUS_KM,
+      Math.max(
+        Number.isFinite(requestedRadius) && requestedRadius > 0 ? requestedRadius : CANDIDATE_PREFILTER_RADIUS_KM,
+        Number(resolvedConfig.defaultRadius) || 0,
+      ),
+    );
+    };
+
+    // Bound the candidate pool by geography before any scoring — see CANDIDATE_PREFILTER_RADIUS_KM.
+    // The effective radius never drops below the client's configured serviceability radius, so the
+    // pre-filter can only ever be wider than what scoring already tolerates. `nearbyIds` is null
+    // when there is no usable pre-filter (no branch coordinates, nobody in range, or the query
+    // failed), in which case the full active pool is kept exactly as before.
+    /**
+     * The operator's radius wins when they set one; otherwise the default floor.
+     *
+     * Still a `max` against the client's configured serviceability radius, so a client who
+     * services 400 km is never searched at 200 — but an explicit request now widens it too,
+     * which is what makes the map's radius control and the candidate list agree.
+     */
+    const requestedRadius = Number(options?.searchRadiusKm);
+    /**
+     * "Ignore distance policy" searches the whole workforce rather than a disc around the branch.
+     *
+     * The pre-filter is the only distance rule that removes somebody *silently* — it runs before
+     * any filter, so anyone it drops produces no exclusion reason and simply is not there. That
+     * is what an operator is actually turning off here. The conflict-of-interest floor still
+     * applies, and still excludes, with its reason on the panel.
+     */
+    const prefilterRadiusKm = options?.relaxDistancePrefilter ? MAX_SEARCH_RADIUS_KM : Math.min(
       MAX_SEARCH_RADIUS_KM,
       Math.max(
         Number.isFinite(requestedRadius) && requestedRadius > 0 ? requestedRadius : CANDIDATE_PREFILTER_RADIUS_KM,
@@ -2546,6 +2623,17 @@ export class RecommendationEngine {
          * this is what lets the card say so BEFORE the click rather than after it.
          */
         exceedsClientRange: this.exceedsClientRange(context, routeByAssayer[assayer.id]?.distanceKm ?? null),
+        /**
+         * The standing this candidate is on the list in spite of.
+         *
+         * Only ever set when the operator asked to see past the client's panel — relaxing a rule
+         * must not quietly hide what was relaxed. Same contract as `dateConflict`: the row states
+         * the thing it was let through on, so the decision is made with it in view rather than
+         * discovered in a refusal afterwards.
+         */
+        clientStandingIssue: context.relaxClientEligibility
+          ? await this.clientEligibilityFilter.exclusionReason(assayer, context)
+          : null,
         // What staff have said, summarised exactly as the remarks scorer read it — count,
         // recency-weighted mean and the latest remark — so the card can show the words behind
         // the number. Computed from the shared facts; no extra query.
