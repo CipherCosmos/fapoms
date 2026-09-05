@@ -70,6 +70,35 @@ COMPOSE=("$CLI" compose)
 for f in "${COMPOSE_FILES[@]}"; do COMPOSE+=(-f "$f"); done
 COMPOSE+=(--env-file "$ENVFILE")
 
+# Which of a package's declared dependencies are not actually present inside its container.
+#
+# Answers the question the deploy could not otherwise ask: "does what is installed match what the
+# manifest says?" It has to be asked because the dev images install dependencies at BUILD time and
+# compose then mounts an anonymous volume over node_modules — a volume that outlives the image it
+# shadowed. Once the two disagree, no later deploy notices, because the manifest has not changed
+# since and so nothing triggers a rebuild.
+#
+# Prints the missing names (comma-separated, capped) or nothing at all. Deliberately silent on
+# every failure — a container that is down, a node that will not start, a manifest that cannot be
+# read all yield "" and are treated as "nothing to do", because a false positive here costs a full
+# image rebuild on every single tick.
+missing_deps() {
+  local svc="$1" pkgdir="$2"
+  "${COMPOSE[@]}" exec -T "$svc" node -e '
+    const fs = require("fs");
+    try {
+      const dir = process.argv[1];
+      const pkg = JSON.parse(fs.readFileSync(dir + "/package.json", "utf8"));
+      // optionalDependencies are excluded on purpose: a platform-specific binary that is legitimately
+      // absent would otherwise rebuild the image on every deploy, forever.
+      const declared = Object.keys({ ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) });
+      const roots = [dir + "/node_modules", "/app/node_modules"];
+      const missing = declared.filter((d) => !roots.some((r) => fs.existsSync(r + "/" + d)));
+      if (missing.length) console.log(missing.slice(0, 6).join(", "));
+    } catch { /* unreadable manifest: say nothing rather than force a rebuild */ }
+  ' "$pkgdir" 2>/dev/null | tr -d "\r" | head -1
+}
+
 # A cheap content hash of the compiled shared package inside one container, used to tell a
 # no-op recompile from one that actually replaced the build. Empty when the service or the
 # directory is not there, which compares unequal to any real hash and so errs towards restarting.
@@ -362,6 +391,30 @@ if [ -n "$HOOK" ]; then
     log "REFUSING: FAPOMS_POST_RESET_HOOK is set to $HOOK, which is not executable."
     exit 1
   fi
+fi
+
+# Self-heal a container whose node_modules no longer matches its manifest.
+#
+# The flag added alongside this (`--renew-anon-volumes`) stops the problem being CREATED, but only
+# on a deploy that already rebuilds — and a container that is already wrong stays wrong, because
+# the manifest that would trigger the rebuild has not changed since it broke. So the state is
+# checked rather than inferred from the diff, and any deploy can put it right.
+#
+# Runs only where the anonymous-volume shadowing exists at all. The production images bake
+# dependencies in with no mount over them, so there is nothing there for this to detect.
+if $SOURCE_MOUNTED; then
+  for entry in "backend:/app/packages/backend" "frontend:/app/packages/frontend" "mobile:/app/packages/mobile"; do
+    svc="${entry%%:*}"; pkgdir="${entry#*:}"
+    "${COMPOSE[@]}" ps --services 2>/dev/null | grep -qx "$svc" || continue
+    gone="$(missing_deps "$svc" "$pkgdir")"
+    [ -n "$gone" ] || continue
+    log "$svc is missing declared dependencies ($gone) — its node_modules volume predates them; rebuilding"
+    case "$svc" in
+      backend)  NEED_BACKEND=true ;;
+      frontend) NEED_FRONTEND=true ;;
+      mobile)   NEED_MOBILE=true ;;
+    esac
+  done
 fi
 
 # ---------------------------------------------------------------------------------------------
