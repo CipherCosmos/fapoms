@@ -63,7 +63,26 @@ export function LocationConfirmBanner({
         return;
       }
       setDone(true);
-      feedback.success(tr('registration.home.thanksTitle'), tr('registration.home.thanksBody'));
+
+      /**
+       * The pin is saved either way. What differs is whether the person still has something to do.
+       *
+       * A device fix settles where they are; it does not make the ADDRESS on their record right,
+       * and the address is the part that lasts — it goes on documents, a clerk reads it, and it is
+       * what gets looked up again if the pin is ever cleared. When the server reports the two
+       * disagree, saying "thank you, done" would leave a wrong address in place and nobody aware
+       * of it. So they are told what specifically does not match and what to do about it.
+       */
+      const check = res.addressCheck;
+      if (check?.looksWrong) {
+        const body = check.recordedState && check.actualState && check.recordedState !== check.actualState
+          ? tr('location.addressMismatchState', { recorded: check.recordedState, actual: check.actualState })
+          : tr('location.addressMismatchDistance', { km: String(check.kmFromWrittenAddress ?? '') });
+        // `warning`, not `error`: nothing failed, and nothing they did was wrong.
+        feedback.warning(tr('location.addressMismatchTitle'), body);
+      } else {
+        feedback.success(tr('registration.home.thanksTitle'), tr('registration.home.thanksBody'));
+      }
       onConfirmed?.();
     } catch {
       feedback.error(tr('registration.home.noFixTitle'), tr('registration.home.noFixBody'));

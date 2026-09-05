@@ -987,6 +987,17 @@ export const en = {
   },
 
   location: {
+    /**
+     * Shown after the pin is saved, when the written address disagrees with where the person
+     * actually is. Deliberately not an error: the person did the right thing and their pin is now
+     * correct — what still needs their help is the address text on the record, which is what goes
+     * on documents and what gets looked up again if the pin is ever cleared.
+     */
+    addressMismatchTitle: 'Your location is saved — please check your address',
+    addressMismatchState:
+      'Your address says %{recorded}, but you are in %{actual}. Your map pin is now correct. Please open your profile and correct your address, so your documents and your travel are worked out from the right place.',
+    addressMismatchDistance:
+      'Your address points to a place about %{km} km away from where you are. Your map pin is now correct. Please open your profile and correct your address, so your documents and your travel are worked out from the right place.',
     confirmTitle: 'Confirm where you are based',
     confirmBody:
       'We could not place you accurately on the map. Tap below where you live or work from, so we send you jobs that are actually close by.',

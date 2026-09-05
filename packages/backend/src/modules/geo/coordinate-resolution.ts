@@ -128,5 +128,25 @@ export async function resolveCoordinates(
 export function needsBetterFix(geoSource: string | null, accuracyMeters: number | null): boolean {
   if (geoSource === 'manual') return false;
   if (geoSource === null || accuracyMeters === null) return true;
-  return accuracyMeters > PRECISION_METERS.pincode;
+  return accuracyMeters > IMPROVABLE_ABOVE_METERS;
 }
+
+/**
+ * Coarser than this and the row is worth another look.
+ *
+ * The bar used to sit at the pincode tier, which meant a 3 km centroid counted as finished: the
+ * selection query skipped it and the "only write if better" rule refused to replace it. That was
+ * the right call while the address lookup asked one question it could not answer — the whole
+ * postal address went in as Nominatim's `street`, which ANDs its components, so a detailed
+ * address and a bare one produced the same 3 km answer and retrying only burned lookups.
+ *
+ * `nominatimSearch` now works down a ladder of candidates parsed out of the address, and reaches
+ * street and building level where OSM holds the data. So a pincode centroid is no longer the best
+ * available answer, it is the answer of last resort — and the bar belongs one tier finer, where a
+ * row that could be placed on its own street is not left sitting in the middle of its postcode.
+ *
+ * Rows whose address contains nothing a map could match are excluded before this by the caller
+ * (`isAddressUsable`); there is no ladder to climb for those and they are a record to fix, which
+ * is what the workforce flag is for.
+ */
+const IMPROVABLE_ABOVE_METERS = PRECISION_METERS.osm_locality;

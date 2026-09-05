@@ -52,6 +52,7 @@
 import * as path from 'path';
 import { calculateHaversineDistance } from '@fapoms/shared';
 import { JsonFileCache } from './geo-cache-store';
+import { placeCandidates } from './indian-address';
 
 /**
  * Nominatim endpoint, configurable so a deployment can point at a SELF-HOSTED instance instead of
@@ -613,16 +614,76 @@ async function overpassBankSearch(
  * Its own `place_rank` cheerfully calls that road-level, so the rank is a ceiling here, never a
  * grant.
  */
-function gradeNominatimCandidate(entry: any, parts: AddressParts): GeoPrecision | null {
+/**
+ * Road classes that are short enough for a street-level claim to mean something.
+ *
+ * Deliberately excludes motorway/trunk/primary/secondary: those run for tens of kilometres, and
+ * Nominatim's `place_rank` calls a 45 km highway "road-level" exactly as it does a housing-estate
+ * lane. Matching the name of a national highway tells you the state, not the street.
+ */
+/**
+ * OSM categories that describe a business or facility rather than a place people live.
+ *
+ * Rejected outright for a record that does not name a place (see `namesAPlace`): matching a home
+ * address onto one of these is never right, and the finer the grade the more damage it does.
+ */
+const POI_CATEGORIES = new Set([
+  'amenity', 'shop', 'office', 'tourism', 'leisure', 'healthcare', 'craft', 'club', 'emergency',
+]);
+
+const LOCAL_ROAD_TYPES = new Set([
+  'residential', 'living_street', 'unclassified', 'service', 'tertiary', 'pedestrian', 'footway',
+]);
+
+/**
+ * Half the diagonal of the object OSM actually matched, in metres — a measured error bar rather
+ * than a tier's nominal one.
+ *
+ * This is what keeps a finer grade honest. A corroborated road name is not by itself evidence of
+ * street-level precision, because the road may be two kilometres long and the coordinate is its
+ * midpoint. The bounding box says how big the matched thing really is, so the claim can be made
+ * from the geometry instead of from the hope. Returns null when the provider sent no box.
+ */
+export function matchedExtentMeters(entry: any): number | null {
+  const box = (entry?.boundingbox ?? []).map(Number);
+  if (box.length !== 4 || box.some((n: number) => !Number.isFinite(n))) return null;
+  const [minLat, maxLat, minLon, maxLon] = box;
+  const midLat = ((minLat + maxLat) / 2) * (Math.PI / 180);
+  const dLat = (maxLat - minLat) * 111320;
+  const dLon = (maxLon - minLon) * 111320 * Math.cos(midLat);
+  return Math.round(Math.hypot(dLat, dLon) / 2);
+}
+
+export function gradeNominatimCandidate(entry: any, parts: AddressParts): GeoPrecision | null {
   const address = entry?.address ?? {};
   const noise = placeNoise(parts);
   const ourPlace = without(tokenise(parts.name, parts.address), noise);
   const ourBrand = tokenise(parts.brand);
 
+  /**
+   * Whether this record names a place a map might hold as a point of interest.
+   *
+   * A branch does — that is what `name` and `brand` are for, and the POI rung below is the whole
+   * reason they are sent. A person's home does not, and every rule keyed on this exists for that
+   * case: without them a home address falls into the POI tiers by coincidence of a shared word.
+   */
+  const namesAPlace = Boolean(parts.name || parts.brand);
+
+  /**
+   * What counts as "the same place" — and, for a home, the building's own name does not.
+   *
+   * `entry.name` is the name of the matched object. For a branch that is the point: the POI is
+   * literally what we are looking for. For a home it is the trap, and a measured one — an address
+   * reading "Vyayam Shala, Chopra, Vidhisha" matched **Chopra Clinic**, a surgery OSM happens to
+   * tag `place=house`, on the single shared word "Chopra". Corroborating a home against the place
+   * hierarchy (the suburb, village, town and road it sits in) and not against whatever the
+   * building is called is what separates "this person lives in Chopra" from "there is a business
+   * called Chopra".
+   */
   const theirPlace = without(
     tokenise(
       address.suburb, address.neighbourhood, address.village, address.town,
-      address.city_district, address.road, entry?.name,
+      address.city_district, address.road, ...(namesAPlace ? [entry?.name] : []),
     ),
     noise,
   );
@@ -633,8 +694,53 @@ function gradeNominatimCandidate(entry: any, parts: AddressParts): GeoPrecision 
   const isBank = entry?.category === 'amenity' && POI_VALUES.has(entry?.type);
   if (isBank && corroborates(ourBrand, theirName)) return 'osm_poi';
 
-  // Same rule as Photon, for the same reasons — see gradePhotonCandidate. Nominatim's own
-  // place_rank calls a 45 km highway "road-level", so it is not evidence of anything finer.
+  /**
+   * A person's home is not a business, however well the names line up.
+   *
+   * Measured on the live roster: an address reading "Vyayam Shala, Chopra, Vidhisha" matched
+   * **Chopra Clinic** and, because the clinic carries a house number, was graded building-level at
+   * 25 m. That is the namesake trap that pinned 52 appraisers onto shops and surgeries, returning
+   * in a better disguise — a single common token corroborating against a POI, now with a finer
+   * grade attached. One shared word is not evidence that somebody lives there.
+   */
+  if (!namesAPlace && POI_CATEGORIES.has(entry?.category)) return null;
+
+  /**
+   * A road that runs between districts locates the district, not the house.
+   *
+   * Also measured: two rows matched "Khargone - Indore Hwy" and "Karnal - Ladwa Highway" and were
+   * graded 900 m. Nominatim's own `place_rank` calls a 45 km highway road-level exactly as it does
+   * a housing lane, so the class is the only thing that separates them.
+   */
+  if (!namesAPlace && entry?.category === 'highway' && !LOCAL_ROAD_TYPES.has(entry?.type)) return null;
+
+  /**
+   * A house number in the ANSWER is not evidence about the question we asked.
+   *
+   * We never send one: OSM holds almost no Indian house numbers, so `placeCandidates` strips them
+   * and the ladder asks about roads and localities. A match that happens to carry a house number
+   * therefore tells us the map knows that building — not that it is *this person's* building. It
+   * was graded 25 m on exactly that reasoning and put an appraiser inside a clinic.
+   *
+   * So building level is reachable only for a record that names a place and matched on that name.
+   * For a home the honest ceiling is the street it is on.
+   */
+  if (namesAPlace && address.house_number) return 'osm_building';
+
+  /**
+   * A corroborated local road, and only when its own geometry is small enough to justify the
+   * claim.
+   *
+   * The name matching is necessary but not sufficient — hence the extent check. Where the
+   * provider sends no bounding box there is no evidence, so the coarser grade stands. This is the
+   * same discipline as everywhere else here: never state a precision the data has not earned.
+   */
+  if (entry?.category === 'highway' && LOCAL_ROAD_TYPES.has(entry?.type)) {
+    const extent = matchedExtentMeters(entry);
+    if (extent !== null && extent <= PRECISION_METERS.osm_street) return 'osm_street';
+  }
+
+  // Same rule as Photon, for the same reasons — see gradePhotonCandidate.
   return 'osm_locality';
 }
 
@@ -647,45 +753,83 @@ async function nominatimSearch(
   parts: AddressParts,
   anchor: VerificationAnchor | null,
 ): Promise<OsmGeocodeResult | null> {
-  const street = (parts.address || '')
-    .replace(/\b\d{6}\b/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-  if (!street && !parts.city) return null;
+  const pincode = parts.pincode && /^\d{6}$/.test(parts.pincode) ? parts.pincode : null;
+  const city = (parts.city || '').trim() || null;
+  const state = (parts.state || '').trim() || null;
 
-  const params = new URLSearchParams({
-    format: 'jsonv2',
-    countrycodes: 'in',
-    limit: '10',
-    addressdetails: '1',
-  });
-  if (street) params.set('street', street.slice(0, 120));
-  if (parts.city) params.set('city', parts.city);
-  if (parts.state) params.set('state', parts.state);
-  if (parts.pincode && /^\d{6}$/.test(parts.pincode)) params.set('postalcode', parts.pincode);
+  /**
+   * The address is asked about in pieces, best piece first.
+   *
+   * It used to be asked about whole: the entire postal address went in as `street`, and because
+   * structured search ANDs its components, a `street` that is not a street name returns nothing
+   * however good the rest of the query is. Measured on a live record whose address was perfectly
+   * good, the blob scored 0 hits and the same query without the street scored 1 — so every row
+   * paid for a query that could not succeed and then fell back to a pincode centroid. That is why
+   * the roster sat at a uniform 3 km however detailed the address was.
+   *
+   * `placeCandidates` returns the road first, then the named colony, then the bare village name,
+   * which is also the order of decreasing precision — so the first candidate that a map recognises
+   * is also the best answer available, and the ladder can stop there.
+   */
+  const candidates = placeCandidates(parts.address);
+  if (candidates.length === 0 && !city && !pincode) return null;
 
-  // Nominatim's usage policy: absolute maximum 1 request per second, per IP.
-  const data = await politely('nominatim', NOMINATIM_MIN_INTERVAL_MS, () =>
-    getJson(`${NOMINATIM_BASE_URL}/search?${params.toString()}`),
-  );
+  /**
+   * How many rungs the ladder is allowed, which depends on whose server is answering.
+   *
+   * Against the self-hosted instance a lookup costs ~0.27s and there is no rate limit, so trying
+   * three candidates two ways is cheap and pays for itself. Against a public Nominatim every call
+   * is serialised at ~1 request/second by `politely`, and a deep ladder would multiply the whole
+   * estate's sweep by six. So the depth follows the budget rather than being tuned to one
+   * deployment.
+   */
+  const depth = NOMINATIM_MIN_INTERVAL_MS > 0 ? 1 : 3;
 
-  const entries: any[] = Array.isArray(data) ? data : [];
+  const attempts: Array<Record<string, string>> = [];
+  for (const candidate of candidates.slice(0, depth)) {
+    // Pincode first: it is the tightest anchor on the record, and it is present on almost every
+    // row. City is skipped here on purpose — the roster's city column disagrees with OSM's
+    // spelling often enough ("Palayam Kottai" vs "Palayamkottai") to kill an otherwise good match.
+    if (pincode) attempts.push({ street: candidate, postalcode: pincode });
+    if (city) attempts.push({ street: candidate, city, ...(state ? { state } : {}) });
+  }
+  // No street at all — the coarse rung that still beats a centroid, and the one that was quietly
+  // doing all the work before the ladder existed.
+  if (city) attempts.push({ city, ...(state ? { state } : {}), ...(pincode ? { postalcode: pincode } : {}) });
+
   let best: OsmGeocodeResult | null = null;
 
-  for (const entry of entries) {
-    const candidate: Coord = { lat: Number(entry.lat), lng: Number(entry.lon) };
-    if (!verifyCandidate({ coord: candidate, state: entry?.address?.state }, parts.state, anchor)) continue;
+  for (const attempt of attempts) {
+    const params = new URLSearchParams({
+      format: 'jsonv2',
+      countrycodes: 'in',
+      limit: '10',
+      addressdetails: '1',
+      ...attempt,
+    });
 
-    const precision = gradeNominatimCandidate(entry, parts);
-    if (!precision) continue;
-    const result: OsmGeocodeResult = {
-      ...candidate,
-      precision,
-      accuracyMeters: PRECISION_METERS[precision],
-      matchedName: entry.display_name?.split(',').slice(0, 3).join(',').trim(),
-    };
-    if (!best || result.accuracyMeters < best.accuracyMeters) best = result;
-    if (best.precision === 'osm_poi') break;
+    // Nominatim's usage policy: absolute maximum 1 request per second, per IP.
+    const data = await politely('nominatim', NOMINATIM_MIN_INTERVAL_MS, () =>
+      getJson(`${NOMINATIM_BASE_URL}/search?${params.toString()}`),
+    );
+
+    for (const entry of (Array.isArray(data) ? data : [])) {
+      const candidate: Coord = { lat: Number(entry.lat), lng: Number(entry.lon) };
+      if (!verifyCandidate({ coord: candidate, state: entry?.address?.state }, parts.state, anchor)) continue;
+
+      const precision = gradeNominatimCandidate(entry, parts);
+      if (!precision) continue;
+      const result: OsmGeocodeResult = {
+        ...candidate,
+        precision,
+        accuracyMeters: PRECISION_METERS[precision],
+        matchedName: entry.display_name?.split(',').slice(0, 3).join(',').trim(),
+      };
+      if (!best || result.accuracyMeters < best.accuracyMeters) best = result;
+    }
+
+    // Good enough to stop paying for the rungs below, which are coarser by construction.
+    if (best && best.accuracyMeters <= PRECISION_METERS.osm_street) break;
   }
 
   return best;
@@ -827,6 +971,21 @@ export async function resolveFreely(
   parts: AddressParts,
   anchor: VerificationAnchor | null = null,
 ): Promise<OsmGeocodeResult | null> {
+  /**
+   * With nothing to check an answer against, a home address is not worth guessing at.
+   *
+   * `verifyCandidate` applies its distance test only when it has an anchor — a pincode or district
+   * centroid. Without one, the only surviving checks are "inside India" and "state does not
+   * contradict", and a state is the size of a country: that is how a Vidisha appraiser was matched
+   * to a clinic in Indore, 200 km away, and how a cleared cache (which is where the anchors come
+   * from) can quietly turn verification off.
+   *
+   * A record that names a place keeps the old behaviour — a branch is looked up BY its name, and
+   * the POI rung is the point of asking. For a home the honest answer with no anchor is the coarse
+   * tier the caller already holds, so this returns nothing rather than something unfalsifiable.
+   */
+  if (!anchor && !(parts.name || parts.brand)) return null;
+
   const key = cacheKey('free', parts);
   const cached = cache.get(key);
   if (cached) return cached;

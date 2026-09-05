@@ -113,6 +113,22 @@ export function getApiBaseUrl(): string {
 const isAssignmentStatus = (v: unknown): v is AssignmentStatus =>
   typeof v === 'string' && (Object.values(AssignmentStatus) as string[]).includes(v);
 
+/**
+ * What the server made of the address on the record, once it knew where the person actually is.
+ *
+ * Confirming the pin fixes the map. It does not fix the ADDRESS, and the address is what lasts —
+ * it goes on documents, a clerk reads it, and it is what gets geocoded again if the pin is ever
+ * cleared. So the server compares the two and says when they disagree, and the app asks the person
+ * to correct their address instead of thanking them and leaving it wrong.
+ */
+export interface AddressCheck {
+  looksWrong: boolean;
+  recordedState: string | null;
+  actualState: string | null;
+  actualDistrict: string | null;
+  kmFromWrittenAddress: number | null;
+}
+
 export class MobileApiService {
   static authToken: string | null = null;
   static refreshToken: string | null = null;
@@ -826,7 +842,7 @@ export class MobileApiService {
     assayerId: string,
     latitude: number,
     longitude: number,
-  ): Promise<{ success: boolean; error?: string }> {
+  ): Promise<{ success: boolean; error?: string; addressCheck?: AddressCheck }> {
     try {
       const response = await this.fetchWithAuth(`${API_BASE_URL}/assayers/${assayerId}/base-location`, {
         method: 'PUT',
@@ -839,7 +855,7 @@ export class MobileApiService {
           error: Array.isArray(data?.message) ? data.message.join(', ') : (data?.message || 'Could not save your location.'),
         };
       }
-      return { success: true };
+      return { success: true, addressCheck: data?.data?.addressCheck };
     } catch (err: any) {
       return { success: false, error: err?.message || 'Network error saving your location' };
     }

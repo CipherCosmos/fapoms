@@ -1,11 +1,13 @@
 import {
   Injectable, NotFoundException, ConflictException, BadRequestException, UnauthorizedException, OnModuleInit, Logger } from '@nestjs/common'; import { InjectRepository, InjectDataSource } from '@nestjs/typeorm'; import { Repository, LessThanOrEqual, In, DataSource, ILike } from 'typeorm'; import * as xlsx from 'xlsx'; import * as bcrypt from 'bcrypt'; import { randomInt } from 'crypto'; import { AssayerEntity } from './assayer.entity'; import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity'; import { WorkforceAttributeEntity } from './workforce-attribute.entity'; import { AssayerRemarkEntity } from './assayer-remark.entity'; import { AssayerActivityEntity } from './assayer-activity.entity'; import { TEMP_PASSWORD_WORDS } from './temp-password-words'; import { AuditService } from '../../core/audit/audit.service'; import { AssayerStateMachine } from './assayer.state-machine'; import { DomainEventPublisher } from '../../core/events/domain-event.publisher'; import { WorkflowEngine } from '../platform/workflow/workflow.engine'; import { NotificationDispatchService } from '../notifications/notification-dispatch.service'; import { EmailProvider } from '../../infrastructure/notifications/email-provider'; import { SmsProvider } from '../../infrastructure/notifications/sms-provider'; import { CacheService } from '../../infrastructure/cache/cache.service'; import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service'; import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, DocumentVerification, PLANNABLE_EMPANELMENT_STANDINGS,
+  calculateHaversineDistance,
 } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import type { EntityManager } from 'typeorm';
 import { diffFields } from '../../core/audit/diff-fields';
-import { COMMITTED_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
+import { COMMITTED_ASSIGNMENT_STATUSES, DEFAULT_WEEKLY_CAPACITY } from '../assignment/assignment-workload';
+import { DATA_INTEGRITY_SHEET } from './data-integrity.service';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { geocodeIndia, pincodeAuthority } from '../geo/india-geocoder';
 import { resolveCoordinates, needsBetterFix, isPlausibleIndianCoord, GeoFields } from '../geo/coordinate-resolution';
@@ -215,6 +217,16 @@ export type SensitiveAssayerField = keyof typeof SENSITIVE_ASSAYER_FIELDS;
 export const SENSITIVE_FIELD_NAMES = Object.keys(SENSITIVE_ASSAYER_FIELDS) as SensitiveAssayerField[];
 
 /** Human labels for the audit remark and the refusal messages — one place, one spelling. */
+/**
+ * How far a confirmed device fix may sit from where the written address geocoded before the
+ * address itself is treated as wrong. See `confirmBaseLocation` for why it is this large.
+ */
+const ADDRESS_CONTRADICTION_KM = 25;
+
+/** Case- and punctuation-insensitive, so "Tamil Nadu" and "TAMILNADU" are the same state. */
+const normaliseForCompare = (value: string | null | undefined): string =>
+  String(value ?? '').toLowerCase().replace(/[^a-z]/g, '');
+
 const SENSITIVE_FIELD_LABELS: Record<SensitiveAssayerField, string> = {
   pan: 'PAN number',
   aadhaar: 'Aadhaar number',
@@ -1196,7 +1208,7 @@ export class AssayerService implements OnModuleInit {
    * but it would block the very people this flow exists to help.
    */
   async confirmBaseLocation(id: string, latitude: number, longitude: number, userId?: string): Promise<AssayerEntity> {
-    await this.findOne(id);
+    const before = await this.findOne(id);
     if (!isPlausibleIndianCoord(latitude, longitude)) {
       throw withCode(
         new BadRequestException(
@@ -1226,9 +1238,48 @@ export class AssayerService implements OnModuleInit {
       if (actual.district) update.district = actual.district;
     }
 
+    /**
+     * The pin is now right. That does not make the ADDRESS right, and the address is what lasts.
+     *
+     * A device fix settles where the person is; it says nothing about the text on their record —
+     * and that text is what appears on documents, what a clerk reads, and what gets geocoded again
+     * if the pin is ever cleared. So the two are compared here, while a reverse lookup for this
+     * exact point is already in hand, and the disagreement is handed back to the caller so the app
+     * can ask the person to correct their address rather than thanking them and moving on.
+     *
+     * Two independent signals, because either alone is weak: a different STATE is close to proof
+     * that the written address belongs somewhere else, and a large DISTANCE from where the address
+     * geocoded catches the case within one state. The distance is only meaningful against a pin
+     * that came from the address in the first place, so a previous manual pin is not compared.
+     */
+    const recordedState = normaliseForCompare(before?.state);
+    const foundState = normaliseForCompare(actual?.state);
+    const stateDisagrees = Boolean(recordedState && foundState && recordedState !== foundState);
+
+    const cameFromAddress = before?.geoSource != null && before.geoSource !== 'manual';
+    const previouslyAt = cameFromAddress && before?.latitude != null && before?.longitude != null
+      ? calculateHaversineDistance(latitude, longitude, Number(before.latitude), Number(before.longitude))
+      : null;
+    /**
+     * Twenty-five kilometres, and not less.
+     *
+     * Most of this roster is placed from a pincode centroid, whose own error bar is 3 km, and a
+     * district centroid's is far larger. A threshold near those would fire on every correctly
+     * recorded address and train people to ignore it. Twenty-five is past any honest geocoding
+     * error and into "this address is not where this person lives".
+     */
+    const distanceDisagrees = previouslyAt !== null && previouslyAt > ADDRESS_CONTRADICTION_KM;
+    const addressLooksWrong = stateDisagrees || distanceDisagrees;
+
     await this.assayerRepository.update(id, update as any);
     await this.recordActivity(id, 'ASSAYER_CONFIRMED_LOCATION', null, null, userId ?? id,
-      `Base location set by the assayer to ${latitude.toFixed(5)}, ${longitude.toFixed(5)} from the app.`)
+      `Base location set by the assayer to ${latitude.toFixed(5)}, ${longitude.toFixed(5)} from the app.`
+      + (addressLooksWrong
+        ? ` Their written address does not agree with this: ${stateDisagrees
+            ? `it says ${before?.state}, the pin is in ${actual?.state}`
+            : `the address places them about ${Math.round(previouslyAt!)} km away`}. `
+          + 'The pin is correct; the address on the record still needs fixing.'
+        : ''))
       .catch(() => undefined);
 
     /**
@@ -1240,6 +1291,19 @@ export class AssayerService implements OnModuleInit {
      * web was guaranteed not to notice until someone reloaded the page.
      */
     const saved = await this.findOne(id);
+    /**
+     * Carried on the returned record rather than persisted: it is a fact about this confirmation,
+     * for the screen that just performed it. What has to outlive the request — the corrected pin,
+     * and the note explaining the disagreement — is already written above.
+     */
+    (saved as any).addressCheck = {
+      looksWrong: addressLooksWrong,
+      recordedState: before?.state ?? null,
+      actualState: actual?.state ?? null,
+      actualDistrict: actual?.district ?? null,
+      kmFromWrittenAddress: previouslyAt === null ? null : Math.round(previouslyAt),
+    };
+
     this.eventPublisher.publish('assayer:updated', {
       eventType: 'assayer:updated',
       aggregateId: id,
@@ -2199,6 +2263,42 @@ export class AssayerService implements OnModuleInit {
     return target;
   }
 
+  /**
+   * The two facts about a candidate that only exist as a "current moment" snapshot, not a
+   * lifetime stat: how full their diary is right now, and whether anything is currently flagged
+   * against them. Split out of `getProfile` (which the mobile app also calls, for its own
+   * signed-in user) rather than added to it, so a heavier, staff-only read never rides the
+   * self-service profile the field app polls.
+   *
+   * `activeCount`/`maxWeeklyCapacity` mirror `WorkloadScoreCalculator.calculate` exactly (same
+   * statuses, same capacity fallback) — this must read as the same number that decided the
+   * candidate's "Spare capacity" score, not a second, differently-defined workload figure.
+   */
+  async getPlanningSnapshot(assayerId: string): Promise<{
+    workload: { activeCount: number; maxWeeklyCapacity: number; remaining: number };
+    riskFlags: Array<{ reason: string; rawValue: string; createdAt: string }>;
+  }> {
+    const assayer = await this.assayerRepository.findOne({ where: { id: assayerId } });
+    if (!assayer) throw new NotFoundException(`Assayer ${assayerId} not found.`);
+
+    const mgr = this.assayerRepository.manager;
+    const [activeCount, riskFlagRows] = await Promise.all([
+      mgr.count('assignments', { where: { assayerId, status: In(COMMITTED_ASSIGNMENT_STATUSES), isActive: true } }),
+      mgr.query(
+        `SELECT reason, raw_value, created_at FROM assayer_import_issues
+         WHERE assayer_id = $1 AND source_sheet = $2 AND resolved_at IS NULL
+         ORDER BY created_at DESC LIMIT 10`,
+        [assayerId, DATA_INTEGRITY_SHEET],
+      ).catch(() => []),
+    ]);
+    const maxWeeklyCapacity = assayer.maxWeeklyWorkload || DEFAULT_WEEKLY_CAPACITY;
+
+    return {
+      workload: { activeCount, maxWeeklyCapacity, remaining: Math.max(0, maxWeeklyCapacity - activeCount) },
+      riskFlags: (riskFlagRows as any[]).map((r) => ({ reason: r.reason, rawValue: r.raw_value, createdAt: r.created_at })),
+    };
+  }
+
   // ---- Activity Timeline ----
 
   // Public because it is the ONE writer of assayer_activities — QualificationScoreService
@@ -2549,7 +2649,7 @@ export class AssayerService implements OnModuleInit {
       { field: 'Exit Date', required: 'No', description: 'Date the appraiser left, if they have.' },
       { field: 'HR Name', required: 'No', description: 'HR person who owns this appraiser’s file.' },
       { field: 'Total Experience', required: 'No', description: 'Years of experience, e.g. 20 Years. The number feeds the match score.' },
-      { field: 'Active / Inactive', required: 'No', description: 'Availability and how they are engaged, as written in the roster, e.g. "Active / Regular", "Inactive / Not Interested", "Active / Back up". Read into availability, reason and engagement type.' },
+      { field: 'Active / Inactive', required: 'No', description: 'Availability and how they are engaged, as written in the roster, e.g. "Active / Regular", "Inactive / Not Interested", "Active / Back up". Read into availability, reason and engagement type. Strongly recommended: left blank on a NEW appraiser, the import will not assume a status — the person is created as INVITED and listed for review — so a blank here is the most common reason a row that "followed the template" still needs reviewing.' },
       { field: 'Status', required: 'No', description: 'Employment outcome where there is one, e.g. Resigned, Terminated, Expired. Takes precedence over the availability column when deciding the final status.' },
       { field: 'Remarks', required: 'No', description: 'Any free-text note about this appraiser.' },
       // ── References ──

@@ -418,6 +418,53 @@ describe('DataIntegrityService', () => {
    * against them and travel is costed from them. A wrong pin is worse than an absent one, because
    * the absent one fails visibly.
    */
+  /**
+   * An address that looks filled in and holds no place.
+   *
+   * `blankAddress` catches an empty cell; this catches the cell that reads as an address and is
+   * not one. The two must not both fire on the same person, and neither should fire on an address
+   * that merely failed to resolve today — that one may resolve tomorrow as OSM fills in, and it is
+   * `placeholderPin`'s business.
+   */
+  describe('an address with no place in it', () => {
+    const raise = (rows: any[]) => rows.find((r: any) => r.sourceColumn.startsWith('Home address has no place'));
+
+    it('raises an address that is only a relative and a door number', async () => {
+      people = [person({ assayerCode: 'AS0900', address: 'S/O Ramesh Kumar, H.No-110' })];
+
+      await scan();
+
+      const row = raise(issues.scanner());
+      expect(row).toBeDefined();
+      expect(row.sourceColumn).toContain('AS0900');
+      // The clerk has to see what is actually in the cell to know what is missing from it.
+      expect(row.rawValue).toBe('S/O Ramesh Kumar, H.No-110');
+      expect(row.reason).toMatch(/nothing in it names a place/);
+      expect(row.reason).toMatch(/Add the locality or road/);
+    });
+
+    it('raises an address that is only a landmark', async () => {
+      people = [person({ assayerCode: 'AS0901', address: 'Near Bus Stand' })];
+      await scan();
+      expect(raise(issues.scanner())).toBeDefined();
+    });
+
+    it('leaves a real address alone, however coarsely it happens to resolve', async () => {
+      people = [person({ assayerCode: 'AS0902', address: '81, Sunaro Ka Bass, Satlana, Jodhpur, Rajasthan-342802' })];
+      await scan();
+      expect(raise(issues.scanner())).toBeUndefined();
+    });
+
+    it('leaves an empty address to the check that is about empty addresses', async () => {
+      people = [person({ assayerCode: 'AS0903', address: '' })];
+
+      await scan();
+
+      expect(raise(issues.scanner())).toBeUndefined();
+      expect(issues.scanner().some((r: any) => r.sourceColumn.startsWith('No home address'))).toBe(true);
+    });
+  });
+
   describe('a home pin that is a placeholder rather than a home', () => {
     it('raises a person pinned to a 100 km centroid, which the NULL check misses', async () => {
       people = [person({ assayerCode: 'AD0104', latitude: 23.94, longitude: 91.98,

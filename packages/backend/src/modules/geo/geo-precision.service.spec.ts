@@ -63,7 +63,7 @@ describe('GeoPrecisionService', () => {
       // The needsBetterFix predicate, in SQL: never resolved or coarser than the pincode tier.
       expect(qb.andWhere).toHaveBeenCalledWith(
         '(r.geo_source IS NULL OR r.geo_accuracy_meters IS NULL OR r.geo_accuracy_meters > :pin)',
-        { pin: 3000 },
+        { pin: 900 },
       );
       /**
        * Worst placed first (a state centroid before a district one), then longest waiting.

@@ -33,6 +33,7 @@ import { NOT_A_RECORD_ENTITY_ID } from '../../core/audit/audit-event';
 import { EventCategory } from '@fapoms/shared';
 import { resolveCoordinates, needsBetterFix, isPlausibleIndianCoord, GeoFields } from './coordinate-resolution';
 import { reverseFreely, PRECISION_METERS, GeoPrecision } from './osm-geocoder';
+import { isAddressUsable } from './indian-address';
 import {
   calculateHaversineDistance, resolveRegion, zoneNameForState, isMetroPlace, canonicalStateName,
 } from '@fapoms/shared';
@@ -70,6 +71,13 @@ export interface BackfillReport {
   unchanged: number;
   /** Rows skipped because someone had pinned them by hand. */
   protectedManual: number;
+  /**
+   * Rows whose address holds nothing a map could match, so no lookup was spent on them.
+   *
+   * Counted rather than silently skipped: this is the number that says how much of the estate is
+   * waiting on a person to correct a record rather than on the geocoder to try harder.
+   */
+  unusableAddress: number;
   /** How far each improved row moved — large values are the point, not a warning. */
   movedKm: { name: string; km: number; from: string; to: string }[];
 }
@@ -317,7 +325,7 @@ export class GeoPrecisionService {
    * waited longest, and the bound applies to rows actually worked.
    */
   async backfill(target: GeoTarget, limit = 50, ids?: string[]): Promise<BackfillReport> {
-    const report: BackfillReport = { examined: 0, improved: 0, unchanged: 0, protectedManual: 0, movedKm: [] };
+    const report: BackfillReport = { examined: 0, improved: 0, unchanged: 0, protectedManual: 0, unusableAddress: 0, movedKm: [] };
 
     const repo: Repository<any> = target === 'branch' ? this.branchRepository : this.assayerRepository;
     const qb = repo
@@ -325,10 +333,10 @@ export class GeoPrecisionService {
       .where('r.is_active = true')
       // Manual pins are never re-resolved; excluded in the query rather than counted and skipped.
       .andWhere("(r.geo_source IS NULL OR r.geo_source <> 'manual')")
-      // The same predicate as `needsBetterFix`, expressed in SQL: never resolved, or coarser
-      // than the pincode tier.
+      // The same predicate as `needsBetterFix`, expressed in SQL — see the note on
+      // `IMPROVABLE_ABOVE_METERS` for why the bar sits at the locality tier rather than the pincode one.
       .andWhere('(r.geo_source IS NULL OR r.geo_accuracy_meters IS NULL OR r.geo_accuracy_meters > :pin)', {
-        pin: PRECISION_METERS.pincode,
+        pin: PRECISION_METERS.osm_locality,
       })
       // Worst first — a state centroid is a bigger lie than a district one — then oldest first,
       // so a row that failed last night is not starved by rows that arrived today.
@@ -355,6 +363,20 @@ export class GeoPrecisionService {
         return;
       }
       if (!needsBetterFix(row.geoSource, row.geoAccuracyMeters)) return;
+
+      /**
+       * An address with nothing a map could match is not worth a lookup.
+       *
+       * Since the bar moved to the locality tier, every pincode-centroid row is a candidate again
+       * — including the ones whose address is a relative's name and a door number. No ladder helps
+       * those; retrying them nightly would burn the sweep's budget on rows that cannot move while
+       * starving rows that can. They are a record for somebody to fix, which is what the
+       * `unusableAddress` workforce flag exists to say.
+       */
+      if (target !== 'branch' && !isAddressUsable(row.address)) {
+        report.unusableAddress++;
+        return;
+      }
 
       report.examined++;
       const before = { lat: Number(row.latitude), lng: Number(row.longitude), tier: row.geoSource ?? 'unknown' };

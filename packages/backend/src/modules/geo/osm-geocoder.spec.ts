@@ -1,4 +1,4 @@
-import { verifyCandidate, PRECISION_METERS, politely } from './osm-geocoder';
+import { verifyCandidate, PRECISION_METERS, politely, gradeNominatimCandidate, resolveFreely } from './osm-geocoder';
 import { isPlausibleIndianCoord, needsBetterFix, resolveCoordinates } from './coordinate-resolution';
 
 /**
@@ -82,10 +82,25 @@ describe('needsBetterFix', () => {
     expect(needsBetterFix(null, null)).toBe(true);
   });
 
-  it('accepts a pincode-level fix or better', () => {
-    expect(needsBetterFix('pincode', PRECISION_METERS.pincode)).toBe(false);
+  it('accepts a locality-level fix or better', () => {
     expect(needsBetterFix('osm_locality', PRECISION_METERS.osm_locality)).toBe(false);
+    expect(needsBetterFix('osm_street', PRECISION_METERS.osm_street)).toBe(false);
     expect(needsBetterFix('osm_poi', PRECISION_METERS.osm_poi)).toBe(false);
+  });
+
+  /**
+   * A pincode centroid used to count as finished. It no longer does, and the change is the point.
+   *
+   * While the address lookup asked one question it could not answer — the whole postal address
+   * handed to Nominatim as `street`, which ANDs its components — a detailed address and a bare one
+   * produced the same 3 km centroid, so retrying only burned lookups and the bar sat here to stop
+   * that. `nominatimSearch` now works down a ladder of candidates parsed out of the address and
+   * reaches street and building level where OSM holds the data, so the centroid is the answer of
+   * last resort rather than the best one, and a row sitting in the middle of its postcode deserves
+   * another attempt.
+   */
+  it('asks to improve a pincode centroid, which is no longer the best answer available', () => {
+    expect(needsBetterFix('pincode', PRECISION_METERS.pincode)).toBe(true);
   });
 
   it('never asks to re-resolve a hand-placed pin', () => {
@@ -207,5 +222,146 @@ describe('politely — how lookups are scheduled per host', () => {
     const boom = politely('failing-host-test', 0, async () => { throw new Error('provider down'); });
     await expect(boom).rejects.toThrow('provider down');
     await expect(politely('failing-host-test', 0, async () => 'ok')).resolves.toBe('ok');
+  });
+});
+
+/**
+ * Grading a Nominatim answer for a person's home.
+ *
+ * Every case here is a real answer the live server returned during the cascade trial, including
+ * the two it got wrong. The lesson each encodes is the same one that runs through this whole file:
+ * a name lining up is not evidence of a location, and a finer grade on a wrong match is worse than
+ * a coarse grade on a right one.
+ */
+describe('gradeNominatimCandidate — a home address, not a business', () => {
+  const home = { address: 'Vyayam Shala, Chopra, Vidhisha', city: 'Vidisha', state: 'Madhya Pradesh' };
+  const box = (metres: number) => {
+    // A square bounding box whose half-diagonal is roughly `metres`.
+    const d = (metres * Math.SQRT2) / 111320;
+    return ['20', String(20 + d), '77', String(77 + d / Math.cos((20 * Math.PI) / 180))];
+  };
+
+  /**
+   * The live failure, reproduced from the server's actual answer.
+   *
+   * OSM tags this surgery `place=house`, not `amenity=clinic`, so no category rule catches it. The
+   * only thing linking it to the address was the word "Chopra" in the building's own NAME — the
+   * road is "Yashoda Krishna Dwar" and the city is Indore, 200 km from the appraiser's Vidisha
+   * pincode. It was graded 25 m and would have put a person inside a clinic in another district.
+   */
+  it("refuses a business whose only link to the address is its own name", () => {
+    expect(gradeNominatimCandidate(
+      { category: 'place', type: 'house', name: 'Chopra Clinic', boundingbox: box(20),
+        address: { place: 'Chopra Clinic', house_number: 'S.S. 71', road: 'Yashoda Krishna Dwar',
+                   city_district: 'Indore City', city: 'Indore', state: 'Madhya Pradesh' } },
+      home,
+    )).toBeNull();
+  });
+
+  it('still matches a home on the place it actually sits in', () => {
+    // The same shape of answer, but corroborating through the address hierarchy rather than a
+    // building's name — that is a person living in Chopra, and it must keep working.
+    expect(gradeNominatimCandidate(
+      { category: 'place', type: 'village', name: 'Chopra', boundingbox: box(700),
+        address: { village: 'Chopra', state_district: 'Vidisha', state: 'Madhya Pradesh' } },
+      home,
+    )).toBe('osm_locality');
+  });
+
+  it('refuses a highway that runs between districts', () => {
+    // The live failure: "Khargone - Indore Hwy" graded 900 m for a home in Bhawsar Mohalla.
+    expect(gradeNominatimCandidate(
+      { category: 'highway', type: 'trunk', name: 'Khargone - Indore Hwy', boundingbox: box(30000),
+        address: { road: 'Chopra' } },
+      home,
+    )).toBeNull();
+  });
+
+  it('accepts a local road, and only when its own geometry earns the claim', () => {
+    const short = gradeNominatimCandidate(
+      { category: 'highway', type: 'residential', name: 'Chopra Road', boundingbox: box(80),
+        address: { road: 'Chopra Road' } },
+      home,
+    );
+    expect(short).toBe('osm_street');
+
+    // Same name, same class, two kilometres long — the coordinate is its midpoint, so 120 m would
+    // be a claim the geometry does not support.
+    const long = gradeNominatimCandidate(
+      { category: 'highway', type: 'residential', name: 'Chopra Road', boundingbox: box(2000),
+        address: { road: 'Chopra Road' } },
+      home,
+    );
+    expect(long).toBe('osm_locality');
+  });
+
+  /**
+   * Building level is not reachable from a home address, and that is the honest ceiling.
+   *
+   * We never send a house number — OSM holds almost none for India, so `placeCandidates` strips
+   * them and the ladder asks about roads and localities. A hit that happens to carry a house
+   * number is therefore telling us about a building we did not ask about. The street it is on is
+   * the finest thing this evidence supports.
+   */
+  it('does not claim building level for a home, because we never asked about a building', () => {
+    expect(gradeNominatimCandidate(
+      { category: 'place', type: 'house', name: null, boundingbox: box(15),
+        address: { house_number: '12', road: 'Chopra', suburb: 'Chopra' } },
+      home,
+    )).not.toBe('osm_building');
+  });
+
+  it('still lets a branch match the POI it is mapped as', () => {
+    // `name`/`brand` mark a record that names a place, which is what the POI rung is for. A branch
+    // must keep reaching it — the two rules above are for records that name a person, and a bank
+    // mapped as an amenity is precisely what they must not block.
+    //
+    // The brand here is one whose words survive `tokenise`'s generic-word filter. "State Bank of
+    // India" does not: `bank`, `india` and `state` are all generic, so its brand tokenises to
+    // nothing and it corroborates on the locality instead. That is long-standing behaviour of the
+    // matcher, not something these rules changed.
+    expect(gradeNominatimCandidate(
+      { category: 'amenity', type: 'bank', name: 'Karnataka Vikas Grameena Bank, Aundh', boundingbox: box(20),
+        address: { amenity: 'Karnataka Vikas Grameena Bank', suburb: 'Aundh' } },
+      { address: 'Aundh Road', name: 'Aundh Branch', brand: 'Karnataka Vikas Grameena Bank', city: 'Pune', state: 'Maharashtra' },
+    )).toBe('osm_poi');
+  });
+
+  it('does not reject a place-naming record under the home-address rules', () => {
+    // The regression that matters: a branch whose brand is too generic to match the POI rung must
+    // still be graded, not thrown away by the amenity rejection meant for people.
+    expect(gradeNominatimCandidate(
+      { category: 'amenity', type: 'bank', name: 'State Bank of India, Aundh', boundingbox: box(20),
+        address: { amenity: 'State Bank of India', suburb: 'Aundh' } },
+      { address: 'Aundh', name: 'Aundh Branch', brand: 'State Bank of India', city: 'Pune', state: 'Maharashtra' },
+    )).not.toBeNull();
+  });
+});
+
+/**
+ * The distance check is the only thing standing between a plausible name match and a pin in
+ * another district — and it runs only when there is an anchor to measure from.
+ */
+describe('resolveFreely — refuses to guess when nothing can check the answer', () => {
+  const original = process.env.GEOCODER_ALLOW_NETWORK_IN_TESTS;
+  beforeAll(() => { process.env.GEOCODER_ALLOW_NETWORK_IN_TESTS = 'true'; });
+  afterAll(() => { process.env.GEOCODER_ALLOW_NETWORK_IN_TESTS = original; });
+
+  it('returns nothing for a home address with no anchor, rather than an unfalsifiable answer', async () => {
+    // No network call is made at all, which is the point: with no anchor the only surviving checks
+    // are "inside India" and "state matches", and a state is the size of a country.
+    await expect(resolveFreely(
+      { address: 'Vyayam Shala, Chopra, Vidhisha', state: 'Madhya Pradesh', pincode: '464001' },
+      null,
+    )).resolves.toBeNull();
+  });
+
+  it('still looks up a record that names a place, which is what its name is for', async () => {
+    // A branch is looked up BY its name; this must not become null. The lookup itself is a network
+    // call the harness blocks, so the assertion is only that it was not short-circuited above.
+    await expect(resolveFreely(
+      { address: '1 Main Rd', name: 'Aundh Branch', brand: 'Karnataka Vikas Grameena Bank', city: 'Pune' },
+      null,
+    )).resolves.toBeDefined();
   });
 });

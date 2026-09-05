@@ -23,8 +23,9 @@ const EVERY_VARIABLE = {
   distance: '1 km', document: 'd', done: 1, field: 'f', fields: 'a, b', file: 'f.pdf', hours: 1,
   instruction: 'i', km: 1, kmh: 40, languages: 2, limit: '₹9', max: 3, minutes: 5, mode: 'bus',
   name: 'X', number: 'L1', page: 2, pages: '2, 3', percent: 10, progress: 'p', rate: 50,
-  reason: 'r', required: 2, round: 1, since: '', skills: 1, state: 'S', time: 'T', title: 't',
-  total: 4, uploaded: 2, wait: 'w', what: 'w', who: 'W',
+  reason: 'r', recorded: 'Kerala', required: 2, round: 1, since: '', skills: 1, state: 'S',
+  time: 'T', title: 't', total: 4, uploaded: 2, wait: 'w', what: 'w', who: 'W',
+  actual: 'Sikkim',
 };
 
 function leafKeys(node: unknown, path: string[] = []): string[] {

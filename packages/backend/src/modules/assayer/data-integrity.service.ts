@@ -4,6 +4,7 @@ import { In, IsNull, Repository } from 'typeorm';
 import {
   AssayerLifecycleStatus, DocumentVerification, EmpanelmentStatus, businessTodayDateKey, PLACEHOLDER_PIN_METRES, hasLeftWorkforce,
 } from '@fapoms/shared';
+import { isAddressUsable } from '../geo/indian-address';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerDocumentEntity } from './assayer-document.entity';
 import { AssayerClientEmpanelmentEntity } from './assayer-client-empanelment.entity';
@@ -82,6 +83,7 @@ export const CHECK_TITLES = {
   noCoordinates: 'No home location on the map',
   placeholderPin: 'Home pin is a placeholder, not a home',
   blankAddress: 'No home address on the record',
+  unusableAddress: 'Home address has no place a map can find',
   noPhone: 'No phone number on the record',
   claimedNoScan: 'Ticked as received, but no scan was kept',
   docsNeverVerified: 'Documents received but never verified',
@@ -313,6 +315,7 @@ export class DataIntegrityService {
       ...this.noHomeCoordinate(people),
       ...this.placeholderPin(people),
       ...this.blankAddress(people),
+      ...this.unusableAddress(people),
       ...this.noPhone(people),
       ...(await this.documentsNeverVerified()),
       ...(await this.claimedWithoutScan()),
@@ -372,6 +375,7 @@ export class DataIntegrityService {
       ...(await this.duplicatesForPerson(person, summary)),
       ...this.placeholderPin([person]),
       ...this.blankAddress([person]),
+      ...this.unusableAddress([person]),
       ...this.noPhone([person]),
     ];
     summary.findings = findings.length;
@@ -1150,6 +1154,43 @@ export class DataIntegrityService {
         reason: `${p.displayName ?? p.assayerCode} has no home address on their record, so their map pin `
           + 'can never be worked out automatically — the address lookup has nothing to read. Add the '
           + 'address on their record.',
+        assayerId: p.id,
+        sourceAssayerCode: p.assayerCode,
+      }));
+  }
+
+  /**
+   * Check 12b — an address is written down, but there is no place in it.
+   *
+   * `blankAddress` catches an empty cell. This catches the one that looks filled in and is not:
+   * a relative's name and a door number ("S/O Ramesh Kumar, H.No-110"), or a landmark and nothing
+   * else. `placeCandidates` parses an address into the things a map could be asked about — a road,
+   * a colony, a village — and when it finds none, no geocoder will ever place this person, however
+   * good the geocoder or the map becomes. Retrying it nightly is wasted work; a person has to add
+   * the missing part.
+   *
+   * That is the whole distinction this check draws, and why it is separate from `placeholderPin`:
+   * a placeholder pin means "we tried and the map does not hold it", and it may improve on its own
+   * as OSM fills in. This means "there is nothing here to try", and it never improves by itself.
+   *
+   * Per-person, because each needs a different address looked at by whoever knows that person.
+   */
+  private unusableAddress(people: AssayerEntity[]): Finding[] {
+    return people
+      .filter((p) => this.stillOnTheRoster(p)
+        && String(p.address ?? '').trim() !== ''
+        && !isAddressUsable(p.address))
+      .map((p) => ({
+        title: CHECK_TITLES.unusableAddress,
+        suffix: p.assayerCode,
+        // The address itself, trimmed — the clerk has to see what is actually in the cell to know
+        // what is missing from it.
+        rawValue: String(p.address).trim().slice(0, 120),
+        reason: `${p.displayName ?? p.assayerCode} has something in the address field, but nothing in it `
+          + 'names a place — no road, no colony, no village, only things like a relative\'s name, a door '
+          + 'number or a landmark. The address lookup has nothing to search for, so this person can never '
+          + 'be put on the map automatically and the distance and travel rules cannot run for them. Add '
+          + 'the locality or road to their address.',
         assayerId: p.id,
         sourceAssayerCode: p.assayerCode,
       }));

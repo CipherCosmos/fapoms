@@ -777,14 +777,28 @@ describe('ProjectService', () => {
         );
       });
 
+      /**
+       * The bar for "needs a better fix" sits at the locality tier (900 m), not the pincode one.
+       *
+       * It moved when the address lookup stopped asking one unanswerable question — the whole
+       * postal address handed to Nominatim as `street`, which ANDs its components and so returned
+       * nothing however good the address was. With a ladder of parsed candidates the lookup now
+       * reaches street and building level, so a 2.5 km pincode centroid is the answer of last
+       * resort rather than the best one, and a branch sitting on it is worth queueing.
+       */
       it('hands coarsely placed branches to the precision worker when the import finishes', async () => {
-        // The stub geocoder answers at the pincode tier (2.5 km) — below the "needs a better fix"
-        // threshold — so first prove the clean case enqueues nothing…
+        // A locality-level placement is at the bar, so it enqueues nothing…
         mockGeoPrecision.enqueueBackfill.mockClear();
+        mockGeocode.mockResolvedValueOnce({ lat: 10.78, lng: 76.65, accuracyMeters: 900, source: 'osm_locality' });
         await service.uploadBranchesFromExcel({ kind: 'PROJECT', id: 'p-1' }, sheetBuffer([plainRow()]), 'user-1');
         expect(mockGeoPrecision.enqueueBackfill).toHaveBeenCalledWith('branch', [], expect.stringContaining('p-1'));
 
-        // …then a district-centroid placement (15 km), which is the common real outcome.
+        // …a pincode centroid (2.5 km) now does, because the ladder can beat it…
+        mockGeoPrecision.enqueueBackfill.mockClear();
+        await service.uploadBranchesFromExcel({ kind: 'PROJECT', id: 'p-1' }, sheetBuffer([plainRow()]), 'user-1');
+        expect(mockGeoPrecision.enqueueBackfill).toHaveBeenCalledWith('branch', ['b-new'], expect.stringContaining('p-1'));
+
+        // …and so does a district-centroid placement (15 km), which is the common real outcome.
         mockGeoPrecision.enqueueBackfill.mockClear();
         mockGeocode.mockResolvedValueOnce({ lat: 10.7, lng: 76.6, accuracyMeters: 15000, source: 'locality' });
         const report = await service.uploadBranchesFromExcel({ kind: 'PROJECT', id: 'p-1' }, sheetBuffer([plainRow()]), 'user-1');
