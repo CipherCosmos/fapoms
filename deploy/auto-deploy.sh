@@ -364,15 +364,32 @@ if [ -n "$HOOK" ]; then
   fi
 fi
 
+# ---------------------------------------------------------------------------------------------
+# `--renew-anon-volumes` on every rebuild, and it is the whole point of the rebuild.
+#
+# The dev images install dependencies at BUILD time into /app/node_modules and
+# /app/packages/<pkg>/node_modules, and the compose file mounts an ANONYMOUS VOLUME over each of
+# those paths so a host-side node_modules cannot leak in. `docker compose up -d` preserves
+# anonymous volumes across container recreation by design — it copies them onto the new container.
+#
+# So the sequence "build the image with the new dependency, then up -d" did the expensive thing
+# and then threw the result away: the fresh image's node_modules was immediately shadowed by the
+# volume created before the dependency existed, and the newly added library was still missing.
+# Which is exactly what the rebuild was triggered to fix.
+#
+# Only anonymous volumes are renewed. Named ones — pgdata, redisdata, miniodata, backupsdata —
+# are untouched, so no data is at risk here.
+REBUILD_UP=(up -d --renew-anon-volumes)
+
 if $NEED_BACKEND; then
-  log "rebuilding backend"
+  log "rebuilding backend (dependencies or Dockerfile changed)"
   "${COMPOSE[@]}" build backend >> "$LOG" 2>&1
-  "${COMPOSE[@]}" up -d backend >> "$LOG" 2>&1
+  "${COMPOSE[@]}" "${REBUILD_UP[@]}" backend >> "$LOG" 2>&1
 fi
 if $NEED_FRONTEND; then
-  log "rebuilding frontend"
+  log "rebuilding frontend (dependencies or Dockerfile changed)"
   "${COMPOSE[@]}" build frontend >> "$LOG" 2>&1
-  "${COMPOSE[@]}" up -d frontend >> "$LOG" 2>&1
+  "${COMPOSE[@]}" "${REBUILD_UP[@]}" frontend >> "$LOG" 2>&1
 fi
 if $NEED_SHARED_BUILD && ! $NEED_BACKEND && ! $NEED_FRONTEND; then
   # Skipped when an image rebuild is already happening — that recompiles shared anyway.
@@ -402,7 +419,7 @@ fi
 if $NEED_MOBILE; then
   log "rebuilding mobile (Metro bundler)"
   "${COMPOSE[@]}" build mobile >> "$LOG" 2>&1
-  "${COMPOSE[@]}" up -d mobile >> "$LOG" 2>&1
+  "${COMPOSE[@]}" "${REBUILD_UP[@]}" mobile >> "$LOG" 2>&1
 fi
 # Only meaningful where the stack actually terminates traffic in Caddy. The AWS box fronts its
 # containers with host nginx and defines no caddy service, so a Caddyfile edit there changes
