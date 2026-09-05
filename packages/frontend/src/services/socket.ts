@@ -8,10 +8,11 @@ let socket: Socket | null = null;
 /**
  * Handles the one disconnect reason socket.io-client will not retry itself — see
  * `manualReconnect.ts` for the full story. Module-level, like `socket`, so it is naturally scoped
- * to the current login: `disconnectSocket()` (real logout) cancels it, and the next
- * `connectSocket()` builds a fresh one with fresh backoff.
+ * to the current login: `disconnectSocket()` (real logout) cancels it, which clears the pending
+ * timer and resets the delay to its initial value — so the next `connectSocket()` starts from
+ * fresh backoff on the same instance rather than a rebuilt one.
  */
-let manualReconnect = createManualReconnect(
+const manualReconnect = createManualReconnect(
   () => !!getSocketToken(),
   () => socket?.connect(),
 );

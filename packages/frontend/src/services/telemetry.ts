@@ -23,7 +23,7 @@ const FLUSH_INTERVAL_MS = 15_000;
 const MAX_QUEUE = 50;
 const LABEL_MAX = 80;
 
-let queue: TelemetryEvent[] = [];
+const queue: TelemetryEvent[] = [];
 let timer: ReturnType<typeof setTimeout> | null = null;
 
 function token(): string | null {

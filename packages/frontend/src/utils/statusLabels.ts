@@ -52,10 +52,12 @@ export function branchStatusBucket(status?: string | null): BranchStatusBucket {
     case ProjectBranchStatus.UNABLE_TO_COVER:
     case ProjectBranchStatus.CANCELLED:
       return 'blocked';
+    // NEGOTIATION is a display fallback for pre-removal rows only: in-app negotiation is gone and
+    // nothing writes this status any more, but an unmigrated stale row must still get a sane
+    // colour. Placed above the group because a comment between two `case` lines stops the earlier
+    // one counting as empty, which makes no-fallthrough report a correct grouping as a bug.
     case ProjectBranchStatus.CANDIDATE_SEARCH:
     case ProjectBranchStatus.CONTACT_INITIATED:
-    // Display fallback for pre-removal rows only — in-app negotiation is gone and nothing
-    // writes this status any more, but an unmigrated stale row must still get a sane colour.
     case ProjectBranchStatus.NEGOTIATION:
       return 'seeking';
     case ProjectBranchStatus.ON_HOLD:

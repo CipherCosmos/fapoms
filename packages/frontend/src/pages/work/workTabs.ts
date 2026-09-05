@@ -100,12 +100,15 @@ export function tabForBranchStatus(status?: string | null): WorkTabPath | null {
   switch (status) {
     // Nobody is assigned yet, or the person who was has fallen through — the next real action is
     // finding somebody and agreeing a fee.
+    //
+    // NEGOTIATION is a display fallback for pre-removal rows only: nothing writes it since in-app
+    // fee negotiation was removed, but a stale row still belongs on the planning tab. It sits here
+    // rather than beside its own label because a comment between two `case` lines stops the
+    // earlier one counting as empty, and no-fallthrough then reports a grouping that is correct.
     case ProjectBranchStatus.IMPORTED:
     case ProjectBranchStatus.PLANNING:
     case ProjectBranchStatus.CANDIDATE_SEARCH:
     case ProjectBranchStatus.CONTACT_INITIATED:
-    // Display fallback for pre-removal rows only — nothing writes NEGOTIATION since in-app fee
-    // negotiation was removed, but a stale row still belongs on the planning tab.
     case ProjectBranchStatus.NEGOTIATION:
     case ProjectBranchStatus.UNABLE_TO_COVER:
     case ProjectBranchStatus.ON_HOLD:

@@ -55,7 +55,7 @@ const LANDMARK = /(?:^|\s)(?:near\s*by|near|opp\.?|opposite|behind|beside|back\s
  * `Plot No-12`, `Door no -3-3-11/A`, `Ward No-23`, `Flat No 2`), the `#` form (`# 155/A`), and a
  * bare segment that is nothing but digits and separators (`81`, `7/55`, `35-1-3/1`, `10-A`).
  */
-const LABELLED_NUMBER = /\b(?:h\.?\s*no|house\s*no|door\s*no|d\.?\s*no|plot\s*no|flat\s*no|ward\s*no|room\s*no|shop\s*no|survey\s*no|khasra\s*no|no)\b\.?\s*[-:.]?\s*[\w/\-]*/gi;
+const LABELLED_NUMBER = /\b(?:h\.?\s*no|house\s*no|door\s*no|d\.?\s*no|plot\s*no|flat\s*no|ward\s*no|room\s*no|shop\s*no|survey\s*no|khasra\s*no|no)\b\.?\s*[-:.]?\s*[\w/-]*/gi;
 const BARE_NUMBER_SEGMENT = /^[#\s]*\d[\d\s/\-.,]*[a-z]?$/i;
 
 /** `Village- Raghunathpur`, `PO-Siddhipur`, `Vill-1 No Sahapara` — a label, then the actual name. */
