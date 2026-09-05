@@ -202,11 +202,12 @@ export class QualificationScoreService {
     for (const o of overrideRows) (overridesByClient.get(o.clientId!) ?? overridesByClient.set(o.clientId!, []).get(o.clientId!)!).push(o);
 
     const held = this.heldCredentials(assayer as AssayerWithWorkforceAttributes);
-    const views: PartnerQualificationView[] = [];
-    for (const client of allClients) {
-      views.push(await this.partnerView(assayer, client, dims, weights, policy.caps, empanelmentByClient.get(client.id) ?? null, overridesByClient.get(client.id) ?? []));
-    }
-    return views;
+    // One `partnerView` per active client, independent of every other — a client with overrides
+    // issues its own query (see `overrideViews`), so a sequential loop serialized what were
+    // otherwise unrelated round trips against however many clients are active.
+    return Promise.all(allClients.map((client) =>
+      this.partnerView(assayer, client, dims, weights, policy.caps, empanelmentByClient.get(client.id) ?? null, overridesByClient.get(client.id) ?? []),
+    ));
   }
 
   private async partnerView(
@@ -312,6 +313,7 @@ export class QualificationScoreService {
       .map((d) => ({
         identity: true,
         id: d.id,
+        hasScan: (d.filePaths ?? []).length > 0,
         label: (ONBOARDING_DOCUMENT_LABELS as Record<string, string>)[d.requirement] ?? d.requirement,
         verificationStatus: (d.verificationStatus as any) ?? null,
         expiryDate: d.expiryDate ?? null,
@@ -556,7 +558,7 @@ export class QualificationScoreService {
     const results = pool.map((assayer) => {
       const hydrated = assayer as AssayerWithWorkforceAttributes;
       const identityInputs = (docsBy.get(assayer.id) ?? []).map((d) => ({
-        identity: true, id: d.id,
+        identity: true, id: d.id, hasScan: (d.filePaths ?? []).length > 0,
         label: (ONBOARDING_DOCUMENT_LABELS as Record<string, string>)[d.requirement] ?? d.requirement,
         verificationStatus: (d.verificationStatus as any) ?? null, expiryDate: d.expiryDate ?? null,
       }));

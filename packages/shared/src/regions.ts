@@ -17,6 +17,8 @@
  * every write.
  */
 
+import { editDistance } from './text-distance';
+
 /** The six operational regions. Stored as-is in `branches.region` and `users.regions`. */
 export enum Region {
   NORTH = 'NORTH',
@@ -174,37 +176,6 @@ const STATE_ABBREVIATIONS: Record<string, string> = {
   dl: 'delhi',
   gj: 'gujarat',
 };
-
-/**
- * Levenshtein edit distance, bounded so a hopeless pair costs almost nothing to reject.
- *
- * Two rolling rows rather than a full matrix: this runs against ~40 candidates per lookup and a
- * branch import calls it once per unmatched row, so the allocation is worth avoiding.
- */
-function editDistance(a: string, b: string, ceiling: number): number {
-  if (a === b) return 0;
-  if (Math.abs(a.length - b.length) > ceiling) return ceiling + 1;
-
-  let prev = new Array<number>(b.length + 1);
-  let curr = new Array<number>(b.length + 1);
-  for (let j = 0; j <= b.length; j++) prev[j] = j;
-
-  for (let i = 1; i <= a.length; i++) {
-    curr[0] = i;
-    let rowBest = curr[0];
-    for (let j = 1; j <= b.length; j++) {
-      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
-      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
-      if (curr[j] < rowBest) rowBest = curr[j];
-    }
-    // Every future row is >= this row's minimum, so we can stop once the whole row is hopeless.
-    if (rowBest > ceiling) return ceiling + 1;
-    const swap = prev;
-    prev = curr;
-    curr = swap;
-  }
-  return prev[b.length];
-}
 
 /**
  * How many letters may differ before a spelling stops being a typo and starts being a different

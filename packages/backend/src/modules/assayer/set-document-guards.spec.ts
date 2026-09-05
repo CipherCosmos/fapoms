@@ -94,6 +94,9 @@ describe('who may record a PAN or Aadhaar number', () => {
   const controller = () => {
     const c: any = Object.create(AssayerController.prototype);
     c.rosterRecords = { setDocument: jest.fn().mockResolvedValue({ ok: true }) };
+    // None of these calls pass a scope, so the real guard would no-op regardless — this mock
+    // exists only so `setDocument`'s unconditional region-scope check has something to call.
+    c.regionGuard = { assertAssayerInScope: jest.fn().mockResolvedValue(undefined) };
     return c;
   };
 
@@ -132,5 +135,76 @@ describe('who may record a PAN or Aadhaar number', () => {
     const c = controller();
     await c.setDocument('asr-1', 'PAN_CARD', { documentNumber: 'ABCDE1234F' }, req(['OPERATIONS'], 'u-9'));
     expect(c.rosterRecords.setDocument).toHaveBeenCalled();
+  });
+});
+
+/**
+ * What a reviewer must have in front of them before the record says somebody checked it.
+ *
+ * Both rules below were absent, and their absence pointed in opposite directions: one made the
+ * commonest rejection impossible to record, and the other let a verification be recorded against
+ * nothing at all.
+ */
+describe('verifying an identity document', () => {
+  const rowWith = (over: Record<string, unknown> = {}) => ({
+    id: 'doc-1',
+    assayerId: 'asr-1',
+    requirement: OnboardingDocument.PAN_CARD,
+    filePaths: ['scans/pan.jpg'],
+    verificationStatus: null,
+    documentNumber: null,
+    ...over,
+  });
+
+  const serviceFor = (row: any, person: any = { id: 'asr-1', panNumber: 'ABCDE1234F' }) => {
+    const svc: any = Object.create(RosterRecordsService.prototype);
+    svc.onboarding = { findOne: jest.fn().mockResolvedValue(row), save: jest.fn(async (d: any) => d) };
+    svc.assayers = { findOne: jest.fn().mockResolvedValue(person), update: jest.fn() };
+    svc.auditService = { recordEventSafe: jest.fn() };
+    return svc;
+  };
+
+  /**
+   * The bug this pins: the number was demanded for every verdict that was not PENDING, REJECTED
+   * included. You reject an illegible scan precisely *because* you could not read the number off
+   * it, so the guard asked the reviewer for the one thing they were reporting they could not get —
+   * and the commonest rejection of all could never be recorded.
+   */
+  it('rejects a scan whose number could not be read', async () => {
+    const svc = serviceFor(rowWith(), { id: 'asr-1', panNumber: null });
+    await expect(svc.verifyDocument('doc-1', 'REJECTED', 'actor-1')).resolves.toMatchObject({
+      verificationStatus: 'REJECTED',
+    });
+  });
+
+  it('still refuses to VERIFY without a number, because there is nothing to have checked', async () => {
+    const svc = serviceFor(rowWith(), { id: 'asr-1', panNumber: null });
+    await expect(svc.verifyDocument('doc-1', 'VERIFIED', 'actor-1'))
+      .rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  /**
+   * The roster import wrote 11,160 rows saying a document was received with no file behind any of
+   * them. Without this rule every one could be marked verified in a click, and the record would
+   * then carry a name and a timestamp asserting somebody checked a scan that does not exist —
+   * worse than the tick it replaced.
+   */
+  it('refuses to verify a document with no scan on file', async () => {
+    const svc = serviceFor(rowWith({ filePaths: [] }));
+    await expect(svc.verifyDocument('doc-1', 'VERIFIED', 'actor-1'))
+      .rejects.toThrow(/no scan of this/i);
+  });
+
+  it('verifies when the scan and the number are both there', async () => {
+    const svc = serviceFor(rowWith());
+    await expect(svc.verifyDocument('doc-1', 'VERIFIED', 'actor-1')).resolves.toMatchObject({
+      verificationStatus: 'VERIFIED',
+    });
+  });
+
+  /** A rejection needs no scan either — "nothing arrived" is a thing a reviewer must be able to say. */
+  it('rejects a document with no scan', async () => {
+    const svc = serviceFor(rowWith({ filePaths: [] }), { id: 'asr-1', panNumber: null });
+    await expect(svc.verifyDocument('doc-1', 'REJECTED', 'actor-1')).resolves.toBeTruthy();
   });
 });

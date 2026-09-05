@@ -39,6 +39,14 @@ export interface IdentityDocInput {
   identity: boolean;
   /** Null when no row exists — the document was never received at all. */
   id: string | null;
+  /**
+   * Whether a scan is actually attached.
+   *
+   * A row on its own proves nothing here. The roster import created 11,160 document rows that say
+   * a document was received and hold no file, so "a row exists" was true for almost every
+   * appraiser and almost none of it was evidence.
+   */
+  hasScan: boolean;
   label: string;
   verificationStatus: 'PENDING' | 'VERIFIED' | 'REJECTED' | null;
   expiryDate: string | Date | null;
@@ -58,7 +66,15 @@ export interface IdentityDocInput {
  * all → null ("not yet assessed"), never zero.
  */
 export function identityVerificationScore(docs: IdentityDocInput[], now: Date = new Date()): ScoredDimension {
-  const onFile = docs.filter((d) => d.identity && d.id !== null);
+  /**
+   * On file means a scan is on file.
+   *
+   * This tested `d.id !== null` — a row exists — and then awarded 50 for "on file, awaiting
+   * verification". The roster import wrote 11,160 such rows with no file behind any of them, so
+   * every appraiser collected 50 on a weighted dimension for paperwork nobody has ever seen, and
+   * the score said the estate was half-vetted when none of it was.
+   */
+  const onFile = docs.filter((d) => d.identity && d.id !== null && d.hasScan);
   if (onFile.length === 0) {
     return { key: 'identityVerification', score: null, basis: ['No identity documents on file yet.'] };
   }

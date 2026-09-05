@@ -24,7 +24,8 @@ describe('qualification score contract', () => {
 
   describe('identityVerification', () => {
     const doc = (over: Partial<any>) => ({
-      identity: true, id: 'row-1', label: 'PAN card', verificationStatus: null, expiryDate: null, ...over,
+      identity: true, id: 'row-1', hasScan: true, label: 'PAN card',
+      verificationStatus: null, expiryDate: null, ...over,
     });
 
     it('scores 100 when everything on file is verified and unexpired', () => {
@@ -41,6 +42,21 @@ describe('qualification score contract', () => {
     it('averages only over documents ON FILE — the eight identity types are alternatives', () => {
       // One verified doc + seven absent requirements: the absent ones must not drag the mean.
       const rows = [doc({ verificationStatus: 'VERIFIED' }), ...Array.from({ length: 7 }, (_, i) => doc({ id: null, label: `alt-${i}` }))];
+      expect(identityVerificationScore(rows, NOW).score).toBe(100);
+    });
+
+    /**
+     * A row is not evidence. The roster import wrote 11,160 document rows that say a document was
+     * received and hold no file, so testing "a row exists" handed almost every appraiser 50 on a
+     * weighted dimension for paperwork nobody has ever seen — and the score reported the estate as
+     * half-vetted when not one document had been verified.
+     */
+    it('ignores a document that was ticked as received but has no scan', () => {
+      expect(identityVerificationScore([doc({ hasScan: false })], NOW).score).toBeNull();
+    });
+
+    it('does not let a ticked-but-empty row dilute a real one', () => {
+      const rows = [doc({ verificationStatus: 'VERIFIED' }), doc({ id: 'row-2', hasScan: false })];
       expect(identityVerificationScore(rows, NOW).score).toBe(100);
     });
 

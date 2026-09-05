@@ -46,6 +46,11 @@ export * from './assignment-fee';
 // PAN/Aadhaar/IFSC/phone validation — one rulebook for the importer and every API write path
 export * from './identity-validation';
 
+// Comparing a name on a card with a name on a record, and the edit distance both it and the
+// region canonicaliser measure with.
+export * from './text-distance';
+export * from './name-match';
+
 // Service-log viewer: the readable-service allowlist, line shape and query ceilings
 export * from './service-logs';
 

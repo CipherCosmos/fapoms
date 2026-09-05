@@ -531,10 +531,34 @@ export class RosterRecordsService {
       const person = await this.assayers.findOne({ where: { id: row.assayerId } });
       effectiveNumber = (person?.[numberOnPerson] as string | null) ?? null;
     }
-    if (verdict !== DocumentVerification.PENDING && !effectiveNumber) {
+    /**
+     * A number is needed to ATTEST, not to refuse.
+     *
+     * This read `verdict !== PENDING`, which caught REJECTED too — and made the commonest rejection
+     * of all impossible to record. You reject an illegible scan precisely *because* you could not
+     * read the number off it; demanding the number first is asking the reviewer for the thing they
+     * are telling you they could not get.
+     */
+    if (verdict === DocumentVerification.VERIFIED && !effectiveNumber) {
       throw new BadRequestException(
         'There is no document number on this record, so there is nothing to have checked against '
         + 'the original.',
+      );
+    }
+
+    /**
+     * And there has to be a document to have checked.
+     *
+     * The roster import wrote 11,160 rows that say a document was received and hold no file —
+     * `DataIntegrityService` reports them as "ticked as received, but no scan was kept". Without
+     * this line every one of them could be marked verified in a single click, and the record would
+     * then assert that somebody checked a scan that does not exist. That is a worse lie than the
+     * tick, because a verification carries a name and a timestamp.
+     */
+    if (verdict === DocumentVerification.VERIFIED && (row.filePaths ?? []).length === 0) {
+      throw new BadRequestException(
+        `There is no scan of this ${ONBOARDING_DOCUMENT_LABELS[row.requirement]} on file, so there `
+        + 'is nothing to have checked against the original. Upload the document first.',
       );
     }
     const previousStatus = row.verificationStatus;

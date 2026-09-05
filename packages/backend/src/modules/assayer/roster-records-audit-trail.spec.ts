@@ -93,6 +93,9 @@ describe('RosterRecordsService — audit trail for previously-silent writes', ()
     onboarding.findOne.mockResolvedValue({
       id: 'doc-1', assayerId: 'a-1', requirement: 'PAN_CARD',
       verificationStatus: DocumentVerification.PENDING, documentNumber: null,
+      // A verification now needs something to have been verified. `set-document-guards.spec.ts`
+      // covers the refusal; this test is about the trail the write leaves behind.
+      filePaths: ['scans/a-1/pan.jpg'],
     });
     assayers.findOne.mockResolvedValue({ id: 'a-1', panNumber: 'ABCDE1234F' });
 
