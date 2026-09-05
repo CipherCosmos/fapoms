@@ -157,6 +157,8 @@ interface Candidate {
    * clash, or the operator dispatches into a double-booking believing the list was clean.
    */
   dateConflict?: string | null;
+  /** The client's service limit, set only when this candidate is beyond it. */
+  exceedsClientRange?: number | null;
   /**
    * What staff have said about this person, exactly as the engine's `remarksScore` read it —
    * count of rated remarks in the last year, their recency-weighted mean (−2…+2), the latest
@@ -2117,6 +2119,22 @@ export const PlanningWorkspace: React.FC = () => {
                 </div>
               )}
 
+              {/*
+                * Ranked, but beyond what this client normally pays to travel.
+                *
+                * The engine deliberately penalises distance rather than hiding it — the minimum is
+                * the compliance rule, the maximum is a cost preference — while the write path
+                * enforced the maximum anyway. So this card looked perfectly assignable and was
+                * refused on the click, with nothing on screen having hinted at it. Assigning them
+                * is allowed with a stated reason; saying so here is what turns a dead end into a
+                * decision.
+                */}
+              {c.exceedsClientRange != null && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10.5px', fontWeight: 600, padding: '4px 8px', borderRadius: 'var(--radius-sm)', background: 'var(--status-pending-bg)', color: 'var(--warning)' }}>
+                  <AlertTriangle size={10} /> Beyond this client&rsquo;s {c.exceedsClientRange} km limit — assigning them needs a reason.
+                </div>
+              )}
+
               <div style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', gap: '8px', background: 'var(--bg-surface-2)', padding: '6px 8px', borderRadius: '4px' }}>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Phone size={10} /> {c.phone}</span>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><MapPin size={10} /> {c.city}, {c.state}</span>
@@ -3066,10 +3084,33 @@ export const PlanningWorkspace: React.FC = () => {
                     style={{ width: '100%', padding: '10px 10px 10px 26px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '14px', boxSizing: 'border-box' }} />
                 </div>
               </div>
+              {/*
+                * The rule this assignment will break, and the box that lets it through.
+                *
+                * Shown only when there is actually something to waive. The operator used to
+                * complete this whole form — fee, date, two checkboxes — press Confirm, and be
+                * refused by a limit the modal had never mentioned; their only route through was to
+                * abandon it, scroll to the excluded panel and start again. Asking here, in the
+                * form they are already filling in, is the difference between a dead end and a
+                * decision they are accountable for.
+                */}
+              {selectedCandidate.exceedsClientRange != null && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <label style={{ fontSize: '11px', color: 'var(--warning)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <AlertTriangle size={11} /> Beyond this client&rsquo;s {selectedCandidate.exceedsClientRange} km limit — why assign them?
+                  </label>
+                  <input
+                    value={overrideReasonInput}
+                    onChange={e => setOverrideReasonInput(e.target.value)}
+                    required
+                    placeholder="Recorded against this assignment"
+                    style={{ width: '100%', padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--warning)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px', boxSizing: 'border-box' }}
+                  />
+                </div>
+              )}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                 <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
                   <Calendar size={11} /> Audit Scheduled Date
-                </label>
                 <input type="date" value={scheduledAuditDate} onChange={e => pinPlanDate(e.target.value)} required={!counterOfferAssignmentId}
                   style={{ width: '100%', padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px', boxSizing: 'border-box' }} />
               </div>

@@ -37,6 +37,7 @@ import { RoutingService, RouteResult } from '../geo/routing.provider';
 import { ValidationService } from '../validation/validation.service';
 import { DocumentService } from '../document/document.service';
 import { FeePolicyService } from '../pricing/fee-policy.service';
+import { withCode } from '../../infrastructure/http/api-error';
 import { EventCategory, ScheduleStatus, AssignmentStatus, ProjectBranchStatus, CustomerMasterStatus, Priority, SystemRole, calculateHaversineDistance, assignmentIssueCategoryLabel, isAssignmentTerminal, BypassableRule, businessDateKey, businessTodayDateKey, standingAllowsPlanning } from '@fapoms/shared';
 import { NO_EMPANELMENT_ROW_SETTING } from '../planning/recommendation.engine';
 import { applyBranchScope, branchScopeWhere, needsBranchJoin } from '../../infrastructure/scope/apply-scope';
@@ -314,6 +315,33 @@ export class AssignmentService {
     return `ASN-${new Date().getFullYear()}-${String(n).padStart(6, '0')}`;
   }
 
+  /**
+   * Decide whether a stated reason gets past a blocking rule, or refuse in a way that says why.
+   *
+   * Static and pure so the decision can be exercised on its own. It is the whole of what changed
+   * on this path — six of the seven blocking checks used to throw unconditionally while a seventh
+   * consulted `overrideReason`, so the planning panel offered "Assign anyway", the operator typed
+   * a justification, and a rule that had never read the field refused them.
+   */
+  static applyOverridePolicy(
+    rule: AssignmentRule,
+    barredReason: string,
+    overrideReason: string | undefined,
+  ): { rule: AssignmentRule; barredReason: string; overrideReason: string } {
+    const stated = overrideReason?.trim();
+    if (canOverrideAssignmentRule(rule) && stated) {
+      return { rule, barredReason, overrideReason: stated };
+    }
+    // Says whether a reason would have helped. A refusal that leaves that unsaid is what had
+    // operators retyping the same justification into the same button.
+    throw withCode(
+      new BadRequestException(`${barredReason} ${overrideAdviceFor(rule)}`),
+      canOverrideAssignmentRule(rule)
+        ? ASSIGNMENT_ERROR_CODES.OVERRIDE_REASON_REQUIRED
+        : ASSIGNMENT_ERROR_CODES.RULE_NOT_OVERRIDABLE,
+    );
+  }
+
   async create(dto: CreateAssignmentDto, userId: string): Promise<AssignmentEntity> {
     const projectBranch = await this.projectQueryService.findProjectBranchById(dto.projectBranchId);
 
@@ -334,6 +362,12 @@ export class AssignmentService {
     });
 
     // Validate Assayer exists and has the required skills/certifications
+    const overrides: Array<{ rule: AssignmentRule; barredReason: string; overrideReason: string }> = [];
+    const refuseUnlessOverridden = (rule: AssignmentRule, barredReason: string): void => {
+      const waived = AssignmentService.applyOverridePolicy(rule, barredReason, dto.overrideReason);
+      overrides.push(waived);
+    };
+
     const assayer = await this.assayerService.findOne(dto.assayerId);
 
     if (!assayer) {
@@ -344,7 +378,12 @@ export class AssignmentService {
     if (projectBranch.project) {
       const skillsCheck = this.constraintEvaluator.checkSkillsAndCertifications(assayer, projectBranch.project, dto.scheduledDate ? new Date(dto.scheduledDate) : undefined);
       if (!skillsCheck.passed) {
-        throw new BadRequestException(skillsCheck.reason);
+        // A lapsed certification with a renewal in hand is an operational judgement, and the
+        // planning panel has always offered to waive it. Now it can.
+        refuseUnlessOverridden(
+          skillsCheck.rule ?? AssignmentRule.SKILLS_AND_CERTIFICATIONS,
+          skillsCheck.reason ?? 'Missing a skill or certification this project requires.',
+        );
       }
     }
 
@@ -431,7 +470,21 @@ export class AssignmentService {
       distanceKm > 0 ? distanceKm : null,
     );
     if (!distancePolicy.passed) {
-      throw new BadRequestException(distancePolicy.reason);
+      /**
+       * The two halves of this rule are not the same kind of thing, and only now can they be
+       * told apart in code.
+       *
+       * The FLOOR is the conflict-of-interest rule — somebody valuing gold at a branch beside
+       * their own home — and is deliberately not an operator's to waive. The CEILING is a service
+       * limit: further out than usual, which is a cost and practicality question an operator may
+       * answer. The recommendation engine already treats them differently, ranking distant
+       * candidates as eligible (`relaxDistance`) while this path refused them — so a candidate
+       * shown as perfectly assignable failed on the click with no warning anywhere.
+       */
+      refuseUnlessOverridden(
+        distancePolicy.rule ?? AssignmentRule.DISTANCE_FLOOR,
+        distancePolicy.reason ?? 'Outside the client\'s permitted distance band for this branch.',
+      );
     }
 
     /**
@@ -772,6 +825,29 @@ export class AssignmentService {
           entityId: savedAssignment.id,
           userId,
           remarks: `${eligibilityOverride.barredReason} Overridden: ${eligibilityOverride.overrideReason}`,
+          metadata: { rule: AssignmentRule.CLIENT_ELIGIBILITY },
+        }, { manager });
+      }
+
+      /**
+       * Every other rule a stated reason just waived, one row each, naming which.
+       *
+       * The empanelment override above had a trail from the day it existed. The rules that only
+       * now honour a reason — skills, the distance ceiling, rotation, date availability — would
+       * otherwise waive silently, which would be worse than refusing: a certification requirement
+       * set aside with nothing on the record is exactly the sort of decision that has to be
+       * answerable afterwards. Same event type, so one query finds every override of any kind;
+       * the rule is in the metadata so they can still be told apart.
+       */
+      for (const waived of overrides) {
+        await this.auditService.recordEventSafe({
+          category: EventCategory.OPERATIONAL,
+          eventType: 'ASSIGNMENT_ELIGIBILITY_OVERRIDDEN',
+          entityType: 'ASSIGNMENT',
+          entityId: savedAssignment.id,
+          userId,
+          remarks: `${waived.barredReason} Overridden: ${waived.overrideReason}`,
+          metadata: { rule: waived.rule },
         }, { manager });
       }
       if (eligibilityBypassReason) {

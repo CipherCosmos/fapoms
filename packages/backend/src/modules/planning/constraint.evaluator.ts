@@ -7,7 +7,7 @@ import { HolidayService } from '../holiday/holiday.service';
 import { AssayerEntity, AssayerWithWorkforceAttributes } from '../assayer/assayer.entity';
 import { BranchEntity } from '../branch/branch.entity';
 import { ProjectEntity } from '../project/project.entity';
-import { AssignmentStatus, businessDateKey, BypassableRule } from '@fapoms/shared';
+import { AssignmentStatus, businessDateKey, BypassableRule, AssignmentRule } from '@fapoms/shared';
 import { COMMITTED_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
 import { RuleBypassService } from '../platform/rule-bypass/rule-bypass.service';
 
@@ -21,6 +21,17 @@ export interface ConstraintContext {
 export interface ConstraintResult {
   passed: boolean;
   reason?: string;
+  /**
+   * Which rule refused, when one did.
+   *
+   * The reason sentence is written for a person and must stay that way, so it cannot also be the
+   * thing code branches on — and the write path has to branch on it, because whether a stated
+   * reason may waive a refusal depends entirely on WHICH refusal it is. `checkDistancePolicy` is
+   * the case that forced this: its two branches are the client's independence floor and its
+   * service ceiling, one of which an operator may overrule and one of which they may not, and
+   * they were distinguishable only by reading the English.
+   */
+  rule?: AssignmentRule;
   /**
    * Set when this check passed only because an administrator has the rule suspended. Callers
    * that surface outcomes to a person should say so — a plan that is valid only while a bypass
@@ -270,6 +281,7 @@ export class ConstraintEvaluator {
       }
       return {
         passed: false,
+        rule: AssignmentRule.DISTANCE_FLOOR,
         reason: `Conflict of interest: ${distance.toFixed(1)}km is within the client's ${minDistance}km minimum-distance rule.`,
       };
     }
@@ -281,6 +293,7 @@ export class ConstraintEvaluator {
       }
       return {
         passed: false,
+        rule: AssignmentRule.DISTANCE_CEILING,
         reason: `Out of range: ${distance.toFixed(1)}km exceeds the client's ${maxDistance}km limit.`,
       };
     }
@@ -308,6 +321,7 @@ export class ConstraintEvaluator {
         }
         return {
           passed: false,
+          rule: AssignmentRule.SKILLS_AND_CERTIFICATIONS,
           reason: `Assayer Qualification Conflict: Assayer lacks required skills: ${missingSkills.join(', ')}`,
         };
       }
@@ -337,6 +351,7 @@ export class ConstraintEvaluator {
         }
         return {
           passed: false,
+          rule: AssignmentRule.SKILLS_AND_CERTIFICATIONS,
           reason: `Assayer Qualification Conflict: Assayer lacks a valid certification (missing or expired): ${missingCerts.join(', ')}`,
         };
       }

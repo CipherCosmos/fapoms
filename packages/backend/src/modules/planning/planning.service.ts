@@ -64,6 +64,14 @@ export interface AssayerRecommendation {
    */
   dateConflict?: string | null;
   /**
+   * The client's service limit, when this candidate is beyond it.
+   *
+   * Ranked but out of range: the engine penalises distance rather than hiding it, and assigning
+   * them now needs a stated reason. Carried so the card can say that before the click instead of
+   * the operator discovering it in a refusal.
+   */
+  exceedsClientRange?: number | null;
+  /**
    * What staff have said about this person, exactly as the `remarksScore` dimension read it:
    * how many rated remarks in the last year, their recency-weighted mean (−2…+2), and the most
    * recent one. Lets the card say "3 remarks · avg −0.7" and show the words, so a moved score
@@ -278,6 +286,7 @@ export class PlanningService {
         // Present only when the date checks were relaxed and this candidate has a clash on the
         // planned date. Null/absent means genuinely free.
         dateConflict: r.dateConflict ?? null,
+        exceedsClientRange: (r as any).exceedsClientRange ?? null,
         remarkSummary: r.remarkSummary,
       });
     }

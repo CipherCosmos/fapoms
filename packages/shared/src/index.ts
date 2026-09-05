@@ -51,6 +51,9 @@ export * from './identity-validation';
 export * from './text-distance';
 export * from './name-match';
 
+// What "assign anyway" may and may not waive — read by the engine, the write path and the panel.
+export * from './assignment-override';
+
 // Service-log viewer: the readable-service allowlist, line shape and query ceilings
 export * from './service-logs';
 

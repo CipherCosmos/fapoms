@@ -91,6 +91,22 @@ export const AUTH_ERROR_CODES = {
  * and several are refusals they can fix themselves the moment they understand them — which is
  * precisely what an untranslated sentence prevents.
  */
+/**
+ * Why an assignment was refused, so a client can tell "type a reason" apart from "this will never
+ * work".
+ *
+ * Until these existed the whole path answered with prose and an HTTP status, and the planning
+ * screen displayed the sentence verbatim — which reads fine but means nothing can be branched on.
+ * The distinction that matters is exactly the one a bare 400 cannot carry: whether the operator's
+ * stated reason would have helped.
+ */
+export const ASSIGNMENT_ERROR_CODES = {
+  /** A stated reason would let this through; none was given. */
+  OVERRIDE_REASON_REQUIRED: 'OVERRIDE_REASON_REQUIRED',
+  /** No reason will get past this one — see `NOT_OVERRIDABLE_BECAUSE` for what to tell them. */
+  RULE_NOT_OVERRIDABLE: 'RULE_NOT_OVERRIDABLE',
+} as const;
+
 export const ASSAYER_ERROR_CODES = {
   /**
    * Activation refused because no identity document has been checked against its original.
@@ -185,6 +201,7 @@ export const GENERAL_ERROR_CODES = {
 export const API_ERROR_CODES = {
   ...AUTH_ERROR_CODES,
   ...ASSAYER_ERROR_CODES,
+  ...ASSIGNMENT_ERROR_CODES,
   ...GENERAL_ERROR_CODES,
 } as const;
 

@@ -1723,6 +1723,20 @@ export class RecommendationEngine {
    * default would quietly move the boundary — measured on a 5,000-assayer set, 322 candidates
    * instead of 321. Passing false selects the same spherical maths, and the same candidates.
    */
+  /**
+   * Is this candidate beyond the client's own service limit?
+   *
+   * Null when the client sets no limit, or when the distance is unknown — an absent figure is not
+   * evidence of being far away, and reporting it as a warning would put a caution on every
+   * candidate whose route lookup failed.
+   */
+  private exceedsClientRange(context: any, distanceKm: number | null): number | null {
+    const maxDistanceKm = Number(context?.client?.planningPreferences?.maxDistanceKm);
+    if (!Number.isFinite(maxDistanceKm) || maxDistanceKm <= 0) return null;
+    if (distanceKm == null || !Number.isFinite(distanceKm)) return null;
+    return distanceKm > maxDistanceKm ? maxDistanceKm : null;
+  }
+
   private async findNearbyActiveAssayerIds(
     branch: BranchEntity,
     radiusKm: number,
@@ -2521,6 +2535,17 @@ export class RecommendationEngine {
         dateConflict: context.relaxAvailability
           ? this.describeDateConflict(assayer, context)
           : null,
+        /**
+         * Further out than the client will normally send somebody, but still ranked.
+         *
+         * `DistancePolicyFilter` deliberately relaxes the CEILING (`relaxDistance: true`) so a
+         * distant candidate is penalised in scoring rather than hidden — the floor is the
+         * compliance rule, the ceiling is a cost preference. The write path enforced it anyway,
+         * so a card that looked perfectly assignable was refused on the click with nothing on
+         * screen having hinted at it. Assigning them is now allowed with a stated reason, and
+         * this is what lets the card say so BEFORE the click rather than after it.
+         */
+        exceedsClientRange: this.exceedsClientRange(context, routeByAssayer[assayer.id]?.distanceKm ?? null),
         // What staff have said, summarised exactly as the remarks scorer read it — count,
         // recency-weighted mean and the latest remark — so the card can show the words behind
         // the number. Computed from the shared facts; no extra query.
