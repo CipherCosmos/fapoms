@@ -4,8 +4,9 @@ import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { useConfirm, StatusBadge, AlertBanner, SkeletonList } from '../../components/ui';
 import { card, label, Bar, Empty, Section, Lede, LinkButton } from './hr-ui';
-import { STANDING_LABELS } from './AssayerVettingTab';
+import { STANDING_LABELS, standingStance, STANDING_STANCE_TONE } from './AssayerVettingTab';
 import { openAssayerProfilePrintWindow } from './assayerProfilePrint';
+import type { Assayer } from './assayer-shared';
 import type { AssayerQualificationView, PartnerQualificationView, DimensionScoreView } from '@fapoms/shared';
 
 /**
@@ -111,7 +112,18 @@ export const AssayerQualificationTab: React.FC<{
   const printProfile = async () => {
     if (!data || !partners) return;
     try {
-      const dossier = await api.request<any>(`/assayers/${assayerId}/dossier`);
+      // `dossier.onboarding` is the joining-paperwork checklist (soft/hard copy, verification
+      // status per requirement) — a different shape entirely from a certificate, and not
+      // something this printed profile should read certifications out of. What the profile
+      // means by "Certifications" is what the person actually holds, which lives on the assayer
+      // record itself (`Assayer.certifications`, the same array `heldCredentials()` on the
+      // backend reads when it scores this person's qualification). That is not part of either
+      // response this tab already fetches, so it is a small third request, made only when
+      // Print profile is actually pressed.
+      const [dossier, assayer] = await Promise.all([
+        api.request<any>(`/assayers/${assayerId}/dossier`),
+        api.request<Pick<Assayer, 'certifications'>>(`/assayers/${assayerId}`),
+      ]);
       const refs = dossier?.references ?? [];
       openAssayerProfilePrintWindow({
         qualification: data,
@@ -122,7 +134,7 @@ export const AssayerQualificationTab: React.FC<{
           cibilBand: dossier?.currentCheck?.cibilBand ?? null,
           referencesChecked: refs.filter((r: any) => r.checkedAt).length,
           referencesTotal: refs.length,
-          certifications: (dossier?.onboarding ?? []).length ? undefined : undefined,
+          certifications: assayer?.certifications ?? undefined,
         },
       });
     } catch (e) { setErr(userMessage(e)); }
@@ -244,7 +256,21 @@ export const AssayerQualificationTab: React.FC<{
                       actually means "empanelled before, dormant now". One map, in
                       `STANDING_LABELS`, which now covers all eight values.
                     */
-                    <StatusBadge label={STANDING_LABELS[pt.standing] ?? pt.standing} color={pt.standingCap != null ? 'var(--warning)' : 'var(--success)'} bg={pt.standingCap != null ? 'var(--status-pending-bg)' : 'var(--status-active-bg)'} variant="tag" />
+                    /*
+                      Coloured by `standingStance`, the same rule the Summary strip and the
+                      Vetting table use — NOT by whether a cap happens to apply. Colouring on
+                      `pt.standingCap != null` instead meant a standing with no cap read as green
+                      regardless of what it actually was, so a REJECTED or DOCUMENTS_PENDING
+                      partner with nothing capping its score (there is nothing left to cap) sat
+                      here in the same green as ACTIVE, disagreeing with the red/amber the other
+                      two surfaces already show for that exact standing.
+                    */
+                    <StatusBadge
+                      label={STANDING_LABELS[pt.standing] ?? pt.standing}
+                      color={STANDING_STANCE_TONE[standingStance(pt.standing)].fg}
+                      bg={STANDING_STANCE_TONE[standingStance(pt.standing)].bg}
+                      variant="tag"
+                    />
                   )}
                   {pt.standingCap != null && !pt.barred && (
                     <span style={{ fontSize: '12px', color: 'var(--warning)' }} title={pt.standingReason ?? undefined}>capped at {pt.standingCap}</span>

@@ -1,11 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { View, Linking } from 'react-native';
 import { AssayerAssignment } from '../types/mobile-app';
 import { MobileApiService } from '../services/api.service';
-import { assignmentFeeValue } from '../utils/fees';
 import { useTheme } from '../theme/ThemeProvider';
 import { AppText, Badge, Button, Card, Divider, EmptyState, FadeIn, Icon, Segmented } from '../components/ui/primitives';
-import { formatRupees as money, assignmentStatusLabel, isAssignmentTerminal, formatDateOnly, travelModeLabel } from '@fapoms/shared';
+import { assignmentStatusLabel, isAssignmentTerminal, formatDateOnly } from '@fapoms/shared';
 import { assignmentStatusTone } from '../utils/statusTone';
 import { dayGroupHeader, dayKey, relativeDay } from '../utils/dates';
 import { useT, useLocale, serverErrorText, t as translate } from '../i18n';
@@ -24,7 +23,6 @@ interface ScheduleScreenProps {
   onCheckOut?: (assignment: AssayerAssignment) => void;
   onOpenPdfDocs: (assignment: AssayerAssignment) => void;
   onOpenScanner?: (assignment: AssayerAssignment) => void;
-  onCounterOffer?: (assignment: AssayerAssignment) => void;
   onOpenQueryChat?: (assignment: AssayerAssignment) => void;
   onOpenMap?: (assignment: AssayerAssignment) => void;
   /**
@@ -47,7 +45,12 @@ const fmtDate = (d?: string | null) =>
  * Rebuilt around one card per stop that leads with where and when, states
  * plainly what is being asked, and shows only the actions legal in the current
  * status. The old version stacked six nested inline-styled rows per card at
- * 11px type and repeated the fee in three places.
+ * 11px type.
+ *
+ * There is deliberately no money on this screen — no fee, no counter-offer, no per-day
+ * totals. Fees are ops-internal until the invoice invitation reveals them on the Earnings
+ * tab; an offer here is accepted or declined on the work alone, and the figure is settled
+ * with the desk by phone.
  */
 export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
   assignments,
@@ -58,25 +61,10 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
   onCheckOut,
   onOpenPdfDocs,
   onOpenScanner,
-  onCounterOffer,
   onOpenQueryChat,
   onOpenMap,
   onLoadOlderHistory,
 }) => {
-  /**
-   * The negotiation cap, from the server that enforces it — not a copy on the phone.
-   *
-   * Hardcoding it meant the button could disagree with the rule: too low and the assayer is
-   * locked out of a negotiation the platform allows, too high and a tap auto-declines the offer
-   * and loses them the job. Falls back to the shipped default while the fetch is in flight.
-   */
-  const [maxRounds, setMaxRounds] = useState(3);
-  useEffect(() => {
-    let alive = true;
-    void MobileApiService.getPlatformLimits().then((l) => { if (alive) setMaxRounds(l.maxNegotiationRounds); });
-    return () => { alive = false; };
-  }, []);
-
   const t = useTheme();
   const tr = useT();
   const locale = useLocale();
@@ -161,9 +149,9 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
    * The flat list made the assayer do the calendar work themselves: every card showed a bare
    * date and nothing marked today, tomorrow, or the stop that slipped. Grouped by calendar
    * day — soonest first, overdue naturally rising to the top, unscheduled last — with the
-   * day's stop count and its total fee on the header, the screen answers "what does my week
-   * look like and what is each day worth" at a glance. History stays a flat reverse-
-   * chronological record; grouping a done-pile adds nothing.
+   * day's stop count on the header, the screen answers "what does my week look like" at a
+   * glance. History stays a flat reverse-chronological record; grouping a done-pile adds
+   * nothing.
    */
   const groups = React.useMemo(() => {
     if (tab === 'DONE') {
@@ -226,15 +214,12 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                 header={g.header}
                 tone={g.tone}
                 count={g.items.length}
-                totalFee={g.items.reduce((s, x) => s + assignmentFeeValue(x), 0)}
               />
             )}
             {g.items.map((a, i) => {
           // Wording from @fapoms/shared, tone from the app's one tone map — this screen used
           // to keep its own copy of both, and they had drifted from HomeScreen's.
           const meta = { label: assignmentStatusLabel(a.status), tone: assignmentStatusTone(a.status) as Tone };
-          const fee = assignmentFeeValue(a);
-          const rounds = a.negotiationCount || 0;
 
           return (
             <FadeIn key={a.id} delay={Math.min(i, 6) * 45}>
@@ -262,56 +247,16 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
                 <View style={{ flexDirection: 'row', gap: t.space.lg }}>
                   <Fact icon="calendar-outline" label={tr('schedule.factDate')} value={fmtDate(a.scheduledDate)} />
                   <Fact icon="cube-outline" label={tr('schedule.factPackets')} value={a.estimatedCustomerCount > 0 ? String(a.estimatedCustomerCount) : '—'} />
-                  <Fact
-                    icon="cash-outline"
-                    label={tr('schedule.factFee')}
-                    value={fee > 0 ? money(fee) : tr('schedule.feeNotSet')}
-                    tone={fee > 0 ? 'success' : 'warning'}
-                  />
                 </View>
 
-                {/* What part of that fee is meant to cover the journey — the desk's own
-                    breakdown, recorded when the offer was priced. Informational: the fee
-                    above already includes it. */}
-                {a.quotedTravelFee != null && a.quotedTravelFee > 0 && fee > 0 && (
-                  <AppText variant="small" tone="muted">
-                    {tr('schedule.includesTravel', { amount: money(a.quotedTravelFee) })}
-                    {a.quotedTransportMode
-                      ? tr('schedule.includesTravelBy', { mode: travelModeLabel(a.quotedTransportMode).toLowerCase() })
-                      : ''}
-                    {a.quotedDistanceKm
-                      ? tr('schedule.includesTravelDistance', { km: Math.round(Number(a.quotedDistanceKm)) })
-                      : ''}
-                  </AppText>
-                )}
-
+                {/* Accept or decline, on the work alone — no fee is shown and no counter-offer
+                    is possible: money is ops-internal until the invoice invitation. The decline
+                    still demands a reason (RejectionModal), because replanning the branch needs
+                    one. */}
                 {a.status === 'PENDING' && (
-                  <View style={{ gap: t.space.sm }}>
-                    {rounds > 0 && (
-                      <View style={{
-                        padding: t.space.md, borderRadius: t.radius.md,
-                        backgroundColor: t.colors.accentSoft, gap: 3,
-                      }}>
-                        <AppText variant="caption" tone="accent">
-                          {tr('schedule.counterOffer', { round: rounds, max: maxRounds, amount: money(a.proposedFee ?? 0) })}
-                        </AppText>
-                        {a.remarks ? <AppText variant="small" tone="muted">{a.remarks}</AppText> : null}
-                      </View>
-                    )}
-                    <View style={{ flexDirection: 'row', gap: t.space.sm }}>
-                      <Button label={tr('schedule.accept')} icon="checkmark" loading={busyActionId === a.id} disabled={busyActionId != null} onPress={() => onAcceptAssignment(a.id)} style={{ flex: 1 }} />
-                      <Button label={tr('schedule.decline')} icon="close" variant="neutral" disabled={busyActionId != null} onPress={() => onOpenRejectModal(a.id)} style={{ flex: 1 }} />
-                    </View>
-                    {onCounterOffer && (
-                      <Button
-                        label={rounds >= maxRounds ? tr('schedule.negotiationClosed') : tr('schedule.proposeFee', { round: rounds, max: maxRounds })}
-                        icon={rounds >= maxRounds ? 'lock-closed-outline' : 'swap-horizontal'}
-                        variant="neutral"
-                        disabled={rounds >= maxRounds}
-                        onPress={() => onCounterOffer(a)}
-                        full
-                      />
-                    )}
+                  <View style={{ flexDirection: 'row', gap: t.space.sm }}>
+                    <Button label={tr('schedule.accept')} icon="checkmark" loading={busyActionId === a.id} disabled={busyActionId != null} onPress={() => onAcceptAssignment(a.id)} style={{ flex: 1 }} />
+                    <Button label={tr('schedule.decline')} icon="close" variant="neutral" disabled={busyActionId != null} onPress={() => onOpenRejectModal(a.id)} style={{ flex: 1 }} />
                   </View>
                 )}
 
@@ -443,12 +388,12 @@ export const ScheduleScreen: React.FC<ScheduleScreenProps> = ({
 };
 
 /**
- * A day's header on the route: when, how many stops, and what the day is worth.
- * The fee total is the figure an assayer plans a travel day around, and it was
- * previously only computable by opening every card and adding in your head.
+ * A day's header on the route: when, and how many stops. (It used to also total the day's
+ * fees — money left this screen with the negotiation removal, so the header now speaks only
+ * of the work.)
  */
-const DayHeader: React.FC<{ header: string; tone: Tone; count: number; totalFee: number }> = ({
-  header, tone, count, totalFee,
+const DayHeader: React.FC<{ header: string; tone: Tone; count: number }> = ({
+  header, tone, count,
 }) => {
   const t = useTheme();
   const tr = useT();
@@ -462,7 +407,6 @@ const DayHeader: React.FC<{ header: string; tone: Tone; count: number; totalFee:
       <AppText variant="overline" style={{ color: toneColor, flex: 1 }}>{header.toUpperCase()}</AppText>
       <AppText variant="caption" tone="faint">
         {count === 1 ? tr('schedule.oneStop') : tr('schedule.manyStops', { count })}
-        {totalFee > 0 ? tr('schedule.dayTotal', { amount: money(totalFee) }) : ''}
       </AppText>
     </View>
   );
@@ -472,17 +416,15 @@ const Fact: React.FC<{
   icon: string;
   label: string;
   value: string;
-  tone?: 'success' | 'warning';
-}> = ({ icon, label, value, tone }) => {
+}> = ({ icon, label, value }) => {
   const t = useTheme();
-  const color = tone === 'success' ? t.colors.success : tone === 'warning' ? t.colors.warning : t.colors.text;
   return (
     <View style={{ flex: 1, gap: 4 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
         <Icon name={icon} size={12} color={t.colors.textFaint} />
         <AppText variant="overline" tone="faint">{label.toUpperCase()}</AppText>
       </View>
-      <AppText variant="bodyStrong" numberOfLines={1} style={{ color }}>{value}</AppText>
+      <AppText variant="bodyStrong" numberOfLines={1}>{value}</AppText>
     </View>
   );
 };

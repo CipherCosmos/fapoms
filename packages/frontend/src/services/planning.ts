@@ -163,9 +163,24 @@ export const getRecommendations = <TCandidate = unknown, TExcluded = unknown>(
    */
   radiusKm?: number,
   signal?: AbortSignal,
+  /**
+   * Rank people the client has not empanelled, rather than excluding them.
+   *
+   * They come back carrying `clientStandingIssue`, so the standing is stated on the row rather
+   * than hidden, and assigning one still needs a recorded reason on the write path. This changes
+   * what an operator can SEE, not what they may do unrecorded.
+   */
+  ignoreClientPolicy?: boolean,
+  /**
+   * Search the whole workforce instead of a disc around the branch.
+   *
+   * Turns off the distance PRE-FILTER — the one distance rule that drops somebody without
+   * producing a reason. The client's conflict-of-interest minimum is untouched.
+   */
+  ignoreDistancePolicy?: boolean,
 ) =>
   api.request<{ data: TCandidate[]; meta?: { excluded?: TExcluded[] } }>(
-    `/planning/recommendations?branchId=${encodeURIComponent(branchId)}${date ? `&date=${encodeURIComponent(date)}` : ''}${includeUnavailable ? '&includeUnavailable=true' : ''}${radiusKm ? `&radiusKm=${Math.round(radiusKm)}` : ''}`,
+    `/planning/recommendations?branchId=${encodeURIComponent(branchId)}${date ? `&date=${encodeURIComponent(date)}` : ''}${includeUnavailable ? '&includeUnavailable=true' : ''}${radiusKm ? `&radiusKm=${Math.round(radiusKm)}` : ''}${ignoreClientPolicy ? '&ignoreClientPolicy=true' : ''}${ignoreDistancePolicy ? '&ignoreDistancePolicy=true' : ''}`,
     // withMeta so the caller receives `meta.excluded` (filtered-out candidates + reasons),
     // not just the unwrapped data array.
     { method: 'GET', withMeta: true, signal },

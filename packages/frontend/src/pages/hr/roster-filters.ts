@@ -1,6 +1,7 @@
 import {
-  AssayerEngagementType, AssayerLifecycleStatus, AssayerUnavailableReason,
+  AssayerEngagementType, AssayerLifecycleStatus, AssayerUnavailableReason, EmpanelmentStatus,
   assayerLifecycleLabel, employmentTypeLabel, daysUntilExpiry, isPlaceholderPin,
+  PAYOUT_BLOCKING_KEYS,
 } from '@fapoms/shared';
 
 import {
@@ -66,8 +67,12 @@ export type RosterPerson = Assayer & { documents?: RosterDocumentTally };
  * The roster's "Record" column used to say only "3 missing", which reads as paperwork. It is
  * not: with no bank account, IFSC or PAN, that person cannot be paid at all, and today every
  * single assayer on the books is in exactly that state while showing a green ACTIVE stage.
+ *
+ * `PAYOUT_BLOCKING_KEYS` itself now comes from `@fapoms/shared` rather than being typed out here a
+ * second time — this file and the server's own payability rule (`cannotBePaid` in
+ * `assayer-record.ts`) read the same three keys instead of two lists that could drift the way
+ * "cannot be paid" already had three disagreeing definitions before that rulebook existed.
  */
-const PAYOUT_BLOCKING_KEYS: (keyof Assayer)[] = ['bankAccountNumber', 'ifscCode', 'panNumber'];
 
 /** The payout-blocking gaps on one record, by their shared human labels. */
 export function payoutBlockers(a: Partial<Assayer>): string[] {
@@ -158,6 +163,27 @@ export const UNAVAILABLE_LABELS: Record<string, string> = {
   [AssayerUnavailableReason.NO_WORK_IN_AREA]: 'No work in their area',
   [AssayerUnavailableReason.MOVED_ABROAD]: 'Moved out of India',
   [AssayerUnavailableReason.MOVED_TO_COMPANY]: 'Now engaged through a company',
+};
+
+/**
+ * A FOURTH copy, for the same reason as the two above and with the same fix pending: the words
+ * for an `EmpanelmentStatus` already exist, privately, as `STANDING_LABELS` in
+ * `AssayerVettingTab.tsx`. That file cannot be imported from here — it pulls in `services/api.ts`
+ * / `services/socket.ts`, and the latter's `import.meta.env` (Vite syntax) is not something the
+ * Jest config this package's plain logic-module specs run under can parse, which is exactly the
+ * kind of thing a filter catalogue must not depend on to be testable at all. Copied verbatim
+ * rather than reworded, for the same reason the other three are: a clerk must not meet "Documents
+ * pending" on the vetting tab and a different word for it in the filter panel.
+ */
+export const EMPANELMENT_STANDING_LABELS: Record<string, string> = {
+  [EmpanelmentStatus.ACTIVE]: 'Active',
+  [EmpanelmentStatus.RECOMMENDED]: 'Recommended',
+  [EmpanelmentStatus.NOT_RECOMMENDED]: 'Not recommended',
+  [EmpanelmentStatus.DOCUMENTS_PENDING]: 'Documents pending',
+  [EmpanelmentStatus.REJECTED]: 'Rejected',
+  [EmpanelmentStatus.RESIGNED]: 'Resigned',
+  [EmpanelmentStatus.TERMINATED]: 'Terminated',
+  [EmpanelmentStatus.INACTIVE]: 'Empanelled before, dormant now',
 };
 
 /**
@@ -292,6 +318,10 @@ export type FilterGroupKey = (typeof FILTER_GROUPS)[number]['key'];
 /** The value standing for "this person has nothing recorded here". Never a real stored value. */
 export const NOT_RECORDED = '__none__';
 
+/** The empanelment-client axis's key — a single-value pick, exclusive-choice below and empty
+ *  until `withClientChoices` fills it in with the app's own client list. */
+export const EMPANELMENT_CLIENT_FILTER_KEY = 'empanelmentClientId';
+
 interface FilterBase {
   key: string;
   label: string;
@@ -315,6 +345,14 @@ export interface RuleFilter extends FilterBase {
   choices: { value: string; label: string; match: (a: RosterPerson) => boolean }[];
   /** Hides the whole filter when the data it reads is not present — see the documents filter. */
   available?: (rows: RosterPerson[]) => boolean;
+  /**
+   * This axis is answered by the server, not by counting the rows that happen to be loaded — see
+   * the empanelment filters below, where `match` is a pass-through and the real narrowing is a
+   * `GET /assayers` param. A per-option count computed locally would read the same (the roster's
+   * own size) against every choice, which is not a count at all; the panel hides it when this is
+   * set rather than print a number that cannot mean anything.
+   */
+  noCount?: boolean;
 }
 
 export interface DateFilter extends FilterBase {
@@ -542,6 +580,37 @@ export const ROSTER_FILTERS: RosterFilter[] = [
       { value: 'self', label: 'The person themselves', match: (a) => a.workDoneBySomeoneElse !== true },
     ],
   },
+  /**
+   * "Who can work for client X" — the question HR had no way to ask from this screen at all.
+   *
+   * `RosterQueryService` has parsed `empanelmentStatus`/`empanelmentClientId` since the roster
+   * gained server-side filtering; nothing on this panel ever offered them. Both are genuinely
+   * server-only: a roster row carries no list of who employs it, so there is nothing here to
+   * count or to re-check client-side the way `applyRosterFilters` does for every other axis —
+   * `match` is a pass-through, and `toServerQuery` is what actually narrows the request.
+   */
+  {
+    kind: 'rule',
+    key: 'empanelmentStatus',
+    label: 'Client standing',
+    group: 'paperwork',
+    hint: 'Asked of the server, over every empanelment on file — not just the rows loaded here. '
+      + 'Pick a client below to ask about one bank or NBFC by name.',
+    noCount: true,
+    choices: Object.entries(EMPANELMENT_STANDING_LABELS).map(([value, label]) => ({ value, label, match: () => true })),
+  },
+  {
+    kind: 'rule',
+    key: EMPANELMENT_CLIENT_FILTER_KEY,
+    label: 'Empanelled with client',
+    group: 'paperwork',
+    hint: 'One client at a time — ticking a different one replaces your pick rather than adding '
+      + 'to it, because the server can only be asked about one.',
+    noCount: true,
+    // Empty until a caller with the live client list fills it in — see `withClientChoices`. This
+    // file has no hook to fetch that list itself; the panel that renders it does.
+    choices: [],
+  },
 
   // ── Dates ───────────────────────────────────────────────────────────────────────────────
   { kind: 'date', key: 'joined', label: 'Joined between', group: 'dates', dateOf: (a) => a.joiningDate },
@@ -666,7 +735,14 @@ export function fieldChoices(
   return out;
 }
 
-/** The options for one rule filter, with the count each would leave on screen. */
+/**
+ * The options for one rule filter, with the count each would leave on screen.
+ *
+ * A `noCount` filter (the two empanelment axes) gets `-1` for every option rather than a real
+ * tally: `match` is a pass-through for those, so reducing over `rows` would print the roster's
+ * own size against every choice — a number that looks like a count and is not one. The panel
+ * reads `-1` as "do not show a count here" rather than printing it.
+ */
 export function ruleChoices(
   def: RuleFilter,
   rows: RosterPerson[],
@@ -674,8 +750,25 @@ export function ruleChoices(
   return def.choices.map((c) => ({
     value: c.value,
     label: c.label,
-    count: rows.reduce((n, a) => n + (c.match(a) ? 1 : 0), 0),
+    count: def.noCount ? -1 : rows.reduce((n, a) => n + (c.match(a) ? 1 : 0), 0),
   }));
+}
+
+/**
+ * `ROSTER_FILTERS`, with the empanelment-client axis's options filled in from a live client list.
+ *
+ * `roster-filters.ts` has no hook to fetch that list itself — it is a plain logic module, and the
+ * clients the app already knows about live behind `useClientOptions()` in a component. The caller
+ * (the roster page and its filter panel) reads that hook once and passes the result here, so both
+ * render the same options under the same key rather than each inventing a picker.
+ */
+export function withClientChoices(
+  defs: RosterFilter[],
+  clients: { id: string; name: string }[],
+): RosterFilter[] {
+  return defs.map((d) => (d.kind === 'rule' && d.key === EMPANELMENT_CLIENT_FILTER_KEY
+    ? { ...d, choices: clients.map((c) => ({ value: c.id, label: c.name, match: () => true })) }
+    : d));
 }
 
 /** The filters worth showing against the roster that actually arrived. */
@@ -806,10 +899,24 @@ export function writeFilters(
   return next;
 }
 
+/**
+ * Axes where ticking a second option is meant to replace the first, not add to it.
+ *
+ * Today that is only the empanelment-client pick: `RosterQueryService` takes one client id, so
+ * two ticked at once would send `"id1,id2"` as a literal string — a query that matches nobody
+ * rather than either client. Rendered with the same tick-box `ChoiceRow` as every other axis
+ * (a bespoke dropdown would be one more control shape to learn), so the exclusivity is enforced
+ * here instead.
+ */
+const EXCLUSIVE_CHOICE_KEYS = new Set<string>([EMPANELMENT_CLIENT_FILTER_KEY]);
+
 /** Ticking and unticking one option, without the caller touching the shape of the state. */
 export function toggleChoice(state: RosterFilterState, key: string, value: string): RosterFilterState {
   const current = state.choices[key] ?? [];
-  const next = current.includes(value) ? current.filter((v) => v !== value) : [...current, value];
+  const alreadyChosen = current.includes(value);
+  const next = alreadyChosen
+    ? current.filter((v) => v !== value)
+    : EXCLUSIVE_CHOICE_KEYS.has(key) ? [value] : [...current, value];
   const choices = { ...state.choices };
   if (next.length) choices[key] = next; else delete choices[key];
   return { ...state, choices };
@@ -842,14 +949,20 @@ export function clearFilter(state: RosterFilterState, key: string, value?: strin
  * `GET /assayers` — see `RosterQueryService`/`AssayerController.parseRosterFilters` on the
  * backend, which reads exactly these param names.
  *
- * Only the `field`-kind axes with a real column behind them map across: `stage` ->
+ * Most of the `field`-kind axes with a real column behind them map across: `stage` ->
  * `lifecycleStatus`, `engagement` -> `engagementType`, `unavailable` -> `unavailableReason`,
- * plus `state`, `region` and the `joined` date range. Every `rule`-kind axis (record
+ * plus `state`, `region` and the `joined` date range. Every OTHER `rule`-kind axis (record
  * completeness, documents, certificates, pin quality, attendance) and the qualification band
  * stay client-side only: they are computed from several columns or from a compute-on-read score,
  * not stored, so there is no single WHERE clause for the server to run. That is not a compromise
  * peculiar to this screen — `applyRosterFilters` still runs on whatever page comes back, so
  * those axes keep working exactly as before; only the axes that can be pushed down are.
+ *
+ * `empanelmentStatus`/`empanelmentClientId` are the two exceptions to "rule-kind stays local":
+ * they are `rule`-kind for the panel's sake (options are a fixed list, not a stored column value
+ * to read off a row) but answer a question no roster row carries data for at all, so there is
+ * nothing for `applyRosterFilters` to check locally either way — see the `noCount`/pass-through
+ * `match` on those two definitions above.
  */
 const SERVER_FILTER_PARAM: Record<string, string> = {
   stage: 'lifecycleStatus',
@@ -857,6 +970,8 @@ const SERVER_FILTER_PARAM: Record<string, string> = {
   unavailable: 'unavailableReason',
   state: 'state',
   region: 'region',
+  empanelmentStatus: 'empanelmentStatus',
+  [EMPANELMENT_CLIENT_FILTER_KEY]: 'empanelmentClientId',
 };
 
 export function toServerQuery(filters: RosterFilterState): string {

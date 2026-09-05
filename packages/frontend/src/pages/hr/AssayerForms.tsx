@@ -9,7 +9,7 @@ import { Select } from '../../components/ui';
 import { Autocomplete } from '../../components/ui/Autocomplete';
 import { ChipMultiSelect } from '../../components/ui/ChipMultiSelect';
 import { asOptions } from '../../hooks/useWorkforceVocabulary';
-import { blocksPhrase, type Assayer } from './assayer-shared';
+import { blocksPhrase, parseListValue, type Assayer } from './assayer-shared';
 import { userMessage } from '../../services/errors';
 import { fetchWithTimeout } from '../../services/http';
 import { api } from '../../services/api';
@@ -89,7 +89,9 @@ const EMERGENCY_CONTACT_RELATIONS: { value: string; label: string }[] = [
   { value: 'Other', label: 'Other' },
 ];
 
-const PERFORMANCE_RATINGS: { value: string; label: string }[] = [
+// Exported so the record's Summary can print the same words ("4 - Good") the edit dropdown
+// offers, rather than a bare number nobody has defined the scale for on that screen.
+export const PERFORMANCE_RATINGS: { value: string; label: string }[] = [
   { value: '1', label: '1 - Poor' }, { value: '2', label: '2 - Below Average' },
   { value: '3', label: '3 - Average' }, { value: '4', label: '4 - Good' },
   { value: '5', label: '5 - Excellent' },
@@ -233,15 +235,12 @@ export const useHrOwnerOptions = (enabled: boolean) => {
  * contain a comma ("Assaying, Hallmarked"), and splitting on it silently invented two
  * requirements that match nobody. The catch branch still accepts old comma text so a value
  * saved by the previous version of this form survives being opened for edit.
+ *
+ * The parse side is `parseListValue` from `./assayer-shared` — this file used to carry an
+ * identical copy under the name `parseList`, and `buildAssayerEditBody` (assayer-shared.ts)
+ * carried the same body a third time under `parseListValue`. One implementation now; imported
+ * here rather than re-declared, since nothing else in the app imported this file's copy by name.
  */
-export const parseList = (raw?: string): string[] => {
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed)) return parsed.map(String).filter(Boolean);
-  } catch { /* legacy comma text — fall through */ }
-  return raw.split(',').map((x) => x.trim()).filter(Boolean);
-};
 export const stringifyList = (list: string[]): string => (list.length > 0 ? JSON.stringify(list) : '');
 
 /**
@@ -706,7 +705,7 @@ export const renderFormField = (
         (() => (
           <ChipMultiSelect
             options={REGION_OPTIONS}
-            value={parseList(val)}
+            value={parseListValue(val)}
             onChange={(next) => setForm({ ...form, [field.key]: stringifyList(next) })}
             searchThreshold={99}
             emptyText="No regions are set up."
@@ -721,7 +720,7 @@ export const renderFormField = (
          */
         (() => {
           const names = vocabulary ? vocabulary[field.vocab] : null;
-          const selected = parseList(val);
+          const selected = parseListValue(val);
           return (
             <ChipMultiSelect
               options={asOptions(names)}

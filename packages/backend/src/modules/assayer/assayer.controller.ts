@@ -104,7 +104,7 @@ import { RosterImportService } from './roster-import.service';
 import { ImportJobService } from '../import/import-job.service';
 import { RosterRecordsService } from './roster-records.service';
 import { QualificationScoreService } from './qualification-score.service';
-import { RosterQueryService, RosterFilters } from './roster-query.service';
+import { RosterQueryService, RosterFilters, rosterCursorFor } from './roster-query.service';
 import { STAFF_ROLES } from '../auth/staff-roles';
 
 /** Roles that may edit any assayer's record; everyone else is limited to their own. */
@@ -1126,6 +1126,11 @@ export class AssayerController {
       // method only knows `isActive` + region, and only knows offset paging.
       if (after) {
         const { assayers, nextCursor } = await this.rosterQuery.findKeyset(filters, after, limit, scope);
+        // THE HYDRATION BUG: this path never ran AssayerService's three hydration steps, so a
+        // keyset page came back with skills/certifications/languages/documents/empanelment all
+        // `undefined` — see `hydrateRosterRows` for the full account. Same grouped-batch cost as
+        // the unfiltered path below; nothing per-row is added here.
+        await this.assayerService.hydrateRosterRows(assayers);
         const total = await this.rosterQuery.count(filters, scope);
         return {
           success: true,
@@ -1144,6 +1149,8 @@ export class AssayerController {
         };
       }
       const { assayers, total } = await this.rosterQuery.findFiltered(filters, page, limit, scope);
+      // Same hydration gap as the keyset branch above — see the comment there.
+      await this.assayerService.hydrateRosterRows(assayers);
       return {
         success: true,
         data: scopeAssayerListForRoles(assayers as any[], rolesOf(req.user), req.user?.id),
@@ -1161,6 +1168,11 @@ export class AssayerController {
     }
 
     const { assayers, total } = await this.assayerService.findAll(page, limit, scope);
+    // The handoff that makes "fetch it all" actually fetch it all: the walker starts here (no
+    // filters, no `after`) and continues on the keyset branch above. Without a cursor on this
+    // first page it stopped at one page forever — the 1,000-row roster cap, rediscovered.
+    const lastRow = assayers[assayers.length - 1];
+    const nextCursor = assayers.length === limit && lastRow ? rosterCursorFor(lastRow) : null;
     return {
       success: true,
       // Stripping for the roles that may not see identity or banking at all. The MASKING that
@@ -1177,6 +1189,7 @@ export class AssayerController {
           totalPages: Math.ceil(total / limit),
           hasNext: page * limit < total,
           hasPrevious: page > 1,
+          nextCursor,
         },
       },
     };
@@ -1269,8 +1282,15 @@ export class AssayerController {
   @RequirePermissions('assayer:view:organization')
   @Get('/map-roster')
   @ApiOperation({ summary: 'Every active assayer as the map needs them: pin facts, bank standings, committed-today' })
-  async mapRoster(@Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
-    const roster = await this.assayerService.mapRoster(scope);
+  async mapRoster(
+    @Req() req: any,
+    // This layer renders map dots, not a data API — a generous clamp rather than the unbounded
+    // fetch this used to be, matching the shape (if not the exact numbers) of every other list
+    // route's ceiling in this controller.
+    @Query('limit', new ParseLimitPipe({ default: 2000, max: 5000 })) limit: number,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    const roster = await this.assayerService.mapRoster(scope, limit);
     return {
       success: true,
       data: scopeAssayerListForRoles(roster as any[], rolesOf(req.user), req.user?.id),
@@ -1300,10 +1320,16 @@ export class AssayerController {
      */
     @Query('limit', new ParseLimitPipe({ default: 500, max: 500 })) limit: number,
     @Query('includeResolved') includeResolved?: string,
+    // The roster this queue is drawn from is region-scoped; the queue itself was not, so a
+    // region-scoped desk saw import issues for people outside their territory. Scoped by the
+    // ISSUE'S OWN assayer's region in `listIssues` — a row with no assayer attached (the importer
+    // could not even match a code) has no region to test and stays visible to everyone.
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     const data = await this.rosterRecords.listIssues({
       includeResolved: String(includeResolved ?? '').toLowerCase() === 'true',
       limit,
+      scope,
     });
     return { success: true, data };
   }

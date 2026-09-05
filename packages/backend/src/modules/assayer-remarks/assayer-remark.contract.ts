@@ -32,8 +32,14 @@ export const REMARK_TEXT_MAX = 1000;
  * staff observation), CLIENT_USER (client feedback is a different channel with a different
  * weight), AUDITOR (read-only by definition), PRODUCT_SUPPORT (the product team has no view of
  * anyone's fieldwork).
+ *
+ * DEVELOPER is named explicitly (not left to the guards' implication) because this list is
+ * also consulted by raw name-match — snapshotAuthorRole below, and the moderator check in
+ * assayer-remarks.service.ts — where an unnamed role simply never matches. First, because the
+ * first match is the role snapshotted onto a multi-role author's remark.
  */
 export const REMARK_WRITE_ROLES: SystemRole[] = [
+  SystemRole.DEVELOPER,
   SystemRole.ADMIN,
   SystemRole.OPERATIONS,
   SystemRole.DESK,
@@ -48,6 +54,7 @@ export const REMARK_WRITE_ROLES: SystemRole[] = [
  * retract it, but may not remove a colleague's.
  */
 export const REMARK_MODERATE_ROLES: SystemRole[] = [
+  SystemRole.DEVELOPER, // Named for the same raw name-match reason as the write list above.
   SystemRole.ADMIN,
   SystemRole.OPERATIONS,
 ];

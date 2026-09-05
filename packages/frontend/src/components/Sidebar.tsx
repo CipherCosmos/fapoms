@@ -4,13 +4,14 @@ import { SystemRole } from '@fapoms/shared';
 import {
   ShieldOff,
   ShieldAlert,
+  ShieldCheck,
   LayoutDashboard,
   FolderKanban,
   GitMerge,
   Map,
   CalendarDays,
   Files,
-  
+
   ClipboardList,
   Users,
   Building2,
@@ -59,7 +60,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
       items: [
         { name: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
         { name: 'Live Map', path: '/executive-map', icon: Map },
-        { name: 'Feedback', path: '/feedback', icon: MessageSquare },
+        { name: 'Support', path: '/feedback', icon: MessageSquare },
       ],
     },
     {
@@ -120,6 +121,9 @@ export const Sidebar: React.FC<SidebarProps> = ({ user, collapsed }) => {
       items: [
         { name: 'Notification Rules', path: '/admin/notifications', icon: BellRing },
         { name: 'User Management', path: '/users', icon: Users },
+        // The admin's side of the destructive-action two-person rule: a developer's data-wipe
+        // requests are decided here. Visibility flows from canAccessRoute like every other item.
+        { name: 'Approvals', path: '/admin/approvals', icon: ShieldCheck },
         // Administrators and auditors — the incident register + compliance health.
         { name: 'Security & Compliance', path: '/admin/compliance', icon: ShieldAlert },
         // Administrators only — filtered by canAccessRoute against route-permissions, same as

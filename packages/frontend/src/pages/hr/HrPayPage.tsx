@@ -1,15 +1,17 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Wallet, Pencil, Plus, AlertTriangle, Clock } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
+import { Wallet, Pencil, Plus, AlertTriangle, Clock, RefreshCw } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { onboardingNextStep } from '@fapoms/shared';
+import { onboardingNextStep, cannotBePaid, payoutBlockingGaps } from '@fapoms/shared';
 import { api } from '../../services/api';
 import { fetchWholeAssayerRoster } from '../../services/assayer-roster';
 import { userMessage } from '../../services/errors';
 import { AlertBanner, DataTable, SearchInput } from '../../components/ui';
 import { listPhase } from '../../components/ui/list-phase';
-import { card, label, Empty, Notice, Lede, fmtDate } from './hr-ui';
+import { card, label, Empty, Notice, Lede, fmtDate, fmtWhen } from './hr-ui';
 import { counted } from '../../utils/plural';
 import { useHr } from './HrLayout';
+import { queryKeys } from '../../hooks/queryKeys';
 import { CommercialProfileModal, formatMoney, type CommercialProfile } from './CommercialProfileModal';
 
 /**
@@ -39,9 +41,33 @@ interface AssayerLite {
    */
   bankAccountNumber: string | null;
   ifscCode: string | null;
+  /**
+   * The third payout-blocking field, and the two facts that decide whether a gap is still worth
+   * chasing — added alongside `cannotBePaid`/`payoutBlockingGaps` below. Without these three this
+   * page could only ask "is the bank box empty", never "cannot be paid" in the sense the roster
+   * and the server's own aggregate mean it.
+   */
+  panNumber: string | null;
+  unavailableReason?: string | null;
+  exitDate?: string | null;
+  terminationDate?: string | null;
 }
 
-const bankMissing = (a: AssayerLite) => !a.bankAccountNumber?.trim() || !a.ifscCode?.trim();
+/**
+ * What to tell a clerk is missing, per row — bank details, PAN, or both. Named from the same
+ * `PAYOUT_BLOCKING_ASSAYER_FIELDS` labels `@fapoms/shared` scores the roster's own "Cannot be
+ * paid" gaps by, so this sentence and that chip can never name a different set of columns.
+ * `null` when nothing payout-blocking is missing, in which case the row says nothing at all.
+ */
+const payGapMessage = (a: AssayerLite): string | null => {
+  const gaps = new Set(payoutBlockingGaps(a as unknown as Record<string, unknown>).map((f) => f.key));
+  const bankGap = gaps.has('bankAccountNumber') || gaps.has('ifscCode');
+  const panGap = gaps.has('panNumber');
+  if (bankGap && panGap) return 'No bank details or PAN on file — add them';
+  if (bankGap) return 'No bank details — add them';
+  if (panGap) return 'No PAN on file — add it';
+  return null;
+};
 
 interface RosterPayRow {
   assayerId: string;
@@ -90,18 +116,9 @@ const rateOf = (
 export const HrPayPage: React.FC = () => {
 
   const { canManage } = useHr();
-  const [roster, setRoster] = useState<AssayerLite[]>([]);
-  const [pay, setPay] = useState<Record<string, RosterPayRow>>({});
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<Filter>('all');
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState<{ assayerId: string; profile: CommercialProfile | null } | null>(null);
-  /**
-   * Set only when the roster could not all be loaded, which the four tiles above have to admit to.
-   * Null on any roster the loader got through in full, which is the normal case.
-   */
-  const [shortfall, setShortfall] = useState<{ shown: number; total: number } | null>(null);
 
   /**
    * Everybody, in as many requests as it takes — not the first thousand rows.
@@ -113,25 +130,46 @@ export const HrPayPage: React.FC = () => {
    * this screen reported the roster fully banked. Nothing said the list was partial. The four
    * tiles are the reason this has to be the whole roster rather than a warning — a count is either
    * of everyone or it is wrong.
+   *
+   * Keyed as `queryKeys.hr.roster('')` — the SAME cache entry `AssayerRoster.tsx` uses for its own
+   * unfiltered view (`toServerQuery(EMPTY_FILTERS)` is `''`), rather than a page-local key. Both
+   * pages ask `fetchWholeAssayerRoster` for the identical unfiltered walk of `/assayers`; sharing
+   * the key means whichever page asks first serves the other from cache instead of the roster
+   * being walked twice, and it means a lifecycle event's registry invalidation
+   * (`useSocketInvalidation.ts`'s `queryKeys.hr.rosterAll` entries) refreshes this page too, with
+   * no separate wiring needed here.
    */
-  const load = async () => {
-    try {
-      const [everyone, rows] = await Promise.all([
-        fetchWholeAssayerRoster<AssayerLite>(),
-        api.request<RosterPayRow[]>('/assayers/commercial/roster'),
-      ]);
-      setRoster(everyone.people);
-      setShortfall(everyone.missing > 0 ? { shown: everyone.people.length, total: everyone.total } : null);
-      setPay(Object.fromEntries(rows.map((r) => [r.assayerId, r])));
-    } catch (e) {
-      // userMessage, not `.message` — the raw one can be "Request failed with status code 403".
-      setError(userMessage(e));
-    } finally {
-      setLoading(false);
-    }
-  };
+  const rosterQuery = useQuery({
+    queryKey: queryKeys.hr.roster(''),
+    queryFn: ({ signal }) => fetchWholeAssayerRoster<AssayerLite>({ signal }),
+  });
+  const payQuery = useQuery({
+    queryKey: queryKeys.hr.commercialRoster,
+    queryFn: () => api.request<RosterPayRow[]>('/assayers/commercial/roster'),
+  });
 
-  useEffect(() => { load(); }, []);
+  const roster = rosterQuery.data?.people ?? [];
+  const pay = useMemo(
+    () => Object.fromEntries((payQuery.data ?? []).map((r) => [r.assayerId, r])),
+    [payQuery.data],
+  );
+  const loading = rosterQuery.isLoading || payQuery.isLoading;
+  const error = rosterQuery.error ? userMessage(rosterQuery.error) : payQuery.error ? userMessage(payQuery.error) : null;
+  const refreshing = rosterQuery.isFetching || payQuery.isFetching;
+  const refresh = () => { void rosterQuery.refetch(); void payQuery.refetch(); };
+  /**
+   * When either half last actually answered — the later of the two, since a tile fed by one and
+   * a row fed by the other are both on screen together. `0` (react-query's "never fetched yet")
+   * is read the same as "unknown" rather than printed as an epoch date.
+   */
+  const asOf = Math.max(rosterQuery.dataUpdatedAt, payQuery.dataUpdatedAt) || null;
+  /**
+   * Set only when the roster could not all be loaded, which the four tiles above have to admit to.
+   * Null on any roster the loader got through in full, which is the normal case.
+   */
+  const shortfall = rosterQuery.data && rosterQuery.data.missing > 0
+    ? { shown: rosterQuery.data.people.length, total: rosterQuery.data.total }
+    : null;
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -144,7 +182,25 @@ export const HrPayPage: React.FC = () => {
   }, [roster, pay, search, filter]);
 
   const unpricedCount = roster.filter((a) => !paidOwnFee(pay[a.id])).length;
-  const unbankedCount = roster.filter(bankMissing).length;
+  /**
+   * "Cannot be paid", the STRICT rule — `cannotBePaid` from `@fapoms/shared`, the same rulebook
+   * the roster's own chip and the server's aggregate both read. This used to be a page-local
+   * `bankMissing` test that (a) never checked whether the person had actually left, so a
+   * resigned or terminated contractor with no account number sat in this count as though payroll
+   * still owed them a decision, and (b) ignored a missing PAN entirely, which blocks a payout
+   * exactly as hard as a missing account number does. Same words on screen as the roster chip now
+   * mean the same population.
+   */
+  const unbankedCount = roster.filter((a) => cannotBePaid(a as unknown as Record<string, unknown>)).length;
+  /**
+   * The looser number payroll still has a real reason to want: EVERY missing bank/IFSC/PAN gap,
+   * including people who have already left — a departed contractor can still be owed a final
+   * settlement, and that needs their bank details exactly as much as an active person's next
+   * payout does. Never shown under the strict count's own label — see the second tile below,
+   * which is explicit about covering people who are gone.
+   */
+  const anyoneMissingBankDetailsCount = roster
+    .filter((a) => payoutBlockingGaps(a as unknown as Record<string, unknown>).length > 0).length;
 
   // The error still takes over the screen — there is nothing to show and something to fix.
   // Loading does not: see below, where the page keeps its shape and the rows fill in.
@@ -169,8 +225,8 @@ export const HrPayPage: React.FC = () => {
       {shortfall && (
         <Notice tone="warning">
           Only {shortfall.shown} of the {shortfall.total} people on the roster could be loaded, so
-          the counts and the table below leave {shortfall.total - shortfall.shown} out. Reload the
-          page to try again.
+          the counts and the table below leave {shortfall.total - shortfall.shown} out. Try
+          Refresh, below.
         </Notice>
       )}
 
@@ -179,6 +235,27 @@ export const HrPayPage: React.FC = () => {
           ? `${counted(unpricedCount, 'person', 'people')} have no agreed base fee of their own, so every audit they do is paid at the client’s contracted default — set their terms from the row.`
           : 'Everybody has their own agreed base fee; nothing here is falling back to a client default.'}
       </Lede>
+
+      {/*
+        Migrated onto React Query rather than a one-shot `useEffect`/`useState` fetch, this page
+        can now say WHEN its figures were true and offer a way to ask again — something a plain
+        `useEffect` firing once on mount never could. "Figures as of", not "updated": this is one
+        cached read of two endpoints, not a live feed, and the distinction matters exactly here —
+        a rate card is money, and a clerk deciding whether to trust the amber "paid the client
+        default" tag needs to know how old it might be before acting on it.
+      */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: 'var(--text-muted)' }}>
+        <span>Figures as of {asOf ? fmtWhen(new Date(asOf).toISOString()) : '—'}</span>
+        <button
+          onClick={refresh}
+          disabled={refreshing}
+          className="btn btn-secondary"
+          style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '12px', padding: '4px 10px' }}
+        >
+          <RefreshCw size={12} className={refreshing ? 'spin' : undefined} /> {refreshing ? 'Refreshing…' : 'Refresh'}
+        </button>
+      </div>
+
       <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
         <button onClick={() => setFilter('all')} style={tile(filter === 'all')}>
           <div style={statValue}>{roster.length}</div>
@@ -196,18 +273,37 @@ export const HrPayPage: React.FC = () => {
           Not a filter — a count with nothing behind it on this page, because bank details are not
           edited here. Shown anyway: a rate card with no account behind it produces a payout that
           cannot be sent, and this is the screen where someone is thinking about being paid.
+
+          STRICT, now — `cannotBePaid` from `@fapoms/shared`: still on the books, and missing bank
+          account, IFSC or PAN. Someone who has resigned or been terminated no longer belongs in a
+          "needs chasing" count, and a missing PAN blocks a payout exactly as hard as a missing
+          account number, so it counts too. Same rule, same words, as the roster's own chip.
         */}
         <div style={{ ...tile(false, unbankedCount > 0), cursor: 'default' }}>
           <div style={{ ...statValue, color: unbankedCount > 0 ? 'var(--danger)' : undefined }}>{unbankedCount}</div>
-          <div style={label}>Cannot be paid — no bank details</div>
+          <div style={label}>Cannot be paid</div>
         </div>
+        {/*
+          The looser number, ON PURPOSE and NEVER under the strict tile's own label. A departed
+          contractor with no account number on file is not "cannot be paid" in the sense above —
+          they are gone — but they can still be owed a final settlement, and payroll has a real
+          reason to see that this many people (working or not) have a payout-blocking gap. Shown
+          only when it says something the strict tile does not, i.e. there really is at least one
+          such gap.
+        */}
+        {anyoneMissingBankDetailsCount > 0 && (
+          <div style={{ ...tile(false, false), cursor: 'default' }}>
+            <div style={statValue}>{anyoneMissingBankDetailsCount}</div>
+            <div style={label}>Missing bank details (including people who left)</div>
+          </div>
+        )}
       </div>
 
       {unbankedCount > 0 && (
         <Notice tone="danger">
-          Account number and IFSC are part of the assayer's own record, not their rate card. Use
-          the “Add bank details” link on any row below — it opens that person's record with the
-          Financial section ready to fill in.
+          Account number, IFSC and PAN are part of the assayer's own record, not their rate card.
+          Use the link on any row below — it opens that person's record to fill in whichever one
+          is missing.
         </Notice>
       )}
 
@@ -284,19 +380,24 @@ export const HrPayPage: React.FC = () => {
                       Still joining — {onboardingNextStep(a.lifecycleStatus)}
                     </div>
                   )}
-                  {bankMissing(a) && (
+                  {payGapMessage(a) && (
                     <Link
                       /**
-                       * `section=financial` so the edit form opens on the Financial tab. Without
-                       * it this landed on the top of a four-tab form and the bank fields — the
-                       * entire reason for following this link — were three clicks away. The modal
-                       * reads the parameter itself (see AssayerForms), so nothing has to be
-                       * threaded through the roster.
+                       * `?section=financial` was meant to open the edit form on the Financial tab
+                       * directly — written when there still was a single-record edit modal that
+                       * read it. That modal is gone (editing is in place on the record's own page
+                       * now; see AssayerRecord.tsx), nothing reads `section` any more, and
+                       * `?assayer=` itself is forwarded straight to `/hr/roster/:id` by
+                       * AssayerRoster's own redirect effect, which drops every other query param
+                       * in the process — so this link already lands on the record's Summary tab
+                       * either way, one click short of the Financial section rather than zero.
+                       * Left as-is rather than guessed at here: wiring the record page to actually
+                       * open on a named section is a real, separate change.
                        */
                       to={`/hr/roster?assayer=${a.id}&section=financial`}
                       style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '12px', fontWeight: 600, color: 'var(--danger)', marginTop: '3px' }}
                     >
-                      <AlertTriangle size={11} /> No bank details — add them
+                      <AlertTriangle size={11} /> {payGapMessage(a)}
                     </Link>
                   )}
                 </>
@@ -389,7 +490,7 @@ export const HrPayPage: React.FC = () => {
           assayerId={editing.assayerId}
           profile={editing.profile}
           onClose={() => setEditing(null)}
-          onSaved={() => { setEditing(null); load(); }}
+          onSaved={() => { setEditing(null); void payQuery.refetch(); }}
         />
       )}
     </div>

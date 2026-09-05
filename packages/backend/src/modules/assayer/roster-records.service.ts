@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull } from 'typeorm';
+import { Repository, IsNull, SelectQueryBuilder } from 'typeorm';
+import type { GlobalScope } from '../../infrastructure/scope/global-scope';
 import {
   EmpanelmentStatus, BackgroundCheckVerdict, RiskGrade, CibilBand, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, DocumentVerification, isIdentityDocument, maskTail, looksMasked, isValidPan, isValidAadhaar, isPlaceholderAadhaar,
   DocumentRejectionReason, DOCUMENT_PRINTED_FIELDS, PRINTED_FIELD_LABELS,
@@ -942,20 +943,51 @@ export class RosterRecordsService {
    *
    * Open by default: a resolved issue is a decision somebody already made, and showing it
    * alongside the outstanding ones is how a review queue stops being read.
+   *
+   * Region-scoped like the roster it is drawn from: `AssayerController.findAll` honours
+   * `scope.regions`, and this queue did not, so a region-scoped desk saw import issues for every
+   * territory, not their own. Scoped by the ISSUE'S OWN assayer — the `issue.assayer` join this
+   * already carries for the row's display columns — rather than by anything on the issue itself,
+   * since an issue has no region of its own. An issue with no assayer attached (`assayerId` is
+   * nullable: the commonest case is an unmatched source code, which is exactly the row most worth
+   * surfacing — see the entity's own comment) has no region to test either way, so it is ORed
+   * into every scope rather than silently dropped out of all of them the moment any scope narrows.
    */
-  async listIssues(options: { includeResolved?: boolean; limit?: number } = {}) {
+  async listIssues(options: {
+    includeResolved?: boolean;
+    limit?: number;
+    scope?: Partial<GlobalScope>;
+  } = {}) {
     const limit = Math.min(options.limit ?? 500, 500);
-    const qb = this.issues.createQueryBuilder('issue')
+    const regions = options.scope?.regions;
+
+    const applyRegionScope = (qb: SelectQueryBuilder<AssayerImportIssueEntity>) => {
+      if (regions?.length) {
+        qb.andWhere('(assayer.region IN (:...regions) OR issue.assayerId IS NULL)', { regions });
+      }
+      return qb;
+    };
+
+    const rowsQb = this.issues.createQueryBuilder('issue')
       .leftJoin('issue.assayer', 'assayer')
-      .addSelect(['assayer.id', 'assayer.assayerCode', 'assayer.firstName', 'assayer.lastName'])
+      .addSelect(['assayer.id', 'assayer.assayerCode', 'assayer.firstName', 'assayer.lastName', 'assayer.region'])
       .orderBy('issue.createdAt', 'DESC')
       .take(limit);
-    if (!options.includeResolved) qb.where('issue.resolvedAt IS NULL');
+    if (!options.includeResolved) rowsQb.where('issue.resolvedAt IS NULL');
+    // Appended after the conditional `.where()` above, never before: TypeORM's `.where()` resets
+    // whatever conditions already exist on the builder, so an `.andWhere()` call ahead of it would
+    // be silently discarded rather than combined.
+    applyRegionScope(rowsQb);
 
-    const [rows, openCount] = await Promise.all([
-      qb.getMany(),
-      this.issues.count({ where: { resolvedAt: IsNull() } }),
-    ]);
+    // A genuinely separate query, not `rows.length`: the count means "how many are open" whether
+    // or not this call is also showing resolved ones, and it carries no `.take()` ceiling of its
+    // own — the row list can be capped at 500 while the count still reports the true total.
+    const countQb = this.issues.createQueryBuilder('issue')
+      .leftJoin('issue.assayer', 'assayer')
+      .where('issue.resolvedAt IS NULL');
+    applyRegionScope(countQb);
+
+    const [rows, openCount] = await Promise.all([rowsQb.getMany(), countQb.getCount()]);
     return { rows, openCount };
   }
 

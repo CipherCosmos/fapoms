@@ -126,7 +126,7 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
   ];
 
   const BRANCH_STATUSES = [
-    'IMPORTED', 'PLANNING', 'CANDIDATE_SEARCH', 'CONTACT_INITIATED', 'NEGOTIATION',
+    'IMPORTED', 'PLANNING', 'CANDIDATE_SEARCH', 'CONTACT_INITIATED',
     'ASSIGNMENT_CONFIRMED', 'SCHEDULED', 'AUDIT_COMPLETED', 'VALIDATION_COMPLETED',
     'CLOSED', 'UNABLE_TO_COVER', 'ON_HOLD', 'CANCELLED',
   ];
@@ -139,7 +139,7 @@ export const MapLayerControls: React.FC<MapLayerControlsProps> = ({
    */
   const STATUS_GROUPS: ReadonlyArray<{ label: string; statuses: string[] }> = [
     { label: 'To do', statuses: ['IMPORTED', 'PLANNING', 'CANDIDATE_SEARCH', 'ON_HOLD'] },
-    { label: 'In progress', statuses: ['CONTACT_INITIATED', 'NEGOTIATION', 'ASSIGNMENT_CONFIRMED', 'SCHEDULED'] },
+    { label: 'In progress', statuses: ['CONTACT_INITIATED', 'ASSIGNMENT_CONFIRMED', 'SCHEDULED'] },
     { label: 'Done', statuses: ['AUDIT_COMPLETED', 'VALIDATION_COMPLETED', 'CLOSED'] },
     { label: 'Cancelled', statuses: ['UNABLE_TO_COVER', 'CANCELLED'] },
   ];

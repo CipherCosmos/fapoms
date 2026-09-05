@@ -1,10 +1,11 @@
 import React from 'react';
 import { View } from 'react-native';
 import { AssayerPayableStatus, formatRupees as money, formatDateOnly } from '@fapoms/shared';
+import type { AssayerInvoiceInvitation } from '@fapoms/shared';
 import { AssayerAssignment, AssayerExpense, ExpenseSummary, AssayerStatement } from '../types/mobile-app';
 
 import { calendarDayDiff } from '../utils/dates';
-import { displayedTds } from './earnings-breakdown';
+import { displayedTds, deriveEarningsGateState } from './earnings-breakdown';
 import { CAT_LABEL_KEYS } from '../components/ExpenseModal';
 import { useTheme } from '../theme/ThemeProvider';
 import { useT, t as translate, type TranslationKey } from '../i18n';
@@ -31,10 +32,23 @@ interface EarningsScreenProps {
    * assignments happened to be loaded. Both could disagree with what finance will actually pay,
    * and a wrong number about someone's own pay is worse than no number. When the statement
    * cannot be read the screen says so and shows nothing.
+   *
+   * Once assayer invoicing is enabled server-side, the statement arrives GATED: totals and
+   * rows cover only approved-invoice earnings plus grandfathered pre-invoicing rows, and an
+   * `invoicing` block carries the counts this screen's gate cards render. Unbilled work is
+   * counted here, never priced — the first rupee an assayer sees for it is on the invitation.
    */
   statement?: AssayerStatement | null;
   /** True when the last statement read failed. */
   statementError?: boolean;
+  /**
+   * The active invoice invitation, fetched alongside the statement. Only its status and line
+   * count are read here — the figures themselves are shown exclusively by InvoiceReviewModal,
+   * which re-fetches them at the moment of review.
+   */
+  invitation?: AssayerInvoiceInvitation | null;
+  /** Opens InvoiceReviewModal — the reveal. */
+  onOpenInvoiceReview?: () => void;
 }
 
 type Tone = 'neutral' | 'primary' | 'accent' | 'success' | 'warning' | 'danger' | 'info';
@@ -105,6 +119,13 @@ const MoneyChip: React.FC<{ icon: string; label: string; value: string; iconColo
  * The headline figure is now the balance actually owed rather than a lifetime
  * gross total, because that is the number a field assayer opens this screen to
  * check. Amounts come from the billing engine, so they match what finance sees.
+ *
+ * With assayer invoicing enabled, this screen is also the earnings GATE — one of four states:
+ * nothing invited (counts-only "awaiting invoicing" card), an open invitation (the prominent
+ * card that leads to the reveal), submitted (readable, awaiting ops approval), and approved
+ * history rolled into the totals with grandfathered rows badged "pre-invoicing". While the
+ * server flag is off the statement has no `invoicing` block and this screen renders exactly
+ * its pre-gate self.
  */
 export const EarningsScreen: React.FC<EarningsScreenProps> = ({
   assignments,
@@ -113,9 +134,14 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
   onOpenExpenseModal,
   claims,
   claimSummary,
+  invitation,
+  onOpenInvoiceReview,
 }) => {
   const t = useTheme();
   const tr = useT();
+
+  // Which of the gate's states we are in — pure derivation, spec'd in earnings-gate-state.spec.ts.
+  const gate = deriveEarningsGateState(statement ?? null, invitation ?? null);
 
   const expenses = claims?.length ? claims : assignments.flatMap((a) => a.expenses ?? []);
   const totalExpenses =
@@ -162,7 +188,12 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
           <>
             <AppText variant="display" tone={owed > 0 ? 'accent' : 'muted'}>{money(owed)}</AppText>
             <AppText variant="caption" tone="muted">
-              {owed > 0 ? tr('earnings.balanceOwed') : tr('earnings.balanceSettled')}
+              {/* Gated, the totals cover only approved invoices (+ pre-invoicing rows) — the
+                  caption must not claim "all completed work" when unbilled audits are counted
+                  elsewhere on this screen, never priced. */}
+              {owed > 0
+                ? tr(gate.kind === 'legacy' ? 'earnings.balanceOwed' : 'earnings.balanceOwedGated')
+                : tr('earnings.balanceSettled')}
             </AppText>
 
             <Divider spacing={2} />
@@ -187,6 +218,61 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
           </>
         )}
       </Card>
+
+      {/* ── The earnings gate ─────────────────────────────────────────────────────
+          One card, chosen by state. Counts only until the invitation — the reveal itself
+          happens in InvoiceReviewModal, off a fresh server read. */}
+      {gate.kind === 'awaiting' && (
+        <Card level={1} style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
+          <Icon name="hourglass-outline" size={22} color={t.colors.textMuted} />
+          <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+            <AppText variant="bodyStrong">
+              {gate.count === 1
+                ? tr('earnings.invoicing.awaitingOne')
+                : tr('earnings.invoicing.awaitingMany', { count: gate.count })}
+            </AppText>
+            <AppText variant="caption" tone="muted">{tr('earnings.invoicing.awaitingBody')}</AppText>
+          </View>
+        </Card>
+      )}
+
+      {gate.kind === 'invited' && (
+        <Card level={2} style={{ gap: t.space.md, borderColor: t.colors.accent + '55' }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
+            <Icon name="document-text-outline" size={22} color={t.colors.accent} />
+            <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+              <AppText variant="bodyStrong">{tr('earnings.invoicing.invitedTitle')}</AppText>
+              <AppText variant="caption" tone="muted">
+                {gate.lineCount === 1
+                  ? tr('earnings.invoicing.invitedBodyOne')
+                  : tr('earnings.invoicing.invitedBodyMany', { count: gate.lineCount })}
+              </AppText>
+            </View>
+          </View>
+          {onOpenInvoiceReview && (
+            <Button label={tr('earnings.invoicing.reviewCta')} icon="receipt-outline" glow full onPress={onOpenInvoiceReview} />
+          )}
+        </Card>
+      )}
+
+      {gate.kind === 'submitted' && (
+        <Card level={1} style={{ gap: t.space.md }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
+            <Icon name="checkmark-circle-outline" size={22} color={t.colors.info} />
+            <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.sm, flexWrap: 'wrap' }}>
+                <AppText variant="bodyStrong">{tr('earnings.invoicing.submittedTitle')}</AppText>
+                <Badge label={tr('invoice.submittedBadge')} tone="info" dot />
+              </View>
+              <AppText variant="caption" tone="muted">{tr('earnings.invoicing.submittedBody')}</AppText>
+            </View>
+          </View>
+          {/* The consented document stays readable while it awaits approval. */}
+          {onOpenInvoiceReview && (
+            <Button label={tr('earnings.invoicing.viewCta')} icon="document-text-outline" variant="neutral" full onPress={onOpenInvoiceReview} />
+          )}
+        </Card>
+      )}
 
       <StatStrip>
         <StatTile label={tr('earnings.statExpenses')} value={money(totalExpenses)} icon="receipt-outline" />
@@ -252,6 +338,12 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
                       </View>
                       <View style={{ alignItems: 'flex-end', gap: 4 }}>
                         <Badge label={state.label} tone={state.tone} dot />
+                        {/* Earned before the invoicing gate existed — visible under the old
+                            rules, never re-billed. The badge explains why this row carries
+                            amounts without ever having ridden an invoice. */}
+                        {p.preInvoicingEra === true && (
+                          <Badge label={tr('earnings.preInvoicingBadge')} tone="neutral" />
+                        )}
                         {p.outstanding > 0 && p.outstanding !== p.totalAmount && (
                           <AppText variant="caption" tone="muted">{tr('earnings.outstanding', { amount: money(p.outstanding) })}</AppText>
                         )}
@@ -354,11 +446,12 @@ export const EarningsScreen: React.FC<EarningsScreenProps> = ({
               <Card level={1} style={{ flexDirection: 'row', alignItems: 'center', gap: t.space.md }}>
                 <View style={{ flex: 1, minWidth: 0, gap: 3 }}>
                   {/* What the payout was actually booked at — not a figure worked out here.
-                      An audit with no payout yet says so rather than showing an offer amount
-                      that may not be what is paid. */}
+                      An audit with no VISIBLE payout shows no amount: pre-gate that meant
+                      "not booked yet"; gated it means the money is not revealed until the
+                      invoice round, and the wording says which. */}
                   {bookedByAssignment.has(a.id)
                     ? <AppText variant="bodyStrong">{money(bookedByAssignment.get(a.id) as number)}</AppText>
-                    : <AppText variant="small" tone="muted">{tr('earnings.notBooked')}</AppText>}
+                    : <AppText variant="small" tone="muted">{tr(gate.kind === 'legacy' ? 'earnings.notBooked' : 'earnings.awaitingInvoicingRow')}</AppText>}
                   <AppText variant="caption" tone="faint" numberOfLines={1}>
                     {a.branchName} · {a.scheduledDate ? pastDay(a.scheduledDate) : '—'}
                   </AppText>

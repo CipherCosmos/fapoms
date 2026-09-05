@@ -42,6 +42,16 @@ describe('PlanningService', () => {
     findOne: jest.fn(),
   };
 
+  const mockFeePolicyService = {
+    // Mirrors the real service: a client rate card when configured, platform defaults
+    // otherwise, and a base fee resolved for the date the candidate is scored on.
+    getRates: jest.fn().mockResolvedValue({ travelFeePerKm: 8, freeTravelAllowanceKm: 10, defaultBaseFee: 1200, clientConfigured: false }),
+    resolveBaseFee: jest.fn().mockResolvedValue({ baseFee: 1500, usedFallback: false }),
+    // Batched variant: the candidate list resolves every ranked assayer's rate in one
+    // query. Same rule as resolveBaseFee, so the stub mirrors it per id.
+    resolveBaseFees: jest.fn(async (ids: string[]) => new Map(ids.map((id) => [id, { baseFee: 1500, usedFallback: false }]))),
+  };
+
   const mockAssayerService = {
     getActiveCommercialProfile: mockCommercialRepo.findOne,
   };
@@ -52,15 +62,7 @@ describe('PlanningService', () => {
         PlanningService,
         {
           provide: FeePolicyService,
-          useValue: {
-            // Mirrors the real service: a client rate card when configured, platform defaults
-            // otherwise, and a base fee resolved for the date the candidate is scored on.
-            getRates: jest.fn().mockResolvedValue({ travelFeePerKm: 8, freeTravelAllowanceKm: 10, defaultBaseFee: 1200, clientConfigured: false }),
-            resolveBaseFee: jest.fn().mockResolvedValue({ baseFee: 1500, usedFallback: false }),
-            // Batched variant: the candidate list resolves every ranked assayer's rate in one
-            // query. Same rule as resolveBaseFee, so the stub mirrors it per id.
-            resolveBaseFees: jest.fn(async (ids: string[]) => new Map(ids.map((id) => [id, { baseFee: 1500, usedFallback: false }]))),
-          },
+          useValue: mockFeePolicyService,
         },
         { provide: AuditService, useValue: { recordEvent: jest.fn().mockResolvedValue(undefined) , recordEventSafe: jest.fn(function (this: any, dto: any) { return this.recordEvent(dto); })} },
         {
@@ -182,6 +184,52 @@ describe('PlanningService', () => {
     expect(results[0].readableReasons!.map((r) => r.message).join(' ')).toContain('~164 km (straight line, estimate)');
     // The engine's route was reused — no second lookup for the same pair.
     expect(mockRoutingService.calculateRoute).not.toHaveBeenCalled();
+  });
+
+  it('flags a fallback base fee so the UI can tell a platform guess from a real contracted rate', async () => {
+    mockBranchRepository.findOne.mockResolvedValue({ id: 'b-1', latitude: 19.076, longitude: 72.8777 });
+    mockRecommendationEngine.recommend.mockResolvedValue([
+      {
+        assayer: {
+          id: 'a-3', assayerCode: 'AS-3', displayName: 'No Contract', phone: null, email: null,
+          status: 'ACTIVE', state: 'MH', district: 'Pune', city: 'Pune',
+          effectiveLatitude: 18.5, effectiveLongitude: 73.8,
+        },
+        score: 50,
+        breakdown: { distance: 50 },
+      },
+    ]);
+    // FeePolicyService itself already knows this candidate has no priced profile — it resolved
+    // to the platform-wide default. This used to be computed and thrown away right here.
+    mockFeePolicyService.resolveBaseFees.mockResolvedValueOnce(
+      new Map([['a-3', { baseFee: 1200, usedFallback: true }]]) as any,
+    );
+
+    const results = await service.getRecommendedCandidates('b-1');
+
+    expect(results[0].baseFee).toBe(1200);
+    expect(results[0].usedFallbackBaseFee).toBe(true);
+  });
+
+  it('does not flag a real, priced base fee as a fallback', async () => {
+    mockBranchRepository.findOne.mockResolvedValue({ id: 'b-1', latitude: 19.076, longitude: 72.8777 });
+    mockRecommendationEngine.recommend.mockResolvedValue([
+      {
+        assayer: {
+          id: 'a-1', assayerCode: 'AS-1', displayName: 'John Doe', phone: null, email: null,
+          status: 'ACTIVE', state: 'MH', district: 'Mumbai', city: 'Mumbai',
+          effectiveLatitude: 19.082, effectiveLongitude: 72.882,
+        },
+        score: 95.5,
+        breakdown: { distance: 95 },
+      },
+    ]);
+    // The default mock from beforeEach: usedFallback: false, a real contracted rate.
+
+    const results = await service.getRecommendedCandidates('b-1');
+
+    expect(results[0].baseFee).toBe(1500);
+    expect(results[0].usedFallbackBaseFee).toBe(false);
   });
 
   // Business Rule test coverage

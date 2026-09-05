@@ -114,7 +114,9 @@ describe('EmailDigestService', () => {
     });
     audience([
       { id: 'u-1', email: 'both@x.in', role_name: 'DESK' },
-      { id: 'u-1', email: 'both@x.in', role_name: 'ADMIN' },
+      // DEVELOPER owns the feedback desk since 2026-09-05 (feedback-roles.ts); ADMIN no longer
+      // maps to any section.
+      { id: 'u-1', email: 'both@x.in', role_name: 'DEVELOPER' },
     ]);
 
     const result = await service.run();
@@ -133,7 +135,7 @@ describe('EmailDigestService', () => {
     });
     audience([
       { id: 'u-1', email: 'desk@x.in', role_name: 'DESK' },
-      { id: 'u-2', email: 'support@x.in', role_name: 'ADMIN' },
+      { id: 'u-2', email: 'support@x.in', role_name: 'DEVELOPER' },
     ]);
 
     await service.run();
@@ -152,7 +154,7 @@ describe('EmailDigestService', () => {
       firstResponseOverdue: [{ id: 'f1', title: 'X', ageHours: 30 }],
       resolutionOverdue: [],
     });
-    audience([{ id: 'u-1', email: 'support@x.in', role_name: 'ADMIN' }]);
+    audience([{ id: 'u-1', email: 'support@x.in', role_name: 'DEVELOPER' }]);
 
     const result = await service.run();
 

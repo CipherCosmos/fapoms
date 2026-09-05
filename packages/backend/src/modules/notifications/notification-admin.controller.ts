@@ -4,7 +4,8 @@
  * Everything about how the platform speaks to people, made changeable without a deploy: which
  * events fire, on which channels, in whose words, and whether the mail path works at all.
  *
- * Held to administrators. These settings decide what reaches whose inbox and phone across the
+ * Held to administrators — and, for the two transport-plumbing routes (email/test, digest/run),
+ * to the developer alone. These settings decide what reaches whose inbox and phone across the
  * whole organisation — a mistake here is not one person's preference, it is everyone's.
  */
 
@@ -116,6 +117,15 @@ export class TestEmailRequestDto {
  * comment true; `GET catalog`, `GET email/status` and `POST preview` need no such marker because
  * they declare no `@RequirePermissions` at all and were already fail-closed to any role this
  * class-level `@Roles(ADMIN)` does not name.
+ *
+ * Amended 2026-09-05, when the DEVELOPER role split off the technical estate: the four writes
+ * are no longer one audience. `PUT`/`DELETE catalog/:type` are business messaging policy — who
+ * gets told what, in whose words — and stay ADMIN-gated exactly as above (a developer reaches
+ * them too, through the ADMIN implication in role-hierarchy.ts). `POST email/test` and
+ * `POST digest/run` are transport plumbing — proving the mail path works is the developer's
+ * job, not a business decision — so those two carry method-level `@Roles(DEVELOPER)` (one-way:
+ * an administrator does not pass) and `system:edit:platform`, the technical-estate grant, in
+ * place of the configuration one. The class-level `@Roles(ADMIN)` stays for everything else.
  */
 const NOTIFICATION_ADMIN_ROLES = [SystemRole.ADMIN] as const;
 const NOTIFICATION_ADMIN_READ_ROLES = [...NOTIFICATION_ADMIN_ROLES];
@@ -343,11 +353,15 @@ export class NotificationAdminController {
    * proves the variables are set, not that Gmail accepts them.
    */
   @Post('email/test')
-  @Roles(...NOTIFICATION_ADMIN_ROLES)
+  // Method-level override of the class @Roles(ADMIN) — see the 2026-09-05 amendment in the
+  // class comment: exercising the mail transport is the developer's, and one-way implication
+  // means an administrator does not pass this route.
+  @Roles(SystemRole.DEVELOPER)
   // `edit` rather than `view`, on both this and the digest run below: neither changes a setting,
   // but both send real mail to real people, which is not something a read-only holder should fire.
-  @RequirePermissions('configuration:edit:platform')
-  // See the class comment: without this, a custom role holding only configuration:edit:platform
+  // `system:` rather than `configuration:` — transport plumbing is the technical estate's grant.
+  @RequirePermissions('system:edit:platform')
+  // See the class comment: without this, a custom role holding only the matching permission
   // can send real email through the platform's own transport to any address it names. Confirmed
   // live — this is the one that actually matters most to close.
   @RoleOnly()
@@ -385,11 +399,11 @@ export class NotificationAdminController {
    * configure anything.
    */
   @Post('digest/run')
-  @Roles(...NOTIFICATION_ADMIN_ROLES)
-  @RequirePermissions('configuration:edit:platform')
-  // See the class comment. Confirmed live without this: a role holding only
-  // configuration:edit:platform fired a real, unscheduled digest at every real candidate
-  // recipient — not a drill.
+  // Developer-only transport plumbing, same as email/test above — see the class comment.
+  @Roles(SystemRole.DEVELOPER)
+  @RequirePermissions('system:edit:platform')
+  // See the class comment. Confirmed live without this: a role holding only the matching
+  // permission fired a real, unscheduled digest at every real candidate recipient — not a drill.
   @RoleOnly()
   @ApiOperation({ summary: 'Assemble and send the morning digest immediately' })
   async runDigest(): Promise<{ success: boolean; data: { queued: boolean } }> {

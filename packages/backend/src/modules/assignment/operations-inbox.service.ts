@@ -13,7 +13,8 @@ import { PlatformSettingsService } from '../../infrastructure/settings/platform-
  *
  * The three stage pages mirror the assignment lifecycle, which is right for planning-time work —
  * but real desk work is exception-shaped: an offer that must be made by PHONE (not every assayer
- * uses a smartphone), an in-app counter to answer, a decline needing a replacement, accepted work
+ * uses a smartphone — and since in-app fee negotiation was removed, every fee question is a
+ * phone call by definition), a decline needing a replacement, accepted work
  * with no date, a scheduled audit past its date with no check-in. Each of those previously meant
  * a tour across Planning → Scheduling → Execution. This service surfaces them as cards; the
  * system proposes, the desk disposes. Nothing here acts automatically.
@@ -69,7 +70,12 @@ export interface InboxAssignment {
 export interface OperationsInbox {
   /** PHONE-channel offers + APP offers that have gone quiet: the desk should dial. */
   callTasks: InboxAssignment[];
-  /** In-app counter-offers awaiting the desk's answer. */
+  /**
+   * Always empty now. In-app fee negotiation was removed (2026-09): there is no counter for
+   * the desk to answer in-app, and offers with a spent counter ride `callTasks` instead. The
+   * key is kept for one release so a web bundle built before the lane was deleted renders an
+   * empty lane rather than crashing on a missing array; drop it once Phase 2 has shipped.
+   */
   negotiations: InboxAssignment[];
   /** Declined / auto-declined branches that still need someone. */
   replacements: InboxAssignment[];
@@ -261,15 +267,16 @@ export class OperationsInboxService {
     };
 
     const callTasks: InboxAssignment[] = [];
-    const negotiations: InboxAssignment[] = [];
     let waitingOnApp = 0;
 
     for (const a of pending) {
       const item = toItem(a);
       if (item.negotiationCount > 0) {
-        // A counter is in play. In-app counters await the desk's answer; phone-channel counters
-        // are still a call to finish.
-        negotiations.push(item);
+        // A counter was in play when in-app negotiation was removed. There is no in-app answer
+        // the desk can send any more — an in-flight negotiation is now precisely a call the
+        // desk must finish — so these go to the call lane whatever the assayer's channel,
+        // instead of waiting in a lane whose reply button is gone.
+        callTasks.push(item);
       } else if (item.channel === 'PHONE') {
         callTasks.push(item);
       } else if (item.ageHours >= APP_SILENCE_HOURS) {
@@ -299,7 +306,8 @@ export class OperationsInboxService {
 
     return {
       callTasks,
-      negotiations,
+      // Empty on purpose, kept for one release — see the interface comment.
+      negotiations: [],
       replacements: rejected.map(toItem),
       unscheduled,
       overdue,

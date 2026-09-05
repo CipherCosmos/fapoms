@@ -1,12 +1,12 @@
 import React from 'react';
 import { PauseCircle } from 'lucide-react';
 import {
-  BillingState, InvoiceStatus, AssayerPayableStatus,
+  BillingState, InvoiceStatus, AssayerPayableStatus, AssayerInvoiceStatus,
   billingStateLabel, payableStatusLabel, invoiceStatusLabel,
 } from '@fapoms/shared';
 
 /**
- * The few presentational pieces every billing tab shares: the three status pills (one per state
+ * The few presentational pieces every billing tab shares: the status pills (one per state
  * machine, words from the shared labels so the phone says the same thing), the hold marker, a
  * card, a section label and a date. Nothing here touches money.
  */
@@ -29,6 +29,22 @@ const INVOICE_TONE: Record<InvoiceStatus, string> = {
   PAID: 'var(--success)',
   CANCELLED: 'var(--text-muted)',
 };
+// INVITED is waiting on the assayer (their queue, warning-toned like a pending payout);
+// SUBMITTED is waiting on ops — the action lane, accent-toned so it reads as "yours to do".
+const ASSAYER_INVOICE_TONE: Record<AssayerInvoiceStatus, string> = {
+  INVITED: 'var(--warning)',
+  SUBMITTED: 'var(--accent)',
+  APPROVED: 'var(--success)',
+  CANCELLED: 'var(--text-muted)',
+};
+
+/**
+ * Words for the assayer-invoice states. Local because the shared label layer does not know this
+ * enum yet; when the mobile reveal screen ships these belong beside `payableStatusLabel` in
+ * @fapoms/shared so both apps say the same thing.
+ */
+export const assayerInvoiceStatusLabel = (s: AssayerInvoiceStatus): string =>
+  ({ INVITED: 'Invited', SUBMITTED: 'Submitted', APPROVED: 'Approved', CANCELLED: 'Cancelled' })[s] ?? s;
 
 export const Pill: React.FC<{ tone: string; children: React.ReactNode; title?: string }> = ({ tone, children, title }) => (
   <span title={title} style={{
@@ -55,6 +71,10 @@ export const InvoiceStatusPill: React.FC<{ status: InvoiceStatus; partPaid?: boo
   <Pill tone={INVOICE_TONE[status] ?? 'var(--text-muted)'}>
     {invoiceStatusLabel(status)}{partPaid && status === 'ISSUED' ? ' · part-paid' : ''}
   </Pill>
+);
+
+export const AssayerInvoiceStatusPill: React.FC<{ status: AssayerInvoiceStatus; title?: string }> = ({ status, title }) => (
+  <Pill tone={ASSAYER_INVOICE_TONE[status] ?? 'var(--text-muted)'} title={title}>{assayerInvoiceStatusLabel(status)}</Pill>
 );
 
 export const HoldPill: React.FC<{ reason?: string | null }> = ({ reason }) => (

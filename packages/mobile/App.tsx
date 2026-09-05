@@ -20,6 +20,7 @@ import { registerAndroidNotificationChannels } from './src/services/notification
 import { handleIncomingCall, handleCallAnswered, handleCallEnded } from './src/services/calls';
 import { countOpenQueries, countResolvedQueries } from './src/utils/queries';
 import { parseRupeeInput, formatRupees } from '@fapoms/shared';
+import type { AssayerInvoiceInvitation } from '@fapoms/shared';
 
 // Context Providers
 import { ThemeProvider, ThemeContext, useTheme } from './src/theme/ThemeProvider';
@@ -55,7 +56,7 @@ import { InAppNavigationModal } from './src/components/InAppNavigationModal';
 import { CallModal } from './src/components/CallModal';
 import { RejectionModal } from './src/components/RejectionModal';
 import { ExpenseModal, CAT_LABEL_KEYS } from './src/components/ExpenseModal';
-import { NegotiateModal } from './src/components/NegotiateModal';
+import { InvoiceReviewModal } from './src/components/InvoiceReviewModal';
 import { ReportIssueModal } from './src/components/ReportIssueModal';
 import { FeedbackModal } from './src/components/FeedbackModal';
 import { AvailabilityModal } from './src/components/AvailabilityModal';
@@ -84,6 +85,12 @@ function AppMain() {
   const [statement, setStatement] = useState<AssayerStatement | null>(null);
   /** True when the last statement read failed. The screen says so rather than showing a figure. */
   const [statementError, setStatementError] = useState(false);
+  /**
+   * The active invoice invitation (status + line count for the Earnings gate cards). The
+   * amounts on it are only ever shown by InvoiceReviewModal, which re-fetches the invitation
+   * at the moment of review — this copy exists to answer "is there one?", not "how much?".
+   */
+  const [invitation, setInvitation] = useState<AssayerInvoiceInvitation | null>(null);
   const [expenseSummary, setExpenseSummary] = useState<ExpenseSummary>({
     pending: 0,
     approved: 0,
@@ -136,6 +143,34 @@ function AppMain() {
     [outbox, user?.id],
   );
 
+  /**
+   * Refresh the earnings screen — keeping whatever it last knew for anything that fails.
+   *
+   * These readers used to return empties on a timeout, and this wrote them straight into state:
+   * one slow request on a 2G link and Earnings showed ₹0 claimed and no statement, for a network
+   * problem. Each read now throws when the server did not answer, and only the reads that
+   * succeeded update their slice; a failed one leaves the previous value on screen. On a first
+   * load with nothing previous the screen simply stays empty, which is honest.
+   *
+   * (Defined above the notification-tap handler because an `/earnings` deep link calls it.)
+   */
+  const loadExpenseSummary = useCallback(async () => {
+    if (!user?.id) return;
+    const [summary, mine, stmt, invite] = await Promise.allSettled([
+      MobileApiService.getMyExpenseSummary(),
+      MobileApiService.getMyExpenses(),
+      MobileApiService.getAssayerStatement(user.id),
+      MobileApiService.getMyInvoiceInvitation(user.id),
+    ]);
+    if (summary.status === 'fulfilled') setExpenseSummary(summary.value);
+    if (mine.status === 'fulfilled') setClaims(mine.value);
+    if (stmt.status === 'fulfilled') { setStatement(stmt.value); setStatementError(false); }
+    else setStatementError(true);
+    // A fulfilled `null` means "no invitation" (or the feature is dark) and clears the card; a
+    // failed read keeps whatever the screen last knew, same as the statement.
+    if (invite.status === 'fulfilled') setInvitation(invite.value);
+  }, [user?.id]);
+
   // A tapped notification's target, held until `assignments` has actually loaded — a cold
   // start races the deep link against the assignment list fetch, so the target is queued
   // here and resolved by the effect below once real data exists to resolve it against.
@@ -175,6 +210,10 @@ function AppMain() {
     if (link.startsWith('/earnings')) {
       paperwork.close();
       setSelectedTab('EARNINGS');
+      // The taps that land here are billing events — an invoice invitation or approval among
+      // them — and the app may have been backgrounded when the socket event went by. Refresh
+      // the statement + invitation so the tab shows the state the notification announced.
+      void loadExpenseSummary();
       return;
     }
 
@@ -186,7 +225,10 @@ function AppMain() {
     paperwork.close();
     setSelectedTab('SCHEDULE');
     setPendingNotificationTarget({ assignmentId, category: data.category });
-  }, []);
+    // `loadExpenseSummary` is the one dependency with real identity churn (it follows
+    // `user?.id`); the notifications hook keeps `onTap` in a ref, so this re-creation does not
+    // tear down any listener.
+  }, [loadExpenseSummary]);
 
   /**
    * Delivery lives in the hook; where a tap lands is decided here, because it depends on the tab
@@ -215,28 +257,6 @@ function AppMain() {
     updateField: handleUpdateProfileField,
     save: handleSaveProfile,
   } = useAssayerProfile(user, location);
-
-  /**
-   * Refresh the earnings screen — keeping whatever it last knew for anything that fails.
-   *
-   * These readers used to return empties on a timeout, and this wrote them straight into state:
-   * one slow request on a 2G link and Earnings showed ₹0 claimed and no statement, for a network
-   * problem. Each read now throws when the server did not answer, and only the reads that
-   * succeeded update their slice; a failed one leaves the previous value on screen. On a first
-   * load with nothing previous the screen simply stays empty, which is honest.
-   */
-  const loadExpenseSummary = useCallback(async () => {
-    if (!user?.id) return;
-    const [summary, mine, stmt] = await Promise.allSettled([
-      MobileApiService.getMyExpenseSummary(),
-      MobileApiService.getMyExpenses(),
-      MobileApiService.getAssayerStatement(user.id),
-    ]);
-    if (summary.status === 'fulfilled') setExpenseSummary(summary.value);
-    if (mine.status === 'fulfilled') setClaims(mine.value);
-    if (stmt.status === 'fulfilled') { setStatement(stmt.value); setStatementError(false); }
-    else setStatementError(true);
-  }, [user?.id]);
 
   /**
    * Re-reads everything a server-side mutation can move.
@@ -272,14 +292,24 @@ function AppMain() {
        */
       const onNotification = () => loadNotifications();
 
-      /** A validated payable changes the balance on Home and Earnings, not the schedule. */
+      /**
+       * Money moved server-side — a payout changed state, or an assayer invoice was invited /
+       * submitted / approved / cancelled — so the statement and the invitation both reload,
+       * silently (no banner: the push notification covers anything needing attention).
+       *
+       * These are the events the gateway actually emits to this assayer's room:
+       * `billing:payout-changed` and `billing:assayer-invoice-changed`. The old subscription
+       * here was `billing:created`, a name the gateway has never emitted — the balance only
+       * ever refreshed by poll or pull.
+       */
       const onBilling = () => {
         loadAssayerProfile();
         loadExpenseSummary();
       };
 
       socket?.on('notification:new', onNotification);
-      socket?.on('billing:created', onBilling);
+      socket?.on('billing:payout-changed', onBilling);
+      socket?.on('billing:assayer-invoice-changed', onBilling);
       socket?.on('expense:decided', onBilling);
 
       /**
@@ -313,7 +343,8 @@ function AppMain() {
       return () => {
         clearInterval(timer);
         socket?.off('notification:new', onNotification);
-        socket?.off('billing:created', onBilling);
+        socket?.off('billing:payout-changed', onBilling);
+        socket?.off('billing:assayer-invoice-changed', onBilling);
         socket?.off('expense:decided', onBilling);
         socket?.off('call:incoming', handleIncomingCall);
         socket?.off('call:answered', handleCallAnswered);
@@ -748,7 +779,6 @@ function AppMain() {
   const scanner = overlay.current('scanner');
   const queryChat = overlay.current('queryChat');
   const navigate = overlay.current('navigate');
-  const negotiate = overlay.current('negotiate');
   const issue = overlay.current('issue');
   const reject = overlay.current('reject');
   const expense = overlay.current('expense');
@@ -847,8 +877,6 @@ function AppMain() {
             totalAssignments={profile.totalAssignments}
             completedAssignments={profile.completedAssignments}
             averageRating={profile.averageRating}
-            statement={statement}
-            statementError={statementError}
             expenseSummary={expenseSummary}
             onOpenAssignment={paperwork.open}
             onCheckIn={handleCheckIn}
@@ -883,7 +911,6 @@ function AppMain() {
             onOpenScanner={(a) => overlay.open({ name: 'scanner', assignment: a })}
             onOpenQueryChat={(a) => overlay.open({ name: 'queryChat', assignment: a })}
             onOpenMap={(a) => overlay.open({ name: 'navigate', assignment: a })}
-            onCounterOffer={(a) => overlay.open({ name: 'negotiate', assignment: a })}
             onLoadOlderHistory={loadOlderHistory}
           />
         )}
@@ -902,6 +929,8 @@ function AppMain() {
             claimSummary={expenseSummary}
             statement={statement}
             statementError={statementError}
+            invitation={invitation}
+            onOpenInvoiceReview={() => overlay.open({ name: 'invoiceReview' })}
             onOpenExpenseModal={() => {
               // From the Earnings tab there is no open job, so tie the claim to the one the
               // assayer is currently on (checked in / in progress / accepted). If there is
@@ -931,7 +960,6 @@ function AppMain() {
             assayerName={assayerName}
             assayerCode={user?.assayerCode || profile.assayerCode}
             profile={profile}
-            statement={statement}
             savingProfile={savingProfile}
             profileDirty={profileDirty}
             openQueries={countOpenQueries(assignments)}
@@ -1123,8 +1151,6 @@ function AppMain() {
       {expense && (
         <ExpenseModal
           visible
-          quotedTravelFee={expense.assignment?.quotedTravelFee}
-          quotedTransportMode={expense.assignment?.quotedTransportMode}
           onClose={overlay.close}
           onAddExpense={async (category, amount, description) => {
             // Against the assignment chosen at the entry point, never assignments[0]. The old
@@ -1218,40 +1244,20 @@ function AppMain() {
         />
       )}
 
-      {negotiate && (
-        <NegotiateModal
+      {/*
+        The earnings reveal. Mounted whenever its overlay is open; it fetches the invitation
+        itself, so it takes no subject — see the overlay variant's comment. `onSubmitted`
+        refreshes the statement + invitation so the Earnings tab behind it flips to
+        "submitted" the moment the sheet is dismissed.
+      */}
+      {overlay.current('invoiceReview') && user?.id && (
+        <InvoiceReviewModal
           visible
-          // Pass the real fee (0 when unresolved), not `|| 1800`. The modal seeds an empty
-          // counter-offer box for a non-positive fee on purpose; injecting 1800 here defeated
-          // that guard and re-fabricated the phantom asking price it exists to prevent.
-          currentFee={negotiate.assignment.proposedFee || 0}
-          quotedTravelFee={negotiate.assignment.quotedTravelFee}
-          counterTravelFee={negotiate.assignment.counterTravelFee}
-          quotedTransportMode={negotiate.assignment.quotedTransportMode}
-          quotedDistanceKm={negotiate.assignment.quotedDistanceKm}
-          onCancel={overlay.close}
-          onSubmit={async (counterTravelFee, remarks) => {
-            const res = await updateAssignmentStatus(
-              negotiate.assignment.id,
-              'PENDING',
-              remarks,
-              { counterTravelFee }
-            );
-            if (res.success) {
-              // Says travel, because that is what moved. The audit fee comes from the rate card
-              // and is not the assayer's to change — telling them "your fee of ₹650" when 650 is
-              // the travel would have them expecting a fee they never asked for.
-              feedback.success(
-                tr('negotiate.sentTitle'),
-                tr('negotiate.sentBody', { amount: formatRupees(counterTravelFee) }),
-              );
-              overlay.close();
-            } else {
-              feedback.error(
-                tr('negotiate.failedTitle'),
-                serverErrorText(res.error, 'negotiate.failedBody'),
-              );
-            }
+          assayerId={user.id}
+          onClose={overlay.close}
+          onSubmitted={() => {
+            feedback.success(tr('invoice.submittedToastTitle'), tr('invoice.submittedToastBody'));
+            void loadExpenseSummary();
           }}
         />
       )}

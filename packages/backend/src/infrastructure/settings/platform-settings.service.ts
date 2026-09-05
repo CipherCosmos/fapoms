@@ -1,9 +1,10 @@
-import { Injectable, Logger, BadRequestException, OnModuleInit } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, ForbiddenException, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { SystemRole, expandRoles } from '@fapoms/shared';
 
 import { PlatformSettingEntity } from './platform-setting.entity';
-import { SETTINGS_REGISTRY, SETTING_BY_KEY, SettingDef } from './settings.registry';
+import { SETTINGS_REGISTRY, SETTING_BY_KEY, SettingDef, audienceOfSetting } from './settings.registry';
 import { CacheService } from '../cache/cache.service';
 import { encryptField, decryptField } from '../security/field-encryption';
 
@@ -158,9 +159,30 @@ export class PlatformSettingsService implements OnModuleInit {
 
   // ---------------------------------------------------------------- writes
 
-  async set(key: string, rawValue: any, userId?: string): Promise<void> {
+  /**
+   * The technical/business write fence (2026-09-05). Technical settings — mail transports,
+   * cron schedules, retention floors, security rollouts — are the Developer's; business
+   * settings stay the administrator's (the route's own @Roles already ensures the caller is at
+   * least that). `expandRoles` rather than a raw name check for consistency with the guards:
+   * today nothing implies DEVELOPER so it is effectively direct, and if that ever changes this
+   * fence follows the hierarchy instead of silently diverging from it.
+   *
+   * `actorRoles === undefined` means an internal caller (seeding, migrations, listeners) with
+   * no HTTP actor to fence — the fence is about which PERSON may turn a knob, and the only
+   * person-shaped path here is the controller, which always threads its caller's roles.
+   */
+  private assertAudienceAllowed(key: string, actorRoles?: string[]): void {
+    if (actorRoles === undefined) return;
+    if (audienceOfSetting(key) !== 'technical') return;
+    if (!expandRoles(actorRoles).includes(SystemRole.DEVELOPER)) {
+      throw new ForbiddenException('This is a technical platform setting — only a Developer can change it.');
+    }
+  }
+
+  async set(key: string, rawValue: any, userId?: string, actorRoles?: string[]): Promise<void> {
     const def = SETTING_BY_KEY[key];
     if (!def) throw new BadRequestException(`Unknown setting "${key}"`);
+    this.assertAudienceAllowed(key, actorRoles);
 
     // Sending the mask back unchanged is what a form does when the user did not retype a
     // password. It means "leave it alone", never "set the value to dots".
@@ -209,10 +231,15 @@ export class PlatformSettingsService implements OnModuleInit {
     await this.notify(key, value);
   }
 
-  /** Removes the saved value so the key falls back to the environment or the default. */
-  async reset(key: string, userId?: string): Promise<void> {
+  /**
+   * Removes the saved value so the key falls back to the environment or the default.
+   * Clearing a technical key changes what is in force just as surely as setting one, so it
+   * passes the same audience fence.
+   */
+  async reset(key: string, userId?: string, actorRoles?: string[]): Promise<void> {
     const def = SETTING_BY_KEY[key];
     if (!def) throw new BadRequestException(`Unknown setting "${key}"`);
+    this.assertAudienceAllowed(key, actorRoles);
     await this.repository.delete({ key });
     await this.invalidate();
     await this.notify(key, await this.get(key).catch(() => null));

@@ -65,6 +65,20 @@ export interface ExecuteInput {
   billingConfirmed?: boolean;
   actorUserId: string;
   backup?: OnDemandBackup | null;
+  /** The approved destructive-action request this wipe consumes — recorded in the audit trail. */
+  requestId?: string;
+  /**
+   * The two-person rule's consumption step, run as the FIRST statement inside the wipe's own
+   * transaction: `DestructiveApprovalService.assertExecutableAndConsume` flips the approval
+   * APPROVED → EXECUTED atomically, or throws before a single row is deleted. Passed in as a
+   * hook (the controller composes it) rather than injected, so this service and the approval
+   * service — which already depends on `preview()` — never form a provider cycle.
+   *
+   * Living inside the transaction is the point: a wipe that fails after consumption rolls the
+   * consumption back with it, so a failed attempt does not burn the approval, and a consumed
+   * approval always describes a wipe that actually committed.
+   */
+  consumeApproval?: (manager: EntityManager) => Promise<void>;
 }
 
 export interface ExecuteResult {
@@ -185,6 +199,12 @@ export class DataResetService {
     let removed: Record<string, number> = {};
 
     await this.dataSource.transaction('READ COMMITTED', async (manager) => {
+      // Consume the approval BEFORE deleting anything, in this same transaction — see the
+      // doc-comment on `ExecuteInput.consumeApproval` for why both halves of that sentence matter.
+      if (input.consumeApproval) {
+        await input.consumeApproval(manager);
+      }
+
       for (const table of order) {
         if (table === 'users') {
           await manager.query(`DELETE FROM "users" WHERE id <> ALL($1::uuid[])`, [keepIds]);
@@ -230,6 +250,9 @@ export class DataResetService {
             preCounts,
             removed,
             backup: input.backup ?? null,
+            // Which approved request authorised this wipe — the audit row and the request row
+            // must be joinable, or the two-person rule leaves no verifiable trail.
+            destructiveActionRequestId: input.requestId ?? null,
           },
         },
         { manager },

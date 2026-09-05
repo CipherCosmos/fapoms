@@ -1,4 +1,4 @@
-import { SystemRole } from '@fapoms/shared';
+import { SystemRole, expandRoles } from '@fapoms/shared';
 
 /**
  * Who may open a page.
@@ -65,18 +65,19 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
   },
   {
     /**
-     * The feedback & collaboration channel — super administrators only, by decision
-     * (2026-08-17): the platform owner asked for feedback, notification rules and platform
-     * settings to be visible to the super administrator and nobody else. This used to be open
-     * to every role (reporters saw their own items, the PRODUCT_SUPPORT team and admins the
-     * triage desk); the header launcher is gated on this same entry (Header.tsx), so no other
-     * web user sees a feedback surface at all. Mirrors FEEDBACK_TEAM_ROLES on the backend.
+     * The support desk — the people who ANSWER the tickets, not the business owner. Since the
+     * DEVELOPER split (2026-09-05) that is DEVELOPER and PRODUCT_SUPPORT, and ADMIN loses the
+     * page: running the business does not include working the product-support queue. (A
+     * developer also reaches it through implication — DEVELOPER ⇒ PRODUCT_SUPPORT — but is
+     * named anyway so this table reads as the complete answer.) The header launcher is gated
+     * on this same entry (Header.tsx); sending feedback stays open to everyone — only browsing
+     * the channel is restricted. Mirrors FEEDBACK_TEAM_ROLES on the backend.
      *
      * No permission: the backend gates the triage queue on FEEDBACK_TEAM_ROLES by name and
      * declares nothing a role could be granted, so there is nothing here to honour yet.
      */
     path: '/feedback',
-    allowedRoles: [SystemRole.ADMIN],
+    allowedRoles: [SystemRole.DEVELOPER, SystemRole.PRODUCT_SUPPORT],
   },
   {
     // The command centre this page draws asks for planning:view:organization.
@@ -227,12 +228,25 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR],
   },
   {
-    // Container logs. Administrators only, gated on the role itself rather than a grantable
-    // permission: logs are the least filtered view of the system there is, and that is not a
-    // capability anyone should be able to add to a role by editing a role. Mirrors
-    // @Roles(SystemRole.ADMIN) on ServiceLogsController. The absence of a permission here is the
-    // decision, not an omission.
+    // Container logs. Developers only — the technical estate, gated on the role itself rather
+    // than a grantable permission: logs are the least filtered view of the system there is, and
+    // that is not a capability anyone should be able to add to a role by editing a role. ADMIN
+    // is deliberately NOT here and cannot arrive by implication (it runs DEVELOPER → ADMIN,
+    // never the reverse) — the business owner does not read raw service logs. Mirrors
+    // @Roles(SystemRole.DEVELOPER) on ServiceLogsController. The absence of a permission here
+    // is the decision, not an omission.
     path: '/admin/logs',
+    allowedRoles: [SystemRole.DEVELOPER],
+  },
+  {
+    // The approve side of the destructive-action two-person rule: a DEVELOPER requests a data
+    // wipe in the Danger Zone, an ADMIN decides it here. Listed as ADMIN's page — developers
+    // are refused the approve/reject ACTIONS by design, but the route gate cannot express that:
+    // implication makes every developer pass an ADMIN name-match, so the page itself gates its
+    // buttons on the DIRECT role (canApproveDestructiveActions) and the backend refuses a
+    // developer's approval anyway. A developer landing here sees the queue read-only.
+    // No permission: approval must not be grantable to a custom role by editing a role.
+    path: '/admin/approvals',
     allowedRoles: [SystemRole.ADMIN],
   },
   {
@@ -378,12 +392,19 @@ export function canAccessRoute(
   const routeConfig = matches.reduce((best, rp) => (rp.path.length > best.path.length ? rp : best));
 
   if (routeConfig.anyAuthenticated) return true;
-  if (userRoles.some((role) => routeConfig.allowedRoles.includes(role))) return true;
+  // The caller's names are expanded through the role hierarchy before matching (role-hierarchy.ts
+  // in @fapoms/shared): DEVELOPER implies ADMIN and PRODUCT_SUPPORT, so every entry naming those
+  // admits a developer without this table listing it on 20 rows. One-way — an entry naming only
+  // DEVELOPER (/admin/logs) still excludes admins — and the same expansion RolesGuard applies, so
+  // the navigation and the API keep agreeing.
+  if (expandRoles(userRoles).some((role) => routeConfig.allowedRoles.includes(role as SystemRole))) return true;
 
   // The permission fallback exists so a role built in Admin → Roles — which by definition matches
   // no `allowedRoles` entry — can still reach the pages it was granted. It must NOT hand a built-in
   // role a page it was deliberately kept off (see note 4). If every role the person holds is a
   // built-in `SystemRole`, the role-name check above was the whole answer, and it said no.
+  // RAW names here, not the expansion: expansion only ever adds built-in names, and the fallback
+  // must open exactly when the person actually carries a database-defined role.
   const knownRoleNames = new Set<string>(Object.values(SystemRole));
   const hasCustomRole = userRoles.some((role) => !knownRoleNames.has(role));
   if (!hasCustomRole) return false;
@@ -411,6 +432,9 @@ export function canAccessRoute(
  * the job those dead branches were reaching for.
  */
 const HOME_BY_ROLE: [SystemRole, string][] = [
+  // First match wins for a person holding several roles, so the most capable role sits first —
+  // DEVELOPER above ADMIN, mirroring the hierarchy (DEVELOPER ⇒ ADMIN, role-hierarchy.ts).
+  [SystemRole.DEVELOPER, '/dashboard'],      // runs the machine; same board as ADMIN
   [SystemRole.ADMIN, '/dashboard'],          // runs the whole board
   [SystemRole.OPERATIONS, '/executive-map'], // live pipeline overview
   [SystemRole.DESK, '/documents'],           // packets out, packets back
@@ -445,6 +469,10 @@ const LANDING_ORDER: string[] = [
   '/zones',
   '/users',
   '/admin/settings',
+  // The support desk: for PRODUCT_SUPPORT this is the job itself, and before this entry the
+  // role fell through to its own notification inbox — a page about the work instead of the work.
+  // Placed after the operational pages so no role that can open one of those lands here instead.
+  '/feedback',
   '/notifications',
   '/settings',
 ];

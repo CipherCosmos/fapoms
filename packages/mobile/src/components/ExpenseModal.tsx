@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Modal, View, TextInput, TextStyle, KeyboardAvoidingView, Platform } from 'react-native';
-import { travelModeLabel, parseRupeeInput, formatRupees } from '@fapoms/shared';
+import { parseRupeeInput, formatRupees } from '@fapoms/shared';
 import { useTheme } from '../theme/ThemeProvider';
 import { MobileApiService } from '../services/api.service';
 import { AppText, Button, Card, Tappable } from './ui/primitives';
@@ -26,14 +26,13 @@ export interface ExpenseModalProps {
   expenseCategory?: ExpenseCategory;
   expenseAmount?: string;
   expenseDescription?: string;
-  /**
-   * The travel money already inside the assignment's agreed fee, as the desk's calculator
-   * priced it. Shown as context on a TRAVEL_KM claim so the assayer knows what the fee was
-   * already meant to cover before claiming on top of it. Never pre-filled into the amount —
-   * a claim is the assayer's own statement, not a suggestion accepted by inertia.
+  /*
+   * This sheet used to show a "your fee already includes ₹X for travel" hint on TRAVEL_KM
+   * claims, read off the assignment's quoted travel fee. That figure no longer reaches the
+   * app at all — the server strips every fee field from assayer responses (money-blinding) —
+   * so the hint and its props were removed rather than kept as a branch that can never render.
+   * The claim flow itself is untouched: it is the assayer's own out-of-pocket money.
    */
-  quotedTravelFee?: number | null;
-  quotedTransportMode?: string | null;
   onSelectCategory?: (cat: ExpenseCategory) => void;
   onChangeAmount?: (val: string) => void;
   onChangeDescription?: (val: string) => void;
@@ -48,8 +47,6 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
   expenseCategory: controlledCat,
   expenseAmount: controlledAmt,
   expenseDescription: controlledDesc,
-  quotedTravelFee,
-  quotedTransportMode,
   onSelectCategory,
   onChangeAmount,
   onChangeDescription,
@@ -213,17 +210,6 @@ export const ExpenseModal: React.FC<ExpenseModalProps> = ({
               })}
             </View>
           </View>
-
-          {cat === 'TRAVEL_KM' && quotedTravelFee != null && quotedTravelFee > 0 && (
-            <AppText variant="small" tone="muted">
-              {quotedTransportMode
-                ? tr('expense.quotedIncludedByMode', {
-                    amount: formatRupees(Number(quotedTravelFee)),
-                    mode: travelModeLabel(quotedTransportMode).toLowerCase(),
-                  })
-                : tr('expense.quotedIncluded', { amount: formatRupees(Number(quotedTravelFee)) })}
-            </AppText>
-          )}
 
           <View style={{ gap: t.space.xs }}>
             <AppText variant="overline" tone="faint">{tr('expense.amountLabel')}</AppText>

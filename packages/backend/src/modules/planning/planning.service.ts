@@ -49,6 +49,14 @@ export interface AssayerRecommendation {
   latitude?: number | null;
   longitude?: number | null;
   baseFee?: number;
+  /**
+   * True when `baseFee` is the platform-wide default rather than this assayer's own contracted
+   * rate — `FeePolicyService` already computes this distinction (`resolveBaseFees`' `usedFallback`)
+   * and it used to be resolved and then silently discarded right here, so the card had no way to
+   * say "this figure is a guess" the same way `distanceSource` already lets it say "this distance
+   * is an estimate". Absent/false means the fee is the assayer's real contracted or client-rate figure.
+   */
+  usedFallbackBaseFee?: boolean;
   readableReasons?: ExplanationReason[];
   /** Per-dimension scores (distance, acceptanceRate, queryVolume, …) behind the total. */
   scoreBreakdown?: Record<string, number>;
@@ -251,7 +259,8 @@ export class PlanningService {
       // fell back to 1200 and FeePolicyService falls back to the client's contracted rate — so
       // ops saw a figure on the candidate list that no part of the system would ever charge.
       // Resolved for the whole pool above; same rule, one query.
-      const { baseFee } = baseFees.get(r.assayer.id) ?? { baseFee: rates.defaultBaseFee, usedFallback: true };
+      const { baseFee, usedFallback: usedFallbackBaseFee } =
+        baseFees.get(r.assayer.id) ?? { baseFee: rates.defaultBaseFee, usedFallback: true };
 
       const readableReasons = generateExplanation(r.breakdown, {
         displayName: r.assayer.displayName,
@@ -285,6 +294,7 @@ export class PlanningService {
         latitude: r.assayer.effectiveLatitude,
         longitude: r.assayer.effectiveLongitude,
         baseFee,
+        usedFallbackBaseFee,
         readableReasons,
         // Per-dimension scores so ops can see *why* this candidate ranked where they did,
         // rather than being handed an unexplained number.

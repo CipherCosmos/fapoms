@@ -20,6 +20,12 @@ import { api } from './api';
  * is what a screen must show: it is 0 for any roster this product will realistically meet, and
  * above 0 only when the roster outgrows the ceiling below or somebody is added mid-fetch — either
  * way the screen says so rather than quietly listing fewer people than it has.
+ *
+ * `RosterQueryService` has since grown real server-side filters (search text, stage, region, the
+ * empanelment axes…), so this now takes an optional `query` string — see `fetchWholeAssayerRoster`
+ * below — and walks every page of THAT filtered set rather than only ever the unfiltered roster.
+ * The roster screen uses it this way; a caller that wants literally everyone (HrPayPage) simply
+ * omits it, exactly as before.
  */
 
 /** Rows per request. Matches what the roster page asks for, so the server sees one shape of call. */
@@ -55,11 +61,22 @@ interface RosterEnvelope<T> {
  * it used to be).
  */
 export async function fetchWholeAssayerRoster<T extends { id: string }>(
-  options?: { signal?: AbortSignal },
+  options?: {
+    /**
+     * Extra filters, already encoded — `toServerQuery(filters)` from the roster screen, nothing
+     * at all for a caller that genuinely wants everyone (HrPayPage). `limit` and `after` are this
+     * function's to set, so a caller passing either would be overruled. Matches the same
+     * `query?: string` shape `fetchWholeBranchDirectory` already has, for the same reason: a
+     * walker that fetches every page of a server-side-filtered list is one idea, used twice.
+     */
+    query?: string;
+    signal?: AbortSignal;
+  },
 ): Promise<WholeAssayerRoster<T>> {
+  const extra = options?.query ? `&${options.query}` : '';
   const fetchPage = (after?: string) =>
     api.request<RosterEnvelope<T>>(
-      `/assayers?limit=${ASSAYER_PAGE_SIZE}${after ? `&after=${encodeURIComponent(after)}` : ''}`,
+      `/assayers?limit=${ASSAYER_PAGE_SIZE}${extra}${after ? `&after=${encodeURIComponent(after)}` : ''}`,
       {
         // Without this the client unwraps the envelope and throws the pagination total away, which
         // is the single line whose absence made all of this invisible.

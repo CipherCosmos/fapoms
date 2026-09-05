@@ -134,7 +134,10 @@ async function seed() {
       { resource: PermissionResource.ASSIGNMENT, action: PermissionAction.VIEW, scope: AuthorizationScope.PLATFORM, description: 'View all assignments' },
       { resource: PermissionResource.ASSIGNMENT, action: PermissionAction.VIEW, scope: AuthorizationScope.ASSIGNED_RECORDS, description: 'View own assignments' },
       { resource: PermissionResource.ASSIGNMENT, action: PermissionAction.CREATE, scope: AuthorizationScope.ORGANIZATION, description: 'Create assignments' },
-      { resource: PermissionResource.ASSIGNMENT, action: PermissionAction.NEGOTIATE, scope: AuthorizationScope.ORGANIZATION, description: 'Negotiate assignments' },
+      // ASSIGNMENT:NEGOTIATE is retired: in-app fee negotiation was removed (2026-09) and no
+      // route checks the permission any more, so seeding it would only offer role-builder
+      // admins a grant that does nothing. PermissionAction.NEGOTIATE stays in the shared enum
+      // (deprecated) because historical role rows and audit events still carry the string.
       { resource: PermissionResource.ASSIGNMENT, action: PermissionAction.ACCEPT, scope: AuthorizationScope.SELF, description: 'Accept assigned work (Assayer)' },
       { resource: PermissionResource.ASSIGNMENT, action: PermissionAction.CANCEL, scope: AuthorizationScope.ORGANIZATION, description: 'Cancel assignments' },
 
@@ -233,7 +236,6 @@ async function seed() {
       { name: 'ASSIGNMENT_VIEW', displayName: 'View All Assignments', category: 'ASSIGNMENT', permissionKeys: ['ASSIGNMENT:VIEW:PLATFORM'] },
       { name: 'ASSIGNMENT_VIEW_OWN', displayName: 'View Own Assignments', category: 'ASSIGNMENT', permissionKeys: ['ASSIGNMENT:VIEW:ASSIGNED_RECORDS'] },
       { name: 'ASSIGNMENT_CREATE', displayName: 'Create Assignments', category: 'ASSIGNMENT', permissionKeys: ['ASSIGNMENT:CREATE:ORGANIZATION'] },
-      { name: 'ASSIGNMENT_NEGOTIATE', displayName: 'Negotiate Assignments', category: 'ASSIGNMENT', permissionKeys: ['ASSIGNMENT:NEGOTIATE:ORGANIZATION'] },
       { name: 'ASSIGNMENT_ACCEPT', displayName: 'Accept Assigned Work', category: 'ASSIGNMENT', permissionKeys: ['ASSIGNMENT:ACCEPT:SELF'] },
       { name: 'ASSIGNMENT_CANCEL', displayName: 'Cancel Assignments', category: 'ASSIGNMENT', permissionKeys: ['ASSIGNMENT:CANCEL:ORGANIZATION'] },
       { name: 'SCHEDULE_VIEW', displayName: 'View Schedules', category: 'SCHEDULING', permissionKeys: ['SCHEDULING:VIEW:PLATFORM'] },
@@ -287,7 +289,7 @@ async function seed() {
       { name: 'PROJECT_VIEWING', displayName: 'Project Viewing', description: 'View projects', capabilityNames: ['PROJECT_VIEW'] },
       { name: 'BRANCH_MANAGEMENT', displayName: 'Branch Management', description: 'Import and manage branch data', capabilityNames: ['BRANCH_VIEW', 'BRANCH_IMPORT', 'BRANCH_EDIT'] },
       { name: 'BRANCH_VIEWING', displayName: 'Branch Viewing', description: 'View branch data', capabilityNames: ['BRANCH_VIEW'] },
-      { name: 'ASSIGNMENT_MANAGEMENT', displayName: 'Assignment Management', description: 'Create, negotiate, and cancel assignments', capabilityNames: ['ASSIGNMENT_VIEW', 'ASSIGNMENT_CREATE', 'ASSIGNMENT_NEGOTIATE', 'ASSIGNMENT_CANCEL'] },
+      { name: 'ASSIGNMENT_MANAGEMENT', displayName: 'Assignment Management', description: 'Create and cancel assignments', capabilityNames: ['ASSIGNMENT_VIEW', 'ASSIGNMENT_CREATE', 'ASSIGNMENT_CANCEL'] },
       { name: 'ASSIGNMENT_EXECUTION', displayName: 'Assignment Execution', description: 'View and accept assigned work', capabilityNames: ['ASSIGNMENT_VIEW_OWN', 'ASSIGNMENT_ACCEPT'] },
       { name: 'ASSIGNMENT_VIEWING', displayName: 'Assignment Viewing', description: 'View assignments', capabilityNames: ['ASSIGNMENT_VIEW'] },
       { name: 'SCHEDULE_MANAGEMENT', displayName: 'Schedule Management', description: 'Create and modify schedules', capabilityNames: ['SCHEDULE_VIEW', 'SCHEDULE_CREATE', 'SCHEDULE_MODIFY'] },
@@ -339,6 +341,16 @@ async function seed() {
      * declare.
      */
     const roleDefinitions = [
+      {
+        // Runs the machine: the technical estate plus everything ADMIN can do (via the
+        // implication map in shared/role-hierarchy.ts). Cannot approve its own destructive
+        // requests — that is ADMIN's SYSTEM:APPROVE grant.
+        name: SystemRole.DEVELOPER,
+        displayName: 'Developer',
+        description: 'Runs the machine: integrations, rollout switches, logs and diagnostics — plus everything Admin can do.',
+        permissionKeys: ROLE_PERMISSIONS[SystemRole.DEVELOPER],
+        responsibilityNames: Array.from(responsibilityMap.keys()), // All responsibilities
+      },
       {
         name: SystemRole.ADMIN,
         displayName: 'Super Administrator',

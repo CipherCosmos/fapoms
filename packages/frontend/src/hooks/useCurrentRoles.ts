@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { SystemRole } from '@fapoms/shared';
+import { SystemRole, expandRoles } from '@fapoms/shared';
 
 /**
  * The signed-in user's roles, read from the cache App.tsx already writes on login.
@@ -130,7 +130,11 @@ function allowed(
   permission: string | null,
   permissions?: string[],
 ): boolean {
-  if (roles.some((r) => named.includes(r))) return true;
+  // Expanded through the role hierarchy (role-hierarchy.ts in @fapoms/shared): a DEVELOPER
+  // implies ADMIN and PRODUCT_SUPPORT, so every helper naming those roles admits a developer
+  // without listing it — the same expansion the backend RolesGuard applies. One-way: a gate
+  // naming only DEVELOPER still excludes admins.
+  if (expandRoles(roles).some((r) => named.includes(r as SystemRole))) return true;
   if (!permission) return false;
   return heldPermissions(permissions).includes(permission);
 }
@@ -153,7 +157,12 @@ function allowedByNameOrCustomPermission(
   permission: string,
   permissions?: string[],
 ): boolean {
-  if (roles.some((r) => named.includes(r))) return true;
+  // Hierarchy-expanded like `allowed` above (see role-hierarchy.ts) — DEVELOPER ⇒ ADMIN,
+  // PRODUCT_SUPPORT, one-way.
+  if (expandRoles(roles).some((r) => named.includes(r as SystemRole))) return true;
+  // Custom-role detection stays on the RAW names, never the expansion: expansion only ever adds
+  // built-in names, and the fallback below must open exactly when the person actually carries a
+  // role built in Admin → Roles.
   const known = new Set<string>(Object.values(SystemRole));
   const hasCustomRole = roles.some((r) => !known.has(r));
   if (!hasCustomRole) return false;
@@ -208,8 +217,16 @@ export function canManageRoles(roles: SystemRole[], permissions?: string[]): boo
   return allowedByNameOrCustomPermission(roles, [SystemRole.ADMIN], 'USER:EDIT:ORGANIZATION', permissions);
 }
 
+/**
+ * Implication-aware since 2026-09-05 (see role-hierarchy.ts in @fapoms/shared): the caller's
+ * names are expanded through ROLE_IMPLICATIONS before matching, so a DEVELOPER passes any check
+ * that names ADMIN or PRODUCT_SUPPORT. The expansion is one-way — a DEVELOPER-only list still
+ * excludes admins, which is how the technical estate is fenced off. Every capability helper in
+ * this file routes through here (or `allowed`, which expands identically), so the hierarchy is
+ * applied once at the match rather than remembered at 162 call sites.
+ */
 export function hasAnyRole(roles: SystemRole[], allowed: SystemRole[]): boolean {
-  return roles.some((r) => allowed.includes(r));
+  return expandRoles(roles).some((r) => allowed.includes(r as SystemRole));
 }
 
 /** Branch records are operations' to maintain; audit and finance only read them. */
@@ -267,6 +284,11 @@ export function canManageHolidays(roles: SystemRole[], permissions?: string[]): 
  * This helper used to admit that same permission via `allowed()`, which would have shown the
  * Save controls to exactly the account the backend now correctly refuses. `permissions` stays
  * an accepted (ignored) second argument only so existing call sites need no edit.
+ *
+ * Still named `[ADMIN]` after the DEVELOPER split: a developer arrives via the hierarchy
+ * expansion inside `hasAnyRole`, and the SERVER decides which groups each of them actually
+ * sees — `GET /platform-settings` returns only the caller's groups, and technical writes 403
+ * anyone but a developer. This gate only decides whether edit controls render at all.
  */
 export function canAdministerPlatformSettings(roles: SystemRole[], _permissions?: string[]): boolean {
   return hasAnyRole(roles, [SystemRole.ADMIN]);
@@ -276,20 +298,48 @@ export function canAdministerPlatformSettings(roles: SystemRole[], _permissions?
  * The "Danger Zone" data-reset tool. Named after its own feature rather than reusing
  * `canAdministerPlatformSettings` for the same reason the comment above it gives: they gate
  * different backends, and a wipe-the-database permission check should not silently ride along
- * with whatever platform-settings decides next. Mirrors the controller-level
- * `@Roles(SystemRole.ADMIN)` on `DataResetController`.
+ * with whatever platform-settings decides next.
  */
 /**
- * Deliberately NOT permission-aware, unlike every other helper here.
+ * DEVELOPER only, and deliberately NOT permission-aware, unlike most helpers here.
  *
  * This one wipes operational data. There is no permission in the vocabulary that means "may
  * destroy the database", and inventing one — or accepting `CONFIGURATION:EDIT` as a proxy — would
  * let an administrator hand out an ordinary-looking settings grant that turns out to include it.
- * A capability whose blast radius is the whole system should be reachable only by being the
- * built-in administrator, which is also what `@Roles(SystemRole.ADMIN)` on `DataResetController`
- * already says.
+ *
+ * Since 2026-09-05 the wipe is the DEVELOPER's side of the destructive-action two-person rule
+ * (see destructive-action.ts in @fapoms/shared): a developer requests and executes; an ADMIN only
+ * ever approves, on the Approvals screen — see `canApproveDestructiveActions` below. ADMIN is
+ * therefore not named here, and implication cannot add it (it runs DEVELOPER → ADMIN, never the
+ * reverse). Mirrors `@Roles(SystemRole.DEVELOPER)` on `DataResetController`.
  */
 export function canAdministerDataReset(roles: SystemRole[]): boolean {
+  return hasAnyRole(roles, [SystemRole.DEVELOPER]);
+}
+
+/**
+ * The technical settings groups — mail transport, schedules, retention clocks, security dials,
+ * the Support SLA. DEVELOPER's estate alone: the server filters `GET /platform-settings` to the
+ * groups the caller may see and 403s technical writes from anyone else, so this helper exists
+ * for the few places the client decides whether to *offer* a technical control at all. ADMIN
+ * keeps the business groups via `canAdministerPlatformSettings`, which implication lets a
+ * developer pass too.
+ */
+export function canAdministerTechnicalSettings(roles: SystemRole[]): boolean {
+  return hasAnyRole(roles, [SystemRole.DEVELOPER]);
+}
+
+/**
+ * The approve side of the destructive-action two-person rule — the Approvals queue's buttons.
+ *
+ * Checked against the RAW role names, never the hierarchy expansion, and that is the point:
+ * `expandRoles` makes every DEVELOPER an ADMIN, so an implication-aware check would show the
+ * approve surface to the very person whose request needs the second pair of eyes — collapsing
+ * the two-person rule back to one person. The backend approval service applies the same
+ * direct-role check against the caller's stored role rows for the same reason; this mirrors it,
+ * so the buttons appear exactly for the accounts whose click will be honoured.
+ */
+export function canApproveDestructiveActions(roles: SystemRole[]): boolean {
   return roles.includes(SystemRole.ADMIN);
 }
 
@@ -346,7 +396,7 @@ export function canManageTransportRates(roles: SystemRole[], permissions?: strin
  * direction; this must stay name-only to match.
  */
 export function canManageCompliance(roles: SystemRole[]): boolean {
-  return roles.includes(SystemRole.ADMIN);
+  return hasAnyRole(roles, [SystemRole.ADMIN]);
 }
 
 /**
@@ -356,34 +406,30 @@ export function canManageCompliance(roles: SystemRole[]): boolean {
  */
 export function canAdministerNotifications(roles: SystemRole[]): boolean {
   // Super administrators only, by decision (2026-08-17) — mirrors NOTIFICATION_ADMIN_ROLES.
-  return roles.includes(SystemRole.ADMIN);
+  return hasAnyRole(roles, [SystemRole.ADMIN]);
 }
 
 /** Business rules feed candidate scoring directly — operations own this too. */
 export function canManageZones(roles: SystemRole[]): boolean {
-  return roles.some((r) =>
-    [SystemRole.ADMIN, SystemRole.OPERATIONS].includes(r),
-  );
+  return hasAnyRole(roles, [SystemRole.ADMIN, SystemRole.OPERATIONS]);
 }
 
 /** Deletion is the only zone action reserved to admins — it can strand branches. */
 export function canDeleteZones(roles: SystemRole[]): boolean {
-  return roles.some((r) => [SystemRole.ADMIN].includes(r));
+  return hasAnyRole(roles, [SystemRole.ADMIN]);
 }
 
 /** Suspending operational rules is administrator-only — matches the backend's @Roles gate. */
 export function canManageRuleBypass(roles: SystemRole[]): boolean {
-  return roles.some((r) => [SystemRole.ADMIN].includes(r));
+  return hasAnyRole(roles, [SystemRole.ADMIN]);
 }
 
 export function canManageRules(roles: SystemRole[]): boolean {
-  return roles.some((r) =>
-    [SystemRole.ADMIN, SystemRole.OPERATIONS].includes(r),
-  );
+  return hasAnyRole(roles, [SystemRole.ADMIN, SystemRole.OPERATIONS]);
 }
 
 export function canDeleteClients(roles: SystemRole[]): boolean {
-  return roles.some((r) => [SystemRole.ADMIN].includes(r));
+  return hasAnyRole(roles, [SystemRole.ADMIN]);
 }
 
 /**
@@ -395,7 +441,7 @@ export function canDeleteClients(roles: SystemRole[]): boolean {
  * control that invites a click it can never honour.
  */
 export function canManageClients(roles: SystemRole[]): boolean {
-  return roles.some((r) => [SystemRole.ADMIN, SystemRole.OPERATIONS].includes(r));
+  return hasAnyRole(roles, [SystemRole.ADMIN, SystemRole.OPERATIONS]);
 }
 
 /** The signed-in user's own id, from the same cache App.tsx populates on login. */

@@ -48,6 +48,11 @@ const IMPORTS_TYPEORM = [
   // the subject is the schema itself, which is precisely why it is queried live rather than
   // transcribed into a list that would drift from it.
   'infrastructure/data-reset/fk-graph.service.ts',
+  // The destructive-action approval trail, in the wipe module's own raw-DataSource style. Its
+  // consume step must run on the WIPE's transaction manager (a wipe that cannot burn its
+  // approval must not delete anything), and its rows must survive the users domain being
+  // wiped — both are table-level concerns a repository port cannot express.
+  'infrastructure/data-reset/destructive-approval.service.ts',
   'core/audit/audit-seal.service.ts',
   'core/audit/unified-audit.service.ts',
   // The region ceiling on detail routes. Read-only, and single-column region lookups by id
@@ -111,6 +116,11 @@ const IMPORTS_TYPEORM = [
   // yet revoked". No DataSource, no transactions.
   'modules/auth/session.service.ts',
   'modules/billing-engine/billing-engine.service.ts',
+  // Assayer invoicing (the invite → reveal → submit → approve consent flow over payables).
+  // Sits beside billing-engine.service.ts and uses the same repository + transaction style —
+  // its writes join the engine's own tx paths (approvePayableInTx), so raw TypeORM here is
+  // the same deliberate choice the engine itself is on this list for.
+  'modules/billing-engine/assayer-invoice.service.ts',
   'modules/branch/branch-query.service.ts',
   'modules/branch/branch.service.ts',
   'modules/client/client.service.ts',
@@ -199,6 +209,10 @@ const OPENS_ITS_OWN_TRANSACTIONS = [
   'infrastructure/data-reset/data-reset.service.ts',
   // Holds a DataSource to read information_schema; opens no transaction.
   'infrastructure/data-reset/fk-graph.service.ts',
+  // Holds a DataSource for the approval-trail rows; the one transaction it participates in is
+  // the wipe's own (its consume step runs on that manager so approval-burn and deletion are
+  // atomic) — it opens none of its own.
+  'infrastructure/data-reset/destructive-approval.service.ts',
   // Takes a DataSource for read-only region lookups only; opens no transaction.
   'infrastructure/scope/region-guard.service.ts',
   // Read-only morning-digest aggregates (pending payables/expenses/overdue invoices) and the

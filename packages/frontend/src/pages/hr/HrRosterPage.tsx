@@ -9,19 +9,22 @@ import { useHr } from './HrLayout';
  * be linked to directly from a worklist row elsewhere in the section.
  */
 /**
- * The roster asks the server for a page of people and counts *those* for its filter chips, which
- * the page says plainly. That is tolerable for "how many have no skills recorded" and not for a
- * compliance flag, where a number short of the truth reads as the whole of it. The overview
- * payload this section already loads carries the real aggregate, so the chip borrows it.
+ * Every chip is the overview's own count now, not a tally of whatever page the roster happened to
+ * have loaded.
+ *
+ * This used to borrow exactly two aggregates (`workByOthersCount`, the expired-certificate count)
+ * because those were the only two the compliance-flag reasoning above once called out by name —
+ * every other chip counted the loaded window and said so. `data.segments` is the workforce
+ * overview's answer for EVERY `ROSTER_SEGMENTS` key, keyed identically
+ * (`all`/`active`/`onboarding`/`to-verify`/…), so passing the whole map is what makes every chip —
+ * not just two of them — describe the same scoped population as the header above it.
+ *
+ * `data.segments` is optional on `HrWorkforceOverview`: it is a pending backend contract addition
+ * landing alongside this frontend change, so a server that has not shipped it yet simply sends no
+ * `segments` key, `exactCounts` is `undefined`, and `AssayerRoster` falls back to counting its own
+ * loaded rows exactly as it always has — nothing breaks while the two tracks land in parallel.
  */
 export const HrRosterPage: React.FC = () => {
   const { data } = useHr();
-  return (
-    <AssayerRoster
-      exactCounts={{
-        'someone-else': data?.compliance?.workByOthersCount,
-        lapsed: data?.expiries?.certifications?.expired,
-      }}
-    />
-  );
+  return <AssayerRoster exactCounts={data?.segments} />;
 };

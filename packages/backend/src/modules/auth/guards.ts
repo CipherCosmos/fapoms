@@ -16,7 +16,7 @@ import {
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { AuthGuard } from '@nestjs/passport';
-import { AUTH_ERROR_CODES, SystemRole } from '@fapoms/shared';
+import { AUTH_ERROR_CODES, SystemRole, expandRoles } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
 
 // ---------------------------------------------------------------------------
@@ -238,7 +238,11 @@ export class RolesGuard implements CanActivate {
       throw new ForbiddenException('Insufficient permissions');
     }
 
-    const userRoles = user.roles.map((r: { name: string }) => r.name);
+    // Expanded through the one implication map (shared/role-hierarchy.ts): a DEVELOPER passes
+    // any gate naming ADMIN or PRODUCT_SUPPORT, one-way — an ADMIN does not pass a
+    // DEVELOPER-only gate. Only this name match expands; the custom-role fallback below stays
+    // on the caller's actual role rows.
+    const userRoles = expandRoles(user.roles.map((r: { name: string }) => r.name));
     if (requiredRoles.some((role) => userRoles.includes(role))) return true;
 
     /**

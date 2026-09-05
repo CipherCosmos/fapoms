@@ -7,6 +7,7 @@ import {
   type RosterFilter, type RosterFilterState, type RosterPerson,
 } from './roster-filters';
 import { counted } from '../../utils/plural';
+import { FilterBar } from '../../components/ui';
 
 /**
  * The filter panel, and the bar that says what it did.
@@ -25,7 +26,11 @@ import { counted } from '../../utils/plural';
 
 const FONT = { small: '12px', body: '12.5px', heading: '13px' };
 
-/** One tick box with its count. The count is the option's whole value: it says whether to bother. */
+/**
+ * One tick box with its count. The count is the option's whole value: it says whether to bother —
+ * except on a `noCount` axis (empanelment), where `-1` means there is nothing honest to print, and
+ * the badge is left off rather than showing the roster's own size against every choice.
+ */
 const ChoiceRow: React.FC<{
   label: string;
   count: number;
@@ -45,9 +50,11 @@ const ChoiceRow: React.FC<{
     <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
       {label}
     </span>
-    <span style={{ fontSize: FONT.small, color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums' }}>
-      {count}
-    </span>
+    {count >= 0 && (
+      <span style={{ fontSize: FONT.small, color: 'var(--text-muted)', fontVariantNumeric: 'tabular-nums' }}>
+        {count}
+      </span>
+    )}
   </label>
 );
 
@@ -189,8 +196,15 @@ export const RosterFilterPanel: React.FC<{
   state: RosterFilterState;
   onChange: (next: RosterFilterState) => void;
   onClearAll: () => void;
-}> = ({ rows, state, onChange, onClearAll }) => {
-  const defs = useMemo(() => availableFilters(rows), [rows]);
+  /**
+   * `ROSTER_FILTERS`, or the caller's own copy of it with the empanelment-client axis's options
+   * filled in from the live client list (`withClientChoices` in roster-filters.ts) — this module
+   * has no hook to fetch that list itself. Defaults to the plain catalogue so every other caller
+   * (and every existing test) needs no change.
+   */
+  defs?: RosterFilter[];
+}> = ({ rows, state, onChange, onClearAll, defs: providedDefs = ROSTER_FILTERS }) => {
+  const defs = useMemo(() => availableFilters(rows, providedDefs), [rows, providedDefs]);
   const [openGroups, setOpenGroups] = useState<string[]>(['person', 'place', 'paperwork', 'dates']);
 
   /**
@@ -286,12 +300,14 @@ export const AppliedFilterBar: React.FC<{
   total: number;
   onChange: (next: RosterFilterState) => void;
   onClearAll: () => void;
-}> = ({ state, shown, total, onChange, onClearAll }) => {
-  const applied = useMemo(() => describeFilters(state, ROSTER_FILTERS), [state]);
+  /** See the same prop on `RosterFilterPanel` — pass the same value to both. */
+  defs?: RosterFilter[];
+}> = ({ state, shown, total, onChange, onClearAll, defs = ROSTER_FILTERS }) => {
+  const applied = useMemo(() => describeFilters(state, defs), [state, defs]);
   if (applied.length === 0) return null;
 
   return (
-    <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+    <FilterBar style={{ padding: '8px 10px' }}>
       <span style={{ fontSize: FONT.small, fontWeight: 700, color: 'var(--text-muted)' }}>
         Showing {shown} of {counted(total, 'person', 'people')}:
       </span>
@@ -323,6 +339,6 @@ export const AppliedFilterBar: React.FC<{
       >
         Clear all
       </button>
-    </div>
+    </FilterBar>
   );
 };

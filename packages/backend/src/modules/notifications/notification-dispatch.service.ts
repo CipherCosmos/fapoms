@@ -7,6 +7,11 @@ import {
   EventCategory,
   NotificationChannel,
   NotificationStatus,
+  // The addressing direction of the role hierarchy: an audience naming ADMIN (or
+  // PRODUCT_SUPPORT) also reaches every role that implies it — today, DEVELOPER — so a pure
+  // developer hears everything addressed to the roles they absorbed, without the catalog
+  // naming DEVELOPER anywhere. (expandRoles is the gating direction; this is who-should-hear.)
+  expandAudience,
 } from '@fapoms/shared';
 import { NotificationEntity } from './notification.entity';
 import { NotificationPreferenceEntity } from './notification-preference.entity';
@@ -85,7 +90,9 @@ export class NotificationDispatchService {
   /**
    * Who receives an event whose own desk has nobody in it. The platform administrators — the
    * only role guaranteed to exist on a running deployment, and the people who can either act
-   * on the work or create the account that should have received it.
+   * on the work or create the account that should have received it. Like every audience list,
+   * this passes through `expandAudience` in `usersInRoles`, so a pure DEVELOPER hears the
+   * fallback too.
    */
   private static readonly FALLBACK_ROLES = ['ADMIN'];
 
@@ -105,11 +112,15 @@ export class NotificationDispatchService {
    * particular it would leak operational detail to a disabled account.
    */
   private async usersInRoles(roleNames: string[], fallbackPermissions?: string[]): Promise<UserEntity[]> {
-    const byName = roleNames.length
+    // Audience expansion before the IN-list: an event addressed to ADMIN also reaches DEVELOPER
+    // (see the import note). Applied here, at the single point every audience passes through, so
+    // the catalog, the fallback and every caller get the same rule.
+    const audienceNames = expandAudience(roleNames);
+    const byName = audienceNames.length
       ? await this.userRepository
           .createQueryBuilder('u')
           .innerJoin('u.roles', 'r')
-          .where('r.name IN (:...roleNames)', { roleNames })
+          .where('r.name IN (:...roleNames)', { roleNames: audienceNames })
           .andWhere('u.is_active = true')
           .andWhere('u.status = :status', { status: 'ACTIVE' })
           .getMany()

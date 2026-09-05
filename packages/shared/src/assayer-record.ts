@@ -220,3 +220,63 @@ export function operationalStatusFor(lifecycle: string | null | undefined): 'ACT
   if (lifecycle === 'SUSPENDED') return 'SUSPENDED';
   return 'INACTIVE';
 }
+
+// ---------------------------------------------------------------------------
+// Payability — the one rulebook (2026-09-05)
+// ---------------------------------------------------------------------------
+// "Cannot be paid" was three different tests before this: the roster chip required
+// bank + IFSC + PAN and a still-workable person; the Pay page tested only bank + IFSC and
+// happily counted people who had left; and the server's aggregate was hand-written SQL with
+// its own idea of both. Same words on screen, three populations. The rule now lives here —
+// the SQL mirror in hr-workforce.service.ts cannot import these functions, so
+// cannot-be-paid-parity.spec.ts pins the two to the same answers on shared fixtures.
+
+import { hasLeftWorkforce } from './assayer-lifecycle';
+
+/**
+ * The gaps that stop money, as opposed to leaving the record untidy. A subset of the critical
+ * fields above — filtering the one table keeps column (SQL), key (JS) and label (English)
+ * paired; a separate list is how the three vocabularies drifted apart last time.
+ */
+export const PAYOUT_BLOCKING_ASSAYER_FIELDS: AssayerRecordField[] = ASSAYER_RECORD_FIELDS.filter(
+  (f) => ['bankAccountNumber', 'ifscCode', 'panNumber'].includes(f.key),
+);
+
+export const PAYOUT_BLOCKING_KEYS: string[] = PAYOUT_BLOCKING_ASSAYER_FIELDS.map((f) => f.key);
+export const PAYOUT_BLOCKING_COLUMNS: string[] = PAYOUT_BLOCKING_ASSAYER_FIELDS.map((f) => f.column);
+
+/**
+ * Still on the books and still workable — the population every nag figure ("cannot be paid",
+ * "incomplete record") is allowed to chase. Status AND dates, because the live roster holds
+ * both mirror-image mistakes: people with a departed lifecycle and no date, and people with an
+ * exit date whose lifecycle was never moved. Relocated from the web app's hr/assayer-shared.ts,
+ * where being one copy of three is exactly how a man recorded as deceased stayed on the
+ * chase-his-bank-details list.
+ */
+export function stillWorkable(a: {
+  lifecycleStatus?: string | null;
+  unavailableReason?: string | null;
+  exitDate?: string | Date | null;
+  terminationDate?: string | Date | null;
+}): boolean {
+  return !hasLeftWorkforce(a) && !a.exitDate && !a.terminationDate;
+}
+
+/** The payout-blocking gaps on one record — the critical-field misses that stop money. */
+export function payoutBlockingGaps(
+  record: Record<string, unknown> | null | undefined,
+): AssayerRecordField[] {
+  return missingAssayerRecordFields(record).filter((f) => PAYOUT_BLOCKING_KEYS.includes(f.key));
+}
+
+/**
+ * THE "cannot be paid" rule: a still-workable person missing bank account, IFSC or PAN.
+ * Someone who has left is not "cannot be paid" — they are gone; chasing their banking details
+ * is the exact clerical dead-end this predicate exists to prevent.
+ */
+export function cannotBePaid(
+  record: (Record<string, unknown> & Parameters<typeof stillWorkable>[0]) | null | undefined,
+): boolean {
+  if (!record) return false;
+  return stillWorkable(record) && payoutBlockingGaps(record).length > 0;
+}

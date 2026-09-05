@@ -67,15 +67,19 @@ describe('role lists', () => {
     expect(total).toBeGreaterThan(20);
   });
 
-  /** The helpers still answer the same question they did before the duplicates came out. */
+  /**
+   * The helpers still answer the same question they did before the duplicates came out —
+   * plus DEVELOPER everywhere ADMIN appears, which is the role hierarchy (role-hierarchy.ts:
+   * DEVELOPER ⇒ ADMIN) doing its job through `hasAnyRole` rather than any list naming it.
+   */
   it.each([
-    ['manage assayers', canManageAssayers, [SystemRole.ADMIN, SystemRole.OPERATIONS]],
-    ['manage branches', canManageBranches, [SystemRole.ADMIN, SystemRole.OPERATIONS]],
-    ['manage projects', canManageProjects, [SystemRole.ADMIN, SystemRole.OPERATIONS]],
-    ['delete projects', canDeleteProjects, [SystemRole.ADMIN]],
-    ['manage transport rates', canManageTransportRates, [SystemRole.ADMIN, SystemRole.OPERATIONS]],
-    ['administer platform settings', canAdministerPlatformSettings, [SystemRole.ADMIN]],
-    ['manage planning rules', canManagePlanningRules, [SystemRole.ADMIN, SystemRole.OPERATIONS]],
+    ['manage assayers', canManageAssayers, [SystemRole.DEVELOPER, SystemRole.ADMIN, SystemRole.OPERATIONS]],
+    ['manage branches', canManageBranches, [SystemRole.DEVELOPER, SystemRole.ADMIN, SystemRole.OPERATIONS]],
+    ['manage projects', canManageProjects, [SystemRole.DEVELOPER, SystemRole.ADMIN, SystemRole.OPERATIONS]],
+    ['delete projects', canDeleteProjects, [SystemRole.DEVELOPER, SystemRole.ADMIN]],
+    ['manage transport rates', canManageTransportRates, [SystemRole.DEVELOPER, SystemRole.ADMIN, SystemRole.OPERATIONS]],
+    ['administer platform settings', canAdministerPlatformSettings, [SystemRole.DEVELOPER, SystemRole.ADMIN]],
+    ['manage planning rules', canManagePlanningRules, [SystemRole.DEVELOPER, SystemRole.ADMIN, SystemRole.OPERATIONS]],
   ])('lets exactly the right roles %s', (_name, can, allowed) => {
     for (const role of Object.values(SystemRole)) {
       expect({ role, allowed: can([role]) }).toEqual({ role, allowed: allowed.includes(role) });
@@ -100,13 +104,14 @@ describe('sections folded into Platform Settings', () => {
   const only = (can: (r: SystemRole[]) => boolean) =>
     Object.values(SystemRole).filter((r) => can([r]));
 
-  it('keeps eligibility rules with the roles that owned them', () => {
-    expect(only(canManagePlanningRules).sort()).toEqual([SystemRole.ADMIN, SystemRole.OPERATIONS].sort());
+  it('keeps eligibility rules with the roles that owned them (developer via implication)', () => {
+    expect(only(canManagePlanningRules).sort())
+      .toEqual([SystemRole.DEVELOPER, SystemRole.ADMIN, SystemRole.OPERATIONS].sort());
   });
 
   it('keeps the travel rate card readable by the roles that could read it', () => {
     expect(only(canReadTravelSettings).sort())
-      .toEqual([SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR].sort());
+      .toEqual([SystemRole.DEVELOPER, SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR].sort());
   });
 
   it('does not widen Platform Settings itself to either of them', () => {

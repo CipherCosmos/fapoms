@@ -22,6 +22,18 @@ import { CANONICAL_STATE_NAMES } from '@fapoms/shared';
 
 export type SettingType = 'string' | 'number' | 'boolean' | 'password' | 'select' | 'cron';
 
+/**
+ * Who a setting belongs to, since the DEVELOPER/ADMIN split (2026-09-05).
+ *
+ * 'business' settings are the operator's decisions about how the business runs — fees, tax
+ * identity, travel policy — and stay writable by administrators. 'technical' settings are
+ * platform plumbing (mail transports, cron schedules, retention floors, security rollouts):
+ * they decide how the machine behaves, not what the business charges, and only a Developer
+ * may change them. The registry stays one list; the audience is a property of each group,
+ * overridable per key for the odd setting living in the wrong group's clothes.
+ */
+export type SettingAudience = 'technical' | 'business';
+
 export interface SettingDef {
   key: string;
   label: string;
@@ -45,24 +57,42 @@ export interface SettingDef {
    * settings screen.
    */
   applies: 'immediately' | 'next-run' | 'restart';
+  /**
+   * Per-key override of the group's audience, for a setting whose group is one kind and whose
+   * nature is the other. Unset means "whatever my group is" — see `audienceOfSetting`.
+   */
+  audience?: SettingAudience;
 }
 
+/**
+ * The `audience` on each group is what fences the DEVELOPER/ADMIN write split (2026-09-05).
+ * Technical groups — plumbing: the mail transport, cron schedules, retention floors, identity
+ * enforcement and access-boundary rollouts, and the Support SLA (the desk moved to the
+ * developer) — are the Developer's alone. Business groups — money, tax identity, travel and
+ * planning policy — remain the administrator's. Enforced in PlatformSettingsService.set/reset
+ * and reflected in what GET /platform-settings shows each role.
+ */
 export const SETTINGS_GROUPS = [
-  { key: 'company', label: 'Company & tax identity', description: 'Your firm\'s legal identity as it appears on the GST invoices you send bank clients, and the tax labels on statements. These are printed exactly as entered — set them before sending a real invoice.' },
-  { key: 'email', label: 'Email delivery', description: 'The mailbox the platform sends from, and where its links point.' },
-  { key: 'schedule', label: 'Schedules', description: 'When recurring work runs — the morning brief and the SLA sweep.' },
-  { key: 'fees', label: 'Fees & pricing', description: 'What an audit is worth when no client or assayer contract says otherwise.' },
-  { key: 'transport', label: 'Transport recommendation', description: 'How the recommended way to travel is chosen — the speed assumed for each mode when no timetable exists, when a mode is ruled out, and how cost is weighed against time.' },
-  { key: 'billing', label: 'Billing & claims', description: 'Tax withholding and the ceiling on a single expense claim.' },
-  { key: 'retention', label: 'Data retention', description: 'How long movement and operational records are kept.' },
-  { key: 'dpdp', label: 'Data protection (DPDP)', description: 'The Grievance Officer / DPO contact published to Data Principals, and how long the platform has to answer a rights request. Required by the Digital Personal Data Protection Act.' },
-  { key: 'feedback', label: 'Feedback SLA', description: 'How long the product team has to answer, and to resolve, before it escalates.' },
-  { key: 'onboarding', label: 'Joining and identity', description: 'What an appraiser must prove about who they are before they can be activated, and how strictly it is enforced.' },
-  { key: 'field', label: 'In the field', description: 'What the app enforces on an assayer while they are out on a job, and how far a negotiation may run.' },
-  { key: 'planning', label: 'Planning', description: 'How the recommendation engine spreads work across the people who are eligible for it.' },
-  { key: 'roster', label: 'Roster import', description: 'How the appraiser roster spreadsheet is brought in.' },
-  { key: 'security', label: 'Access boundaries', description: 'Rollout controls for access checks being tightened — a value here is a staged switch, never a permanent policy.' },
-  { key: 'qualification', label: 'Assayer qualification', description: 'How the qualification scores on an assayer\'s profile weigh their verification, background, credentials and track record. Weights are relative — they are normalized over whichever dimensions have data.' },
+  { key: 'company', label: 'Company & tax identity', audience: 'business', description: 'Your firm\'s legal identity as it appears on the GST invoices you send bank clients, and the tax labels on statements. These are printed exactly as entered — set them before sending a real invoice.' },
+  { key: 'email', label: 'Email delivery', audience: 'technical', description: 'The mailbox the platform sends from, and where its links point.' },
+  { key: 'schedule', label: 'Schedules', audience: 'technical', description: 'When recurring work runs — the morning brief and the SLA sweep.' },
+  { key: 'fees', label: 'Fees & pricing', audience: 'business', description: 'What an audit is worth when no client or assayer contract says otherwise.' },
+  { key: 'transport', label: 'Transport recommendation', audience: 'business', description: 'How the recommended way to travel is chosen — the speed assumed for each mode when no timetable exists, when a mode is ruled out, and how cost is weighed against time.' },
+  { key: 'billing', label: 'Billing & claims', audience: 'business', description: 'Tax withholding and the ceiling on a single expense claim.' },
+  { key: 'retention', label: 'Data retention', audience: 'technical', description: 'How long movement and operational records are kept.' },
+  { key: 'dpdp', label: 'Data protection (DPDP)', audience: 'business', description: 'The Grievance Officer / DPO contact published to Data Principals, and how long the platform has to answer a rights request. Required by the Digital Personal Data Protection Act.' },
+  // User-facing group name is "Support SLA" — the channel itself renamed from "Feedback" to
+  // "Support" / "Help & Support" (see feedback.service.ts). The key stays 'feedback' so saved
+  // settings, the individual keys below (feedback.firstResponseHours, …) and their env vars
+  // keep resolving. Technical audience: the support desk belongs to the developer now
+  // (see feedback-roles.ts), so its SLA knobs follow the desk.
+  { key: 'feedback', label: 'Support SLA', audience: 'technical', description: 'How long the product team has to answer, and to resolve, before it escalates.' },
+  { key: 'onboarding', label: 'Joining and identity', audience: 'technical', description: 'What an appraiser must prove about who they are before they can be activated, and how strictly it is enforced.' },
+  { key: 'field', label: 'In the field', audience: 'business', description: 'What the app enforces on an assayer while they are out on a job.' },
+  { key: 'planning', label: 'Planning', audience: 'business', description: 'How the recommendation engine spreads work across the people who are eligible for it.' },
+  { key: 'roster', label: 'Roster import', audience: 'business', description: 'How the appraiser roster spreadsheet is brought in.' },
+  { key: 'security', label: 'Access boundaries', audience: 'technical', description: 'Rollout controls for access checks being tightened — a value here is a staged switch, never a permanent policy.' },
+  { key: 'qualification', label: 'Assayer qualification', audience: 'business', description: 'How the qualification scores on an assayer\'s profile weigh their verification, background, credentials and track record. Weights are relative — they are normalized over whichever dimensions have data.' },
 ] as const;
 
 export const SETTINGS_REGISTRY: SettingDef[] = [
@@ -558,7 +588,7 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
   },
 
 
-  // ── Feedback SLA ────────────────────────────────────────────────────────
+  // ── Support SLA ────────────────────────────────────────────────────────
   // These were readable only as environment variables, evaluated once at import. The people who
   // own the response commitment are the product team, not whoever can restart a container.
   {
@@ -629,33 +659,30 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     min: 50, max: 50_000, unit: 'metres',
     applies: 'immediately',
   },
+  // `field.maxNegotiationRounds` and `field.maxCounterOfferTravelFee` lived here until in-app
+  // fee negotiation was removed. Their orphaned DB rows are left in place (harmless, historical);
+  // the limits endpoint still answers `maxNegotiationRounds: 0` as the old-APK kill-switch — see
+  // platform-settings.controller.ts.
   {
-    key: 'field.maxNegotiationRounds',
-    label: 'Counter-offers allowed',
-    description: 'How many times an assayer may counter before the offer auto-declines and goes back to the desk. Raising it lets a negotiation run longer; lowering it forces a decision sooner.',
-    group: 'field',
-    type: 'number',
-    default: 3,
-    envVar: 'MAX_NEGOTIATION_ROUNDS',
-    min: 1, max: 20, unit: 'rounds',
-    applies: 'immediately',
-  },
-  {
-    // A safety ceiling, not a real-world cap on travel cost: it exists to catch a malformed or
-    // mistyped figure before it becomes a real payable, not to constrain a genuine long-distance
-    // dispute. Found live 2026-09-04: a mobile UI bug let a pre-filled counter-fee field
-    // concatenate instead of replace ("2200" + "2600" typed over it → 22002600), and the only
-    // check on the way in was `counterTravel < 0` — the server accepted a ₹2.2-crore travel
-    // counter-offer for a routine branch audit with a 201 and no complaint, straight into a real
-    // PENDING offer that would have flowed into billing had it been accepted.
-    key: 'field.maxCounterOfferTravelFee',
-    label: 'Counter-offer travel fee ceiling',
-    description: 'The highest travel figure a counter-offer (from either the assayer or the desk) may propose. Set well above any real dispute — this exists to catch a malformed or mistyped figure, not to limit a genuine one. If a real negotiation is refused for exceeding it, raise the ceiling rather than work around it.',
-    group: 'field',
-    type: 'number',
-    default: 25000,
-    envVar: 'MAX_COUNTER_OFFER_TRAVEL_FEE',
-    min: 1000, max: 500_000, unit: '₹',
+    /**
+     * The rollout gate for assayer invoicing — the flow where an assayer, invited by the desk,
+     * first SEES the fees for their completed work, submits them as one invoice, and gains
+     * visible earnings only once the desk approves it. Off (the default) keeps the assayer's
+     * statement in its full pre-gate shape and hides every invite control, so the code can ship
+     * dark and the switch is flipped only once the mobile build that renders the invitation
+     * states is distributed. Old apps degrade safely either way — the gated statement is a
+     * strict subset plus one optional block — but flipping early would show assayers fewer
+     * rows with no way to act on them yet.
+     */
+    key: 'billing.assayerInvoicingEnabled',
+    label: 'Assayer invoicing',
+    description: 'Turns on the invoicing round: the desk invites assayers to review and submit their unbilled completed work as an invoice, fees become visible to them only inside that review, and earnings appear only after the desk approves the submitted invoice. Leave off until the updated mobile app is distributed.',
+    group: 'billing',
+    type: 'boolean',
+    default: false,
+    // A rollout flag wearing a business group's clothes — flip it only in step with the mobile
+    // release, so it is the Developer's; remove the override when the rollout completes.
+    audience: 'technical',
     applies: 'immediately',
   },
 
@@ -1018,3 +1045,24 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
 export const SETTING_BY_KEY: Record<string, SettingDef> = Object.fromEntries(
   SETTINGS_REGISTRY.map((s) => [s.key, s]),
 );
+
+const GROUP_BY_KEY: Record<string, (typeof SETTINGS_GROUPS)[number]> = Object.fromEntries(
+  SETTINGS_GROUPS.map((g) => [g.key, g]),
+);
+
+/** A group's audience. Unknown groups default to 'business' — the narrower write reach. */
+export function audienceOfGroup(groupKey: string): SettingAudience {
+  return GROUP_BY_KEY[groupKey]?.audience ?? 'business';
+}
+
+/**
+ * A setting's audience: its own override when it carries one, else its group's, else
+ * 'business'. The write fence (PlatformSettingsService.set/reset) and the admin read filter
+ * (PlatformSettingsController.findAll) both consult this one function, so an administrator is
+ * never shown a key the fence would refuse them for a reason the screen cannot explain.
+ */
+export function audienceOfSetting(key: string): SettingAudience {
+  const def = SETTING_BY_KEY[key];
+  if (!def) return 'business';
+  return def.audience ?? audienceOfGroup(def.group);
+}

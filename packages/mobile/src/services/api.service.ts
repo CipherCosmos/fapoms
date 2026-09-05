@@ -2,6 +2,9 @@ import { Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import Constants from 'expo-constants';
 import { AssignmentStatus, calculateHaversineDistance } from '@fapoms/shared';
+// The assayer-invoicing payload shapes come from @fapoms/shared so this app, the ops web app
+// and the backend agree on THE money-reveal contract without re-declaring a field of it here.
+import type { AssayerInvoiceInvitation, AssayerInvoiceSummary } from '@fapoms/shared';
 import { readToken, writeToken, deleteToken, ALL_TOKEN_KEYS } from './token-store';
 // Imported from the runtime module rather than the `../i18n` barrel: the barrel also exports the
 // React hooks, which pull in `services/preferences` and, through it, this file's own siblings.
@@ -710,16 +713,16 @@ export class MobileApiService {
   /**
    * Operational limits the server enforces and this app must render.
    *
-   * `maxNegotiationRounds` is the one that matters here. The counter-offer button used to be
-   * disabled at a hardcoded 3 while the server reads the cap from platform settings an admin can
-   * change — and exceeding it does not just refuse the counter, it auto-declines the whole offer.
-   * A stale copy on the phone either locks the assayer out of a negotiation the platform would
-   * allow, or invites a tap that loses them the job.
+   * `maxSingleExpenseClaim` gates the claim form before a round trip; `checkInGeofenceMeters`
+   * is how far from the branch a check-in may be taken. The endpoint also still returns
+   * `maxNegotiationRounds: 0` — a kill-switch for OLD builds that shipped an in-app
+   * counter-offer button (fee negotiation has been removed from the app entirely) — which this
+   * build deliberately does not read: it has nothing left to gate with it.
    */
-  static async getPlatformLimits(): Promise<{ maxNegotiationRounds: number; checkInGeofenceMeters: number; maxSingleExpenseClaim: number }> {
+  static async getPlatformLimits(): Promise<{ checkInGeofenceMeters: number; maxSingleExpenseClaim: number }> {
     // Shipped defaults, matching the server registry, so a failed lookup is never worse than the
     // hardcoded values this replaced.
-    const fallback = { maxNegotiationRounds: 3, checkInGeofenceMeters: 2000, maxSingleExpenseClaim: 50_000 };
+    const fallback = { checkInGeofenceMeters: 2000, maxSingleExpenseClaim: 50_000 };
     try {
       const response = await this.fetchWithAuth(`${API_BASE_URL}/platform-settings/limits`);
       const data = await response.json().catch(() => ({}));
@@ -1290,6 +1293,8 @@ export class MobileApiService {
           paidAmount: num(p.paidAmount),
           outstanding: num(p.outstanding),
           createdAt: p.createdAt,
+          // Grandfathered rows — visible under the pre-invoicing rules, badged as such.
+          preInvoicingEra: p.preInvoicingEra === true,
         })),
         payments: (d.payments || []).map((pm: any) => ({
           id: pm.id,
@@ -1297,13 +1302,91 @@ export class MobileApiService {
           method: pm.method,
           amount: num(pm.amount),
           paidDate: pm.paidDate,
+          // The gated statement omits balanceAfter entirely (a running balance over rows the
+          // reader cannot see would leak the hidden ones' sum); map its absence to null.
           balanceAfter: pm.balanceAfter == null ? null : num(pm.balanceAfter),
           notes: pm.notes,
         })),
+        // Present only once billing.assayerInvoicingEnabled is on server-side; its absence is
+        // how the earnings screen knows to render the legacy (ungated) world.
+        ...(d.invoicing
+          ? {
+              invoicing: {
+                awaitingInvoiceCount: num(d.invoicing.awaitingInvoiceCount),
+                invitation: d.invoicing.invitation
+                  ? {
+                      id: d.invoicing.invitation.id,
+                      status: d.invoicing.invitation.status,
+                      lineCount: num(d.invoicing.invitation.lineCount),
+                    }
+                  : null,
+              },
+            }
+          : {}),
       };
     } catch (err) {
       // `null` meant "no statement"; a dropped connection is not that.
       throw err instanceof Error && err.name === 'ServerUnavailableError' ? err : this.unavailable('Statement', err);
+    }
+  }
+
+  /**
+   * THE money reveal: the active invoice invitation with its lines and, for the first time
+   * anywhere in this app, the fees. `null` means "nothing to review" — either no invitation is
+   * open, or the deployment has not enabled assayer invoicing yet (the server answers 404 while
+   * `billing.assayerInvoicingEnabled` is off, and to this screen those are the same fact).
+   *
+   * Throws on transport failure, like the statement: "could not ask" must never render as
+   * "you have no invitation".
+   */
+  static async getMyInvoiceInvitation(assayerId: string): Promise<AssayerInvoiceInvitation | null> {
+    try {
+      const response = await this.fetchWithAuth(
+        `${API_BASE_URL}/billing-engine/assayers/${assayerId}/invoice-invitation`,
+      );
+      // Feature dark on this deployment. Not an error and not retryable — just nothing here.
+      if (response.status === 404) return null;
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data?.success) throw this.unavailable('Invoice invitation');
+      return (data.data ?? null) as AssayerInvoiceInvitation | null;
+    } catch (err) {
+      throw err instanceof Error && err.name === 'ServerUnavailableError'
+        ? err
+        : this.unavailable('Invoice invitation', err);
+    }
+  }
+
+  /**
+   * The assayer's consent: submit the active invitation as their invoice.
+   *
+   * DELIBERATELY a direct awaited call — this must NEVER go through the offline action queue.
+   * The submission is consent to the exact figures on screen, and a queued retry hours later
+   * could bind that consent to an invitation ops has since cancelled and re-issued with
+   * different lines. Offline, the answer is "connect and try again", not "we'll send it later".
+   *
+   * `clientRequestId` is the idempotency key: the server records it on the submission, so a
+   * retry with the SAME id after a lost response returns the submission that already happened
+   * (one consent, recorded once), while a DIFFERENT id against an already-submitted invoice is
+   * refused with 409 — the caller reloads the invitation and shows its real state.
+   */
+  static async submitInvoiceInvitation(
+    assayerId: string,
+    clientRequestId: string,
+  ): Promise<{ success: boolean; data?: AssayerInvoiceSummary; error?: string; status?: number }> {
+    try {
+      const response = await this.fetchWithAuth(
+        `${API_BASE_URL}/billing-engine/assayers/${assayerId}/invoice-invitation/submit`,
+        { method: 'POST', body: JSON.stringify({ clientRequestId }) },
+      );
+      const data = await response.json().catch(() => ({}));
+      if (response.ok && data?.success) {
+        return { success: true, data: data.data as AssayerInvoiceSummary, status: response.status };
+      }
+      return { success: false, error: data?.message, status: response.status };
+    } catch (err: any) {
+      // No `status` is the caller's signal that the server was never reached — the "connect to
+      // submit" case, distinct from a refusal.
+      return { success: false, error: err?.message || 'Network error submitting the invoice.' };
     }
   }
 
@@ -1530,20 +1613,12 @@ export class MobileApiService {
           // Unknown statuses surface as-is rather than being rewritten to PENDING; a status
           // the app does not recognise is a bug to see, not one to disguise as new work.
           status: isAssignmentStatus(item.status) ? item.status : item.status || AssignmentStatus.PENDING,
-          proposedFee: item.proposedFee != null ? Number(item.proposedFee) : 0,
-          // Null, not an invented 1200 — see utils/fees.ts. The server resolves this from the
-          // assayer's commercial profile, so a missing value means "unknown", not "₹1200".
-          // `undefined`, not `null`: the model treats the field as optional, and extracting this
-          // mapper is what surfaced the mismatch the inline version had been widening away.
-          // The agreed fee, and nothing else. `standardBaseFee` (the assayer's profile rate) and
-          // `agreedTravelFee` (from a `travelAllowance` field the server never sends, so always
-          // 0) were both dropped: a payout is booked from the agreed or proposed fee alone, and
-          // a display fallback to any other figure shows a worker money they will not be paid.
-          agreedBaseFee: item.agreedFee != null ? Number(item.agreedFee) : 0,
-          // The quote breakdown recorded when the offer was priced. Grounding for display —
-          // "includes ₹X travel by bus" — never added to totals: proposedFee already holds it.
-          quotedTravelFee: item.quotedTravelFee != null ? Number(item.quotedTravelFee) : null,
-          counterTravelFee: item.counterTravelFee != null ? Number(item.counterTravelFee) : null,
+          // No fee fields are mapped here on purpose. The server's assayer-money-redaction
+          // interceptor strips `proposedFee`, `agreedFee`, `quotedBaseFee`, `quotedTravelFee`,
+          // `counterTravelFee` and `negotiationCount` from every response an assayer receives —
+          // the app is money-blind until the invoice invitation reveals the figures — so mapping
+          // them could only ever produce zeros dressed up as amounts. The two quote fields kept
+          // below are operational facts (mode and distance), not money.
           quotedTransportMode: item.quotedTransportMode ?? null,
           quotedDistanceKm: item.quotedDistanceKm != null ? Number(item.quotedDistanceKm) : null,
           distanceKm: (() => {
@@ -1561,7 +1636,6 @@ export class MobileApiService {
           checkedInAt: item.checkedInAt ?? undefined,
           checkedOutAt: item.checkedOutAt ?? undefined,
           documentReadiness: item.documentReadiness ?? { state: 'NONE', dispatchedCount: 0, message: '' },
-          negotiationCount: item.negotiationCount != null ? Number(item.negotiationCount) : 0,
           remarks: item.remarks || '',
           queries: item.queries || [],
           // `amount` arrives as a decimal string ("180.00") — Postgres numerics serialise that
@@ -1628,31 +1702,23 @@ export class MobileApiService {
     }
   }
 
+  /**
+   * Move an assignment along its lifecycle: ACCEPTED, REJECTED (reason mandatory server-side),
+   * CHECKED_IN, IN_PROGRESS. Those are the only transitions an assayer holds any more.
+   *
+   * There is deliberately no fee parameter and no COUNTER_OFFER path here. Fee negotiation was
+   * removed from the app — fees are settled with the operations desk by phone — and the server
+   * answers any fee-carrying or COUNTER_OFFER transition from an old build with a plain 400
+   * ("Fee negotiation has been removed…"), which `isRetryableStatus` correctly treats as
+   * terminal rather than retryable.
+   */
   static async updateAssignmentStatus(
     assignmentId: string,
     status: AssayerAssignment['status'],
     reason?: string,
-    /**
-     * What the assayer is asking for the journey.
-     *
-     * A counter-offer is about travel, not the audit fee — the fee comes from the rate card and
-     * is not the assayer's to move. This used to send the whole fee, and the server carved
-     * travel back out at the quoted figure, so everything asked for landed in the base.
-     */
-    counterTravelFee?: number,
-    /**
-     * Only meaningful for a counter-offer: it is the one transition here that creates a new
-     * negotiation round each time it lands, so it is the one the desk dedupes on. Accept/reject
-     * and plain status moves are already idempotent server-side (repeating one is a no-op), so
-     * sending an id for those would be dead weight on the wire.
-     */
-    clientRequestId?: string,
   ): Promise<{ ok: boolean; status: number }> {
-    const backendStatus = counterTravelFee !== undefined ? 'COUNTER_OFFER' : status;
-    const body: any = { targetStatus: backendStatus };
+    const body: { targetStatus: string; reason?: string } = { targetStatus: status };
     if (reason) body.reason = reason;
-    if (counterTravelFee !== undefined) body.counterTravelFee = counterTravelFee;
-    if (counterTravelFee !== undefined && clientRequestId) body.clientRequestId = clientRequestId;
     const response = await this.fetchWithAuth(`${API_BASE_URL}/assignments/${assignmentId}/transition`, {
       method: 'POST',
       body: JSON.stringify(body),
@@ -2114,7 +2180,7 @@ export class MobileApiService {
         } else {
           formData.append('files', {
             uri: file.uri,
-            name: file.name || file.fileName || `feedback_${Date.now()}`,
+            name: file.name || file.fileName || `support_${Date.now()}`,
             type: file.mimeType || file.type || 'application/octet-stream',
           } as any);
         }
@@ -2138,9 +2204,9 @@ export class MobileApiService {
       const res = await this.fetchWithAuth(`${API_BASE_URL}/feedback`, { method: 'POST', body: JSON.stringify(input) });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data?.success) return { success: true, id: data?.data?.id };
-      return { success: false, error: data?.message || 'The feedback could not be sent.' };
+      return { success: false, error: data?.message || 'The support request could not be sent.' };
     } catch (err: any) {
-      return { success: false, error: err?.message || 'Network error sending feedback.' };
+      return { success: false, error: err?.message || 'Network error sending the support request.' };
     }
   }
 

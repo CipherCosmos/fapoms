@@ -181,7 +181,11 @@ export class PlanningController {
   @Get('projects/:projectId/coverage')
   @Roles(...STAFF_ROLES)
   @ApiOperation({ summary: 'Get project planning coverage and metrics summary' })
-  async getProjectCoverage(@Param('projectId', ParseUUIDPipe) projectId: string) {
+  async getProjectCoverage(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertProjectInScope(projectId, scope);
     const coverage = await this.planningOrchestratorService.getProjectCoverage(projectId);
     return {
       success: true,
@@ -254,8 +258,10 @@ export class PlanningController {
   async createOrRegeneratePlan(
     @Param('projectId', ParseUUIDPipe) projectId: string,
     @Body() body: CreateCoveragePlanRequestDto,
-    @Req() req: any
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertProjectInScope(projectId, scope);
     const plan = await this.operationsPlanningService.createOrRegeneratePlan(projectId, body.overrides || [], req.user.id, body.justification);
     return {
       success: true,
@@ -270,8 +276,10 @@ export class PlanningController {
   async transitionPlan(
     @Param('planId', ParseUUIDPipe) planId: string,
     @Body() body: TransitionCoveragePlanRequestDto,
-    @Req() req: any
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertCoveragePlanInScope(planId, scope);
     const plan = await this.operationsPlanningService.transitionPlanStatus(planId, body.status, req.user.id);
     return {
       success: true,
@@ -289,8 +297,10 @@ export class PlanningController {
   async executePlan(
     @Param('planId', ParseUUIDPipe) planId: string,
     @Body() body: ExecutePlanRequestDto,
-    @Req() req: any
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertCoveragePlanInScope(planId, scope);
     const result = await this.operationsPlanningService.executeApprovedPlan(planId, req.user.id, body?.scheduledDate);
     return {
       success: true,
@@ -356,7 +366,11 @@ export class PlanningController {
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Generate optimized project-wide assayer matching and routing deployment plan' })
-  async optimizeProjectDeployment(@Param('projectId', ParseUUIDPipe) projectId: string) {
+  async optimizeProjectDeployment(
+    @Param('projectId', ParseUUIDPipe) projectId: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertProjectInScope(projectId, scope);
     const plan = await this.optimizationEngine.generateProjectDeploymentPlan(projectId);
     return {
       success: true,
@@ -372,8 +386,10 @@ export class PlanningController {
   @RequirePermissions('planning:create:organization')
   @ApiOperation({ summary: 'Simulate planning scenario with weight and config overrides without mutating database' })
   async simulateScenario(
-    @Body() dto: SimulateScenarioRequestDto
+    @Body() dto: SimulateScenarioRequestDto,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertProjectInScope(dto.projectId, scope);
     const plan = await this.scenarioPlanningService.simulatePlanningScenario(dto);
     return {
       success: true,
@@ -489,8 +505,10 @@ export class PlanningController {
     @Query('projectIds') projectIds: string,
     @Query('targetDate') targetDate?: string,
     @Query('minDistanceKm') minDistanceKm?: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     const ids = this.parseProjectIds(projectIds);
+    await this.regionGuard.assertProjectsInScope(ids, scope);
     const manualMinDistanceKm = minDistanceKm !== undefined ? Number(minDistanceKm) : undefined;
     const plan = await this.dayPlannerService.generateDayPlans(
       ids,
@@ -539,8 +557,10 @@ export class PlanningController {
     @Req() req: any,
     @Query('targetDate') targetDate?: string,
     @Query('minDistanceKm') minDistanceKm?: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     const ids = this.parseProjectIds(projectIds);
+    await this.regionGuard.assertProjectsInScope(ids, scope);
     const manualMinDistanceKm = minDistanceKm !== undefined ? Number(minDistanceKm) : undefined;
     const enqueued = await this.planningJobsService.enqueueDayPlans(
       ids,
@@ -564,7 +584,9 @@ export class PlanningController {
     // previously this endpoint had no minimum-distance concept at all (see
     // DayPlannerService.resolveMinDistanceKm).
     @Query('minDistanceKm') minDistanceKm?: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertProjectInScope(projectId, scope);
     const manualMinDistanceKm = minDistanceKm !== undefined ? Number(minDistanceKm) : undefined;
     const plan = await this.dayPlannerService.generateDayPlans(
       projectId,
@@ -589,7 +611,9 @@ export class PlanningController {
     @Req() req: any,
     @Query('targetDate') targetDate?: string,
     @Query('minDistanceKm') minDistanceKm?: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertProjectInScope(projectId, scope);
     const manualMinDistanceKm = minDistanceKm !== undefined ? Number(minDistanceKm) : undefined;
     const enqueued = await this.planningJobsService.enqueueDayPlans(
       [projectId],

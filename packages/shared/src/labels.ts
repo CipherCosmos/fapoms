@@ -46,6 +46,9 @@ const BRANCH_STATUS_LABELS: Record<ProjectBranchStatus, string> = {
   [ProjectBranchStatus.PLANNING]: 'Planning',
   [ProjectBranchStatus.CANDIDATE_SEARCH]: 'Finding Assayer',
   [ProjectBranchStatus.CONTACT_INITIATED]: 'Contacting Assayer',
+  // NEGOTIATION is retired (in-app fee negotiation was removed; the migration moved live rows
+  // to CONTACT_INITIATED). The label stays because a stale row — an older backup, an unmigrated
+  // environment — must still render as "Negotiation", not crash the status map.
   [ProjectBranchStatus.NEGOTIATION]: 'Negotiation',
   [ProjectBranchStatus.ASSIGNMENT_CONFIRMED]: 'Assigned',
   [ProjectBranchStatus.SCHEDULED]: 'Scheduled',
@@ -339,7 +342,9 @@ export const BRANCH_PENDING_STATUSES: readonly ProjectBranchStatus[] = [
   ProjectBranchStatus.PLANNING,
   ProjectBranchStatus.CANDIDATE_SEARCH,
   ProjectBranchStatus.CONTACT_INITIATED,
-  ProjectBranchStatus.NEGOTIATION,
+  // NEGOTIATION left the active set when in-app fee negotiation was removed — nothing can
+  // enter it any more and the retirement migration emptied it. (Its display label above stays
+  // for stale rows.)
   ProjectBranchStatus.ON_HOLD,
 ];
 
@@ -613,6 +618,7 @@ export function feedbackCategoryLabel(category?: string | null): string {
  * "Product & Support". Spelling them out is the only way they all read right.
  */
 export const ROLE_LABELS: Record<SystemRole, string> = {
+  [SystemRole.DEVELOPER]: 'Developer',
   [SystemRole.ADMIN]: 'Admin',
   [SystemRole.OPERATIONS]: 'Operations',
   [SystemRole.DESK]: 'Desk',
@@ -628,7 +634,8 @@ export const ROLE_LABELS: Record<SystemRole, string> = {
  * alone leaves someone guessing which of these a new joiner should get.
  */
 export const ROLE_DESCRIPTIONS: Record<SystemRole, string> = {
-  [SystemRole.ADMIN]: 'Runs the platform: settings, people and access, and everything the other roles can do.',
+  [SystemRole.DEVELOPER]: 'Runs the machine: integrations, rollout switches, logs and diagnostics — plus everything Admin can do. Cannot approve their own destructive actions.',
+  [SystemRole.ADMIN]: 'Runs the business: people and access, company identity, fees and compliance. Approves destructive actions requested by a Developer.',
   [SystemRole.OPERATIONS]: 'Runs the work: clients, projects, branches, planning and scheduling — and the money and the assayer workforce.',
   [SystemRole.DESK]: 'Runs the paperwork end to end: packets out to the field, back again, through data entry and validation.',
   [SystemRole.DESK_OPERATOR]: 'Works their own share of the desk queue: takes a packet, types it up, hands it back.',
@@ -703,6 +710,7 @@ export const BILLING_ENTITY_TYPE_LABELS: Record<BillingEntityType, string> = {
   [BillingEntityType.INVOICE]: 'Invoice',
   [BillingEntityType.PAYMENT]: 'Payment',
   [BillingEntityType.PAYABLE]: 'Assayer Payable',
+  [BillingEntityType.ASSAYER_INVOICE]: 'Assayer Invoice',
 };
 
 export function billingEntityTypeLabel(type?: string | null): string {

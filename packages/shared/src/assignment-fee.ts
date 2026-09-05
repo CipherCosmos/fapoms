@@ -69,8 +69,9 @@ export interface AssignmentFeeView {
   splitSource: FeeSplitSource;
   /** `base + travel` disagrees with `total` — a data fault a screen should surface, not hide. */
   inconsistent: boolean;
-  /** Whether a travel counter is meaningful at all. False when there is no known base. */
-  counterable: boolean;
+  // `counterable` lived here while in-app fee negotiation existed — "may a screen offer a
+  // travel counter on this fee". The feature is removed (2026-09), so the question has no
+  // asker; `previewFeeChange` still refuses a split-less fee, but on `base` directly.
   /** Pre-formatted, so no screen re-decides the rupee format or what "no fee" looks like. */
   text: {
     total: string;
@@ -92,7 +93,7 @@ export function describeAssignmentFee(a: AssignmentFeeInput | null | undefined):
   const blank = (): AssignmentFeeView => ({
     total: null, settled: false, source: 'NONE',
     base: null, travel: null, quotedTravel: null,
-    splitSource: 'NONE', inconsistent: false, counterable: false,
+    splitSource: 'NONE', inconsistent: false,
     text: { total: '—', base: '—', travel: '—', breakdown: 'No fee set' },
   });
 
@@ -160,8 +161,6 @@ export function describeAssignmentFee(a: AssignmentFeeInput | null | undefined):
     total, settled, source,
     base, travel, quotedTravel,
     splitSource, inconsistent,
-    // A counter needs a base to add the new travel to. Without one the sum is meaningless.
-    counterable: base !== null,
     text: {
       total: money(total),
       base: money(base),
@@ -182,9 +181,14 @@ export interface FeeChangePreview {
   error: string | null;
   /** "Audit fee ₹1,250 (fixed) + travel ₹650 → the assayer sees ₹1,900" */
   text: string;
-  /** The exact request bodies, so no call site assembles one by hand and swaps the fields. */
+  /**
+   * The exact request body, so no call site assembles one by hand and swaps the fields.
+   *
+   * `counter` (a ready-made `targetStatus: 'NEGOTIATION'` transition body) sat beside
+   * `firstOffer` until in-app fee negotiation was removed (2026-09) — the server now refuses
+   * that transition outright, so a helper that builds it would only manufacture 400s.
+   */
   body: {
-    counter: { targetStatus: 'NEGOTIATION'; counterTravelFee: number } | null;
     firstOffer: { proposedFee: number } | null;
   };
 }
@@ -202,10 +206,13 @@ export interface FeeChangePreview {
 export function previewFeeChange(view: AssignmentFeeView, travelInput: string): FeeChangePreview {
   const refuse = (error: string): FeeChangePreview => ({
     travel: null, newTotal: null, error, text: error,
-    body: { counter: null, firstOffer: null },
+    body: { firstOffer: null },
   });
 
-  if (!view.counterable) {
+  // Was `!view.counterable` while negotiation existed; the underlying fact is the same — with
+  // no known base there is nothing to add the typed travel to, and `base ?? 0` below would
+  // silently reprice the audit itself.
+  if (view.base === null) {
     return refuse('This offer has no recorded audit fee, so travel cannot be changed on it.');
   }
 
@@ -226,19 +233,13 @@ export function previewFeeChange(view: AssignmentFeeView, travelInput: string): 
     text: `Audit fee ${formatRupees(base)} (fixed) + travel ${formatRupees(travel)}`
       + ` → the assayer sees ${formatRupees(newTotal)}`,
     body: {
-      counter: { targetStatus: 'NEGOTIATION', counterTravelFee: travel },
       firstOffer: { proposedFee: newTotal },
     },
   };
 }
 
-/**
- * What a travel input should be seeded with. Never the total.
- *
- * Exists as a named function so the mistake is not re-typeable: every historical bug here was a
- * screen writing `setTravelField(fee.total)`. There is now nothing to reach for that returns a
- * total from this module's seeding path.
- */
-export function seedTravelInput(view: AssignmentFeeView): string {
-  return view.travel !== null && view.travel > 0 ? String(view.travel) : '';
-}
+// `seedTravelInput` lived here until in-app fee negotiation was removed (2026-09). It existed
+// to make one mistake un-typeable — seeding a travel input from the TOTAL — and with no
+// negotiation UI left there is no travel input to seed. `previewFeeChange` above survives for
+// the desk's first-offer arithmetic; the COUNTERED split source in `describeAssignmentFee`
+// survives because historical rows that were countered must still describe themselves.

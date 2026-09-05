@@ -66,11 +66,11 @@ describe('ReasonPresetSelect', () => {
   });
 
   /**
-   * The one list backs all three reason inputs in `OperationsInbox.tsx` (call-queue decline,
-   * negotiation decline, overdue no-show) on purpose, so they cannot drift into three
-   * near-identical lists. This is the regression guard for that: if a second, differently-spelled
-   * list ever gets added, this still passes but a manual read of the file would catch the drift —
-   * the real guard is that there is only one export to import from.
+   * The one list backs both reason inputs in `OperationsInbox.tsx` (call-queue decline, overdue
+   * no-show) on purpose, so they cannot drift into near-identical lists. This is the regression
+   * guard for that: if a second, differently-spelled list ever gets added, this still passes but
+   * a manual read of the file would catch the drift — the real guard is that there is only one
+   * export to import from.
    */
   it('exports exactly one preset list', () => {
     expect(ASSIGNMENT_REASON_PRESETS.length).toBeGreaterThan(0);

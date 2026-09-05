@@ -304,7 +304,6 @@ export const hi: PartialCatalogue<typeof en> = {
     stats: {
       completed: 'पूरे किए',
       assigned: 'मिले',
-      balance: 'बकाया',
       rating: 'रेटिंग',
       ratingHint: '5 में से',
     },
@@ -314,7 +313,7 @@ export const hi: PartialCatalogue<typeof en> = {
       performance: 'प्रदर्शन',
       app: 'ऐप',
       account: 'खाता',
-      help: 'मदद और सुझाव',
+      help: 'मदद और सहायता',
       session: 'सेशन',
     },
     rows: {
@@ -353,9 +352,9 @@ export const hi: PartialCatalogue<typeof en> = {
       accreditation: 'मान्यता और लाइसेंस',
       licenceNumber: 'लाइसेंस नंबर: %{number}',
       noLicence: 'कोई लाइसेंस नंबर दर्ज नहीं है',
-      feedback: 'सुझाव भेजें',
+      feedback: 'सहायता',
       feedbackHint: 'कोई दिक्कत बताएँ, सुधार का सुझाव दें, या कुछ पूछें',
-      feedbackAccessibility: 'मदद और सुझाव खोलें',
+      feedbackAccessibility: 'मदद और सहायता खोलें',
       signOut: 'साइन आउट करें',
       signOutHint: 'दोबारा साइन इन करने के लिए पासवर्ड चाहिए होगा',
     },
@@ -565,7 +564,6 @@ export const hi: PartialCatalogue<typeof en> = {
     scheduledTodayValue: 'आज के काम: %{count}',
     openQueries: 'खुले सवाल',
     openQueriesValue: 'खुले सवाल: %{count}',
-    balance: 'आपका बकाया',
     claimsPending: 'मंज़ूरी का इंतज़ार कर रहे खर्च',
     distanceKm: '%{km} किमी',
     customers: '%{count} ग्राहक',
@@ -588,19 +586,10 @@ export const hi: PartialCatalogue<typeof en> = {
     emptyDoneBody: 'आपके पूरे किए और मना किए गए काम यहाँ रखे जाते हैं।',
     oneStop: '1 जगह',
     manyStops: '%{count} जगहें',
-    dayTotal: ' · %{amount}',
     factDate: 'तारीख़',
     factPackets: 'पैकेट',
-    factFee: 'रकम',
-    feeNotSet: 'रकम तय नहीं',
-    includesTravel: 'इसमें %{amount} सफ़र के हैं',
-    includesTravelBy: ', %{mode} से',
-    includesTravelDistance: ' · एक तरफ़ लगभग %{km} किमी',
-    counterOffer: '%{max} में से %{round} बार रकम पर बात हुई · %{amount} बताई गई',
     accept: 'मंज़ूर करें',
     decline: 'मना करें',
-    negotiationClosed: 'अब रकम पर बात नहीं हो सकती',
-    proposeFee: 'दूसरी रकम बताएँ (%{round}/%{max})',
     navigate: 'रास्ता दिखाएँ',
     checkIn: 'हाज़िरी लगाएँ',
     scanAndSubmit: 'जाँची हुई रिपोर्ट स्कैन करके भेजें',
@@ -712,10 +701,6 @@ export const hi: PartialCatalogue<typeof en> = {
       food: 'खाना',
       other: 'अन्य',
     },
-    quotedIncluded:
-      'इस काम की आपकी फ़ीस में सफ़र के लिए %{amount} पहले से शामिल है। यहाँ सिर्फ़ वही माँगें जो उससे पूरा न हुआ हो।',
-    quotedIncludedByMode:
-      'इस काम की आपकी फ़ीस में %{mode} से सफ़र के लिए %{amount} पहले से शामिल है। यहाँ सिर्फ़ वही माँगें जो उससे पूरा न हुआ हो।',
     amountLabel: 'रकम (₹)',
     amountPlaceholder: 'जैसे 250',
     overLimit:
@@ -776,29 +761,50 @@ export const hi: PartialCatalogue<typeof en> = {
     failedBody: 'आपकी उपलब्धता सेव नहीं हो सकी।',
   },
 
-  negotiate: {
-    title: 'सफ़र के लिए अलग रकम माँगें',
-    currentFee: 'अभी की पेशकश: %{amount}',
-    includesTravel: 'इसमें सफ़र के लिए %{amount} शामिल है।',
-    includesTravelByMode: 'इसमें %{mode} से सफ़र के लिए %{amount} शामिल है।',
-    aboutDistance: 'एक तरफ़ करीब %{km} किमी।',
-    amountLabel: 'सफ़र के लिए आप कितना माँग रहे हैं (₹)',
-    amountPlaceholder: 'जैसे 2200',
-    remarksLabel: 'वजह / बात (ज़रूरी नहीं)',
-    remarksPlaceholder: 'जैसे: बहुत दूर का सफ़र है, भत्ता चाहिए',
-    amountRequired: 'सफ़र के लिए जो रकम माँग रहे हैं, वह लिखें।',
-    submitFailed: 'आपका सफ़र का अनुरोध भेजा नहीं जा सका।',
+  // "बिल" (bill) throughout, not a coined word for "invoice": it is the everyday word this
+  // workforce uses for the same document, and the sheet's whole job is to be understood at the
+  // moment of consent.
+  invoice: {
+    title: 'आपका बिल',
+    subtitle: 'भेजने से पहले हर लाइन देख लें। यही रकमें आप बिल में माँग रहे हैं।',
+    loading: 'आपका बिल आ रहा है…',
+    loadFailed: 'आपका बिल नहीं आ सका। कनेक्शन देखकर फिर कोशिश करें।',
+    emptyTitle: 'अभी कोई बिल नहीं है',
+    emptyBody: 'ऑपरेशंस ने अभी आपको बिल बनाने के लिए नहीं बुलाया है। जब बुलाएँगे, यहीं पता चलेगा।',
+    itemsOne: '1 एंट्री',
+    itemsMany: '%{count} एंट्री',
+    lineFee: 'ऑडिट की फ़ीस',
+    lineExpense: 'खर्च',
+    subtotalBase: 'मूल का जोड़',
+    subtotalTravel: 'सफ़र का जोड़',
+    // TDS keeps its English name — see the note at the top of this file.
+    tdsDeducted: 'TDS कटौती',
+    total: 'इस बिल का कुल',
+    submit: 'बिल भेजें',
+    confirmTitle: 'यह बिल भेज दें?',
+    confirmBodyOne:
+      'आप 1 एंट्री का, कुल %{total} का बिल भेज रहे हैं। भेजने का मतलब है कि आप इन्हीं रकमों का बिल कर रहे हैं।',
+    confirmBodyMany:
+      'आप %{count} एंट्री का, कुल %{total} का बिल भेज रहे हैं। भेजने का मतलब है कि आप इन्हीं रकमों का बिल कर रहे हैं।',
+    confirmCta: 'हाँ, भेजें',
+    confirmBack: 'वापस जाएँ',
     submitting: 'भेजा जा रहा है…',
-    submit: 'अनुरोध भेजें',
-    sentTitle: 'सफ़र का अनुरोध भेज दिया',
-    sentBody: 'आपने सफ़र के लिए %{amount} माँगे हैं। ऑपरेशंस जवाब देंगे।',
-    failedTitle: 'नहीं भेजा गया',
-    failedBody: 'आपका सफ़र का अनुरोध भेजा नहीं जा सका।',
+    submitOffline:
+      'सर्वर से बात नहीं हो पाई, इसलिए कुछ नहीं भेजा गया। इंटरनेट से जुड़कर फिर “भेजें” दबाएँ।',
+    submitConflict:
+      'यह बिल सर्वर पर बदल गया है। नीचे उसकी अभी की हालत दिख रही है — कुछ भी करने से पहले उसे फिर देख लें।',
+    submitFailed: 'आपका बिल भेजा नहीं जा सका। फिर कोशिश करें।',
+    submittedBadge: 'भेज दिया — मंज़ूरी बाक़ी',
+    submittedNote:
+      'ऑपरेशंस इस बिल को जाँचकर मंज़ूर करेंगे। मंज़ूरी मिलते ही ये रकमें आपकी कमाई में जुड़ जाएँगी।',
+    submittedToastTitle: 'बिल भेज दिया',
+    submittedToastBody: 'ऑपरेशंस इसे देखेंगे। मंज़ूरी मिलने पर आपको ख़बर मिलेगी।',
   },
 
   earnings: {
     balanceLabel: 'आपको मिलने वाली रकम',
     balanceOwed: 'पूरे किए गए सारे काम की, भुगतान और TDS के बाद, आपको मिलने वाली रकम।',
+    balanceOwedGated: 'मंज़ूर हुए बिलों की, भुगतान और TDS के बाद, आपको मिलने वाली रकम।',
     balanceSettled: 'आपका हिसाब पूरा साफ़ है — अभी कुछ बाक़ी नहीं।',
     statementFailed:
       'आपका हिसाब नहीं आ सका। नीचे खींचकर फिर कोशिश करें — आपका पैसा सुरक्षित है, बस यह स्क्रीन अभी उसे पढ़ नहीं पा रही।',
@@ -844,7 +850,21 @@ export const hi: PartialCatalogue<typeof en> = {
     completedEmptyTitle: 'अभी कोई कमाई नहीं',
     completedEmptyBody: 'पहला ऑडिट पूरा करते ही आपकी फ़ीस यहाँ दिखने लगेगी।',
     notBooked: 'अभी दर्ज नहीं',
+    awaitingInvoicingRow: 'बिल बनना बाक़ी',
     completedBadge: 'पूरा हुआ',
+    preInvoicingBadge: 'बिल-व्यवस्था से पहले का',
+    invoicing: {
+      awaitingOne: '1 पूरा हुआ ऑडिट बिल बनने के इंतज़ार में है',
+      awaitingMany: '%{count} पूरे हुए ऑडिट बिल बनने के इंतज़ार में हैं',
+      awaitingBody: 'बिल बनवाने के लिए ऑपरेशंस खुद आपको बुलाएँगे। अभी आपको कुछ नहीं करना है।',
+      invitedTitle: 'आपका बिल देखने के लिए तैयार है',
+      invitedBodyOne: 'ऑपरेशंस ने आपके देखने और भेजने के लिए 1 एंट्री तैयार की है।',
+      invitedBodyMany: 'ऑपरेशंस ने आपके देखने और भेजने के लिए %{count} एंट्री तैयार की हैं।',
+      reviewCta: 'बिल देखें और भेजें',
+      submittedTitle: 'बिल भेज दिया',
+      submittedBody: 'आपका बिल ऑपरेशंस के पास है। मंज़ूरी मिलते ही रकमें आपकी कमाई में जुड़ जाएँगी।',
+      viewCta: 'भेजा हुआ बिल देखें',
+    },
   },
 
   queries: {
@@ -1070,9 +1090,9 @@ export const hi: PartialCatalogue<typeof en> = {
   },
 
   feedback: {
-    title: 'आपकी बात',
-    newTitle: 'नई बात',
-    sendNew: 'नई बात भेजें',
+    title: 'मदद और सहायता',
+    newTitle: 'नई सहायता',
+    sendNew: 'नई सहायता',
     emptyTitle: 'अभी कुछ नहीं भेजा',
     emptyBody:
       'कोई गड़बड़ी बताएँ, कोई सुझाव दें या कुछ पूछें — प्रोडक्ट टीम यहीं जवाब देगी।',

@@ -8,6 +8,12 @@
 // Canonical business enumerations
 export * from './enums';
 
+// The role hierarchy: which built-in roles imply which (DEVELOPER ⊇ ADMIN + PRODUCT_SUPPORT)
+export * from './role-hierarchy';
+
+// The destructive-action two-person rule (developer requests, admin approves, developer executes)
+export * from './destructive-action';
+
 // Canonical geographic regions and the state → region map
 export * from './regions';
 export * from './pincode';
@@ -53,6 +59,9 @@ export * from './name-match';
 
 // What "assign anyway" may and may not waive — read by the engine, the write path and the panel.
 export * from './assignment-override';
+
+// Assayer invoicing: the consent wrapper over payables (invite → submit → approve) API shapes
+export * from './assayer-invoicing';
 
 // Service-log viewer: the readable-service allowlist, line shape and query ceilings
 export * from './service-logs';

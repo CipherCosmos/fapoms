@@ -111,12 +111,14 @@ export class OperationsSnapshotService {
      * so the dashboard funnel named the same stage differently from every table and badge that
      * showed it.
      */
+    // NEGOTIATION is gone from the funnel: in-app fee negotiation was removed, nothing can
+    // enter the status any more, and the retirement migration moved the surviving rows to
+    // CONTACT_INITIATED — a permanently-zero stage is not a shape, it is noise.
     const STAGE_ORDER: ProjectBranchStatus[] = [
       ProjectBranchStatus.IMPORTED,
       ProjectBranchStatus.PLANNING,
       ProjectBranchStatus.CANDIDATE_SEARCH,
       ProjectBranchStatus.CONTACT_INITIATED,
-      ProjectBranchStatus.NEGOTIATION,
       ProjectBranchStatus.ASSIGNMENT_CONFIRMED,
       ProjectBranchStatus.SCHEDULED,
       ProjectBranchStatus.AUDIT_COMPLETED,

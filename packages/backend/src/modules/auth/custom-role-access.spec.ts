@@ -127,6 +127,25 @@ describe('a role the route has never heard of', () => {
 
       expect(guard.canActivate(ctx(ops))).toBe(true);
     });
+
+    /**
+     * The technical estate's fence, from the admin's side. Implication is one-way
+     * (role-hierarchy.ts): DEVELOPER expands to ADMIN, never the reverse — so a
+     * `@Roles(DEVELOPER)` route excludes an administrator by name, and with `@RoleOnly()` set
+     * there is no permission fallback for a coincidental `system:edit:platform` grant to slip
+     * through either. This is what keeps a developer-only route (service logs, the OCR
+     * boundary, email/test) closed to the business side however well-stocked the account is.
+     */
+    it('refuses built-in ADMIN on a @RoleOnly() @Roles(DEVELOPER) route, whatever it holds', () => {
+      const guard = new RolesGuard(reflectorReturning({
+        [ROLES_KEY]: ['DEVELOPER'],
+        [PERMISSIONS_KEY]: ['system:edit:platform'],
+        [ROLE_ONLY_KEY]: true,
+      }));
+      const admin = withPermissions('ADMIN', [['SYSTEM', 'EDIT', 'PLATFORM']]);
+
+      expect(() => guard.canActivate(ctx(admin))).toThrow(ForbiddenException);
+    });
   });
 
   describe('nothing was loosened', () => {

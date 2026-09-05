@@ -174,6 +174,69 @@ export class RegionGuardService {
     this.assertRegionAllowed(rows?.[0]?.region, scope);
   }
 
+  /**
+   * The ceiling, for a whole project. A project has no region of its own — it is a set of
+   * branches that can legitimately span several — so unlike `assertBranchInScope` this cannot
+   * compare one region. Instead it refuses the whole request if the project touches ANY branch
+   * outside the caller's assigned regions, rather than silently narrowing to the in-scope slice:
+   * a project-wide optimise/day-plan/deploy is a single operation over the whole set, and a
+   * partial run over an arbitrarily-narrowed subset would be a different, silently-smaller
+   * operation than the one the caller asked for and the one its result claims to be.
+   */
+  async assertProjectInScope(projectId: string | null | undefined, scope?: Partial<GlobalScope>): Promise<void> {
+    if (!projectId || !scope?.regions?.length) return;
+    const rows = await this.dataSource.query(
+      `SELECT DISTINCT b.region
+         FROM project_branches pb
+         JOIN branches b ON b.id = pb.branch_id
+        WHERE pb.project_id = $1`,
+      [projectId],
+    );
+    const blocked = rows.some((r: any) => r.region && !(scope.regions as string[]).includes(r.region));
+    if (blocked) {
+      throw new ForbiddenException(
+        'This project includes branches outside the regions your account is assigned to.',
+      );
+    }
+  }
+
+  /** The same ceiling as `assertProjectInScope`, for several projects checked in one call. */
+  async assertProjectsInScope(projectIds: string[], scope?: Partial<GlobalScope>): Promise<void> {
+    if (projectIds.length === 0 || !scope?.regions?.length) return;
+    const rows = await this.dataSource.query(
+      `SELECT DISTINCT b.region
+         FROM project_branches pb
+         JOIN branches b ON b.id = pb.branch_id
+        WHERE pb.project_id = ANY($1)`,
+      [projectIds],
+    );
+    const blocked = rows.some((r: any) => r.region && !(scope.regions as string[]).includes(r.region));
+    if (blocked) {
+      throw new ForbiddenException(
+        'One or more of these projects include branches outside the regions your account is assigned to.',
+      );
+    }
+  }
+
+  /** The ceiling, for a coverage plan (plan → its project → that project's branches). */
+  async assertCoveragePlanInScope(planId: string | null | undefined, scope?: Partial<GlobalScope>): Promise<void> {
+    if (!planId || !scope?.regions?.length) return;
+    const rows = await this.dataSource.query(
+      `SELECT DISTINCT b.region
+         FROM coverage_plans cp
+         JOIN project_branches pb ON pb.project_id = cp.project_id
+         JOIN branches b ON b.id = pb.branch_id
+        WHERE cp.id = $1`,
+      [planId],
+    );
+    const blocked = rows.some((r: any) => r.region && !(scope.regions as string[]).includes(r.region));
+    if (blocked) {
+      throw new ForbiddenException(
+        'This coverage plan includes branches outside the regions your account is assigned to.',
+      );
+    }
+  }
+
   /** The ceiling, for an assignment id (assignment → project_branch → branch). */
   async assertAssignmentInScope(assignmentId: string | null | undefined, scope?: Partial<GlobalScope>): Promise<void> {
     if (!assignmentId || !scope?.regions?.length) return;

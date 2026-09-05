@@ -38,7 +38,7 @@ import { ValidationService } from '../validation/validation.service';
 import { DocumentService } from '../document/document.service';
 import { FeePolicyService } from '../pricing/fee-policy.service';
 import { withCode } from '../../infrastructure/http/api-error';
-import { EventCategory, ScheduleStatus, AssignmentStatus, ProjectBranchStatus, CustomerMasterStatus, Priority, SystemRole, calculateHaversineDistance, assignmentIssueCategoryLabel, isAssignmentTerminal, BypassableRule, businessDateKey, businessTodayDateKey, standingAllowsPlanning,
+import { EventCategory, ScheduleStatus, AssignmentStatus, ProjectBranchStatus, CustomerMasterStatus, Priority, SystemRole, calculateHaversineDistance, assignmentIssueCategoryLabel, isAssignmentTerminal, BypassableRule, businessDateKey, businessTodayDateKey, standingAllowsPlanning, expandRoles,
   AssignmentRule, canOverrideAssignmentRule, overrideAdviceFor, ASSIGNMENT_ERROR_CODES } from '@fapoms/shared';
 import { NO_EMPANELMENT_ROW_SETTING } from '../planning/recommendation.engine';
 import { applyBranchScope, branchScopeWhere, needsBranchJoin } from '../../infrastructure/scope/apply-scope';
@@ -136,18 +136,6 @@ export interface TransitionAssignmentDto {
   fee?: number;
   scheduledDate?: string;
 }
-
-/**
- * How many counter-offers a negotiation may run before the offer auto-declines.
- *
- * The number was written three times in one block — the comparison, a comment, and the message
- * the assayer is shown — so the rule and the explanation of the rule could drift apart, and the
- * person told "3 counter-offers max" would be the last to know if it had.
- */
-const DEFAULT_MAX_NEGOTIATION_ROUNDS = 3;
-
-/** Shipped default for the counter-offer travel-fee safety ceiling; the saved setting wins. */
-const DEFAULT_MAX_COUNTER_OFFER_TRAVEL_FEE = 25000;
 
 /** Shipped default for the check-in geofence; the saved setting wins. */
 const DEFAULT_CHECK_IN_GEOFENCE_METERS = 2000;
@@ -363,6 +351,18 @@ export class AssignmentService {
     });
 
     // Validate Assayer exists and has the required skills/certifications
+    /**
+     * One place that decides whether a blocking check may be waived, and records it when it is.
+     *
+     * Six of the seven checks below used to throw unconditionally while a seventh consulted
+     * `overrideReason` — so the planning screen offered "Assign anyway", the operator typed a
+     * justification, and a rule that had never looked at the field refused them. Worse, the panel
+     * suggested wording *for* rules that would always refuse: its own prompt for a skills
+     * exclusion read "Skill or certification requirement waived by ops".
+     *
+     * `OVERRIDABLE_WITH_A_REASON` in `@fapoms/shared` is the one list this, the recommendation
+     * engine and the panel all read, so the button cannot be offered where it will not work.
+     */
     const overrides: Array<{ rule: AssignmentRule; barredReason: string; overrideReason: string }> = [];
     const refuseUnlessOverridden = (rule: AssignmentRule, barredReason: string): void => {
       const waived = AssignmentService.applyOverridePolicy(rule, barredReason, dto.overrideReason);
@@ -952,7 +952,9 @@ export class AssignmentService {
             assayerName: assayer.displayName ?? 'The assayer',
             branchName,
             scheduledDate: scheduledDateLabel,
-            agreedFee: accepted.agreedFee ?? resolvedProposedFee,
+            // No fee variable. The assayer is money-blind now (fees are settled on the phone and
+            // first shown at invoicing), so the catalog body for this type carries no ₹ — and a
+            // money figure must not ride a push payload to a phone that renders it.
           },
         });
 
@@ -1400,231 +1402,6 @@ export class AssignmentService {
     this.assayerService.scheduleStatsRefresh(saved.assayerId);
 
     return { saved, event };
-  }
-
-  /**
-   * A counter-offer is about the journey, not the audit fee.
-   *
-   * The fee is what the work is worth and comes from the rate card; neither the assayer nor the
-   * desk sets it. What varies is the travel — how far, by what, and at whose cost — so
-   * `counterTravelFee` is what moves, and the total follows it.
-   *
-   * This used to take the whole fee. `assignmentMoney` then carved travel back out at the frozen
-   * quoted figure, so every rupee negotiated landed in the *base* — silently repricing the audit
-   * instead of the journey, and leaving the payable's base disagreeing with the rate card that
-   * produced it.
-   *
-   * The total is kept in step here rather than derived at read time, because `proposedFee` is
-   * what the mobile app shows the assayer and what the payable is built from: those must agree
-   * with each other and with the travel figure beside them.
-   */
-  async proposeCounterFee(
-    id: string,
-    userId: string,
-    counterTravelFee: number,
-    remarks?: string,
-    clientRequestId?: string,
-  ): Promise<AssignmentEntity> {
-    const assignment = await this.findOne(id);
-    // A retried POST (flaky mobile connection) carries the same clientRequestId as the counter-
-    // offer it is retrying. Without this check the retry read as a genuine second round: it
-    // incremented negotiationCount again and recomputed proposedFee from a previousFee that was
-    // already the retried value, silently compounding a travel figure the assayer sent once.
-    // Checked before the PENDING guard so a retry that lands after the desk has already acted
-    // on the (successfully applied) first attempt still returns cleanly instead of erroring.
-    if (clientRequestId && assignment.lastCounterRequestId === clientRequestId) {
-      return assignment;
-    }
-    // A counter-offer only makes sense while the offer is still open. Without this guard it could
-    // mutate proposedFee on a COMPLETED assignment (diverging from what was already billed) or
-    // re-open a CANCELLED/CHECKED_IN branch by flipping it back to NEGOTIATION.
-    if (assignment.status !== AssignmentStatus.PENDING) {
-      throw new BadRequestException(
-        `A counter-offer can only be made on an open offer (PENDING), not '${assignment.status}'.`,
-      );
-    }
-    const maxRounds = await this.settings
-      .getNumber('field.maxNegotiationRounds', DEFAULT_MAX_NEGOTIATION_ROUNDS)
-      .catch(() => DEFAULT_MAX_NEGOTIATION_ROUNDS);
-
-    /**
-     * The only check this figure got before now was `counterTravel < 0` in the controller — no
-     * upper bound at all. Checked here rather than only in the controller so `proposeCounterFee`
-     * itself is safe against any caller, not just the one HTTP path that exists today. A cheap
-     * fast-fail before the transaction, same reasoning as `maxRounds` just above: this cannot
-     * change mid-request, so there is nothing the row lock below would add.
-     */
-    const maxCounterTravelFee = await this.settings
-      .getNumber('field.maxCounterOfferTravelFee', DEFAULT_MAX_COUNTER_OFFER_TRAVEL_FEE)
-      .catch(() => DEFAULT_MAX_COUNTER_OFFER_TRAVEL_FEE);
-    if (counterTravelFee > maxCounterTravelFee) {
-      throw new BadRequestException(
-        `A counter travel fee of ₹${counterTravelFee} is above the ₹${maxCounterTravelFee} safety `
-        + `ceiling. If this is a genuine figure, an administrator can raise the ceiling in Platform Settings.`,
-      );
-    }
-
-    /**
-     * The round increment and the cap are a COMPARE-AND-SWAP under a row lock, not a
-     * check-then-write around the unlocked `findOne` above.
-     *
-     * `negotiationCount` was read unlocked and incremented in a plain transaction with no re-read,
-     * so N concurrent counter-offers all saw the same starting count and overwrote each other:
-     * confirmed live 2026-09-04 — SIX concurrent counters left `negotiation_count = 2`, not 6, and
-     * every one passed the `< maxRounds` cap check against the same stale value, so the
-     * negotiation-round limit was bypassable by firing counters in parallel (and `proposedFee`
-     * was last-write-wins). Re-reading the row `FOR UPDATE` inside the transaction and re-deriving
-     * everything from the locked row serialises them: each counter sees the previous one's
-     * increment, the count is exact, and the cap bites on the real value. Mirrors the CAS the
-     * status-transition path (`executeAssignmentTransition`) already uses.
-     *
-     * The pre-lock checks above stay as a cheap fast-fail with good error messages; the locked
-     * block is the authority.
-     */
-    const outcome = await this.dataSource.transaction(async (manager) => {
-      // Lock the assignment ROW ALONE — no relations. `FOR UPDATE` over a LEFT JOIN
-      // (relations: ['projectBranch']) is rejected by Postgres ("FOR UPDATE cannot be applied to
-      // the nullable side of an outer join"). The project-branch status write below uses the
-      // branch already loaded on the unlocked `assignment` read; it is the same branch.
-      const locked = await manager.findOne(AssignmentEntity, {
-        where: { id },
-        lock: { mode: 'pessimistic_write' },
-      });
-      if (!locked) throw new NotFoundException(`Assignment ${id} not found`);
-
-      // Re-assert every guard against the locked row — a concurrent counter may have moved any of
-      // these since the unlocked read above.
-      if (clientRequestId && locked.lastCounterRequestId === clientRequestId) {
-        return { kind: 'dedup' as const, assignment: locked };
-      }
-      if (locked.status !== AssignmentStatus.PENDING) {
-        throw new BadRequestException(
-          `A counter-offer can only be made on an open offer (PENDING), not '${locked.status}'.`,
-        );
-      }
-      const lockedCount = locked.negotiationCount || 0;
-      if (lockedCount >= maxRounds) {
-        // Cap reached on the REAL count — signal the caller to run the shared auto-decline path
-        // (rejectOffer) outside this lock, so we do not nest transactions.
-        return { kind: 'cap' as const };
-      }
-
-      const prevFee = locked.proposedFee;
-      const prevTravel = locked.counterTravelFee ?? locked.quotedTravelFee;
-      const quotedTravel = Number(locked.quotedTravelFee ?? 0);
-      const baseFee = locked.quotedBaseFee !== null && locked.quotedBaseFee !== undefined
-        ? Number(locked.quotedBaseFee)
-        : Math.max(0, Number(prevFee ?? 0) - quotedTravel);
-
-      locked.negotiationCount = lockedCount + 1;
-      locked.lastCounterRequestId = clientRequestId ?? null;
-      locked.counterTravelFee = counterTravelFee;
-      locked.proposedFee = Math.round((baseFee + counterTravelFee) * 100) / 100;
-      locked.remarks = remarks
-        ?? `Counter offer #${locked.negotiationCount}: travel ₹${counterTravelFee} `
-           + `(audit fee ₹${baseFee} unchanged)`;
-      locked.updatedBy = userId;
-      // The branch row comes from the unlocked read (the locked query cannot join it). It is the
-      // same project branch; move it to NEGOTIATION in this same transaction.
-      if (assignment.projectBranch) {
-        assignment.projectBranch.status = ProjectBranchStatus.NEGOTIATION;
-        await manager.save(assignment.projectBranch);
-      }
-      const savedRow = await manager.save(locked);
-      return { kind: 'applied' as const, assignment: savedRow, previousFee: prevFee, previousTravel: prevTravel };
-    });
-
-    if (outcome.kind === 'dedup') {
-      return outcome.assignment;
-    }
-    if (outcome.kind === 'cap') {
-      /**
-       * Routed through the SAME transition pipeline a manual decline takes (ASSIGNMENT_REJECTED
-       * audit event, realtime emit, schedule retirement, stats refresh) — one decline path,
-       * whoever triggers it. Runs after the lock is released so transactions do not nest.
-       */
-      return this.rejectOffer(
-        id,
-        userId,
-        `Negotiation limit reached (${maxRounds} counter-offers max). Offer auto-declined.`,
-      );
-    }
-    const saved = outcome.assignment;
-    const previousFee = outcome.previousFee;
-    const previousTravel = outcome.previousTravel;
-
-    /**
-     * A counter-offer changes what this audit will cost, so it is a money decision and needs
-     * a record. Nothing was written here: the assignment kept only the latest proposedFee, so
-     * a negotiation that moved 1,200 -> 1,800 -> 1,500 left one number and no history of how
-     * it got there or who moved it.
-     */
-    await this.auditService.recordEvent({
-      category: EventCategory.OPERATIONAL,
-      eventType: 'ASSIGNMENT_COUNTER_OFFERED',
-      entityType: 'ASSIGNMENT',
-      entityId: saved.id,
-      userId,
-      // The movement that matters is the travel figure. The total is recorded beside it because
-      // that is what the payable is built from, but it moved only because travel did.
-      remarks: `Counter offer #${saved.negotiationCount}: travel ₹${previousTravel ?? 'unset'} → `
-        + `₹${counterTravelFee} (total ₹${previousFee ?? 'unset'} → ₹${saved.proposedFee}).`,
-      metadata: {
-        previousTravelFee: previousTravel ?? null,
-        counterTravelFee,
-        previousFee: previousFee ?? null,
-        proposedFee: saved.proposedFee,
-        negotiationRound: saved.negotiationCount,
-        assayerId: saved.assayerId,
-      },
-    });
-
-    // The round number is in the dedupe key: each counter-offer is a fresh price ops must
-    // answer, so round 2 must not be swallowed as a duplicate of round 1.
-    this.notificationDispatch.emitSafe({
-      type: 'ASSIGNMENT_COUNTER_OFFERED',
-      entityType: 'ASSIGNMENT',
-      entityId: saved.id,
-      actorUserId: userId,
-      assayerId: saved.assayerId,
-      ownerUserId: saved.createdBy,
-      dedupeKey: `ASSIGNMENT_COUNTER_OFFERED:${saved.id}:${saved.negotiationCount}`,
-      payload: {
-        assignmentId: saved.id,
-        assignmentNumber: saved.assignmentNumber,
-        assayerName: assignment.assayer
-          ? `${assignment.assayer.firstName} ${assignment.assayer.lastName}`.trim()
-          : 'The assayer',
-        proposedFee: saved.proposedFee,
-        counterTravelFee,
-        branchName: assignment.projectBranch?.branch?.name ?? saved.assignmentNumber,
-        reason: remarks ?? 'No reason given',
-      },
-    });
-
-    try {
-      this.eventPublisher.publish('assignment:counter-offered', {
-        eventType: 'assignment:counter-offered',
-        assignmentId: saved.id,
-        assignmentNumber: saved.assignmentNumber,
-        assayerId: saved.assayerId,
-        proposedFee: saved.proposedFee,
-        counterTravelFee,
-        previousFee: previousFee ?? null,
-        negotiationRound: saved.negotiationCount,
-        // The phone receives this event and has to say something useful about it. Without a
-        // branch name the only live text it could show was a generic "an assignment changed",
-        // which tells an assayer holding several offers nothing about which one moved.
-        branchName: assignment.projectBranch?.branch?.name ?? saved.assignmentNumber,
-        projectBranchId: saved.projectBranchId,
-        userId,
-        timestamp: new Date(),
-      });
-    } catch (err) {
-      console.error('Failed to publish counter offer event', err);
-    }
-
-    return saved;
   }
 
   async acceptOffer(id: string, userId: string, fee?: number, reason?: string): Promise<AssignmentEntity> {
@@ -3148,7 +2925,8 @@ export class AssignmentService {
         .findOne({ where: { id: userId }, relations: ['roles'] })
         .catch(() => null);
       const actorRoles: string[] = (actor?.roles ?? []).map((r: any) => r?.name).filter(Boolean);
-      staffOverride = actorRoles.some((r) =>
+      // expandRoles: implication-aware, so a DEVELOPER passes the ADMIN half without being named.
+      staffOverride = expandRoles(actorRoles).some((r) =>
         [
           SystemRole.ADMIN,
           SystemRole.OPERATIONS,
@@ -3489,7 +3267,8 @@ export class AssignmentService {
         .findOne({ where: { id: userId }, relations: ['roles'] })
         .catch(() => null);
       const actorRoles: string[] = (actor?.roles ?? []).map((r: any) => r?.name).filter(Boolean);
-      const staffOverride = actorRoles.some((r) =>
+      // expandRoles: implication-aware, same as the check-in guard above.
+      const staffOverride = expandRoles(actorRoles).some((r) =>
         [SystemRole.ADMIN, SystemRole.OPERATIONS].includes(r as SystemRole),
       );
       if (!staffOverride) {

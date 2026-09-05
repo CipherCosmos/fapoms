@@ -35,6 +35,7 @@ import { UserService, CreateUserDto, UpdateUserDto } from './user.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AnyAuthenticated, PasswordChangeExempt } from '../auth/guards';
 import { SystemRole, UserStatus } from '@fapoms/shared';
 import { ParsePagePipe } from '../../infrastructure/http/parse-page.pipe';
+import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 
 /**
  * Role names the application's own access rules compare against.
@@ -262,9 +263,14 @@ export class UserController {
   // `?page=-1` and `?page=abc` each produced a negative or NaN `skip`, rejected by Postgres/
   // TypeORM before the query ran — an unhandled 500 rather than just serving page one. Same gap
   // already found and fixed the same way across several other list endpoints.
+  //
+  // `limit` had no ceiling at all — not even the `ParseLimitPipe` clamp every sibling list route
+  // already carries — so `?limit=999999` asked `userService.findAll`'s `take:` for every account
+  // in the organisation in one response. `max: 2000` mirrors `/assayers`' generous ceiling rather
+  // than a tight one: this is the account list behind an admin screen, not a search result.
   async findAll(
     @Query('page', new ParsePagePipe()) page: number,
-    @Query('limit') limit = 20,
+    @Query('limit', new ParseLimitPipe({ default: 20, max: 2000 })) limit: number,
   ) {
     const { users, total } = await this.userService.findAll(page, limit);
     return {

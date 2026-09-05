@@ -12,7 +12,7 @@ import { RoutingService, DestinationCoords } from './routing.provider';
 import { GeoStateEntity, GeoDistrictEntity, GeoCityEntity } from './geo.entities';
 import { autocompleteIndia, isPlaceLookupConfigured } from './india-autocomplete.helper';
 import { lookupIfsc } from './ifsc-lookup.helper';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AnyAuthenticated } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AnyAuthenticated, RoleOnly } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { GeoPrecisionService, GeoTarget } from './geo-precision.service';
@@ -245,8 +245,13 @@ export class GeoController {
   }
 
   @Post('precision/:target/backfill')
-  @Roles(SystemRole.ADMIN)
+  // DEVELOPER, not ADMIN (2026-09-05): driving the geocoder fleet is integration plumbing, not
+  // operations — the manual pin below stays with the people who know where the branch actually is.
+  @Roles(SystemRole.DEVELOPER)
   @RequirePermissions('branch:edit:organization', 'assayer:edit:organization')
+  // Deliberate tightening: a custom role holding these edit grants no longer reaches the
+  // geocoder run via the permission fallback — this is a developer-only surface.
+  @RoleOnly()
   @ApiOperation({ summary: 'Re-resolve coarse coordinates through the free geocoders' })
   async backfillPrecision(@Param('target') target: string, @Body() dto: BackfillDto) {
     // Bounded, and deliberately not "all". The free providers allow about one lookup a second,
@@ -256,8 +261,9 @@ export class GeoController {
   }
 
   @Post('branches/enrich-addresses')
-  @Roles(SystemRole.ADMIN)
+  @Roles(SystemRole.DEVELOPER)
   @RequirePermissions('branch:edit:organization')
+  @RoleOnly() // Same tightening as the backfill above — developer-only geocoder plumbing.
   @ApiOperation({ summary: 'Fill branch district/pincode/city (self-hosted reverse-geocode) + zone/territory/tier' })
   async enrichBranchAddresses(@Body() dto: BackfillDto) {
     // The reverse-geocode is the self-hosted India Nominatim (free, ~200 ms), so this can take a

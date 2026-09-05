@@ -4,6 +4,7 @@ import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { HrWorkforceService } from './hr-workforce.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { SystemRole } from '@fapoms/shared';
+import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 
 /**
  * HR's own workspace.
@@ -37,7 +38,13 @@ export class HrController {
    */
   @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'Organisation-level workforce analytics for HR' })
-  async workforce() {
-    return { success: true, data: await this.hrWorkforceService.overview() };
+  async workforce(@GlobalScopeFilter() scope?: GlobalScope) {
+    // This used to answer for the whole organisation regardless of who asked, while the roster
+    // right next to it was already region-scoped — so a territorial desk's headcount tile and its
+    // own roster page disagreed about how many people existed. `GlobalScopeFilter` derives the
+    // caller's regions from their JWT principal when no `?region=` is on the query string, so a
+    // region-scoped account narrows here for free; an unrestricted staff account still sees
+    // everything, exactly as before.
+    return { success: true, data: await this.hrWorkforceService.overview(scope) };
   }
 }

@@ -60,6 +60,9 @@ describe('ImportIssuesPanel', () => {
 
     await waitFor(() => expect(screen.getByText(/8 record problems to review/)).toBeInTheDocument());
     expect(screen.getByText(/showing 2 of 8/)).toBeInTheDocument();
+    // The grouping underneath only ever sees this same capped page, so "2 distinct problems" has
+    // to own up to being a count of the page, not of everything open.
+    expect(screen.getByText(/2 distinct problems in this page/)).toBeInTheDocument();
   });
 
   it('claims no shortfall when every open row is on screen', async () => {
@@ -69,6 +72,9 @@ describe('ImportIssuesPanel', () => {
 
     await waitFor(() => expect(screen.getByText(/1 record problem to review/)).toBeInTheDocument());
     expect(screen.queryByText(/showing/i)).not.toBeInTheDocument();
+    // Nothing is missing here, so "One distinct problem" needs no page caveat either.
+    expect(screen.getByText(/One distinct problem/)).toBeInTheDocument();
+    expect(screen.queryByText(/in this page/)).not.toBeInTheDocument();
   });
 
   it('no longer claims everything is an unreadable import cell — scanner findings share this queue', async () => {

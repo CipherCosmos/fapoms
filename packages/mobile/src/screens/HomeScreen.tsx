@@ -8,8 +8,7 @@ import { relativeDay, RelativeDay } from '../utils/dates';
 import { useT, t } from '../i18n';
 import { StatsScreen } from './StatsScreen';
 import { countOpenQueries, countResolvedQueries } from '../utils/queries';
-import { assignmentFeeValue } from '../utils/fees';
-import type { AssayerAssignment, AssayerStatement, ExpenseSummary } from '../types/mobile-app';
+import type { AssayerAssignment, ExpenseSummary } from '../types/mobile-app';
 import { LocationConfirmBanner } from '../components/LocationConfirmBanner';
 import { RegistrationPapersBanner } from '../components/RegistrationPapersBanner';
 
@@ -18,10 +17,12 @@ export interface HomeScreenProps {
   totalAssignments: number;
   completedAssignments: number;
   averageRating?: number;
-  /** The assayer's statement — the one source for what they are owed. Null while it loads. */
-  statement?: AssayerStatement | null;
-  /** True when the last statement read failed: show a dash, never a stale or invented figure. */
-  statementError?: boolean;
+  /*
+   * No statement prop any more. The outstanding-balance tile this screen carried was removed
+   * with money-blinding: earnings become visible only through the invoicing flow on the
+   * Earnings tab, and Home no longer names a rupee of fee money. The expense summary below
+   * stays — claims are the assayer's own out-of-pocket entries.
+   */
   expenseSummary: ExpenseSummary;
   onOpenAssignment: (a: AssayerAssignment) => void;
   onCheckIn: (a: AssayerAssignment) => void;
@@ -81,8 +82,6 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
   totalAssignments,
   completedAssignments,
   averageRating,
-  statement,
-  statementError,
   expenseSummary,
   onOpenAssignment,
   onCheckIn,
@@ -307,12 +306,9 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
             chevron
             accessibilityLabel={tr('home.openQueriesValue', { count: openQueries })}
           />
-          <GroupedRow
-            icon="wallet-outline"
-            tone="accent"
-            label={tr('home.balance')}
-            value={statement ? money(statement.totals.outstanding) : statementError ? '—' : '…'}
-          />
+          {/* No balance row here any more — earnings are revealed through the invoicing flow
+              on the Earnings tab, never summarised on Home. Claims below are the assayer's
+              own out-of-pocket money and stay. */}
           {expenseSummary.pending > 0 && (
             <GroupedRow
               icon="receipt-outline"
@@ -338,7 +334,7 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
 
 
 /**
- * The line of facts under an assignment's title: when, where, how big, what it pays.
+ * The line of facts under an assignment's title: when, where, how big.
  *
  * Rendered identically by the offer card and the job card, and it was written out twice —
  * same badge, same date rule, same distance and customer formatting. Two copies of a display
@@ -346,17 +342,15 @@ export const HomeScreen: React.FC<HomeScreenProps> = ({
  * then reads differently depending on whether the assayer is looking at the offer or the job
  * they accepted.
  *
- * The fee is the one real difference. It belongs on an offer, where the assayer is deciding
- * whether to take the work, and not on the job afterwards, where it is settled and the card is
- * about getting there.
+ * Deliberately no fee chip: the app is money-blind. An offer is judged on the work — where,
+ * when, how far, how many customers — and its fee is settled with the desk by phone, first
+ * appearing in this app on the invoice invitation.
  */
 const AssignmentMeta: React.FC<{
   assignment: AssayerAssignment;
   /** From `relativeDay` — the label, its urgency tone and the calendar-day offset. */
   when: RelativeDay;
-  /** Shown only when there is a fee to show — offers, not accepted jobs. */
-  fee?: number;
-}> = ({ assignment, when, fee }) => {
+}> = ({ assignment, when }) => {
   const t = useTheme();
   const tr = useT();
   return (
@@ -374,7 +368,6 @@ const AssignmentMeta: React.FC<{
       {assignment.estimatedCustomerCount > 0 && (
         <Meta icon="people-outline" label={tr('home.customers', { count: assignment.estimatedCustomerCount })} />
       )}
-      {fee != null && fee > 0 && <Meta icon="wallet-outline" label={money(fee)} />}
     </View>
   );
 };
@@ -383,9 +376,9 @@ const AssignmentMeta: React.FC<{
  * A job offer awaiting the assayer's decision.
  *
  * Deliberately carries only what that decision needs — where, when, how far, how many
- * customers, and the fee — plus the two answers. No check-in, no scanning, no packet
- * documents: those belong to work the assayer has agreed to do. The offer's operational
- * detail stays minimal until acceptance.
+ * customers — plus the two answers. No fee (money is ops-internal until invoicing), no
+ * check-in, no scanning, no packet documents: those belong to work the assayer has agreed
+ * to do. The offer's operational detail stays minimal until acceptance.
  */
 const OfferCard: React.FC<{
   assignment: AssayerAssignment;
@@ -395,7 +388,6 @@ const OfferCard: React.FC<{
 }> = ({ assignment, busy, onAccept, onDecline }) => {
   const t = useTheme();
   const tr = useT();
-  const fee = assignmentFeeValue(assignment);
   const subtitle = [assignment.bankName, assignment.solId].filter(Boolean).join(' · ');
   // Accepting an offer is a commitment to a date; "Tomorrow" and "In 3 days" are different
   // decisions, and the bare date left that arithmetic to the assayer.
@@ -413,7 +405,7 @@ const OfferCard: React.FC<{
         ) : null}
       </View>
 
-      <AssignmentMeta assignment={assignment} when={when} fee={fee} />
+      <AssignmentMeta assignment={assignment} when={when} />
 
       <View style={{ flexDirection: 'row', gap: t.space.sm }}>
         <Button label={tr('home.accept')} icon="checkmark" loading={busy} disabled={busy} onPress={onAccept} style={{ flex: 1 }} />
@@ -504,7 +496,7 @@ const CurrentJobCard: React.FC<{
 };
 
 /**
- * A meta fact as a neon chip — time, distance, customers, fee.
+ * A meta fact as a neon chip — time, distance, customers.
  *
  * Was a bare icon+label row that dissolved into the card. As a tinted pill with a cyan glyph
  * it reads as a scannable tag, the pattern every modern field/delivery app uses to surface the

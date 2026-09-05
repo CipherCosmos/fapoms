@@ -1,4 +1,4 @@
-import { describeAssignmentFee, previewFeeChange, seedTravelInput } from './assignment-fee';
+import { describeAssignmentFee, previewFeeChange } from './assignment-fee';
 
 /**
  * The fee rules, held still.
@@ -82,13 +82,13 @@ describe('describeAssignmentFee', () => {
   });
 
   /**
-   * An offer made before the quote columns existed. A total is known; the split is not. Countering
-   * on travel would silently reprice the audit itself, so it must be refused.
+   * An offer made before the quote columns existed. A total is known; the split is not — the
+   * base stays null (so `previewFeeChange` refuses to touch travel on it) and the breakdown
+   * falls back to the bare total rather than inventing components.
    */
-  it('refuses to offer a travel counter when no split is knowable', () => {
+  it('reports no split when none is knowable', () => {
     const v = describeAssignmentFee({ proposedFee: 1900 });
     expect(v.splitSource).toBe('LEGACY_UNSPLIT');
-    expect(v.counterable).toBe(false);
     expect(v.base).toBeNull();
     expect(v.text.breakdown).toBe(v.text.total);
   });
@@ -111,15 +111,16 @@ describe('previewFeeChange', () => {
   });
 
   /**
-   * The Operations Inbox bug: a lane headed "Travel fee" posted the figure as a whole fee, and the
-   * backend carved `max(0, 650 − 1250)` — travel silently became ₹0 and the offer dropped to the
-   * base. The bodies below are the only ones any screen should send, so the two fields cannot be
-   * swapped by hand again.
+   * The Operations Inbox bug this shape was born from: a lane headed "Travel fee" posted the
+   * figure as a whole fee, and the backend carved `max(0, 650 − 1250)` — travel silently became
+   * ₹0. The body below is the only one any screen should send. (`body.counter` — the ready-made
+   * NEGOTIATION transition — was deleted with in-app fee negotiation; the server refuses that
+   * transition now, so the helper must not offer to build it.)
    */
-  it('produces the request bodies, so no screen assembles one by hand', () => {
+  it('produces the first-offer request body, so no screen assembles one by hand', () => {
     const p = previewFeeChange(view, '500');
-    expect(p.body.counter).toEqual({ targetStatus: 'NEGOTIATION', counterTravelFee: 500 });
     expect(p.body.firstOffer).toEqual({ proposedFee: 1750 });
+    expect(p.body).not.toHaveProperty('counter');
   });
 
   /** Mobile blocked this: `parseRupeeInput` returns null for 0, so ₹0 travel was un-enterable. */
@@ -143,11 +144,11 @@ describe('previewFeeChange', () => {
     }
   });
 
-  it('refuses to preview a counter on an offer with no known audit fee', () => {
+  it('refuses to preview a travel change on an offer with no known audit fee', () => {
     const legacy = describeAssignmentFee({ proposedFee: 1900 });
     const p = previewFeeChange(legacy, '500');
     expect(p.error).toContain('no recorded audit fee');
-    expect(p.body.counter).toBeNull();
+    expect(p.body.firstOffer).toBeNull();
   });
 
   it('states the arithmetic in words the desk can check', () => {
@@ -155,23 +156,6 @@ describe('previewFeeChange', () => {
   });
 });
 
-describe('seedTravelInput', () => {
-  /**
-   * Every historical bug in this area was a screen seeding a travel field from the TOTAL. There is
-   * deliberately no exported helper that would return one, so the mistake is not re-typeable.
-   */
-  it('seeds the travel component, never the total', () => {
-    const view = describeAssignmentFee({ proposedFee: 1900, quotedBaseFee: 1250, quotedTravelFee: 650 });
-    expect(seedTravelInput(view)).toBe('650');
-    expect(seedTravelInput(view)).not.toBe('1900');
-  });
-
-  it('seeds the countered travel once one exists', () => {
-    const view = describeAssignmentFee({ proposedFee: 2150, quotedBaseFee: 1250, quotedTravelFee: 650, counterTravelFee: 900 });
-    expect(seedTravelInput(view)).toBe('900');
-  });
-
-  it('leaves the box empty when nothing is on the table, rather than answering wrongly', () => {
-    expect(seedTravelInput(describeAssignmentFee({ proposedFee: 1900 }))).toBe('');
-  });
-});
+// The `seedTravelInput` describe lived here until in-app fee negotiation was removed — there is
+// no travel input left to seed. The COUNTERED history tests above stay: rows countered before
+// the removal must keep describing themselves correctly forever.

@@ -1,4 +1,5 @@
 import { ValidationQueryStatus } from '@fapoms/shared';
+import type { AssayerStatementInvoicingBlock } from '@fapoms/shared';
 
 export interface CustomerRecord {
   id: string;
@@ -69,6 +70,13 @@ export interface AssayerPayable {
   paidAmount: number;
   outstanding: number;
   createdAt: string;
+  /**
+   * True on rows whose money was already visible under the pre-invoicing rules — earnings that
+   * predate the invite → submit → approve gate. Badged in the app so a reader understands why
+   * these rows carry amounts without ever having ridden an invoice. Absent while the server's
+   * `billing.assayerInvoicingEnabled` flag is off (the statement then has today's full shape).
+   */
+  preInvoicingEra?: boolean;
 }
 
 export interface AssayerPayment {
@@ -92,6 +100,14 @@ export interface AssayerStatement {
   };
   payables: AssayerPayable[];
   payments: AssayerPayment[];
+  /**
+   * The counts-only invoicing block of the GATED statement (shape from `@fapoms/shared`):
+   * how many completed audits await invoicing, and the active invitation if one exists —
+   * deliberately with no amounts, because money first becomes visible on the invitation
+   * itself. Absent while the server's `billing.assayerInvoicingEnabled` flag is off, which is
+   * how this app tells the gated world from the legacy one (see `deriveEarningsGateState`).
+   */
+  invoicing?: AssayerStatementInvoicingBlock;
 }
 
 /** Claim totals from `/expenses/mine/summary`, in rupees. */
@@ -134,21 +150,20 @@ export interface AssayerAssignment {
    * legacy cached rows, which we treat as active.
    */
   isActive?: boolean;
-  proposedFee: number;
-  agreedBaseFee: number;
-  distanceKm?: number;
-  /**
-   * The travel component INSIDE the offered fee, as the desk's calculator priced it —
-   * display-only grounding ("includes ₹240 travel by bus"). Never add it to a total:
-   * `proposedFee` already contains it. Null on offers made before the server recorded
-   * quote breakdowns.
+  /*
+   * There are deliberately NO fee fields here (`proposedFee`, `agreedBaseFee`,
+   * `quotedTravelFee`, `counterTravelFee`, `negotiationCount` all used to live at this spot).
+   * Fee negotiation was removed from the app and the assayer is money-blind until invoicing:
+   * the server's assayer-money-redaction interceptor strips every fee key from every response
+   * an assayer principal receives, so a field here could only ever hold undefined — and a fee
+   * an assayer first sees is the one on their invoice invitation (`AssayerInvoiceInvitation`),
+   * never one on an assignment.
    */
-  quotedTravelFee?: number | null;
-  /** The travel currently on the table once the desk has countered. Seeds the counter sheet. */
-  counterTravelFee?: number | null;
-  /** The transport mode that travel figure assumed (a shared TravelMode value), if any. */
+  distanceKm?: number;
+  /** The transport mode the desk's quote assumed (a shared TravelMode value), if any.
+   *  An operational fact, not money — kept because it still reaches assayer responses. */
   quotedTransportMode?: string | null;
-  /** One-way routed km the quote priced, as recorded at offer time. */
+  /** One-way routed km the quote priced, as recorded at offer time. Operational, not money. */
   quotedDistanceKm?: number | null;
   checkedInAt?: string;
   /** When they left the branch. Present only once checked out; closes the on-site window. */
@@ -158,7 +173,6 @@ export interface AssayerAssignment {
   customerPdfUrl?: string;
   completedPdfUrl?: string;
   instructions?: string;
-  negotiationCount?: number;
   remarks?: string;
   /**
    * Whether this branch's audit packet has actually been dispatched, from the server.

@@ -634,7 +634,11 @@ export class AssayerService implements OnModuleInit {
       where,
       skip: (page - 1) * limit,
       take: limit,
-      order: { createdAt: 'DESC' },
+      // id tiebreak matches RosterQueryService.findKeyset's ordering exactly. Bulk-imported
+      // rows share one createdAt by the hundred; without the tiebreak, the offset first page
+      // and the keyset pages that continue from its cursor could order those ties differently
+      // and rows at the boundary would be skipped or duplicated mid-walk.
+      order: { createdAt: 'DESC', id: 'DESC' },
     });
     await this.hydrateAllWorkforceAttributes(assayers);
     await this.hydrateDocumentSummaries(assayers);
@@ -749,14 +753,51 @@ export class AssayerService implements OnModuleInit {
   }
 
   /**
+   * Run the same three hydrations `findAll` runs, for a page of rows that came from somewhere
+   * else.
+   *
+   * `RosterQueryService.findFiltered`/`findKeyset` are a second read path over the same table —
+   * built so a filtered or keyset page could land independently of this service (see that file's
+   * own header) — and until this method existed, that independence meant they never called
+   * `hydrateAllWorkforceAttributes`, `hydrateDocumentSummaries` or `hydrateEmpanelmentSummary` at
+   * all. `findAll` ran all three inline, so any `GET /assayers` carrying `?after=` or a filter came
+   * back with `skills`/`certifications`/`languages`/`documents`/`empanelment` all `undefined`:
+   * the roster screen's page-2+ rows silently lost those fields, the Documents filter had nothing
+   * to filter on, and every skill/certification count read as zero for people who hold both.
+   *
+   * One entry point rather than three separate calls at each call site, because that is exactly
+   * how the gap opened: `findAll` remembering all three is not a guarantee the NEXT caller will.
+   * Mutates `assayers` in place and returns it, matching the private hydrators it wraps — the
+   * caller keeps its own array reference; nothing is copied or re-fetched.
+   *
+   * Still one grouped query per hydration step, whatever the page size: `hydrateDocumentSummaries`
+   * and `hydrateAllWorkforceAttributes` already batch over `ANY($1)`/`In(...)` of the page's ids,
+   * so calling them here on up to 1,000 rows costs exactly what `findAll` already pays for the
+   * same page size — no per-row loop is introduced.
+   */
+  async hydrateRosterRows(assayers: AssayerEntity[]): Promise<AssayerEntity[]> {
+    await this.hydrateAllWorkforceAttributes(assayers);
+    // Cascades into hydrateEmpanelmentSummary itself — see that method's tail call — so this one
+    // await covers all three documented hydration steps.
+    await this.hydrateDocumentSummaries(assayers);
+    return assayers;
+  }
+
+  /**
    * The pool the live map draws — every active assayer with exactly the facts a pin needs and
    * nothing else. The map used to fetch the full entity list (78 columns of HR, banking and
    * KYC detail for a layer that renders a dot), and it fetched it unscoped. This read selects
    * eleven fields, honours the region scope the way findAll does, and answers the two
    * questions the roster row cannot: which banks the person is empanelled with (one grouped
    * query, client names joined) and whether they are already committed somewhere today.
+   *
+   * `limit` defaults to a generous ceiling rather than none at all: this used to fetch every
+   * active assayer unconditionally, which was fine at 1,155 rows and is not a promise worth
+   * keeping as the roster grows — this is a layer that renders map dots, not a data export.
+   * The controller clamps the caller-supplied value; the default here covers direct/internal
+   * callers that pass none.
    */
-  async mapRoster(scope?: Partial<GlobalScope>): Promise<Array<Record<string, unknown>>> {
+  async mapRoster(scope?: Partial<GlobalScope>, limit = 2000): Promise<Array<Record<string, unknown>>> {
     const where: Record<string, unknown> = { isActive: true };
     if (scope?.regions?.length) where.region = In(scope.regions);
 
@@ -767,6 +808,7 @@ export class AssayerService implements OnModuleInit {
       ],
       where,
       order: { displayName: 'ASC' },
+      take: limit,
     });
     if (!assayers.length) return [];
     const ids = assayers.map((a) => a.id);

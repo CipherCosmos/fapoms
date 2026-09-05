@@ -60,7 +60,11 @@ export const PERMISSION_AREAS: AreaSpec[] = [
     key: 'admin',
     label: 'Administration',
     hint: 'Staff accounts, system settings and the audit trail',
-    resources: ['USER', 'CONFIGURATION', 'HOLIDAY', 'AUDIT_LOG'],
+    // SYSTEM is the developer's technical estate (see PermissionResource.SYSTEM in shared
+    // enums.ts): view/edit gate the technical settings groups, approve is the admin-held half
+    // of the destructive-action two-person rule. It renders here so the Roles editor shows it
+    // labelled instead of dropping it.
+    resources: ['USER', 'CONFIGURATION', 'HOLIDAY', 'AUDIT_LOG', 'SYSTEM'],
   },
 ];
 
@@ -84,6 +88,7 @@ const RESOURCE_LABELS: Record<string, string> = {
   CONFIGURATION: 'System settings',
   HOLIDAY: 'Holiday calendar',
   AUDIT_LOG: 'Audit trail',
+  SYSTEM: 'Platform (technical)',
 };
 
 const ACTION_LABELS: Record<string, string> = {
@@ -99,7 +104,6 @@ const ACTION_LABELS: Record<string, string> = {
   CLOSE: 'Close',
   ASSIGN: 'Assign',
   REVIEW: 'Review',
-  NEGOTIATE: 'Negotiate fees',
   ACCEPT: 'Accept',
   GENERATE: 'Generate',
   UPLOAD: 'Upload',

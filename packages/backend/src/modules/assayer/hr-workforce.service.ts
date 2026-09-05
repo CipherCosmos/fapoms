@@ -8,7 +8,9 @@ import { canonicalState } from '../planning/command-center.service';
 import { IN_FLIGHT_ASSIGNMENT_STATUSES, sqlStatusList } from '../assignment/assignment-workload';
 import {
   BUSINESS_TODAY_SQL, ASSAYER_RECORD_FIELDS, IDENTITY_DOCUMENTS, PLACEHOLDER_PIN_METRES,
+  PAYOUT_BLOCKING_COLUMNS,
 } from '@fapoms/shared';
+import { GlobalScope } from '../../infrastructure/scope/global-scope';
 
 /**
  * FAPOMS — HR workforce analytics.
@@ -135,24 +137,68 @@ export class HrWorkforceService implements OnModuleInit {
    *
    * The cache lives in shared Redis, so deleting the key on whichever node handled the write
    * clears it for every replica at once.
+   *
+   * One overview payload became several the moment the endpoint learned to answer by region: a
+   * write anywhere could be inside a Kerala-scoped caller's cached page, a national caller's, both,
+   * or neither. A single `del(OVERVIEW_CACHE_KEY)` only ever cleared the unscoped variant, so a
+   * region-scoped desk kept reading a stale overview for the rest of the TTL after every edit.
+   * `delByPattern` sweeps every cached variant — `hr:workforce:overview:all`,
+   * `hr:workforce:overview:r:NORTH`, `hr:workforce:overview:r:EAST,WEST`, and so on — because an
+   * edit to one assayer can change a figure any of them show.
    */
   onModuleInit(): void {
-    const invalidate = () => { void this.cache.del(OVERVIEW_CACHE_KEY); };
+    const invalidate = () => { void this.cache.delByPattern(`${OVERVIEW_CACHE_KEY}:*`); };
     this.events.subscribe('assayer:updated', invalidate);
     this.events.subscribe('assayer:created', invalidate);
     this.events.subscribe('assayer:deleted', invalidate);
+  }
+
+  /**
+   * The cache key for one scope. Named once so the write path above and the read path below
+   * cannot drift the way `overview()` and this key already had — `overview()` cached itself under
+   * the literal `'hr:workforce:overview'` instead of `OVERVIEW_CACHE_KEY`, which happened to be the
+   * same string today but left nothing to stop the two texts drifting apart on the next edit.
+   *
+   * Sorted before joining so a caller assigned `[EAST, NORTH]` and one assigned `[NORTH, EAST]`
+   * share a cache entry instead of silently doubling the cluster's HR overview traffic.
+   */
+  private static overviewCacheKey(scope?: GlobalScope): string {
+    const suffix = scope?.regions?.length ? `r:${[...scope.regions].sort().join(',')}` : 'all';
+    return `${OVERVIEW_CACHE_KEY}:${suffix}`;
   }
 
   private static num(v: any): number {
     return Number(v ?? 0);
   }
 
-  async overview(): Promise<any> {
+  /**
+   * The region half of the caller's scope, as a WHERE fragment plus its bind parameter.
+   *
+   * Appended, never inserted: this pushes the regions array onto the END of the caller's OWN
+   * params array, so it never renumbers a `$1…$n` the query already uses — the caller builds its
+   * other bind values first, and the placeholder this returns is always `$` + that array's new
+   * length. One implementation, so a query scoped by hand cannot say something subtly different
+   * from a query scoped by calling this — see `hr-workforce-region-scope.spec.ts`, which fails on
+   * a raw query that does neither this nor carries a reviewed exemption.
+   *
+   * Returns `''` when the scope carries no region constraint, so an unscoped caller's SQL is
+   * byte-for-byte what it was before region scoping existed. `alias` is the range variable that
+   * carries `region` in THIS query — `assayers` itself when the table has no `AS`, the join alias
+   * otherwise (Postgres exposes an unaliased table under its own name, so `assayers.region` is
+   * always valid there).
+   */
+  private static scopeSql(alias: string, params: unknown[], scope?: GlobalScope): string {
+    if (!scope?.regions?.length) return '';
+    params.push(scope.regions);
+    return ` AND ${alias}.region = ANY($${params.length})`;
+  }
+
+  async overview(scope?: GlobalScope): Promise<any> {
     // ~22 queries across nine org-wide panels. HR data (headcount, compliance, expiries) changes
     // slowly, so cache the whole payload cluster-wide for a short TTL instead of re-running all of it
     // on every /hr overview load. Fault-tolerant: a Redis miss just runs the queries.
     const TTL = Number(process.env.HR_OVERVIEW_CACHE_TTL_S) || 30;
-    return this.cache.wrap('hr:workforce:overview', TTL, async () => {
+    return this.cache.wrap(HrWorkforceService.overviewCacheKey(scope), TTL, async () => {
       const [
         headcount,
         pipeline,
@@ -163,20 +209,27 @@ export class HrWorkforceService implements OnModuleInit {
         utilisation,
         attrition,
         activity,
+        segments,
       ] = await Promise.all([
-        this.headcount(),
-        this.onboardingPipeline(),
-        this.recordCompliance(),
-        this.expiries(),
-        this.capability(),
-        this.deployment(),
-        this.utilisation(),
-        this.attrition(),
-        this.recentActivity(),
+        this.headcount(scope),
+        this.onboardingPipeline(scope),
+        this.recordCompliance(scope),
+        this.expiries(scope),
+        this.capability(scope),
+        this.deployment(scope),
+        this.utilisation(scope),
+        this.attrition(scope),
+        this.recentActivity(scope),
+        this.segments(scope),
       ]);
 
       return {
         generatedAt: new Date().toISOString(),
+        // `null` means unscoped — every region, because the caller holds every region. A
+        // restricted caller never resolves to `null` (see `GlobalScope.regions`), so the UI can
+        // paint a scope chip whenever this is non-null without a second "am I actually narrowed"
+        // check of its own.
+        scope: scope?.regions?.length ? { regions: [...scope.regions] } : null,
         headcount,
         pipeline,
         compliance,
@@ -186,6 +239,9 @@ export class HrWorkforceService implements OnModuleInit {
         utilisation,
         attrition,
         activity,
+        // The one server-side source for every count the roster's segment chips show — see
+        // `segments()`.
+        segments,
         // Surfaced first in the UI: the handful of things HR should act on today,
         // ranked, rather than left for someone to infer from nine panels.
         actions: this.deriveActions({ pipeline, compliance, expiries, deployment, utilisation }),
@@ -195,16 +251,22 @@ export class HrWorkforceService implements OnModuleInit {
 
   // ── Headcount ────────────────────────────────────────────────────────────
 
-  private async headcount() {
+  private async headcount(scope?: GlobalScope) {
+    const byLifecycleParams: unknown[] = [];
+    const byLifecycleScope = HrWorkforceService.scopeSql('assayers', byLifecycleParams, scope);
     const byLifecycle = await this.dataSource.query(`
       SELECT COALESCE(lifecycle_status::text, 'UNKNOWN') AS stage, COUNT(*)::int AS count
-      FROM assayers WHERE is_active = true GROUP BY 1 ORDER BY 2 DESC
-    `);
+      FROM assayers WHERE is_active = true${byLifecycleScope} GROUP BY 1 ORDER BY 2 DESC
+    `, byLifecycleParams);
+    const byEmploymentParams: unknown[] = [];
+    const byEmploymentScope = HrWorkforceService.scopeSql('assayers', byEmploymentParams, scope);
     const byEmployment = await this.dataSource.query(`
       SELECT COALESCE(employment_type, 'UNSPECIFIED') AS type, COUNT(*)::int AS count
-      FROM assayers WHERE ${ON_ROSTER}
+      FROM assayers WHERE ${ON_ROSTER}${byEmploymentScope}
       GROUP BY 1 ORDER BY 2 DESC
-    `);
+    `, byEmploymentParams);
+    const tenureParams: unknown[] = [];
+    const tenureScope = HrWorkforceService.scopeSql('assayers', tenureParams, scope);
     const tenure = await this.dataSource.query(`
       SELECT
         COUNT(*) FILTER (WHERE joining_date IS NULL)::int                                          AS unknown,
@@ -212,8 +274,10 @@ export class HrWorkforceService implements OnModuleInit {
         COUNT(*) FILTER (WHERE joining_date <= NOW() - INTERVAL '3 months'
                            AND joining_date > NOW() - INTERVAL '1 year')::int                      AS m3_to_1y,
         COUNT(*) FILTER (WHERE joining_date <= NOW() - INTERVAL '1 year')::int                     AS over_1y
-      FROM assayers WHERE ${ON_ROSTER}
-    `);
+      FROM assayers WHERE ${ON_ROSTER}${tenureScope}
+    `, tenureParams);
+    const totalsParams: unknown[] = [];
+    const totalsScope = HrWorkforceService.scopeSql('assayers', totalsParams, scope);
     const totals = await this.dataSource.query(`
       SELECT
         COUNT(*)::int                                                              AS total,
@@ -230,8 +294,8 @@ export class HrWorkforceService implements OnModuleInit {
         -- total and in none of the parts.
         COUNT(*) FILTER (WHERE ${HAS_LEFT('')}
                             OR exit_date IS NOT NULL OR termination_date IS NOT NULL)::int AS exited
-      FROM assayers WHERE is_active = true
-    `);
+      FROM assayers WHERE is_active = true${totalsScope}
+    `, totalsParams);
 
     return {
       ...totals[0],
@@ -248,7 +312,9 @@ export class HrWorkforceService implements OnModuleInit {
    * comes from the last LIFECYCLE_TRANSITION into the current stage; a candidate
    * with no transition row falls back to when the record was created.
    */
-  private async onboardingPipeline() {
+  private async onboardingPipeline(scope?: GlobalScope) {
+    const params: unknown[] = [];
+    const scopeClause = HrWorkforceService.scopeSql('a', params, scope);
     const rows = await this.dataSource.query(
       `
       WITH last_move AS (
@@ -273,9 +339,10 @@ export class HrWorkforceService implements OnModuleInit {
              EXTRACT(DAY FROM NOW() - COALESCE(lm.occurred_at, a.created_at))::int AS "daysInStage"
       FROM assayers a
       LEFT JOIN last_move lm ON lm.assayer_id = a.id
-      WHERE ${ON_ROSTER_A}
+      WHERE ${ON_ROSTER_A}${scopeClause}
       ORDER BY "daysInStage" DESC
     `,
+      params,
     );
 
     const stages = ONBOARDING_STAGES.map((s) => {
@@ -345,17 +412,36 @@ export class HrWorkforceService implements OnModuleInit {
       : `(${blank})`;
   }
 
-  private async recordCompliance() {
+  /**
+   * "Something on the critical list is blank" — the roster's "Incomplete record" rule, as one
+   * WHERE fragment. Built from `missingSql` over exactly the columns `missingAssayerRecordFields`
+   * in `@fapoms/shared` treats as critical, so this and the roster's client-side check start from
+   * the same list. Shared between `recordCompliance()` (which also needs the per-column list for
+   * `missingExpr` below, so cannot use this alone) and `segments()`'s `incomplete`/`ready` counts —
+   * two panels asking "is this record incomplete" used to each spell that out by hand.
+   */
+  private static anyCriticalMissingSql(): string {
+    return RECORD_FIELDS.filter((f) => f.critical).map((f) => HrWorkforceService.missingSql(f.column)).join(' OR ');
+  }
+
+  /** The narrower "cannot be paid" rule — only the three columns a payout actually needs. */
+  private static anyPayoutBlockingMissingSql(): string {
+    return PAYOUT_BLOCKING_COLUMNS.map((c) => HrWorkforceService.missingSql(c)).join(' OR ');
+  }
+
+  private async recordCompliance(scope?: GlobalScope) {
     const selects = RECORD_FIELDS.map(
       (f) => `COUNT(*) FILTER (WHERE NOT ${HrWorkforceService.missingSql(f.column)})::int AS "${f.column}"`,
     ).join(',\n        ');
 
+    const filledParams: unknown[] = [];
+    const filledScope = HrWorkforceService.scopeSql('assayers', filledParams, scope);
     const [filled] = await this.dataSource.query(`
       SELECT COUNT(*)::int AS total,
         ${selects}
       FROM assayers
-      WHERE ${ON_ROSTER}
-    `);
+      WHERE ${ON_ROSTER}${filledScope}
+    `, filledParams);
 
     const total = HrWorkforceService.num(filled.total);
     const fields = RECORD_FIELDS.map((f) => {
@@ -376,19 +462,23 @@ export class HrWorkforceService implements OnModuleInit {
     const missingExpr = criticalCols
       .map((c) => `CASE WHEN ${HrWorkforceService.missingSql(c)} THEN '${c}' END`)
       .join(', ');
-    const anyMissing = criticalCols.map((c) => HrWorkforceService.missingSql(c)).join(' OR ');
+    // Same fragment `segments()` uses for its `incomplete`/`ready` counts — one WHERE clause for
+    // "something on the critical list is blank", not a second hand-copy of it here.
+    const anyMissing = HrWorkforceService.anyCriticalMissingSql();
 
+    const incompleteParams: unknown[] = [];
+    const incompleteScope = HrWorkforceService.scopeSql('assayers', incompleteParams, scope);
     const incomplete = await this.dataSource.query(`
       SELECT id, assayer_code AS "assayerCode", display_name AS "displayName",
              state, district, lifecycle_status AS "lifecycleStatus",
              ARRAY_REMOVE(ARRAY[${missingExpr}], NULL) AS "missing"
       FROM assayers
       WHERE ${ON_ROSTER}
-        AND (${anyMissing})
+        AND (${anyMissing})${incompleteScope}
       ORDER BY ARRAY_LENGTH(ARRAY_REMOVE(ARRAY[${missingExpr}], NULL), 1) DESC NULLS LAST,
                assayer_code
       LIMIT 100
-    `);
+    `, incompleteParams);
 
     /**
      * How many records are incomplete, as opposed to how many fit on the page.
@@ -398,22 +488,35 @@ export class HrWorkforceService implements OnModuleInit {
      * hundred while the per-field bars beside them — real aggregates — went on counting
      * thousands. Two numbers describing the same roster, side by side, on the same screen.
      */
+    const incompleteTotalsParams: unknown[] = [];
+    const incompleteTotalsScope = HrWorkforceService.scopeSql('assayers', incompleteTotalsParams, scope);
     const [incompleteTotals] = await this.dataSource.query(`
       SELECT COUNT(*)::int AS count
       FROM assayers
       WHERE ${ON_ROSTER}
-        AND (${anyMissing})
-    `);
+        AND (${anyMissing})${incompleteTotalsScope}
+    `, incompleteTotalsParams);
 
     // Only identity documents are verified, so only they are counted here. The register this
     // replaced defaulted every row to PENDING, which meant a joining form counted as an
     // unverified document for ever.
+    //
+    // Joined to `assayers` for two reasons at once: this is a "documents" query, which can only
+    // reach a region through the assayer who owns it, and — the same bug `docCoverage` below was
+    // already fixed for — the count used to have no join to `assayers` at all, so a document
+    // belonging to someone who has since left stayed in this breakdown while `docCoverage`'s
+    // `roster` denominator (which DOES filter to `ON_ROSTER`) had already dropped them. Adding the
+    // join needed to reach `region` closed the same "two halves, two populations" gap here too.
+    const govDocsParams: unknown[] = [];
+    const govDocsScope = HrWorkforceService.scopeSql('a', govDocsParams, scope);
     const govDocs = await this.dataSource.query(`
-      SELECT verification_status AS status, COUNT(*)::int AS count
-      FROM assayer_documents
-      WHERE is_active = true AND verification_status IS NOT NULL
+      SELECT g.verification_status AS status, COUNT(*)::int AS count
+      FROM assayer_documents g
+      JOIN assayers a ON a.id = g.assayer_id
+      WHERE g.is_active = true AND g.verification_status IS NOT NULL
+        AND ${ON_ROSTER_A}${govDocsScope}
       GROUP BY 1
-    `);
+    `, govDocsParams);
 
     /**
      * Both halves of every ratio count the same people.
@@ -443,9 +546,19 @@ export class HrWorkforceService implements OnModuleInit {
      */
     // The identity half of the list, passed in rather than inlined so the one definition in
     // @fapoms/shared stays the only one.
+    //
+    // Three subqueries, three range variables carrying `region` (`assayers` unaliased, then two
+    // `a`s) — each gets its own call to `scopeSql`, appended after `$1` so the identity-documents
+    // list keeps its place. Recomputing the same regions array three times over one round trip
+    // costs nothing worth avoiding; keeping `roster` and its two numerators scoped identically is
+    // the whole point of the comment above this query.
+    const docCoverageParams: unknown[] = [IDENTITY_DOCUMENTS as unknown as string[]];
+    const docCoverageRosterScope = HrWorkforceService.scopeSql('assayers', docCoverageParams, scope);
+    const docCoverageGovScope = HrWorkforceService.scopeSql('a', docCoverageParams, scope);
+    const docCoverageFileScope = HrWorkforceService.scopeSql('a', docCoverageParams, scope);
     const [docCoverage] = await this.dataSource.query(`
       SELECT
-        (SELECT COUNT(*)::int FROM assayers WHERE ${ON_ROSTER}) AS roster,
+        (SELECT COUNT(*)::int FROM assayers WHERE ${ON_ROSTER}${docCoverageRosterScope}) AS roster,
         (SELECT COUNT(DISTINCT g.assayer_id)::int
            FROM assayer_documents g
            JOIN assayers a ON a.id = g.assayer_id
@@ -454,13 +567,13 @@ export class HrWorkforceService implements OnModuleInit {
             -- On file means a copy arrived or a number was taken. A row that exists only to say
             -- "not received" is the absence this figure is measuring, not the presence of it.
             AND (g.soft_copy_received IS TRUE OR g.hard_copy_received IS TRUE
-                 OR NULLIF(g.document_number, '') IS NOT NULL)) AS "withGovDoc",
+                 OR NULLIF(g.document_number, '') IS NOT NULL)${docCoverageGovScope}) AS "withGovDoc",
         (SELECT COUNT(DISTINCT d.assayer_id)::int
            FROM assayer_documents d
            JOIN assayers a ON a.id = d.assayer_id
           WHERE d.is_active = true AND ${ON_ROSTER_A}
-            AND jsonb_array_length(d.file_paths) > 0) AS "withFile"
-    `, [IDENTITY_DOCUMENTS as unknown as string[]]);
+            AND jsonb_array_length(d.file_paths) > 0${docCoverageFileScope}) AS "withFile"
+    `, docCoverageParams);
 
     /**
      * People whose audits are attended by somebody other than the person empanelled.
@@ -474,18 +587,22 @@ export class HrWorkforceService implements OnModuleInit {
      * a capped list's length is not a total, and a compliance figure that quietly stops at the
      * cap reads as "that is all of them".
      */
+    const workByOthersTotalParams: unknown[] = [];
+    const workByOthersTotalScope = HrWorkforceService.scopeSql('assayers', workByOthersTotalParams, scope);
     const [workByOthersTotal] = await this.dataSource.query(`
       SELECT COUNT(*)::int AS count FROM assayers
-      WHERE ${ON_ROSTER} AND work_done_by_someone_else = true
-    `);
+      WHERE ${ON_ROSTER} AND work_done_by_someone_else = true${workByOthersTotalScope}
+    `, workByOthersTotalParams);
+    const workByOthersParams: unknown[] = [];
+    const workByOthersScope = HrWorkforceService.scopeSql('assayers', workByOthersParams, scope);
     const workByOthers = await this.dataSource.query(`
       SELECT id, assayer_code AS "assayerCode", display_name AS "displayName",
              state, lifecycle_status AS "lifecycleStatus"
       FROM assayers
-      WHERE ${ON_ROSTER} AND work_done_by_someone_else = true
+      WHERE ${ON_ROSTER} AND work_done_by_someone_else = true${workByOthersScope}
       ORDER BY assayer_code
       LIMIT 100
-    `);
+    `, workByOthersParams);
 
     return {
       roster: total,
@@ -528,6 +645,12 @@ export class HrWorkforceService implements OnModuleInit {
    * One `LIMIT 200` over the union rather than 200 each: the cap exists to bound a single
    * scanner tick, and the soonest-expiring rows are the ones worth spending it on regardless
    * of which table they came from.
+   *
+   * region-scope-reviewed: deliberately NOT scoped. Both callers are cron-triggered background
+   * sweeps (`SlaScannerWorker`, `EmailDigestService`) with no HTTP request and no principal behind
+   * them, so there is no caller region to thread through — a renewal that is about to lapse needs
+   * chasing regardless of which desk happens to have the HR overview open at the time. See
+   * `hr-workforce-region-scope.spec.ts`'s allowlist for the same note in the fitness test itself.
    */
   async credentialsExpiringWithin(days: number): Promise<
     {
@@ -574,7 +697,9 @@ export class HrWorkforceService implements OnModuleInit {
   }
 
   /** Certifications and identity documents falling due, so renewals start early. */
-  private async expiries() {
+  private async expiries(scope?: GlobalScope) {
+    const certificationsParams: unknown[] = [];
+    const certificationsScope = HrWorkforceService.scopeSql('a', certificationsParams, scope);
     const certifications = await this.dataSource.query(`
       SELECT w.id, w.name, w.type, w.level, w.expiry_date AS "expiryDate",
              a.id AS "assayerId", a.assayer_code AS "assayerCode", a.display_name AS "displayName",
@@ -583,12 +708,14 @@ export class HrWorkforceService implements OnModuleInit {
       FROM workforce_attributes w
       JOIN assayers a ON a.id = w.assayer_id
       WHERE w.is_active = true AND w.expiry_date IS NOT NULL
-        AND ${ON_ROSTER_A}
+        AND ${ON_ROSTER_A}${certificationsScope}
         AND w.expiry_date::date <= ${BUSINESS_TODAY_SQL} + INTERVAL '180 days'
       ORDER BY w.expiry_date ASC
       LIMIT 100
-    `);
+    `, certificationsParams);
 
+    const documentsParams: unknown[] = [];
+    const documentsScope = HrWorkforceService.scopeSql('a', documentsParams, scope);
     const documents = await this.dataSource.query(`
       SELECT g.id, g.requirement AS "documentType", g.expiry_date AS "expiryDate",
              g.verification_status AS "verificationStatus",
@@ -597,11 +724,11 @@ export class HrWorkforceService implements OnModuleInit {
       FROM assayer_documents g
       JOIN assayers a ON a.id = g.assayer_id
       WHERE g.is_active = true AND g.expiry_date IS NOT NULL
-        AND ${ON_ROSTER_A}
+        AND ${ON_ROSTER_A}${documentsScope}
         AND g.expiry_date::date <= ${BUSINESS_TODAY_SQL} + INTERVAL '180 days'
       ORDER BY g.expiry_date ASC
       LIMIT 100
-    `);
+    `, documentsParams);
 
     /**
      * The buckets count the whole set; the rows above are the hundred soonest.
@@ -612,22 +739,37 @@ export class HrWorkforceService implements OnModuleInit {
      * expired, which reported "0 expiring within 30 days" and silently dropped the renewal
      * action derived from it — the counts said the quietest possible thing exactly when there
      * was most to do.
+     *
+     * Two more fixes riding along with the region-scoping pass, both specific to the certification
+     * side (`workforce_attributes` carries SKILL and LANGUAGE rows too, and none of them have an
+     * `expiry_date`, so in practice this was harmless — but "in practice" is not the same claim as
+     * "correct", and `certificate-lapsed-parity.spec.ts` pins the `lapsed` segment count to a rule
+     * that names the type explicitly):
+     *   - `typeFilter` restricts the certification call to `type = 'CERTIFICATION'`, matching the
+     *     `lapsed` segment's own EXISTS clause below instead of trusting every expiring row in the
+     *     table to happen to be one.
+     *   - `COUNT(DISTINCT … assayer_id)` replaces `COUNT(*)`, so somebody holding two certificates
+     *     that both lapse this month is one person in "within30", not two — the same "count people,
+     *     not rows" correction `docCoverage` and `capability()`'s coverage figures already apply.
      */
-    const bucketsFor = async (table: string, alias: string, dateColumn: string) => {
+    const bucketsFor = async (table: string, alias: string, dateColumn: string, typeFilter = '') => {
+      const params: unknown[] = [];
+      const scopeClause = HrWorkforceService.scopeSql('a', params, scope);
       const [counts] = await this.dataSource.query(`
-        SELECT COUNT(*) FILTER (WHERE days < 0)::int                    AS expired,
-               COUNT(*) FILTER (WHERE days BETWEEN 0 AND 30)::int       AS within30,
-               COUNT(*) FILTER (WHERE days > 30 AND days <= 90)::int    AS within90,
-               COUNT(*) FILTER (WHERE days > 90)::int                   AS within180
+        SELECT COUNT(DISTINCT assayer_id) FILTER (WHERE days < 0)::int                 AS expired,
+               COUNT(DISTINCT assayer_id) FILTER (WHERE days BETWEEN 0 AND 30)::int    AS within30,
+               COUNT(DISTINCT assayer_id) FILTER (WHERE days > 30 AND days <= 90)::int AS within90,
+               COUNT(DISTINCT assayer_id) FILTER (WHERE days > 90)::int                AS within180
           FROM (
-            SELECT (${alias}.${dateColumn}::date - ${BUSINESS_TODAY_SQL})::int AS days
+            SELECT ${alias}.assayer_id AS assayer_id,
+                   (${alias}.${dateColumn}::date - ${BUSINESS_TODAY_SQL})::int AS days
               FROM ${table} ${alias}
               JOIN assayers a ON a.id = ${alias}.assayer_id
              WHERE ${alias}.is_active = true AND ${alias}.${dateColumn} IS NOT NULL
-               AND ${ON_ROSTER_A}
+               AND ${ON_ROSTER_A}${typeFilter}${scopeClause}
                AND ${alias}.${dateColumn}::date <= ${BUSINESS_TODAY_SQL} + INTERVAL '180 days'
           ) lapsing
-      `);
+      `, params);
       return {
         expired: HrWorkforceService.num(counts?.expired),
         within30: HrWorkforceService.num(counts?.within30),
@@ -637,7 +779,7 @@ export class HrWorkforceService implements OnModuleInit {
     };
 
     const [certificationCounts, documentCounts] = await Promise.all([
-      bucketsFor('workforce_attributes', 'w', 'expiry_date'),
+      bucketsFor('workforce_attributes', 'w', 'expiry_date', " AND w.type = 'CERTIFICATION'"),
       bucketsFor('assayer_documents', 'g', 'expiry_date'),
     ]);
 
@@ -654,7 +796,7 @@ export class HrWorkforceService implements OnModuleInit {
    * audit in Tamil Nadu goes better with a Tamil speaker, so language coverage is
    * reported against where the branches are, not just as a total.
    */
-  private async capability() {
+  private async capability(scope?: GlobalScope) {
     /**
      * `COUNT(DISTINCT w.assayer_id)` per `(type, name)` — a skill's headline number is how many
      * PEOPLE hold it, so a person who recorded the same skill twice must count once.
@@ -670,14 +812,16 @@ export class HrWorkforceService implements OnModuleInit {
      * own — it is inside `overview()`, behind a 30 s cache, and 0.3 ms on today's data. It gets
      * the improvement as a free rider on an index bought for the uncached picker.
      */
+    const byTypeParams: unknown[] = [];
+    const byTypeScope = HrWorkforceService.scopeSql('a', byTypeParams, scope);
     const byType = await this.dataSource.query(`
       SELECT w.type, w.name, COUNT(DISTINCT w.assayer_id)::int AS "assayerCount"
       FROM workforce_attributes w
       JOIN assayers a ON a.id = w.assayer_id
-      WHERE w.is_active = true AND ${ON_ROSTER_A}
+      WHERE w.is_active = true AND ${ON_ROSTER_A}${byTypeScope}
       GROUP BY 1, 2
       ORDER BY 1, 3 DESC
-    `);
+    `, byTypeParams);
 
     // Same rule as the document coverage above: numerator and denominator must count the same
     // people, or `unprofiled` goes negative and the "N assayers have no recorded skill" warning
@@ -693,19 +837,24 @@ export class HrWorkforceService implements OnModuleInit {
     // is the input to `unprofiled` below, which IS displayed. `withLanguage` and
     // `withCertification` are genuinely unread by any consumer — dead payload on every response,
     // worth removing, but that is an API-shape change and not part of a query-cost pass.
+    const coverageParams: unknown[] = [];
+    const skillScope = HrWorkforceService.scopeSql('a', coverageParams, scope);
+    const languageScope = HrWorkforceService.scopeSql('a', coverageParams, scope);
+    const certificationScope = HrWorkforceService.scopeSql('a', coverageParams, scope);
+    const coverageRosterScope = HrWorkforceService.scopeSql('assayers', coverageParams, scope);
     const [coverage] = await this.dataSource.query(`
       SELECT
         (SELECT COUNT(DISTINCT w.assayer_id)::int FROM workforce_attributes w
            JOIN assayers a ON a.id = w.assayer_id
-          WHERE w.type='SKILL' AND w.is_active=true AND ${ON_ROSTER_A})         AS "withSkill",
+          WHERE w.type='SKILL' AND w.is_active=true AND ${ON_ROSTER_A}${skillScope})         AS "withSkill",
         (SELECT COUNT(DISTINCT w.assayer_id)::int FROM workforce_attributes w
            JOIN assayers a ON a.id = w.assayer_id
-          WHERE w.type='LANGUAGE' AND w.is_active=true AND ${ON_ROSTER_A})      AS "withLanguage",
+          WHERE w.type='LANGUAGE' AND w.is_active=true AND ${ON_ROSTER_A}${languageScope})      AS "withLanguage",
         (SELECT COUNT(DISTINCT w.assayer_id)::int FROM workforce_attributes w
            JOIN assayers a ON a.id = w.assayer_id
-          WHERE w.type='CERTIFICATION' AND w.is_active=true AND ${ON_ROSTER_A}) AS "withCertification",
-        (SELECT COUNT(*)::int FROM assayers WHERE ${ON_ROSTER})                 AS roster
-    `);
+          WHERE w.type='CERTIFICATION' AND w.is_active=true AND ${ON_ROSTER_A}${certificationScope}) AS "withCertification",
+        (SELECT COUNT(*)::int FROM assayers WHERE ${ON_ROSTER}${coverageRosterScope})                 AS roster
+    `, coverageParams);
 
     const group = (t: string) => byType.filter((r: any) => r.type === t).slice(0, 20);
 
@@ -729,18 +878,25 @@ export class HrWorkforceService implements OnModuleInit {
    * recruit. State spellings differ between the branch and assayer imports, so
    * both sides are canonicalised before being compared.
    */
-  private async deployment() {
+  private async deployment(scope?: GlobalScope) {
+    const supplyParams: unknown[] = [];
+    const supplyScope = HrWorkforceService.scopeSql('assayers', supplyParams, scope);
     const supplyRaw = await this.dataSource.query(`
       SELECT state, COUNT(*)::int AS assayers,
              COUNT(*) FILTER (WHERE lifecycle_status = 'ACTIVE')::int AS active
       FROM assayers
-      WHERE ${ON_ROSTER}
+      WHERE ${ON_ROSTER}${supplyScope}
       GROUP BY 1
-    `);
+    `, supplyParams);
+    // `branches` carries its own `region` column (the materialised copy `resolveRegion(state)`
+    // keeps in step — see regions.ts), so this reaches the scope directly rather than through a
+    // join to assayers: the demand side of "supply vs demand" has no assayer to join through.
+    const demandParams: unknown[] = [];
+    const demandScope = HrWorkforceService.scopeSql('branches', demandParams, scope);
     const demandRaw = await this.dataSource.query(`
       SELECT state, COUNT(*)::int AS branches
-      FROM branches WHERE is_active = true GROUP BY 1
-    `);
+      FROM branches WHERE is_active = true${demandScope} GROUP BY 1
+    `, demandParams);
 
     const map = new Map<string, { state: string; assayers: number; active: number; branches: number }>();
     const touch = (raw: string | null) => {
@@ -781,7 +937,7 @@ export class HrWorkforceService implements OnModuleInit {
 
   // ── Utilisation and wellbeing ────────────────────────────────────────────
 
-  private async utilisation() {
+  private async utilisation(scope?: GlobalScope) {
     // Deliberately NOT factored into a shared predicate string: `hr-workforce-soft-delete.spec.ts`
     // statically scans each query's OWN text for its guard (`is_active` / `ON_ROSTER`) — a query
     // that instead references a constant defined elsewhere is, in that test's own words, "reading
@@ -790,6 +946,8 @@ export class HrWorkforceService implements OnModuleInit {
     // identical on this line by eye rather than by the compiler — the same trade this file makes
     // everywhere else (`ON_ROSTER_A` is itself a shared constant, but every query still writes
     // `${ON_ROSTER_A}` inline rather than composing a bigger shared clause on top of it).
+    const idleParams: unknown[] = [IDLE_AFTER_DAYS];
+    const idleScope = HrWorkforceService.scopeSql('a', idleParams, scope);
     const idle = await this.dataSource.query(
       `
       SELECT a.id, a.assayer_code AS "assayerCode", a.display_name AS "displayName",
@@ -801,11 +959,11 @@ export class HrWorkforceService implements OnModuleInit {
       WHERE a.lifecycle_status = 'ACTIVE'
         AND ${ON_ROSTER_A}
         AND a.is_active = true
-        AND (a.last_assignment_date IS NULL OR a.last_assignment_date < NOW() - ($1 || ' days')::interval)
+        AND (a.last_assignment_date IS NULL OR a.last_assignment_date < NOW() - ($1 || ' days')::interval)${idleScope}
       ORDER BY a.last_assignment_date ASC NULLS FIRST
       LIMIT 50
     `,
-      [IDLE_AFTER_DAYS],
+      idleParams,
     );
 
     /**
@@ -821,6 +979,8 @@ export class HrWorkforceService implements OnModuleInit {
      * predicate and no LIMIT, so the tile and the table can disagree on WHICH 50 people are shown
      * but never on how many there are in total.
      */
+    const idleCountsParams: unknown[] = [IDLE_AFTER_DAYS];
+    const idleCountsScope = HrWorkforceService.scopeSql('a', idleCountsParams, scope);
     const [idleCounts] = await this.dataSource.query(
       `
       SELECT COUNT(*)::int AS total,
@@ -829,11 +989,13 @@ export class HrWorkforceService implements OnModuleInit {
       WHERE a.lifecycle_status = 'ACTIVE'
         AND ${ON_ROSTER_A}
         AND a.is_active = true
-        AND (a.last_assignment_date IS NULL OR a.last_assignment_date < NOW() - ($1 || ' days')::interval)
+        AND (a.last_assignment_date IS NULL OR a.last_assignment_date < NOW() - ($1 || ' days')::interval)${idleCountsScope}
     `,
-      [IDLE_AFTER_DAYS],
+      idleCountsParams,
     );
 
+    const performanceParams: unknown[] = [];
+    const performanceScope = HrWorkforceService.scopeSql('assayers', performanceParams, scope);
     const [performance] = await this.dataSource.query(`
       SELECT
         ROUND(AVG(NULLIF(average_rating, 0))::numeric, 2)                       AS "avgRating",
@@ -844,8 +1006,8 @@ export class HrWorkforceService implements OnModuleInit {
         SUM(cancelled_assignments)::int                                         AS "cancelledAssignments",
         SUM(on_time_completions)::int                                           AS "onTimeCompletions"
       FROM assayers
-      WHERE ${ON_ROSTER}
-    `);
+      WHERE ${ON_ROSTER}${performanceScope}
+    `, performanceParams);
 
     const completed = HrWorkforceService.num(performance.completedAssignments);
 
@@ -859,6 +1021,8 @@ export class HrWorkforceService implements OnModuleInit {
     // than the number planning enforces — the two answer different questions. See
     // modules/assignment/assignment-workload.ts. (This comment previously claimed the numbers
     // agreed with planning; they never did.)
+    const utilizationRowsParams: unknown[] = [];
+    const utilizationRowsScope = HrWorkforceService.scopeSql('a', utilizationRowsParams, scope);
     const utilizationRows = await this.dataSource.query(`
       SELECT a.id, a.assayer_code AS "assayerCode", a.display_name AS "displayName",
              a.state, a.district, a.max_weekly_workload AS "maxWeeklyWorkload",
@@ -869,9 +1033,9 @@ export class HrWorkforceService implements OnModuleInit {
              ) AS "currentAllocation"
       FROM assayers a
       WHERE a.lifecycle_status = 'ACTIVE' AND ${ON_ROSTER_A}
-        AND a.is_active = true
+        AND a.is_active = true${utilizationRowsScope}
       ORDER BY a.display_name ASC
-    `);
+    `, utilizationRowsParams);
     const DEFAULT_WEEKLY = 15;
     const utilization = (utilizationRows ?? []).map((r: any) => {
       const weeklyCapacity = r.maxWeeklyWorkload || DEFAULT_WEEKLY;
@@ -925,7 +1089,9 @@ export class HrWorkforceService implements OnModuleInit {
 
   // ── Attrition ────────────────────────────────────────────────────────────
 
-  private async attrition() {
+  private async attrition(scope?: GlobalScope) {
+    const totalsParams: unknown[] = [];
+    const totalsScope = HrWorkforceService.scopeSql('assayers', totalsParams, scope);
     const [totals] = await this.dataSource.query(`
       SELECT
         -- Everyone who has gone, by status OR by date — the same rule the headcount tile uses.
@@ -952,9 +1118,11 @@ export class HrWorkforceService implements OnModuleInit {
       -- Attrition counts people who LEFT, which is a different thing from a record that was
       -- deleted. Resigning or being terminated leaves the row live and dated; deletion clears
       -- is_active. Without this, a deleted profile inflated both the exit count and joins90d.
-      WHERE is_active = true
-    `);
+      WHERE is_active = true${totalsScope}
+    `, totalsParams);
 
+    const recentParams: unknown[] = [];
+    const recentScope = HrWorkforceService.scopeSql('assayers', recentParams, scope);
     const recent = await this.dataSource.query(`
       SELECT id, assayer_code AS "assayerCode", display_name AS "displayName", state,
              COALESCE(exit_date, termination_date) AS "exitDate",
@@ -974,15 +1142,17 @@ export class HrWorkforceService implements OnModuleInit {
              END AS mode,
              joining_date AS "joiningDate"
       FROM assayers
-      WHERE is_active = true AND (exit_date IS NOT NULL OR termination_date IS NOT NULL)
+      WHERE is_active = true AND (exit_date IS NOT NULL OR termination_date IS NOT NULL)${recentScope}
       ORDER BY COALESCE(exit_date, termination_date) DESC
       LIMIT 20
-    `);
+    `, recentParams);
 
+    const headcountParams: unknown[] = [];
+    const headcountScope = HrWorkforceService.scopeSql('assayers', headcountParams, scope);
     const headcount = await this.dataSource.query(`
       SELECT COUNT(*)::int AS active FROM assayers
-      WHERE ${ON_ROSTER}
-    `);
+      WHERE ${ON_ROSTER}${headcountScope}
+    `, headcountParams);
 
     const active = HrWorkforceService.num(headcount[0]?.active);
     const exits12m = HrWorkforceService.num(totals.exits12m);
@@ -1017,7 +1187,12 @@ export class HrWorkforceService implements OnModuleInit {
   // ── Traceability ─────────────────────────────────────────────────────────
 
   /** Who changed what, and when. Every HR action on a person lands here. */
-  private async recentActivity() {
+  private async recentActivity(scope?: GlobalScope) {
+    const params: unknown[] = [];
+    // Scoped to the assayer the activity is ABOUT (`a`), not to `actor` — the person who
+    // performed it may be an HR user outside any region, or an assayer in a different one, and
+    // this feed answers "what happened to people in my patch", not "who in my patch did something".
+    const scopeClause = HrWorkforceService.scopeSql('a', params, scope);
     return this.dataSource.query(`
       SELECT act.id, act.event_type AS "eventType", act.previous_state AS "previousState",
              act.new_state AS "newState",
@@ -1041,9 +1216,107 @@ export class HrWorkforceService implements OnModuleInit {
       -- soft-delete-exempt: the actor is here to name who performed the act, and an act does
       -- not become anonymous because the person who did it has since left.
       LEFT JOIN assayers actor ON act.performed_by::text ~ '^[0-9a-fA-F-]{36}$' AND actor.id = act.performed_by::uuid
+      WHERE TRUE${scopeClause}
       ORDER BY act.occurred_at DESC
       LIMIT 40
-    `);
+    `, params);
+  }
+
+  // ── Roster segments ──────────────────────────────────────────────────────
+
+  /**
+   * Every count the roster's segment chips show, from the one place that can see the whole
+   * scoped population.
+   *
+   * `ROSTER_SEGMENTS` in the web app's `roster-filters.ts` used to be counted client-side, over
+   * whichever page of up to 1,000 rows had actually loaded. On a roster bigger than that window —
+   * which is the normal case, not an edge one — "Cannot be paid: 47" meant 47 among the rows on
+   * screen, and the number changed as somebody scrolled or paged, without the underlying set of
+   * people changing at all. `COUNT(DISTINCT a.id)` here runs over the full scoped population every
+   * time, so the chip's number and this one can never disagree about who is being counted.
+   *
+   * The key names are `ROSTER_SEGMENTS[].key` verbatim — this is the contract the frontend reads —
+   * and each predicate is that segment's `match` function translated into SQL, checked against it
+   * line by line rather than re-derived from scratch:
+   *
+   *  - `all`, `active`, `to-verify`, `background-due` read the lifecycle status alone, exactly as
+   *    `ROSTER_SEGMENTS` does, with NO `stillWorkable`/`ON_ROSTER_A` gate — a departed person still
+   *    carrying e.g. `DOCUMENT_VERIFICATION` on their way out is still counted here, because the
+   *    chip they back does not ask whether they stayed.
+   *  - `onboarding` is the same four-stage membership test as `isOnboardingStage`, ALSO ungated.
+   *    This is deliberately a different number from the "onboarding" key inside `headcount()`'s
+   *    totals, which DOES gate on `ON_ROSTER` because that panel's active/onboarding/exited
+   *    buckets must partition the roster without anybody counted twice or left out. Two panels
+   *    asking a different question share one English word; each mirrors its OWN consumer.
+   *  - `ready` is `isReadyToActivate`: the state machine's only edge from an onboarding stage to
+   *    ACTIVE is `TRAINING → ACTIVE` (see `ASSAYER_LIFECYCLE_TRANSITIONS` in `@fapoms/shared`), so
+   *    "the next legal step is ACTIVE and isOnboardingStage" collapses to `lifecycle_status =
+   *    'TRAINING'` — named directly rather than re-deriving the transition table in SQL.
+   *  - `incomplete`/`unpayable` reuse `anyCriticalMissingSql`/`anyPayoutBlockingMissingSql` (the
+   *    same fragments `recordCompliance()` uses), gated on `ON_ROSTER_A` for `stillWorkable`.
+   *  - `unprofiled` mirrors `!a.skills || a.skills.length === 0`: the roster's `skills` field is
+   *    hydrated from `workforce_attributes` rows of `type = 'SKILL'`
+   *    (`AssayerService.hydrateWorkforceAttributes`), never a column on `assayers` itself, so "no
+   *    skills" is a NOT EXISTS against that table — the same population `capability()`'s
+   *    `withSkill` counts.
+   *  - `exited` is `!stillWorkable(a)`, i.e. `NOT (ON_ROSTER_A)` — and since the outer WHERE
+   *    already restricts to `is_active = true`, that negation reduces to exactly the departed-OR-
+   *    dated predicate `headcount()`'s own `exited` counter uses.
+   *  - `someone-else` reuses `workByOthersCount`'s predicate (`ON_ROSTER_A AND
+   *    a.work_done_by_someone_else = true`) rather than a second copy of it.
+   *  - `lapsed` is EXISTS a `workforce_attributes` row of `type = 'CERTIFICATION'` whose
+   *    `expiry_date` is before today — see `certificate-lapsed-parity.spec.ts` for this pinned
+   *    against fixtures, and the note on `bucketsFor` in `expiries()` for the untyped-row bug this
+   *    same type filter fixes there.
+   *
+   * One round trip, one row: every segment is a `FILTER` on one aggregate query over `assayers a`,
+   * so the twelve counts can never land at slightly different moments relative to a concurrent
+   * write the way twelve separate queries could.
+   */
+  private async segments(scope?: GlobalScope): Promise<Record<string, number>> {
+    const anyMissing = HrWorkforceService.anyCriticalMissingSql();
+    const anyPayoutMissing = HrWorkforceService.anyPayoutBlockingMissingSql();
+    const params: unknown[] = [];
+    const scopeClause = HrWorkforceService.scopeSql('a', params, scope);
+
+    const [row] = await this.dataSource.query(`
+      SELECT
+        COUNT(DISTINCT a.id)::int AS "all",
+        COUNT(DISTINCT a.id) FILTER (WHERE a.lifecycle_status = 'ACTIVE')::int AS "active",
+        COUNT(DISTINCT a.id) FILTER (
+          WHERE a.lifecycle_status IN ('INVITED','DOCUMENT_VERIFICATION','BACKGROUND_VERIFICATION','TRAINING')
+        )::int AS "onboarding",
+        COUNT(DISTINCT a.id) FILTER (WHERE a.lifecycle_status = 'DOCUMENT_VERIFICATION')::int AS "to-verify",
+        COUNT(DISTINCT a.id) FILTER (WHERE a.lifecycle_status = 'BACKGROUND_VERIFICATION')::int AS "background-due",
+        COUNT(DISTINCT a.id) FILTER (WHERE a.lifecycle_status = 'TRAINING' AND NOT (${anyMissing}))::int AS "ready",
+        COUNT(DISTINCT a.id) FILTER (WHERE ${ON_ROSTER_A} AND (${anyMissing}))::int AS "incomplete",
+        COUNT(DISTINCT a.id) FILTER (WHERE ${ON_ROSTER_A} AND (${anyPayoutMissing}))::int AS "unpayable",
+        COUNT(DISTINCT a.id) FILTER (
+          WHERE ${ON_ROSTER_A} AND NOT EXISTS (
+            SELECT 1 FROM workforce_attributes w
+             WHERE w.assayer_id = a.id AND w.is_active = true AND w.type = 'SKILL'
+          )
+        )::int AS "unprofiled",
+        COUNT(DISTINCT a.id) FILTER (WHERE NOT (${ON_ROSTER_A}))::int AS "exited",
+        COUNT(DISTINCT a.id) FILTER (WHERE ${ON_ROSTER_A} AND a.work_done_by_someone_else = true)::int AS "someone-else",
+        COUNT(DISTINCT a.id) FILTER (
+          WHERE ${ON_ROSTER_A} AND EXISTS (
+            SELECT 1 FROM workforce_attributes w
+             WHERE w.assayer_id = a.id AND w.is_active = true AND w.type = 'CERTIFICATION'
+               AND w.expiry_date IS NOT NULL AND w.expiry_date::date < ${BUSINESS_TODAY_SQL}
+          )
+        )::int AS "lapsed"
+      FROM assayers a
+      WHERE a.is_active = true${scopeClause}
+    `, params);
+
+    const keys = [
+      'all', 'active', 'onboarding', 'to-verify', 'background-due', 'ready', 'incomplete',
+      'unpayable', 'unprofiled', 'exited', 'someone-else', 'lapsed',
+    ];
+    const out: Record<string, number> = {};
+    for (const key of keys) out[key] = HrWorkforceService.num(row?.[key]);
+    return out;
   }
 
   // ── What to do about it ──────────────────────────────────────────────────

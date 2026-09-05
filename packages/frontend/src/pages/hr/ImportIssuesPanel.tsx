@@ -229,7 +229,11 @@ export const ImportIssuesPanel: React.FC<{
                 {issues.length < openCount ? ` — showing ${issues.length} of ${openCount}` : ''}.
               </strong>{' '}
               <span style={{ color: 'var(--text-muted)' }}>
-                {groups.length === 1 ? 'One distinct problem' : `${groups.length} distinct problems`} —
+                {groups.length === 1 ? 'One distinct problem' : `${groups.length} distinct problems`}
+                {/* The grouping below only ever sees the page of rows that arrived — the same
+                    shortfall the headline above admits to. "3 distinct problems" over a capped
+                    page reads as the whole roster's tally; it is only this page's. */}
+                {issues.length < openCount ? ' in this page' : ''} —
                 cells the roster import could not read, and checks failing on live records.
                 Nothing was guessed or changed automatically; each waits for a decision.
               </span>

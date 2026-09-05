@@ -21,7 +21,8 @@ const openAt = (from: string, roles: SystemRole[], permissions: string[]) =>
     <MemoryRouter initialEntries={[from]}>
       <Routes>
         <Route element={<ProtectedRoute userRoles={roles} userPermissions={permissions}><Where name="page" /></ProtectedRoute>}>
-          {['/dashboard', '/hr', '/billing', '/users', '/settings', '/notifications', '/documents']
+          {['/dashboard', '/hr', '/billing', '/users', '/settings', '/notifications', '/documents',
+            '/admin/settings', '/admin/logs', '/admin/approvals', '/feedback']
             .map((p) => <Route key={p} path={p} element={<Where name="page" />} />)}
         </Route>
       </Routes>
@@ -94,5 +95,45 @@ describe('ProtectedRoute', () => {
   it('lands an account granted nothing on the one page every user has', () => {
     openAt('/documents', [], []);
     expect(screen.getByText('page @ /notifications')).toBeInTheDocument();
+  });
+
+  /**
+   * The DEVELOPER split (2026-09-05). The route gate expands roles through the hierarchy
+   * (DEVELOPER ⇒ ADMIN + PRODUCT_SUPPORT, one-way), so a developer opens the admin estate
+   * unlisted while a pure admin is turned away from the technical pages — redirected to a page
+   * they can use, exactly like any other refusal.
+   */
+  describe('the developer split', () => {
+    it('lets a DEVELOPER through admin-listed doors by implication', () => {
+      openAt('/admin/settings', [SystemRole.DEVELOPER], []);
+      expect(screen.getByText('page @ /admin/settings')).toBeInTheDocument();
+    });
+
+    it('lets a DEVELOPER manage users, also by implication', () => {
+      openAt('/users', [SystemRole.DEVELOPER], []);
+      expect(screen.getByText('page @ /users')).toBeInTheDocument();
+    });
+
+    it('turns a pure ADMIN away from the service logs — implication is one-way', () => {
+      openAt('/admin/logs', [SystemRole.ADMIN], []);
+      expect(screen.queryByText('page @ /admin/logs')).not.toBeInTheDocument();
+      expect(screen.getByText('page @ /dashboard')).toBeInTheDocument();
+    });
+
+    it('opens the approvals queue to the ADMIN who decides there', () => {
+      openAt('/admin/approvals', [SystemRole.ADMIN], []);
+      expect(screen.getByText('page @ /admin/approvals')).toBeInTheDocument();
+    });
+
+    it('opens the support desk to PRODUCT_SUPPORT, its actual job', () => {
+      openAt('/feedback', [SystemRole.PRODUCT_SUPPORT], []);
+      expect(screen.getByText('page @ /feedback')).toBeInTheDocument();
+    });
+
+    it('turns an ADMIN away from the support desk it no longer runs', () => {
+      openAt('/feedback', [SystemRole.ADMIN], []);
+      expect(screen.queryByText('page @ /feedback')).not.toBeInTheDocument();
+      expect(screen.getByText('page @ /dashboard')).toBeInTheDocument();
+    });
   });
 });

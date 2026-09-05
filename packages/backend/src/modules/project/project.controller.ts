@@ -34,8 +34,6 @@ const projectBranchUploadMulterOptions = {
   limits: { fileSize: MAX_UPLOAD_BYTES },
 };
 
-import { InjectRepository } from '@nestjs/typeorm';
-import { In, Repository } from 'typeorm';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsArray, IsObject, ArrayNotEmpty, IsUUID, IsDateString, IsEnum, MaxLength, Min, Validate, ValidatorConstraint, ValidatorConstraintInterface, ValidationArguments } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ProjectService, CreateProjectDto } from './project.service';
@@ -46,7 +44,6 @@ import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole, Priority, ProjectStatus } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
-import { UserEntity } from '../user/user.entity';
 
 /**
  * Trim before validating, so a field of spaces fails `@IsNotEmpty` like the empty string it is.
@@ -155,8 +152,8 @@ export class ProjectController {
   constructor(
     private readonly projectService: ProjectService,
     private readonly importJobService: ImportJobService,
-    @InjectRepository(UserEntity)
-    private readonly userRepository: Repository<UserEntity>,
+    // The UserEntity repository that used to be injected here existed only to resolve
+    // `negotiatedByName` on the branches queue; it left with in-app fee negotiation.
     private readonly regionGuard: RegionGuardService,
   ) {}
 
@@ -333,20 +330,6 @@ export class ProjectController {
       ]),
     );
 
-    // Resolves "who is negotiating this branch" — the ops user who created the offer, i.e.
-    // who first made contact with the assayer. `createdBy` on the assignment is just a raw
-    // user id (see BaseEntity), so without this the frontend has no way to show it as a name;
-    // operators had no visibility into which colleague already owns a given negotiation,
-    // risking duplicate outreach to the same assayer. Batched into one query rather than
-    // resolved per-branch to avoid N+1 lookups on a list endpoint.
-    const creatorIds = [...new Set(
-      [...activeAssignmentByBranch.values()].map(a => a?.createdBy).filter((v): v is string => !!v),
-    )];
-    const creators = creatorIds.length
-      ? await this.userRepository.find({ where: { id: In(creatorIds) }, select: ['id', 'displayName'] })
-      : [];
-    const creatorNameById = new Map(creators.map(u => [u.id, u.displayName]));
-
     const data = branches.map(b => {
       const activeAssignment = activeAssignmentByBranch.get(b.id);
       return {
@@ -371,14 +354,12 @@ export class ProjectController {
           quotedTravelFee: activeAssignment.quotedTravelFee,
           counterTravelFee: activeAssignment.counterTravelFee,
           scheduledDate: activeAssignment.scheduledDate,
-          // Was declared in the frontend's type but never actually sent — the counter-offer
-          // banner's "(Remarks: ...)" text always rendered "None" as a result.
           remarks: activeAssignment.remarks,
-          negotiatedByName: activeAssignment.createdBy
-            ? creatorNameById.get(activeAssignment.createdBy) ?? null
-            : null,
-          // proposeCounterFee() auto-declines once this reaches 3 — surfaced so ops can see
-          // how many rounds remain before that happens, instead of it silently auto-declining.
+          // `negotiatedByName` (and the users query that resolved it) left with in-app fee
+          // negotiation: there is no negotiation for a colleague to own any more, so the
+          // per-request name lookup was a cost with no reader. `negotiationCount` stays for one
+          // release as a historical fact — the operations inbox still uses it to route
+          // ex-negotiation offers into the call lane.
           negotiationCount: activeAssignment.negotiationCount ?? 0,
           assayer: activeAssignment.assayer ? {
             displayName: activeAssignment.assayer.displayName,

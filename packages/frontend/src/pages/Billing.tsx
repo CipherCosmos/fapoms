@@ -11,17 +11,23 @@ import { userMessage } from '../services/errors';
 import { OverviewTab } from './billing/OverviewTab';
 import { PayoutsTab, type PayoutFilter } from './billing/PayoutsTab';
 import { InvoicesTab, type InvoiceFilter } from './billing/InvoicesTab';
+import { AssayerInvoicesTab, type AssayerInvoiceFilter } from './billing/AssayerInvoicesTab';
 
 /**
- * Billing — three tabs, because the business has three jobs: see the book (Overview), pay the
- * assayers (Payouts), bill the clients (Invoices). Money appears on its own when an assignment
- * completes; nothing here is typed by hand except a bank reference and a reason.
+ * Billing — four tabs, because the business has four jobs: see the book (Overview), pay the
+ * assayers (Payouts), bill the clients (Invoices), and approve what assayers have confirmed
+ * they are owed (Assayer Invoices — the consent step that first shows an assayer their money).
+ * Money appears on its own when an assignment completes; nothing here is typed by hand except
+ * a bank reference and a reason.
  */
-type Tab = 'overview' | 'payouts' | 'invoices';
+type Tab = 'overview' | 'payouts' | 'invoices' | 'assayer-invoices';
 const TABS: Array<{ key: Tab; label: string }> = [
   { key: 'overview', label: 'Overview' },
   { key: 'payouts', label: 'Payouts' },
   { key: 'invoices', label: 'Invoices' },
+  // Notification links deep-link here as `/billing?tab=assayer-invoices` — the key is part of
+  // the catalog's contract, not just this file's routing.
+  { key: 'assayer-invoices', label: 'Assayer Invoices' },
 ];
 
 export const Billing: React.FC = () => {
@@ -45,11 +51,13 @@ export const Billing: React.FC = () => {
   const tab = (TABS.some((t) => t.key === params.get('tab')) ? params.get('tab') : 'overview') as Tab;
   const payoutFilter = (params.get('payouts') as PayoutFilter) || 'ALL';
   const invoiceFilter = (params.get('invoices') as InvoiceFilter) || 'ALL';
+  const assayerInvoiceFilter = (params.get('assayer-invoices') as AssayerInvoiceFilter) || 'ALL';
   const go = (t: Tab, filter?: string) => {
     const next = new URLSearchParams(params);
     if (t === 'overview') next.delete('tab'); else next.set('tab', t);
     if (t === 'payouts') { if (filter) next.set('payouts', filter); else next.delete('payouts'); }
     if (t === 'invoices') { if (filter) next.set('invoices', filter); else next.delete('invoices'); }
+    if (t === 'assayer-invoices') { if (filter) next.set('assayer-invoices', filter); else next.delete('assayer-invoices'); }
     setParams(next, { replace: false });
   };
 
@@ -95,6 +103,9 @@ export const Billing: React.FC = () => {
       {tab === 'overview' && <OverviewTab onGo={(t, f) => go(t, f)} />}
       {tab === 'payouts' && <PayoutsTab filter={payoutFilter} onFilter={(f) => go('payouts', f === 'ALL' ? undefined : f)} canAct={canPay} canReviewClaims={canReviewClaims} />}
       {tab === 'invoices' && <InvoicesTab filter={invoiceFilter} onFilter={(f) => go('invoices', f === 'ALL' ? undefined : f)} canAct={canInvoice} />}
+      {/* Everyone who can open Billing can READ assayer invoices (the auditor included); the
+          approve/cancel gate is the same disbursement gate as Payouts — see `canPay` above. */}
+      {tab === 'assayer-invoices' && <AssayerInvoicesTab filter={assayerInvoiceFilter} onFilter={(f) => go('assayer-invoices', f === 'ALL' ? undefined : f)} canAct={canPay} />}
 
       {reconcileOpen && <ReconcileModal onClose={() => setReconcileOpen(false)} onDone={(msg) => { toast('success', msg); setReconcileOpen(false); }} />}
     </div>

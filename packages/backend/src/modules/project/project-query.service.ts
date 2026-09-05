@@ -102,8 +102,11 @@ export class ProjectQueryService {
         // a project could be 89% unstaffed (64 of 72 branches, as this one currently is) and
         // look no different from one that was fully planned. Distinct from `uncovered`: those
         // have had a decision recorded, these have not.
+        // 'NEGOTIATION' left this list with in-app negotiation itself: nothing can enter the
+        // status any more and RetireNegotiationBranchStatus moved the existing rows to
+        // CONTACT_INITIATED, so counting it here would only ever count nothing.
         .addSelect(
-          `COUNT(*) FILTER (WHERE pb.status IN ('IMPORTED','PLANNING','CANDIDATE_SEARCH','CONTACT_INITIATED','NEGOTIATION'))::int`,
+          `COUNT(*) FILTER (WHERE pb.status IN ('IMPORTED','PLANNING','CANDIDATE_SEARCH','CONTACT_INITIATED'))::int`,
           'unstaffed',
         )
         .where('pb.project_id IN (:...ids)', { ids: projects.map((p) => p.id) })

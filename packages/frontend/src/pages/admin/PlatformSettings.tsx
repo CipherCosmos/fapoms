@@ -22,7 +22,7 @@ import { TransportCostsSection } from '../TransportCosts';
  * the server (they aren't a saved-value/environment/default setting at all), so unlike every
  * other row in `groups` this one is never fetched, just appended.
  */
-const DANGER_ZONE_GROUP = { key: 'dangerZone', label: 'Danger zone', description: 'Clear accumulated test data — everything here is destructive.' };
+const DANGER_ZONE_GROUP = { key: 'dangerZone', label: 'Danger zone', description: 'Clear accumulated test data — destructive, and gated by an Admin\'s approval.' };
 
 /**
  * Eligibility rules, folded in from the page that used to live at `/rules`.
@@ -145,7 +145,14 @@ const CRON_SYNTAX_HINT = 'Five fields, in order: minute hour day-of-month month 
 
 export const PlatformSettings: React.FC = () => {
   const roles = useCurrentRoles();
+  // Implication-aware: a DEVELOPER passes this via the role hierarchy. WHICH groups arrive is
+  // the server's decision — GET /platform-settings returns only the caller's groups (all of
+  // them for a developer, the business groups for a pure admin), so this page renders what it
+  // is given rather than re-deriving the split locally.
   const canEdit = canAdministerPlatformSettings(roles);
+  // Developer-only since the two-person rule (2026-09-05): the wipe is requested and executed
+  // by a DEVELOPER; an admin's part is approving it, on /admin/approvals — so a pure ADMIN no
+  // longer sees the Danger Zone at all.
   const canWipeData = canAdministerDataReset(roles);
   /**
    * Operations reach this screen for one section only.

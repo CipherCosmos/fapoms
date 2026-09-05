@@ -23,7 +23,7 @@ interface HeaderProps {
 const BREADCRUMBS: { prefix: string; category: string; label: string }[] = [
   { prefix: '/dashboard', category: 'Overview', label: 'Dashboard' },
   { prefix: '/executive-map', category: 'Overview', label: 'Live Map' },
-  { prefix: '/feedback', category: 'Overview', label: 'Feedback' },
+  { prefix: '/feedback', category: 'Overview', label: 'Support' },
   { prefix: '/projects', category: 'Operations', label: 'Projects' },
   /**
    * The four Audit Work tabs, all naming the one destination they now belong to.
@@ -498,10 +498,10 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
           {live ? <Wifi size={12} /> : <WifiOff size={12} />}
           {live ? 'Live' : 'Offline'}
         </div>
-        {/* The feedback entry point, on every page — for whoever may open /feedback. It used to
-            be unconditional ("any user, any page"); the platform owner asked for feedback to be
+        {/* The support entry point, on every page — for whoever may open /feedback. It used to
+            be unconditional ("any user, any page"); the platform owner asked for the channel to be
             visible to the super administrator and nobody else, and the launcher's own "View my
-            feedback" navigates to /feedback, so it follows that route's permission exactly
+            support requests" navigates to /feedback, so it follows that route's permission exactly
             rather than carrying a second copy of the role list. */}
         {canAccessRoute((user?.roles ?? []).map((r) => r.name), permissionKeysFrom(user), '/feedback') && <FeedbackLauncher />}
         <NotificationDropdown />

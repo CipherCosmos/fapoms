@@ -1,9 +1,17 @@
+/**
+ * The platform's product-support channel — the user-facing name is "Support" (nav, buttons) /
+ * "Help & Support" (headings), reporting bugs, ideas, process complaints and questions to the
+ * product team. Not to be confused with feedback/remarks directed AT an assayer
+ * (`AssayerRemarks.tsx`, `modules/assayer-remarks` on the backend) — a different concept that
+ * happens to share the same English word. This file, its route (`/feedback`), and everything it
+ * imports keep the historical "feedback" name so deep links and stored data stay stable.
+ */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { MessageSquare, Inbox, Loader2, Search, Sparkles, Flame, Clock, TrendingUp, Users, AlertTriangle, ArrowRight } from 'lucide-react';
 import { SystemRole, FeedbackStatus, FeedbackCategory, FeedbackSeverity } from '@fapoms/shared';
 
-import { useCurrentRoles } from '../../hooks/useCurrentRoles';
+import { useCurrentRoles, hasAnyRole } from '../../hooks/useCurrentRoles';
 import { connectSocket, getSocket } from '../../services/socket';
 import {
   getMyFeedback, getQueue, getStats, getDigest, getAssignees, getAttention,
@@ -19,10 +27,12 @@ import { Select } from '../../components/ui';
 
 import { FEEDBACK_STATUS_LABELS } from '@fapoms/shared';
 const PAGE_SIZE = 25;
-// Mirrors FEEDBACK_TEAM_ROLES on the backend: super administrators only, by decision (2026-08-17).
-// The route itself admits only this role now (route-permissions.ts), so in practice every visitor
-// is team; the reporter view is kept for the day the desk is widened again.
-const TEAM_ROLES = [SystemRole.ADMIN];
+// Mirrors FEEDBACK_TEAM_ROLES on the backend: the support desk is the people who answer the
+// tickets — DEVELOPER and PRODUCT_SUPPORT since the developer split (2026-09-05); ADMIN runs the
+// business, not this queue, and lost the page. The route admits the same pair
+// (route-permissions.ts), so in practice every visitor is team; the reporter view is kept for
+// the day the desk is widened again.
+const TEAM_ROLES = [SystemRole.DEVELOPER, SystemRole.PRODUCT_SUPPORT];
 
 const STATUS_TABS: { key: FeedbackStatus | 'ALL'; label: string }[] = [
   { key: 'ALL', label: 'All' },
@@ -72,7 +82,8 @@ const Row: React.FC<{ t: FeedbackThread; active: boolean; onClick: () => void }>
 
 export const FeedbackPage: React.FC = () => {
   const roles = useCurrentRoles();
-  const isTeam = useMemo(() => roles.some((r) => TEAM_ROLES.includes(r)), [roles]);
+  // hasAnyRole is hierarchy-aware, so a DEVELOPER passes through implication as well as by name.
+  const isTeam = useMemo(() => hasAnyRole(roles, TEAM_ROLES), [roles]);
   const [params, setParams] = useSearchParams();
   const selectedId = params.get('id');
   const setSelectedId = useCallback((id: string | null) => {
@@ -108,7 +119,7 @@ const ReporterView: React.FC<{ selectedId: string | null; setSelectedId: (id: st
     <div style={{ padding: '20px', maxWidth: '1100px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '16px', height: '100%', minHeight: 0 }}>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
         <div>
-          <h1 style={{ fontSize: '20px', fontWeight: 800, margin: 0 }}>My feedback</h1>
+          <h1 style={{ fontSize: '20px', fontWeight: 800, margin: 0 }}>My support requests</h1>
           <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', margin: '4px 0 0' }}>Bugs, ideas and questions you've sent the product team.</p>
         </div>
         <FeedbackLauncher />
@@ -120,8 +131,8 @@ const ReporterView: React.FC<{ selectedId: string | null; setSelectedId: (id: st
           {items?.length === 0 && (
             <div style={{ ...card, textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}>
               <MessageSquare size={26} style={{ opacity: 0.3, marginBottom: '8px' }} />
-              <div>You haven't sent any feedback yet.</div>
-              <div style={{ fontSize: '11.5px', marginTop: '4px' }}>Use the Feedback button any time you hit a bug or have an idea.</div>
+              <div>You haven't sent any support requests yet.</div>
+              <div style={{ fontSize: '11.5px', marginTop: '4px' }}>Use the Support button any time you hit a bug or have an idea.</div>
             </div>
           )}
           {items?.map((t) => <Row key={t.id} t={t} active={t.id === selectedId} onClick={() => setSelectedId(t.id)} />)}
@@ -210,7 +221,7 @@ const TeamView: React.FC<{ selectedId: string | null; setSelectedId: (id: string
   return (
     <div style={{ padding: '18px 20px', display: 'flex', flexDirection: 'column', gap: '14px', height: '100%', minHeight: 0 }}>
       <div>
-        <h1 style={{ fontSize: '20px', fontWeight: 800, margin: 0 }}>Feedback desk</h1>
+        <h1 style={{ fontSize: '20px', fontWeight: 800, margin: 0 }}>Support desk</h1>
         <p style={{ fontSize: '12.5px', color: 'var(--text-muted)', margin: '4px 0 0' }}>Everything users have reported — triage, respond, and track to resolution.</p>
       </div>
 
@@ -273,8 +284,8 @@ const TeamView: React.FC<{ selectedId: string | null; setSelectedId: (id: string
             {items === null && <div style={{ color: 'var(--text-muted)', fontSize: '13px', display: 'flex', gap: '8px', alignItems: 'center' }}><Loader2 size={15} className="spin" /> Loading…</div>}
             {items?.length === 0 && <div style={{ ...card, textAlign: 'center', color: 'var(--text-muted)', fontSize: '13px' }}><Inbox size={24} style={{ opacity: 0.3, marginBottom: '6px' }} /><div>
               {statusTab !== 'ALL' || category || severity || mineOnly || debounced
-                ? 'Nothing matches the filters you have picked. Clear them to see all feedback.'
-                : 'No feedback yet. Anyone in the company can report a bug, suggest an idea or raise a complaint from the app, and it arrives here for the product team to answer.'}
+                ? 'Nothing matches the filters you have picked. Clear them to see all support requests.'
+                : 'No support requests yet. Anyone in the company can report a bug, suggest an idea or raise a complaint from the app, and it arrives here for the product team to answer.'}
             </div></div>}
             {items?.map((t) => <Row key={t.id} t={t} active={t.id === selectedId} onClick={() => setSelectedId(t.id)} />)}
           </div>

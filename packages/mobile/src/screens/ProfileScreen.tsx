@@ -14,7 +14,6 @@ import { useLocation } from '../context/LocationContext';
 // address against (assayer.service.ts → assertAddressConsistent rejects anything else outright), so
 // the state field is a picker over that list rather than a free-text box that can only fail.
 import {
-  formatRupees as money,
   INDIAN_STATES,
   canonicalStateName,
   splitMissingByOwnership,
@@ -45,7 +44,6 @@ import {
   resolveEmergencyRelation,
   composeEmergencyRelation,
 } from './profile-emergency-relation';
-import type { AssayerStatement } from '../types/mobile-app';
 import { probeServerUrl } from '../services/server-config';
 import { registerForPushNotificationsAsync, unregisterPushNotificationsAsync } from '../services/notification.service';
 import { StatsScreen } from './StatsScreen';
@@ -171,14 +169,23 @@ export interface ProfileDataState {
   locationNeedsConfirmation?: boolean;
 }
 
+interface ProfileScreenProps {
+  /** Whose record this is — needed to read their photograph, which is an authenticated fetch. */
+  assayerId?: string;
+  /**
+   * Hands a captured photograph to the durable outbox, exactly as the paperwork checklist does.
+   *
+   * Passed in rather than called directly so this screen keeps knowing nothing about the upload
+   * queue, and so a photograph taken with no signal survives the app being killed like every other
+   * capture in this application.
+   */
+  onCapturePhoto?: (requirement: string, documentLabel: string, fileName: string, fileUri: string) => Promise<void>;
   /** Clarification counts for the Stats tab, derived from the assayer's live assignments. */
   openQueries?: number;
   resolvedQueries?: number;
   assayerName?: string;
   assayerCode?: string;
   profile: ProfileDataState;
-  /** The assayer's statement — the one source for what they are owed. Null while it loads. */
-  statement?: AssayerStatement | null;
   savingProfile: boolean;
   /** Whether `profile` actually differs from the server's last confirmed copy. */
   profileDirty: boolean;
@@ -1090,7 +1097,6 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
   assayerName = '',
   assayerCode = '',
   profile,
-  statement,
   savingProfile,
   profileDirty,
   onUpdateProfileField,
@@ -1403,9 +1409,8 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: t.space.md }}>
         <StatTile label={tr('profile.stats.completed')} value={profile.completedAssignments ?? 0} icon="checkmark-done" tone="success" />
         <StatTile label={tr('profile.stats.assigned')} value={profile.totalAssignments ?? 0} icon="clipboard-outline" />
-        {/* What you are owed has one source — the statement — so this tile shows what the
-            statement says, or an em dash when it could not be read. Never a second figure. */}
-        <StatTile label={tr('profile.stats.balance')} value={statement ? money(statement.totals.outstanding) : '—'} icon="wallet-outline" tone="accent" />
+        {/* No balance tile any more: money-blinding. What has been earned appears only through
+            the invoicing flow on the Earnings tab; this screen keeps to identity and work. */}
         {Number(profile.averageRating) > 0 && (
           <StatTile label={tr('profile.stats.rating')} value={Number(profile.averageRating).toFixed(1)} icon="star" tone="warning" hint={tr('profile.stats.ratingHint')} />
         )}
@@ -1548,7 +1553,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({
         />
       </GroupedSection>
 
-      {/* Help & Feedback: the assayer's two-way channel to the product team — report a
+      {/* Help & Support: the assayer's two-way channel to the product team — report a
           bug, ask for something, or ask a question, and follow the replies in thread. */}
       {onOpenFeedback && (
         <GroupedSection title={tr('profile.sections.help')}>

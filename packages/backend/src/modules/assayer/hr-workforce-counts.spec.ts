@@ -70,7 +70,9 @@ describe('HrWorkforceService counts', () => {
 
     it('buckets the whole set, so a backlog cannot hide what is due next month', async () => {
       query.mockImplementation(async (sql: string) => {
-        if (sql.includes('COUNT(*) FILTER (WHERE days < 0)')) {
+        // `COUNT(DISTINCT assayer_id)`, not `COUNT(*)`: a person holding two lapsing rows must
+        // count once per bucket, not twice — see the note on `bucketsFor` in `expiries()`.
+        if (sql.includes('COUNT(DISTINCT assayer_id) FILTER (WHERE days < 0)')) {
           // What the database really holds behind those hundred rows.
           return [{ expired: 120, within30: 18, within90: 9, within180: 3 }];
         }

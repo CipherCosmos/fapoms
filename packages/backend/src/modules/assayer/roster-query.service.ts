@@ -168,10 +168,22 @@ export class RosterQueryService {
 
     if (after) {
       const [createdAtIso, id] = splitCursor(after);
-      if (createdAtIso && id) {
+      if (id) {
+        /**
+         * Compare against the cursor ROW, not the cursor STRING. The string's timestamp went
+         * through JS `Date.toISOString()`, which keeps milliseconds — Postgres keeps
+         * microseconds. On this roster that is not a rounding nicety: 1,155 of 1,163 rows share
+         * one bulk-import timestamp (…03:01:16.139992), the string said …16.139, and
+         * `created_at < '…139'` skipped the entire tie-group — keyset paging silently ended
+         * after the first page for as long as this table has existed. The row-value subquery
+         * reads the real microseconds back out of the table, so the equality arm actually fires.
+         * The string timestamp survives only as the fallback for a cursor row deleted mid-walk.
+         */
         qb.andWhere(
-          '(a.createdAt < :cursorCreatedAt OR (a.createdAt = :cursorCreatedAt AND a.id < :cursorId))',
-          { cursorCreatedAt: createdAtIso, cursorId: id },
+          `((a.createdAt, a.id) < (SELECT c.created_at, c.id FROM assayers c WHERE c.id = :cursorId)
+            OR (NOT EXISTS (SELECT 1 FROM assayers c2 WHERE c2.id = :cursorId)
+                AND a.createdAt < :cursorCreatedAt))`,
+          { cursorId: id, cursorCreatedAt: createdAtIso ?? '1970-01-01T00:00:00Z' },
         );
       }
     }
@@ -256,6 +268,18 @@ export class RosterQueryService {
 function makeCursor(row: AssayerEntity): string {
   const createdAt = row.createdAt instanceof Date ? row.createdAt.toISOString() : String(row.createdAt);
   return `${createdAt}_${row.id}`;
+}
+
+/**
+ * The keyset cursor for a row, for the ONE caller outside this service that must mint one: the
+ * controller's unfiltered first page. That page comes from `AssayerService.findAll` (offset
+ * query), and until 2026-09-05 its meta carried no `nextCursor` at all — so every "fetch it
+ * all" walker stopped at page one, quietly re-capping the roster at 1,000 and leaving the Pay
+ * screen's shortfall banner permanently lit. Exported as the same encoding `findKeyset` reads,
+ * from the same file, so the mint and the parse cannot drift apart.
+ */
+export function rosterCursorFor(row: AssayerEntity): string {
+  return makeCursor(row);
 }
 
 function splitCursor(cursor: string): [string | undefined, string | undefined] {

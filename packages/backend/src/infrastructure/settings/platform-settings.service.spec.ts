@@ -4,7 +4,7 @@ import { getRepositoryToken } from '@nestjs/typeorm';
 import { PlatformSettingsService, SECRET_MASK } from './platform-settings.service';
 import { PlatformSettingEntity } from './platform-setting.entity';
 import { CacheService } from '../cache/cache.service';
-import { SETTING_BY_KEY } from './settings.registry';
+import { SETTING_BY_KEY, audienceOfGroup, audienceOfSetting } from './settings.registry';
 
 /**
  * The contract that makes this safe to add to a running system: nothing changes until somebody
@@ -130,6 +130,57 @@ describe('PlatformSettingsService', () => {
     it('coerces a form’s string into the declared type', async () => {
       await service.set('fees.platformBaseFee', '1500');
       expect(repo.save.mock.calls[0][0].value).toBe(1500);
+    });
+  });
+
+  /**
+   * The technical/business write fence (2026-09-05): technical keys are the Developer's,
+   * business keys the administrator's, and the caller's roles arrive as the fourth argument
+   * from the controller. No roles at all (`undefined`) is an internal caller — seeding,
+   * listeners — with no person to fence.
+   */
+  describe('audience fence', () => {
+    it('lets an administrator write a business key', async () => {
+      await expect(service.set('fees.platformBaseFee', 1500, 'u-1', ['ADMIN'])).resolves.toBeUndefined();
+      expect(repo.save).toHaveBeenCalled();
+    });
+
+    it('refuses an administrator on a technical key, and says why', async () => {
+      await expect(service.set('email.from', 'x@y.in', 'u-1', ['ADMIN']))
+        .rejects.toThrow(/technical platform setting — only a Developer/);
+      expect(repo.save).not.toHaveBeenCalled();
+    });
+
+    it('lets a developer write both kinds', async () => {
+      await service.set('email.from', 'x@y.in', 'u-1', ['DEVELOPER']);
+      await service.set('fees.platformBaseFee', 1500, 'u-1', ['DEVELOPER']);
+      expect(repo.save).toHaveBeenCalledTimes(2);
+    });
+
+    it('a migrated administrator holding both names passes on their DEVELOPER role', async () => {
+      await expect(service.set('email.from', 'x@y.in', 'u-1', ['ADMIN', 'DEVELOPER'])).resolves.toBeUndefined();
+    });
+
+    it('fences reset the same way — clearing a technical key changes what is in force too', async () => {
+      await expect(service.reset('email.from', 'u-1', ['ADMIN']))
+        .rejects.toThrow(/technical platform setting/);
+      expect(repo.delete).not.toHaveBeenCalled();
+
+      await service.reset('email.from', 'u-1', ['DEVELOPER']);
+      expect(repo.delete).toHaveBeenCalledWith({ key: 'email.from' });
+    });
+
+    it('honours the per-key override: the rollout flag in the business billing group is technical', async () => {
+      // billing.assayerInvoicingEnabled must flip in step with a mobile release — a Developer
+      // decision wearing a business group's clothes (see its registry entry).
+      expect(audienceOfGroup('billing')).toBe('business');
+      expect(audienceOfSetting('billing.assayerInvoicingEnabled')).toBe('technical');
+      await expect(service.set('billing.assayerInvoicingEnabled', true, 'u-1', ['ADMIN']))
+        .rejects.toThrow(/technical platform setting/);
+    });
+
+    it('an internal caller passing no roles is not fenced — there is no person to fence', async () => {
+      await expect(service.set('email.from', 'x@y.in')).resolves.toBeUndefined();
     });
   });
 

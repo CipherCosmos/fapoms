@@ -498,7 +498,7 @@ export class AssignmentController {
     };
   }
 
-  // Driving the assignment lifecycle (accept/reject/cancel/complete/negotiate) is an operations
+  // Driving the assignment lifecycle (accept/reject/cancel/complete) is an operations
   // action — and COMPLETED feeds billing — so it is NOT open to the full STAFF_ROLES read set.
   // READ_ONLY_AUDITOR/FINANCE_MANAGER/validation/doc/HR roles are viewers here. ASSAYER is allowed
   // but constrained to their own assignment and a subset of transitions by the guard below.
@@ -541,14 +541,41 @@ export class AssignmentController {
 
     if (callerIsAssayer) {
       /**
+       * Fee negotiation is REMOVED from the field app — refused here, by name, before anything
+       * else runs.
+       *
+       * The business decision (2026-09): fees are an ops-internal fact settled on the phone; the
+       * assayer sees no money in the app at all. The counter-offer machinery that used to live on
+       * this route is gone, but sideloaded APKs that predate the removal still POST
+       * `COUNTER_OFFER`/`NEGOTIATION` — or a fee-carrying `PENDING`, which is how the oldest
+       * builds phrased a counter. Those callers need a message that explains the policy, not a
+       * generic "invalid transition": this 400 is the human half of the kill-switch, and
+       * `GET /platform-settings/limits` returning `maxNegotiationRounds: 0` is the machine half
+       * (shipped builds gate their own counter button on that number).
+       */
+      if (
+        targetStatus === 'COUNTER_OFFER' || targetStatus === 'NEGOTIATION'
+        || (targetStatus === 'PENDING'
+          && (body.counterTravelFee !== undefined || body.counterFee !== undefined
+            || body.fee !== undefined || body.proposedFee !== undefined))
+      ) {
+        throw new BadRequestException(
+          'Fee negotiation has been removed from the app. Please accept or decline the offer; '
+          + 'fee questions are settled with the operations desk by phone. Update your app to the latest version.',
+        );
+      }
+
+      /**
        * `IN_PROGRESS` is included because the assayer is the only person who knows when the audit
        * actually started — the desk can see they arrived, not that they have begun counting. It
        * carries no money or scheduling consequence (see `startWork`), so admitting it here grants
        * no authority the assayer did not already have by checking in.
        *
        * Cancelling and completing remain the desk's, which is what the message below explains.
+       * `COUNTER_OFFER`/`NEGOTIATION`/`PENDING` were in this list while in-app negotiation
+       * existed; they left with it (the explicit refusal above answers the old builds).
        */
-      const ASSAYER_TRANSITIONS = ['ACCEPTED', 'REJECTED', 'CHECKED_IN', 'IN_PROGRESS', 'COUNTER_OFFER', 'NEGOTIATION', 'PENDING'];
+      const ASSAYER_TRANSITIONS = ['ACCEPTED', 'REJECTED', 'CHECKED_IN', 'IN_PROGRESS'];
       if (!ASSAYER_TRANSITIONS.includes(targetStatus)) {
         throw new ForbiddenException(
           'Cancelling or completing an assignment is done by the operations team, not from the field app.',
@@ -561,66 +588,11 @@ export class AssignmentController {
     }
 
     let assignment: any;
-    if (
-      targetStatus === 'COUNTER_OFFER' || targetStatus === 'NEGOTIATION'
-      || (targetStatus === 'PENDING'
-        && (body.counterTravelFee !== undefined || body.counterFee !== undefined
-          || body.fee !== undefined || body.proposedFee !== undefined))
-    ) {
-      /**
-       * What is countered is the travel, not the audit fee — the fee comes from the rate card.
-       *
-       * `counterTravelFee` is what current clients send. An older mobile build sends the whole
-       * fee as `counterFee`/`fee`/`proposedFee`, and those are still read: the travel share of
-       * such an offer is the total less the audit fee that was quoted, which is exactly what the
-       * old money formula derived anyway. Refusing them would strand every phone that has not
-       * updated, mid-negotiation.
-       */
-      const travelVal = body.counterTravelFee;
-      const wholeFeeVal = body.counterFee ?? body.fee ?? body.proposedFee;
-
-      let counterTravel: number;
-      if (travelVal !== undefined && travelVal !== null && !isNaN(Number(travelVal))) {
-        counterTravel = Number(travelVal);
-      } else if (wholeFeeVal !== undefined && wholeFeeVal !== null && !isNaN(Number(wholeFeeVal))) {
-        /**
-         * A legacy whole-fee body: carve the travel out of it.
-         *
-         * The clamp here used to be `Math.max(0, whole − base)`, which turned the most likely
-         * mistake into silence. A caller that sends the TRAVEL figure in this field — which the
-         * operations inbox did for as long as it existed, under a lane headed "Travel fee" — gets
-         * `whole < base`, and the clamp wrote travel = 0, dropping the offer to the bare audit fee
-         * with no error and a success response. A number below the audit fee is not a whole fee;
-         * it is a caller confusion, and it has to fail where it happens.
-         */
-        const current = await this.assignmentService.findOne(id);
-        const base = Number(current?.quotedBaseFee ?? 0);
-        const whole = Number(wholeFeeVal);
-        if (base > 0 && whole < base) {
-          throw new BadRequestException(
-            `₹${whole} is less than this assignment's audit fee of ₹${base}, so it cannot be the `
-            + 'whole fee. Send the travel amount as counterTravelFee instead.',
-          );
-        }
-        counterTravel = Math.max(0, whole - base);
-      } else {
-        throw new BadRequestException(
-          'A travel amount is required to counter an offer. The audit fee itself is set by the '
-          + 'rate card and is not negotiated.',
-        );
-      }
-
-      if (counterTravel < 0) {
-        throw new BadRequestException('A travel amount cannot be negative.');
-      }
-      assignment = await this.assignmentService.proposeCounterFee(
-        id,
-        userId,
-        counterTravel,
-        body.reason ?? body.remarks,
-        body.clientRequestId,
-      );
-    } else if (targetStatus === 'ACCEPTED') {
+    // The counter-offer branch lived here until 2026-09 — parsing `counterTravelFee` (and the
+    // legacy whole-fee aliases) and calling `proposeCounterFee`. In-app negotiation is removed;
+    // an assayer-role caller still sending one is answered by the explicit 400 above, and a
+    // staff caller lands in the final `Invalid transition` refusal below.
+    if (targetStatus === 'ACCEPTED') {
       // `fee` lets the desk accept on an assayer's behalf at a verbally-agreed number — the
       // phone-channel flow, where the negotiation happened inside the call, not in the app.
       //

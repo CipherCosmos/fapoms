@@ -146,16 +146,17 @@ describe('EventsGateway — territorial rooms', () => {
 });
 
 /**
- * Negotiation event routing.
+ * Money-event routing under the money-blind rule.
  *
- * A fee negotiation runs on `assignment:counter-offered`, and that event had no case in
- * `broadcastEvent` at all — it fell through to the generic path, whose only delivery is
- * `emitOperational` (staff / region / org). Assayers are deliberately excluded from those rooms,
- * so the desk's counter never reached the phone that had to answer it: the assayer saw the old
- * fee until they pulled to refresh, while the web app saw the assayer's counters live. These
- * cases pin both directions.
+ * The assayer's app sees no fee until the invoicing step, so the routing itself has to keep the
+ * promise: `assignment:fee-updated` carries the fee in its payload and must therefore never
+ * reach a `user:` room — the desk's queues still refresh on it. `assignment:counter-offered` no
+ * longer exists (nothing publishes it since negotiation was removed); if something ever does
+ * again, the generic fallback delivers it to staff rooms only, which these cases pin. The new
+ * `billing:assayer-invoice-changed` is the opposite: ids and status only, and the phone MUST
+ * hear it — it is how the app learns an invitation appeared or an invoice was approved.
  */
-describe('EventsGateway — negotiation event routing', () => {
+describe('EventsGateway — money event routing', () => {
   const ASSIGNMENT_ID = '11111111-1111-1111-1111-111111111111';
 
   const makeGateway = (eventRegion: string | null = 'WEST') => {
@@ -172,49 +173,25 @@ describe('EventsGateway — negotiation event routing', () => {
   /** `emitOperational` resolves the region asynchronously and emits on the microtask queue. */
   const settle = () => new Promise((r) => setImmediate(r));
 
-  const counterOffer = {
-    eventType: 'assignment:counter-offered',
-    assignmentId: ASSIGNMENT_ID,
-    assayerId: 'assayer-1',
-    proposedFee: 1800,
-    userId: 'ops-1',
-  };
-
-  it('delivers a counter-offer to the assayer it concerns', async () => {
-    const { gw } = makeGateway();
-    gw.broadcastEvent('assignment:counter-offered', counterOffer);
-    await settle();
-    expect((gw as any).server.to).toHaveBeenCalledWith('user:assayer-1');
-  });
-
-  it('delivers a counter-offer to the room watching that assignment', async () => {
-    const { gw } = makeGateway();
-    gw.broadcastEvent('assignment:counter-offered', counterOffer);
-    await settle();
-    expect((gw as any).server.to).toHaveBeenCalledWith(`assignment:${ASSIGNMENT_ID}`);
-  });
-
-  // The direction that already worked must keep working.
-  it('still delivers a counter-offer to the desk, scoped to the branch region', async () => {
+  it('a stray counter-offered event reaches staff rooms only, never the assayer', async () => {
     const { gw } = makeGateway('WEST');
-    gw.broadcastEvent('assignment:counter-offered', counterOffer);
+    gw.broadcastEvent('assignment:counter-offered', {
+      eventType: 'assignment:counter-offered',
+      assignmentId: ASSIGNMENT_ID,
+      assayerId: 'assayer-1',
+      proposedFee: 1800,
+    });
     await settle();
-    expect((gw as any).server.to).toHaveBeenCalledWith('region:WEST');
-  });
-
-  it('emits under the counter-offered name the clients subscribe to', async () => {
-    const { gw, emit } = makeGateway();
-    gw.broadcastEvent('assignment:counter-offered', counterOffer);
-    await settle();
-    expect(emit).toHaveBeenCalledWith('assignment:counter-offered', counterOffer);
+    expect((gw as any).server.to).not.toHaveBeenCalledWith('user:assayer-1');
+    expect((gw as any).server.to).not.toHaveBeenCalledWith(`assignment:${ASSIGNMENT_ID}`);
   });
 
   /**
-   * `assignment:created` and `assignment:fee-updated` reached the desk only through `org:`, and
-   * most tokens issued here carry no organizationId — so a new offer and an agreed fee, the two
-   * numbers a negotiation starts and ends on, moved the assayer's phone and not the desk.
+   * The fee payload keeps moving the desk and stops moving the phone. The desk half was a real
+   * bug once (delivery limited to `org:` missed the queues); the phone half is the money-blind
+   * rule made structural.
    */
-  it('delivers a fee update to the desk, not only to the org room', async () => {
+  it('delivers a fee update to the desk and never to the assayer', async () => {
     const { gw } = makeGateway('SOUTH');
     gw.broadcastEvent('assignment:fee-updated', {
       eventType: 'assignment:fee-updated',
@@ -223,8 +200,22 @@ describe('EventsGateway — negotiation event routing', () => {
       agreedFee: 2000,
     });
     await settle();
-    expect((gw as any).server.to).toHaveBeenCalledWith('user:assayer-1');
+    expect((gw as any).server.to).not.toHaveBeenCalledWith('user:assayer-1');
     expect((gw as any).server.to).toHaveBeenCalledWith('region:SOUTH');
+  });
+
+  it('delivers an assayer-invoice change to the assayer it concerns and to the desk', async () => {
+    const { gw, emit } = makeGateway('WEST');
+    gw.broadcastEvent('billing:assayer-invoice-changed', {
+      eventType: 'billing:assayer-invoice-changed',
+      invoiceId: 'ainv-1',
+      assayerId: 'assayer-1',
+      status: 'INVITED',
+    });
+    await settle();
+    expect((gw as any).server.to).toHaveBeenCalledWith('user:assayer-1');
+    expect((gw as any).server.to).toHaveBeenCalledWith('region:WEST');
+    expect(emit).toHaveBeenCalledWith('billing:assayer-invoice-changed', expect.objectContaining({ status: 'INVITED' }));
   });
 
   it('delivers a newly created assignment to the desk as well as the assayer', async () => {
@@ -495,7 +486,8 @@ describe('EventsGateway — room subscription entitlement', () => {
 
   it('admits a feedback-team member who is not the reporter', async () => {
     feedbackRow = { id: THREAD_ID, reporterUserId: 'reporter-1', reporterAssayerId: null };
-    const client = makeClient({ id: 'admin-1', roles: [{ name: 'ADMIN' }] });
+    // DEVELOPER owns the support desk since 2026-09-05 (feedback-roles.ts); ADMIN no longer does.
+    const client = makeClient({ id: 'dev-1', roles: [{ name: 'DEVELOPER' }] });
 
     await gateway.handleSubscribeFeedback(client as any, THREAD_ID);
 

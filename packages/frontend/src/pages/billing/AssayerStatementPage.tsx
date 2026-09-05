@@ -2,12 +2,14 @@ import React, { useEffect, useState } from 'react';
 import { useSearchParams, Link } from 'react-router-dom';
 import { Banknote, Search } from 'lucide-react';
 import { formatRupees as money } from '@fapoms/shared';
-import { useAssayerStatement } from '../../hooks/useBilling';
+import { useAssayerStatement, useAssayerInvoices } from '../../hooks/useBilling';
 import { fetchWholeAssayerRoster } from '../../services/assayer-roster';
 import { userMessage } from '../../services/errors';
 import type { AssayerStatement } from '../../services/billing';
+import { BILLING_PAGE_SIZE } from '../../services/billing';
 import { Select } from '../../components/ui';
 import { payableStatusLabel } from '@fapoms/shared';
+import { AssayerInvoiceStatusPill } from './shared';
 
 /**
  * Assayer statement — what an assayer has earned, been paid, and is still owed.
@@ -71,7 +73,7 @@ export const AssayerStatementPage: React.FC = () => {
     : roster;
 
   return (
-    <div style={{ padding: '20px 24px', maxWidth: 1200, display: 'flex', flexDirection: 'column', gap: 14 }}>
+    <div style={{ padding: '20px 24px', maxWidth: 1200, margin: '0 auto', display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'flex', alignItems: 'baseline', gap: 12 }}>
         <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>Assayer statement</h1>
         <Link to="/billing?tab=payouts" style={{ fontSize: 12.5, color: 'var(--accent)', textDecoration: 'none' }}>← Back to Billing</Link>
@@ -136,16 +138,25 @@ const StatementBody: React.FC<{ data: AssayerStatement }> = ({ data }) => {
         <div style={card}>
           <div style={{ ...label, marginBottom: 10 }}>Payouts ({data.payables.length})</div>
           <SimpleTable
-            head={['Payout', 'Status', 'Base', 'Travel', 'TDS', 'Total', 'Paid', 'Outstanding']}
+            head={['Payout', 'Status', 'Invoice', 'Base', 'Travel', 'TDS', 'Total', 'Paid', 'Outstanding']}
             rows={data.payables.map((p) => [
               p.expenseId ? `${p.payableNumber} · reimbursement` : p.payableNumber,
               p.onHold ? `${payableStatusLabel(p.status)} · on hold${p.holdReason ? ` (${p.holdReason})` : ''}` : payableStatusLabel(p.status),
+              // Which assayer invoice this row rides — labels the statement attaches itself
+              // (the staff shape), so no lookup is needed here. Blank means never invited.
+              p.invoiceNumber ? (
+                <span style={{ display: 'inline-flex', gap: 5, alignItems: 'center' }}>
+                  {p.invoiceNumber}{p.invoiceStatus && <AssayerInvoiceStatusPill status={p.invoiceStatus} />}
+                </span>
+              ) : '—',
               money(p.baseAmount), money(p.travelAmount),
               `−${money(p.tdsAmount)}`, money(p.totalAmount), money(p.paidAmount), money(p.outstanding),
             ])}
           />
         </div>
       )}
+
+      <AssayerInvoicesSection assayerId={data.assayerId} />
 
       {data.payments.length > 0 && (
         <div style={card}>
@@ -167,6 +178,42 @@ const StatementBody: React.FC<{ data: AssayerStatement }> = ({ data }) => {
     </>
   );
 };
+
+/**
+ * The assayer's invoices — the consent loop this statement's rows ride through. Shown from the
+ * finance side so "why is this payout not approved yet?" answers itself: it is waiting on an
+ * invitation the assayer has not confirmed, or a submission nobody has approved. Renders
+ * nothing when the assayer has never been invited (most of the roster, pre-rollout).
+ */
+const AssayerInvoicesSection: React.FC<{ assayerId: string }> = ({ assayerId }) => {
+  const invoices = useAssayerInvoices({ assayerId, limit: BILLING_PAGE_SIZE });
+  const items = invoices.data?.items ?? [];
+  if (items.length === 0) return null;
+  const dates = (inv: (typeof items)[number]) =>
+    [
+      inv.invitedAt && `invited ${fmtShort(inv.invitedAt)}`,
+      inv.submittedAt && `submitted ${fmtShort(inv.submittedAt)}`,
+      inv.approvedAt && `approved ${fmtShort(inv.approvedAt)}`,
+      inv.cancelledAt && `cancelled ${fmtShort(inv.cancelledAt)}`,
+    ].filter(Boolean).join(' · ');
+  return (
+    <div style={card}>
+      <div style={{ ...label, marginBottom: 10 }}>Assayer invoices ({items.length})</div>
+      <SimpleTable
+        head={['Invoice', 'Status', 'Lines', 'Total', 'Dates']}
+        rows={items.map((inv) => [
+          inv.invoiceNumber,
+          <AssayerInvoiceStatusPill key={inv.id} status={inv.status} />,
+          inv.lineCount,
+          money(inv.totalAmount),
+          dates(inv) || '—',
+        ])}
+      />
+    </div>
+  );
+};
+
+const fmtShort = (iso: string) => new Date(iso).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
 
 const Stat: React.FC<{ label: string; value: string; tone?: string }> = ({ label, value, tone }) => (
   <div style={{ ...card, flex: '1 1 150px', minWidth: 0 }}>

@@ -1,6 +1,7 @@
 import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { render, screen, waitFor } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { HrPayPage } from './HrPayPage';
 import { api } from '../../services/api';
 import { ONBOARDING_NEXT_STEP } from '@fapoms/shared';
@@ -41,7 +42,19 @@ const serve = (pages: ReturnType<typeof rosterPage>[]) => {
   );
 };
 
-const renderPage = () => render(<MemoryRouter><HrPayPage /></MemoryRouter>);
+/**
+ * A fresh, retry-free client per render — the page now reads two `useQuery`s instead of a plain
+ * `useEffect`/`useState` fetch, so it needs a `QueryClientProvider` the way every other
+ * react-query page's spec already supplies one (see Rules.spec.tsx, ImportIssuesPanel.spec.tsx).
+ * `retry: false` matters here specifically: this suite's own "cold-cache timeout" flake was the
+ * default 3-retry backoff turning one slow/unmatched mock into a `waitFor` that gave up before
+ * react-query's own retries had finished, and a client shared across tests would additionally
+ * leak one test's cached roster into the next.
+ */
+const renderPage = () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  return render(<QueryClientProvider client={client}><MemoryRouter><HrPayPage /></MemoryRouter></QueryClientProvider>);
+};
 
 beforeEach(() => mockRequest.mockReset());
 
@@ -114,5 +127,70 @@ describe('HrPayPage — people who have not finished joining', () => {
 
     await waitFor(() => expect(screen.getByText('New Joiner')).toBeInTheDocument());
     expect(screen.queryByText(/Still joining/)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * "Cannot be paid" now reads `cannotBePaid`/`payoutBlockingGaps` from `@fapoms/shared` — the same
+ * rulebook the roster's own chip and the server's aggregate read — rather than a page-local
+ * `bankMissing` test that only ever looked at the bank account and IFSC. Two things follow: someone
+ * who has left is no longer counted as "cannot be paid" (they are gone, not owed a decision), and a
+ * missing PAN blocks a payout exactly as hard as a missing account number always did.
+ */
+describe('HrPayPage — the strict "Cannot be paid" rule', () => {
+  const person = (over: Record<string, unknown>) => ({
+    success: true,
+    data: [{
+      id: 'a-1', assayerCode: 'AS-1', displayName: 'Test Person', district: 'Ernakulam',
+      lifecycleStatus: 'ACTIVE', bankAccountNumber: '123', ifscCode: 'ABCD0123456', panNumber: 'ABCDE1234F',
+      ...over,
+    }],
+    meta: { pagination: { total: 1 } },
+  });
+
+  it('does not count someone who has resigned in the strict tile, even with no bank details on file', async () => {
+    serve([person({
+      displayName: 'Gone Already', lifecycleStatus: 'RESIGNED', bankAccountNumber: null, ifscCode: null,
+    }) as any]);
+
+    renderPage();
+
+    // The old rule never checked lifecycle at all, so this person's empty bank fields alone used
+    // to put them in "Cannot be paid" — a count meant for people payroll still owes a decision to.
+    await waitFor(() => expect(screen.getByText('Gone Already')).toBeInTheDocument());
+    expect(screen.getByText('Cannot be paid').previousSibling).toHaveTextContent('0');
+  });
+
+  it('still counts an active person who is missing only their PAN', async () => {
+    serve([person({ displayName: 'No Pan On File', panNumber: null }) as any]);
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('No Pan On File')).toBeInTheDocument());
+    expect(screen.getByText('Cannot be paid').previousSibling).toHaveTextContent('1');
+    expect(screen.getByText('No PAN on file — add it')).toBeInTheDocument();
+  });
+
+  it('puts a departed, unbanked person in the looser tile — never under the strict label', async () => {
+    serve([person({
+      displayName: 'Gone Unbanked', lifecycleStatus: 'RESIGNED', bankAccountNumber: null, ifscCode: null,
+    }) as any]);
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Gone Unbanked')).toBeInTheDocument());
+    expect(screen.getByText('Cannot be paid').previousSibling).toHaveTextContent('0');
+    expect(screen.getByText('Missing bank details (including people who left)').previousSibling)
+      .toHaveTextContent('1');
+  });
+
+  it('shows neither tile once every payout-blocking field is on file', async () => {
+    serve([person({ displayName: 'Fully Payable' }) as any]);
+
+    renderPage();
+
+    await waitFor(() => expect(screen.getByText('Fully Payable')).toBeInTheDocument());
+    expect(screen.getByText('Cannot be paid').previousSibling).toHaveTextContent('0');
+    expect(screen.queryByText(/Missing bank details/)).not.toBeInTheDocument();
   });
 });

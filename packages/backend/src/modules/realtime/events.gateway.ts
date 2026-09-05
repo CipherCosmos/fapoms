@@ -504,44 +504,21 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
         break;
       }
 
-      /**
-       * A counter-offer — the single event a fee negotiation actually runs on.
-       *
-       * It had no case here at all, so it fell through to `broadcastGenericEvent`, whose only
-       * delivery is `emitOperational` — the staff/region/org rooms. Assayers are deliberately
-       * excluded from those rooms (see EXTERNAL_ROLES above), and the `assignment:` room was
-       * never addressed either. The consequence was one-directional negotiation: an assayer
-       * countering from the field appeared on the desk live, but when the desk countered back
-       * the offer sat on the server and the assayer's phone showed the old fee until they
-       * pulled to refresh — even though the mobile app subscribes to this exact event.
-       *
-       * Routed like `assignment:status-changed`, because it is the same kind of change: the
-       * assayer it concerns, anyone watching that assignment, and the desk.
-       */
-      case 'assignment:counter-offered': {
-        const coAsnId = payload.assignmentId || payload.aggregateId;
-        if (coAsnId) {
-          this.server.to(`assignment:${coAsnId}`).emit('assignment:counter-offered', payload);
-        }
-        if (payload.assayerId) {
-          this.server.to(`user:${payload.assayerId}`).emit('assignment:counter-offered', payload);
-        }
-        if (payload.organizationId) {
-          this.server.to(`org:${payload.organizationId}`).emit('assignment:counter-offered', payload);
-        }
-        this.emitOperational('assignment:counter-offered', payload);
-        break;
-      }
+      // `assignment:counter-offered` had a case here until in-app fee negotiation was removed —
+      // nothing publishes it any more, so there is nothing left to route.
 
       case 'assignment:fee-updated': {
-        if (payload.assayerId) {
-          this.server.to(`user:${payload.assayerId}`).emit('assignment:fee-updated', payload);
-        }
+        /**
+         * Deliberately NOT sent to `user:${assayerId}` any more. The payload carries the fee,
+         * and the assayer's app is money-blind until the invoicing step — a desk fee edit is an
+         * ops-internal fact. The publication itself must survive: the desk's queues refresh on
+         * it, and the billing engine subscribes to it for repricing.
+         */
         if (payload.organizationId) {
           this.server.to(`org:${payload.organizationId}`).emit('assignment:fee-updated', payload);
         }
         // Same gap as `assignment:created`: with delivery limited to `org:`, an agreed fee — the
-        // number a negotiation exists to settle — never reached the desk's queues live.
+        // number the desk queues track — never reached them live.
         this.emitOperational('assignment:fee-updated', payload);
         break;
       }
@@ -610,8 +587,9 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
        * Feedback & collaboration channel. The open thread's room gets every event;
        * the reporter's own room mirrors it so their "my feedback" list stays live —
        * except internal team notes, which the reporter must never receive. The
-       * feedback team (FEEDBACK_TEAM_ROLES — super administrators only) hear it in their
-       * role rooms so their queue and dashboard refresh without a manual reload.
+       * feedback team (FEEDBACK_TEAM_ROLES — the developers, plus PRODUCT_SUPPORT as
+       * delegate since 2026-09-05) hear it in their role rooms so their queue and
+       * dashboard refresh without a manual reload.
        */
       case 'feedback:new':
       case 'feedback:updated':
@@ -647,9 +625,12 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       }
 
       // Money events. The assayer whose money moved hears it on their phone; the desk hears all.
+      // These payloads carry ids and statuses, never amounts — the phone reacts by re-fetching
+      // its own (gated) endpoints, so nothing here fights the money-blind rule.
       case 'billing:booked':
       case 'billing:payout-changed':
-      case 'billing:invoice-changed': {
+      case 'billing:invoice-changed':
+      case 'billing:assayer-invoice-changed': {
         if (payload.assayerId) {
           this.server.to(`user:${payload.assayerId}`).emit(eventType, payload);
         }

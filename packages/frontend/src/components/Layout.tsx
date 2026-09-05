@@ -93,7 +93,12 @@ export const Layout: React.FC<LayoutProps> = ({ children, onLogout, user }) => {
           onToggleSidebar={toggleSidebar}
         />
         <div style={{ flex: 1, overflowY: 'auto', padding: '20px', paddingBottom: '70px' }}>
-          {children}
+          {/* One centering container for every page: on wide monitors content used to pin to
+              the sidebar and leave all the spare width as a right-hand gutter. Cap and centre
+              it here — not per page — so the gutters stay balanced app-wide. */}
+          <div style={{ maxWidth: '1600px', margin: '0 auto', width: '100%' }}>
+            {children}
+          </div>
         </div>
 
         {/* Mobile Bottom Navigation Bar */}

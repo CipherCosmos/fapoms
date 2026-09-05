@@ -1,9 +1,9 @@
 # FAPOMS — Field Audit Planning & Operations Management System
 
 Software for a company that performs **physical audits of bank branches** on behalf of client
-banks. A bank issues a contract covering a set of branches; FAPOMS plans the work, picks and
-negotiates with field appraisers ("assayers"), tracks them to the branch and back, moves the
-paperwork through data entry and validation, and bills for it.
+banks. A bank issues a contract covering a set of branches; FAPOMS plans the work, picks field
+appraisers ("assayers") who agree fees by phone with the operations desk, tracks them to the
+branch and back, moves the paperwork through data entry and validation, and bills for it.
 
 Field appraisers work from an Android app. Everyone else — planning, HR, the data-entry desk,
 finance, client users — works from a web app. Both talk to one API.

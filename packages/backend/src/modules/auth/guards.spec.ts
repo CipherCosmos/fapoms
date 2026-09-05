@@ -159,3 +159,53 @@ describe('Authorization guards — deny by default', () => {
     });
   });
 });
+
+/**
+ * The role hierarchy at the guard.
+ *
+ * DEVELOPER implies ADMIN and PRODUCT_SUPPORT (shared/role-hierarchy.ts) — the guard expands a
+ * caller's names through that one map before matching. These lock in the three properties the
+ * split depends on: a developer passes every admin gate, the implication is one-way (an admin
+ * does NOT pass a developer-only gate — that fence is the technical estate), and @RoleOnly()
+ * changes none of this because it only disables the custom-role permission fallback.
+ */
+describe('RolesGuard — DEVELOPER implication', () => {
+  const ctx = (user: any): any => ({
+    switchToHttp: () => ({ getRequest: () => ({ user }) }),
+    getHandler: () => function handler() {},
+    getClass: () => class Controller {},
+  });
+  const reflectorReturning = (map: Record<string, any>) =>
+    ({ getAllAndOverride: (key: string) => map[key] }) as any;
+
+  const developer = { id: 'd-1', roles: [{ name: 'DEVELOPER' }] };
+  const admin = { id: 'adm-1', roles: [{ name: 'ADMIN' }] };
+
+  it('a DEVELOPER passes a gate that names only ADMIN', () => {
+    const guard = new RolesGuard(reflectorReturning({ [ROLES_KEY]: ['ADMIN'] }));
+    expect(guard.canActivate(ctx(developer))).toBe(true);
+  });
+
+  it('a DEVELOPER passes a gate that names only PRODUCT_SUPPORT (the support desk)', () => {
+    const guard = new RolesGuard(reflectorReturning({ [ROLES_KEY]: ['PRODUCT_SUPPORT'] }));
+    expect(guard.canActivate(ctx(developer))).toBe(true);
+  });
+
+  it('one-way: an ADMIN is refused at a DEVELOPER-only gate (the technical fence)', () => {
+    const guard = new RolesGuard(reflectorReturning({ [ROLES_KEY]: ['DEVELOPER'] }));
+    expect(() => guard.canActivate(ctx(admin))).toThrow(ForbiddenException);
+  });
+
+  it('implication also passes a @RoleOnly() admin gate (RoleOnly only kills the fallback)', () => {
+    const guard = new RolesGuard(
+      reflectorReturning({ [ROLES_KEY]: ['ADMIN'], roleOnly: true }),
+    );
+    expect(guard.canActivate(ctx(developer))).toBe(true);
+  });
+
+  it('a custom role gains nothing from the map: names pass through unexpanded', () => {
+    const guard = new RolesGuard(reflectorReturning({ [ROLES_KEY]: ['ADMIN'], roleOnly: true }));
+    const custom = { id: 'c-1', roles: [{ name: 'REGIONAL_LEAD', permissions: [] }] };
+    expect(() => guard.canActivate(ctx(custom))).toThrow(ForbiddenException);
+  });
+});

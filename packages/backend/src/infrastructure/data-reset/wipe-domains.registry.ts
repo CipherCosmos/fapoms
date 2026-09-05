@@ -37,7 +37,9 @@ export interface WipeDomain {
  * that no longer exists isn't worth protecting, and this list is about tables the wipe reaches
  * *directly*, not every downstream cascade.
  */
-export const NEVER_WIPEABLE_TABLES = ['audit_events', 'workflow_history', 'outbox_events'] as const;
+// `destructive_action_requests`: the approval trail must survive the wipe it approved — a wipe
+// that could erase the record of who authorised it would defeat the two-person rule outright.
+export const NEVER_WIPEABLE_TABLES = ['audit_events', 'workflow_history', 'outbox_events', 'destructive_action_requests'] as const;
 
 export const WIPE_DOMAINS: WipeDomain[] = [
   {
@@ -106,9 +108,11 @@ export const WIPE_DOMAINS: WipeDomain[] = [
     tables: ['billing_payments', 'billing_history', 'assayer_payables', 'billing_entries', 'billing_invoices'],
   },
   {
+    // User-facing label is "Support requests" (the channel renamed from "Feedback" to
+    // "Support"); key and tables keep the historical 'feedback' name.
     key: 'feedback',
-    label: 'Feedback threads',
-    description: 'Feedback/bug/idea threads, their messages and votes.',
+    label: 'Support requests',
+    description: 'Support/bug/idea threads, their messages and votes.',
     tables: ['feedback_votes', 'feedback_messages', 'feedback_threads'],
   },
   {

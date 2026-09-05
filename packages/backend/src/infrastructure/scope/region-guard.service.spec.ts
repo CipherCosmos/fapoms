@@ -143,8 +143,16 @@ describe('RegionGuardService', () => {
     it('admits a feedback-team member who is not the reporter', async () => {
       row = { id: THREAD_ID, reporterUserId: 'reporter-1', reporterAssayerId: null };
       const { guard: g } = guardWithRepo();
-      const verdict = await g.feedbackVerdict({ id: 'admin-1', roles: [{ name: 'ADMIN' }] }, THREAD_ID);
+      // DEVELOPER owns the support desk since 2026-09-05 (feedback-roles.ts); ADMIN no longer does.
+      const verdict = await g.feedbackVerdict({ id: 'dev-1', roles: [{ name: 'DEVELOPER' }] }, THREAD_ID);
       expect(verdict).toEqual({ found: true, allowed: true });
+    });
+
+    it('refuses an administrator — the desk moved to the developer (2026-09-05)', async () => {
+      row = { id: THREAD_ID, reporterUserId: 'reporter-1', reporterAssayerId: null };
+      const { guard: g } = guardWithRepo();
+      const verdict = await g.feedbackVerdict({ id: 'admin-1', roles: [{ name: 'ADMIN' }] }, THREAD_ID);
+      expect(verdict).toEqual({ found: true, allowed: false });
     });
 
     it('refuses a socket that is neither the reporter nor on the feedback team', async () => {
@@ -152,6 +160,69 @@ describe('RegionGuardService', () => {
       const { guard: g } = guardWithRepo();
       const verdict = await g.feedbackVerdict({ id: 'assayer-2', roles: [{ name: 'ASSAYER' }] }, THREAD_ID);
       expect(verdict).toEqual({ found: true, allowed: false });
+    });
+  });
+
+  /**
+   * `assertProjectInScope` / `assertProjectsInScope` / `assertCoveragePlanInScope` — the
+   * planning-controller ceiling. A project has no region of its own (it is a set of branches
+   * that can legitimately span several), so unlike the single-record lookups above these refuse
+   * the WHOLE request the moment any touched branch falls outside the caller's regions, rather
+   * than comparing one region. Added after an adversarial review found `optimize`,
+   * `scenarios/simulate`, the four day-plan routes, `coverage-plan` create/transition/execute and
+   * `projects/:id/coverage` carried no region check at all.
+   */
+  describe('project and coverage-plan lookups', () => {
+    it('allows a project whose branches are entirely within the held region', async () => {
+      dataSource.query.mockResolvedValue([{ region: Region.WEST }, { region: Region.WEST }]);
+      await expect(guard.assertProjectInScope('p1', west)).resolves.toBeUndefined();
+    });
+
+    it('refuses a project that touches even one branch outside the held region', async () => {
+      dataSource.query.mockResolvedValue([{ region: Region.WEST }, { region: Region.SOUTH }]);
+      await expect(guard.assertProjectInScope('p1', west)).rejects.toThrow(ForbiddenException);
+    });
+
+    // Same reasoning as `assertRegionAllowed`'s null-region case: an unresolved region is a data
+    // gap, not a security boundary, and refusing on it would make the branch unfixable.
+    it('ignores a branch whose region could not be resolved', async () => {
+      dataSource.query.mockResolvedValue([{ region: Region.WEST }, { region: null }]);
+      await expect(guard.assertProjectInScope('p1', west)).resolves.toBeUndefined();
+    });
+
+    it('does not query at all for an unassigned (national) account', async () => {
+      await guard.assertProjectInScope('p1', national);
+      await guard.assertProjectsInScope(['p1', 'p2'], national);
+      await guard.assertCoveragePlanInScope('plan1', national);
+      expect(dataSource.query).not.toHaveBeenCalled();
+    });
+
+    it('does not query at all when no project id is given', async () => {
+      await guard.assertProjectInScope(undefined, west);
+      await guard.assertProjectInScope(null, west);
+      expect(dataSource.query).not.toHaveBeenCalled();
+    });
+
+    it('skips an empty project list without querying', async () => {
+      await expect(guard.assertProjectsInScope([], west)).resolves.toBeUndefined();
+      expect(dataSource.query).not.toHaveBeenCalled();
+    });
+
+    it('refuses several projects at once if any of them reaches outside the region', async () => {
+      dataSource.query.mockResolvedValue([{ region: Region.WEST }, { region: Region.SOUTH }]);
+      await expect(guard.assertProjectsInScope(['p1', 'p2'], west)).rejects.toThrow(ForbiddenException);
+      expect(dataSource.query.mock.calls[0][1]).toEqual([['p1', 'p2']]);
+    });
+
+    it('walks a coverage plan to its project to that project’s branches', async () => {
+      dataSource.query.mockResolvedValue([{ region: Region.SOUTH }]);
+      await expect(guard.assertCoveragePlanInScope('plan1', west)).rejects.toThrow(ForbiddenException);
+      expect(dataSource.query.mock.calls[0][0]).toContain('coverage_plans');
+    });
+
+    it('allows a coverage plan whose project stays inside the held region', async () => {
+      dataSource.query.mockResolvedValue([{ region: Region.WEST }]);
+      await expect(guard.assertCoveragePlanInScope('plan1', west)).resolves.toBeUndefined();
     });
   });
 

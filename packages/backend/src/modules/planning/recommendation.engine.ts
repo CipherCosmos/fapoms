@@ -15,7 +15,7 @@ import { RuleEngine } from '../platform/rules/rule.engine';
 import { ConfigurationResolver } from '../platform/configuration/configuration.resolver';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { ValidationQueryEntity } from '../validation-query/validation-query.entity';
-import { ConstraintEvaluator } from './constraint.evaluator';
+import { ConstraintEvaluator, ConstraintResult } from './constraint.evaluator';
 import { COMMITTED_ASSIGNMENT_STATUSES, DEFAULT_WEEKLY_CAPACITY } from '../assignment/assignment-workload';
 import { AssayerRemarksService } from '../assayer-remarks/assayer-remarks.service';
 import {
@@ -102,18 +102,23 @@ export interface PlanningContext {
   /**
    * Rank people the client has not empanelled, instead of excluding them.
    *
-   * The standing stays a fact about the person — still computed, still shown on the card, still
-   * needing a stated reason to assign — but it stops emptying the list. More than half the active
-   * workforce has no Active or Recommended standing recorded with any client, so a
-   * compliance-strict list is frequently an empty one, and an empty list gets worked around
-   * outside the system rather than inside it.
+   * The standing rule stays a fact about the person — it is still computed, still shown on the
+   * card, and still needs a stated reason to assign — but it stops emptying the list. Ops asked
+   * for this because on most branches it is the only thing standing between them and a plan:
+   * more than half of the active workforce has no Active or Recommended standing recorded with
+   * any client, so a compliance-strict list is frequently an empty one, and an empty list is
+   * worked around outside the system rather than inside it.
+   *
+   * Deliberately NOT the same as ignoring the rule: `AssignmentService` still refuses to create
+   * the assignment without a reason, and records the waiver against it.
    */
   relaxClientEligibility?: boolean;
   /**
    * Stop the distance pre-filter removing people before any rule has run.
    *
-   * The conflict-of-interest floor is untouched by this and always will be: relaxing it would
-   * only put candidates on screen that the write path refuses outright.
+   * The conflict-of-interest floor is untouched by this and always will be — it is the one
+   * distance rule that is not an operator's to set aside, and relaxing it here would only put
+   * candidates on screen that `AssignmentService` refuses outright.
    */
   relaxDistancePrefilter?: boolean;
   /**
@@ -132,6 +137,20 @@ export interface PlanningContext {
   branchFacts?: {
     /** Most recent assignment on this branch, or null if it has never been audited. */
     lastAssignment: { assayerId: string; status: AssignmentStatus } | null;
+    /**
+     * Whether `scheduledDate` is a holiday for this branch's state/client — identical for every
+     * candidate, so resolved once rather than once per assayer. Consulted by AvailabilityFilter,
+     * which used to skip this check entirely (found live 2026-09-04: a real, active state
+     * holiday produced zero exclusions on the Planning screen, while the exact same date was
+     * correctly refused a moment later at assignment-creation time).
+     */
+    holidayResult: ConstraintResult;
+    /**
+     * Whether `scheduledDate` falls inside this branch's project engagement window — same
+     * "identical for every candidate, and AvailabilityFilter used to skip it" story as
+     * holidayResult above.
+     */
+    timelineResult: ConstraintResult;
     /** Committed workload per assayer id, for every candidate in the pool. */
     activeWorkloadByAssayer: Record<string, number>;
     /**
@@ -308,12 +327,36 @@ export class AvailabilityFilter implements CandidateFilter {
      * DeployabilityFilter's; whether they are free on this date is this one's.
      */
 
-    // Both checks below are about one specific day. When the operator has asked to see the
+    // All four checks below are about one specific day. When the operator has asked to see the
     // whole workforce regardless of that day, they stop disqualifying and are reported on the
     // candidate row instead — see PlanningContext.relaxAvailability.
     if (context.relaxAvailability) return true;
 
-    // 1. Check double booking
+    // 1. Check holiday
+    // Identical for every candidate, so resolved once by recommend() into branchFacts; a
+    // standalone caller with no branchFacts still gets it checked live. Found missing entirely
+    // live 2026-09-04: a real, active state holiday produced zero exclusions here while the
+    // identical date was correctly refused a moment later at assignment-creation time.
+    if (context.branchFacts) {
+      if (!context.branchFacts.holidayResult.passed) return false;
+    } else {
+      const holidayResult = await this.constraintEvaluator.checkHoliday(
+        context.branch.state || '',
+        context.scheduledDate,
+        context.client?.id ?? undefined,
+      );
+      if (!holidayResult.passed) return false;
+    }
+
+    // 2. Check project engagement window
+    // Same "resolved once, identical for every candidate" story as holiday above. Only
+    // enforced when a project is actually known (recommend()'s own branchFacts, or nothing —
+    // there is no project reachable from a bare PlanningContext, so a genuinely standalone
+    // caller with no branchFacts cannot have this checked; every real caller in this codebase
+    // goes through recommend()).
+    if (context.branchFacts && !context.branchFacts.timelineResult.passed) return false;
+
+    // 3. Check double booking
     // Resolved for the whole pool in one query when recommend() supplied the facts; the
     // per-candidate check remains for standalone use.
     if (context.branchFacts) {
@@ -323,13 +366,53 @@ export class AvailabilityFilter implements CandidateFilter {
       if (!dbResult.passed) return false;
     }
 
-    // 2. Check leaves
+    // 4. Check leaves
     const leaveResult = this.constraintEvaluator.checkLeaves(assayer, context.scheduledDate);
     if (!leaveResult.passed) {
       return false;
     }
 
     return true;
+  }
+
+  /**
+   * Which of the four checks above actually failed, for the operator to read.
+   *
+   * `evaluate()` collapses all four to one boolean, so every exclusion this filter produces was
+   * stamped with the same static sentence — "already booked or on leave" — regardless of which
+   * check fired. That is a straightforward lie for the other two: a holiday and an ended project
+   * engagement are not personal facts about the assayer at all, and reported as one made every
+   * candidate on an out-of-window project look individually unavailable on a day nobody is
+   * actually booked or on leave. Mirrors `evaluate()`'s own check order exactly, so the reason
+   * given here is always the same one that actually excluded them.
+   */
+  async exclusionReason(assayer: AssayerEntity, context: PlanningContext): Promise<{ reason: string; detail?: string } | null> {
+    if (context.relaxAvailability) return null;
+
+    const holidayResult = context.branchFacts
+      ? context.branchFacts.holidayResult
+      : await this.constraintEvaluator.checkHoliday(context.branch.state || '', context.scheduledDate, context.client?.id ?? undefined);
+    if (!holidayResult.passed) {
+      return { reason: 'Unavailable on this date — regional holiday', detail: holidayResult.reason };
+    }
+
+    if (context.branchFacts && !context.branchFacts.timelineResult.passed) {
+      return { reason: "Unavailable on this date — outside the project's engagement window", detail: context.branchFacts.timelineResult.reason };
+    }
+
+    const doubleBooked = context.branchFacts
+      ? context.branchFacts.doubleBookedByAssayer[assayer.id]
+      : !(await this.constraintEvaluator.checkDoubleBooking(assayer.id, context.scheduledDate)).passed;
+    if (doubleBooked) {
+      return { reason: 'Unavailable on this date — already booked' };
+    }
+
+    const leaveResult = this.constraintEvaluator.checkLeaves(assayer, context.scheduledDate);
+    if (!leaveResult.passed) {
+      return { reason: 'Unavailable on this date — on leave', detail: leaveResult.reason };
+    }
+
+    return null;
   }
 }
 
@@ -528,7 +611,10 @@ export class ClientEligibilityFilter implements CandidateFilter {
      *
      * Kept rather than hidden, exactly as `relaxAvailability` keeps a booked candidate: the
      * standing is still computed, still travels to the card, and still needs a stated reason
-     * before `AssignmentService` will create anything.
+     * before `AssignmentService` will create anything. What changes is that a compliance-strict
+     * list stops being an empty one — on this estate more than half the active workforce has no
+     * recorded standing with any client, and an empty candidate list gets worked around outside
+     * the system rather than inside it.
      */
     if (context.relaxClientEligibility) return true;
     if (this.ruleBypass.isBypassedSync(BypassableRule.CLIENT_ELIGIBILITY)) {
@@ -958,9 +1044,20 @@ export class ExperienceScoreCalculator implements ScoreCalculator {
   }
 }
 
-function getCityTierMultiplier(city?: string): number {
+/** Exported so the tier lookup is directly testable, the same reasoning as `distanceScore`. */
+export function getCityTierMultiplier(city?: string): number {
   if (!city) return 1.0;
-  const c = city.trim().toLowerCase();
+  /**
+   * Branch `city` is free text carried through from address parsing, not a canonical name —
+   * live data holds both "Pune" and "Pune City" for the same metro, and "Mumbai City" alongside
+   * what would otherwise match "mumbai". The lists below compared the raw value verbatim, so
+   * "pune city" !== "pune" and the tier-1 multiplier silently never applied: on this deployment
+   * 5 of 14 real branches (every Pune branch, all city-labelled "Pune City") priced as if they
+   * were an untiered town, understating cost for every candidate there. Stripping a trailing
+   * "city" token (the one variant actually observed in the data) before matching fixes exactly
+   * that gap without guessing at forms nothing here evidences.
+   */
+  const c = city.trim().toLowerCase().replace(/\s+city$/, '');
   const tier1 = ['mumbai', 'delhi', 'bangalore', 'bengaluru', 'chennai', 'kolkata', 'hyderabad', 'pune', 'ahmedabad', 'gurgaon', 'gurugram', 'noida'];
   if (tier1.includes(c)) return 1.5;
   const tier2 = ['jaipur', 'lucknow', 'patna', 'bhopal', 'nagpur', 'indore', 'coimbatore', 'kochi', 'visakhapatnam', 'chandigarh', 'surat', 'vadodara', 'ludhiana', 'agra', 'nashik', 'meerut', 'rajkot', 'varanasi', 'srinagar', 'aurangabad', 'amritsar', 'allahabad', 'ranchi', 'jabalpur', 'gwalior', 'vijayawada'];
@@ -1511,7 +1608,7 @@ export interface RecommendOptions {
    * is only there to stop one request scanning a national workforce.
    */
   searchRadiusKm?: number;
-  /** See `PlanningContext.relaxClientEligibility`. */
+  /** See `PlanningContext.relaxClientEligibility` — carried through so the filter can read it. */
   relaxClientEligibility?: boolean;
   /** See `PlanningContext.relaxDistancePrefilter`. */
   relaxDistancePrefilter?: boolean;
@@ -1946,9 +2043,10 @@ export class RecommendationEngine {
     /**
      * "Ignore distance policy" searches the whole workforce rather than a disc around the branch.
      *
-     * The pre-filter is the only distance rule that removes somebody silently — it runs before any
-     * filter, so anyone it drops produces no exclusion reason and simply is not there. The
-     * conflict-of-interest floor still applies, and still excludes, with its reason on the panel.
+     * The pre-filter is the only distance rule that removes somebody *silently* — it runs before
+     * any filter, so anyone it drops produces no exclusion reason and simply is not there. That
+     * is what an operator is actually turning off here. The conflict-of-interest floor still
+     * applies, and still excludes, with its reason on the panel.
      */
     const prefilterRadiusKm = options?.relaxDistancePrefilter ? MAX_SEARCH_RADIUS_KM : Math.min(
       MAX_SEARCH_RADIUS_KM,
@@ -2006,7 +2104,7 @@ export class RecommendationEngine {
     const workloadWeekStart = new Date(workloadWeekAnchor);
     workloadWeekStart.setDate(workloadWeekAnchor.getDate() - ((workloadWeekAnchor.getDay() + 6) % 7));
 
-    const [lastAssignment, workloadRows, projectBranchRow] = await Promise.all([
+    const [lastAssignment, workloadRows, projectBranchRow, holidayResult] = await Promise.all([
       this.assignmentRepository.findOne({
         where: { projectBranch: { branchId: branch.id }, isActive: true },
         order: { createdAt: 'DESC' },
@@ -2037,6 +2135,14 @@ export class RecommendationEngine {
         where: { branchId: branch.id, isActive: true },
         relations: ['project'],
       }).catch(() => null),
+      // Identical for every candidate on this branch/date, so resolved once here rather than
+      // once per assayer inside AvailabilityFilter — same reasoning as lastAssignment above.
+      // Fails open (matches every other fact in this Promise.all): a holiday-service outage
+      // must not take down the whole recommendation, and the write path re-checks this
+      // properly at assignment-creation time regardless of what this list showed.
+      this.constraintEvaluator
+        .checkHoliday(branch.state || '', scheduledDate, client?.id ?? undefined)
+        .catch(() => ({ passed: true }) as ConstraintResult),
     ]);
 
     /**
@@ -2328,10 +2434,20 @@ export class RecommendationEngine {
       return acc;
     }, {});
 
+    // Timeline is synchronous and reads a project already loaded above (`projectBranchRow
+    // .project`) — no extra query, so it's computed here rather than inside the Promise.all.
+    // Fails open on a missing project-branch/project row (nothing to bound the date against),
+    // matching holidayResult's failure mode just above.
+    const timelineResult: ConstraintResult = projectBranchRow?.project
+      ? this.constraintEvaluator.checkProjectTimeline(projectBranchRow.project, scheduledDate)
+      : { passed: true };
+
     context.branchFacts = {
       lastAssignment: lastAssignment
         ? { assayerId: lastAssignment.assayerId, status: lastAssignment.status }
         : null,
+      holidayResult,
+      timelineResult,
       activeWorkloadByAssayer: (workloadRows as any[]).reduce<Record<string, number>>((acc, r) => {
         acc[r.assayerId] = Number(r.count) || 0;
         return acc;
@@ -2468,6 +2584,15 @@ export class RecommendationEngine {
           // The specific standing (or its absence), not the generic sentence — "RESIGNED from
           // AXIS" tells the operator exactly which vetting row to change.
           detail = (await this.clientEligibilityFilter.exclusionReason(assayer, context)) ?? undefined;
+        } else if (blockedBy === this.availabilityFilter.name) {
+          // Which of holiday / project-timeline / double-booking / leave actually fired — see
+          // exclusionReason's own comment for why the shared "already booked or on leave"
+          // sentence cannot stand in for all four.
+          const r = await this.availabilityFilter.exclusionReason(assayer, context);
+          if (r) {
+            reasonOverride = r.reason;
+            detail = r.detail;
+          }
         } else if (blockedBy === this.requiredSkillsFilter.name) {
           /**
            * Which skill or certification, not merely that one is missing.
@@ -2587,8 +2712,10 @@ export class RecommendationEngine {
         /**
          * The standing this candidate is on the list in spite of.
          *
-         * Only set when the operator asked to see past the client's panel — relaxing a rule must
-         * not quietly hide what was relaxed. Same contract as `dateConflict`.
+         * Only ever set when the operator asked to see past the client's panel — relaxing a rule
+         * must not quietly hide what was relaxed. Same contract as `dateConflict`: the row states
+         * the thing it was let through on, so the decision is made with it in view rather than
+         * discovered in a refusal afterwards.
          */
         clientStandingIssue: context.relaxClientEligibility
           ? await this.clientEligibilityFilter.exclusionReason(assayer, context)

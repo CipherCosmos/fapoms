@@ -23,6 +23,8 @@ import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { rbacPrincipalCacheKey } from '../auth/auth.service';
 import { EventCategory, AssayerLifecycleStatus, AssignmentStatus } from '@fapoms/shared';
 import * as bcrypt from 'bcrypt';
+import { DEFAULT_WEEKLY_CAPACITY } from '../assignment/assignment-workload';
+import { DATA_INTEGRITY_SHEET } from './data-integrity.service';
 
 describe('AssayerService', () => {
   let service: AssayerService;
@@ -35,6 +37,8 @@ describe('AssayerService', () => {
    * ones — an empty string is right for them and null is refused; the rest take null.
    */
   const NOT_NULL_COLUMNS = new Set(['address', 'city', 'district', 'state', 'employmentType']);
+  /** `getPlanningSnapshot`'s raw-SQL seam — `assayerRepository.manager.count`/`.query`. */
+  const mockAssayerManager = { count: jest.fn().mockResolvedValue(0), query: jest.fn().mockResolvedValue([]) };
   const mockAssayerRepo = {
     create: jest.fn(),
     save: jest.fn(),
@@ -42,6 +46,7 @@ describe('AssayerService', () => {
     findAndCount: jest.fn(),
     find: jest.fn(),
     update: jest.fn().mockResolvedValue({ affected: 1 }),
+    manager: mockAssayerManager,
     metadata: {
       findColumnWithPropertyName: (name: string) => ({
         propertyName: name,
@@ -1522,6 +1527,93 @@ describe('AssayerService', () => {
 
     it('leaves an ordinary edit alone', async () => {
       await expect(service.update('as-1', { phone: '9876543210' }, 'u-1')).resolves.toBeDefined();
+    });
+  });
+
+  /**
+   * The two facts Planning's candidate-detail view needs that `getProfile` deliberately does not
+   * carry: live workload (must read exactly like `WorkloadScoreCalculator` does, or the number
+   * shown to a planner would disagree with the one that actually decided the "Spare capacity"
+   * score) and any open data-integrity flags.
+   */
+  describe('getPlanningSnapshot', () => {
+    it('reports live workload against the assayer’s own weekly capacity', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'as-1', maxWeeklyWorkload: 20 });
+      mockAssayerManager.count.mockResolvedValue(6);
+
+      const result = await service.getPlanningSnapshot('as-1');
+
+      expect(result.workload).toEqual({ activeCount: 6, maxWeeklyCapacity: 20, remaining: 14 });
+    });
+
+    // Mirrors WorkloadScoreCalculator.calculate's own fallback exactly — the two must never
+    // disagree about what "full" means for the same person.
+    it('falls back to the platform default capacity when the assayer has none set', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'as-1', maxWeeklyWorkload: 0 });
+      mockAssayerManager.count.mockResolvedValue(3);
+
+      const result = await service.getPlanningSnapshot('as-1');
+
+      expect(result.workload).toEqual({
+        activeCount: 3,
+        maxWeeklyCapacity: DEFAULT_WEEKLY_CAPACITY,
+        remaining: DEFAULT_WEEKLY_CAPACITY - 3,
+      });
+    });
+
+    it('never reports negative remaining capacity for an overbooked assayer', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'as-1', maxWeeklyWorkload: 5 });
+      mockAssayerManager.count.mockResolvedValue(9);
+
+      const result = await service.getPlanningSnapshot('as-1');
+
+      expect(result.workload.remaining).toBe(0);
+    });
+
+    it('surfaces open data-integrity flags for this assayer, mapped to plain fields', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'as-1', maxWeeklyWorkload: 15 });
+      mockAssayerManager.count.mockResolvedValue(0);
+      mockAssayerManager.query.mockResolvedValue([
+        { reason: 'PAN mismatch against KYC scan', raw_value: 'ABCDE1234F', created_at: '2026-09-01T00:00:00.000Z' },
+      ]);
+
+      const result = await service.getPlanningSnapshot('as-1');
+
+      expect(result.riskFlags).toEqual([
+        { reason: 'PAN mismatch against KYC scan', rawValue: 'ABCDE1234F', createdAt: '2026-09-01T00:00:00.000Z' },
+      ]);
+      // Scoped to this one assayer's still-OPEN findings — a resolved flag, or someone else's,
+      // must not follow them onto a screen a planner is using to decide whether to book them.
+      expect(mockAssayerManager.query.mock.calls[0][0]).toContain('resolved_at IS NULL');
+      expect(mockAssayerManager.query.mock.calls[0][1]).toEqual(['as-1', DATA_INTEGRITY_SHEET]);
+    });
+
+    it('reports a clean record as an empty list, not an error', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'as-1', maxWeeklyWorkload: 15 });
+      mockAssayerManager.count.mockResolvedValue(0);
+      mockAssayerManager.query.mockResolvedValue([]);
+
+      const result = await service.getPlanningSnapshot('as-1');
+
+      expect(result.riskFlags).toEqual([]);
+    });
+
+    // A flags lookup that fails must not take the whole candidate card down with it — the
+    // workload half is still real, useful information even when this one query is unavailable.
+    it('degrades to an empty flag list rather than failing the whole snapshot when the query errors', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue({ id: 'as-1', maxWeeklyWorkload: 15 });
+      mockAssayerManager.count.mockResolvedValue(2);
+      mockAssayerManager.query.mockRejectedValue(new Error('db hiccup'));
+
+      const result = await service.getPlanningSnapshot('as-1');
+
+      expect(result.riskFlags).toEqual([]);
+      expect(result.workload.activeCount).toBe(2);
+    });
+
+    it('refuses an unknown assayer', async () => {
+      mockAssayerRepo.findOne.mockResolvedValue(null);
+      await expect(service.getPlanningSnapshot('nope')).rejects.toThrow(NotFoundException);
     });
   });
 

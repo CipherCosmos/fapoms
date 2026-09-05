@@ -2,7 +2,9 @@ import { useEffect, useState } from 'react';
 import { api } from '../services/api';
 
 export interface PlatformLimits {
-  maxNegotiationRounds: number;
+  // `maxNegotiationRounds` is gone from this type on purpose: in-app fee negotiation was
+  // removed (2026-09). The endpoint still returns it as a literal 0 — an old-APK kill-switch
+  // the mobile builds read — but no web screen has a round counter left to feed.
   checkInGeofenceMeters: number;
   maxSingleExpenseClaim: number;
 }
@@ -14,7 +16,6 @@ export interface PlatformLimits {
  * platform — but they are a starting value, not the rule. The rule is whatever the server says.
  */
 const FALLBACK: PlatformLimits = {
-  maxNegotiationRounds: 3,
   checkInGeofenceMeters: 2000,
   maxSingleExpenseClaim: 50_000,
 };
@@ -25,11 +26,9 @@ let inFlight: Promise<PlatformLimits> | null = null;
 /**
  * Operational limits, from the server that enforces them.
  *
- * Screens used to hardcode these — "Round 2 of 3", a disabled counter-offer button at 3 — while
- * the server reads them from platform settings an administrator can change at any time. The
- * negotiation cap is the one that bites: exceeding it does not refuse the counter, it
- * auto-declines the entire offer. A screen showing a stale cap either freezes a negotiation the
- * platform would allow, or invites a click that destroys the assignment.
+ * Screens used to hardcode these while the server reads them from platform settings an
+ * administrator can change at any time — so a screen could confidently state a rule (a geofence
+ * radius, an expense cap) the platform no longer enforced.
  *
  * Cached module-wide: these change rarely and every screen wants the same answer, so one fetch
  * per page load serves all of them.

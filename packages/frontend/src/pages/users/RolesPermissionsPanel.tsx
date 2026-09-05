@@ -69,13 +69,26 @@ export const RolesPermissionsPanel: React.FC = () => {
   });
   const { data: usersRes } = useQuery({
     queryKey: ['users', 'all', 'for-role-counts'],
-    // Match DirectoryPanel: the default 20-row page would undercount every role's holder tally.
-    queryFn: () => api.request<UserRow[]>('/users?limit=500'),
+    /**
+     * Match DirectoryPanel: the default 20-row page would undercount every role's holder tally.
+     *
+     * Raised from 500 to 2,000 (the ceiling `GET /users` is contracted to honour) and reads
+     * `meta.total` alongside the page, because 500 has the exact same silent-shortfall shape the
+     * 20-row default did — a role's holder count would quietly stop growing past the 501st
+     * account with nothing on screen to say the tally was no longer of everyone.
+     */
+    queryFn: () => api.request<{ data?: UserRow[]; meta?: { pagination?: { total?: number } } }>(
+      '/users?limit=2000',
+      { withMeta: true },
+    ),
   });
 
   const roles: RoleRow[] = (Array.isArray(rolesRes) ? rolesRes : (rolesRes as any)?.data) || [];
   const catalogue: Permission[] = (Array.isArray(permsRes) ? permsRes : (permsRes as any)?.data) || [];
-  const users = useMemo(() => (Array.isArray(usersRes) ? usersRes : (usersRes as any)?.data) || [], [usersRes]);
+  const users = useMemo(() => (Array.isArray(usersRes?.data) ? usersRes.data : []), [usersRes]);
+  /** The server's own count, for the shortfall banner below — not `users.length`, which is only
+   *  ever the page that arrived. */
+  const usersTotal = usersRes?.meta?.pagination?.total ?? users.length;
 
   const holderCount = useMemo(() => {
     const m = new Map<string, number>();
@@ -244,6 +257,14 @@ export const RolesPermissionsPanel: React.FC = () => {
 
       {error && <AlertBanner type="error">{error}</AlertBanner>}
       {success && <AlertBanner type="success">{success}</AlertBanner>}
+      {/* Every holder count above is only ever of the accounts this query actually got — say so
+          rather than let a role's tally quietly stop growing past whatever the page cap was. */}
+      {usersTotal > users.length && (
+        <AlertBanner type="error">
+          Showing {users.length} of {usersTotal} accounts. The holder count beside each role below
+          is counted from only those {users.length} and may undercount who actually has it.
+        </AlertBanner>
+      )}
 
       {!canEdit && (
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center', fontSize: '11.5px', color: 'var(--text-muted)', padding: '9px 12px', borderRadius: '8px', background: 'var(--bg-surface-2)' }}>

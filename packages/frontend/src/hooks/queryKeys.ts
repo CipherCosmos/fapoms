@@ -117,8 +117,15 @@ export const queryKeys = {
      * any of them and the engine returns a different answer, so all three belong in the key rather
      * than in a re-slice of whatever the last request happened to return.
      */
-    recommendations: (branchId: string, date: string, includeUnavailable: boolean, radiusKm: number) =>
-      ['planning', 'recommendations', branchId, date, includeUnavailable, Math.round(radiusKm)] as const,
+    recommendations: (
+      branchId: string, date: string, includeUnavailable: boolean, radiusKm: number,
+      // Both change WHICH candidates come back, so both belong in the key — a cached list
+      // re-sliced under a different policy would show an empanelment-relaxed answer as if it
+      // were the strict one, which is the opposite of what the toggle promises.
+      ignoreClientPolicy = false, ignoreDistancePolicy = false,
+    ) =>
+      ['planning', 'recommendations', branchId, date, includeUnavailable, Math.round(radiusKm),
+        ignoreClientPolicy, ignoreDistancePolicy] as const,
     /** Prefix: "have we already phoned this person about this branch?", for any branch. */
     lastContactAll: ['planning', 'last-contact'] as const,
     lastContact: (projectBranchId: string) => ['planning', 'last-contact', projectBranchId] as const,
@@ -150,6 +157,30 @@ export const queryKeys = {
   hr: {
     all: ['hr'] as const,
     workforce: ['hr', 'workforce'] as const,
+    /**
+     * The roster itself — everyone `fetchWholeAssayerRoster` walks, kept as one shared cache
+     * entry instead of `AssayerRoster.tsx`'s own `useState`/`useEffect` pair.
+     *
+     * Keyed by the server-mappable slice of the active filters (`toServerQuery` — search text,
+     * stage, engagement, region, the empanelment axes…) because that string is exactly what
+     * changes which rows the walker fetches; two different filter states that happen to produce
+     * the same query string are, correctly, one cache entry. The client-only "rule" filters
+     * (record completeness, documents, pin quality…) do NOT appear in the key, on purpose — they
+     * narrow whatever page already loaded rather than asking the server for a different one, so a
+     * change to one of them must reuse the cached roster rather than refetch it.
+     */
+    roster: (serverQuery: string) => ['hr', 'roster', serverQuery] as const,
+    /** Prefix: every roster query regardless of filter — what a lifecycle event invalidates. */
+    rosterAll: ['hr', 'roster'] as const,
+    /**
+     * The commercial/pay-rate roster `HrPayPage` reads alongside the assayer roster itself.
+     *
+     * `HrPayPage`'s own "everyone" fetch reuses `roster('')` — the unfiltered variant of the key
+     * above — rather than inventing a second key for the same walk over the same rows; this one
+     * is only for the pay-terms half (`GET /assayers/commercial/roster`), which no other screen
+     * reads yet.
+     */
+    commercialRoster: ['hr', 'commercial-roster'] as const,
     /**
      * The review queue — cells the roster import could not read, plus the standing
      * data-integrity scan's findings.
@@ -185,6 +216,13 @@ export const queryKeys = {
     invoiceable: (clientId?: string) => ['billing', 'invoiceable', clientId ?? 'ALL'] as const,
     invoices: (params: object) => ['billing', 'invoices', params] as const,
     invoice: (id: string) => ['billing', 'invoice', id] as const,
+    assayerInvoices: (params: object) => ['billing', 'assayerInvoices', params] as const,
+    /**
+     * One assayer invoice by id. Shared by the review drawer AND the per-payout invoice chips
+     * (`useAssayerInvoiceLookup`) — payout rows carry only the invoice id, so both resolve the
+     * same detail under one key rather than each fetching its own copy.
+     */
+    assayerInvoice: (id: string) => ['billing', 'assayerInvoice', id] as const,
     assayerStatement: (assayerId: string) => ['billing', 'assayerStatement', assayerId] as const,
     assignmentMoney: (assignmentId: string) => ['billing', 'assignmentMoney', assignmentId] as const,
     reconcilePreview: (since?: string) => ['billing', 'reconcilePreview', since ?? 'ALL'] as const,

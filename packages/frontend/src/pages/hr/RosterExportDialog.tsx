@@ -149,9 +149,17 @@ export const RosterExportDialog: React.FC<{
             {scopeChoice(
               'all',
               `Everyone loaded (${all.length})`,
+              /*
+                `truncated` is now only ever true past the roster walker's own 20,000-person
+                ceiling (`fetchWholeAssayerRoster`'s `missing`) — the roster no longer stops at a
+                thousand-row window, so "everyone loaded" really is everyone bar that rare case.
+                The old wording ("this page has the N most recently added") described the ordinary
+                state of an 11,000-person roster; it would now be a lie on every roster this
+                product actually meets, so it is said only in the case that still makes it true.
+              */
               truncated
-                ? `Ignores the filters. The server holds ${rosterTotal} — this page has the ${all.length} most recently added, so use the Excel workbook below for the whole book.`
-                : 'Ignores the filters and covers the whole roster this page has loaded.',
+                ? `Ignores the filters. The server holds ${rosterTotal} — this dialog has the ${all.length} it could load, past which the whole roster is more than one screen can hold at once.`
+                : 'Ignores the filters and covers the whole roster — the server confirms nobody was left out.',
             )}
           </div>
         </section>
@@ -270,8 +278,9 @@ export const RosterExportDialog: React.FC<{
           <div style={{ flex: '1 1 320px', fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.55 }}>
             <strong style={{ fontWeight: 700, color: 'var(--text-primary)' }}>Need pay rates?</strong>{' '}
             The payroll rate card and each person's assignment counts are not on this screen, so no
-            choice of columns above can include them. The server builds those into a two-sheet
-            Excel workbook covering everyone, which takes a few seconds.
+            choice of columns above can include them — this is a different export, not a bigger
+            version of the CSV above. The server builds those into a two-sheet Excel workbook
+            covering everyone, which takes a few seconds.
           </div>
           <button
             onClick={onExcelExport}
@@ -279,7 +288,7 @@ export const RosterExportDialog: React.FC<{
             className="btn btn-secondary"
             style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '7px 12px', color: 'var(--success)' }}
           >
-            <FileSpreadsheet size={13} /> {excelBusy ? 'Preparing…' : 'Full roster + pay rates (Excel)'}
+            <FileSpreadsheet size={13} /> {excelBusy ? 'Preparing…' : 'Full roster + pay rates (workbook, everyone)'}
           </button>
         </section>
       </div>

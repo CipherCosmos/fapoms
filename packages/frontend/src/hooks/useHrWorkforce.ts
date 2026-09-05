@@ -12,6 +12,26 @@ export interface HrAction {
 
 export interface HrWorkforceOverview {
   generatedAt: string;
+  /**
+   * The caller's own region scope, so a screen showing a national figure can say why a regional
+   * user's own memory of the roster is smaller — see `HrLayout`'s "Your regions" chip. `null` for
+   * an unscoped (national) caller; an empty array should not occur but is read the same as `null`.
+   *
+   * Optional because this is a pending backend contract addition (Track A/B, landing alongside
+   * `segments` below) — a server that has not shipped it yet simply omits the key, and every
+   * reader here treats a missing `scope` exactly like `null`.
+   */
+  scope?: { regions: string[] } | null;
+  /**
+   * Server-truth counts for every `ROSTER_SEGMENTS` chip, over the caller's own scope —
+   * independent of whatever window the roster page happens to have loaded. Keyed by segment key
+   * (`all`, `active`, `onboarding`, `to-verify`, …); see `roster-filters.ts`'s `ROSTER_SEGMENTS`
+   * for the full list, which this object's keys are contracted to match exactly.
+   *
+   * Optional for the same reason as `scope` — until the backend ships it, `HrRosterPage` falls
+   * back to the roster's own loaded-window counts, which is the pre-existing behaviour.
+   */
+  segments?: Record<string, number>;
   headcount: {
     total: number; active: number; onboarding: number; exited: number;
     byLifecycle: { stage: string; count: number }[];

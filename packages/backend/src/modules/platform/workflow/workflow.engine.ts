@@ -4,7 +4,7 @@ import { EntityManager, Repository } from 'typeorm';
 import { WorkflowHistoryEntity } from './workflow-history.entity';
 import { AuditService } from '../../../core/audit/audit.service';
 import { UnitOfWork } from '../../../infrastructure/persistence/unit-of-work';
-import { EventCategory } from '@fapoms/shared';
+import { EventCategory, roleSatisfies } from '@fapoms/shared';
 
 export interface WorkflowContext {
   userId: string;
@@ -54,7 +54,10 @@ export class WorkflowEngine {
     action: WorkflowAction,
     payload?: any
   ): Promise<any> {
-    if (allowedRoles.length > 0 && !allowedRoles.includes(userRole)) {
+    // roleSatisfies rather than a raw includes: implication-aware (role-hierarchy.ts), so a
+    // DEVELOPER passes every stage that admits ADMIN — one edit here covers every workflow
+    // caller (project, validation, assayer, client) instead of widening each allowed list.
+    if (allowedRoles.length > 0 && !roleSatisfies(userRole, allowedRoles)) {
       throw new BadRequestException(`Role ${userRole} is not authorized to execute command ${command} in this workflow stage.`);
     }
 

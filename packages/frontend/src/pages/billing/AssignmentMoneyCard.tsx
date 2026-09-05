@@ -2,11 +2,12 @@ import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Wallet, PauseCircle, PlayCircle, SlidersHorizontal } from 'lucide-react';
 import { AssignmentStatus, BillingState } from '@fapoms/shared';
+import type { AssayerPayable } from '@fapoms/shared';
 import { Modal, Select, useToast } from '../../components/ui';
-import { useAssignmentMoney, useEditClientLine } from '../../hooks/useBilling';
+import { useAssignmentMoney, useEditClientLine, useAssayerInvoiceLookup } from '../../hooks/useBilling';
 import { userMessage } from '../../services/errors';
 import { moneyExact as money } from '../../utils/money';
-import { LineStatePill, PayoutStatusPill, InvoiceStatusPill, fmtDate, inputStyle } from './shared';
+import { LineStatePill, PayoutStatusPill, InvoiceStatusPill, AssayerInvoiceStatusPill, fmtDate, inputStyle } from './shared';
 // The client line and the assayer payout are held for the same reasons — the same "put this on
 // hold" action, seen from the client side rather than the assayer side — so this imports
 // PayoutsTab's HOLD_REASONS rather than keeping a second list that could drift from it.
@@ -33,6 +34,15 @@ export const AssignmentMoneyCard: React.FC<{ assignmentId: string; status: strin
   const done = status === AssignmentStatus.COMPLETED;
   const { data, isLoading } = useAssignmentMoney(assignmentId, { enabled: done });
   const [editing, setEditing] = useState(false);
+  /**
+   * The assayer invoice the fee payable rides, if any. The money line's payable is the raw
+   * entity, which carries only `assayerInvoiceId` (the shared AssayerPayable type predates the
+   * column, hence the cast); the number/status are looked up under the same cached key as the
+   * Assayer Invoices drawer. Called before the early returns — hooks are unconditional.
+   */
+  const payableInvoiceId = (data?.payable as (AssayerPayable & { assayerInvoiceId?: string | null }) | null | undefined)?.assayerInvoiceId ?? null;
+  const invoiceById = useAssayerInvoiceLookup(payableInvoiceId ? [payableInvoiceId] : []);
+  const assayerInvoice = payableInvoiceId ? invoiceById.get(payableInvoiceId) : undefined;
 
   if (!done) return null;
   if (isLoading || !data) {
@@ -67,6 +77,14 @@ export const AssignmentMoneyCard: React.FC<{ assignmentId: string; status: strin
             {Number(p.tdsAmount) > 0 && <Row k="TDS withheld" v={`−${money(p.tdsAmount)}`} />}
             <Row k="To pay" v={money(p.totalAmount)} strong />
             {Number(p.paidAmount) > 0 && <Row k="Paid" v={money(p.paidAmount)} />}
+            {/* The assayer invoice this payout rides — the mirror of the client-invoice line in
+                the other box. While it is invited/submitted, approving happens on the invoice,
+                not on this payout. */}
+            {assayerInvoice && (
+              <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 4, display: 'flex', gap: 6, alignItems: 'center' }}>
+                {assayerInvoice.invoiceNumber} <AssayerInvoiceStatusPill status={assayerInvoice.status} />
+              </div>
+            )}
             {data.reimbursements.length > 0 && (
               <div style={{ fontSize: 10.5, color: 'var(--text-muted)', marginTop: 4 }}>
                 + {data.reimbursements.length} expense reimbursement{data.reimbursements.length === 1 ? '' : 's'} ({money(data.reimbursements.reduce((s, r) => s + Number(r.totalAmount), 0))})

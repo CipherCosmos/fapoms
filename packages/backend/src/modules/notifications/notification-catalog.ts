@@ -970,6 +970,44 @@ export const NOTIFICATION_CATALOG: Record<string, NotificationTypeDef> = {
     body: '${requestType} request has been open ${days} day(s), past its response SLA.',
     link: '/admin/compliance',
   },
+
+  // ── Destructive actions (the two-person rule) ─────────────────────────────
+  /**
+   * A developer filed a data-wipe request; only an admin's decision can move it. Decision-forcing
+   * by definition — nothing happens until a human clicks approve or reject — so it emails, per
+   * the ALL/IN_APP_AND_EMAIL discipline above. The body names the requester and how much is
+   * selected; deliberately no row counts here (email is the least contained surface — the exact
+   * numbers are on the approval screen, where the decision belongs).
+   */
+  DESTRUCTIVE_ACTION_REQUESTED: {
+    category: NotificationCategory.SYSTEM,
+    priority: NotificationPriority.HIGH,
+    roles: ADMINS,
+    channels: IN_APP_AND_EMAIL,
+    title: 'A data wipe needs your approval',
+    body: '${requesterName} requests a wipe of ${domainCount} data domain(s). Review and approve or reject it.',
+    link: '/admin/approvals',
+    skipActor: true,
+  },
+  /**
+   * The decision, told to the one person who can act on it: the requesting developer
+   * (`RECORD_OWNER`, resolved from `ownerUserId` — the same specific-recipient mechanism the
+   * feedback and invoice types use). Approved means a clock is running — the wipe is executable
+   * only until the approval's expiry — which is why this also emails rather than waiting in a
+   * bell. The service composes `detail` as the "run it until {expiry}" or "Reason: {reason}"
+   * sentence, so one template serves both outcomes without a holed fallback.
+   */
+  DESTRUCTIVE_ACTION_DECIDED: {
+    category: NotificationCategory.SYSTEM,
+    priority: NotificationPriority.HIGH,
+    roles: [],
+    special: ['RECORD_OWNER'],
+    channels: IN_APP_AND_EMAIL,
+    title: 'Data wipe request ${decision}',
+    body: 'Your data-wipe request (${domainCount} domain(s)) was ${decision}. ${detail}',
+    link: '/admin/settings',
+    skipActor: true,
+  },
 };
 
 /**

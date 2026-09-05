@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
-import { Compass, Check, X, AlertTriangle, CheckCircle, Search, Star, Briefcase, MapPin, Phone, Mail, Award, Clock, DollarSign, Calendar, TrendingUp, Building2, Route, Users, Layers, Smartphone, Package, Car, Flame, BarChart3, Zap, ClipboardList, Send, Bus, Download, Eye, MessageCircle, Map as MapIcon, Home, Hourglass } from 'lucide-react';
+import { Compass, Check, X, AlertTriangle, CheckCircle, Search, Briefcase, MapPin, Phone, Mail, Clock, DollarSign, Calendar, TrendingUp, Building2, Route, Users, Layers, Smartphone, Package, Car, Flame, BarChart3, Zap, ClipboardList, Send, Bus, Download, Eye, MessageCircle, Map as MapIcon, Home, Hourglass } from 'lucide-react';
 import { ProjectBranchStatus, roleLabel, formatDateOnly, formatRouteDistance, formatTravelTime, type RouteSource, callOutcomeLabel, CALL_OUTCOME_LABELS } from '@fapoms/shared';
 import { branchStatusLabel, BRANCH_COVERED_STATUSES, localDateKey, todayDateKey } from '../utils/statusLabels';
 import { api } from '../services/api';
@@ -13,7 +12,8 @@ import { InteractivePlanningMap } from '../components/InteractivePlanningMap';
 import { BranchHistoryDrawer } from './planning/BranchHistoryDrawer';
 import { useToast, Modal, Select, useConfirm } from '../components/ui';
 import { ScoreBreakdown } from './planning/ScoreBreakdown';
-import { AssayerRemarks, type RemarkSummary } from '../components/AssayerRemarks';
+import { AssayerDetailModal } from './planning/AssayerDetailModal';
+import { type RemarkSummary } from '../components/AssayerRemarks';
 import { ExcludedCandidatesPanel } from './planning/ExcludedCandidatesPanel';
 import { CoveragePlanModal } from './planning/CoveragePlanModal';
 import { BranchListPanel, RecommendationPanel, ProjectBranch } from './planning';
@@ -117,7 +117,7 @@ interface ProjectOption {
 
 
 
-interface Candidate {
+export interface Candidate {
   id: string;
   assayerCode: string;
   displayName: string;
@@ -144,6 +144,8 @@ interface Candidate {
   longitude: number | null;
   score?: number;
   baseFee?: number;
+  /** True when `baseFee` is the platform-wide default, not this assayer's own contracted rate. */
+  usedFallbackBaseFee?: boolean;
   pendingOnThisBranch?: boolean;
   /** Backend already computes these; the UI previously discarded them. */
   readableReasons?: { label: string; detail?: string; sentiment?: string }[];
@@ -157,6 +159,10 @@ interface Candidate {
    * clash, or the operator dispatches into a double-booking believing the list was clean.
    */
   dateConflict?: string | null;
+  /** The client's service limit, set only when this candidate is beyond it. */
+  exceedsClientRange?: number | null;
+  /** The client standing this candidate was let through on, when that rule was relaxed. */
+  clientStandingIssue?: string | null;
   /**
    * What staff have said about this person, exactly as the engine's `remarksScore` read it —
    * count of rated remarks in the last year, their recency-weighted mean (−2…+2), the latest
@@ -178,7 +184,7 @@ interface ExcludedCandidate {
   nextAvailableDate?: string | null;
 }
 
-interface AssayerDetail {
+export interface AssayerDetail {
   id: string;
   assayerCode: string;
   displayName: string;
@@ -473,7 +479,17 @@ export const PlanningWorkspace: React.FC = () => {
   const [priorityFilter, setPriorityFilter] = useState('ALL');
   const [zoneFilter, setZoneFilter] = useState('ALL');
 
-  const [showNegotiationModal, setShowNegotiationModal] = useState(false);
+  // The Call & Assign confirmation modal — the desk settles the fee on the phone and records
+  // the result here. (Formerly the "negotiation modal", which also had a counter-back mode;
+  // in-app fee negotiation was removed 2026-09 and only this flow remains.)
+  const [showAssignModal, setShowAssignModal] = useState(false);
+  /**
+   * The reason that lets a blocked-but-overridable candidate through, typed in the assign modal.
+   *
+   * Seeded when the modal opens for someone the client's distance limit would refuse, so the
+   * operator is answering a question the screen asked rather than decoding a refusal afterwards.
+   */
+  const [overrideReasonInput, setOverrideReasonInput] = useState('');
   const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null);
   const [selectedCandidateForMap, setSelectedCandidateForMap] = useState<Candidate | null>(null);
   // The server's quote for the currently selected candidate, so every fee figure on this
@@ -487,12 +503,8 @@ export const PlanningWorkspace: React.FC = () => {
   const [bulkScheduledDate, setBulkScheduledDate] = useState('');
   const [bulkFailures, setBulkFailures] = useState<Array<{ branchId: string; branchName: string; error: string }>>([]);
   const [dayPlanFailures, setDayPlanFailures] = useState<Record<string, Array<{ branchId: string; branchName: string; error: string }>>>({});
-  const [negotiatingFee, setNegotiatingFee] = useState('');
-  // When set, the negotiation modal is in "counter back" mode: submitting posts a counter-offer on
-  // THIS existing assignment (proposeCounterFee) instead of creating a brand-new one. null = the
-  // normal Call & Assign flow.
-  const [counterOfferAssignmentId, setCounterOfferAssignmentId] = useState<string | null>(null);
-  const [counterRemarks, setCounterRemarks] = useState('');
+  /** The total fee (base + travel) agreed on the call, as typed into the assign modal. */
+  const [agreedFeeInput, setAgreedFeeInput] = useState('');
   const [commercialBaseFee, setCommercialBaseFee] = useState<number | null>(null);
   const [loadingCommercial, setLoadingCommercial] = useState(false);
   const [autoDispatch, setAutoDispatch] = useState(true);
@@ -541,6 +553,8 @@ export const PlanningWorkspace: React.FC = () => {
   const [showAssayerDetailModal, setShowAssayerDetailModal] = useState(false);
   const [detailAssayer, setDetailAssayer] = useState<AssayerDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
+  /** The card the detail modal was opened from — its branch-specific match context. */
+  const [detailCandidate, setDetailCandidate] = useState<Candidate | null>(null);
   const [showAllCandidates, setShowAllCandidates] = useState(false);
   /**
    * Rank the whole nearby workforce, treating a booking or leave on the planned date as
@@ -553,6 +567,24 @@ export const PlanningWorkspace: React.FC = () => {
    * with `dateConflict` set and are labelled on the row, so nothing is hidden.
    */
   const [ignoreDateAvailability, setIgnoreDateAvailability] = useState(false);
+  /**
+   * Rank people the client has not empanelled — ON by default, at operations' request.
+   *
+   * The reason it defaults on is the data: more than half the active workforce has no Active or
+   * Recommended standing recorded with any client, so the compliance-strict list is frequently
+   * empty, and an empty candidate list gets worked around outside the system rather than inside
+   * it. Relaxed is not ignored — the standing is stated on every card it applies to, and the
+   * write path still refuses to create the assignment without a recorded reason.
+   */
+  const [ignoreClientPolicy, setIgnoreClientPolicy] = useState(true);
+  /**
+   * Search the whole workforce rather than a disc around the branch.
+   *
+   * Off by default: it is the wider, slower search, and the narrower one is right most of the
+   * time. This turns off the distance PRE-FILTER only — the client's conflict-of-interest
+   * minimum still excludes, and says so on the excluded panel.
+   */
+  const [ignoreDistancePolicy, setIgnoreDistancePolicy] = useState(false);
   /**
    * The conflict-of-interest independence floor — an optional manual override, OFF by default.
    *
@@ -721,10 +753,10 @@ export const PlanningWorkspace: React.FC = () => {
   /**
    * Keep whatever branch is already selected if the refresh still contains it.
    *
-   * The queue reloads after nearly every action on this page — assign, negotiate, bulk-assign, a
+   * The queue reloads after nearly every action on this page — assign, bulk-assign, a
    * coverage-plan deploy, or a realtime event for a branch that is not even the one open — and it
-   * used to snap back to `data[0]` every single time. Negotiating a fee on branch #12 would
-   * refresh the queue and silently swap the open panel to branch #1, so finishing one negotiation
+   * used to snap back to `data[0]` every single time. Confirming an assignment on branch #12
+   * would refresh the queue and silently swap the open panel to branch #1, so finishing one call
    * meant re-finding whichever branch you had actually been working on. Only fall back to the
    * first branch (or none) when the previous selection is genuinely gone — completed, reassigned
    * elsewhere, or this is the first load.
@@ -780,9 +812,11 @@ export const PlanningWorkspace: React.FC = () => {
     // whatever the last request found.
     queryKey: queryKeys.planning.recommendations(
       selectedBranchKey ?? '', scheduledAuditDate, ignoreDateAvailability, engineRadiusKm,
+      ignoreClientPolicy, ignoreDistancePolicy,
     ),
     queryFn: ({ signal }) => getRecommendations<Candidate, ExcludedCandidate>(
       selectedBranchKey!, scheduledAuditDate, ignoreDateAvailability, engineRadiusKm, signal,
+      ignoreClientPolicy, ignoreDistancePolicy,
     ),
     enabled: !!selectedBranchKey,
     staleTime: 30_000,
@@ -1322,16 +1356,118 @@ export const PlanningWorkspace: React.FC = () => {
     }
   };
 
-  const loadAssayerDetail = async (assayerId: string) => {
+  const loadAssayerDetail = async (candidate: Candidate) => {
+    setDetailCandidate(candidate);
     setLoadingDetail(true);
     setShowAssayerDetailModal(true);
     try {
-      // Remarks are fetched by <AssayerRemarks> inside the modal — one component, one API,
-      // shared with the HR drawer — so only the profile is loaded here.
-      const profile = await api.request<AssayerDetail>(`/assayers/${assayerId}/profile`, { method: 'GET' });
+      // Remarks, qualification, eligibility and live workload are fetched inside the modal
+      // itself (each its own API, one of them shared with the HR drawer) — only the base
+      // profile is loaded here.
+      const profile = await api.request<AssayerDetail>(`/assayers/${candidate.id}/profile`, { method: 'GET' });
       setDetailAssayer(profile);
     } catch { console.error('Failed to load assayer details'); }
     finally { setLoadingDetail(false); }
+  };
+
+  /**
+   * Quotes the client's contracted fee and opens the assign modal. Named (rather than left
+   * as the card button's inline handler) so the candidate-detail modal can trigger the exact
+   * same flow without a second copy of the fee-quote logic.
+   */
+  const handleCallAndAssign = async (c: Candidate) => {
+    setSelectedCandidate(c);
+    setCommercialBaseFee(null);
+    setLoadingCommercial(true);
+    try {
+      // Quoted by the server against the client's contracted rate card. This used to
+      // recompute the fee here from a hardcoded ₹8/km and a ₹1200 fallback, which meant the
+      // recommended fee shown to ops could differ from what the server actually stored on
+      // assign.
+      const quote = await api.request<FeeQuote>('/pricing/quote', {
+        method: 'POST',
+        body: JSON.stringify({
+          assayerId: c.id,
+          projectId: selectedProjectId || undefined,
+          distanceKm: c.distanceKm || 0,
+          // The routed leg behind that distance, so the rate card times road modes by the
+          // real drive — the same input assignment creation hands the calculator, so the mode
+          // (and fee) quoted here is the one stored on assign. `roadSource` keeps the quote
+          // honest about an estimate.
+          durationMinutes: c.durationMinutes && c.durationMinutes > 0 ? c.durationMinutes : undefined,
+          roadSource: c.durationMinutes && c.durationMinutes > 0 ? (c.distanceSource ?? 'ESTIMATE') : undefined,
+          // The branch being covered — lets the transport rate card price the actual journey
+          // for its state instead of the generic per-km formula.
+          branchId: branches.find((b) => b.id === selectedBranchId)?.branchId || undefined,
+        }),
+      });
+      setFeeQuote(quote);
+      setCommercialBaseFee(Number(quote.baseFee));
+      setAgreedFeeInput(String(Math.round(Number(quote.total))));
+    } catch {
+      // No silent second formula: if the quote fails, show what we know rather than inventing
+      // a number that the server would then reject or override.
+      setFeeQuote(null);
+      setCommercialBaseFee(null);
+      setAgreedFeeInput('');
+      setMessage({ type: 'error', text: 'Could not retrieve the contracted fee for this assayer. Enter the agreed fee manually.' });
+    } finally {
+      setLoadingCommercial(false);
+      // Pre-filled, not pre-decided: the operator can replace or clear it, and the button below
+      // stays disabled until something is there.
+      setOverrideReasonInput(
+        c.clientStandingIssue
+          ? 'Not on this client\'s panel — cleared by ops for this branch.'
+          : c.exceedsClientRange != null
+            ? `Beyond the client's ${c.exceedsClientRange} km limit — nobody nearer is available.`
+            : '',
+      );
+      setShowAssignModal(true);
+    }
+  };
+
+  /**
+   * Books the assayer immediately with no fee recorded. Named for the same reason as
+   * `handleCallAndAssign` above — the candidate-detail modal calls it too.
+   */
+  const handleSendToAppNoFee = async (c: Candidate) => {
+    const selectedPb = branches.find(b => b.id === selectedBranchId);
+    if (!selectedPb) return;
+    /*
+      This button created a live assignment on a single click, with no fee and no confirmation
+      — the most consequential control on the card and the only one that asked nothing. Its old
+      name, "Direct App Invite", also described the mechanism rather than the outcome: it is not
+      an invitation to look, it books the person. The shared confirm dialog now names the
+      assayer, the branch and the fee consequence before anything is sent (never
+      window.confirm — that cannot show any of it).
+    */
+    const ok = await confirm({
+      title: 'Send this job to the assayer’s phone?',
+      message: `${c.displayName} will be assigned to ${selectedPb.branch?.name ?? 'this branch'} straight away and will see it in their app. No fee is agreed or recorded — use “Call & Assign” instead if a fee needs to be quoted.`,
+      confirmLabel: 'Send now',
+      // Truthful rather than reassuring: the assignment can be cancelled afterwards, but the
+      // notification on the assayer's phone cannot be recalled.
+      reversibleNote: 'The assignment can be cancelled afterwards, but the assayer will already have been notified.',
+    });
+    if (!ok) return;
+    try {
+      await api.request('/assignments', {
+        method: 'POST',
+        body: JSON.stringify({
+          projectBranchId: selectedPb.id,
+          assayerId: c.id,
+          // Says what the button says. Omitting the fee used to mean "quote it from the rate
+          // card", so this dispatched base + travel while the label, the tooltip and the
+          // confirmation all promised no fee was recorded.
+          noFee: true,
+          remarks: 'Dispatched directly via App Invitation',
+        }),
+      });
+      setMessage({ type: 'success', text: `App invitation dispatched directly to ${c.displayName}!` });
+      refreshBranches();
+    } catch (err: any) {
+      setMessage({ type: 'error', text: userMessage(err) });
+    }
   };
 
   const handleConfirmAssignment = async (e: React.FormEvent) => {
@@ -1352,26 +1488,37 @@ export const PlanningWorkspace: React.FC = () => {
         body: JSON.stringify({
           projectBranchId: selectedBranchId,
           assayerId: selectedCandidate.id,
-          proposedFee: Number(negotiatingFee),
+          proposedFee: Number(agreedFeeInput),
           scheduledDate: scheduledAuditDate,
           autoSchedule: autoDispatch,
           acceptOnBehalf: assignDirectly,
           acceptanceReason: assignDirectly
-            ? `Agreed at ${money(negotiatingFee)} during Call & Assign.`
+            ? `Agreed at ${money(agreedFeeInput)} during Call & Assign.`
             : undefined,
+          /**
+           * Sent only when a rule on this candidate actually needs waiving.
+           *
+           * The engine ranks a candidate beyond the client's service limit rather than hiding
+           * them — distance is a cost preference, not the compliance floor — but the write path
+           * requires a stated reason for it. Without this the modal collected a fee, a date and
+           * two checkboxes, posted, and was refused for a rule it had never mentioned. Sending it
+           * unconditionally would be worse: an override recorded against every ordinary
+           * assignment is an audit trail nobody can read.
+           */
+          overrideReason: overrideReasonInput.trim() || undefined,
         })
       });
       // The call that produced this agreement is the record of who committed to what fee, and
       // when. `call_logs` has existed since the first migration with nowhere writing to it, so
       // a negotiated fee had no supporting record if the assayer later disputed it. Logged
       // after the assignment so a logging failure can never cost the assignment itself.
-      recordCall(selectedCandidate.id, 'AGREED', Number(negotiatingFee), 'Agreed during Call & Assign');
+      recordCall(selectedCandidate.id, 'AGREED', Number(agreedFeeInput), 'Agreed during Call & Assign');
 
       // Reports what the server actually did, not what was asked for. Direct assignment can fall
       // back to a PENDING offer if the confirmation could not be applied, and telling ops the job
       // is locked when it is still waiting on someone is the failure this whole change is about.
       // Only now is it safe to dismiss: the assignment exists.
-      setShowNegotiationModal(false);
+      setShowAssignModal(false);
       const confirmed = created?.status === 'ACCEPTED';
       setMessage({
         type: 'success',
@@ -1393,7 +1540,10 @@ export const PlanningWorkspace: React.FC = () => {
    */
   const recordCall = (
     assayerId: string,
-    outcome: 'AGREED' | 'NEGOTIATING' | 'DECLINED' | 'NO_ANSWER' | 'CALLBACK_REQUESTED' | 'WRONG_NUMBER',
+    outcome: 'AGREED' | 'DECLINED' | 'NO_ANSWER' | 'CALLBACK_REQUESTED' | 'WRONG_NUMBER',
+    // The call-log API's own field name: the fee agreed out loud on the phone. Historical rows
+    // with a NEGOTIATING outcome still display through `callOutcomeLabel`; this page just no
+    // longer records that outcome since in-app fee negotiation was removed.
     negotiatedFee?: number,
     notes?: string,
   ) => {
@@ -1405,7 +1555,7 @@ export const PlanningWorkspace: React.FC = () => {
         assayerId,
         outcome,
         // The server rejects a fee on outcomes where no fee was discussed.
-        negotiatedFee: (outcome === 'AGREED' || outcome === 'NEGOTIATING') ? negotiatedFee : undefined,
+        negotiatedFee: outcome === 'AGREED' ? negotiatedFee : undefined,
         notes,
       }),
     })
@@ -1642,107 +1792,6 @@ export const PlanningWorkspace: React.FC = () => {
     topCandidateRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     setScrollToTopMatch(false);
   }, [scrollToTopMatch, displayCandidates]);
-
-  // ── Counter-offer negotiation handlers ──────────────────────────────────────────
-  // Previously this exact logic (and the banner that triggers it) was hand-duplicated in the
-  // "default" and "three-col" layouts, with the two copies already drifted apart in wording —
-  // and missing entirely from "two-col-branch-recom", so a counter-offer arriving while that
-  // layout was active was invisible until switching layouts. One definition now, used by all
-  // three via the shared NegotiationBanner component below.
-  const handleAcceptCounterOffer = async (assignmentId: string, proposedFee: number) => {
-    try {
-      await api.request(`/assignments/${assignmentId}/transition`, {
-        method: 'POST',
-        body: JSON.stringify({ targetStatus: 'ACCEPTED' }),
-      });
-      setMessage({ type: 'success', text: `Counter fee ₹${proposedFee.toLocaleString()} approved! Branch confirmed.` });
-      refreshBranches();
-    } catch (err: any) {
-      setMessage({ type: 'error', text: userMessage(err) });
-    }
-  };
-
-  const handleOpenCounterProposal = (assignment: NonNullable<ProjectBranch['assignment']>) => {
-    if (assignment.assayer) {
-      setSelectedCandidate({ id: assignment.assayer.id, displayName: assignment.assayer.displayName } as any);
-      /**
-       * Seed the TRAVEL figure, because travel is what this form counters.
-       *
-       * It was seeded from `proposedFee` — the whole agreed number — while submit sends the
-       * value as `counterTravelFee`. So countering without editing did not repeat the current
-       * offer as the pre-filled number implied: it asked for base + the entire previous total,
-       * and the base silently absorbed it. The same mistake existed in the assayer's app.
-       *
-       * Whatever travel is currently on the table wins: a counter already made, else the rate
-       * card's original quote. Blank when neither is known — an empty field asks the question
-       * instead of answering it wrongly.
-       */
-      const travelOnTable = assignment.counterTravelFee ?? assignment.quotedTravelFee ?? null;
-      setNegotiatingFee(travelOnTable != null ? String(travelOnTable) : '');
-      setCounterRemarks('');
-      // This path opens the modal without fetching a fresh quote, so whatever quote the last
-      // Call & Assign left behind belongs to a DIFFERENT assayer and branch. Clearing it keeps
-      // the transport-grounding panel from lending this negotiation someone else's numbers.
-      setFeeQuote(null);
-      // The audit fee this assignment was actually priced at, so the modal can show what the
-      // counter adds to rather than presenting a bare number with no context.
-      setCommercialBaseFee(assignment.quotedBaseFee != null ? Number(assignment.quotedBaseFee) : null);
-      // Counter-back mode: submit will counter THIS assignment, not create a new one.
-      setCounterOfferAssignmentId(assignment.id);
-      setShowNegotiationModal(true);
-    }
-  };
-
-  /**
-   * Ops counters the assayer's fee back. This posts a real counter-offer on the existing
-   * assignment (proposeCounterFee via the NEGOTIATION transition) — it used to reuse the
-   * Confirm-Assignment path, which POSTed a brand-new duplicate assignment and left the original
-   * negotiation dangling, so the counter never reached the assayer.
-   */
-  const handleSubmitCounterOffer = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!counterOfferAssignmentId) return;
-    /*
-      What is countered is the travel. The audit fee comes from the rate card and neither side
-      moves it, so a counter that used to send the whole fee had every rupee of it land in the
-      base — repricing the work rather than the journey.
-
-      Zero is a legitimate answer here (a branch inside the free commute allowance), so this
-      checks for a number rather than for truthiness.
-    */
-    const travelFee = Number(negotiatingFee);
-    if (negotiatingFee.trim() === '' || Number.isNaN(travelFee) || travelFee < 0) {
-      setMessage({ type: 'error', text: 'Enter the travel amount you are countering with.' });
-      return;
-    }
-    setMessage(null);
-    setShowNegotiationModal(false);
-    try {
-      await api.request(`/assignments/${counterOfferAssignmentId}/transition`, {
-        method: 'POST',
-        body: JSON.stringify({ targetStatus: 'NEGOTIATION', counterTravelFee: travelFee, remarks: counterRemarks || undefined }),
-      });
-      setMessage({ type: 'success', text: `Countered at ₹${travelFee.toLocaleString()} travel. The assayer will see it on their app.` });
-      refreshBranches();
-    } catch (err: any) {
-      setMessage({ type: 'error', text: userMessage(err) });
-    } finally {
-      setCounterOfferAssignmentId(null);
-    }
-  };
-
-  const handleDeclineCounterOffer = async (assignmentId: string) => {
-    try {
-      await api.request(`/assignments/${assignmentId}/transition`, {
-        method: 'POST',
-        body: JSON.stringify({ targetStatus: 'REJECTED', reason: 'Counter fee rejected by Operations Manager' }),
-      });
-      setMessage({ type: 'success', text: 'Counter offer rejected. Branch returned to candidate search.' });
-      refreshBranches();
-    } catch (err: any) {
-      setMessage({ type: 'error', text: userMessage(err) });
-    }
-  };
 
   const s = (sel: string, set: (v: string) => void, opts: { value: string; label: string }[]) => (
     <Select value={sel} onChange={set} options={opts} compact style={{ background: 'var(--bg-primary)' }} />
@@ -2117,10 +2166,45 @@ export const PlanningWorkspace: React.FC = () => {
                 </div>
               )}
 
+              {/*
+                * Ranked, but beyond what this client normally pays to travel.
+                *
+                * The engine deliberately penalises distance rather than hiding it — the minimum is
+                * the compliance rule, the maximum is a cost preference — while the write path
+                * enforced the maximum anyway. So this card looked perfectly assignable and was
+                * refused on the click, with nothing on screen having hinted at it. Assigning them
+                * is allowed with a stated reason; saying so here is what turns a dead end into a
+                * decision.
+                */}
+              {/*
+                * On the list only because the panel rule was relaxed — so the row says so.
+                *
+                * Relaxing a rule must not quietly hide what was relaxed: the same contract as
+                * `dateConflict` above. Without this the toggle would turn a compliance-strict
+                * list into a longer one with no way to tell which names were on it legitimately.
+                */}
+              {c.clientStandingIssue && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10.5px', fontWeight: 600, padding: '4px 8px', borderRadius: 'var(--radius-sm)', background: 'var(--status-pending-bg)', color: 'var(--warning)' }}>
+                  <AlertTriangle size={10} /> {c.clientStandingIssue} — assigning them needs a reason.
+                </div>
+              )}
+
+              {c.exceedsClientRange != null && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '10.5px', fontWeight: 600, padding: '4px 8px', borderRadius: 'var(--radius-sm)', background: 'var(--status-pending-bg)', color: 'var(--warning)' }}>
+                  <AlertTriangle size={10} /> Beyond this client&rsquo;s {c.exceedsClientRange} km limit — assigning them needs a reason.
+                </div>
+              )}
+
               <div style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', justifyContent: 'space-between', gap: '8px', background: 'var(--bg-surface-2)', padding: '6px 8px', borderRadius: '4px' }}>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><Phone size={10} /> {c.phone}</span>
                 <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><MapPin size={10} /> {c.city}, {c.state}</span>
-                <span>Base: {c.baseFee != null ? `₹${c.baseFee}` : '—'}</span>
+                {/* `usedFallbackBaseFee` — this assayer has no priced commercial profile, so the
+                    figure is the platform-wide default rather than a rate anyone agreed to.
+                    Said out loud rather than shown as an ordinary fee, the same way an estimated
+                    distance is labelled rather than presented as a measured one. */}
+                <span title={c.usedFallbackBaseFee ? 'No priced rate on file for this assayer — this is the platform-wide default, not a contracted figure.' : undefined}>
+                  Base: {c.baseFee != null ? `₹${c.baseFee}` : '—'}{c.usedFallbackBaseFee ? ' (platform default)' : ''}
+                </span>
               </div>
 
               {/* What staff have said — the figure behind the `remarksScore` dimension. Click
@@ -2130,7 +2214,7 @@ export const PlanningWorkspace: React.FC = () => {
                 const tone = m > 0 ? { bg: 'var(--status-active-bg)', fg: 'var(--success)' } : m < 0 ? { bg: 'var(--status-cancelled-bg)', fg: 'var(--danger)' } : { bg: 'var(--bg-surface-2)', fg: 'var(--text-secondary)' };
                 const latest = c.remarkSummary.latest;
                 return (
-                  <button type="button" onClick={() => loadAssayerDetail(c.id)}
+                  <button type="button" onClick={() => loadAssayerDetail(c)}
                     /* The author's role was de-cased here, so a remark left by an operations
                        manager was attributed to "operations manager" while the user directory
                        and every other surface name the same person's role from the shared
@@ -2176,57 +2260,15 @@ export const PlanningWorkspace: React.FC = () => {
                   className="btn btn-secondary" style={{ padding: '6px', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
                   <Compass size={11} /> {isOptimizing ? 'Routing...' : 'Route'}
                 </button>
-                <button onClick={() => loadAssayerDetail(c.id)}
+                <button onClick={() => loadAssayerDetail(c)}
                   className="btn btn-secondary" style={{ padding: '6px', fontSize: '11px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
                   <Search size={11} /> Details
                 </button>
               </div>
 
-              {/* Row 2 Actions: Call & Negotiate vs Direct App Invite */}
+              {/* Row 2 Actions: Call & Assign vs Send to app */}
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px' }}>
-                <button onClick={async () => {
-                  setSelectedCandidate(c);
-                  setCommercialBaseFee(null);
-                  setLoadingCommercial(true);
-                  try {
-                    // Quoted by the server against the client's contracted rate card. This
-                    // used to recompute the fee here from a hardcoded ₹8/km and a ₹1200
-                    // fallback, which meant the recommended fee shown to ops could differ
-                    // from what the server actually stored on assign.
-                    const quote = await api.request<FeeQuote>('/pricing/quote', {
-                      method: 'POST',
-                      body: JSON.stringify({
-                        assayerId: c.id,
-                        projectId: selectedProjectId || undefined,
-                        distanceKm: c.distanceKm || 0,
-                        // The routed leg behind that distance, so the rate card times road
-                        // modes by the real drive — the same input assignment creation hands
-                        // the calculator, so the mode (and fee) quoted here is the one stored
-                        // on assign. `roadSource` keeps the quote honest about an estimate.
-                        durationMinutes: c.durationMinutes && c.durationMinutes > 0 ? c.durationMinutes : undefined,
-                        roadSource: c.durationMinutes && c.durationMinutes > 0 ? (c.distanceSource ?? 'ESTIMATE') : undefined,
-                        // The branch being covered — lets the transport rate card price the
-                        // actual journey for its state instead of the generic per-km formula.
-                        branchId: branches.find((b) => b.id === selectedBranchId)?.branchId || undefined,
-                      }),
-                    });
-                    setFeeQuote(quote);
-                    setCommercialBaseFee(Number(quote.baseFee));
-                    setNegotiatingFee(String(Math.round(Number(quote.total))));
-                  } catch {
-                    // No silent second formula: if the quote fails, show what we know rather
-                    // than inventing a number that the server would then reject or override.
-                    setFeeQuote(null);
-                    setCommercialBaseFee(null);
-                    setNegotiatingFee('');
-                    setMessage({ type: 'error', text: 'Could not retrieve the contracted fee for this assayer. Enter the agreed fee manually.' });
-                  } finally {
-                    setLoadingCommercial(false);
-                    // Normal assign flow — not a counter-back.
-                    setCounterOfferAssignmentId(null);
-                    setShowNegotiationModal(true);
-                  }
-                }}
+                <button onClick={() => handleCallAndAssign(c)}
                   className="btn btn-primary" style={{ padding: '7px 10px', fontSize: '11px', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
                   <Phone size={12} /> Call & Assign
                 </button>
@@ -2252,46 +2294,7 @@ export const PlanningWorkspace: React.FC = () => {
                   style={{ gridColumn: '1 / -1', color: 'var(--text-secondary)' }}
                 />
 
-                <button onClick={async () => {
-                  const selectedPb = branches.find(b => b.id === selectedBranchId);
-                  if (!selectedPb) return;
-                  /*
-                    This button created a live assignment on a single click, with no fee and no
-                    confirmation — the most consequential control on the card and the only one
-                    that asked nothing. Its old name, "Direct App Invite", also described the
-                    mechanism rather than the outcome: it is not an invitation to look, it books
-                    the person. The shared confirm dialog now names the assayer, the branch and
-                    the fee consequence before anything is sent (never window.confirm — that
-                    cannot show any of it).
-                  */
-                  const ok = await confirm({
-                    title: 'Send this job to the assayer\u2019s phone?',
-                    message: `${c.displayName} will be assigned to ${selectedPb.branch?.name ?? 'this branch'} straight away and will see it in their app. No fee is agreed or recorded \u2014 use \u201cCall & Assign\u201d instead if a fee needs to be quoted.`,
-                    confirmLabel: 'Send now',
-                    // Truthful rather than reassuring: the assignment can be cancelled
-                    // afterwards, but the notification on the assayer's phone cannot be recalled.
-                    reversibleNote: 'The assignment can be cancelled afterwards, but the assayer will already have been notified.',
-                  });
-                  if (!ok) return;
-                  try {
-                    await api.request('/assignments', {
-                      method: 'POST',
-                      body: JSON.stringify({
-                        projectBranchId: selectedPb.id,
-                        assayerId: c.id,
-                        // Says what the button says. Omitting the fee used to mean "quote it from
-                        // the rate card", so this dispatched base + travel while the label, the
-                        // tooltip and the confirmation all promised no fee was recorded.
-                        noFee: true,
-                        remarks: 'Dispatched directly via App Invitation',
-                      }),
-                    });
-                    setMessage({ type: 'success', text: `App invitation dispatched directly to ${c.displayName}!` });
-                    refreshBranches();
-                  } catch (err: any) {
-                    setMessage({ type: 'error', text: userMessage(err) });
-                  }
-                }}
+                <button onClick={() => handleSendToAppNoFee(c)}
                   className="btn btn-secondary"
                   title="Assigns this assayer immediately and shows the job in their app. No fee is agreed or recorded — use “Call & Assign” when a fee has to be quoted."
                   style={{ padding: '7px 10px', fontSize: '11px', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px' }}>
@@ -2757,14 +2760,15 @@ export const PlanningWorkspace: React.FC = () => {
               planDate={scheduledAuditDate}
               onPlanDateChange={pinPlanDate}
               ignoreDateAvailability={ignoreDateAvailability}
+              ignoreClientPolicy={ignoreClientPolicy}
+              onToggleIgnoreClientPolicy={setIgnoreClientPolicy}
+              ignoreDistancePolicy={ignoreDistancePolicy}
+              onToggleIgnoreDistancePolicy={setIgnoreDistancePolicy}
               onToggleIgnoreDateAvailability={setIgnoreDateAvailability}
               advanced={advanced}
             onNextUnassigned={handleNextUnassigned}
             nextBranchName={nextUnassignedBranch?.branch?.name ?? null}
             onRefresh={refreshCandidates}
-            onAccept={handleAcceptCounterOffer}
-            onCounter={handleOpenCounterProposal}
-            onDecline={handleDeclineCounterOffer}
           />
         </div>
       )}
@@ -2865,14 +2869,15 @@ export const PlanningWorkspace: React.FC = () => {
               planDate={scheduledAuditDate}
               onPlanDateChange={pinPlanDate}
               ignoreDateAvailability={ignoreDateAvailability}
+              ignoreClientPolicy={ignoreClientPolicy}
+              onToggleIgnoreClientPolicy={setIgnoreClientPolicy}
+              ignoreDistancePolicy={ignoreDistancePolicy}
+              onToggleIgnoreDistancePolicy={setIgnoreDistancePolicy}
               onToggleIgnoreDateAvailability={setIgnoreDateAvailability}
                     advanced={advanced}
             onNextUnassigned={handleNextUnassigned}
             nextBranchName={nextUnassignedBranch?.branch?.name ?? null}
             onRefresh={refreshCandidates}
-                    onAccept={handleAcceptCounterOffer}
-                    onCounter={handleOpenCounterProposal}
-                    onDecline={handleDeclineCounterOffer}
                   />
                 </div>
               )}
@@ -2916,7 +2921,7 @@ export const PlanningWorkspace: React.FC = () => {
             />
           </div>
 
-          {/* Column 3: Right Match & Counter-Offer Inspector Panel */}
+          {/* Column 3: Right Match Inspector Panel */}
           <RecommendationPanel
             onViewHistory={setHistoryBranchId}
             selectedPb={selectedPb}
@@ -2935,14 +2940,15 @@ export const PlanningWorkspace: React.FC = () => {
               planDate={scheduledAuditDate}
               onPlanDateChange={pinPlanDate}
               ignoreDateAvailability={ignoreDateAvailability}
+              ignoreClientPolicy={ignoreClientPolicy}
+              onToggleIgnoreClientPolicy={setIgnoreClientPolicy}
+              ignoreDistancePolicy={ignoreDistancePolicy}
+              onToggleIgnoreDistancePolicy={setIgnoreDistancePolicy}
               onToggleIgnoreDateAvailability={setIgnoreDateAvailability}
             advanced={advanced}
             onNextUnassigned={handleNextUnassigned}
             nextBranchName={nextUnassignedBranch?.branch?.name ?? null}
             onRefresh={refreshCandidates}
-            onAccept={handleAcceptCounterOffer}
-            onCounter={handleOpenCounterProposal}
-            onDecline={handleDeclineCounterOffer}
           />
         </div>
       )}
@@ -2967,17 +2973,17 @@ export const PlanningWorkspace: React.FC = () => {
         </div>
       )}
 
-      {/* ── Negotiation Modal ── */}
-      {showNegotiationModal && selectedCandidate && selectedPb && (
-        <Modal open onClose={() => setShowNegotiationModal(false)}
-          title={counterOfferAssignmentId ? "Counter the assayer's fee" : 'Confirm Assignment'}
+      {/* ── Confirm Assignment Modal (fee settled on the call, recorded here) ── */}
+      {showAssignModal && selectedCandidate && selectedPb && (
+        <Modal open onClose={() => setShowAssignModal(false)}
+          title="Confirm Assignment"
           width="580px" asForm
-          onSubmit={counterOfferAssignmentId ? handleSubmitCounterOffer : handleConfirmAssignment}
+          onSubmit={handleConfirmAssignment}
           footer={
           <>
-            <button type="button" onClick={() => setShowNegotiationModal(false)} className="btn btn-secondary">Cancel</button>
+            <button type="button" onClick={() => setShowAssignModal(false)} className="btn btn-secondary">Cancel</button>
             <button type="submit" className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <Check size={14} /> {counterOfferAssignmentId ? 'Send counter' : 'Confirm Commitment'}
+              <Check size={14} /> Confirm Commitment
             </button>
           </>
         }>            {/* Assayer Summary */}
@@ -3048,55 +3054,53 @@ export const PlanningWorkspace: React.FC = () => {
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                 {/*
-                  One input, two meanings, so it says which.
-
-                  Making the first offer, this is the whole fee — base plus travel — because that
-                  is what the assayer is shown and accepts. Countering, it is the travel alone:
-                  the audit fee comes from the rate card (read-only beside this) and is not what
-                  either side is arguing about. The old label said "Negotiation Fee" in both, and
-                  a desk countering at 650 had no way to know whether that was the journey or the
-                  whole job.
+                  The whole fee — base plus travel — because that is the figure settled on the
+                  call and stored on the assignment. The rate-card base sits read-only beside
+                  this, so the desk can see how much of the total is the journey.
                 */}
                 <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
-                  <TrendingUp size={11} /> {counterOfferAssignmentId ? 'Travel fee' : 'Total fee (base + travel)'}
+                  <TrendingUp size={11} /> Total fee (base + travel)
                 </label>
                 <div style={{ position: 'relative' }}>
                   <span style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)', fontSize: '13px' }}>₹</span>
-                  <input type="number" value={negotiatingFee} onChange={e => setNegotiatingFee(e.target.value)} required
+                  <input type="number" value={agreedFeeInput} onChange={e => setAgreedFeeInput(e.target.value)} required
                     style={{ width: '100%', padding: '10px 10px 10px 26px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '14px', boxSizing: 'border-box' }} />
                 </div>
               </div>
+              {/*
+                * The rule this assignment will break, and the box that lets it through.
+                *
+                * Shown only when there is actually something to waive. The operator used to
+                * complete this whole form — fee, date, two checkboxes — press Confirm, and be
+                * refused by a limit the modal had never mentioned; their only route through was to
+                * abandon it, scroll to the excluded panel and start again. Asking here, in the
+                * form they are already filling in, is the difference between a dead end and a
+                * decision they are accountable for.
+                */}
+              {(selectedCandidate.exceedsClientRange != null || selectedCandidate.clientStandingIssue) && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <label style={{ fontSize: '11px', color: 'var(--warning)', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <AlertTriangle size={11} /> {selectedCandidate.clientStandingIssue
+                      ? `${selectedCandidate.clientStandingIssue} — why assign them?`
+                      : `Beyond this client's ${selectedCandidate.exceedsClientRange} km limit — why assign them?`}
+                  </label>
+                  <input
+                    value={overrideReasonInput}
+                    onChange={e => setOverrideReasonInput(e.target.value)}
+                    required
+                    placeholder="Recorded against this assignment"
+                    style={{ width: '100%', padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--warning)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px', boxSizing: 'border-box' }}
+                  />
+                </div>
+              )}
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
                 <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '4px' }}>
                   <Calendar size={11} /> Audit Scheduled Date
                 </label>
-                <input type="date" value={scheduledAuditDate} onChange={e => pinPlanDate(e.target.value)} required={!counterOfferAssignmentId}
+                <input type="date" value={scheduledAuditDate} onChange={e => pinPlanDate(e.target.value)} required
                   style={{ width: '100%', padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px', boxSizing: 'border-box' }} />
               </div>
             </div>
-
-            {/*
-              What the assayer will actually be offered, spelled out.
-
-              Countering, the input above is TRAVEL ONLY while the number the assayer sees is
-              base + travel — so a desk typing 350 was shown nothing to tell them the offer
-              becomes 1,900, and a desk reading 1,900 on the card had no way to see that only
-              350 of it was theirs to move. Stating the arithmetic is the whole fix: the same
-              sum the server performs (quotedBaseFee + counterTravelFee), in the same place the
-              number is typed.
-            */}
-            {counterOfferAssignmentId && commercialBaseFee != null && negotiatingFee.trim() !== ''
-              && !Number.isNaN(Number(negotiatingFee)) && (
-              <div style={{ marginTop: '12px', padding: '10px 12px', background: 'var(--bg-secondary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', fontSize: '12px', color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
-                <span>
-                  Audit fee ₹{commercialBaseFee.toLocaleString()} (fixed by the rate card)
-                  {' + '}travel ₹{Number(negotiatingFee).toLocaleString()}
-                </span>
-                <b style={{ color: 'var(--text-primary)', fontSize: '14px', whiteSpace: 'nowrap' }}>
-                  Assayer sees ₹{(commercialBaseFee + Number(negotiatingFee)).toLocaleString()}
-                </b>
-              </div>
-            )}
 
             {/* The transport grounding behind the recommended fee: what the journey actually
                 costs by the recommended mode, with the alternatives, so the caller can argue
@@ -3119,17 +3123,7 @@ export const PlanningWorkspace: React.FC = () => {
               </div>
             )}
 
-            {counterOfferAssignmentId && (
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', marginTop: '12px' }}>
-                <label style={{ fontSize: '11px', color: 'var(--text-muted)', fontWeight: 600 }}>Note to the assayer (optional)</label>
-                <textarea value={counterRemarks} onChange={e => setCounterRemarks(e.target.value)} rows={2}
-                  placeholder="e.g. This is our best rate for this route."
-                  style={{ width: '100%', padding: '10px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', color: 'var(--text-primary)', outline: 'none', fontSize: '13px', boxSizing: 'border-box', resize: 'vertical' }} />
-              </div>
-            )}
-
-            {/* Assign-directly + auto-dispatch — only for a fresh assignment, not a fee counter. */}
-            {!counterOfferAssignmentId && (
+            {/* Assign-directly + auto-dispatch. */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
               {/* Ticked, the desk confirms on the assayer's behalf: the call already settled it,
                   so there is nothing left for them to accept. Unticked restores the offer flow. */}
@@ -3160,204 +3154,22 @@ export const PlanningWorkspace: React.FC = () => {
                 </label>
               </div>
             </div>
-            )}
           </Modal>
         )}
 
       {/* ── Assayer Detail Modal ── */}
-      {showAssayerDetailModal && (
-        <Modal open onClose={() => { setShowAssayerDetailModal(false); setDetailAssayer(null); }} title="Assayer Details" width="800px" maxHeight="90vh" bodyStyle={{ padding: '0 4px 0 0' }}>
-            <div style={{ overflowY: 'auto', paddingRight: '4px' }}>
-              {loadingDetail ? (
-                <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Loading assayer details...</div>
-              ) : !detailAssayer ? (
-                <div style={{ textAlign: 'center', padding: '40px', color: 'var(--text-muted)' }}>Assayer not found.</div>
-              ) : (
-                <>
-                  {(() => {
-                    const effectiveTotal = Math.max(detailAssayer.totalAssignments, detailAssayer.auditHistory?.length || 0);
-                    const effectiveCompleted = Math.max(detailAssayer.completedAssignments, detailAssayer.auditHistory?.filter(a => ['COMPLETED', 'AUDIT_COMPLETED', 'CLOSED', 'VALIDATION_COMPLETED'].includes(a.status)).length || 0);
-                    const completionRate = effectiveTotal > 0
-                      ? Math.round((effectiveCompleted / effectiveTotal) * 100) : 0;
-                    const onTimeRate = effectiveCompleted > 0
-                      ? Math.round((Math.max(detailAssayer.onTimeCompletions, effectiveCompleted) / effectiveCompleted) * 100) : 0;
-                    return (
-                      <>
-                        {/* Header Card */}
-                        <div className="glass-card" style={{ padding: '20px', borderRadius: 'var(--radius-md)', marginBottom: '16px' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '12px' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-                              <div style={{ width: '48px', height: '48px', borderRadius: '50%', background: 'linear-gradient(135deg, var(--accent-primary), var(--accent-secondary))', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--on-accent)', fontSize: '18px', fontWeight: 700 }}>
-                                {detailAssayer.displayName.charAt(0).toUpperCase()}
-                              </div>
-                              <div>
-                                <h3 style={{ fontSize: '18px', fontWeight: 700, margin: 0 }}>{detailAssayer.displayName}</h3>
-                                <div style={{ display: 'flex', gap: '6px', alignItems: 'center', marginTop: '2px', flexWrap: 'wrap' }}>
-                                  <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{detailAssayer.assayerCode}</span>
-                                  <span style={{ width: '3px', height: '3px', borderRadius: '50%', background: 'var(--text-muted)' }} />
-                                  <span style={{ fontSize: '11px', padding: '1px 6px', borderRadius: '8px', background: detailAssayer.lifecycleStatus === 'ACTIVE' ? 'var(--status-active-bg)' : 'var(--status-pending-bg)', color: detailAssayer.lifecycleStatus === 'ACTIVE' ? 'var(--status-active)' : 'var(--warning)', fontWeight: 500 }}>{detailAssayer.lifecycleStatus}</span>
-                                  <span style={{ width: '3px', height: '3px', borderRadius: '50%', background: 'var(--text-muted)' }} />
-                                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '3px' }}><Briefcase size={10} /> {detailAssayer.employmentType}</span>
-                                  <span style={{ width: '3px', height: '3px', borderRadius: '50%', background: 'var(--text-muted)' }} />
-                                  <span style={{ fontSize: '11px', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '3px' }}><Star size={10} /> {detailAssayer.experienceYears} yrs exp</span>
-                                </div>
-                              </div>
-                            </div>
-                            <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
-                              <div style={{ textAlign: 'center' }}>
-                                <div style={{ fontSize: '24px', fontWeight: 700, color: detailAssayer.averageRating >= 4 ? 'var(--status-active)' : detailAssayer.averageRating >= 3 ? 'var(--warning)' : 'var(--danger)' }}>
-                                  {Number(detailAssayer.averageRating) > 0 ? Number(detailAssayer.averageRating).toFixed(1) : '—'}
-                                </div>
-                                <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '1px' }}>Avg Rating</div>
-                              </div>
-                              <div style={{ textAlign: 'center' }}>
-                                <div style={{ fontSize: '24px', fontWeight: 700, color: 'var(--accent-primary)' }}>
-                                  {Number(detailAssayer.performanceRating).toFixed(1)}
-                                </div>
-                                <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '1px' }}>Perf. Rating</div>
-                              </div>
-                            </div>
-                          </div>
-                          <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--border-color)' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--text-secondary)' }}><MapPin size={11} /> {detailAssayer.city}, {detailAssayer.state}</div>
-                            {detailAssayer.phone && <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--text-secondary)' }}><Phone size={11} /> {detailAssayer.phone}</div>}
-                            {detailAssayer.email && <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--text-secondary)' }}><Mail size={11} /> {detailAssayer.email}</div>}
-                            {detailAssayer.department && <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--text-secondary)' }}><Briefcase size={11} /> {detailAssayer.department}</div>}
-                            {detailAssayer.region && <div style={{ display: 'flex', alignItems: 'center', gap: '5px', fontSize: '11px', color: 'var(--text-secondary)' }}><MapPin size={11} /> Region: {detailAssayer.region}</div>}
-                          </div>
-                        </div>
-
-                        {/* KPI Cards */}
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(130px, 1fr))', gap: '10px', marginBottom: '16px' }}>
-                          <div className="glass-card" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
-                            <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '3px' }}><Briefcase size={10} /> Total Audits</div>
-                            <div style={{ fontSize: '20px', fontWeight: 700, color: 'var(--accent-primary)' }}>{effectiveTotal}</div>
-                          </div>
-                          <div className="glass-card" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
-                            <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '3px' }}><CheckCircle size={10} /> Completed</div>
-                            <div style={{ fontSize: '20px', fontWeight: 700, color: 'var(--status-active)' }}>{effectiveCompleted}</div>
-                            <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '1px' }}>{completionRate}%</div>
-                          </div>
-                          <div className="glass-card" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
-                            <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '3px' }}><TrendingUp size={10} /> Acceptance</div>
-                            <div style={{ fontSize: '20px', fontWeight: 700, color: 'var(--accent)' }}>{detailAssayer.acceptanceRate ?? 100}%</div>
-                          </div>
-                          <div className="glass-card" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
-                            <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '3px' }}><X size={10} /> Rejection Rate</div>
-                            <div style={{ fontSize: '20px', fontWeight: 700, color: (detailAssayer.rejectionRate || 0) > 15 ? 'var(--danger)' : 'var(--success)' }}>{detailAssayer.rejectionRate ?? 0}%</div>
-                          </div>
-                          <div className="glass-card" style={{ padding: '12px', borderRadius: 'var(--radius-md)' }}>
-                            <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '3px' }}><AlertTriangle size={10} /> Queries Raised</div>
-                            <div style={{ fontSize: '20px', fontWeight: 700, color: (detailAssayer.queryCount || 0) > 0 ? 'var(--warning)' : 'var(--success)' }}>{detailAssayer.queryCount ?? 0}</div>
-                          </div>
-                          <Link to={`/billing/statement?assayer=${detailAssayer.id}`} className="glass-card" style={{ padding: '12px', borderRadius: 'var(--radius-md)', textDecoration: 'none', color: 'inherit' }} title="Open the assayer's statement — earned, paid, owed">
-                            <div style={{ fontSize: '9px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '2px', display: 'flex', alignItems: 'center', gap: '3px' }}><DollarSign size={10} /> Earnings</div>
-                            <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--accent)' }}>Statement →</div>
-                          </Link>
-                        </div>
-
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '14px' }}>
-                          {/* Left: Skills & Certifications */}
-                          <div className="glass-card" style={{ padding: '14px', borderRadius: 'var(--radius-md)' }}>
-                            <h4 style={{ fontSize: '13px', fontWeight: 600, margin: '0 0 10px', display: 'flex', alignItems: 'center', gap: '5px' }}><Award size={13} /> Skills & Certifications</h4>
-                            <div style={{ marginBottom: '10px' }}>
-                              <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px' }}>SKILLS</div>
-                              {detailAssayer.skills && detailAssayer.skills.length > 0 ? (
-                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px' }}>
-                                  {detailAssayer.skills.map(s => (
-                                    <span key={s} style={{ padding: '2px 6px', background: 'rgba(216,174,71,0.1)', color: 'var(--accent-primary)', borderRadius: '8px', fontSize: '10px' }}>{s}</span>
-                                  ))}
-                                </div>
-                              ) : (
-                                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>No skills recorded</div>
-                              )}
-                            </div>
-                            <div>
-                              <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px' }}>CERTIFICATIONS</div>
-                              {detailAssayer.certifications && detailAssayer.certifications.length > 0 ? (
-                                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                  {detailAssayer.certifications.map(c => (
-                                    <div key={c.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 6px', background: 'var(--status-active-bg)', borderRadius: 'var(--radius-sm)' }}>
-                                      <span style={{ fontSize: '11px', color: 'var(--text-primary)' }}>{c.name}</span>
-                                      <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>Exp: {new Date(c.expiryDate).toLocaleDateString()}</span>
-                                    </div>
-                                  ))}
-                                </div>
-                              ) : (
-                                <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>No certifications recorded</div>
-                              )}
-                            </div>
-                          </div>
-
-                          {/* Right: Performance Insights */}
-                          <div className="glass-card" style={{ padding: '14px', borderRadius: 'var(--radius-md)' }}>
-                            <h4 style={{ fontSize: '13px', fontWeight: 600, margin: '0 0 10px', display: 'flex', alignItems: 'center', gap: '5px' }}><TrendingUp size={13} /> Performance Insights</h4>
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                              <div>
-                                <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '3px' }}>COMPLETION RATE</div>
-                                <div style={{ height: '6px', background: 'var(--bg-primary)', borderRadius: '3px', overflow: 'hidden' }}>
-                                  <div style={{ height: '100%', width: `${completionRate}%`, background: completionRate >= 80 ? 'var(--status-active)' : completionRate >= 50 ? 'var(--warning)' : 'var(--danger)', borderRadius: '3px', transition: 'width 0.3s' }} />
-                                </div>
-                                <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginTop: '1px' }}>{completionRate}%</div>
-                              </div>
-                              <div>
-                                <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '3px' }}>ON-TIME DELIVERY</div>
-                                <div style={{ height: '6px', background: 'var(--bg-primary)', borderRadius: '3px', overflow: 'hidden' }}>
-                                  <div style={{ height: '100%', width: `${onTimeRate}%`, background: onTimeRate >= 80 ? 'var(--status-active)' : onTimeRate >= 50 ? 'var(--warning)' : 'var(--danger)', borderRadius: '3px', transition: 'width 0.3s' }} />
-                                </div>
-                                <div style={{ fontSize: '10px', color: 'var(--text-secondary)', marginTop: '1px' }}>{onTimeRate}%</div>
-                              </div>
-                              {detailAssayer.activeCommercialProfile && (
-                                <div style={{ padding: '8px', background: 'rgba(216,174,71,0.1)', borderRadius: '6px', border: '1px solid rgba(216,174,71,0.2)' }}>
-                                  <div style={{ fontSize: '10px', color: 'var(--accent)', fontWeight: 700, marginBottom: '2px' }}>ACTIVE COMMERCIAL RATE</div>
-                                  <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)' }}>₹{detailAssayer.activeCommercialProfile.baseFee?.toLocaleString()} / audit</div>
-                                  <div style={{ fontSize: '9px', color: 'var(--text-muted)', marginTop: '2px' }}>
-                                    Travel: ₹{detailAssayer.activeCommercialProfile.travelReimbursement || 0} | Daily: ₹{detailAssayer.activeCommercialProfile.dailyRate || 0}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Audit History Timeline */}
-                        <div className="glass-card" style={{ padding: '14px', borderRadius: 'var(--radius-md)', marginTop: '14px' }}>
-                          <h4 style={{ fontSize: '13px', fontWeight: 600, margin: '0 0 10px', display: 'flex', alignItems: 'center', gap: '5px' }}><Calendar size={13} /> Audit History & Fee Logs</h4>
-                          {detailAssayer.auditHistory && detailAssayer.auditHistory.length > 0 ? (
-                            <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', maxHeight: '200px', overflowY: 'auto' }}>
-                              {detailAssayer.auditHistory.map(ah => (
-                                <div key={ah.id} style={{ padding: '8px 10px', background: 'var(--bg-primary)', borderRadius: 'var(--radius-sm)', borderLeft: '3px solid var(--accent)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                  <div>
-                                    <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)' }}>{ah.branch_name || 'Branch Audit'}</div>
-                                    <div style={{ fontSize: '10px', color: 'var(--text-muted)', marginTop: '2px' }}>{ah.branch_city}, {ah.branch_state} | {ah.project_name || 'GSS Project'}</div>
-                                  </div>
-                                  <div style={{ textAlign: 'right' }}>
-                                    <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--warning)' }}>₹{(ah.agreed_fee || ah.proposed_fee || 0).toLocaleString()}</div>
-                                    <span style={{ fontSize: '9px', padding: '1px 5px', borderRadius: '3px', background: 'rgba(216,174,71,0.2)', color: 'var(--accent)', fontWeight: 600 }}>{ah.status}</span>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          ) : (
-                            <div style={{ textAlign: 'center', padding: '12px', color: 'var(--text-muted)', fontSize: '11px' }}>No audit history recorded.</div>
-                          )}
-                        </div>
-
-                        {/* Staff remarks — the shared component (also the HR drawer's Remarks tab),
-                            reading and writing the one remarks API the recommendation engine
-                            scores from. The planner can add one right here after a call. */}
-                        <div className="glass-card" style={{ padding: '14px', borderRadius: 'var(--radius-md)', marginTop: '14px' }}>
-                          <h4 style={{ fontSize: '13px', fontWeight: 600, margin: '0 0 10px', display: 'flex', alignItems: 'center', gap: '5px' }}><Star size={13} /> Staff remarks</h4>
-                          <AssayerRemarks assayerId={detailAssayer.id} compact />
-                        </div>
-                      </>
-                    );
-                  })()}
-                </>
-              )}
-            </div>
-          </Modal>
-        )}
+      <AssayerDetailModal
+        open={showAssayerDetailModal}
+        onClose={() => { setShowAssayerDetailModal(false); setDetailAssayer(null); setDetailCandidate(null); }}
+        assayerId={detailCandidate?.id ?? detailAssayer?.id ?? null}
+        profile={detailAssayer}
+        loadingProfile={loadingDetail}
+        candidate={detailCandidate}
+        branchName={selectedPb?.branch?.name}
+        clientId={selectedProjectClientId ?? undefined}
+        onCallAndAssign={(cand) => { setShowAssayerDetailModal(false); void handleCallAndAssign(cand); }}
+        onSendToApp={(cand) => { setShowAssayerDetailModal(false); void handleSendToAppNoFee(cand); }}
+      />
 
       {/* ── Layout: Day Plans (Multi-Branch Cluster View) ── */}
       {effectiveLayout === 'day-plans' && (

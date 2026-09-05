@@ -16,7 +16,7 @@ import { useCurrentPermissions, useCurrentRoles } from '../../hooks/useCurrentRo
 import { canAccessRoute } from '../../config/route-permissions';
 
 /**
- * The always-available "send feedback" entry point.
+ * The always-available "get support" entry point.
  *
  * Lives in the header so every user — on any page — can report a bug, request a
  * feature or ask a question without hunting for a menu. It captures the route they
@@ -43,9 +43,11 @@ export const FeedbackLauncher: React.FC = () => {
   const navigate = useNavigate();
   /**
    * Whether this user can actually open /feedback, asked of ROUTE_PERMISSIONS rather than
-   * assumed. The channel was narrowed to super administrators (2026-08-17) while the launcher
-   * stayed available to everyone who can reach it — so "View my feedback" is a link that
-   * ProtectedRoute would bounce straight back to the dashboard for anybody else, silently.
+   * assumed. The channel was narrowed to super administrators (2026-08-17) and then moved to
+   * the people who actually answer the tickets — DEVELOPER and PRODUCT_SUPPORT, with ADMIN
+   * dropped (2026-09-05) — while the launcher stayed available to everyone who can reach it —
+   * so "View my support requests" is a link that ProtectedRoute would bounce straight back to
+   * the dashboard for anybody else, silently.
    *
    * Today Header.tsx only mounts this launcher when the same check passes, so the bounce is
    * not reachable in the shipped app. The check is repeated here because the component cannot
@@ -187,8 +189,8 @@ export const FeedbackLauncher: React.FC = () => {
     <>
       <button
         onClick={() => setOpen(true)}
-        title="Send feedback to the product team"
-        aria-label="Send feedback"
+        title="Get support from the product team"
+        aria-label="Get support"
         style={{
           display: 'flex', alignItems: 'center', gap: '6px',
           padding: '5px 11px', borderRadius: 'var(--radius-full)',
@@ -198,7 +200,7 @@ export const FeedbackLauncher: React.FC = () => {
         }}
       >
         <MessageSquarePlus size={14} />
-        <span className="feedback-launcher-label">Feedback</span>
+        <span className="feedback-launcher-label">Support</span>
       </button>
 
       {open && createPortal(
@@ -216,7 +218,7 @@ export const FeedbackLauncher: React.FC = () => {
           }}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '14px 16px', borderBottom: '1px solid var(--border-color)' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 700, fontSize: '14px' }}>
-                <MessageSquarePlus size={16} style={{ color: 'var(--accent)' }} /> Send feedback
+                <MessageSquarePlus size={16} style={{ color: 'var(--accent)' }} /> New support request
               </div>
               <button onClick={close} style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer' }}><X size={18} /></button>
             </div>
@@ -232,7 +234,7 @@ export const FeedbackLauncher: React.FC = () => {
                 </div>
                 <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
                   {canOpenChannel && (
-                    <button className="btn btn-secondary" onClick={() => { const id = doneId; close(); navigate(`/feedback?id=${id}`); }}>View my feedback</button>
+                    <button className="btn btn-secondary" onClick={() => { const id = doneId; close(); navigate(`/feedback?id=${id}`); }}>View my support requests</button>
                   )}
                   <button className="btn btn-primary" onClick={reset}>Send another</button>
                 </div>
@@ -240,7 +242,7 @@ export const FeedbackLauncher: React.FC = () => {
             ) : (
               <div style={{ padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px', overflowY: 'auto' }}>
                 <div>
-                  <div style={{ fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>What kind of feedback?</div>
+                  <div style={{ fontSize: '11.5px', fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '5px' }}>What kind of request is this?</div>
                   <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
                     <TypeChip active={category === ''} onClick={() => setCategory('')} label="Auto-detect" icon={<Sparkles size={12} />} />
                     {(Object.keys(CATEGORY) as FeedbackCategory[]).map((c) => (

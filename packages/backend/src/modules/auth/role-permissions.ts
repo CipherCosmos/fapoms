@@ -30,21 +30,25 @@ import { SystemRole } from '@fapoms/shared';
  * resource, and every one of those routes was already reachable by name, so nothing gained access
  * it did not have. What changed is that the table now says so.
  */
-export const ROLE_PERMISSIONS: Record<SystemRole, string[]> = {
-  /**
-   * Everything. ADMIN is the union of what SUPER_ADMINISTRATOR and ADMINISTRATOR held —
-   * they differed by seven routes, all of them the product-feedback queue, which PRODUCT_SUPPORT
-   * owns and ADMIN keeps a copy of so nothing waits on that role being staffed.
-   */
-  [SystemRole.ADMIN]: [
-    'ASSAYER:CREATE:ORGANIZATION',
+/**
+ * The business estate — every grant ADMIN held before the DEVELOPER split (2026-09-05), as one
+ * named base so the two top roles are built FROM it rather than copied from each other:
+ *
+ *   ADMIN     = base + SYSTEM:APPROVE:PLATFORM   (approves a developer's destructive request)
+ *   DEVELOPER = base + SYSTEM:VIEW/EDIT:PLATFORM (owns the technical estate)
+ *
+ * The asymmetry is the two-person rule: no role holds both the request side (SYSTEM:EDIT) and
+ * the approve side (SYSTEM:APPROVE) of a data wipe. Do not add SYSTEM:* grants to this base —
+ * that would silently give both roles both halves.
+ */
+const ADMIN_BUSINESS_GRANTS: string[] = [
+  'ASSAYER:CREATE:ORGANIZATION',
     'ASSAYER:DELETE:ORGANIZATION',
     'ASSAYER:EDIT:ORGANIZATION',
     'ASSAYER:VIEW:PLATFORM',
     'ASSIGNMENT:ACCEPT:SELF',
     'ASSIGNMENT:CANCEL:ORGANIZATION',
     'ASSIGNMENT:CREATE:ORGANIZATION',
-    'ASSIGNMENT:NEGOTIATE:ORGANIZATION',
     'ASSIGNMENT:VIEW:ASSIGNED_RECORDS',
     'ASSIGNMENT:VIEW:PLATFORM',
     'AUDIT_LOG:VIEW:PLATFORM',
@@ -100,6 +104,31 @@ export const ROLE_PERMISSIONS: Record<SystemRole, string[]> = {
     'VALIDATION:EDIT:ORGANIZATION',
     'VALIDATION:REVIEW:ASSIGNED_RECORDS',
     'VALIDATION:VIEW:PLATFORM',
+];
+
+export const ROLE_PERMISSIONS: Record<SystemRole, string[]> = {
+  /**
+   * Runs the machine. Everything the business estate grants, plus the technical platform
+   * surface (SYSTEM:VIEW/EDIT). Deliberately NOT SYSTEM:APPROVE — a developer requests a
+   * destructive action; only an admin approves it. The RolesGuard implication map
+   * (shared/role-hierarchy.ts) additionally lets this role through every gate that names
+   * ADMIN or PRODUCT_SUPPORT.
+   */
+  [SystemRole.DEVELOPER]: [
+    ...ADMIN_BUSINESS_GRANTS,
+    'SYSTEM:EDIT:PLATFORM',
+    'SYSTEM:VIEW:PLATFORM',
+  ],
+
+  /**
+   * Runs the business. ADMIN is the union of what SUPER_ADMINISTRATOR and ADMINISTRATOR held —
+   * they differed by seven routes, all of them the product-feedback queue, which since
+   * 2026-09-05 belongs to DEVELOPER/PRODUCT_SUPPORT rather than here. The one SYSTEM grant is
+   * the approve half of the destructive two-person rule.
+   */
+  [SystemRole.ADMIN]: [
+    ...ADMIN_BUSINESS_GRANTS,
+    'SYSTEM:APPROVE:PLATFORM',
   ],
 
   /**
@@ -115,7 +144,6 @@ export const ROLE_PERMISSIONS: Record<SystemRole, string[]> = {
     'ASSAYER:VIEW:ORGANIZATION',
     'ASSIGNMENT:CANCEL:ORGANIZATION',
     'ASSIGNMENT:CREATE:ORGANIZATION',
-    'ASSIGNMENT:NEGOTIATE:ORGANIZATION',
     'ASSIGNMENT:VIEW:PLATFORM',
     'BILLING:APPROVE:ORGANIZATION',
     'BILLING:CREATE:ORGANIZATION',

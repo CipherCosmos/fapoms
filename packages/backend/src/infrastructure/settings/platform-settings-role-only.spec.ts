@@ -3,6 +3,8 @@ import { join } from 'path';
 import { ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { RolesGuard, ROLES_KEY, PERMISSIONS_KEY, ROLE_ONLY_KEY } from '../../modules/auth/guards';
+import { PlatformSettingsController } from './platform-settings.controller';
+import { SETTINGS_GROUPS } from './settings.registry';
 
 /**
  * `set()`/`reset()` (`PUT`/`DELETE /platform-settings/:key`) must stay reachable by the ADMIN
@@ -121,5 +123,73 @@ describe('PlatformSettingsController — set/reset resist the custom-role permis
       expect(decoratorsAbove('findAll')).not.toMatch(/@RoleOnly\(\)/);
       expect(decoratorsAbove('limits')).not.toMatch(/@RoleOnly\(\)/);
     });
+  });
+});
+
+/**
+ * The read half of the 2026-09-05 technical/business split: what `GET /platform-settings`
+ * shows each kind of caller. The write half (the per-key fence) is proven in
+ * `platform-settings.service.spec.ts`; this proves the screen never offers a knob the fence
+ * would refuse — a pure administrator sees business-audience groups and keys only, a developer
+ * sees everything, and the narrow single-group readers (AUDITOR) are exactly as they were.
+ */
+describe('PlatformSettingsController.findAll — the audience split', () => {
+  // One key per interesting case: a technical group, a business group, the technical override
+  // inside a business group, and the AUDITOR-readable transport group. Real registry keys, so
+  // audienceOfSetting resolves them exactly as production does.
+  const described = [
+    { key: 'email.from', group: 'email' },
+    { key: 'fees.platformBaseFee', group: 'fees' },
+    { key: 'billing.assayerInvoicingEnabled', group: 'billing' },
+    { key: 'transport.avgSpeedKmh.CAR', group: 'transport' },
+  ];
+
+  const controller = new PlatformSettingsController(
+    { describeAll: jest.fn(async () => described) } as any,
+    {} as any,
+  );
+
+  const reqWithRoles = (...names: string[]) => ({ user: { roles: names.map((name) => ({ name })) } });
+  const keysOf = (data: any) => data.settings.map((s: any) => s.key);
+  const groupKeysOf = (data: any) => data.groups.map((g: any) => g.key);
+
+  it('a pure administrator sees the business groups and business keys only', async () => {
+    const { data } = await controller.findAll(reqWithRoles('ADMIN'));
+
+    expect(groupKeysOf(data)).toEqual(
+      SETTINGS_GROUPS.filter((g) => g.audience === 'business').map((g) => g.key),
+    );
+    // The billing group is shown, but the technical rollout flag parked inside it is not.
+    expect(groupKeysOf(data)).toContain('billing');
+    expect(keysOf(data)).toEqual(['fees.platformBaseFee', 'transport.avgSpeedKmh.CAR']);
+  });
+
+  it('a developer sees every group and every key', async () => {
+    const { data } = await controller.findAll(reqWithRoles('DEVELOPER'));
+
+    expect(groupKeysOf(data)).toEqual(SETTINGS_GROUPS.map((g) => g.key));
+    expect(keysOf(data)).toEqual(described.map((s) => s.key));
+  });
+
+  it('a migrated administrator holding both names is treated as the developer, not the admin', async () => {
+    // DEVELOPER is checked BEFORE ADMIN in the controller — order is the point of this test.
+    const { data } = await controller.findAll(reqWithRoles('ADMIN', 'DEVELOPER'));
+
+    expect(keysOf(data)).toContain('email.from');
+    expect(keysOf(data)).toContain('billing.assayerInvoicingEnabled');
+  });
+
+  it('AUDITOR still reads exactly the transport group, unchanged by the split', async () => {
+    const { data } = await controller.findAll(reqWithRoles('AUDITOR'));
+
+    expect(groupKeysOf(data)).toEqual(['transport']);
+    expect(keysOf(data)).toEqual(['transport.avgSpeedKmh.CAR']);
+  });
+
+  it('OPERATIONS still reads no groups at all, unchanged by the split', async () => {
+    const { data } = await controller.findAll(reqWithRoles('OPERATIONS'));
+
+    expect(data.groups).toEqual([]);
+    expect(data.settings).toEqual([]);
   });
 });

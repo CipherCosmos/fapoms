@@ -1,6 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
-import { formatRupees, BUSINESS_TODAY_SQL } from '@fapoms/shared';
+// expandAudience: the addressing direction of the role hierarchy — a section aimed at a role
+// also reaches every role that implies it (DEVELOPER, for ADMIN and PRODUCT_SUPPORT), same
+// rule as notification fan-out (NotificationDispatchService.usersInRoles).
+import { formatRupees, BUSINESS_TODAY_SQL, expandAudience } from '@fapoms/shared';
 
 import { DeskEscalationService } from '../../modules/validation/desk-escalation.service';
 import { FeedbackEscalationService } from '../../modules/feedback/feedback-escalation.service';
@@ -35,10 +38,16 @@ interface DigestSection {
   link: string;
 }
 
-/** Which roles receive which sections. A user with several roles gets the union, once. */
+/**
+ * Which roles receive which sections. A user with several roles gets the union, once.
+ * Each list is widened through `expandAudience` in `resolveRecipients`, so a role that implies
+ * one of these also gets the section — the developer inherits anything aimed at the roles it
+ * absorbed, without being named here.
+ */
 const SECTION_AUDIENCES: Record<string, string[]> = {
   desk: ['DESK', 'DESK_OPERATOR'],
-  // Whoever owns the feedback desk — one list, see feedback-roles.ts (super administrators only).
+  // Whoever owns the feedback desk — one list, see feedback-roles.ts (the developer, plus the
+  // PRODUCT_SUPPORT delegate; administrators lost the desk 2026-09-05).
   feedback: FEEDBACK_TEAM_ROLE_NAMES,
   finance: ['OPERATIONS'],
   hr: ['OPERATIONS'],
@@ -171,7 +180,7 @@ export class EmailDigestService {
     const oldest = [...a.firstResponseOverdue, ...a.resolutionOverdue]
       .sort((x, y) => y.ageHours - x.ageHours)[0];
     return {
-      heading: `Feedback: ${first + resolution} past SLA`,
+      heading: `Support: ${first + resolution} past SLA`,
       lines: [
         ...(first ? [`${first} awaiting a first response`] : []),
         ...(resolution ? [`${resolution} past the resolution target`] : []),
@@ -244,7 +253,9 @@ export class EmailDigestService {
   ): Promise<Array<{ email: string; sectionKeys: Set<string> }>> {
     const roleToSections = new Map<string, string[]>();
     for (const key of populatedKeys) {
-      for (const role of SECTION_AUDIENCES[key] ?? []) {
+      // Audience expansion (see the import note): the map gains a row per implying role too, so
+      // both the SQL below and the per-row section lookup see the widened audience.
+      for (const role of expandAudience(SECTION_AUDIENCES[key] ?? [])) {
         roleToSections.set(role, [...(roleToSections.get(role) ?? []), key]);
       }
     }

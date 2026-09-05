@@ -72,4 +72,19 @@ describe('AssayerService.mapRoster', () => {
     expect(row.assignedToday).toBe(false);
     expect(row.openAssignments).toBe(0);
   });
+
+  /**
+   * This used to fetch every active assayer with no ceiling at all — fine at 1,155 rows, and not
+   * a promise worth keeping as the roster grows. A layer that renders map dots, not a data export,
+   * gets a generous clamp instead (the controller supplies the caller-facing ParseLimitPipe;
+   * this is the service-level default for any direct/internal caller that passes none).
+   */
+  it('clamps the pool it fetches rather than holding the whole roster unconditionally', async () => {
+    const { service, find } = makeService({ assayers: [] });
+    await service.mapRoster();
+    expect(find.mock.calls[0][0].take).toBe(2000);
+
+    await service.mapRoster(undefined, 750);
+    expect(find.mock.calls[1][0].take).toBe(750);
+  });
 });

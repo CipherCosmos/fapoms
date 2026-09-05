@@ -24,8 +24,6 @@ interface AssignmentContextType {
     assignmentId: string,
     status: AssayerAssignment['status'],
     notes?: string,
-    /** `counterTravelFee` is what a counter-offer moves — the audit fee comes from the rate card. */
-    reportData?: { pdfName?: string; data?: any; counterTravelFee?: number }
   ) => Promise<{ success: boolean; error?: string }>;
   rejectAssignment: (assignmentId: string, reason: string) => Promise<{ success: boolean; error?: string }>;
   submitExpense: (
@@ -109,19 +107,16 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
   /**
    * Every server-side change that alters this list, delivered live.
    *
-   * Only `assignment:status-changed` and `assignment:counter-offered` were subscribed, out of
-   * the set the backend already emits to this assayer's own room. So a newly offered job, an
-   * agreed fee, a packet dispatched to the branch, a query raised by the desk and a validated
-   * payable all landed on the server and sat there until the assayer happened to pull to
-   * refresh — which, for a new assignment, means the offer is invisible until they think to
-   * look for it.
+   * Only `assignment:status-changed` was originally subscribed, out of the set the backend
+   * already emits to this assayer's own room. So a newly offered job, a packet dispatched to
+   * the branch and a query raised by the desk all landed on the server and sat there until the
+   * assayer happened to pull to refresh — which, for a new assignment, means the offer is
+   * invisible until they think to look for it.
    *
    * The reload is debounced rather than fired per event: the backend commonly emits several
-   * around one desk action (status, fee, notification), and at branch-rollout scale a burst
+   * around one desk action (status, notification), and at branch-rollout scale a burst
    * would otherwise become a burst of identical GETs from every handset at once.
    */
-  const selfUserId = user?.id;
-
   useEffect(() => {
     if (!isAuthenticated) return;
 
@@ -157,36 +152,18 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     };
 
     /**
-     * The desk has countered the fee. Shared with `handleStatusChange` until now, which rendered
-     * it as "status has been updated to NEW" — no fee, no branch, and not even true. A counter is
-     * a number the assayer has to answer, so it says which branch and how much.
-     *
-     * The same event carries the assayer's *own* counter back to them, because both sides of a
-     * negotiation post through the one endpoint. That still refreshes the list — it is how the
-     * screen picks up the round number the server assigned — but it must not raise a banner
-     * announcing the assayer's own offer to them as though the desk had sent it.
-     */
-    const handleCounterOffer = (data: any) => {
-      reloadSoon();
-      if (selfUserId && data?.userId === selfUserId) return;
-      const fee = Number(data?.proposedFee);
-      const where = data?.branchName ? `${data.branchName}: ` : '';
-      scheduleLocalNotification(
-        'New fee offered',
-        Number.isFinite(fee) && fee > 0
-          ? `${where}the desk has offered ₹${fee.toLocaleString('en-IN')}. Open the app to accept or counter.`
-          : `${where}the desk has proposed a different fee. Open the app to respond.`,
-        data,
-      );
-    };
-
-    /**
      * Quiet reloads. These change what the screen should show but do not warrant interrupting
      * someone mid-audit with a banner — the desk's own notification covers anything that
      * genuinely needs attention.
+     *
+     * Deliberately NOT here any more: `assignment:counter-offered` (fee negotiation was removed
+     * from the app — the event no longer exists), `assignment:fee-updated` (the gateway stopped
+     * emitting it to assayer sockets when the app went money-blind; a fee edit at the desk is
+     * ops-internal now), and `billing:created` (never emitted by the gateway at all — the real
+     * billing events, `billing:payout-changed` and `billing:assayer-invoice-changed`, move the
+     * statement and the invoice invitation, which App.tsx owns and reloads, not this list).
      */
     const QUIET_EVENTS = [
-      'assignment:fee-updated',
       'query:raised',
       'query:responded',
       'query:resolved',
@@ -194,11 +171,9 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
       'document:received',
       'document:uploaded',
       'document:status-changed',
-      'billing:created',
     ];
 
     socket.on('assignment:status-changed', handleStatusChange);
-    socket.on('assignment:counter-offered', handleCounterOffer);
     socket.on('assignment:created', handleNewAssignment);
     QUIET_EVENTS.forEach((e) => socket.on(e, reloadSoon));
 
@@ -221,18 +196,17 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     return () => {
       if (timer) clearTimeout(timer);
       socket.off('assignment:status-changed', handleStatusChange);
-      socket.off('assignment:counter-offered', handleCounterOffer);
       socket.off('assignment:created', handleNewAssignment);
       QUIET_EVENTS.forEach((e) => socket.off(e, reloadSoon));
       socket.off('connect', reloadSoon);
       socket.off('connect', flushLocationQueueOnReconnect);
     };
-  }, [isAuthenticated, loadAssignments, selfUserId]);
+  }, [isAuthenticated, loadAssignments]);
 
   /**
    * These three all go through the action queue (`services/action-queue.ts`): the request is
    * written to disk before it is attempted, so an app killed mid-request — a dropped handover in
-   * a strongroom, the OS reclaiming memory — does not silently lose an accept, a counter-offer or
+   * a strongroom, the OS reclaiming memory — does not silently lose an accept, a decline or
    * an expense claim the assayer believes they already filed. `enqueueAndRun` attempts it once
    * immediately so the screen still gets an answer straight away; a transport/timeout failure is
    * left queued for `processActionQueue` to retry on the next foreground return or reconnect
@@ -243,9 +217,8 @@ export const AssignmentProvider: React.FC<{ children: React.ReactNode }> = ({ ch
     assignmentId: string,
     status: AssayerAssignment['status'],
     notes?: string,
-    reportData?: { pdfName?: string; data?: any; counterTravelFee?: number }
   ) => {
-    const payload = { op: 'transition' as const, assignmentId, status, notes, counterTravelFee: reportData?.counterTravelFee };
+    const payload = { op: 'transition' as const, assignmentId, status, notes };
     const result = await enqueueAndRun('ASSIGNMENT_STATUS', payload, actionDispatchers.ASSIGNMENT_STATUS);
     if (result.success) await loadAssignments();
     if (result.queued) return { success: false, error: t('common.willRetry') };

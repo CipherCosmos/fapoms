@@ -20,6 +20,9 @@ import { AssayerPayableStatus } from '@fapoms/shared';
 @Index(['clientId'])
 @Index(['projectId'])
 @Index(['status'])
+// The invoice's lines are read together (totals recompute, approval, the reveal) — indexed so
+// none of those is a table scan.
+@Index(['assayerInvoiceId'])
 // One FEE payable per assignment, enforced by the database. Reimbursements carry `expense_id`
 // and are excluded. The name is load-bearing: `isUniqueViolation` matches on it.
 @Index('UQ_assayer_payables_fee_per_assignment', ['assignmentId'], {
@@ -86,6 +89,26 @@ export class AssayerPayableEntity extends BaseEntity {
 
   @Column({ name: 'rate_snapshot', type: 'jsonb', nullable: true })
   rateSnapshot: Record<string, unknown> | null;
+
+  /**
+   * The assayer invoice this payable rides, or null while it is still in the eligible pool.
+   *
+   * Set by `AssayerInvoiceService.invite`, nulled again when the invoice is cancelled or the
+   * line is detached (void/hold while merely INVITED). While the invoice is INVITED or
+   * SUBMITTED the payable is frozen out of per-payable approval ("awaiting assayer invoice
+   * AINV-x") — invoice approval is the gesture that approves its lines.
+   */
+  @Column({ name: 'assayer_invoice_id', type: 'uuid', nullable: true })
+  assayerInvoiceId: string | null;
+
+  /**
+   * True on payables that pre-date assayer invoicing (backfilled where money already moved:
+   * APPROVED/PAID or partly paid). Grandfathered rows stay visible on the assayer's gated
+   * statement WITHOUT an invoice — their money was already revealed under the old rules — and
+   * are permanently excluded from invoice eligibility so history is never re-billed.
+   */
+  @Column({ name: 'pre_invoicing_era', type: 'boolean', default: false })
+  preInvoicingEra: boolean;
 
   @Column({ name: 'approved_at', type: 'timestamptz', nullable: true })
   approvedAt: Date | null;

@@ -1,6 +1,7 @@
 import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AssayerLifecycleStatus } from '@fapoms/shared';
 
 import { AssayerRoster } from './AssayerRoster';
@@ -27,6 +28,11 @@ jest.mock('../../hooks/useCurrentRoles', () => ({
   canCreateAssayers: () => true,
 }));
 jest.mock('../../hooks/useQueuedExcelExport', () => ({ useQueuedExcelExport: () => ({ download: jest.fn(), busy: false }) }));
+// The empanelment-client filter axis reads the app's shared client list; the roster's own tests
+// are not about which clients exist, so a fixed empty list keeps `withClientChoices` harmless
+// rather than routing through the same mocked `api.request` the roster fixtures below reconfigure
+// per test (which would otherwise hand this hook a roster envelope instead of a client array).
+jest.mock('../../hooks/useClients', () => ({ useClientOptions: () => ({ data: [] }) }));
 // The panel reads the review queue through react-query; the roster's own tests are not about it.
 jest.mock('./ImportIssuesPanel', () => ({ ImportIssuesPanel: () => null }));
 // The registration flow is its own screen with its own tests; stubbed so this file stays about
@@ -40,7 +46,15 @@ jest.mock('../../components/import/useImportJob', () => ({
   useImportJob: () => ({ state: mockImportJobState, start: jest.fn(), reset: jest.fn() }),
 }));
 jest.mock('../../components/import/ImportProgressPanel', () => ({ ImportProgressPanel: () => null }));
-jest.mock('@tanstack/react-query', () => ({ useQueryClient: () => ({ invalidateQueries: jest.fn() }) }));
+// Auto-confirms every `confirm(...)` call (bulk transitions, delete) rather than rendering the
+// real dialog and clicking through it — the bulk-reason tests below are about the reason picker
+// and the request body, not the confirmation step itself. `jest.requireActual` keeps every other
+// export (`Select`, `DataTable`, `AlertBanner`, `StatusBadge`, …) real, so nothing else in this
+// file's already-passing tests changes shape.
+jest.mock('../../components/ui', () => {
+  const actual = jest.requireActual('../../components/ui');
+  return { ...actual, useConfirm: () => ({ confirm: jest.fn().mockResolvedValue(true), confirmDialog: null }) };
+});
 // The CSV writer is the app's one export path (utils/csv). Mocked so the export tests can read
 // the headers and rows a clerk's choice of columns actually produces.
 jest.mock('../../utils/csv', () => ({
@@ -82,7 +96,33 @@ const serve = (rows: ReturnType<typeof person>[]) => {
     Promise.resolve({ data: rows, meta: { pagination: { total: rows.length } } }));
 };
 
-const renderRoster = () => render(<MemoryRouter><AssayerRoster /></MemoryRouter>);
+/**
+ * The roster now reads its rows through `useQuery` (the keyset walker) rather than a plain
+ * `useEffect`/`useState` fetch, so it needs a `QueryClientProvider` the way every other
+ * react-query page's spec already supplies one — see Rules.spec.tsx, ImportIssuesPanel.spec.tsx.
+ * A fresh client per render keeps one test's cached roster (keyed by its filter query string) out
+ * of the next, and `retry: false` keeps a mock that does not match a request from retrying three
+ * times before a `waitFor` gives up on it.
+ *
+ * `rerender()` takes no arguments, builds a FRESH element each call, and reuses the SAME client
+ * the initial render created.
+ *
+ * Both halves matter. A fresh element is required because `rerender` on a referentially IDENTICAL
+ * element lets React bail out of re-rendering the subtree entirely — which is invisible for a
+ * component with no other state, but silently breaks the import-lifecycle tests below: the mocked
+ * `useImportJob()` reads a mutable `mockImportJobState` at call time, and a bailed-out render
+ * never calls it again, so the component would never see the test's `phase: 'done'` update. The
+ * SAME client, meanwhile, is what makes `rerender` mean "the app noticed something changed" rather
+ * than "a new tab opened" — a fresh `QueryClient` per call would reset react-query's cache (and
+ * force a refetch) on every call, masking the one-refresh-per-import guard those tests exist to
+ * check.
+ */
+const renderRoster = () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const makeUi = () => <QueryClientProvider client={client}><MemoryRouter><AssayerRoster /></MemoryRouter></QueryClientProvider>;
+  const view = render(makeUi());
+  return { ...view, rerender: () => view.rerender(makeUi()) };
+};
 
 /** The chip whose label starts with `name`, counted by the number printed inside it. */
 const chip = (name: string) => screen.getByRole('tab', { name: new RegExp(`^${name}`) });
@@ -521,7 +561,7 @@ describe('AssayerRoster — when a queued import finishes', () => {
     const beforeImport = mockRequest.mock.calls.length;
 
     mockImportJobState = { phase: 'done', fileName: 'roster.xlsx', report: { totalRows: 2 } };
-    view.rerender(<MemoryRouter><AssayerRoster /></MemoryRouter>);
+    view.rerender();
 
     await waitFor(() => expect(mockRequest.mock.calls.length).toBeGreaterThan(beforeImport));
   });
@@ -534,13 +574,110 @@ describe('AssayerRoster — when a queued import finishes', () => {
     await screen.findByText('Already Here');
 
     mockImportJobState = { phase: 'done', fileName: 'roster.xlsx', report: { totalRows: 2 } };
-    view.rerender(<MemoryRouter><AssayerRoster /></MemoryRouter>);
+    view.rerender();
     await waitFor(() => expect(mockRequest.mock.calls.length).toBeGreaterThan(1));
 
     const afterRefresh = mockRequest.mock.calls.length;
-    view.rerender(<MemoryRouter><AssayerRoster /></MemoryRouter>);
-    view.rerender(<MemoryRouter><AssayerRoster /></MemoryRouter>);
+    view.rerender();
+    view.rerender();
     await new Promise((r) => setTimeout(r, 20));
     expect(mockRequest.mock.calls.length).toBe(afterRefresh);
+  });
+});
+
+/**
+ * Bulk lifecycle moves used to send `reason: "Bulk transition to ${label}"` on every record in
+ * the batch — the name of the button that was pressed, not an actual reason, and not something an
+ * employment record should carry as though somebody had typed it. The single-person path
+ * (`StageStep` in AssayerRecord.tsx) already asks for a real one from `LIFECYCLE_MOVE_REASONS`;
+ * these tests hold the batch path to the same requirement.
+ */
+describe('AssayerRoster — bulk lifecycle moves need a real reason', () => {
+  const twoActive = [
+    person({ id: 'b-1', assayerCode: 'AS0201', displayName: 'Bulk One', lifecycleStatus: AssayerLifecycleStatus.ACTIVE }),
+    person({ id: 'b-2', assayerCode: 'AS0202', displayName: 'Bulk Two', lifecycleStatus: AssayerLifecycleStatus.ACTIVE }),
+  ];
+
+  /** Routes the roster GET and the bulk-move POST to different fixed answers. */
+  const serveBulk = (roster: ReturnType<typeof person>[], bulkResult: unknown) => {
+    mockRequest.mockImplementation((url: string) => (
+      url === '/assayers/bulk/lifecycle'
+        ? Promise.resolve(bulkResult)
+        : Promise.resolve({ data: roster, meta: { pagination: { total: roster.length } } })
+    ));
+  };
+
+  const selectRow = (name: string) => {
+    const row = screen.getByText(name).closest('tr') as HTMLElement;
+    fireEvent.click(within(row).getByRole('checkbox'));
+  };
+
+  /** Opens a `Select` by its accessible name, then clicks the named option. */
+  const chooseFromSelect = (triggerName: string, optionName: string | RegExp) => {
+    fireEvent.click(screen.getByRole('combobox', { name: triggerName }));
+    fireEvent.click(screen.getByRole('option', { name: optionName }));
+  };
+
+  it('disables Apply until a reason is chosen, even once a destination is', async () => {
+    serveBulk(twoActive, { succeeded: [], skipped: [], failed: [] });
+    renderRoster();
+    await waitFor(() => expect(screen.getByText('Bulk Two')).toBeInTheDocument());
+
+    selectRow('Bulk One');
+    selectRow('Bulk Two');
+    chooseFromSelect('Move all selected to', 'Suspended');
+
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
+
+    chooseFromSelect('Reason for the move', 'Not doing regular/any audit');
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
+  });
+
+  it('sends the chosen reason, never a fabricated "Bulk transition to…" string', async () => {
+    serveBulk(twoActive, {
+      succeeded: [{ id: 'b-1', from: 'ACTIVE', to: 'SUSPENDED' }, { id: 'b-2', from: 'ACTIVE', to: 'SUSPENDED' }],
+      skipped: [], failed: [],
+    });
+    renderRoster();
+    await waitFor(() => expect(screen.getByText('Bulk Two')).toBeInTheDocument());
+
+    selectRow('Bulk One');
+    selectRow('Bulk Two');
+    chooseFromSelect('Move all selected to', 'Suspended');
+    chooseFromSelect('Reason for the move', 'Not doing regular/any audit');
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+
+    await waitFor(() => {
+      const call = mockRequest.mock.calls.find(([url]) => url === '/assayers/bulk/lifecycle');
+      expect(call).toBeDefined();
+      const body = JSON.parse((call![1] as any).body);
+      expect(body.reason).toBe('Not doing regular/any audit');
+      expect(body.targetStatus).toBe('SUSPENDED');
+      expect(body.ids.sort()).toEqual(['b-1', 'b-2']);
+    });
+  });
+
+  it('takes a hand-typed reason when "Other" is picked, not the sentinel value', async () => {
+    serveBulk(twoActive, { succeeded: [{ id: 'b-1', from: 'ACTIVE', to: 'SUSPENDED' }], skipped: [], failed: [] });
+    renderRoster();
+    await waitFor(() => expect(screen.getByText('Bulk Two')).toBeInTheDocument());
+
+    selectRow('Bulk One');
+    chooseFromSelect('Move all selected to', 'Suspended');
+    chooseFromSelect('Reason for the move', 'Other (type it in)');
+
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Reason, in your own words'), {
+      target: { value: 'Family emergency, requested by the branch office' },
+    });
+    expect(screen.getByRole('button', { name: 'Apply' })).toBeEnabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+
+    await waitFor(() => {
+      const call = mockRequest.mock.calls.find(([url]) => url === '/assayers/bulk/lifecycle');
+      const body = JSON.parse((call![1] as any).body);
+      expect(body.reason).toBe('Family emergency, requested by the branch office');
+    });
   });
 });

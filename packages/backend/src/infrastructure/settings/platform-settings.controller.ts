@@ -3,8 +3,9 @@
  *
  * The configuration an operator owns, exposed for the settings screen. Reading is staff-wide
  * (knowing what the platform believes an audit is worth is not a secret, and a support
- * conversation goes faster when both sides can see it); writing is administrators only, because
- * these values price work and address mail for the whole organisation.
+ * conversation goes faster when both sides can see it); writing is administrators and the
+ * developer, split by audience — business keys are the administrator's, technical keys the
+ * Developer's — because these values price work and address mail for the whole organisation.
  *
  * Secrets are never returned by any route here — `describeAll` reports only whether one is set.
  */
@@ -12,11 +13,11 @@
 import { Controller, Get, Put, Delete, Param, Body, Req, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Allow } from 'class-validator';
-import { SystemRole } from '@fapoms/shared';
+import { SystemRole, expandRoles } from '@fapoms/shared';
 
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, AnyAuthenticated, RoleOnly } from '../../modules/auth/guards';
 import { PlatformSettingsService, ResolvedSetting } from './platform-settings.service';
-import { SETTINGS_GROUPS } from './settings.registry';
+import { SETTINGS_GROUPS, audienceOfGroup, audienceOfSetting } from './settings.registry';
 import { AuditService } from '../../core/audit/audit.service';
 import { NOT_A_RECORD_ENTITY_ID } from '../../core/audit/audit-event';
 import { EventCategory } from '@fapoms/shared';
@@ -42,6 +43,12 @@ export class SetSettingRequestDto {
  * the API does not is not a boundary — so the class gate narrows to match, with one deliberate
  * exception (`limits`, below), which is not configuration but the operating rules every client
  * is already subject to. The web app's `/admin/settings` route permission mirrors this list.
+ *
+ * Since 2026-09-05 the DEVELOPER role also reaches every route here, through its ADMIN
+ * implication (role-hierarchy.ts) rather than by being named — and WHICH settings each of the
+ * two may see and change is split by audience: technical groups are the Developer's alone,
+ * business groups the administrator's. `findAll` filters the read; the service fences the
+ * writes per key.
  */
 const SETTINGS_ADMIN_ROLES = [SystemRole.ADMIN] as const;
 
@@ -55,6 +62,11 @@ export class PlatformSettingsController {
     private readonly settings: PlatformSettingsService,
     private readonly audit: AuditService,
   ) {}
+
+  /** The caller's role names, across both shapes `req.user.roles` arrives in. */
+  private rolesOf(req: any): string[] {
+    return (req.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean);
+  }
 
   /**
    * The handful of limits a client has to know to render honestly.
@@ -93,12 +105,30 @@ export class PlatformSettingsController {
   @AnyAuthenticated()
   @ApiOperation({ summary: 'Operational limits the web and mobile clients must render' })
   async limits(): Promise<{ success: boolean; data: { maxNegotiationRounds: number; checkInGeofenceMeters: number; maxSingleExpenseClaim: number } }> {
-    const [maxNegotiationRounds, checkInGeofenceMeters, maxSingleExpenseClaim] = await Promise.all([
-      this.settings.getNumber('field.maxNegotiationRounds', 3),
+    const [checkInGeofenceMeters, maxSingleExpenseClaim] = await Promise.all([
       this.settings.getNumber('field.checkInGeofenceMeters', 2000),
       this.settings.getNumber('expense.maxSingleClaim', 50_000),
     ]);
-    return { success: true, data: { maxNegotiationRounds, checkInGeofenceMeters, maxSingleExpenseClaim } };
+    return {
+      success: true,
+      data: {
+        /**
+         * A literal 0, not a setting, and the KEY DELIBERATELY STAYS.
+         *
+         * In-app fee negotiation is removed (2026-09): `field.maxNegotiationRounds` is gone
+         * from the settings registry and the counter-offer route refuses by name. But every
+         * shipped mobile build gates its own counter-offer button on this number — the block
+         * comment above explains why the cap was served rather than hardcoded — so returning 0
+         * makes those builds show "Negotiation closed" on their own, with no forced update.
+         * This is the machine half of the kill-switch; the transition route's explicit 400 is
+         * the human half for any build that posts a counter anyway. Remove the key only when
+         * pre-removal APKs are no longer in the field.
+         */
+        maxNegotiationRounds: 0,
+        checkInGeofenceMeters,
+        maxSingleExpenseClaim,
+      },
+    };
   }
 
   /**
@@ -125,11 +155,33 @@ export class PlatformSettingsController {
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR)
   @ApiOperation({ summary: 'Every platform setting, its value in force, and where that value came from' })
   async findAll(@Req() req: any): Promise<{ success: boolean; data: { groups: (typeof SETTINGS_GROUPS)[number][]; settings: ResolvedSetting[] } }> {
-    const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean);
-    const isAdmin = roles.includes(SystemRole.ADMIN);
+    const roles: string[] = this.rolesOf(req);
+    const expanded = expandRoles(roles);
 
     const settings = await this.settings.describeAll();
-    if (isAdmin) return { success: true, data: { groups: [...SETTINGS_GROUPS], settings } };
+
+    /**
+     * Three-way, and DEVELOPER is checked BEFORE ADMIN deliberately: an administrator migrated
+     * onto the developer role holds both names, and testing ADMIN first would show them the
+     * business subset when they are exactly the person the technical groups exist for. A pure
+     * ADMIN sees the business-audience groups only — the technical estate (mail transport,
+     * schedules, retention, security rollouts) is the Developer's, and showing a knob beside a
+     * fence that refuses to turn it (see PlatformSettingsService.set) is worse than not showing
+     * it. Filtering is per-KEY audience, not per-group, so a technical key parked in a business
+     * group (billing.assayerInvoicingEnabled) is hidden from the group it visually lives in.
+     */
+    if (expanded.includes(SystemRole.DEVELOPER)) {
+      return { success: true, data: { groups: [...SETTINGS_GROUPS], settings } };
+    }
+    if (expanded.includes(SystemRole.ADMIN)) {
+      return {
+        success: true,
+        data: {
+          groups: SETTINGS_GROUPS.filter((g) => audienceOfGroup(g.key) === 'business'),
+          settings: settings.filter((s) => audienceOfSetting(s.key) === 'business'),
+        },
+      };
+    }
 
     // The union of what this caller's roles may read — empty for anyone not listed above,
     // which is the safe direction and matches the class gate they would otherwise have hit.
@@ -146,14 +198,24 @@ export class PlatformSettingsController {
   }
 
   /**
-   * `@RoleOnly()` closes the same gap fixed 2026-09-04 in `rule-bypass.controller.ts` and
+   * Writes are enforced in two layers, and both are needed.
+   *
+   * Layer one, at the door: `@Roles(ADMIN)` + `@RoleOnly()` + the permission. `@RoleOnly()`
+   * closes the gap fixed 2026-09-04 in `rule-bypass.controller.ts` and
    * `notification-admin.controller.ts`: `RolesGuard`'s custom-role permission fallback treated
    * this pairing (`@Roles(ADMIN)` + `@RequirePermissions`) like any other, so a role holding
    * nothing but `configuration:edit:platform` could write ANY platform setting — the mail
-   * transport credentials, the geofence distance, the empanelment "no row" policy, the CERT-In/
-   * DPDP retention floors — with no ADMIN role on the account. Confirmed live, then reverted.
-   * `@RoleOnly()` removes the fallback; the class-level `@Roles` name-match this route also
-   * carries is untouched, so `admin2`/every real administrator is unaffected.
+   * transport credentials, the geofence distance, the CERT-In/DPDP retention floors — with no
+   * ADMIN role on the account. Confirmed live, then reverted. The name-match stays, and the
+   * DEVELOPER role reaches this door through its ADMIN implication (role-hierarchy.ts), so the
+   * decorator does not need to name it.
+   *
+   * Layer two, per key: the service's audience fence (2026-09-05). The door admits both
+   * administrators and developers, but a TECHNICAL key — mail transport, schedules, retention,
+   * security rollouts — is refused inside `PlatformSettingsService.set`/`reset` unless the
+   * caller's roles include DEVELOPER, which is why the caller's role names are threaded
+   * through. A business key is writable by either. The decorators cannot express "which key"
+   * because they run before the parameter is read; the service can, so it does.
    */
   @Put(':key')
   @Roles(...SETTINGS_ADMIN_ROLES)
@@ -165,7 +227,7 @@ export class PlatformSettingsController {
     @Body() dto: SetSettingRequestDto,
     @Req() req: any,
   ): Promise<{ success: boolean; data: ResolvedSetting[] }> {
-    await this.settings.set(key, dto.value, req.user?.id);
+    await this.settings.set(key, dto.value, req.user?.id, this.rolesOf(req));
 
     /**
      * Audited without the value.
@@ -195,14 +257,14 @@ export class PlatformSettingsController {
     return { success: true, data: await this.settings.describeAll() };
   }
 
-  /** Same reasoning and the same `@RoleOnly()` fix as `set()` immediately above. */
+  /** Same two-layer reasoning — `@RoleOnly()` door plus per-key audience fence — as `set()` above. */
   @Delete(':key')
   @Roles(...SETTINGS_ADMIN_ROLES)
   @RoleOnly()
   @RequirePermissions('configuration:edit:platform')
   @ApiOperation({ summary: 'Clear a saved setting so it follows the environment or shipped default again' })
   async reset(@Param('key') key: string, @Req() req: any): Promise<{ success: boolean; data: ResolvedSetting[] }> {
-    await this.settings.reset(key, req.user?.id);
+    await this.settings.reset(key, req.user?.id, this.rolesOf(req));
     await this.audit.recordEventSafe({
       category: EventCategory.SYSTEM,
       eventType: 'PLATFORM_SETTING_RESET',

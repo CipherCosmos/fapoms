@@ -118,3 +118,30 @@ describe('routes and the permissions their roles hold', () => {
     expect(unknown).toEqual([]);
   });
 });
+
+/**
+ * The two top roles are built from one base, and the difference between them IS the
+ * destructive two-person rule: DEVELOPER holds everything ADMIN holds except the approve
+ * grant, plus the technical estate. If this drifts — someone adds a business grant to ADMIN
+ * without it reaching DEVELOPER, or hands DEVELOPER the approve half — the split silently
+ * stops meaning what it says. (Deliberately NOT implication-aware: an implied DEVELOPER being
+ * name-admitted then permission-refused on the approve route is the designed behavior.)
+ */
+describe('DEVELOPER ⊇ ADMIN minus the approve grant', () => {
+  const admin = new Set(ROLE_PERMISSIONS['ADMIN' as keyof typeof ROLE_PERMISSIONS]);
+  const developer = new Set(ROLE_PERMISSIONS['DEVELOPER' as keyof typeof ROLE_PERMISSIONS]);
+
+  it('every ADMIN grant except SYSTEM:APPROVE:PLATFORM is also DEVELOPER’s', () => {
+    const missing = [...admin].filter((p) => p !== 'SYSTEM:APPROVE:PLATFORM' && !developer.has(p));
+    expect(missing).toEqual([]);
+  });
+
+  it('DEVELOPER never holds the approve half of the two-person rule', () => {
+    expect(developer.has('SYSTEM:APPROVE:PLATFORM')).toBe(false);
+  });
+
+  it('ADMIN never holds the request/edit half of the technical estate', () => {
+    expect(admin.has('SYSTEM:EDIT:PLATFORM')).toBe(false);
+    expect(admin.has('SYSTEM:VIEW:PLATFORM')).toBe(false);
+  });
+});

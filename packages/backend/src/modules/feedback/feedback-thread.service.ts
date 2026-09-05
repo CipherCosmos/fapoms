@@ -14,10 +14,9 @@ import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
  * A reporter is either an internal `user` or a field `assayer` — exactly one id is
  * set. `isTeam` marks a principal holding a {@link FEEDBACK_TEAM_ROLES} role, who may
  * read every thread, post on any thread, and leave internal (reporter-invisible)
- * notes. That list is super administrators only as of 2026-08-17 (see
- * `feedback-roles.ts`) — PRODUCT_SUPPORT remains a role in the database but no
- * longer sets `isTeam`; a PRODUCT_SUPPORT caller reaches this service exactly as any
- * other reporter does.
+ * notes. That list is the developer plus the PRODUCT_SUPPORT delegate as of
+ * 2026-09-05 (see `feedback-roles.ts` for the desk's full history) — an ADMIN caller
+ * no longer sets `isTeam` and reaches this service exactly as any other reporter does.
  */
 export interface FeedbackActor {
   userId: string | null;
@@ -63,9 +62,9 @@ export class FeedbackThreadService {
 
   private async mustAccess(threadId: string, actor: FeedbackActor): Promise<FeedbackThreadEntity> {
     const thread = await this.threadRepository.findOne({ where: { id: threadId } });
-    if (!thread) throw new NotFoundException(`Feedback thread ${threadId} not found.`);
+    if (!thread) throw new NotFoundException(`Support request ${threadId} not found.`);
     if (!actor.isTeam && !this.isReporter(thread, actor)) {
-      throw new ForbiddenException('You can only view feedback you reported.');
+      throw new ForbiddenException('You can only view support requests you reported.');
     }
     return thread;
   }

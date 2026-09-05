@@ -36,17 +36,15 @@ export interface ProjectBranch {
     proposedFee: number;
     agreedFee: number | null;
     /**
-     * What `proposedFee` is made of. A counter-offer moves the TRAVEL only — the audit fee comes
-     * from the rate card and neither side moves it — so a screen that shows only the total cannot
-     * say what a counter actually changed, and a form seeded from the total inflates the base.
+     * The frozen rate-card quote behind `proposedFee`. Nothing on this panel renders them
+     * directly, but the assignment object is handed to the shared fee helper
+     * (`assignmentFee` → `describeAssignmentFee`), which needs the split to describe the fee
+     * honestly — including historical rows from before in-app negotiation was removed.
      */
     quotedBaseFee?: number | null;
     quotedTravelFee?: number | null;
-    counterTravelFee?: number | null;
     scheduledDate: string | null;
     remarks?: string | null;
-    negotiatedByName?: string | null;
-    negotiationCount?: number;
     assayer?: { id: string; displayName: string; assayerCode?: string };
   } | null;
 }
@@ -137,18 +135,13 @@ export const BranchListPanel: React.FC<{
           const isAssigned = !!pb.assignment;
           const isDone = ['CLOSED'].includes(pb.status);
           const isValidationPending = ['AUDIT_COMPLETED', 'VALIDATION_COMPLETED'].includes(pb.status) || pb.assignment?.status === 'COMPLETED';
-          // Negotiation is a project-branch state; COUNTER_OFFER is only a transition verb, never an
-          // AssignmentStatus value — so pb.status === 'NEGOTIATION' is the real (and only) signal.
-          const isNegotiating = pb.status === 'NEGOTIATION';
 
-          const badgeBg = isDone ? 'var(--status-active-bg)' : isValidationPending ? 'var(--status-pending-bg)' : isAssigned ? 'rgba(216,174,71,0.15)' : isNegotiating ? 'rgba(216,174,71,0.2)' : 'var(--border-hair)';
-          const badgeColor = isDone ? 'var(--success)' : isValidationPending ? 'var(--warning)' : isAssigned ? 'var(--accent)' : isNegotiating ? 'var(--accent)' : 'var(--text-muted)';
+          const badgeBg = isDone ? 'var(--status-active-bg)' : isValidationPending ? 'var(--status-pending-bg)' : isAssigned ? 'rgba(216,174,71,0.15)' : 'var(--border-hair)';
+          const badgeColor = isDone ? 'var(--success)' : isValidationPending ? 'var(--warning)' : isAssigned ? 'var(--accent)' : 'var(--text-muted)';
           const statusLabel = isDone
             ? `✓ ${branchStatusLabel(pb.status)}`
             : isValidationPending
             ? `🔍 ${branchStatusLabel(pb.status)}`
-            : isNegotiating
-            ? `💬 ${branchStatusLabel(ProjectBranchStatus.NEGOTIATION)}`
             : isAssigned
             ? `✓ ${branchStatusLabel(ProjectBranchStatus.ASSIGNMENT_CONFIRMED)}`
             : `⏳ ${branchStatusLabel(pb.status)}`;
@@ -166,7 +159,7 @@ export const BranchListPanel: React.FC<{
               style={{
                 padding: '10px 12px', cursor: 'pointer', borderRadius: '8px', marginBottom: '6px',
                 background: isSelected ? 'rgba(216,174,71,0.25)' : isDone ? 'var(--status-active-bg)' : isAssigned ? 'rgba(216,174,71,0.06)' : 'var(--bg-surface-2)',
-                borderLeft: isSelected ? '4px solid var(--accent)' : isDone ? '4px solid var(--success)' : isAssigned ? '4px solid var(--accent)' : isNegotiating ? '4px solid var(--warning)' : '4px solid transparent',
+                borderLeft: isSelected ? '4px solid var(--accent)' : isDone ? '4px solid var(--success)' : isAssigned ? '4px solid var(--accent)' : '4px solid transparent',
                 border: isSelected ? '1px solid rgba(216,174,71,0.5)' : '1px solid var(--border-hair)',
               }}>
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
@@ -203,11 +196,6 @@ export const BranchListPanel: React.FC<{
                   <span style={{ fontSize: '10px', color: 'var(--accent)', fontWeight: 600 }}>👤 {pb.assignment.assayer.displayName}</span>
                 )}
               </div>
-              {isNegotiating && pb.assignment?.negotiatedByName && (
-                <div style={{ fontSize: '9.5px', color: 'var(--warning)', marginTop: '2px' }}>
-                  💬 Being negotiated by <b>{pb.assignment.negotiatedByName}</b>
-                </div>
-              )}
             </div>
           );
         })}

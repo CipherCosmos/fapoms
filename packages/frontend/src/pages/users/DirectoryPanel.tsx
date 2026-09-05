@@ -68,6 +68,8 @@ export const DirectoryPanel: React.FC = () => {
   const myId = useCurrentUserId();
   const { confirm, confirmDialog } = useConfirm();
   const [users, setUsers] = useState<UserProfile[]>([]);
+  /** The server's own count — not `users.length`, which is only ever the page that arrived. */
+  const [usersTotal, setUsersTotal] = useState(0);
   const [roles, setRoles] = useState<UserRole[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -156,11 +158,23 @@ export const DirectoryPanel: React.FC = () => {
     setIsLoading(true);
     setError(null);
     try {
-      // Without an explicit limit the API returns only the first 20 users, silently truncating the
-      // directory and every KPI/holder count derived from it. Pull a full working page.
-      const response = await api.request<UserProfile[]>('/users?limit=500');
-      const list = response ?? [];
+      /*
+        Without an explicit limit the API returns only the first 20 users, silently truncating the
+        directory and every KPI/holder count derived from it. Pull a full working page — 2,000,
+        the ceiling `GET /users` is contracted to honour, up from the 500 this used to ask for.
+        500 had exactly the same silent-shortfall shape the 20-row default did, just a bigger
+        number before it bit: past the 501st account, "Total Users" and the search results would
+        quietly stop growing with nothing on screen to say the directory was no longer complete.
+        `withMeta` is what makes that detectable — `meta.total` is the real count, independent of
+        how many rows this page actually got.
+      */
+      const response = await api.request<{ data?: UserProfile[]; meta?: { pagination?: { total?: number } } }>(
+        '/users?limit=2000',
+        { withMeta: true },
+      );
+      const list = Array.isArray(response?.data) ? response.data : [];
       setUsers(list);
+      setUsersTotal(response?.meta?.pagination?.total ?? list.length);
       // Keep the open edit panel in sync after an action (e.g. unlock) refetches.
       setEditingUser((prev) => (prev ? list.find((u: UserProfile) => u.id === prev.id) ?? null : prev));
     } catch (err: any) {
@@ -381,14 +395,29 @@ export const DirectoryPanel: React.FC = () => {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
       {confirmDialog}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '14px' }}>
-        <Kpi icon={<UsersIcon size={20} />} tone="var(--accent-primary)" value={filteredUsers.length} label="Total Users" />
-        <Kpi icon={<UserCheck size={20} />} tone="var(--status-active)" value={filteredUsers.filter((u) => u.status === 'ACTIVE').length} label="Active" />
+        {/*
+          The real total now — `meta.total` from the server, not `filteredUsers.length`. A KPI
+          titled "Total Users" that actually meant "however many match the search box and status
+          filter right now" read as the size of the whole directory even while both were active;
+          "Active"/"Locked Out"/"Distinct Roles" beside it were never filtered the same way, so the
+          four tiles did not even agree with each other about what population they described.
+        */}
+        <Kpi icon={<UsersIcon size={20} />} tone="var(--accent-primary)" value={usersTotal} label="Total Users" />
+        <Kpi icon={<UserCheck size={20} />} tone="var(--status-active)" value={filteredUsers.filter((u) => u.status === 'ACTIVE').length} label="Active (shown)" />
         <Kpi icon={<Lock size={20} />} tone="var(--danger)" value={users.filter(isLocked).length} label="Locked Out" />
         <Kpi icon={<Shield size={20} />} tone="var(--accent)" value={new Set(users.flatMap((u) => u.roles.map((r) => r.name))).size} label="Distinct Roles" />
       </div>
 
       {error && <AlertBanner type="error">{error}</AlertBanner>}
       {notice && <AlertBanner type="success">{notice}</AlertBanner>}
+      {/* The table below, and the KPIs beside it apart from "Total Users" itself, are drawn from
+          this one loaded page — say so the moment it is not everyone. */}
+      {usersTotal > users.length && (
+        <AlertBanner type="error">
+          Showing {users.length} of {usersTotal} accounts — refine search to reach someone not
+          listed.
+        </AlertBanner>
+      )}
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
         <SearchInput value={searchText} onChange={setSearchText} placeholder="Search by name, username, email..." style={{ minWidth: '200px' }} />
@@ -398,7 +427,7 @@ export const DirectoryPanel: React.FC = () => {
           { value: 'SUSPENDED', label: 'Suspended' },
           { value: 'LOCKED', label: 'Locked' },
         ]} />
-        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{filteredUsers.length} of {users.length} users</span>
+        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{filteredUsers.length} of {users.length} shown</span>
         <div style={{ marginLeft: 'auto' }}>
           <PrimaryButton onClick={openCreateModal} icon={<UserPlus size={16} />}>
             <span>Add User</span>

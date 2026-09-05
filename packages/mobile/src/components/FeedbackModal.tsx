@@ -17,6 +17,12 @@ import { useT, t as translate } from '../i18n';
  * app already has (QueryThread), with the product team as the counterparty instead
  * of the desk. Category is optional — the server's classifier fills it in — so the
  * fastest path is just "type what's wrong and send".
+ *
+ * This is the platform's product-support channel — the user-facing name is "Support" /
+ * "Help & Support" (see i18n `feedback.*` and `profile.rows.feedback*`). Not to be confused
+ * with feedback/remarks directed AT an assayer (`AssayerRemarks` on the web side; there is no
+ * mobile equivalent). Internal identifiers here keep the historical "feedback" name — the
+ * component, the API routes, the i18n keys — so nothing downstream has to change shape.
  */
 
 interface Props {

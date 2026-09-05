@@ -5,14 +5,19 @@ import { Reflector } from '@nestjs/core';
 import { RolesGuard, ROLES_KEY, PERMISSIONS_KEY, ROLE_ONLY_KEY } from '../auth/guards';
 
 /**
- * `update()`, `reset()`, `testEmail()` and `runDigest()` must stay reachable by the ADMIN role
- * ONLY — never by a custom role (a database row built in Admin -> Roles) that merely holds
- * `configuration:edit:platform`. See the class-level comment on `NotificationAdminController`
+ * `update()`, `reset()`, `testEmail()` and `runDigest()` must stay reachable by the role each
+ * one names ONLY — never by a custom role (a database row built in Admin -> Roles) that merely
+ * holds the matching permission. See the class-level comment on `NotificationAdminController`
  * for the full story: the platform owner's own instruction was "visible to the super
- * administrator and nobody else," and every write here pairs `@Roles(ADMIN)` with
- * `@RequirePermissions('configuration:edit:platform')` — the shape that makes a route reachable
- * by ANY role holding that one permission via `RolesGuard`'s custom-role fallback, "nobody else"
- * notwithstanding.
+ * administrator and nobody else," and every write here pairs `@Roles` with `@RequirePermissions`
+ * — the shape that makes a route reachable by ANY role holding that one permission via
+ * `RolesGuard`'s custom-role fallback, "nobody else" notwithstanding.
+ *
+ * Since 2026-09-05 the four writes are two audiences (see the controller's amended class
+ * comment): `update`/`reset` are business messaging policy and keep `@Roles(ADMIN)` +
+ * `configuration:edit:platform`; `testEmail`/`runDigest` are the developer's transport
+ * plumbing — `@Roles(DEVELOPER)` (one-way: an administrator does not pass) +
+ * `system:edit:platform`. Both shapes keep `@RoleOnly()`, which is what this suite pins.
  *
  * Confirmed LIVE, 2026-09-04, before this suite existed: a role holding nothing but
  * `configuration:edit:platform` (role QATRACK_L_CONFIG_EDITOR, user qatrack-l-configeditor —
@@ -56,11 +61,19 @@ describe('NotificationAdminController — mutating routes resist the custom-role
   };
 
   const admin = { id: 'u-admin', roles: [{ name: 'ADMIN', permissions: [] }] };
+  const developer = { id: 'u-dev', roles: [{ name: 'DEVELOPER', permissions: [] }] };
 
-  /** The metadata each of the four fixed handlers carries as of this fix. */
+  /** The metadata the two catalog writes (`update`/`reset`) carry as of this fix. */
   const ROUTE_AS_FIXED = {
     [ROLES_KEY]: ['ADMIN'],
     [PERMISSIONS_KEY]: ['configuration:edit:platform'],
+    [ROLE_ONLY_KEY]: true,
+  };
+
+  /** The metadata the two transport routes (`testEmail`/`runDigest`) carry since 2026-09-05. */
+  const TRANSPORT_ROUTE = {
+    [ROLES_KEY]: ['DEVELOPER'],
+    [PERMISSIONS_KEY]: ['system:edit:platform'],
     [ROLE_ONLY_KEY]: true,
   };
 
@@ -87,6 +100,33 @@ describe('NotificationAdminController — mutating routes resist the custom-role
       expect(guard.canActivate(ctx(configEditorOnly))).toBe(true);
     },
   );
+
+  describe('the transport routes (email/test, digest/run) since the 2026-09-05 developer split', () => {
+    it('admits DEVELOPER by name', () => {
+      const guard = new RolesGuard(reflectorReturning(TRANSPORT_ROUTE));
+      expect(guard.canActivate(ctx(developer))).toBe(true);
+    });
+
+    it('refuses ADMIN — implication is one-way, and @RoleOnly() closes the permission door', () => {
+      // An administrator holding even the exact matching grant does not pass: DEVELOPER is not
+      // implied by ADMIN, and the fallback that would have judged the grant is disabled.
+      const adminWithGrant = {
+        id: 'u-admin-2',
+        roles: [{ name: 'ADMIN', permissions: [{ resource: 'SYSTEM', action: 'EDIT', scope: 'PLATFORM' }] }],
+      };
+      const guard = new RolesGuard(reflectorReturning(TRANSPORT_ROUTE));
+      expect(() => guard.canActivate(ctx(adminWithGrant))).toThrow(ForbiddenException);
+    });
+
+    it('refuses a custom role holding only system:edit:platform, same as the catalog writes', () => {
+      const systemEditorOnly = {
+        id: 'u-system-editor',
+        roles: [{ name: 'QATRACK_SYSTEM_EDITOR', permissions: [{ resource: 'SYSTEM', action: 'EDIT', scope: 'PLATFORM' }] }],
+      };
+      const guard = new RolesGuard(reflectorReturning(TRANSPORT_ROUTE));
+      expect(() => guard.canActivate(ctx(systemEditorOnly))).toThrow(ForbiddenException);
+    });
+  });
 
   describe('the real controller file', () => {
     const source = readFileSync(join(__dirname, 'notification-admin.controller.ts'), 'utf8');
@@ -117,10 +157,22 @@ describe('NotificationAdminController — mutating routes resist the custom-role
       expect(decoratorsAbove(handler)).toMatch(/@RoleOnly\(\)/);
     });
 
-    it.each(['update', 'reset', 'testEmail', 'runDigest'])(
-      '%s() still declares @RequirePermissions(\'configuration:edit:platform\'), unchanged',
+    it.each(['update', 'reset'])(
+      '%s() still declares ADMIN and @RequirePermissions(\'configuration:edit:platform\') — business messaging policy, unchanged',
       (handler) => {
-        expect(decoratorsAbove(handler)).toMatch(/@RequirePermissions\('configuration:edit:platform'\)/);
+        const block = decoratorsAbove(handler);
+        expect(block).toMatch(/@Roles\(\.\.\.NOTIFICATION_ADMIN_ROLES\)/);
+        expect(block).toMatch(/@RequirePermissions\('configuration:edit:platform'\)/);
+      },
+    );
+
+    it.each(['testEmail', 'runDigest'])(
+      '%s() declares DEVELOPER and @RequirePermissions(\'system:edit:platform\') — transport plumbing since 2026-09-05',
+      (handler) => {
+        const block = decoratorsAbove(handler);
+        expect(block).toMatch(/@Roles\(SystemRole\.DEVELOPER\)/);
+        expect(block).toMatch(/@RequirePermissions\('system:edit:platform'\)/);
+        expect(block).not.toMatch(/configuration:edit:platform/);
       },
     );
 

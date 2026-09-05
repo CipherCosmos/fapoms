@@ -2,6 +2,8 @@ import { SystemRole } from '@fapoms/shared';
 import {
   canManageAssayers, canCreateAssayers, canDeleteProjects,
   canAdministerDataReset, canAdministerPlatformSettings,
+  canAdministerTechnicalSettings, canApproveDestructiveActions,
+  canAdministerNotifications, canManageCompliance,
   canReadCustomerMaster, canManageRoles, permissionKeysFrom,
 } from './useCurrentRoles';
 
@@ -59,11 +61,17 @@ describe('capability checks', () => {
      * The one capability deliberately left role-only. It wipes operational data, and no permission
      * in the vocabulary means "may destroy the database" — accepting `CONFIGURATION:EDIT` as a
      * proxy would let an ordinary-looking settings grant carry it.
+     *
+     * DEVELOPER-only since the two-person rule (2026-09-05): the wipe is requested and executed
+     * by a developer; an ADMIN's part is APPROVING it, on /admin/approvals — so ADMIN no longer
+     * opens the Danger Zone, and implication cannot re-open it (it runs DEVELOPER → ADMIN,
+     * never the reverse).
      */
-    it('never opens data reset to a permission, however broad', () => {
+    it('never opens data reset to a permission, however broad — nor to ADMIN any more', () => {
       expect(canAdministerDataReset(NO_ROLES)).toBe(false);
       expect(canAdministerDataReset([SystemRole.OPERATIONS])).toBe(false);
-      expect(canAdministerDataReset([SystemRole.ADMIN])).toBe(true);
+      expect(canAdministerDataReset([SystemRole.ADMIN])).toBe(false);
+      expect(canAdministerDataReset([SystemRole.DEVELOPER])).toBe(true);
     });
 
     /**
@@ -158,6 +166,61 @@ describe('capability checks', () => {
 
     it('is false for nobody — no roles, no permissions', () => {
       expect(canManageRoles(NO_ROLES, [])).toBe(false);
+    });
+  });
+
+  /**
+   * The DEVELOPER split (2026-09-05). Every helper here funnels through `hasAnyRole`/`allowed`,
+   * which expand the caller's names through ROLE_IMPLICATIONS (role-hierarchy.ts in
+   * @fapoms/shared) — DEVELOPER ⇒ ADMIN + PRODUCT_SUPPORT, one-way. So a developer passes every
+   * admin gate without being listed, an admin passes NO developer-only gate, and the one check
+   * that must ignore implication (approving a wipe) reads the RAW roles.
+   */
+  describe('the DEVELOPER role and the two-person rule', () => {
+    it('passes the admin-gated helpers through implication, unlisted', () => {
+      expect(canAdministerPlatformSettings([SystemRole.DEVELOPER], [])).toBe(true);
+      expect(canManageAssayers([SystemRole.DEVELOPER], [])).toBe(true);
+      expect(canDeleteProjects([SystemRole.DEVELOPER], [])).toBe(true);
+      expect(canAdministerNotifications([SystemRole.DEVELOPER])).toBe(true);
+      expect(canManageCompliance([SystemRole.DEVELOPER])).toBe(true);
+      expect(canManageRoles([SystemRole.DEVELOPER], [])).toBe(true);
+    });
+
+    it('keeps the technical estate closed to a pure ADMIN — implication is one-way', () => {
+      expect(canAdministerTechnicalSettings([SystemRole.ADMIN])).toBe(false);
+      expect(canAdministerDataReset([SystemRole.ADMIN])).toBe(false);
+      expect(canAdministerTechnicalSettings([SystemRole.DEVELOPER])).toBe(true);
+      expect(canAdministerDataReset([SystemRole.DEVELOPER])).toBe(true);
+    });
+
+    /**
+     * The approve surface must NOT follow implication, and this is the deliberate exception in
+     * a file where everything else does: expanding here would show Approve to the developer
+     * whose own request needs the second pair of eyes, collapsing the two-person rule back to
+     * one person. Mirrors the backend's direct-role check on the approval routes.
+     */
+    describe('canApproveDestructiveActions reads the raw roles only', () => {
+      it('opens for the ADMIN role held directly', () => {
+        expect(canApproveDestructiveActions([SystemRole.ADMIN])).toBe(true);
+      });
+
+      it('stays shut for a DEVELOPER, though implication makes it an admin everywhere else', () => {
+        expect(canApproveDestructiveActions([SystemRole.DEVELOPER])).toBe(false);
+        // The contrast that makes the line above meaningful: the same principal IS an admin
+        // to every implication-aware helper.
+        expect(canAdministerPlatformSettings([SystemRole.DEVELOPER], [])).toBe(true);
+      });
+
+      it('opens for a principal who genuinely holds both roles', () => {
+        // Direct ADMIN among the raw roles is what the backend honours; holding DEVELOPER too
+        // does not subtract it.
+        expect(canApproveDestructiveActions([SystemRole.DEVELOPER, SystemRole.ADMIN])).toBe(true);
+      });
+
+      it('is false for everyone else', () => {
+        expect(canApproveDestructiveActions([SystemRole.OPERATIONS])).toBe(false);
+        expect(canApproveDestructiveActions(NO_ROLES)).toBe(false);
+      });
     });
   });
 });

@@ -35,7 +35,7 @@ const CATEGORY_META: Record<NotificationCategory, { icon: React.ElementType; ton
   [NotificationCategory.WORKFORCE]: { icon: Users, tone: 'var(--accent)', label: 'Workforce' },
   [NotificationCategory.BILLING]: { icon: Wallet, tone: 'var(--success)', label: 'Billing' },
   [NotificationCategory.SYSTEM]: { icon: Settings2, tone: 'var(--text-muted)', label: 'System' },
-  [NotificationCategory.FEEDBACK]: { icon: MessageSquare, tone: 'var(--accent)', label: 'Feedback' },
+  [NotificationCategory.FEEDBACK]: { icon: MessageSquare, tone: 'var(--accent)', label: 'Support' },
 };
 
 /**

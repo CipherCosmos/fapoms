@@ -1,5 +1,6 @@
 import { MobileApiService } from './api.service';
 import { ActionDispatcher, isRetryableStatus } from './action-queue';
+import type { AssayerAssignment } from '../types/mobile-app';
 
 /**
  * The one place a queued action's payload is turned into an actual request.
@@ -21,9 +22,14 @@ export interface CheckInOutPayload {
 export interface AssignmentStatusPayload {
   op: 'transition';
   assignmentId: string;
-  status: string;
+  /**
+   * Typed as the app's own status union, not `string`, so a legacy counter-offer action can no
+   * longer even be CONSTRUCTED: fee negotiation was removed from the app, `COUNTER_OFFER` is not
+   * a value of this union, and there is deliberately no fee field on this payload. (The server
+   * additionally refuses such transitions with a terminal 400 for old builds.)
+   */
+  status: AssayerAssignment['status'];
   notes?: string;
-  counterTravelFee?: number;
 }
 
 export interface RejectPayload {
@@ -61,21 +67,15 @@ export const actionDispatchers: {
     const res = await MobileApiService.checkOutBranch(p.assignmentId, p.lat, p.lng, p.accuracy);
     return { success: res.success, error: res.error, retryable: isRetryableStatus(res.status) };
   },
-  ASSIGNMENT_STATUS: async (p, clientRequestId) => {
+  ASSIGNMENT_STATUS: async (p) => {
     if (p.op === 'reject') {
       const res = await MobileApiService.rejectAssignment(p.assignmentId, p.reason);
       return { success: res.success, error: res.error, retryable: isRetryableStatus(res.status) };
     }
-    // `clientRequestId` only does anything server-side for a counter-offer (see
-    // `updateAssignmentStatus`'s own comment) — it is still passed for every transition so the
-    // dispatcher does not need to know which ones the backend keys on.
-    const { ok, status } = await MobileApiService.updateAssignmentStatus(
-      p.assignmentId,
-      p.status as any,
-      p.notes,
-      p.counterTravelFee,
-      clientRequestId,
-    );
+    // No clientRequestId: every transition an assayer still holds (accept, check-in,
+    // in-progress) is idempotent server-side — repeating one is a no-op. The action that needed
+    // dedup, the counter-offer, no longer exists in this app.
+    const { ok, status } = await MobileApiService.updateAssignmentStatus(p.assignmentId, p.status, p.notes);
     return { success: ok, error: ok ? undefined : 'Failed to update assignment status', retryable: isRetryableStatus(status) };
   },
   EXPENSE_CLAIM: async (p, clientRequestId) => {

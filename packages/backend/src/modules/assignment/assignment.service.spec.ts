@@ -1,8 +1,12 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken } from '@nestjs/typeorm';
-import { NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { NotFoundException, BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { Repository, DataSource } from 'typeorm';
 import { AssignmentService } from './assignment.service';
+// Controller-level pins for the negotiation refusal (the gate lives in the controller, the way
+// the fee self-dealing guard does), and the limits kill-switch it pairs with.
+import { AssignmentController } from './assignment.controller';
+import { PlatformSettingsController } from '../../infrastructure/settings/platform-settings.controller';
 import { AssignmentEntity } from './assignment.entity';
 import { ScheduleEntity } from '../scheduling/schedule.entity';
 import { ProjectBranchEntity } from '../project/project-branch.entity';
@@ -438,6 +442,15 @@ const mockNotificationService = {
     });
   });
 
+  /**
+   * "Assign anyway" now waives what it says it waives.
+   *
+   * Six of the seven blocking checks used to throw unconditionally while a seventh consulted
+   * `overrideReason` — so the planning panel offered the button, the operator typed a
+   * justification, and a rule that had never read the field refused them. The panel even suggested
+   * the wording: its prompt for a skills exclusion was "Skill or certification requirement waived
+   * by ops", for an action the server would always refuse.
+   */
   /**
    * The phone channel. `acceptOnBehalf` says the agreement already happened out loud, so the
    * assignment is confirmed as it is raised rather than left as an offer the assayer must accept
@@ -918,123 +931,117 @@ const mockNotificationService = {
   });
 
   /**
-   * A retried counter-offer POST (flaky field connection) carries the same `clientRequestId` as
-   * the attempt it is retrying. Without recognising that, the retry read as a genuine second
-   * negotiation round: `negotiationCount` incremented again and `proposedFee` was recomputed
-   * from a `previousFee` that was already the retried value — silently compounding a travel
-   * figure the assayer only ever typed once.
+   * In-app fee negotiation is REMOVED (2026-09). The `proposeCounterFee` service method and the
+   * controller's counter branch are deleted; what remains to hold still is the REFUSAL. Old
+   * sideloaded APKs keep POSTing counters, and they must get the deliberate 400 that explains
+   * the policy — not a generic message, and never a code path that quietly re-opens pricing.
+   * These pin the controller gate the way `fee-self-dealing.spec.ts` pins its neighbour.
    */
-  describe('proposeCounterFee — idempotency by clientRequestId', () => {
-    const REQUEST_ID = 'b3e1f7a2-4c5d-4e6f-8a9b-0c1d2e3f4a5b';
+  describe('transition — the negotiation refusal', () => {
+    const REFUSAL =
+      'Fee negotiation has been removed from the app. Please accept or decline the offer; '
+      + 'fee questions are settled with the operations desk by phone. Update your app to the latest version.';
 
-    const openOffer = () => ({
-      id: 'asn-1', status: AssignmentStatus.PENDING, negotiationCount: 0,
-      proposedFee: 2000, quotedBaseFee: 1700, quotedTravelFee: 300,
-      lastCounterRequestId: null,
-      projectBranch: { id: 'pb-1', status: ProjectBranchStatus.NEGOTIATION },
-    });
-
-    it('applies the first counter-offer and stamps the request id', async () => {
-      const assignment = openOffer();
-      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
-
-      const result = await service.proposeCounterFee('asn-1', 'user-1', 500, 'more travel', REQUEST_ID);
-
-      expect(result.negotiationCount).toBe(1);
-      expect(result.lastCounterRequestId).toBe(REQUEST_ID);
-      expect(result.proposedFee).toBe(2200); // 1700 base + 500 travel
-    });
-
-    it('returns the current state unchanged on a repeat with the same clientRequestId', async () => {
-      const assignment = {
-        ...openOffer(),
-        negotiationCount: 1, proposedFee: 2200, counterTravelFee: 500,
-        lastCounterRequestId: REQUEST_ID,
+    function makeController() {
+      const assignmentService = {
+        acceptOffer: jest.fn().mockResolvedValue({ id: 'asn-1', status: 'ACCEPTED' }),
+        // Ownership check support: the assignment belongs to the caller.
+        findOne: jest.fn().mockResolvedValue({ assayerId: 'user-1' }),
       };
-      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
-
-      const result = await service.proposeCounterFee('asn-1', 'user-1', 500, 'more travel', REQUEST_ID);
-
-      // The mutation this proves: removing the `if (clientRequestId && assignment
-      // .lastCounterRequestId === clientRequestId) return assignment;` guard in
-      // AssignmentService.proposeCounterFee makes negotiationCount increment to 2 here.
-      expect(result.negotiationCount).toBe(1);
-      expect(result.proposedFee).toBe(2200);
-      expect(mockAssignmentRepo.save).not.toHaveBeenCalled();
-    });
-
-    it('still increments on a genuinely new counter-offer (different clientRequestId)', async () => {
-      const assignment = {
-        ...openOffer(),
-        negotiationCount: 1, proposedFee: 2200, counterTravelFee: 500,
-        lastCounterRequestId: REQUEST_ID,
-      };
-      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
-
-      const result = await service.proposeCounterFee(
-        'asn-1', 'user-1', 800, 'more still', 'a1b2c3d4-0000-4000-8000-000000000001',
+      const controller = new AssignmentController(
+        assignmentService as any,
+        {} as any,
+        { assertAssignmentInScope: jest.fn(), assertBranchInScope: jest.fn() } as any,
       );
+      return { controller, assignmentService };
+    }
 
-      expect(result.negotiationCount).toBe(2);
-      expect(result.proposedFee).toBe(2500); // 1700 base + 800 travel
-    });
+    const reqAs = (roles: string[], id = 'user-1') => ({ user: { id, roles } });
 
-    it('still increments when no clientRequestId is sent at all — no key, no dedupe', async () => {
-      const assignment = openOffer();
-      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+    /** Awaits the call and asserts the EXACT refusal — the class and the whole message, not a
+     *  substring, because the message IS the product here: it is all an old build can show. */
+    const expectRefusal = async (call: Promise<unknown>) => {
+      const caught: any = await call.then(
+        () => { throw new Error('expected the transition to be refused'); },
+        (e) => e,
+      );
+      expect(caught).toBeInstanceOf(BadRequestException);
+      expect(caught.message).toBe(REFUSAL);
+    };
 
-      const result = await service.proposeCounterFee('asn-1', 'user-1', 500, 'more travel');
+    it.each(['COUNTER_OFFER', 'NEGOTIATION'])(
+      'refuses an assayer POSTing %s with the exact update-your-app message',
+      async (targetStatus) => {
+        const { controller, assignmentService } = makeController();
+        await expectRefusal(
+          controller.transition('asn-1', { targetStatus, counterTravelFee: 500 }, reqAs(['ASSAYER'])),
+        );
+        // The refusal is a wall, not a detour: nothing may reach the service.
+        expect(assignmentService.findOne).not.toHaveBeenCalled();
+        expect(assignmentService.acceptOffer).not.toHaveBeenCalled();
+      },
+    );
 
-      expect(result.negotiationCount).toBe(1);
-      expect(result.lastCounterRequestId).toBeNull();
+    it('refuses a fee-carrying PENDING — how the oldest builds phrased a counter', async () => {
+      const { controller } = makeController();
+      await expectRefusal(
+        controller.transition('asn-1', { targetStatus: 'PENDING', counterTravelFee: 650 }, reqAs(['ASSAYER'])),
+      );
+      // Every legacy alias for the figure is the same refusal.
+      for (const key of ['counterFee', 'fee', 'proposedFee']) {
+        await expectRefusal(
+          controller.transition('asn-1', { targetStatus: 'PENDING', [key]: 1900 }, reqAs(['ASSAYER'])),
+        );
+      }
     });
 
     /**
-     * The cap is enforced on the LOCKED count inside the transaction, not the unlocked read — this
-     * is the compare-and-swap that closes the concurrency bug where N parallel counter-offers all
-     * saw the same stale count and bypassed the limit (confirmed live: 6 concurrent left count at 2).
-     * At the cap the shared auto-decline (rejectOffer) runs and nothing is incremented.
+     * A BARE `PENDING` (no fee keys) is not a counter-offer, so it must not get the negotiation
+     * message. It now falls through to the trimmed allow-list — `PENDING` left
+     * `ASSAYER_TRANSITIONS` with the counter machinery — whose 403 explains that lifecycle
+     * moves belong to the desk.
      */
-    it('auto-declines instead of incrementing when the locked count is already at the cap', async () => {
-      const atCap = { ...openOffer(), negotiationCount: 3 }; // DEFAULT_MAX_NEGOTIATION_ROUNDS
-      mockAssignmentRepo.findOne.mockResolvedValue(atCap);
-      const reject = jest
-        .spyOn(service, 'rejectOffer')
-        .mockResolvedValue({ id: 'asn-1', status: AssignmentStatus.REJECTED } as any);
-
-      const result = await service.proposeCounterFee('asn-1', 'user-1', 500, 'past the cap');
-
-      expect(reject).toHaveBeenCalledWith('asn-1', 'user-1', expect.stringContaining('Negotiation limit reached'));
-      expect(result.status).toBe(AssignmentStatus.REJECTED);
-      reject.mockRestore();
+    it('does not give the negotiation refusal to a bare PENDING', async () => {
+      const { controller } = makeController();
+      const caught: any = await controller
+        .transition('asn-1', { targetStatus: 'PENDING' }, reqAs(['ASSAYER']))
+        .then(
+          () => { throw new Error('expected the transition to be refused'); },
+          (e) => e,
+        );
+      expect(caught).toBeInstanceOf(ForbiddenException);
+      expect(caught.message).not.toBe(REFUSAL);
     });
 
-    /**
-     * Found live 2026-09-04: a mobile UI bug let a pre-filled counter-fee field concatenate
-     * instead of replace ("2200" typed over as "2600" → 22002600), and the only check on the way
-     * in was `counterTravel < 0` — no upper bound at all. A ₹2.2-crore travel counter-offer for a
-     * routine branch audit was accepted as a genuine PENDING offer with no complaint. This proves
-     * the fix: a caller-supplied figure absurdly above the safety ceiling is refused before it
-     * ever reaches the locked transaction — `save` must never be called.
-     */
-    it('refuses a counter travel fee above the safety ceiling, before touching the locked row', async () => {
-      const assignment = openOffer();
-      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
-
-      await expect(
-        service.proposeCounterFee('asn-1', 'user-1', 22_002_600, 'typo, not a real figure'),
-      ).rejects.toThrow(/safety ceiling/);
-      expect(mockAssignmentRepo.save).not.toHaveBeenCalled();
+    it('still lets the assayer accept — the fee-less accept/decline survives the removal', async () => {
+      const { controller, assignmentService } = makeController();
+      await controller.transition('asn-1', { targetStatus: 'ACCEPTED' }, reqAs(['ASSAYER']));
+      expect(assignmentService.acceptOffer).toHaveBeenCalledTimes(1);
     });
+  });
 
-    it('accepts a genuinely large but plausible counter travel fee under the ceiling', async () => {
-      const assignment = openOffer();
-      mockAssignmentRepo.findOne.mockResolvedValue(assignment);
+  /**
+   * The machine half of the kill-switch. Shipped mobile builds gate their own counter-offer
+   * button on this number, so `maxNegotiationRounds: 0` makes a pre-removal APK show
+   * "Negotiation closed" by itself — no forced update. The KEY must stay while those builds are
+   * in the field; the VALUE must be the literal 0, not a setting an administrator could raise.
+   */
+  describe('platform limits — the negotiation kill-switch', () => {
+    it('serves maxNegotiationRounds: 0, whatever the settings store holds', async () => {
+      const settings = {
+        // Even a store that still carries the deleted field.maxNegotiationRounds row (it was
+        // registry-managed; the registry entry is gone) must not resurrect the feature.
+        getNumber: jest.fn().mockImplementation((_key: string, fallback: number) => Promise.resolve(fallback)),
+      };
+      const controller = new PlatformSettingsController(settings as any, {} as any);
 
-      const result = await service.proposeCounterFee('asn-1', 'user-1', 12_000, 'a genuine long-distance dispute');
+      const res = await controller.limits();
 
-      expect(result.negotiationCount).toBe(1);
-      expect(result.proposedFee).toBe(13_700); // 1700 base + 12,000 travel
+      expect(res.data.maxNegotiationRounds).toBe(0);
+      // The neighbours still resolve from settings — only the negotiation cap is nailed down.
+      expect(res.data.checkInGeofenceMeters).toBe(2000);
+      expect(res.data.maxSingleExpenseClaim).toBe(50_000);
+      expect(settings.getNumber).not.toHaveBeenCalledWith('field.maxNegotiationRounds', expect.anything());
     });
   });
 

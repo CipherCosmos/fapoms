@@ -4,7 +4,7 @@ import {
   ROSTER_FILTERS, ROSTER_SEGMENTS, EMPTY_FILTERS, NOT_RECORDED,
   applyRosterFilters, availableFilters, fieldChoices, ruleChoices, describeFilters,
   toggleChoice, clearFilter, activeFilterCount, parseFilters, writeFilters, pinQuality,
-  toServerQuery,
+  toServerQuery, withClientChoices,
   type FieldFilter, type RuleFilter, type RosterFilterState, type RosterPerson,
 } from './roster-filters';
 
@@ -430,5 +430,76 @@ describe('toServerQuery', () => {
     // route does not accept a param for it at all.
     const q = toServerQuery(state({ choices: { record: ['unpayable'] } }));
     expect(q).toBe('');
+  });
+
+  it('maps the two empanelment rule-kind axes onto their server params — the one exception', () => {
+    // These are `kind: 'rule'` for the panel's sake (a fixed list, not a stored row value) but,
+    // unlike "record" above, they DO have a real WHERE clause behind them
+    // (`RosterQueryService`'s empanelment join) — see the comment above `SERVER_FILTER_PARAM`.
+    const q = toServerQuery(state({
+      choices: { empanelmentStatus: ['ACTIVE', 'DOCUMENTS_PENDING'], empanelmentClientId: ['client-1'] },
+    }));
+    const params = new URLSearchParams(q);
+    expect(params.get('empanelmentStatus')).toBe('ACTIVE,DOCUMENTS_PENDING');
+    expect(params.get('empanelmentClientId')).toBe('client-1');
+  });
+});
+
+/**
+ * "Who can work for client X" — the one axis a roster row carries no data to answer locally.
+ * `RosterQueryService` has parsed `empanelmentStatus`/`empanelmentClientId` since the roster
+ * gained server-side filtering; this is what finally exposes them on the panel.
+ */
+describe('the empanelment filters', () => {
+  const roster = [
+    person({ id: '1', displayName: 'Person One' }),
+    person({ id: '2', displayName: 'Person Two' }),
+  ];
+
+  it('offers every EmpanelmentStatus value as a choice, with no per-option count', () => {
+    const def = ruleDef('empanelmentStatus');
+    expect(def.noCount).toBe(true);
+    const options = ruleChoices(def, roster);
+    expect(options.length).toBeGreaterThan(0);
+    // -1 is the panel's signal to print no count at all — a real number here would be the
+    // roster's own size against every single option, which is not a count of anything.
+    expect(options.every((o) => o.count === -1)).toBe(true);
+  });
+
+  it('never removes anyone locally — the server already did the narrowing', () => {
+    // `match` is a deliberate pass-through: nothing on a roster row says who is empanelled where,
+    // so re-checking this axis client-side would either wrongly exclude everyone or do nothing —
+    // pass-through is the only honest choice, and it is what makes AND-across-filters still work.
+    const chosen = state({ choices: { empanelmentStatus: ['ACTIVE'] } });
+    expect(names(applyRosterFilters(roster, chosen))).toEqual(['Person One', 'Person Two']);
+  });
+
+  it('starts with no options for the client axis until a live client list is supplied', () => {
+    expect(ruleDef('empanelmentClientId').choices).toEqual([]);
+  });
+
+  it('withClientChoices fills the client axis in from a live list, leaving every other def alone', () => {
+    const clients = [{ id: 'c1', name: 'Kerala Gramin Bank' }, { id: 'c2', name: 'SBI' }];
+    const filled = withClientChoices(ROSTER_FILTERS, clients);
+    const clientDef = filled.find((d) => d.key === 'empanelmentClientId') as RuleFilter;
+    expect(clientDef.choices.map((c) => c.value)).toEqual(['c1', 'c2']);
+    expect(clientDef.choices.map((c) => c.label)).toEqual(['Kerala Gramin Bank', 'SBI']);
+    // Every other definition (by reference) is untouched.
+    expect(filled.find((d) => d.key === 'state')).toBe(fieldDef('state'));
+  });
+
+  it('is exclusive: ticking a second client replaces the first rather than adding to it', () => {
+    // `empanelmentClientId` is a single-value server param — `RosterQueryService` takes one
+    // client id, so two ticked at once would send a literal "id1,id2" that matches nobody.
+    let s = toggleChoice(EMPTY_FILTERS, 'empanelmentClientId', 'c1');
+    expect(s.choices.empanelmentClientId).toEqual(['c1']);
+    s = toggleChoice(s, 'empanelmentClientId', 'c2');
+    expect(s.choices.empanelmentClientId).toEqual(['c2']);
+  });
+
+  it('does not make every other axis exclusive — a normal field still allows several choices', () => {
+    let s = toggleChoice(EMPTY_FILTERS, 'state', 'Kerala');
+    s = toggleChoice(s, 'state', 'Goa');
+    expect(s.choices.state?.sort()).toEqual(['Goa', 'Kerala']);
   });
 });

@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react';
 import {
-  AssayerLifecycleStatus, AssayerUnavailableReason, ASSAYER_RECORD_FIELDS, CRITICAL_ASSAYER_RECORD_FIELDS, missingAssayerRecordFields, nextAssayerLifecycleStates, ONBOARDING_STAGES, ONBOARDING_NEXT_STEP, isOnboardingStage, onboardingNextStep as sharedOnboardingNextStep, looksMasked, hasLeftWorkforce,
+  AssayerLifecycleStatus, AssayerUnavailableReason, ASSAYER_RECORD_FIELDS, CRITICAL_ASSAYER_RECORD_FIELDS, missingAssayerRecordFields, nextAssayerLifecycleStates, ONBOARDING_STAGES, ONBOARDING_NEXT_STEP, isOnboardingStage, onboardingNextStep as sharedOnboardingNextStep, looksMasked,
 } from '@fapoms/shared';
 
 /** Shared shape and colours for the workforce record, used by the roster and its forms. */
@@ -163,42 +163,19 @@ export const isRecordedDeceased = (a: Partial<Assayer>): boolean =>
   && String(a.unavailableReason ?? '').toUpperCase() === AssayerUnavailableReason.DECEASED;
 
 /**
- * Has this person left, by status? Delegated to `@fapoms/shared`.
- *
- * This screen kept its own list of exit stages, and that list is precisely what went stale: the
- * deceased arm was added to both backend copies of the rule and never to this one, so a man
- * recorded as having died stayed in "Incomplete record" and "Cannot be paid", where the screen
- * asked a clerk to chase his bank details. Two of three copies being right is what hid it.
- */
-const hasLeftByStatus = (a: Partial<Assayer>): boolean =>
-  hasLeftWorkforce({ lifecycleStatus: a.lifecycleStatus, unavailableReason: a.unavailableReason });
-
-/**
  * Still on the books and still workable — the population the server's compliance figures count
  * (`ON_ROSTER` in hr-workforce.service.ts), and the one the roster's gap chips are allowed to nag
  * about. Those chips are worklists: every row is somebody a clerk is meant to ring up.
  *
- * They used to match anybody with a blank field, so 444 people who had resigned or been
- * terminated sat in "Incomplete record" and "Cannot be paid" as though their bank details were
- * worth chasing, and the chip and the Overview described different populations from the same data
- * — the Overview said 717, the chip counted from 1,163 — with nothing on either screen to say why.
- *
- * Shaped like the server's rule on purpose: gone by their stage, OR gone by a date. Both halves
- * are needed. The date alone misses 25 people carrying a departed lifecycle and no leaving date —
- * the roster import never had one — and the stage alone misses a departure typed as a date while
- * the lifecycle was left where it was.
- *
- * The deceased arm is the one this copy was still missing, and it cost exactly one person: AS0055,
- * recorded deceased with no leaving date, counted as current staff here while the server counted
- * 717. He was therefore in both worklists — asking a clerk to go and chase a dead colleague's bank
- * details. The server had already been fixed for this (`HAS_LEFT` in hr-workforce.service.ts,
- * `hasLeft` in data-integrity.service.ts); the fix never crossed to this side, which is what a
- * rule written out three times does.
+ * Delegated to `@fapoms/shared` rather than kept as a local copy. This file used to hold its own
+ * version — stage-plus-dates, with its own `hasLeftByStatus` helper — and it was one of three that
+ * had drifted: the deceased arm was added to the other two and missed here, so AS0055 (recorded
+ * deceased, no leaving date) sat in "Incomplete record" and "Cannot be paid" asking a clerk to
+ * chase a dead colleague's bank details while the server's own count had already moved on without
+ * him. Re-exported under the same name so nothing that imports `stillWorkable` from here has to
+ * change; see the shared implementation for the rule itself.
  */
-export const stillWorkable = (a: Partial<Assayer> & Pick<Assayer, 'lifecycleStatus'>): boolean =>
-  !hasLeftByStatus(a)
-  && !a.exitDate
-  && !a.terminationDate;
+export { stillWorkable } from '@fapoms/shared';
 
 /**
  * The three record fields that are never printed in full without a deliberate, recorded click.
@@ -372,7 +349,7 @@ const TEL_FIELDS = new Set(['phone', 'alternatePhone', 'emergencyContactPhone'])
  */
 const NO_EMPTY_VALUE = new Set(['experienceYears', 'performanceRating', 'maxDailyWorkload', 'maxWeeklyWorkload']);
 
-const parseListValue = (raw?: string): string[] => {
+export const parseListValue = (raw?: string): string[] => {
   if (!raw) return [];
   try {
     const parsed = JSON.parse(raw);

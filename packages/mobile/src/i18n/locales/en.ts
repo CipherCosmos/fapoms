@@ -307,7 +307,6 @@ export const en = {
     stats: {
       completed: 'Completed',
       assigned: 'Assigned',
-      balance: 'Balance',
       rating: 'Rating',
       ratingHint: 'out of 5',
     },
@@ -317,7 +316,7 @@ export const en = {
       performance: 'Performance',
       app: 'App',
       account: 'Account',
-      help: 'Help & Feedback',
+      help: 'Help & Support',
       session: 'Session',
     },
     rows: {
@@ -355,9 +354,9 @@ export const en = {
       accreditation: 'Accreditation & License',
       licenceNumber: 'License No: %{number}',
       noLicence: 'No licence number on file',
-      feedback: 'Send feedback',
+      feedback: 'Support',
       feedbackHint: 'Report a bug, suggest an improvement, or ask the product team a question',
-      feedbackAccessibility: 'Open feedback and support',
+      feedbackAccessibility: 'Open Help & Support',
       signOut: 'Sign out',
       signOutHint: "You'll need your password to sign back in",
     },
@@ -599,7 +598,6 @@ export const en = {
     scheduledTodayValue: 'Scheduled today: %{count}',
     openQueries: 'Open queries',
     openQueriesValue: 'Open queries: %{count}',
-    balance: 'Balance due to you',
     claimsPending: 'Claims awaiting approval',
     distanceKm: '%{km} km',
     customers: '%{count} customers',
@@ -622,19 +620,10 @@ export const en = {
     emptyDoneBody: 'Audits you finish or decline are kept here for your records.',
     oneStop: '1 stop',
     manyStops: '%{count} stops',
-    dayTotal: ' · %{amount}',
     factDate: 'Date',
     factPackets: 'Packets',
-    factFee: 'Fee',
-    feeNotSet: 'Fee not set',
-    includesTravel: 'Includes %{amount} travel',
-    includesTravelBy: ' by %{mode}',
-    includesTravelDistance: ' · ~%{km} km each way',
-    counterOffer: 'Counter-offer round %{round} of %{max} · proposed %{amount}',
     accept: 'Accept',
     decline: 'Decline',
-    negotiationClosed: 'Negotiation closed',
-    proposeFee: 'Propose a different fee (%{round}/%{max})',
     navigate: 'Navigate',
     checkIn: 'Check in',
     scanAndSubmit: 'Scan & submit audited return',
@@ -776,11 +765,6 @@ export const en = {
       food: 'Food',
       other: 'Other',
     },
-    /** Split around the mode so the sentence stays whole when there is no mode to name. */
-    quotedIncluded:
-      'Your fee for this assignment already includes %{amount} for travel. Claim here only what that did not cover.',
-    quotedIncludedByMode:
-      'Your fee for this assignment already includes %{amount} for travel by %{mode}. Claim here only what that did not cover.',
     amountLabel: 'AMOUNT (₹)',
     amountPlaceholder: 'e.g. 250',
     overLimit:
@@ -849,35 +833,58 @@ export const en = {
     failedBody: 'Your availability could not be saved.',
   },
 
-  negotiate: {
-    title: 'Ask for a different travel amount',
-    currentFee: 'Current offered fee: %{amount}',
-    includesTravel: 'Includes %{amount} for travel.',
-    includesTravelByMode: 'Includes %{amount} for travel by %{mode}.',
-    /** Its own sentence rather than a clause, so no language has to fit it inside the one above. */
-    aboutDistance: 'About %{km} km each way.',
-    amountLabel: 'TRAVEL YOU ARE ASKING FOR (₹)',
-    amountPlaceholder: 'e.g. 2200',
-    remarksLabel: 'REASON / REMARKS (OPTIONAL)',
-    remarksPlaceholder: 'e.g. Long-distance travel allowance required',
-    amountRequired: 'Enter the travel amount you are asking for.',
-    submitFailed: 'Could not send your travel request.',
+  /**
+   * The invoice reveal-and-confirm sheet — the first place this app ever shows the assayer a
+   * fee. The copy therefore does two jobs at once: explain what these numbers are, and make
+   * the submission read as the deliberate act of consent it is.
+   */
+  invoice: {
+    title: 'Your invoice',
+    subtitle: 'Check every line before you submit. These are the amounts you are billing for.',
+    loading: 'Loading your invoice…',
+    loadFailed: 'Could not load your invoice. Check your connection and try again.',
+    emptyTitle: 'No invoice to review',
+    emptyBody: 'Operations has not invited you to bill yet. You will be notified here when they do.',
+    itemsOne: '1 item',
+    itemsMany: '%{count} items',
+    lineFee: 'Audit fee',
+    lineExpense: 'Expense',
+    subtotalBase: 'Base subtotal',
+    subtotalTravel: 'Travel subtotal',
+    tdsDeducted: 'TDS deducted',
+    total: 'Total for this invoice',
+    submit: 'Submit invoice',
+    /** The second, deliberate step: restate what is being agreed to, then ask. */
+    confirmTitle: 'Submit this invoice?',
+    confirmBodyOne:
+      'You are submitting 1 item for %{total}. This submits your invoice for these amounts.',
+    confirmBodyMany:
+      'You are submitting %{count} items for %{total}. This submits your invoice for these amounts.',
+    confirmCta: 'Yes, submit',
+    confirmBack: 'Go back',
     submitting: 'Submitting…',
-    submit: 'Send request',
-    /**
-     * Says travel, because travel is what moved. The audit fee comes from the rate card and is
-     * not the assayer's to change; naming it here would have them expecting money they never
-     * asked for.
-     */
-    sentTitle: 'Travel request sent',
-    sentBody: 'You asked for %{amount} of travel. Operations will reply.',
-    failedTitle: 'Not sent',
-    failedBody: 'Your travel request could not be submitted.',
+    /** The submit is online-only on purpose — consent must bind to the figures on screen. */
+    submitOffline:
+      'Could not reach the server, so nothing was submitted. Connect to the internet and tap Submit again.',
+    submitConflict:
+      'This invoice changed on the server. Its current state is shown below — check it again before doing anything.',
+    submitFailed: 'Your invoice could not be submitted. Please try again.',
+    submittedBadge: 'Submitted — awaiting approval',
+    submittedNote:
+      'Operations will check and approve this invoice. The amounts join your earnings once it is approved.',
+    submittedToastTitle: 'Invoice submitted',
+    submittedToastBody: 'Operations will review it. You will be notified when it is approved.',
   },
 
   earnings: {
     balanceLabel: 'BALANCE OWED TO YOU',
     balanceOwed: 'Owed to you across all completed work, after payments and TDS.',
+    /**
+     * The gated wording: once invoicing is on, the totals cover only approved invoices (plus
+     * pre-invoicing rows), so the caption must not claim "all completed work" — completed
+     * audits awaiting invoicing are counted on this screen but never priced.
+     */
+    balanceOwedGated: 'Owed to you across your approved invoices, after payments and TDS.',
     balanceSettled: 'You are fully settled — nothing outstanding right now.',
     /** No figure is shown at all when the statement cannot be read — only this. */
     statementFailed:
@@ -923,9 +930,29 @@ export const en = {
     completedSummary: 'Your finished jobs',
     completedEmptyTitle: 'No earnings yet',
     completedEmptyBody: 'Your fee appears here the moment you complete your first audit.',
-    /** A finished audit the billing engine has not raised a payout for yet. */
+    /** A finished audit the billing engine has not raised a payout for yet (pre-gate wording). */
     notBooked: 'Not booked yet',
+    /** The gated sibling of `notBooked`: the money exists but is not revealed until invoicing. */
+    awaitingInvoicingRow: 'Awaiting invoicing',
     completedBadge: 'Completed',
+    /** Rows earned before the invoicing gate existed — amounts visible under the old rules. */
+    preInvoicingBadge: 'Pre-invoicing',
+    /**
+     * The earnings gate's cards. Counts only, never a rupee: the amounts first appear on the
+     * invoice invitation itself, which the "review" button opens.
+     */
+    invoicing: {
+      awaitingOne: '1 completed audit is awaiting invoicing',
+      awaitingMany: '%{count} completed audits are awaiting invoicing',
+      awaitingBody: 'Operations will invite you when they are ready to bill. Nothing is needed from you yet.',
+      invitedTitle: 'Your invoice is ready to review',
+      invitedBodyOne: 'Operations has prepared 1 item for you to check and submit.',
+      invitedBodyMany: 'Operations has prepared %{count} items for you to check and submit.',
+      reviewCta: 'Review & submit invoice',
+      submittedTitle: 'Invoice submitted',
+      submittedBody: 'Your invoice is with operations. The amounts join your earnings once it is approved.',
+      viewCta: 'View submitted invoice',
+    },
   },
 
   /**
@@ -1190,10 +1217,10 @@ export const en = {
   },
 
   feedback: {
-    title: 'Feedback',
-    newTitle: 'New feedback',
-    sendNew: 'Send new feedback',
-    emptyTitle: 'No feedback yet',
+    title: 'Help & Support',
+    newTitle: 'New support request',
+    sendNew: 'New support request',
+    emptyTitle: 'No support requests yet',
     emptyBody:
       'Report a bug, suggest an improvement or ask a question — the product team will reply here.',
     kindLabel: 'WHAT KIND?',

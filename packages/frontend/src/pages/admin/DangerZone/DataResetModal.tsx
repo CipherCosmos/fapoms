@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, CheckCircle2, Loader2 } from 'lucide-react';
-import { Modal, useToast } from '../../../components/ui';
+import { AlertTriangle, CheckCircle2, Loader2, ShieldCheck } from 'lucide-react';
+import { DESTRUCTIVE_APPROVAL_TTL_HOURS } from '@fapoms/shared';
+import { Modal, useToast, AlertBanner } from '../../../components/ui';
 import { controlStyle, Pill } from '../../../components/ui/settings';
 import { api } from '../../../services/api';
 import { userMessage } from '../../../services/errors';
@@ -37,14 +38,30 @@ interface UserOption {
 
 const roleNames = (u: UserOption) => (u.roles ?? []).map((r) => (typeof r === 'string' ? r : r?.name)).filter(Boolean).join(', ');
 
+/**
+ * Two jobs, one flow, since the two-person rule (2026-09-05):
+ *
+ *  - mode "request": the developer picks domains, sees the live preview, and files a request
+ *    for an admin to approve. Nothing here deletes anything, so the typed phrase, the backup
+ *    checkbox and the keep-list do not appear — those belong to the moment of execution.
+ *  - mode "execute": the approved request's domains, FROZEN (the admin approved that exact
+ *    payload), plus everything the old direct wipe asked for — keep-list, billing
+ *    acknowledgement, backup, the typed phrase — and the request id the backend now requires.
+ */
 export const DataResetModal: React.FC<{
+  mode: 'request' | 'execute';
   domains: WipeDomain[];
   initialSelectedKeys: string[];
+  /** The APPROVED request being executed; required in execute mode. */
+  requestId?: string;
   onClose: () => void;
+  /** Called after a request is successfully filed (request mode). */
+  onRequested?: () => void;
   onWiped: () => void;
-}> = ({ domains, initialSelectedKeys, onClose, onWiped }) => {
+}> = ({ mode, domains, initialSelectedKeys, requestId, onClose, onRequested, onWiped }) => {
   const { toast } = useToast();
   const currentUserId = useCurrentUserId();
+  const isExecute = mode === 'execute';
 
   const [selectedKeys, setSelectedKeys] = useState<string[]>(initialSelectedKeys);
   const [preview, setPreview] = useState<PreviewResult | null>(null);
@@ -52,13 +69,15 @@ export const DataResetModal: React.FC<{
   const [billingConfirmed, setBillingConfirmed] = useState(false);
   const [takeBackupFirst, setTakeBackupFirst] = useState(false);
   const [confirmText, setConfirmText] = useState('');
-  const [submitting, setSubmitting] = useState<'idle' | 'backing-up' | 'wiping'>('idle');
+  const [submitting, setSubmitting] = useState<'idle' | 'requesting' | 'backing-up' | 'wiping'>('idle');
   const [result, setResult] = useState<{ removed: Record<string, number>; backup: any } | null>(null);
 
   const [userSearch, setUserSearch] = useState('');
   const [keepUserIds, setKeepUserIds] = useState<string[]>(currentUserId ? [currentUserId] : []);
   const [users, setUsers] = useState<UserOption[] | null>(null);
   const [usersLoading, setUsersLoading] = useState(false);
+  /** The server's own count — not `users?.length`, which is only ever the page that arrived. */
+  const [usersTotal, setUsersTotal] = useState(0);
 
   const domainByKey = useMemo(() => Object.fromEntries(domains.map((d) => [d.key, d])), [domains]);
   /** Which domain's row-list mentions this table — used to tell the admin exactly what to also select. */
@@ -70,11 +89,17 @@ export const DataResetModal: React.FC<{
   const includesUsers = selectedKeys.includes('users');
   const includesBilling = selectedKeys.includes('billing');
 
-  const toggleDomain = (key: string) =>
+  // In execute mode the selection is the approved request's payload and must not move — the
+  // approval names exactly these domains, and the backend rejects a mismatch anyway.
+  const toggleDomain = (key: string) => {
+    if (isExecute) return;
     setSelectedKeys((prev) => (prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]));
+  };
 
-  const addDomain = (key: string) =>
+  const addDomain = (key: string) => {
+    if (isExecute) return;
     setSelectedKeys((prev) => (prev.includes(key) ? prev : [...prev, key]));
+  };
 
   // Live preview — debounced, refetches whenever the selection actually changes.
   useEffect(() => {
@@ -98,15 +123,29 @@ export const DataResetModal: React.FC<{
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedKeys.join(',')]);
 
-  // Load the account picker only once "users" is actually selected — no need to fetch 500 rows
-  // for a wipe that never touches accounts.
+  /**
+   * Load the account picker only once "users" is actually selected — no need to fetch rows for a
+   * wipe that never touches accounts. Request mode never shows the picker (the keep-list is
+   * chosen at execution time), so it never fetches either.
+   *
+   * Raised from 500 to 2,000 (the ceiling `GET /users` is contracted to honour) and now reads
+   * `meta.total`, because this is the one screen on this list where a silent shortfall is not
+   * merely a wrong number on a tile — it decides who a data wipe deletes. An account past the
+   * cap could never be ticked to keep, and "everyone else is removed" (the copy right above this
+   * list) would have quietly meant it too, with nothing here to say the picker was incomplete.
+   */
   useEffect(() => {
-    if (!includesUsers || users !== null) return;
+    if (!isExecute || !includesUsers || users !== null) return;
     setUsersLoading(true);
-    // api.request already unwraps the {success, data} envelope, so this resolves straight to
-    // the array — see ApiClient.request in services/api.ts.
-    api.request<UserOption[]>('/users?limit=500')
-      .then((res) => setUsers(res ?? []))
+    api.request<{ data?: UserOption[]; meta?: { pagination?: { total?: number } } }>(
+      '/users?limit=2000',
+      { withMeta: true },
+    )
+      .then((res) => {
+        const list = Array.isArray(res?.data) ? res.data : [];
+        setUsers(list);
+        setUsersTotal(res?.meta?.pagination?.total ?? list.length);
+      })
       .catch((err) => toast({ type: 'error', title: 'Could not load accounts', message: userMessage(err) }))
       .finally(() => setUsersLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -130,14 +169,31 @@ export const DataResetModal: React.FC<{
   const billingOk = !includesBilling || billingConfirmed;
   const confirmTextOk = confirmText === CONFIRMATION_PHRASE;
 
-  const canSubmit =
+  /** A coherent selection with a clean preview — everything either submit path needs first. */
+  const selectionOk =
     selectedKeys.length > 0 &&
     !previewLoading &&
     !hasBlockingConflicts &&
-    !hasUnresolvedImplied &&
-    billingOk &&
-    confirmTextOk &&
-    submitting === 'idle';
+    !hasUnresolvedImplied;
+
+  const canRequest = selectionOk && submitting === 'idle';
+  const canSubmit = selectionOk && billingOk && confirmTextOk && submitting === 'idle';
+
+  /** Request mode's submit: file the request; an admin decides on /admin/approvals. */
+  const requestApproval = async () => {
+    setSubmitting('requesting');
+    try {
+      await api.request('/admin/data-reset/requests', {
+        method: 'POST',
+        body: JSON.stringify({ domains: selectedKeys }),
+      });
+      toast('success', 'Request filed — an administrator has been asked to approve it.');
+      onRequested?.();
+    } catch (err: any) {
+      toast({ type: 'error', title: 'Could not file the request', message: userMessage(err) });
+      setSubmitting('idle');
+    }
+  };
 
   const submit = async () => {
     setSubmitting(takeBackupFirst ? 'backing-up' : 'wiping');
@@ -147,6 +203,9 @@ export const DataResetModal: React.FC<{
         {
           method: 'POST',
           body: JSON.stringify({
+            // The approved request's id — the backend refuses an execute without one, and
+            // matches its frozen domains against domainKeys.
+            requestId,
             domainKeys: selectedKeys,
             keepUserIds,
             billingConfirmed: includesBilling ? billingConfirmed : undefined,
@@ -218,22 +277,36 @@ export const DataResetModal: React.FC<{
   }
 
   return (
-    <Modal open onClose={onClose} title="Wipe selected data" width="620px" height="80vh">
+    <Modal
+      open
+      onClose={onClose}
+      title={isExecute ? 'Execute the approved wipe' : 'Request a data wipe'}
+      width="620px"
+      height="80vh"
+    >
       <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
-        {/* Domains, editable here too */}
+        {/* Domains — editable while composing a request, frozen while executing an approval. */}
         <div>
-          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '8px' }}>Domains</div>
+          <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '8px' }}>
+            Domains
+            {isExecute && (
+              <span style={{ fontWeight: 500, color: 'var(--text-muted)', marginLeft: '7px' }}>
+                — frozen: the approval covers exactly this selection
+              </span>
+            )}
+          </div>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px' }}>
-            {domains.map((d) => {
+            {(isExecute ? domains.filter((d) => selectedKeys.includes(d.key)) : domains).map((d) => {
               const checked = selectedKeys.includes(d.key);
               return (
                 <button
                   key={d.key}
                   type="button"
+                  disabled={isExecute}
                   onClick={() => toggleDomain(d.key)}
                   style={{
                     display: 'flex', alignItems: 'center', gap: '6px', padding: '6px 11px', borderRadius: '16px',
-                    fontSize: '11.5px', fontWeight: 600, cursor: 'pointer',
+                    fontSize: '11.5px', fontWeight: 600, cursor: isExecute ? 'default' : 'pointer',
                     border: `1px solid ${checked ? 'var(--danger)' : 'var(--border-color)'}`,
                     background: checked ? 'rgba(216,71,71,0.12)' : 'transparent',
                     color: checked ? 'var(--danger)' : 'var(--text-secondary)',
@@ -245,6 +318,19 @@ export const DataResetModal: React.FC<{
             })}
           </div>
         </div>
+
+        {/* What filing a request actually does — said before the button that does it. */}
+        {!isExecute && (
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start', fontSize: '11.5px', color: 'var(--text-muted)', background: 'var(--bg-secondary)', padding: '10px', borderRadius: '6px', lineHeight: 1.6 }}>
+            <ShieldCheck size={13} style={{ flexShrink: 0, marginTop: '1px' }} />
+            <span>
+              Nothing is deleted now. This files a request an administrator has to approve; once
+              approved you come back here to execute it, and the approval stays valid for{' '}
+              {DESTRUCTIVE_APPROVAL_TTL_HOURS} hours. The domain selection is frozen the moment the
+              request is filed.
+            </span>
+          </div>
+        )}
 
         {/* Live preview */}
         {selectedKeys.length > 0 && (
@@ -277,11 +363,18 @@ export const DataResetModal: React.FC<{
                 </div>
                 <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '6px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
                   {preview!.impliedDomains.map((key) => (
-                    <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '10px' }}>
                       <span><b>{domainByKey[key]?.label ?? key}</b> — cascades from what's already selected.</span>
-                      <button type="button" className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: '11px' }} onClick={() => addDomain(key)}>
-                        Add to selection
-                      </button>
+                      {isExecute ? (
+                        // The approved payload is frozen, so it cannot be widened here: the data
+                        // has changed underneath the approval, and the honest path is a fresh
+                        // request naming everything the wipe now touches.
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)', flexShrink: 0 }}>needs a fresh request</span>
+                      ) : (
+                        <button type="button" className="btn btn-secondary" style={{ padding: '4px 10px', fontSize: '11px' }} onClick={() => addDomain(key)}>
+                          Add to selection
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -304,8 +397,8 @@ export const DataResetModal: React.FC<{
           </div>
         )}
 
-        {/* Billing extra confirmation */}
-        {includesBilling && (
+        {/* Billing extra confirmation — an execution-time acknowledgement, not a request field */}
+        {isExecute && includesBilling && (
           <label style={{ display: 'flex', gap: '9px', alignItems: 'flex-start', fontSize: '12.5px', color: 'var(--text-secondary)', padding: '10px', border: '1px solid var(--warning)', borderRadius: '8px', cursor: 'pointer' }}>
             <input
               type="checkbox"
@@ -317,12 +410,22 @@ export const DataResetModal: React.FC<{
           </label>
         )}
 
-        {/* Users keep-list */}
-        {includesUsers && (
+        {/* Users keep-list — chosen at execution time; the request only freezes the domains */}
+        {isExecute && includesUsers && (
           <div>
             <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-primary)', marginBottom: '6px' }}>
               Accounts to keep <span style={{ fontWeight: 500, color: 'var(--text-muted)' }}>— everyone else is removed</span>
             </div>
+            {/* This is the one place on the whole admin surface where an incomplete account list
+                is not a wrong number on a tile — it decides who a wipe deletes. An account past
+                the cap cannot be ticked to keep, and "everyone else is removed" above means them
+                too unless this says so first. */}
+            {usersTotal > (users?.length ?? 0) && (
+              <AlertBanner type="error" style={{ marginBottom: '8px' }}>
+                Showing {users?.length ?? 0} of {usersTotal} accounts — refine search below to
+                find someone not listed before wiping.
+              </AlertBanner>
+            )}
             <input
               type="text" placeholder="Search accounts…" value={userSearch}
               onChange={(e) => setUserSearch(e.target.value)}
@@ -355,35 +458,51 @@ export const DataResetModal: React.FC<{
           </div>
         )}
 
-        {/* Backup checkbox */}
-        <label style={{ display: 'flex', gap: '9px', alignItems: 'center', fontSize: '12.5px', color: 'var(--text-secondary)', cursor: 'pointer' }}>
-          <input type="checkbox" checked={takeBackupFirst} onChange={(e) => setTakeBackupFirst(e.target.checked)} style={{ cursor: 'pointer' }} />
-          Take a backup before wiping
-        </label>
+        {/* Backup checkbox and typed confirmation — execution only; a request destroys nothing */}
+        {isExecute && (
+          <label style={{ display: 'flex', gap: '9px', alignItems: 'center', fontSize: '12.5px', color: 'var(--text-secondary)', cursor: 'pointer' }}>
+            <input type="checkbox" checked={takeBackupFirst} onChange={(e) => setTakeBackupFirst(e.target.checked)} style={{ cursor: 'pointer' }} />
+            Take a backup before wiping
+          </label>
+        )}
 
-        {/* Typed confirmation */}
-        <div>
-          <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '6px' }}>
-            Type <b>{CONFIRMATION_PHRASE}</b> to confirm:
+        {isExecute && (
+          <div>
+            <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '6px' }}>
+              Type <b>{CONFIRMATION_PHRASE}</b> to confirm:
+            </div>
+            <input
+              type="text" value={confirmText} onChange={(e) => setConfirmText(e.target.value)}
+              placeholder={CONFIRMATION_PHRASE} style={controlStyle}
+            />
           </div>
-          <input
-            type="text" value={confirmText} onChange={(e) => setConfirmText(e.target.value)}
-            placeholder={CONFIRMATION_PHRASE} style={controlStyle}
-          />
-        </div>
+        )}
 
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', paddingTop: '4px' }}>
           <button className="btn btn-secondary" onClick={onClose} disabled={submitting !== 'idle'}>Cancel</button>
-          <button
-            className="btn btn-primary"
-            disabled={!canSubmit}
-            onClick={submit}
-            style={{ background: 'var(--danger)', border: 'none', display: 'flex', alignItems: 'center', gap: '7px' }}
-          >
-            {submitting === 'backing-up' && <><Loader2 size={13} className="spin" /> Taking a backup first…</>}
-            {submitting === 'wiping' && <><Loader2 size={13} className="spin" /> Wiping…</>}
-            {submitting === 'idle' && 'Wipe now'}
-          </button>
+          {isExecute ? (
+            <button
+              className="btn btn-primary"
+              disabled={!canSubmit}
+              onClick={submit}
+              style={{ background: 'var(--danger)', border: 'none', display: 'flex', alignItems: 'center', gap: '7px' }}
+            >
+              {submitting === 'backing-up' && <><Loader2 size={13} className="spin" /> Taking a backup first…</>}
+              {submitting === 'wiping' && <><Loader2 size={13} className="spin" /> Wiping…</>}
+              {submitting === 'idle' && 'Wipe now'}
+            </button>
+          ) : (
+            <button
+              className="btn btn-primary"
+              disabled={!canRequest}
+              onClick={requestApproval}
+              style={{ background: 'var(--danger)', border: 'none', display: 'flex', alignItems: 'center', gap: '7px' }}
+            >
+              {submitting === 'requesting'
+                ? <><Loader2 size={13} className="spin" /> Filing the request…</>
+                : 'Request approval'}
+            </button>
+          )}
         </div>
       </div>
     </Modal>

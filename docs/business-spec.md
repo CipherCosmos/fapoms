@@ -239,7 +239,7 @@ This is the module to rebuild first. It owns Phases 7 and 9, replacing the curre
 
 1. Pending Planning
 2. Assessor Recommended
-3. In Negotiation
+3. In Negotiation *(retired 2026-09 — fee agreement now happens by phone with the operations desk, outside the app)*
 4. Assigned & Scheduled *(or → 5 if no assessor is secured)*
 5. Unassigned *(end state, feeds the coverage report)*
 6. Awaiting Client Data

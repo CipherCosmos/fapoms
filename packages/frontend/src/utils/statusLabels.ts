@@ -54,6 +54,8 @@ export function branchStatusBucket(status?: string | null): BranchStatusBucket {
       return 'blocked';
     case ProjectBranchStatus.CANDIDATE_SEARCH:
     case ProjectBranchStatus.CONTACT_INITIATED:
+    // Display fallback for pre-removal rows only — in-app negotiation is gone and nothing
+    // writes this status any more, but an unmigrated stale row must still get a sane colour.
     case ProjectBranchStatus.NEGOTIATION:
       return 'seeking';
     case ProjectBranchStatus.ON_HOLD:

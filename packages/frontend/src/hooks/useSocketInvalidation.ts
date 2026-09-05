@@ -8,8 +8,8 @@ import { queryKeys } from './queryKeys';
  * The desk views every assignment event has to refresh.
  *
  * Kept as one list because the failure was per-screen: `queryKeys.assignments.all` covered the
- * assignment list and missed the Operations Inbox, which is where negotiations are actually
- * worked. Naming them together makes "did we refresh the queue too?" a single decision instead of
+ * assignment list and missed the Operations Inbox, which is where the desk actually works its
+ * queues. Naming them together makes "did we refresh the queue too?" a single decision instead of
  * one that has to be remembered at each of the six event rows below.
  */
 const DESK_QUEUES = [
@@ -37,8 +37,10 @@ const PLANNING_DESK = [queryKeys.planning.queue, queryKeys.planning.recommendati
 
 const EVENT_KEYS: [string, ...any[]][] = [
   ['assignment:status-changed', queryKeys.assignments.all, ...DESK_QUEUES, ...PLANNING_DESK, queryKeys.dashboard.all, queryKeys.schedules.all, queryKeys.commandCenter.all],
-  ['assignment:counter-offered', queryKeys.assignments.all, ...DESK_QUEUES, ...PLANNING_DESK, queryKeys.dashboard.all, queryKeys.schedules.all],
   ['assignment:created', queryKeys.assignments.all, ...DESK_QUEUES, ...PLANNING_DESK, queryKeys.dashboard.all, queryKeys.commandCenter.all],
+  // `assignment:counter-offered` used to sit here; the gateway stopped emitting it when in-app
+  // fee negotiation was removed (2026-09). `fee-updated` stays: the desk still edits fees, and
+  // ops screens (plus the billing subscriber server-side) refresh off it.
   ['assignment:fee-updated', queryKeys.assignments.all, ...DESK_QUEUES, ...PLANNING_DESK],
   // An assayer flagged a problem from the field — refresh the Field Issues queue and the
   // assignment views so the flag shows without a manual reload.
@@ -71,11 +73,33 @@ const EVENT_KEYS: [string, ...any[]][] = [
    */
   ['branch:created', queryKeys.branches.all, queryKeys.planning.queue, queryKeys.desk.branchHistory, queryKeys.commandCenter.all],
   ['branch:updated', queryKeys.branches.all, queryKeys.planning.queue, queryKeys.desk.branchHistory, queryKeys.commandCenter.all],
-  // Money: every billing event is "the book changed" — the three events name what changed so a
+  // Money: every billing event is "the book changed" — the events name what changed so a
   // future screen can be selective, but today every billing query re-reads from the server.
   ['billing:booked', queryKeys.billing.all],
   ['billing:payout-changed', queryKeys.billing.all],
   ['billing:invoice-changed', queryKeys.billing.all],
+  ['billing:assayer-invoice-changed', queryKeys.billing.all],
+  /**
+   * The workforce roster and the overview it sits under (`AssayerRoster.tsx`/`HrLayout.tsx`),
+   * kept live through this registry instead of `AssayerRoster.tsx`'s own `connectSocket()` call —
+   * which is what it did until this entry existed, and exactly the duplicated-live-update shape
+   * this hook exists to replace: a page with working live updates because it happened to open its
+   * own socket, next to every other screen depending on this map alone.
+   *
+   * ALL TWELVE NAMES, not only the three field-edit events. A lifecycle move — activate, suspend,
+   * resign, terminate, each joining stage — publishes its OWN event under `event.constructor.name`
+   * (`AssayerStateMachine`, dispatched from `AssayerService.dispatchLifecycleTransition`) and never
+   * also fires `assayer:updated`; the two streams do not overlap. Registering only the
+   * `assayer:updated`/`assayer:created`/`assayer:deleted` trio — the events an ordinary field edit
+   * or a create/delete raises — would have left every stage move needing a manual reload, which is
+   * the live-update gap this hook exists to close everywhere else on the desk.
+   */
+  ...[
+    'AssayerActivatedEvent', 'AssayerSuspendedEvent', 'AssayerDeactivatedEvent', 'AssayerOnLeaveEvent',
+    'AssayerResignedEvent', 'AssayerTerminatedEvent', 'AssayerArchivedEvent',
+    'AssayerDocumentVerificationStartedEvent', 'AssayerBackgroundCheckInitiatedEvent', 'AssayerTrainingStartedEvent',
+    'assayer:updated', 'assayer:created', 'assayer:deleted',
+  ].map((event): [string, ...any[]] => [event, queryKeys.hr.rosterAll, queryKeys.hr.workforce]),
 ];
 
 /**
@@ -93,8 +117,16 @@ const EVENT_KEYS: [string, ...any[]][] = [
  * `'command-center'` is the same shape of cost for the same reason: `CommandCenterService.overview`
  * loads every active branch and assayer and aggregates in memory, and is itself behind a 20s
  * cluster-wide cache server-side — refetching it on the live tier would mostly just miss that cache.
+ *
+ * `'hr'` covers both `queryKeys.hr.workforce` (the same shape of whole-roster aggregate as the two
+ * above) and `queryKeys.hr.roster` — the roster now walks every page a filter's server-side result
+ * has (`fetchWholeAssayerRoster`, since the roster's own thousand-row cap was killed), so refetching
+ * it on the fast tier would mean a burst of a dozen lifecycle events re-walking the whole roster a
+ * dozen times over. Matched the same way as `dashboard`, on the first key segment, so it also
+ * covers `hr.importIssues` — that one is not in `EVENT_KEYS` today, so this has no effect on it yet,
+ * but it would need no separate decision if it ever is.
  */
-const SLOW_ROOTS = new Set<string>(['dashboard', 'command-center']);
+const SLOW_ROOTS = new Set<string>(['dashboard', 'command-center', 'hr']);
 
 /**
  * Coalescing windows.
@@ -121,7 +153,7 @@ export function useSocketInvalidation() {
      * Accumulating unique keys over a window collapses a burst — a bulk transition of 50
      * assignments fires 50 `assignment:status-changed`, which would otherwise invalidate the same
      * keys 50 times and refetch the active list 50 times over. Splitting live queues from the slow
-     * aggregates means the negotiation queue still updates within two seconds of an event while
+     * aggregates means the desk's inbox queues still update within two seconds of an event while
      * the dashboard's whole-book aggregate is capped at one refetch per fifteen seconds under
      * sustained load.
      */
@@ -166,7 +198,7 @@ export function useSocketInvalidation() {
      * `connectionStateRecovery` window. Past that — a closed laptop lid, a longer network drop —
      * the socket comes back healthy and the desk's "live" indicator turns green again, but every
      * event from the outage was lost, so the screen keeps showing pre-outage state indefinitely.
-     * For a negotiation that means an operator confidently reading a superseded fee.
+     * For the desk that means an operator confidently reading a superseded fee or queue.
      *
      * Refetching the active queries on reconnect closes that hole. `refetchType: 'active'` keeps
      * it to what is actually on screen rather than the whole cache. Bound to `connect` rather

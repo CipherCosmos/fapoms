@@ -165,5 +165,81 @@ describe('DataResetService', () => {
       const [dto] = mockAudit.recordEvent.mock.calls[0];
       expect(dto.entityId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
     });
+
+    /**
+     * The two-person rule's consumption step. The hook must run INSIDE the wipe's transaction,
+     * before any delete: inside, so a wipe that fails rolls the APPROVED→EXECUTED flip back with
+     * it; before, so a refused approval (expired, drifted, not the requester's) aborts with
+     * nothing deleted.
+     */
+    it('runs the consumeApproval hook on the transaction manager, before the first delete', async () => {
+      const order: string[] = [];
+      const txManager = {
+        query: jest.fn((sql: string) => {
+          if (/DELETE FROM/.test(sql)) order.push('delete');
+          return Promise.resolve(/SELECT COUNT/.test(sql) ? [{ count: 0 }] : [[], 0]);
+        }),
+      };
+      mockDataSource.transaction.mockImplementation(async (_iso: string, fn: (m: any) => Promise<any>) =>
+        fn(txManager),
+      );
+
+      const consumeApproval = jest.fn(async (manager: any) => {
+        order.push('consume');
+        expect(manager).toBe(txManager); // the wipe's own manager, not a fresh connection
+      });
+
+      await service.execute({
+        domainKeys: ['users'],
+        keepUserIds: ['dev-1'],
+        actorUserId: 'dev-1',
+        requestId: 'req-1',
+        consumeApproval,
+      });
+
+      expect(consumeApproval).toHaveBeenCalledTimes(1);
+      expect(order[0]).toBe('consume');
+      expect(order.filter((o) => o === 'delete').length).toBeGreaterThan(0);
+    });
+
+    it('aborts the wipe with nothing deleted when the approval cannot be consumed', async () => {
+      const statements: string[] = [];
+      mockDataSource.transaction.mockImplementation(async (_iso: string, fn: (m: any) => Promise<any>) =>
+        fn({
+          query: jest.fn((sql: string) => {
+            statements.push(sql);
+            return Promise.resolve(/SELECT COUNT/.test(sql) ? [{ count: 0 }] : [[], 0]);
+          }),
+        }),
+      );
+
+      await expect(
+        service.execute({
+          domainKeys: ['users'],
+          keepUserIds: ['dev-1'],
+          actorUserId: 'dev-1',
+          requestId: 'req-1',
+          consumeApproval: async () => {
+            throw new ConflictException('This approval was already used.');
+          },
+        }),
+      ).rejects.toThrow(ConflictException);
+
+      expect(statements.some((s) => /DELETE FROM/.test(s))).toBe(false);
+      expect(mockAudit.recordEvent).not.toHaveBeenCalled();
+    });
+
+    it('records which request authorised the wipe in the audit trail', async () => {
+      await service.execute({
+        domainKeys: ['users'],
+        keepUserIds: ['dev-1'],
+        actorUserId: 'dev-1',
+        requestId: 'req-1',
+        consumeApproval: async () => undefined,
+      });
+
+      const [dto] = mockAudit.recordEvent.mock.calls[0];
+      expect(dto.metadata.destructiveActionRequestId).toBe('req-1');
+    });
   });
 });

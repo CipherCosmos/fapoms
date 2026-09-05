@@ -15,6 +15,10 @@ export enum ProjectBranchStatus {
   PLANNING = 'PLANNING',
   CANDIDATE_SEARCH = 'CANDIDATE_SEARCH',
   CONTACT_INITIATED = 'CONTACT_INITIATED',
+  /**
+   * @deprecated No longer written; retired by the negotiation removal, rows migrated to
+   * CONTACT_INITIATED. Kept so historical rows and stale clients still parse.
+   */
   NEGOTIATION = 'NEGOTIATION',
   ASSIGNMENT_CONFIRMED = 'ASSIGNMENT_CONFIRMED',
   SCHEDULED = 'SCHEDULED',
@@ -160,7 +164,26 @@ export enum UserStatus {
  * cannot. The names say what the person does rather than where they sit in a hierarchy.
  */
 export enum SystemRole {
-  /** Runs the platform: configuration, users and roles, data resets, everything below. */
+  /**
+   * Runs the machine: the technical estate — integration credentials, rollout switches,
+   * retention clocks, service logs, the OCR and geo boundaries — plus everything ADMIN can do
+   * (see ROLE_IMPLICATIONS in role-hierarchy.ts: DEVELOPER implies ADMIN and PRODUCT_SUPPORT,
+   * so every route that admits those names admits a developer too). Split out of ADMIN on
+   * 2026-09-05 because the business owner is not the person who should be editing SMTP
+   * credentials, and the engineer answering support tickets should not need the ADMIN hat.
+   *
+   * The one thing a developer cannot do alone is destroy data: a data wipe is requested by a
+   * DEVELOPER, approved by an ADMIN (SYSTEM:APPROVE:PLATFORM — deliberately NOT granted to
+   * this role), and only then executed by the requesting developer.
+   */
+  DEVELOPER = 'DEVELOPER',
+
+  /**
+   * Runs the business: people and access, company and tax identity, fees and policy,
+   * compliance. Since 2026-09-05 the technical estate (settings' technical groups, service
+   * logs, data resets, integration boundaries) belongs to DEVELOPER — the one power ADMIN
+   * holds over it is approving a developer's destructive-action request.
+   */
   ADMIN = 'ADMIN',
 
   /**
@@ -198,7 +221,9 @@ export enum SystemRole {
   /**
    * The product and support team. Owns the two-way feedback channel: receives bug reports,
    * enhancement requests and suggestions from staff, clients and field assayers, triages them
-   * and replies in thread. ADMIN holds the same queue, so nothing waits on this being staffed.
+   * and replies in thread. Since 2026-09-05 the desk is a developer concern: DEVELOPER implies
+   * this role, and ADMIN no longer holds the queue (feedback is product work, not business
+   * administration — see FEEDBACK_TEAM_ROLES).
    */
   PRODUCT_SUPPORT = 'PRODUCT_SUPPORT',
 
@@ -246,6 +271,7 @@ export enum PermissionAction {
   EXPORT = 'EXPORT',
   IMPORT = 'IMPORT',
   MERGE = 'MERGE',
+  /** @deprecated No longer granted; kept so stored permission strings parse. */
   NEGOTIATE = 'NEGOTIATE',
   ACCEPT = 'ACCEPT',
   CANCEL = 'CANCEL',
@@ -304,6 +330,15 @@ export enum PermissionResource {
    * and was guarded only by coarse role checks.
    */
   BILLING = 'BILLING',
+  /**
+   * The technical platform surface — the developer's estate, distinct from CONFIGURATION
+   * (which ADMIN keeps for business settings). SYSTEM:VIEW/EDIT:PLATFORM gate the technical
+   * settings groups, transport tests, digest runs and diagnostics; SYSTEM:APPROVE:PLATFORM is
+   * the ADMIN-only grant that approves a developer's destructive-action request. Held by
+   * DEVELOPER (view/edit) and ADMIN (approve) — never both sides by one role, so no role can
+   * both request and approve a data wipe.
+   */
+  SYSTEM = 'SYSTEM',
 }
 
 export enum AuthorizationScope {
@@ -479,12 +514,32 @@ export enum AssayerPayableStatus {
   VOIDED = 'VOIDED',
 }
 
+/**
+ * The assayer-side invoice: a consent-and-visibility wrapper over existing payables.
+ *
+ *   INVITED → SUBMITTED → APPROVED   (+ CANCELLED from either pre-approval state)
+ *
+ * Ops INVITES an assayer to bill their eligible payables; the assayer SUBMITS (the first time
+ * they see the amounts); ops APPROVES, which is also the moment every line payable is approved.
+ * There is no REJECTED — ops cancels, fixes the underlying payables, and re-invites. CANCELLED
+ * releases the lines back to the eligible pool. At most one INVITED/SUBMITTED invoice exists
+ * per assayer (partial unique index).
+ */
+export enum AssayerInvoiceStatus {
+  INVITED = 'INVITED',
+  SUBMITTED = 'SUBMITTED',
+  APPROVED = 'APPROVED',
+  CANCELLED = 'CANCELLED',
+}
+
 /** What kind of record a billing history row refers to. */
 export enum BillingEntityType {
   ENTRY = 'ENTRY',
   INVOICE = 'INVOICE',
   PAYMENT = 'PAYMENT',
   PAYABLE = 'PAYABLE',
+  /** An assayer-side invoice (`assayer_invoices`) — see `AssayerInvoiceStatus`. */
+  ASSAYER_INVOICE = 'ASSAYER_INVOICE',
 }
 
 /**

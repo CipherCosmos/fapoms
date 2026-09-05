@@ -335,10 +335,25 @@ describe('canAccessRoute', () => {
       expect({ undeclared }).toEqual({ undeclared: [] });
     });
 
-    it('grants a super administrator everything', () => {
+    it('grants the developer everything — implication covers the admin estate, its own name the rest', () => {
+      // DEVELOPER ⇒ ADMIN + PRODUCT_SUPPORT (role-hierarchy.ts), so every entry naming any of
+      // the three admits it. This is the role with genuinely maximal reach now.
       for (const rp of ROUTE_PERMISSIONS) {
         const routePath = rp.path.replace(':id', 'some-id');
-        expect(canAccessRoute([SystemRole.ADMIN], [], routePath)).toBe(true);
+        expect({ path: routePath, allowed: canAccessRoute([SystemRole.DEVELOPER], [], routePath) })
+          .toEqual({ path: routePath, allowed: true });
+      }
+    });
+
+    it('grants a super administrator everything except what the developer split fenced off', () => {
+      // Implication runs DEVELOPER → ADMIN, never the reverse: the service logs are the
+      // technical estate, and the support desk moved to the people who answer the tickets.
+      const CLOSED_TO_ADMIN = ['/admin/logs', '/feedback'];
+      for (const rp of ROUTE_PERMISSIONS) {
+        const routePath = rp.path.replace(':id', 'some-id');
+        const expected = !CLOSED_TO_ADMIN.includes(rp.path);
+        expect({ path: routePath, allowed: canAccessRoute([SystemRole.ADMIN], [], routePath) })
+          .toEqual({ path: routePath, allowed: expected });
       }
     });
 
@@ -378,6 +393,52 @@ describe('canAccessRoute', () => {
         .toEqual([...(entry(destination).requiredPermissions ?? [])].sort());
     });
   });
+
+  /**
+   * The DEVELOPER split (2026-09-05): a top role implying ADMIN and PRODUCT_SUPPORT
+   * (role-hierarchy.ts), with an exclusive technical estate the implication cannot open in
+   * reverse. These pin both directions, and the two-person-rule surfaces the split created.
+   */
+  describe('the DEVELOPER role and the technical estate', () => {
+    it('reaches the admin pages through implication, without being listed on them', () => {
+      expect(canAccessRoute([SystemRole.DEVELOPER], [], '/admin/settings')).toBe(true);
+      expect(canAccessRoute([SystemRole.DEVELOPER], [], '/users')).toBe(true);
+      expect(canAccessRoute([SystemRole.DEVELOPER], [], '/admin/notifications')).toBe(true);
+      expect(canAccessRoute([SystemRole.DEVELOPER], [], '/admin/rule-bypass')).toBe(true);
+    });
+
+    it('alone reads the service logs — a pure ADMIN is refused the technical estate', () => {
+      expect(canAccessRoute([SystemRole.DEVELOPER], [], '/admin/logs')).toBe(true);
+      expect(canAccessRoute([SystemRole.ADMIN], [], '/admin/logs')).toBe(false);
+    });
+
+    it('shares the support desk with PRODUCT_SUPPORT; ADMIN lost it', () => {
+      expect(canAccessRoute([SystemRole.DEVELOPER], [], '/feedback')).toBe(true);
+      expect(canAccessRoute([SystemRole.PRODUCT_SUPPORT], [], '/feedback')).toBe(true);
+      expect(canAccessRoute([SystemRole.ADMIN], [], '/feedback')).toBe(false);
+    });
+
+    /**
+     * /admin/approvals is the ADMIN's page — the approve side of the destructive two-person
+     * rule. The ROUTE gate is implication-aware, so a developer passes it too and sees the
+     * queue; what it cannot do is act, because the page gates approve/reject on the DIRECT
+     * role (canApproveDestructiveActions) and the backend refuses a developer's approval
+     * regardless. Everyone else is refused at the door.
+     */
+    it('lets ADMIN and (read-only, by implication) DEVELOPER open the approvals queue', () => {
+      expect(canAccessRoute([SystemRole.ADMIN], [], '/admin/approvals')).toBe(true);
+      expect(canAccessRoute([SystemRole.DEVELOPER], [], '/admin/approvals')).toBe(true);
+      expect(canAccessRoute([SystemRole.OPERATIONS], [], '/admin/approvals')).toBe(false);
+      expect(canAccessRoute([SystemRole.AUDITOR], [], '/admin/approvals')).toBe(false);
+    });
+
+    it('keeps the developer pages closed to a custom role, whatever it holds', () => {
+      // Both entries deliberately declare no permission — the estate is not grantable from the
+      // role editor, so the fail-closed rule refuses every permission set.
+      expect(canAccessRoute(CUSTOM_ROLE, ['CONFIGURATION:EDIT:PLATFORM', 'AUDIT_LOG:VIEW:PLATFORM'], '/admin/logs')).toBe(false);
+      expect(canAccessRoute(CUSTOM_ROLE, ['CONFIGURATION:EDIT:PLATFORM'], '/admin/approvals')).toBe(false);
+    });
+  });
 });
 
 /**
@@ -391,12 +452,19 @@ describe('canAccessRoute', () => {
  */
 describe('defaultRouteFor', () => {
   it.each([
+    [SystemRole.DEVELOPER, '/dashboard'],
     [SystemRole.ADMIN, '/dashboard'],
     [SystemRole.OPERATIONS, '/executive-map'],
     [SystemRole.DESK, '/documents'],
     [SystemRole.DESK_OPERATOR, '/data-entry'],
   ])('lands %s on its own home', (role, expected) => {
     expect(defaultRouteFor([role], [])).toBe(expected);
+  });
+
+  it('lands product support on the desk it works, not its notification inbox', () => {
+    // /feedback opened to PRODUCT_SUPPORT with the developer split and joined LANDING_ORDER;
+    // before that the role fell through to /notifications — a page about the work, not the work.
+    expect(defaultRouteFor([SystemRole.PRODUCT_SUPPORT], [])).toBe('/feedback');
   });
 
   it('lands a workforce role built in the admin screen on the workforce console', () => {

@@ -5,8 +5,10 @@ import { BillingEntryEntity } from './billing-entry.entity';
 import { BillingInvoiceEntity } from './invoice.entity';
 import { BillingPaymentEntity } from './payment.entity';
 import { AssayerPayableEntity } from './payable.entity';
+import { AssayerInvoiceEntity } from './assayer-invoice.entity';
 import { BillingHistoryEntity } from './history.entity';
 import { BillingEngineService } from './billing-engine.service';
+import { AssayerInvoiceService } from './assayer-invoice.service';
 import { BillingEngineController } from './billing-engine.controller';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ProjectEntity } from '../project/project.entity';
@@ -34,6 +36,7 @@ import { BillingJobsWorker } from './billing-jobs.worker';
       BillingInvoiceEntity,
       BillingPaymentEntity,
       AssayerPayableEntity,
+      AssayerInvoiceEntity,
       BillingHistoryEntity,
       AssignmentEntity,
       ProjectEntity,
@@ -43,7 +46,7 @@ import { BillingJobsWorker } from './billing-jobs.worker';
     ]),
   ],
   controllers: [BillingEngineController],
-  providers: [BillingEngineService, BillingJobsService, BillingJobsWorker],
-  exports: [BillingEngineService, BillingJobsService],
+  providers: [BillingEngineService, AssayerInvoiceService, BillingJobsService, BillingJobsWorker],
+  exports: [BillingEngineService, AssayerInvoiceService, BillingJobsService],
 })
 export class BillingEngineModule {}

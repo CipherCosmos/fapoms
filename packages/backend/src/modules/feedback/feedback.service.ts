@@ -65,6 +65,18 @@ export interface TeamQueueQuery {
 // scanning and the digest. CLOSED and RESOLVED are settled.
 const OPEN_STATUSES = [FeedbackStatus.OPEN, FeedbackStatus.ACKNOWLEDGED, FeedbackStatus.IN_PROGRESS];
 
+/**
+ * The platform's product-support channel: the two-way thread any FAPOMS user — staff, client
+ * user or field assayer — can open to the product team to report a bug, suggest an idea, flag a
+ * process problem or ask a question. The user-facing name is "Support" (nav, buttons, toasts) /
+ * "Help & Support" (page and section headings); this service, its routes, database tables and
+ * events all keep the historical "feedback" name so deep links, stored data and the notification
+ * catalog stay stable.
+ *
+ * Not to be confused with feedback/remarks directed AT an assayer — a client's or staff
+ * member's remarks on a person's work (`modules/assayer-remarks`, `AssayerRemarks.tsx` on the
+ * frontend). That is a different concept that happens to share the same English word.
+ */
 @Injectable()
 export class FeedbackService {
   constructor(
@@ -86,7 +98,7 @@ export class FeedbackService {
   // ── Reporter side ──────────────────────────────────────────────────────────
 
   async create(dto: CreateFeedbackDto, reporter: FeedbackActor): Promise<FeedbackThreadEntity> {
-    if (!dto.body?.trim()) throw new BadRequestException('Feedback needs a description.');
+    if (!dto.body?.trim()) throw new BadRequestException('A support request needs a description.');
     if (!reporter.userId && !reporter.assayerId) throw new BadRequestException('A reporter identity is required.');
 
     const title = (dto.title?.trim() || this.deriveTitle(dto.body)).slice(0, 200);
@@ -99,9 +111,10 @@ export class FeedbackService {
       reporterUserId: reporter.userId,
       reporterAssayerId: reporter.assayerId,
       reporterName: reporter.name || 'A user',
-      // A display snapshot ("Nilesh · SUPER_ADMINISTRATOR"), not an authorisation. A team
-      // reporter is stamped with the first team role rather than a hardcoded PRODUCT_SUPPORT,
-      // which stopped being on the team when the desk narrowed to super administrators.
+      // A display snapshot ("Nilesh · DEVELOPER"), not an authorisation. A team reporter is
+      // stamped with the first team role rather than a hardcoded name, so the stamp followed
+      // the desk through both of its moves (to super administrators, then to the developer)
+      // without this line changing.
       reporterRole: reporter.assayerId ? 'ASSAYER' : reporter.isTeam ? FEEDBACK_TEAM_ROLES[0] : null,
       title,
       // The reporter's own category wins when they set one; otherwise trust the classifier.
@@ -253,7 +266,7 @@ export class FeedbackService {
     return { items, total, page, limit };
   }
 
-  /** People a thread can be assigned to: whoever holds a FEEDBACK_TEAM_ROLES role (super administrators). */
+  /** People a thread can be assigned to: whoever holds a FEEDBACK_TEAM_ROLES role (the developer, or a PRODUCT_SUPPORT delegate). */
   async teamMembers(): Promise<{ id: string; name: string }[]> {
     const rows = await this.userRepository
       .createQueryBuilder('u')
@@ -359,12 +372,12 @@ export class FeedbackService {
 
   async findOne(id: string, actor: FeedbackActor): Promise<FeedbackThreadEntity & { duplicateCandidates?: FeedbackThreadEntity[]; hasVoted?: boolean }> {
     const thread = await this.threadRepository.findOne({ where: { id } });
-    if (!thread) throw new NotFoundException(`Feedback thread ${id} not found.`);
+    if (!thread) throw new NotFoundException(`Support request ${id} not found.`);
     if (!actor.isTeam) {
       const mine =
         (!!actor.userId && thread.reporterUserId === actor.userId) ||
         (!!actor.assayerId && thread.reporterAssayerId === actor.assayerId);
-      if (!mine) throw new ForbiddenException('You can only view feedback you reported.');
+      if (!mine) throw new ForbiddenException('You can only view support requests you reported.');
       return Object.assign(thread, { hasVoted: await this.hasVoted(id, actor) });
     }
     // The team sees the near-duplicates the classifier flagged, resolved to real rows.
@@ -382,7 +395,7 @@ export class FeedbackService {
    */
   async vote(id: string, actor: FeedbackActor): Promise<{ voted: boolean; voteCount: number }> {
     const thread = await this.threadRepository.findOne({ where: { id } });
-    if (!thread) throw new NotFoundException(`Feedback thread ${id} not found.`);
+    if (!thread) throw new NotFoundException(`Support request ${id} not found.`);
 
     const where = actor.assayerId
       ? { feedbackThreadId: id, voterAssayerId: actor.assayerId }
@@ -443,7 +456,7 @@ export class FeedbackService {
 
   async triage(id: string, dto: TriageFeedbackDto, userId: string): Promise<FeedbackThreadEntity> {
     const thread = await this.threadRepository.findOne({ where: { id } });
-    if (!thread) throw new NotFoundException(`Feedback thread ${id} not found.`);
+    if (!thread) throw new NotFoundException(`Support request ${id} not found.`);
 
     /**
      * A duplicate link has to name a real, different thread.
@@ -457,11 +470,11 @@ export class FeedbackService {
      */
     if (dto.duplicateOfId) {
       if (dto.duplicateOfId === id) {
-        throw new BadRequestException('A feedback thread cannot be marked a duplicate of itself.');
+        throw new BadRequestException('A support request cannot be marked a duplicate of itself.');
       }
       const canonical = await this.threadRepository.findOne({ where: { id: dto.duplicateOfId } });
       if (!canonical) {
-        throw new BadRequestException(`Cannot mark this a duplicate of ${dto.duplicateOfId}: that feedback thread does not exist.`);
+        throw new BadRequestException(`Cannot mark this a duplicate of ${dto.duplicateOfId}: that support request does not exist.`);
       }
     }
 
@@ -557,7 +570,7 @@ export class FeedbackService {
 
   async reopen(id: string, userId: string): Promise<FeedbackThreadEntity> {
     const thread = await this.threadRepository.findOne({ where: { id } });
-    if (!thread) throw new NotFoundException(`Feedback thread ${id} not found.`);
+    if (!thread) throw new NotFoundException(`Support request ${id} not found.`);
     thread.resolvedAt = null;
     thread.resolvedByUserId = null;
     await this.threadRepository.save(thread);

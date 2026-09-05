@@ -1,6 +1,6 @@
 /**
- * The action queue is what stands between a check-in, an expense claim or a counter-offer and
- * the field connection that carries it. The failures under test are the ones that quietly lose or
+ * The action queue is what stands between a check-in or an expense claim and the field
+ * connection that carries it. The failures under test are the ones that quietly lose or
  * duplicate an assayer's action: a retry after a lost response filing a second expense claim, and
  * a validation failure being retried forever instead of being shown once and dropped.
  */
@@ -24,6 +24,7 @@ import {
   dismissAction,
   clearActionQueue,
   generateClientRequestId,
+  isRetryableStatus,
   __resetActionQueueForTests,
   ActionDispatcher,
 } from './action-queue';
@@ -94,24 +95,42 @@ describe('enqueueAndRun', () => {
   });
 
   /**
-   * A validation 4xx ("counter exceeds the negotiation cap") fails the same way every time.
+   * A validation 4xx ("claim is over the single-claim limit") fails the same way every time.
    * Retrying it silently would leave the assayer thinking a rejected request was still trying,
    * so it is surfaced once and taken off the queue rather than requeued.
    */
   it('a non-retryable failure is surfaced and removed, not requeued', async () => {
     const dispatch: ActionDispatcher = jest.fn(async () => ({
       success: false,
-      error: 'Counter exceeds the negotiation cap',
+      error: 'Claim is over the single-claim limit',
       retryable: false,
     }));
-    const result = await enqueueAndRun('ASSIGNMENT_STATUS', { status: 'COUNTER_OFFER' }, dispatch);
+    const result = await enqueueAndRun('EXPENSE_CLAIM', { amount: 90_000 }, dispatch);
     expect(result).toEqual({
       success: false,
-      error: 'Counter exceeds the negotiation cap',
+      error: 'Claim is over the single-claim limit',
       retryable: false,
       queued: false,
     });
     expect(await getQueuedActions()).toHaveLength(0);
+  });
+});
+
+describe('isRetryableStatus', () => {
+  it('treats a 4xx refusal as terminal — including the 400 an old build gets for a legacy counter-offer transition', () => {
+    // Fee negotiation was removed server-side: a COUNTER_OFFER transition from a build that
+    // still ships one is answered with a plain 400. That answer must land as a terminal,
+    // shown-once failure — retrying a refusal can only be refused identically again.
+    expect(isRetryableStatus(400)).toBe(false);
+    expect(isRetryableStatus(403)).toBe(false);
+    expect(isRetryableStatus(409)).toBe(false);
+  });
+
+  it('retries only what might genuinely go differently next time', () => {
+    expect(isRetryableStatus(undefined)).toBe(true); // never reached the server
+    expect(isRetryableStatus(429)).toBe(true); // the server's own "try again"
+    expect(isRetryableStatus(500)).toBe(true);
+    expect(isRetryableStatus(503)).toBe(true);
   });
 });
 

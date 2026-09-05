@@ -24,11 +24,12 @@ interface RequestWithPrincipal {
 /**
  * Roles that legitimately read across every organisation.
  *
- * Deliberately just the platform operator. ADMINISTRATOR is an *organisation* administrator,
+ * Deliberately just the platform operator — ADMIN, and since 2026-09-05 DEVELOPER, the role
+ * that runs the platform's technical estate. ADMINISTRATOR is an *organisation* administrator,
  * not a platform one — including it would make tenant isolation meaningless for the role most
  * likely to hold it.
  */
-const CROSS_TENANT_ROLES: string[] = [SystemRole.ADMIN];
+const CROSS_TENANT_ROLES: string[] = [SystemRole.ADMIN, SystemRole.DEVELOPER];
 
 /**
  * The organisation the current request belongs to.

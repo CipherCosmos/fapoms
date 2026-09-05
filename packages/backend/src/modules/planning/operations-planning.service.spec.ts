@@ -243,4 +243,95 @@ describe('OperationsPlanningService', () => {
     const dates = mockAssignmentService.create.mock.calls.map((c: any[]) => c[0].scheduledDate);
     expect(dates).toEqual(['2026-01-05', '2026-01-07']);
   });
+
+  /**
+   * Found live 2026-09-04: a 3-branch same-assayer cluster placed branch 1 on a date pushed
+   * forward by a cross-cluster capacity collision (ordinary for the multi-branch bundling this
+   * executor exists to deploy), which landed on a non-working Saturday `suggestAuditDate`'s
+   * one-time, near-term scan had never recorded as blocked. `assignmentService.create` correctly
+   * rejected it — and the branch was simply abandoned, even though the very next day was workable
+   * and nothing ever tried it. `blocked` is only ever the handful of dates that one scan happened
+   * to step over; `assignmentService.create` is the one place that always knows.
+   */
+  it('retries the next day when create() rejects for a date-availability reason the resolver did not foresee, instead of abandoning the branch', async () => {
+    mockPlanRepository.findOne.mockResolvedValue({
+      id: 'cp-1',
+      projectId: 'p-1',
+      status: CoveragePlanStatus.APPROVED,
+      currentVersion: 1,
+      versions: [{
+        versionNumber: 1,
+        planData: { clusters: [{ id: 'c-1', assignedAssayerId: 'as-real-1', branchIds: ['b-1'], estimatedTotalFee: 900, branchCount: 1 }] },
+      }],
+    });
+    mockProjectQueryService.findProjectBranches.mockResolvedValue([{ id: 'pb-1', branchId: 'b-1' }]);
+    // The default `suggestAuditDate` mock (see beforeEach) reports nothing blocked — exactly the
+    // live shape that let a real rejection through unforeseen.
+    mockAssignmentService.create
+      .mockRejectedValueOnce(new BadRequestException('Holiday Conflict: Target date is a holiday in Maharashtra.'))
+      .mockResolvedValueOnce({ id: 'asg-1' });
+
+    const result = await service.executeApprovedPlan('cp-1', 'u-1', '2026-01-05');
+
+    expect(mockAssignmentService.create).toHaveBeenCalledTimes(2);
+    const dates = mockAssignmentService.create.mock.calls.map((c: any[]) => c[0].scheduledDate);
+    expect(dates).toEqual(['2026-01-05', '2026-01-06']);
+    expect(result.skipped).toHaveLength(0);
+    expect(result.deployed).toEqual([{ branchId: 'b-1', assignmentId: 'asg-1', scheduledDate: '2026-01-06' }]);
+  });
+
+  it('does not retry a rejection that advancing the date cannot fix', async () => {
+    mockPlanRepository.findOne.mockResolvedValue({
+      id: 'cp-1',
+      projectId: 'p-1',
+      status: CoveragePlanStatus.APPROVED,
+      currentVersion: 1,
+      versions: [{
+        versionNumber: 1,
+        planData: { clusters: [{ id: 'c-1', assignedAssayerId: 'as-real-1', branchIds: ['b-1'], estimatedTotalFee: 900, branchCount: 1 }] },
+      }],
+    });
+    mockProjectQueryService.findProjectBranches.mockResolvedValue([{ id: 'pb-1', branchId: 'b-1' }]);
+    // Not a "Holiday Conflict:" prefix — e.g. an eligibility or fee-ceiling refusal. Trying a
+    // later date cannot change this answer, so it must fail on the first attempt, as before.
+    mockAssignmentService.create.mockRejectedValue(new BadRequestException('Assayer has no empanelment record with this client.'));
+
+    const result = await service.executeApprovedPlan('cp-1', 'u-1', '2026-01-05');
+
+    expect(mockAssignmentService.create).toHaveBeenCalledTimes(1);
+    expect(result.skippedReasons).toEqual([
+      { reason: 'Assayer has no empanelment record with this client.', count: 1 },
+    ]);
+  });
+
+  it("does not burn the assayer's daily capacity slot on a rejected attempt, so a sibling branch can still use that day", async () => {
+    mockPlanRepository.findOne.mockResolvedValue({
+      id: 'cp-1',
+      projectId: 'p-1',
+      status: CoveragePlanStatus.APPROVED,
+      currentVersion: 1,
+      versions: [{
+        versionNumber: 1,
+        planData: { clusters: [{ id: 'c-1', assignedAssayerId: 'as-real-1', branchIds: ['b-1', 'b-2'], estimatedTotalFee: 1800, branchCount: 2 }] },
+      }],
+    });
+    mockProjectQueryService.findProjectBranches.mockResolvedValue([
+      { id: 'pb-1', branchId: 'b-1' },
+      { id: 'pb-2', branchId: 'b-2' },
+    ]);
+    // b-1's first attempt (2026-01-05) is rejected for a date reason the resolver missed and
+    // succeeds the next day. Previously the rejected attempt still reserved 2026-01-05 in the
+    // in-memory capacity map for nothing — booking it only on success is what lets the executor
+    // retry at all without a phantom slot skewing every branch that follows.
+    mockAssignmentService.create
+      .mockRejectedValueOnce(new BadRequestException('Holiday Conflict: Target date is a holiday in Maharashtra.'))
+      .mockResolvedValue({ id: 'asg-ok' });
+
+    const result = await service.executeApprovedPlan('cp-1', 'u-1', '2026-01-05');
+
+    expect(result.skipped).toHaveLength(0);
+    expect(result.deployed).toHaveLength(2);
+    const dates = result.deployed.map((d) => d.scheduledDate);
+    expect(new Set(dates).size).toBe(2);
+  });
 });

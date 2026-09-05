@@ -27,6 +27,7 @@ import {
   RiskScoreCalculator,
   RemarksScoreCalculator,
   FairnessScoreCalculator,
+  getCityTierMultiplier,
 } from './recommendation.engine';
 import { AssayerEntity } from '../assayer/assayer.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
@@ -1137,5 +1138,137 @@ describe('RiskScoreCalculator — reads the 0–10 scale the data is actually on
   it('nearly zeroes a junior on a CRITICAL branch without disqualifying them outright', async () => {
     await expect(calc.calculate(senior, ctx(9))).resolves.toBe(100);
     await expect(calc.calculate(junior, ctx(9))).resolves.toBe(10);
+  });
+});
+
+/**
+ * `branch.city` is free text carried through from address parsing, not a canonical name — live
+ * data holds "Pune" AND "Pune City" for the same metro, and "Mumbai City" alongside what would
+ * otherwise match "mumbai". An exact-string lookup against the tier lists silently missed both:
+ * on the live dev deployment this meant every Pune branch (all city-labelled "Pune City") priced
+ * as if it were an untiered town, understating CostScoreCalculator's fee for every candidate
+ * there. Confirmed against `SELECT DISTINCT city FROM branches` on that database, which returned
+ * exactly this set.
+ */
+describe('getCityTierMultiplier — city is free text, not a canonical key', () => {
+  it('matches a bare tier-1 or tier-2 name', () => {
+    expect(getCityTierMultiplier('Pune')).toBe(1.5);
+    expect(getCityTierMultiplier('Nashik')).toBe(1.2);
+  });
+
+  it('still matches with a trailing "City" — the variant actually seen in production data', () => {
+    expect(getCityTierMultiplier('Pune City')).toBe(1.5);
+    expect(getCityTierMultiplier('Mumbai City')).toBe(1.5);
+  });
+
+  it('is case- and whitespace-insensitive on both the name and the suffix', () => {
+    expect(getCityTierMultiplier('  PUNE CITY  ')).toBe(1.5);
+    expect(getCityTierMultiplier('pune city')).toBe(1.5);
+  });
+
+  it('does not invent a tier for an untiered town, with or without the suffix', () => {
+    expect(getCityTierMultiplier('Solapur')).toBe(1.0);
+    expect(getCityTierMultiplier('Solapur City')).toBe(1.0);
+  });
+
+  it('falls back to 1.0 with no city at all', () => {
+    expect(getCityTierMultiplier(undefined)).toBe(1.0);
+    expect(getCityTierMultiplier('')).toBe(1.0);
+  });
+});
+
+/**
+ * Found live 2026-09-04 (Track S): this filter only ever called checkDoubleBooking and
+ * checkLeaves — checkHoliday and checkProjectTimeline were never reached, even though both are
+ * real and are enforced a moment later at assignment-creation time. Confirmed live: a real,
+ * active Maharashtra state holiday (Ganesh Chaturthi, 2026-09-14) produced zero DATE-kind
+ * exclusions on a real branch's candidate list; re-verified live immediately after this fix —
+ * the same call now produces 49 DATE-kind exclusions on that exact date.
+ */
+describe('AvailabilityFilter', () => {
+  const passResult = { passed: true };
+  const failResult = { passed: false, reason: 'blocked' };
+  const branch = { id: 'branch-1', state: 'Maharashtra' } as any;
+  const client = { id: 'client-1' } as any;
+  const assayer = { id: 'assayer-1' } as any;
+  const scheduledDate = new Date('2026-09-14');
+
+  const mockConstraintEvaluator = {
+    checkHoliday: jest.fn(),
+    checkProjectTimeline: jest.fn(),
+    checkDoubleBooking: jest.fn(),
+    checkLeaves: jest.fn(),
+  } as any;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    mockConstraintEvaluator.checkHoliday.mockResolvedValue(passResult);
+    mockConstraintEvaluator.checkProjectTimeline.mockReturnValue(passResult);
+    mockConstraintEvaluator.checkDoubleBooking.mockResolvedValue(passResult);
+    mockConstraintEvaluator.checkLeaves.mockReturnValue(passResult);
+  });
+
+  it('excludes a candidate when branchFacts.holidayResult failed — the bug this test pins', async () => {
+    const filter = new AvailabilityFilter(mockConstraintEvaluator);
+    const context: any = {
+      branch, client, scheduledDate, weights: {},
+      branchFacts: {
+        holidayResult: failResult,
+        timelineResult: passResult,
+        doubleBookedByAssayer: {},
+      },
+    };
+
+    expect(await filter.evaluate(assayer, context)).toBe(false);
+    // The whole point of hoisting into branchFacts: no per-candidate query for a fact that
+    // does not depend on the candidate.
+    expect(mockConstraintEvaluator.checkHoliday).not.toHaveBeenCalled();
+  });
+
+  it('excludes a candidate when branchFacts.timelineResult failed', async () => {
+    const filter = new AvailabilityFilter(mockConstraintEvaluator);
+    const context: any = {
+      branch, client, scheduledDate, weights: {},
+      branchFacts: {
+        holidayResult: passResult,
+        timelineResult: failResult,
+        doubleBookedByAssayer: {},
+      },
+    };
+
+    expect(await filter.evaluate(assayer, context)).toBe(false);
+  });
+
+  it('admits a candidate when every branchFacts date check passed', async () => {
+    const filter = new AvailabilityFilter(mockConstraintEvaluator);
+    const context: any = {
+      branch, client, scheduledDate, weights: {},
+      branchFacts: {
+        holidayResult: passResult,
+        timelineResult: passResult,
+        doubleBookedByAssayer: {},
+      },
+    };
+
+    expect(await filter.evaluate(assayer, context)).toBe(true);
+  });
+
+  it('falls back to a live checkHoliday call when branchFacts is absent (standalone use)', async () => {
+    const filter = new AvailabilityFilter(mockConstraintEvaluator);
+    mockConstraintEvaluator.checkHoliday.mockResolvedValue(failResult);
+    const context: any = { branch, client, scheduledDate, weights: {} };
+
+    expect(await filter.evaluate(assayer, context)).toBe(false);
+    expect(mockConstraintEvaluator.checkHoliday).toHaveBeenCalledWith('Maharashtra', scheduledDate, 'client-1');
+  });
+
+  it('relaxAvailability skips every date check, including the two just added', async () => {
+    const filter = new AvailabilityFilter(mockConstraintEvaluator);
+    const context: any = {
+      branch, client, scheduledDate, weights: {}, relaxAvailability: true,
+      branchFacts: { holidayResult: failResult, timelineResult: failResult, doubleBookedByAssayer: { 'assayer-1': 'x' } },
+    };
+
+    expect(await filter.evaluate(assayer, context)).toBe(true);
   });
 });

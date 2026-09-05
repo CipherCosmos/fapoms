@@ -15,7 +15,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { SystemRole } from '@fapoms/shared';
+import { SystemRole, expandRoles } from '@fapoms/shared';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, AnyAuthenticated } from './guards';
 import { SessionService } from './session.service';
 
@@ -88,7 +88,8 @@ export class SessionController {
     if (!session) throw new NotFoundException('Session not found.');
 
     const isSelf = session.userId === req.user.id;
-    const isAdmin = roleNames(req.user).includes(SystemRole.ADMIN);
+    // Implication-aware (expandRoles): a DEVELOPER passes the ADMIN check without being named.
+    const isAdmin = expandRoles(roleNames(req.user)).includes(SystemRole.ADMIN);
     if (!isSelf && !isAdmin) {
       throw new ForbiddenException('You can only revoke your own sessions.');
     }

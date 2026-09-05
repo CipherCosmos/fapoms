@@ -1,32 +1,34 @@
 import React, { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import {
-  useNavigate } from 'react-router-dom'; import { useQueryClient } from '@tanstack/react-query'; import { Plus, Search, Edit2, Trash2, AlertTriangle, Download, ArrowRightLeft, MapPin, CheckCircle2, Users, SlidersHorizontal, Upload, FileSpreadsheet, PlayCircle, KeyRound } from 'lucide-react'; import { AssayerLifecycleStatus, assayerLifecyclePath, assayerLifecycleLabel, isOnboardingStage,
+  useNavigate } from 'react-router-dom'; import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'; import { Plus, Search, Edit2, Trash2, AlertTriangle, Download, ArrowRightLeft, MapPin, CheckCircle2, Users, SlidersHorizontal, Upload, FileSpreadsheet, PlayCircle, KeyRound } from 'lucide-react'; import { AssayerLifecycleStatus, assayerLifecyclePath, assayerLifecycleLabel, isOnboardingStage,
 } from '@fapoms/shared';
 
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
-import { connectSocket } from '../../services/socket';
-import { Select, UploadExcelControls, useConfirm, AlertBanner, DataTable } from '../../components/ui';
+import { fetchWholeAssayerRoster } from '../../services/assayer-roster';
+import { Select, UploadExcelControls, useConfirm, AlertBanner, DataTable, StatusBadge } from '../../components/ui';
 import { listPhase } from '../../components/ui/list-phase';
 import { ImportIssuesPanel } from './ImportIssuesPanel';
 import { visibleSelection, hiddenSelectionNote } from '../../utils/selection';
 import { useSearchParams } from 'react-router-dom';
 import { useCurrentRoles, canManageAssayers, canCreateAssayers } from '../../hooks/useCurrentRoles';
 import { useQueuedExcelExport } from '../../hooks/useQueuedExcelExport';
+import { useClientOptions } from '../../hooks/useClients';
 import { RegistrationWizard } from './registration/RegistrationWizard';
 import {
   STATUS_COLORS, onboardingNextStep, stillWorkable, isRecordedDeceased,
 } from './assayer-shared';
 import {
-  ROSTER_SEGMENTS, EMPTY_FILTERS, applyRosterFilters, activeFilterCount, describeFilters,
+  ROSTER_SEGMENTS, ROSTER_FILTERS, EMPTY_FILTERS, applyRosterFilters, activeFilterCount, describeFilters,
   missingFields, payoutBlockers, tenureMonths, parseFilters, writeFilters, segmentFor,
-  toServerQuery,
+  toServerQuery, withClientChoices,
   type RosterFilterState, type RosterPerson,
 } from './roster-filters';
 import { RosterFilterPanel, AppliedFilterBar } from './RosterFilterPanel';
 import { RosterExportDialog } from './RosterExportDialog';
 import { ToolbarMenu, MenuAction } from './ToolbarMenu';
 import { STAGE_CONSEQUENCE, HARD_TO_REVERSE_STAGES } from './AssayerRecord';
+import { LIFECYCLE_MOVE_REASONS, OTHER_LIFECYCLE_REASON } from './lifecycle-reason-vocabulary';
 import { fmtDate } from '../../utils/dates';
 import { queryKeys } from '../../hooks/queryKeys';
 import { counted } from '../../utils/plural';
@@ -91,8 +93,6 @@ export const AssayerRoster: React.FC<{
   const canCreate = canCreateAssayers(roles);
   const { confirm, confirmDialog } = useConfirm();
 
-  const [assayers, setAssayers] = useState<RosterPerson[]>([]);
-  const [loading, setLoading] = useState(true);
   /**
    * The one place this screen reports an outcome that needs a decision.
    *
@@ -141,6 +141,36 @@ export const AssayerRoster: React.FC<{
     [searchParams, setSearchParams],
   );
   const clearFilters = useCallback(() => setFilters(EMPTY_FILTERS), [setFilters]);
+
+  /**
+   * The search box's own text, typed at full speed — `filters.search` follows it 250ms after the
+   * last keystroke rather than on every one.
+   *
+   * `filters.search` feeds `serverQuery`, which is the roster query's cache key: writing straight
+   * into it on every keystroke (as this used to) meant every letter of a five-letter name was a
+   * distinct `queryKeys.hr.roster(...)` entry and therefore a fresh walk of every page the
+   * server-filtered set has, with each one superseded by the next before it had even returned.
+   *
+   * Written through `setSearchParams`'s own functional form (reading `prev` fresh inside the
+   * timeout) rather than through `filters`/`setFilters`, so a filter ticked elsewhere while the
+   * 250ms window is still open is not silently reverted by a stale closure over the `filters`
+   * object as it stood when typing started.
+   */
+  const [searchInput, setSearchInput] = useState(filters.search);
+  useEffect(() => { setSearchInput(filters.search); }, [filters.search]);
+  useEffect(() => {
+    if (searchInput === filters.search) return;
+    const t = setTimeout(() => {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        if (searchInput.trim()) next.set('q', searchInput.trim()); else next.delete('q');
+        return next;
+      }, { replace: true });
+    }, 250);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchInput]);
+
   /**
    * Opening somebody is navigation, not a panel.
    *
@@ -177,6 +207,15 @@ export const AssayerRoster: React.FC<{
     }
   };
   const [bulkTarget, setBulkTarget] = useState('');
+  /**
+   * The one reason that applies to the whole batch, from the same picker the single-person path
+   * uses (`AssayerRecord.tsx`'s `StageStep`) — see `LIFECYCLE_MOVE_REASONS`. This used to fabricate
+   * `Bulk transition to ${label}` and send it as the reason on every record moved, which is not a
+   * reason at all: it names the button that was pressed, not why. A batch move now needs the same
+   * accounting a single move already does, just once for the whole group rather than once each.
+   */
+  const [bulkReason, setBulkReason] = useState('');
+  const [bulkReasonOther, setBulkReasonOther] = useState(false);
   // Queued (POST .../jobs, poll, download) rather than the synchronous GET — see
   // useQueuedExcelExport.ts. The roster workbook also carries the payroll rate card, built
   // over the whole roster, so it is one of the exports the blocking xlsx.write cost applies to.
@@ -229,55 +268,72 @@ export const AssayerRoster: React.FC<{
   } | null>(null);
   const [appAccessBusy, setAppAccessBusy] = useState(false);
   const RENDER_CHUNK = 200;
-  /** How many rows the roster asks for at once. The chips count what arrives. */
-  const ROSTER_LIMIT = 1000;
   const [visibleCount, setVisibleCount] = useState(RENDER_CHUNK);
-  /** How many the server holds, which is not always how many arrived. */
-  const [rosterTotal, setRosterTotal] = useState(0);
   const queryClient = useQueryClient();
 
   /**
    * The server-mappable slice of the active filters, as `GET /assayers` query params — see
-   * `toServerQuery`. Kept as its own memo (rather than reading `filters` straight in `load`) so
-   * a change to a client-only rule filter (record completeness, documents, pin quality — none of
-   * which the server can apply) does not trigger a network round trip: only a change to an axis
-   * the server actually understands refetches.
+   * `toServerQuery`. Kept as its own memo so a change to a client-only rule filter (record
+   * completeness, documents, pin quality — none of which the server can apply) does not change
+   * the roster query's key and therefore does not refetch: only a change to an axis the server
+   * actually understands does.
    */
   const serverQuery = useMemo(() => toServerQuery(filters), [filters]);
 
   /**
-   * The roster, and how big the set it came from actually is.
-   *
-   * This asked for a thousand rows — of the WHOLE roster, ignoring every filter — and then
-   * counted them for every filter chip, while the tab badge above reads the server's own total.
-   * At 11,000 people that put 9% of the roster in front of anyone who filtered by state or
-   * stage, silently. `serverQuery` now travels with the request, so the 1,000-row window is the
-   * top of the FILTERED set — the same axes `AssayerController.parseRosterFilters` reads — and
-   * `meta.pagination.total` is that filtered set's true size, not the unfiltered roster's.
-   *
-   * The remaining "rule"-kind filters (record completeness, documents, certificates, pin
-   * quality, qualification band) stay client-side over this window, exactly as `applyRosterFilters`
-   * already does below — they are computed from several columns or a compute-on-read score, so
-   * there is no single column for the server to filter on.
+   * Every empanelment client this app knows about, for the "Empanelled with client" filter axis —
+   * see `withClientChoices` in roster-filters.ts. `roster-filters.ts` is a plain logic module with
+   * no hook of its own, so the live list is read once here (React Query dedupes this against every
+   * other screen that already calls `useClientOptions`) and merged into the static catalogue.
    */
-  const load = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await api.request<{ data: RosterPerson[]; meta?: { pagination?: { total?: number } } }>(
-        `/assayers?limit=${ROSTER_LIMIT}${serverQuery ? `&${serverQuery}` : ''}`,
-        { withMeta: true },
-      );
-      const rows = Array.isArray(res?.data) ? res.data : [];
-      setAssayers(rows);
-      setRosterTotal(res?.meta?.pagination?.total ?? rows.length);
-    } catch (e) {
-      setNotice({ tone: 'err', text: `Could not load the roster. ${userMessage(e)}` });
-    } finally {
-      setLoading(false);
-    }
-  }, [serverQuery]);
+  const { data: clientOptions } = useClientOptions();
+  const filterDefs = useMemo(
+    () => withClientChoices(ROSTER_FILTERS, clientOptions ?? []),
+    [clientOptions],
+  );
 
-  useEffect(() => { load(); }, [load]);
+  /**
+   * The whole roster — or rather, the whole FILTERED set `serverQuery` describes — walked page by
+   * page rather than asked for as a single, capped page.
+   *
+   * This used to request `?limit=1000` and stop there. Against an 11,000-person roster that put
+   * 9% of it in front of anyone who filtered by state or stage, silently: the chips, the sort and
+   * every "rule"-kind filter (record completeness, documents, pin quality — computed from several
+   * columns, so there is no server column to push them onto) all described the loaded THOUSAND,
+   * not the roster. `fetchWholeAssayerRoster` walks every page the filtered set has, so those
+   * client-side layers now describe everyone the filters leave — see `missing` below for the one
+   * case where "everyone" still falls short.
+   *
+   * Keyed by `serverQuery` (via `queryKeys.hr.roster`) rather than mirrored into local state, so
+   * this is one cache entry per distinct filter combination, shared with anything else that reads
+   * the same key, and refetched by `useSocketInvalidation`'s registry rather than this
+   * component's own socket listeners — see the note where those used to be.
+   *
+   * `placeholderData: keepPreviousData` is what keeps ticking a server-mappable filter (state,
+   * stage, region, the empanelment axes…) from blanking the table while the new key's walk is in
+   * flight. Without it, moving to a filter combination this session has not asked for yet has NO
+   * cached `data`, so `assayers` would drop to `[]` and every client-side layer downstream — the
+   * chips, the sort, the "rule"-kind filters — would flash empty until the walk finishes. With it,
+   * the PREVIOUS filter's rows stay on screen (and keep being narrowed by `applyRosterFilters`,
+   * exactly as the pre-React-Query version did by leaving its own `assayers` state untouched
+   * during a refetch) until the new rows actually arrive.
+   */
+  const rosterQuery = useQuery({
+    queryKey: queryKeys.hr.roster(serverQuery),
+    queryFn: ({ signal }) => fetchWholeAssayerRoster<RosterPerson>({ query: serverQuery, signal }),
+    placeholderData: keepPreviousData,
+  });
+  const assayers = rosterQuery.data?.people ?? [];
+  const rosterTotal = rosterQuery.data?.total ?? 0;
+  /** People the walker's own ceiling (20,000) left behind. Zero for any roster this meets today. */
+  const rosterMissing = rosterQuery.data?.missing ?? 0;
+  const loading = rosterQuery.isLoading;
+
+  useEffect(() => {
+    if (rosterQuery.isError) {
+      setNotice({ tone: 'err', text: `Could not load the roster. ${userMessage(rosterQuery.error)}` });
+    }
+  }, [rosterQuery.isError, rosterQuery.error]);
 
   /**
    * Reload the roster *and* the shared workforce overview.
@@ -285,15 +341,16 @@ export const AssayerRoster: React.FC<{
    * The overview is fetched once by `HrLayout` and feeds the header counts and every tab badge.
    * Reloading only this list left the header asserting "26 active · 0 onboarding" — with a fresh
    * "updated 11:02 am" beside it — straight after someone had added an assayer who was sitting in
-   * onboarding. Use this wherever the roster is changed; plain `load()` is for mount and for
-   * socket events, which do not need to re-fetch a summary the server is already pushing.
+   * onboarding. Use this wherever THIS component changes the roster (a bulk move, a delete, an
+   * import); a lifecycle change from anywhere else in the app is caught by the socket registry
+   * instead — see `useSocketInvalidation.ts`, which invalidates both the same way.
    */
   const refresh = useCallback(() => {
-    load();
+    queryClient.invalidateQueries({ queryKey: queryKeys.hr.rosterAll });
     queryClient.invalidateQueries({ queryKey: queryKeys.hr.workforce });
     // The record is its own page now and re-reads itself on entry, so there is nothing open
     // behind this list holding a stale copy.
-  }, [load, queryClient]);
+  }, [queryClient]);
 
   /**
    * The list has to catch up when the queued import finishes.
@@ -320,43 +377,22 @@ export const AssayerRoster: React.FC<{
     refresh();
   }, [rosterImport.state, refresh]);
 
-  // Lifecycle changes can come from anywhere — a bulk action here, an admin
-  // elsewhere, a backend job. Keep the roster live rather than stale until reload.
-  useEffect(() => {
-    const socket = connectSocket();
-    // The backend publishes domain events under `event.constructor.name`, which carries an
-    // `Event` suffix (see assayer.service.ts) — these listeners silently never fired without it.
-    const events = [
-      'AssayerActivatedEvent', 'AssayerSuspendedEvent', 'AssayerDeactivatedEvent', 'AssayerOnLeaveEvent',
-      'AssayerResignedEvent', 'AssayerTerminatedEvent', 'AssayerArchivedEvent',
-      'AssayerDocumentVerificationStartedEvent', 'AssayerBackgroundCheckInitiatedEvent', 'AssayerTrainingStartedEvent',
-      /**
-       * Ordinary edits, which is what actually moves the "Incomplete record" column.
-       *
-       * The list above is lifecycle-only, so a detail corrected on the phone — a phone number, an
-       * emergency contact, a confirmed map pin — changed nothing on an open roster until someone
-       * reloaded. That is the same symptom as a stale cache and was routinely mistaken for one.
-       * Emitted verbatim (not `…Event`) because the gateway forwards this one under its own
-       * domain-event name; see events.gateway.ts.
-       */
-      'assayer:updated', 'assayer:created', 'assayer:deleted',
-    ];
-    events.forEach((e) => socket?.on(e, load));
-    return () => { events.forEach((e) => socket?.off(e, load)); };
-  }, [load]);
+  /*
+    THIS COMPONENT NO LONGER OPENS ITS OWN SOCKET.
 
-  /**
-   * When the active segment's true total is bigger than what is listed, by how much.
-   * Null when they agree, when there is no exact total, or when another filter is narrowing.
-   */
+    A `connectSocket()` + `socket.on(...)` pair used to live here, listening for the same
+    lifecycle events by hand and calling `load()` directly — a second, parallel live-update path
+    next to `useSocketInvalidation`'s central registry, and the reason a page could have live
+    updates working on the roster while everything else on it depended on React Query invalidation.
+    `assayer:updated`/`assayer:created`/`assayer:deleted` (and the same `…Event`-suffixed lifecycle
+    events this list used to subscribe to) are now entries in that registry's `EVENT_KEYS`,
+    invalidating `queryKeys.hr.rosterAll` and `queryKeys.hr.workforce` together — see
+    `hooks/useSocketInvalidation.ts`. `Layout.tsx` mounts that hook once for the whole app, so this
+    list keeps updating live with no socket code of its own.
+  */
+
+  /** The chip currently selected — its `hint` is what explains the queue underneath it. */
   const selectedSegment = useMemo(() => segmentFor(filters.segment), [filters.segment]);
-
-  const segmentShortfall = useMemo(() => {
-    const total = exactCounts?.[filters.segment];
-    if (total === undefined) return null;
-    const shown = assayers.filter(selectedSegment.match).length;
-    return total > shown ? { total, shown } : null;
-  }, [exactCounts, filters.segment, selectedSegment, assayers]);
 
   /** Everyone the filters leave, before the sort — what the export's "on screen" scope means. */
   const filtered = useMemo(() => applyRosterFilters(assayers, filters), [assayers, filters]);
@@ -378,8 +414,12 @@ export const AssayerRoster: React.FC<{
   /** Which of the four list states this table is in — see components/ui/list-phase.ts. */
   const phase = listPhase({ loading, rowCount: rows.length });
 
-  /** True when the server holds more people than this page asked for. */
-  const truncated = rosterTotal > assayers.length;
+  /**
+   * True only past the walker's own ceiling (20,000 people) — see `rosterMissing`. With the cap
+   * killed, "everyone loaded" really is everyone the filters describe; this is no longer the
+   * ordinary state of an 11,000-person roster, only the rare one of a roster that outgrew 20,000.
+   */
+  const truncated = rosterMissing > 0;
   /**
    * The bulk bar acts on the ticked rows that are *on screen*, never on ticks the current
    * segment, filter or "show more" cut-off is hiding.
@@ -404,9 +444,9 @@ export const AssayerRoster: React.FC<{
    * file a clerk downloads is described by the same sentence that explains an empty table.
    */
   const activeCriteria = useMemo(() => {
-    const applied = describeFilters(filters).map((f) => `"${f.label}"`);
+    const applied = describeFilters(filters, filterDefs).map((f) => `"${f.label}"`);
     return applied.length ? applied : ['the current view'];
-  }, [filters]);
+  }, [filters, filterDefs]);
 
   /** How many separate criteria are in force — the number beside the Filters button. */
   const appliedCount = useMemo(() => activeFilterCount(filters), [filters]);
@@ -446,15 +486,24 @@ export const AssayerRoster: React.FC<{
    * current view, potentially hundreds) was indistinguishable from a deliberate selection of
    * twelve. The dialog now states the count, the destination, what it does to those people, and
    * lists the first few names so the batch can be recognised before it is committed.
+   *
+   * The reason is no longer invented. This used to send `reason: "Bulk transition to ${label}"` —
+   * the name of the button, not an actual reason — on every one of the twelve records, which is
+   * exactly the kind of employment-record entry a real reason exists to prevent. It now requires
+   * the same pick the single-person path offers (`LIFECYCLE_MOVE_REASONS`, see `StageStep` in
+   * AssayerRecord.tsx), once for the whole batch: a reason that differs person to person is not
+   * something a bulk action can honestly ask, so one reason is recorded against everyone moved.
    */
   const runBulkTransition = async () => {
-    if (!bulkTarget || selected.length === 0) return;
+    if (!bulkTarget || !bulkReason.trim() || selected.length === 0) return;
+    const reason = bulkReason.trim();
     const names = selected.slice(0, 5).map((a) => `${a.displayName} (${a.assayerCode})`);
     const ok = await confirm({
       title: `Move ${selected.length} ${selected.length === 1 ? 'person' : 'people'} to ${assayerLifecycleLabel(bulkTarget)}?`,
       message: (
         <>
-          {STAGE_CONSEQUENCE[bulkTarget] ?? `Everyone selected is moved to ${assayerLifecycleLabel(bulkTarget)}.`}
+          {`${counted(selected.length, 'person', 'people')} → ${assayerLifecycleLabel(bulkTarget)}, reason: ${reason}.`}
+          {' '}{STAGE_CONSEQUENCE[bulkTarget] ?? `Everyone selected is moved to ${assayerLifecycleLabel(bulkTarget)}.`}
           {' '}Anyone who cannot legally reach that stage from where they are now is left alone, and
           you will get a list of who moved and who did not.
           <div style={{ marginTop: '8px', fontSize: '12px' }}>
@@ -478,7 +527,7 @@ export const AssayerRoster: React.FC<{
         '/assayers/bulk/lifecycle',
         {
           method: 'POST',
-          body: JSON.stringify({ ids, targetStatus: bulkTarget, reason: `Bulk transition to ${assayerLifecycleLabel(bulkTarget)}` }),
+          body: JSON.stringify({ ids, targetStatus: bulkTarget, reason }),
         },
       );
       const { succeeded, skipped, failed } = res ?? { succeeded: [], skipped: [], failed: [] };
@@ -505,6 +554,8 @@ export const AssayerRoster: React.FC<{
     } finally {
       setBusy(false);
       setBulkTarget('');
+      setBulkReason('');
+      setBulkReasonOther(false);
       setSelectedIds(new Set());
       refresh();
     }
@@ -776,16 +827,22 @@ export const AssayerRoster: React.FC<{
       })()}
 
       {/*
-        * The chips below — and every option count in the Filters panel — describe the rows that
-        * arrived, which is the whole roster until it passes ROSTER_LIMIT. Past that the page says
-        * so rather than letting "Everyone 1,000" sit under a tab badge reading 1,400 with nothing
-        * to explain the gap.
+        * The roster is now everyone the filters describe, walked page by page rather than capped
+        * at a single request's worth — see `rosterQuery` above. `rosterMissing` is only ever
+        * non-zero past the walker's own 20,000-person ceiling, which is not a case this product
+        * meets today; the banner exists so that if it ever is met, the page says so rather than
+        * quietly showing 20,000 of 24,000 people under chips that look complete.
         */}
       {truncated && (
-        <div style={{ fontSize: '12px', color: 'var(--warning)', lineHeight: 1.5 }}>
-          Showing the {assayers.length} most recently added of {rosterTotal} people. The counts on
-          these filters describe those {assayers.length}; search to find anyone not listed.
-        </div>
+        // `AlertBanner` only has success/error tones — no third "notice" colour — and a roster
+        // this screen could not show in full is closer to a failure than a success, so it takes
+        // the same tone `notice` below uses for one.
+        <AlertBanner type="error" style={{ alignItems: 'flex-start' }}>
+          Showing {assayers.length.toLocaleString('en-IN')} of {rosterTotal.toLocaleString('en-IN')} people —
+          {' '}{rosterMissing.toLocaleString('en-IN')} more than this screen can hold at once. Every count and
+          filter below describes only the {assayers.length.toLocaleString('en-IN')} loaded; narrow the
+          search to reach anyone not listed.
+        </AlertBanner>
       )}
       {/*
         TWO ROWS, BECAUSE THESE CHIPS WERE DOING TWO JOBS AT ONCE.
@@ -799,6 +856,13 @@ export const AssayerRoster: React.FC<{
         A queue with nobody in it is not shown. "Certificate lapsed 0" is a question already
         answered, and eight of those are the clutter this row was accused of. The selected one is
         always shown, so `?segment=lapsed` still lands somewhere that explains itself.
+
+        EVERY CHIP IS SERVER TRUTH NOW, not just the two the Overview happened to carry an
+        aggregate for. `HrRosterPage` passes the workforce overview's whole `segments` map, keyed
+        exactly like `ROSTER_SEGMENTS`, so `exactCounts?.[s.key]` resolves for all twelve rather
+        than for `someone-else`/`lapsed` alone — the fallback below (`assayers.filter(s.match)`)
+        is now only what a chip shows for the instant before that overview has loaded, not a
+        second, disagreeing population living alongside the first.
       */}
       {([
         { key: 'who', label: 'Who to show', chips: ROSTER_SEGMENTS.filter((s) => !s.queue) },
@@ -858,23 +922,6 @@ export const AssayerRoster: React.FC<{
       )}
 
       {/*
-        A chip counting the whole roster above a list holding part of it.
-        
-        The banner higher up says the chips describe the loaded page, and for most of them it is
-        true. A segment given an exact total is the exception, and leaving the two numbers to sit
-        side by side unexplained is worse than either alone — the reader cannot tell whether six
-        people are missing or the count is wrong. Said plainly, and only when they disagree.
-      */}
-      {segmentShortfall !== null && (
-        <div style={{ fontSize: '12px', color: 'var(--warning)', display: 'flex', alignItems: 'center', gap: '6px' }}>
-          <AlertTriangle size={13} />
-          Showing {segmentShortfall.shown} of {segmentShortfall.total}. The other{' '}
-          {segmentShortfall.total - segmentShortfall.shown} are outside the {ROSTER_LIMIT} rows
-          loaded here — search by name or code to reach them.
-        </div>
-      )}
-
-      {/*
         THE TOOLBAR: ONE PRIMARY ACTION, AND TWO DOORS.
 
         This row held six controls — Filters, "Export this view", "Full roster + pay rates
@@ -891,8 +938,8 @@ export const AssayerRoster: React.FC<{
         <div style={{ position: 'relative', flex: '1 1 260px', minWidth: '220px' }}>
           <Search size={14} style={{ position: 'absolute', left: '10px', top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)' }} />
           <input
-            value={filters.search}
-            onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
             placeholder="Search name, code, phone, city, skill…"
             aria-label="Search the roster"
             style={{
@@ -920,17 +967,26 @@ export const AssayerRoster: React.FC<{
         <ToolbarMenu label="Export" icon={<Download size={13} />} panelWidth={280}>
           {(close) => (
             <>
+              {/*
+                THE TWO EXPORTS, LABELLED BY WHAT THEY ARE AND WHAT THEY COVER.
+
+                "Choose columns" and "Full roster + pay rates" told a clerk what each one DOES but
+                not what each one IS or WHO it covers — two questions that matter before either is
+                clicked, because they produce different file formats over different populations
+                and the second cannot be undone by re-opening the first. Both now say format
+                (CSV / workbook) and population (what you see now / everyone) up front.
+              */}
               <MenuAction
-                label={`Choose columns — ${counted(rows.length, 'person', 'people')} in this view`}
-                hint="Pick exactly the columns you need, for these rows or for everyone. Opens in Excel."
+                label={`Current view (CSV, what you see now) — Choose columns, ${counted(rows.length, 'person', 'people')}`}
+                hint="Pick exactly the columns you need. Downloads a CSV; the dialog also lets you switch to everyone loaded instead of just this view."
                 icon={<Download size={13} />}
                 onClick={() => { close(); setShowExport(true); }}
               />
               {/* The payroll-rate-card sheet is assembled over the whole roster; until it lands
                   nothing on screen moves, which is why this used to be clicked repeatedly. */}
               <MenuAction
-                label={exporting ? 'Preparing the workbook…' : 'Full roster + pay rates (Excel)'}
-                hint="Everyone, ignoring the filters, with the payroll rate card and assignment counts the roster screen never receives. Built on the server."
+                label={exporting ? 'Preparing the workbook…' : 'Full roster + pay rates (workbook, everyone)'}
+                hint="Ignores the filters — everyone, with the payroll rate card and assignment counts the roster screen never receives. Built on the server."
                 icon={<FileSpreadsheet size={13} />}
                 tone="var(--success)"
                 disabled={exporting}
@@ -996,6 +1052,7 @@ export const AssayerRoster: React.FC<{
           state={filters}
           onChange={setFilters}
           onClearAll={clearFilters}
+          defs={filterDefs}
         />
       )}
 
@@ -1012,6 +1069,7 @@ export const AssayerRoster: React.FC<{
         total={assayers.length}
         onChange={setFilters}
         onClearAll={clearFilters}
+        defs={filterDefs}
       />
 
       {/*
@@ -1020,7 +1078,7 @@ export const AssayerRoster: React.FC<{
         (`/hr/issues`, badged in the tab strip), because a collapsed panel below a thousand-row
         table is not somewhere a queue can be found on purpose.
       */}
-      <ImportIssuesPanel canManage={canManage} onResolved={load} />
+      <ImportIssuesPanel canManage={canManage} onResolved={refresh} />
 
       {/* Bulk bar — only present when a selection exists, so it never adds noise. */}
       {canManage && selected.length > 0 && (
@@ -1037,9 +1095,19 @@ export const AssayerRoster: React.FC<{
           {bulkOptions.length > 0 ? (
             <Select
               value={bulkTarget}
-              onChange={setBulkTarget}
+              onChange={(v) => {
+                setBulkTarget(String(v));
+                // A different destination is a different move — the reason typed for one stage
+                // is not necessarily the reason for another, so it does not carry over silently.
+                setBulkReason(''); setBulkReasonOther(false);
+              }}
               options={bulkOptions.map((t) => ({ value: t, label: assayerLifecycleLabel(t) }))}
               placeholder="Move all to…"
+              // `role="combobox"` does not derive its accessible name from visible content the
+              // way a plain button does, so without this the control had no accessible name at
+              // all — a screen-reader user tabbing into the bulk bar met an unnamed combobox
+              // between "N selected" and an icon.
+              aria-label="Move all selected to"
               compact
             />
           ) : (
@@ -1047,7 +1115,45 @@ export const AssayerRoster: React.FC<{
               No stage is reachable from the selected rows.
             </span>
           )}
-          <button onClick={runBulkTransition} disabled={!bulkTarget || busy} className="btn btn-primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
+          {/*
+            One reason for the whole batch — the same picker `StageStep` (AssayerRecord.tsx) uses
+            for a single move. This used to send `Bulk transition to ${label}` as the reason on
+            every record, which names the button rather than saying why; Apply is now gated on an
+            actual one being chosen or typed.
+          */}
+          {bulkTarget && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', flex: '1 1 220px', minWidth: '200px' }}>
+              <Select
+                value={bulkReasonOther ? OTHER_LIFECYCLE_REASON : bulkReason}
+                onChange={(v) => {
+                  if (v === OTHER_LIFECYCLE_REASON) { setBulkReasonOther(true); setBulkReason(''); }
+                  else { setBulkReasonOther(false); setBulkReason(String(v)); }
+                }}
+                options={[
+                  { value: '', label: 'Why? Choose a reason…' },
+                  ...LIFECYCLE_MOVE_REASONS.map((r) => ({ value: r, label: r })),
+                  { value: OTHER_LIFECYCLE_REASON, label: 'Other (type it in)' },
+                ]}
+                compact
+                error={!bulkReason.trim()}
+                aria-label="Reason for the move"
+              />
+              {bulkReasonOther && (
+                <input
+                  autoFocus
+                  value={bulkReason}
+                  onChange={(e) => setBulkReason(e.target.value)}
+                  placeholder="e.g. no longer available for work in their area"
+                  aria-label="Reason, in your own words"
+                  style={{
+                    padding: '6px 9px', fontSize: '12px', borderRadius: '6px', background: 'var(--bg-page)', color: 'inherit',
+                    border: `1px solid ${bulkReason.trim() ? 'var(--border-color)' : 'var(--warning)'}`,
+                  }}
+                />
+              )}
+            </div>
+          )}
+          <button onClick={runBulkTransition} disabled={!bulkTarget || !bulkReason.trim() || busy} className="btn btn-primary" style={{ fontSize: '12px', padding: '6px 12px' }}>
             {busy ? 'Applying…' : 'Apply'}
           </button>
           {/* Separate from the stage-move control above: issuing access has nothing to do with
@@ -1256,16 +1362,20 @@ export const AssayerRoster: React.FC<{
                 the planning screen that somebody is "in training — mark training complete on the
                 HR roster to activate" arrives here and finds the same sentence on the row.
               */
+              // The hand-rolled dot+span this cell used to be is now the same `StatusBadge`
+              // `AssayerQualificationTab` renders a client standing with — one pill component for
+              // one kind of fact, rather than every screen inventing its own. The tooltip travels
+              // with it unchanged.
               render: (a) => {
                 const tone = STATUS_COLORS[a.lifecycleStatus] ?? 'var(--text-muted)';
                 return (
-                  <span
+                  <StatusBadge
+                    label={assayerLifecycleLabel(a.lifecycleStatus)}
+                    color={tone}
+                    bg={`color-mix(in srgb, ${tone} 14%, transparent)`}
+                    variant="tag"
                     title={onboardingNextStep(a) ? `Onboarding not finished: ${onboardingNextStep(a)}.` : undefined}
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: '5px', fontSize: '12px', fontWeight: 600, color: tone }}
-                  >
-                    <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: tone }} />
-                    {assayerLifecycleLabel(a.lifecycleStatus)}
-                  </span>
+                  />
                 );
               },
             },
@@ -1302,8 +1412,17 @@ export const AssayerRoster: React.FC<{
             },
             {
               // "Exp" could as easily have been an expiry date. It is years of experience.
+              //
+              // "Experience" alone reads as a fact the system worked out — the same trap "Cannot
+              // be paid" used to be before it said why. This is a number a clerk (or the roster
+              // sheet) typed in when the person joined; it never moves as their tenure here grows,
+              // and nothing here recomputes it from the joining date beside it.
               key: 'experienceYears',
-              header: 'Experience',
+              header: (
+                <span title="Self-reported years from the roster import — not computed from joining date.">
+                  Declared experience
+                </span>
+              ),
               sortable: true,
               render: (a) => <>{a.experienceYears ?? 0}y</>,
             },
@@ -1361,8 +1480,11 @@ export const AssayerRoster: React.FC<{
                 ` · ${rows.filter((r) => payoutBlockers(r).length > 0).length} cannot be paid yet`}
             </span>
             {rows.length > visibleCount && (
+              // "Show more" alone, over a roster that is now always loaded in full, would read as
+              // though more people might still be coming from the server — this is a DOM reveal
+              // of rows already in hand, not another page being fetched, so the count says so.
               <button onClick={() => setVisibleCount((c) => c + RENDER_CHUNK)} className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: '12px' }}>
-                Show more ({rows.length - visibleCount} more)
+                Show {Math.min(RENDER_CHUNK, rows.length - visibleCount)} more ({visibleCount} of {rows.length} shown)
               </button>
             )}
           </div>

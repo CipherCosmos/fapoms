@@ -13,7 +13,11 @@ import { NoEnvelope } from '../../../infrastructure/http/response.interceptor';
 import { ServiceLogsService } from './service-logs.service';
 
 /**
- * Container logs, for administrators who cannot reach the machine.
+ * Container logs, for the developer who cannot reach the machine.
+ *
+ * The developer's diagnostic surface, and theirs alone (2026-09-05): `@Roles(DEVELOPER)` with
+ * ADMIN deliberately not named, and implication being one-way, an administrator does not pass —
+ * administrators are business people, and raw service logs are the technical estate.
  *
  * Gated on the role itself rather than a grantable permission, deliberately and for the same
  * reason the rule-bypass screen is: logs are the least filtered view of the system that exists.
@@ -28,7 +32,7 @@ import { ServiceLogsService } from './service-logs.service';
 @ApiTags('Service Logs')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(SystemRole.ADMIN)
+@Roles(SystemRole.DEVELOPER)
 @Controller('admin/logs')
 export class ServiceLogsController {
   constructor(

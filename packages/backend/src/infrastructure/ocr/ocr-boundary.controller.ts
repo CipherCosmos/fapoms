@@ -1,7 +1,7 @@
 import { Controller, Get, Post, Body, Param, Query, UseGuards, ParseUUIDPipe, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { OcrProcessingService } from './ocr-processing.service';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../../modules/auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, RoleOnly } from '../../modules/auth/guards';
 import { SystemRole } from '@fapoms/shared';
 
 class ReceiveOcrResultsDto {
@@ -17,8 +17,11 @@ export class OcrBoundaryController {
   constructor(private readonly ocrProcessingService: OcrProcessingService) {}
 
   @Post('jobs')
-  @Roles(SystemRole.ADMIN)
+  // DEVELOPER, not ADMIN (2026-09-05): the OCR boundary is a developer-only integration surface.
+  @Roles(SystemRole.DEVELOPER)
   @RequirePermissions('ocr:create:organization')
+  // Deliberate tightening: a custom role holding ocr:* no longer slips in via the permission fallback.
+  @RoleOnly()
   @ApiOperation({ summary: 'Create a new OCR tracking job request' })
   async createJob(
     @Query('documentId', ParseUUIDPipe) documentId: string,
@@ -32,8 +35,9 @@ export class OcrBoundaryController {
   }
 
   @Post('jobs/:id/results')
-  @Roles(SystemRole.ADMIN)
+  @Roles(SystemRole.DEVELOPER)
   @RequirePermissions('ocr:edit:organization')
+  @RoleOnly() // Same tightening as createJob above.
   @ApiOperation({ summary: 'Callback endpoint to receive external OCR engine scan results' })
   async callbackOcr(
     @Param('id', ParseUUIDPipe) id: string,
@@ -60,8 +64,10 @@ export class OcrBoundaryController {
    * permission nobody grants is how a route becomes uncallable, which is the bug being fixed.
    */
   @Get('jobs/:id')
-  @Roles(SystemRole.ADMIN, SystemRole.DESK)
+  // DESK stays: reading a job's status is part of the desk's own workflow, not the integration.
+  @Roles(SystemRole.DEVELOPER, SystemRole.DESK)
   @RequirePermissions('ocr:edit:organization')
+  @RoleOnly() // Same tightening as createJob above.
   @ApiOperation({ summary: 'Get status tracking details of an OCR job' })
   async findOne(@Param('id', ParseUUIDPipe) id: string) {
     const job = await this.ocrProcessingService.findOne(id);
@@ -72,8 +78,9 @@ export class OcrBoundaryController {
   }
 
   @Post('jobs/:id/retry')
-  @Roles(SystemRole.ADMIN, SystemRole.DESK)
+  @Roles(SystemRole.DEVELOPER, SystemRole.DESK)
   @RequirePermissions('ocr:edit:organization')
+  @RoleOnly() // Same tightening as createJob above.
   @ApiOperation({ summary: 'Retry a failed OCR job request' })
   async retryJob(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
     const job = await this.ocrProcessingService.retryJob(id, req.user.id);

@@ -1,6 +1,6 @@
 import {
   Controller, Get, Post, Patch, Query, Param, Body, UseGuards, Req, ParseUUIDPipe,
-  ForbiddenException, HttpCode, HttpStatus,
+  ForbiddenException, BadRequestException, HttpCode, HttpStatus,
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
@@ -9,11 +9,13 @@ import {
   ArrayNotEmpty, Min,
 } from 'class-validator';
 import { BillingEngineService } from './billing-engine.service';
+import { AssayerInvoiceService } from './assayer-invoice.service';
 import { BillingJobsService } from './billing-jobs.service';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { BILLING_ROLES, BILLING_READ_ROLES, DISBURSEMENT_ROLES } from './billing-roles';
-import { SystemRole, BillingState, InvoiceStatus, PaymentMethod, AssayerPayableStatus } from '@fapoms/shared';
+import { SystemRole, BillingState, InvoiceStatus, PaymentMethod, AssayerPayableStatus, AssayerInvoiceStatus } from '@fapoms/shared';
 
 // ---- DTOs ---------------------------------------------------------------
 
@@ -116,14 +118,36 @@ class TdsReportQuery {
   @IsOptional() @IsString() to?: string;
 }
 
+/** `{assayerId}` invites one assayer; `{all: true}` runs the bulk cadence round. */
+class InviteAssayerInvoiceDto {
+  @IsOptional() @IsUUID() assayerId?: string;
+  @IsOptional() @IsBoolean() all?: boolean;
+}
+
+class AssayerInvoicesQuery {
+  @IsOptional() @IsEnum(AssayerInvoiceStatus) status?: AssayerInvoiceStatus;
+  @IsOptional() @IsUUID() assayerId?: string;
+  @IsOptional() @Type(() => Number) @IsNumber() page?: number;
+  @IsOptional() @Type(() => Number) @IsNumber() limit?: number;
+}
+
+class SubmitInvoiceInvitationDto {
+  /**
+   * The submission's idempotency key, minted by the client — a retried POST with the same id
+   * returns the original submission instead of conflicting (see `submittedRequestId`).
+   */
+  @IsUUID() clientRequestId: string;
+}
+
 // ---- Controller ---------------------------------------------------------
 
 /**
  * The billing API: the assignment is the ledger line.
  *
- * Eighteen routes. Reads for everyone who may see the book; invoicing for billing staff;
- * approving, paying and holding payouts for finance and administrators only — money leaving
- * the business has one gate.
+ * Reads for everyone who may see the book; invoicing (client- and assayer-side) for billing
+ * staff; approving, paying and holding payouts for finance and administrators only — money
+ * leaving the business has one gate. The two `invoice-invitation` routes are the sole
+ * assayer-facing writes: an assayer reviews and submits their OWN invitation, nothing else.
  */
 @ApiTags('Billing')
 @ApiBearerAuth()
@@ -132,7 +156,9 @@ class TdsReportQuery {
 export class BillingEngineController {
   constructor(
     private readonly service: BillingEngineService,
+    private readonly assayerInvoices: AssayerInvoiceService,
     private readonly jobs: BillingJobsService,
+    private readonly regionGuard: RegionGuardService,
   ) {}
 
   private userId(req: any): string {
@@ -227,7 +253,113 @@ export class BillingEngineController {
     if (!isBillingStaff && req.user?.id !== assayerId) {
       throw new ForbiddenException('You may only view your own statement.');
     }
-    return { success: true, data: await this.service.assayerStatement(assayerId, scope) };
+    // The audience fork is decided HERE, off the authenticated principal — never off anything
+    // the client sends. Staff keep the full book; an assayer principal gets the earnings-gated
+    // shape (only invoice-approved and grandfathered rows) once assayer invoicing is enabled.
+    return {
+      success: true,
+      data: await this.service.assayerStatement(assayerId, scope, isBillingStaff ? 'staff' : 'assayer'),
+    };
+  }
+
+  // ── Assayer invoices (the consent wrapper over payables) ─────────────────
+  //
+  // The rollout gate: the feature ships dark behind `billing.assayerInvoicingEnabled`, and
+  // while the flag is off, `assertEnabled()` makes the gated routes answer 404 as if they did
+  // not exist. Gated: the INVITE route (nothing may start a reveal while dark) and BOTH
+  // assayer-facing invitation routes (the reveal itself, and submit). Deliberately NOT gated:
+  // the ops reads (an empty list is harmless) and approve/cancel — if the flag is ever turned
+  // OFF with invoices in flight, ops must still be able to land or cancel them; a gate there
+  // would strand consented submissions behind the very switch meant to make rollout safe.
+
+  @Post('assayer-invoices/invite')
+  @Roles(...BILLING_ROLES)
+  @RequirePermissions('billing:create:organization')
+  @ApiOperation({ summary: 'Invite one assayer ({assayerId}) or every assayer with eligible work ({all: true}) to submit an invoice' })
+  async inviteAssayerInvoices(@Body() dto: InviteAssayerInvoiceDto, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.assayerInvoices.assertEnabled();
+    if (dto.all) {
+      // No single-assayer scope assert here — the SERVICE filters the round to the caller's
+      // regions (assayers.region IN …), so a region desk's "invite everyone" means everyone
+      // they can see, and the per-assayer outcomes never name anyone outside their scope.
+      return { success: true, data: await this.assayerInvoices.inviteAll(this.userId(req), scope) };
+    }
+    if (!dto.assayerId) {
+      throw new BadRequestException('Pass an assayerId, or {all: true} for the bulk round.');
+    }
+    await this.regionGuard.assertAssayerInScope(dto.assayerId, scope);
+    return { success: true, data: await this.assayerInvoices.invite(dto.assayerId, this.userId(req)) };
+  }
+
+  @Get('assayer-invoices')
+  @Roles(...BILLING_READ_ROLES)
+  @RequirePermissions('billing:view:organization')
+  @ApiOperation({ summary: 'Assayer invoices with labels, paged' })
+  async listAssayerInvoices(@Query() q: AssayerInvoicesQuery) {
+    return { success: true, data: await this.assayerInvoices.list(q) };
+  }
+
+  @Get('assayer-invoices/:id')
+  @Roles(...BILLING_READ_ROLES)
+  @RequirePermissions('billing:view:organization')
+  @ApiOperation({ summary: 'One assayer invoice with its lines' })
+  async assayerInvoice(@Param('id', ParseUUIDPipe) id: string) {
+    return { success: true, data: await this.assayerInvoices.getById(id) };
+  }
+
+  @Post('assayer-invoices/:id/approve')
+  @Roles(...DISBURSEMENT_ROLES)
+  @RequirePermissions('billing:approve:organization')
+  @ApiOperation({ summary: 'Approve a submitted assayer invoice — approves every line payable in the same transaction' })
+  async approveAssayerInvoice(@Param('id', ParseUUIDPipe) id: string, @Req() req: any) {
+    return { success: true, data: await this.assayerInvoices.approve(id, this.userId(req)) };
+  }
+
+  @Patch('assayer-invoices/:id/cancel')
+  @Roles(...BILLING_ROLES)
+  @RequirePermissions('billing:edit:organization')
+  @ApiOperation({ summary: 'Cancel an invited/submitted assayer invoice; its lines return to the eligible pool' })
+  async cancelAssayerInvoice(@Param('id', ParseUUIDPipe) id: string, @Body() dto: ReasonDto, @Req() req: any) {
+    return { success: true, data: await this.assayerInvoices.cancel(id, this.userId(req), dto.reason) };
+  }
+
+  @Get('assayers/:assayerId/invoice-invitation')
+  @Roles(...BILLING_ROLES, SystemRole.ASSAYER)
+  // Deliberately no @RequirePermissions, for the same reason as the statement route above: an
+  // assayer principal holds no permission rows at all.
+  @ApiOperation({ summary: 'The active invoice invitation for an assayer — THE money reveal — or null' })
+  async assayerInvoiceInvitation(@Param('assayerId', ParseUUIDPipe) assayerId: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.assayerInvoices.assertEnabled();
+    // An assayer may read only their own invitation; the path id is attacker-controlled.
+    const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean);
+    const isBillingStaff = roles.some((r) => (BILLING_ROLES as string[]).includes(r));
+    if (!isBillingStaff && req.user?.id !== assayerId) {
+      throw new ForbiddenException('You may only view your own invoice invitation.');
+    }
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
+    return { success: true, data: await this.assayerInvoices.getInvitationFor(assayerId, scope) };
+  }
+
+  @Post('assayers/:assayerId/invoice-invitation/submit')
+  @Roles(...BILLING_ROLES, SystemRole.ASSAYER)
+  // Deliberately no @RequirePermissions — see the statement route.
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Submit the active invitation (idempotent by clientRequestId) — the assayer’s consent to the shown figures' })
+  async submitAssayerInvoiceInvitation(
+    @Param('assayerId', ParseUUIDPipe) assayerId: string,
+    @Body() dto: SubmitInvoiceInvitationDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.assayerInvoices.assertEnabled();
+    // An assayer may submit only their own invitation; the path id is attacker-controlled.
+    const roles: string[] = (req.user?.roles ?? []).map((r: any) => r?.name ?? r).filter(Boolean);
+    const isBillingStaff = roles.some((r) => (BILLING_ROLES as string[]).includes(r));
+    if (!isBillingStaff && req.user?.id !== assayerId) {
+      throw new ForbiddenException('You may only submit your own invoice invitation.');
+    }
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
+    return { success: true, data: await this.assayerInvoices.submit(assayerId, dto.clientRequestId) };
   }
 
   // ── Invoices ──────────────────────────────────────────────────────────────

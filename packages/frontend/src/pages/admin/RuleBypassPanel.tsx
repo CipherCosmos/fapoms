@@ -258,7 +258,7 @@ export const RuleBypassPanel: React.FC = () => {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '900px' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', maxWidth: '900px', margin: '0 auto' }}>
       {confirmDialog}
       <PageHeader
         icon={<Unlock size={20} />}

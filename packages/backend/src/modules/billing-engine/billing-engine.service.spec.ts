@@ -847,8 +847,10 @@ describe('BillingEngineService', () => {
     it('excludes held rows from outstanding and awaiting — the SQL says so', async () => {
       await service.assayerTotals('assayer-1');
       const sql = managerQuery.mock.calls.map((c) => c[0]).find((s: string) => s.includes('awaiting_approval')) as string;
-      expect(sql).toMatch(/FILTER \(WHERE on_hold = false\), 0\)\s+AS outstanding/);
-      expect(sql).toMatch(/status = 'PENDING' AND on_hold = false/);
+      // Columns are `p.`-prefixed since the SELECT list became shared with the gated
+      // (assayer-audience) totals variant, which joins the invoice table.
+      expect(sql).toMatch(/FILTER \(WHERE p\.on_hold = false\), 0\)\s+AS outstanding/);
+      expect(sql).toMatch(/p\.status = 'PENDING' AND p\.on_hold = false/);
     });
   });
 

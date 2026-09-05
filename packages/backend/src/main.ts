@@ -19,6 +19,7 @@ import { GlobalExceptionFilter } from './infrastructure/http/global-exception.fi
 import { CodedValidationPipe } from './infrastructure/http/coded-validation.pipe';
 import { ResponseInterceptor } from './infrastructure/http/response.interceptor';
 import { AssayerRedactionInterceptor } from './infrastructure/http/assayer-redaction.interceptor';
+import { AssayerMoneyRedactionInterceptor } from './infrastructure/http/assayer-money-redaction.interceptor';
 import { TrimStringsPipe } from './infrastructure/http/trim-strings.pipe';
 import { Reflector } from '@nestjs/core';
 
@@ -411,6 +412,10 @@ async function bootstrap() {
     // runs, so audit events recorded during the request carry userId/role/session.
     new RequestContextInterceptor(),
     new AssayerRedactionInterceptor(),
+    // The assayer sees no money (2026-09): assignment fee fields are stripped from every
+    // response to an assayer-only principal, at the same boundary — and for the same reasons —
+    // as the PII redaction above it. See the interceptor for the policy.
+    new AssayerMoneyRedactionInterceptor(),
     new ResponseInterceptor(app.get(Reflector)),
   );
 

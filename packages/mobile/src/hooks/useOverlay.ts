@@ -4,10 +4,11 @@ import type { AssayerAssignment } from '../types/mobile-app';
 /**
  * Which overlay is open, and what it is open on.
  *
- * The app has ten of these — scanner, chat, navigation, decline, counter-offer, expense claim,
- * issue report, availability, feedback, notifications — and each one used to carry its own pair
- * of state variables in App.tsx: a boolean for whether it was showing and a nullable assignment
- * for what it was showing it for. Fourteen `useState` calls describing a single question.
+ * The app has ten of these — scanner, chat, navigation, decline, expense claim, issue report,
+ * invoice review, availability, feedback, notifications — and each one used to carry its own
+ * pair of state variables in App.tsx: a boolean for whether it was showing and a nullable
+ * assignment for what it was showing it for. Fourteen `useState` calls describing a single
+ * question.
  *
  * That shape allowed states that mean nothing. `visible` true with a null assignment rendered a
  * modal about no job; an assignment set with `visible` false held a stale reference to a job the
@@ -25,7 +26,6 @@ export type Overlay =
   | { name: 'scanner'; assignment: AssayerAssignment }
   | { name: 'queryChat'; assignment: AssayerAssignment }
   | { name: 'navigate'; assignment: AssayerAssignment }
-  | { name: 'negotiate'; assignment: AssayerAssignment }
   | { name: 'issue'; assignment: AssayerAssignment }
   /**
    * The reason lives here rather than beside it, so it is scoped to the decline it was typed
@@ -41,6 +41,12 @@ export type Overlay =
   | { name: 'availability' }
   | { name: 'feedback' }
   | { name: 'notifications' }
+  /**
+   * The invoice reveal-and-confirm sheet. Carries no subject on purpose: the figures an assayer
+   * consents to must come from a fresh server read done by the sheet itself at the moment it
+   * opens, never from whatever copy of the invitation the opening screen happened to hold.
+   */
+  | { name: 'invoiceReview' }
   /** The durable upload outbox — carries no subject; it lists every packet, across branches. */
   | { name: 'uploads' }
   /** The assayer's own registration paperwork. No subject: it is always about themselves. */

@@ -21,7 +21,7 @@ import {
 } from './assayer-shared';
 import { SensitiveValue } from './SensitiveValue';
 import {
-  EDIT_FIELDS, useManagerOptions, useHrOwnerOptions, applyPlace, GEO_AUTO_FIELDS, resolveIfsc,
+  EDIT_FIELDS, PERFORMANCE_RATINGS, useManagerOptions, useHrOwnerOptions, applyPlace, GEO_AUTO_FIELDS, resolveIfsc,
   type FieldDef, type IfscInfo,
 } from './AssayerForms';
 import { fmtDate, fmtWhen } from '../../utils/dates';
@@ -303,6 +303,45 @@ export const AssayerRecord: React.FC<{
   const managerOpts = useManagerOptions(editing && canManage, assayerId);
   const hrOwnerOpts = useHrOwnerOptions(editing && canManage);
 
+  /**
+   * The reporting manager's name, for the read-only Summary.
+   *
+   * Edit mode already resolves `managerId` to a name through `useManagerOptions` above — but
+   * that hook pages through the ENTIRE assayer roster (over a thousand rows on the live tenant)
+   * to build its picker, which is the right cost for a deliberate edit and the wrong cost for
+   * every ordinary view of every record: most people have no manager at all, and the ones who do
+   * need only one name, not the whole roster. So the Summary looks that one person up by id
+   * instead — `GET /assayers/:id`, the same request this page already makes for itself — rather
+   * than either calling `useManagerOptions` unconditionally here or, as it did before this fix,
+   * printing the bare `managerId` UUID because nothing resolved it outside edit mode at all.
+   *
+   * Keyed by id, not just a bare name string, so that changing managers (or reopening a
+   * different record before this lookup returns) cannot show the PREVIOUS manager's name while
+   * the new one is still in flight — the id check below only trusts a result that matches the
+   * `managerId` currently on the record.
+   */
+  const [managerLookup, setManagerLookup] = useState<{ id: string; name: string | null } | null>(null);
+  useEffect(() => {
+    const managerId = a?.managerId;
+    if (!managerId) return;
+    let cancelled = false;
+    api.request<Assayer>(`/assayers/${managerId}`)
+      .then((m) => {
+        if (cancelled) return;
+        setManagerLookup({ id: managerId, name: m.assayerCode ? `${m.displayName} · ${m.assayerCode}` : m.displayName });
+      })
+      // A manager who no longer resolves (archived, or a permissions edge case) falls back to
+      // the id rather than hanging on "Loading…" forever — no worse than what this row showed
+      // before this fix.
+      .catch(() => { if (!cancelled) setManagerLookup({ id: managerId, name: null }); });
+    return () => { cancelled = true; };
+  }, [a?.managerId]);
+
+  const managerDisplay = !a?.managerId ? null
+    : managerLookup?.id === a.managerId
+      ? (managerLookup.name ?? a.managerId)
+      : 'Loading…';
+
   const snapshotEdit = (rec: Assayer): Record<string, string> => {
     const f: Record<string, string> = {};
     for (const key of SUMMARY_EDIT_KEYS) {
@@ -397,24 +436,46 @@ export const AssayerRecord: React.FC<{
   }, [a, canManage]);
 
   // The per-tab panels are cached in `loaded`; a change to the record invalidates that cache
-  // too, or the Pay and Skills tabs keep serving what they fetched before the edit.
+  // too, or the Pay tab keeps serving what it fetched before the edit.
   useEffect(() => { setLoaded({}); }, [assayerId, reloadKey]);
 
-  // Escape goes back to the list. It closed the drawer this used to be, and the habit outlives
-  // the drawer; the page carries a Back link for everyone else.
+  /**
+   * Escape goes back to the list. It closed the drawer this used to be, and the habit outlives
+   * the drawer; the page carries a Back link for everyone else.
+   *
+   * BUT ONLY WHEN THERE IS NOTHING LOCAL FOR IT TO CANCEL FIRST. Every dialog-based editor this
+   * record opens — Vetting/Documents/Skills' `Editor`, the confirm dialogs — is built on the
+   * shared `Modal` (components/ui/Modal.tsx), and `Modal` already owns Escape itself: it listens
+   * on `document` and calls `stopPropagation()`, which runs before this `window` listener ever
+   * sees the key, so those are not actually at risk. What IS a plain `window`-level keydown away
+   * from being clobbered is the state that lives directly on this component with no modal over
+   * it: the Summary's in-place edit mode (`editing`, a whole form's worth of unsaved typing) and
+   * the lifecycle-move reason box (`target`/`reason`, opened by `StageStep` below). Escape is
+   * routed to whichever of those is open instead of closing the whole record out from under it.
+   */
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      if (target) { setTarget(''); setReason(''); return; }
+      if (editing) { setEditing(false); return; }
+      onClose();
+    };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  }, [onClose, target, editing]);
 
   useEffect(() => {
     if (tab === 'summary' || loaded[tab] !== undefined) return;
     // Remarks are fetched by <AssayerRemarks> itself (react-query), so the planning desk and
     // this drawer read one list from one API; only the other tabs load through here.
+    //
+    // Skills is deliberately absent from this map. `AssayerSkillsPanel` (rendered for that tab)
+    // fetches `/workforce-attribute` itself and never reads `loaded.skills` — so fetching it
+    // here too was a second, wasted round trip to the same endpoint on every visit to the tab,
+    // for a result nothing consumed. The child owns this data fully; every other tab still loads
+    // through here exactly as before.
     const url: Partial<Record<TabKey, string>> = {
       commercial: `/assayers/${assayerId}/commercial`,
-      skills: `/assayers/${assayerId}/workforce-attribute`,
       history: `/assayers/${assayerId}/activity`,
     };
     const tabUrl = url[tab];
@@ -1165,8 +1226,28 @@ export const AssayerRecord: React.FC<{
                     ['Availability',
                       a.unavailableReason ? (UNAVAILABLE_LABELS[a.unavailableReason] ?? a.unavailableReason) : 'Available for work',
                       'unavailableReason'],
-                    ['Reporting manager', a.managerId, 'managerId'],
+                    // The resolved name, not the bare `managerId` UUID — see `managerDisplay`.
+                    // Read-only only: the row is editable whenever `managerId` is in EDIT_FIELDS
+                    // (it is), and `Facts` ignores this value entirely in that case, rendering
+                    // `InlineField`/`useManagerOptions`'s own picker instead — see the note above
+                    // `Facts` about every value here being the read-mode one.
+                    ['Reporting manager', managerDisplay, 'managerId'],
                     ['HR owner', a.hrOwnerName, 'hrOwnerName'],
+                    /*
+                      Set by HR, read by the recommendation engine when it ranks candidates for a
+                      job — a real input, not a decorative note — and until now shown on no screen
+                      at all: the field has existed on `EDIT_FIELDS` since the roster carried it,
+                      but nothing rendered a `Fact` row for it, so the only way to see or change it
+                      was to already know the API accepted `performanceRating`. Printed in the
+                      dropdown's own words ("4 - Good") rather than a bare digit, so the record and
+                      the edit control agree on what the number means.
+                    */
+                    ['Performance rating',
+                      a.performanceRating
+                        ? (PERFORMANCE_RATINGS.find((r) => r.value === String(a.performanceRating))?.label
+                          ?? `${a.performanceRating}`)
+                        : <span style={{ color: 'var(--text-muted)' }}>Not rated yet</span>,
+                      'performanceRating'],
                   ]} />
                   <FactGroup
                     edit={editCtx}
@@ -1502,7 +1583,7 @@ const SUMMARY_EDIT_KEYS = [
   'employmentType', 'employeeId', 'department', 'joiningDate', 'managerId', 'engagementType', 'unavailableReason', 'hrOwnerName',
   'dateOfBirth', 'qualification', 'aadhaarNumber', 'panNumber', 'vstsCode',
   'bankName', 'bankAccountNumber', 'ifscCode',
-  'maxDailyWorkload', 'maxWeeklyWorkload', 'experienceYears',
+  'maxDailyWorkload', 'maxWeeklyWorkload', 'experienceYears', 'performanceRating',
 ];
 
 interface EditCtx {
@@ -1583,10 +1664,22 @@ const InlineControl: React.FC<{ fieldKey: string; ctx: EditCtx }> = ({ fieldKey,
     );
   }
   if (def.options) {
+    /**
+     * A value already on the record that is not one of the offered choices is shown as its own
+     * choice, marked "as recorded", instead of leaving the box looking unanswered — the same fix
+     * `renderFormField` in AssayerForms.tsx already carries, for the same reason: the rating is
+     * stored to two decimals, the list offers whole numbers, and a box that goes blank for 4.80
+     * invites "correcting" it to 4, quietly rounding a figure the recommendation engine scores
+     * candidates on. `InlineControl` renders every options-based field inline-edited from this
+     * screen, so the same silent-round risk applies to any of them holding a legacy or imported
+     * value the current list has since dropped.
+     */
+    const known = def.options.some((o) => o.value === val);
+    const opts = val && !known ? [...def.options, { value: val, label: `${val} — as recorded` }] : def.options;
     return (
       <select style={inlineControl} value={val} onChange={(e) => onChange(e.target.value)}>
         <option value="">— choose —</option>
-        {def.options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+        {opts.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
     );
   }

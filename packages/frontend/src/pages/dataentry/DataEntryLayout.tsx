@@ -23,7 +23,7 @@ const PAGES = [
 ] as const;
 
 export const DataEntryLayout: React.FC = () => (
-  <div style={{ padding: '20px 24px', maxWidth: 1500 }}>
+  <div style={{ padding: '20px 24px', maxWidth: 1500, margin: '0 auto' }}>
     <PageHeader
       icon={<ClipboardCheck size={20} />}
       title="Data Entry & Validation"

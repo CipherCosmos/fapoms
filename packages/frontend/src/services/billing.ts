@@ -1,4 +1,5 @@
 import { api } from './api';
+import { AppError } from './errors';
 import type {
   BillingEntry,
   BillingInvoice,
@@ -10,15 +11,20 @@ import type {
   InvoiceStatus,
   PaymentMethod,
   AssayerPayableStatus,
+  AssayerInvoiceStatus,
+  AssayerInvoiceSummary,
+  AssayerInvoiceInvitation,
+  AssayerInvoiceInviteOutcome,
 } from '@fapoms/shared';
 
 /**
  * The billing API, as the web app sees it: the assignment is the ledger line.
  *
- * Eighteen calls. Reads are `overview`, `payouts`, `invoiceable`, `invoices`, the assayer
- * statement and the assignment's money line; writes are approve/pay/hold payouts, create/send/
- * cancel invoices, record/reverse payments, adjust/hold a client line, and the admin reconcile.
- * Nothing here computes money — every figure on screen is a figure the server sent.
+ * Reads are `overview`, `payouts`, `invoiceable`, `invoices`, the assayer statement, the
+ * assignment's money line and the assayer-invoice list/detail; writes are approve/pay/hold
+ * payouts, create/send/cancel invoices, record/reverse payments, adjust/hold a client line,
+ * the assayer-invoice invite/approve/cancel, and the admin reconcile. Nothing here computes
+ * money — every figure on screen is a figure the server sent.
  */
 
 // ---- Shapes ---------------------------------------------------------------
@@ -46,6 +52,16 @@ export type PayoutRow = AssayerPayable & {
   projectName: string | null;
   assignmentNumber: string | null;
   branchName: string | null;
+  /**
+   * The assayer invoice this payout rides, if any — the id ONLY. The payout list is the payable
+   * entity spread with labels, and the entity carries these two columns; the invoice's
+   * number/status are NOT attached here (the backend attaches those on the statement's rows,
+   * not the payouts page), so a screen that wants them resolves the id — see
+   * `useAssayerInvoiceLookup`. `preInvoicingEra` marks rows revealed under the pre-invoicing
+   * rules: settled history the invite must never bill twice.
+   */
+  assayerInvoiceId: string | null;
+  preInvoicingEra: boolean;
 };
 
 export type InvoiceRow = BillingInvoice & { entryCount: number; clientName: string | null };
@@ -97,6 +113,8 @@ export interface AssayerStatement {
     id: string; payableNumber: string; status: AssayerPayableStatus; onHold: boolean; holdReason: string | null;
     assignmentId: string; expenseId: string | null; baseAmount: number; travelAmount: number;
     tdsAmount: number; totalAmount: number; paidAmount: number; outstanding: number; createdAt: string;
+    /** The assayer invoice this row rides — labels the server attaches for the staff audience. */
+    invoiceNumber: string | null; invoiceStatus: AssayerInvoiceStatus | null;
   }>;
   payments: Array<{
     id: string; paymentReference: string; method: PaymentMethod;
@@ -107,6 +125,30 @@ export interface AssayerStatement {
 export interface PayoutActionResult {
   done: string[];
   refused: Array<{ id: string; reason: string }>;
+}
+
+// ── Assayer invoices (the consent wrapper over payables) ───────────────────
+
+/**
+ * The bulk "invite everyone with unbilled work" round. Per-assayer outcomes, never a whole-batch
+ * failure: `invited`/`skipped` are the server's own counts over `outcomes` ('failed' counts as
+ * skipped there — the UI splits it back out, because an infrastructure error is not a business
+ * outcome).
+ */
+export interface AssayerInvoiceInviteAllResult {
+  outcomes: AssayerInvoiceInviteOutcome[];
+  invited: number;
+  skipped: number;
+}
+
+/**
+ * The rollout gate, as the client sees it: while `billing.assayerInvoicingEnabled` is off, the
+ * invite routes answer 404 "not enabled" as if they did not exist. That is a deployment state,
+ * not a user error — callers show a quiet banner and disable the invite buttons rather than
+ * toasting an error at whoever clicked first.
+ */
+export function isInvoicingNotEnabled(err: unknown): boolean {
+  return err instanceof AppError && err.status === 404 && /not enabled/i.test(err.technical ?? err.userMessage);
 }
 
 // ── GST tax invoice document ───────────────────────────────────────────────
@@ -277,6 +319,42 @@ async function getAssayerStatement(assayerId: string): Promise<AssayerStatement>
   return api.request<AssayerStatement>(`/billing-engine/assayers/${assayerId}/statement`);
 }
 
+/**
+ * Invite ONE assayer to invoice all of their eligible unbilled payouts, as one invoice. 409 when
+ * they already hold an active (invited/submitted) invoice; 404 while the rollout flag is off —
+ * see `isInvoicingNotEnabled`.
+ */
+async function inviteAssayerInvoice(assayerId: string): Promise<AssayerInvoiceSummary> {
+  return api.request<AssayerInvoiceSummary>('/billing-engine/assayer-invoices/invite', { method: 'POST', body: JSON.stringify({ assayerId }) });
+}
+
+/** The bulk cadence round: one invoice per assayer with eligible work, per-assayer outcomes. */
+async function inviteAllAssayerInvoices(): Promise<AssayerInvoiceInviteAllResult> {
+  return api.request<AssayerInvoiceInviteAllResult>('/billing-engine/assayer-invoices/invite', { method: 'POST', body: JSON.stringify({ all: true }) });
+}
+
+async function listAssayerInvoices(params: { status?: AssayerInvoiceStatus; assayerId?: string } & PageParams = {}): Promise<BillingPage<AssayerInvoiceSummary>> {
+  return api.request<BillingPage<AssayerInvoiceSummary>>(`/billing-engine/assayer-invoices${qs(params)}`);
+}
+
+/** One assayer invoice with its lines and labels — the review drawer, and the chip resolver. */
+async function getAssayerInvoice(id: string): Promise<AssayerInvoiceInvitation> {
+  return api.request<AssayerInvoiceInvitation>(`/billing-engine/assayer-invoices/${id}`);
+}
+
+/**
+ * Approve a SUBMITTED assayer invoice — the server approves every still-pending line payable in
+ * the same transaction. Refusals (a held line, totals drift) come back as human sentences and
+ * are shown verbatim.
+ */
+async function approveAssayerInvoice(id: string): Promise<AssayerInvoiceSummary> {
+  return api.request<AssayerInvoiceSummary>(`/billing-engine/assayer-invoices/${id}/approve`, { method: 'POST' });
+}
+
+async function cancelAssayerInvoice(id: string, reason: string): Promise<AssayerInvoiceSummary> {
+  return api.request<AssayerInvoiceSummary>(`/billing-engine/assayer-invoices/${id}/cancel`, { method: 'PATCH', body: JSON.stringify({ reason }) });
+}
+
 async function listInvoiceable(clientId?: string): Promise<{ clients: InvoiceableClient[]; total: number; truncated: boolean }> {
   return api.request<{ clients: InvoiceableClient[]; total: number; truncated: boolean }>(`/billing-engine/invoiceable${qs({ clientId })}`);
 }
@@ -356,6 +434,12 @@ export const billingApi = {
   holdPayout,
   reopenAssignment,
   getAssayerStatement,
+  inviteAssayerInvoice,
+  inviteAllAssayerInvoices,
+  listAssayerInvoices,
+  getAssayerInvoice,
+  approveAssayerInvoice,
+  cancelAssayerInvoice,
   listInvoiceable,
   listInvoices,
   getInvoice,

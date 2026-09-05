@@ -2,7 +2,7 @@ import { readCache, writeCache } from './token-store';
 
 /**
  * The on-device queue for one-shot field actions: check-in, check-out, offer accept/reject,
- * counter-offer, an expense claim, a clarification reply.
+ * an expense claim, a clarification reply.
  *
  * These used to be a bare `await fetch(...)`, shown or lost on the spot. `upload-outbox.ts` and
  * `location-queue.ts` already solved this shape of problem — write the intent to disk before
@@ -11,17 +11,22 @@ import { readCache, writeCache } from './token-store';
  * idea generalised to a small JSON action instead of a file or a GPS fix, so those two queues did
  * not have to be duplicated a third time for "everything else that hits the network".
  *
+ * NOT everything that hits the network belongs here. The invoice-invitation submit goes around
+ * this queue on purpose (see `MobileApiService.submitInvoiceInvitation`): it is consent to the
+ * exact figures on screen, and a deferred replay could bind that consent to a different
+ * document. A queue is for actions whose meaning survives a delay.
+ *
  * Two things distinguish an action from a location fix or a packet:
  *
  *  - It carries a `clientRequestId` (a v4-shaped UUID, generated once and persisted with the
  *    action) so a retry that actually reached the server the first time — the response was just
- *    lost — does not create a second expense claim or a second counter-offer. Check-in/out and
- *    offer accept/reject do not need this: the server already treats them as idempotent by
- *    nature (first arrival kept; already-checked-out returns success). Expense claims and
- *    counter-offers are the two actions that create a new record each time they are POSTed, so
- *    they are the ones the backend contract keys on `clientRequestId`.
- *  - A failure can be terminal. A validation 4xx ("that branch is not open for a counter-offer
- *    today") will fail forever no matter how many times it is retried, and retrying it silently
+ *    lost — does not create a second expense claim. Check-in/out and offer accept/reject do not
+ *    need this: the server already treats them as idempotent by nature (first arrival kept;
+ *    already-checked-out returns success). The expense claim is the one queued action that
+ *    creates a new record each time it is POSTed, so it is the one the backend contract keys
+ *    on `clientRequestId`.
+ *  - A failure can be terminal. A validation 4xx ("this claim is over the single-claim limit")
+ *    will fail forever no matter how many times it is retried, and retrying it silently
  *    would leave the assayer thinking a rejected request was still "trying". Only a transport
  *    failure (`retryable: true` from the dispatcher) re-queues the action; anything else is
  *    surfaced immediately and taken off the queue.

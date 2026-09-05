@@ -242,8 +242,8 @@ export const Assignments: React.FC = () => {
 
   // ── Lifecycle actions — the only mutation this page had was posting a
   // comment. Accept/Reject/Cancel/Complete/Escalate call the same endpoints
-  // PlanningWorkspace and the SLA scanner already use; a plain un-countered
-  // PENDING offer had no manual override anywhere in the frontend before this.
+  // PlanningWorkspace and the SLA scanner already use; a plain PENDING offer
+  // had no manual override anywhere in the frontend before this.
   const [actionMode, setActionMode] = useState<'REJECT' | 'CANCEL' | 'ESCALATE' | null>(null);
   const [actionReason, setActionReason] = useState('');
   const [actionBusy, setActionBusy] = useState(false);
@@ -618,7 +618,7 @@ export const Assignments: React.FC = () => {
       'CREATED': 'var(--warning)', 'ACCEPTED': 'var(--success)', 'REJECTED': 'var(--danger)',
       'SCHEDULED': 'var(--accent)', 'COMPLETED': 'var(--accent)', 'CANCELLED': 'var(--danger)',
       'CLOSED': 'var(--success)', 'PENDING': 'var(--warning)', 'CONFIRMED': 'var(--success)',
-      'NEGOTIATION': 'var(--warning)', 'CHECKED_IN': 'var(--accent)',
+      'CHECKED_IN': 'var(--accent)',
       'CANDIDATE_SELECTED': 'var(--warning)', 'CONTACT_INITIATED': 'var(--accent)',
       'AUDIT_COMPLETED': 'var(--accent)',
     };

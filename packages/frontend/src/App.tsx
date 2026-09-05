@@ -53,6 +53,7 @@ const Zones = React.lazy(() => import('./pages/Zones'));
 const Settings = React.lazy(() => import('./pages/Settings'));
 const RuleBypassPanel = React.lazy(() => import('./pages/admin/RuleBypassPanel').then((m) => ({ default: m.RuleBypassPanel })));
 const CompliancePanel = React.lazy(() => import('./pages/admin/CompliancePanel').then((m) => ({ default: m.CompliancePanel })));
+const Approvals = React.lazy(() => import('./pages/admin/Approvals').then((m) => ({ default: m.Approvals })));
 import { LEGACY_PATHS as HR_LEGACY_PATHS } from './pages/hr/hr-destinations';
 
 const HrLayout = React.lazy(() => import('./pages/hr/HrLayout').then((m) => ({ default: m.HrLayout })));
@@ -497,6 +498,8 @@ export const App: React.FC = () => {
           <Route path="/admin/notifications" element={<NotificationAdmin />} />
           <Route path="/admin/settings" element={<PlatformSettings />} />
           <Route path="/admin/logs" element={<ServiceLogs />} />
+          {/* The admin's side of the destructive-action two-person rule — see Approvals.tsx. */}
+          <Route path="/admin/approvals" element={<Approvals />} />
           <Route path="/admin/compliance" element={<CompliancePanel />} />
           <Route path="/zones" element={<Zones />} />
           <Route path="/notifications" element={<Notifications />} />

@@ -154,7 +154,7 @@ export const HrLayout: React.FC = () => {
    */
   if (isLoading) {
     return (
-      <div style={{ padding: '20px 24px', maxWidth: '1500px' }}>
+      <div style={{ padding: '20px 24px', maxWidth: '1500px', margin: '0 auto' }}>
         <h1 style={{ fontSize: '22px', fontWeight: 700, margin: 0 }}>Workforce</h1>
         <p style={{ color: 'var(--text-muted)', fontSize: '13px', marginTop: '10px' }}>
           Getting the latest figures for everyone on the roster…
@@ -185,17 +185,48 @@ export const HrLayout: React.FC = () => {
   const d = data as HrWorkforceOverview;
 
   return (
-    <div style={{ padding: '20px 24px', maxWidth: '1500px' }}>
+    <div style={{ padding: '20px 24px', maxWidth: '1500px', margin: '0 auto' }}>
       <PageHeader
         icon={<Users size={20} />}
         title="Workforce"
-        subtitle={`${d.headcount.active} active · ${d.headcount.onboarding} onboarding · ${d.headcount.exited} exited · updated ${fmtWhen(d.generatedAt)}`}
+        /*
+          "Updated 11:02 am" reads as a promise that the figures are live, which they are not: this
+          is `hr_workforce.service.ts`'s own aggregate, computed once and cached — the words a
+          reader needs are "this is when the number was true", not "this is current". The same
+          mis-reading is what made a stale HR page indistinguishable from a working one before the
+          section had live updates at all.
+        */
+        subtitle={`${d.headcount.active} active · ${d.headcount.onboarding} onboarding · ${d.headcount.exited} exited · figures as of ${fmtWhen(d.generatedAt)}`}
         actions={
           <Link to="/hr/roster" className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 14px', textDecoration: 'none' }}>
             <Users size={14} /> {canManage ? 'Manage roster' : 'View roster'}
           </Link>
         }
       />
+
+      {/*
+        A regionally-scoped account sees a smaller workforce than the "whole roster" figure they
+        may remember from a national screen or a colleague's, with nothing here saying why —
+        the same shape of unexplained gap `RosterExportDialog` already has to head off for a
+        server-filtered roster. Shown only for a scoped caller; `d.scope` is undefined for both an
+        unscoped (national) one and a server that has not shipped this field yet, so the chip
+        disappears cleanly rather than rendering "Your regions: " with nothing after the colon.
+      */}
+      {!!d.scope?.regions?.length && (
+        <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '10px' }}>
+          <span
+            title="Your account is confined to these regions on every operations desk, and this workforce view is scoped the same way — the figures above describe only these regions, not the whole roster."
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: '5px',
+              fontSize: '12px', fontWeight: 600, padding: '4px 10px', borderRadius: '999px',
+              background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)',
+              color: 'var(--text-secondary)',
+            }}
+          >
+            Your regions: {d.scope.regions.join(', ')}
+          </span>
+        </div>
+      )}
 
       {/*
         * ONE SCROLLING STRIP, NEVER A WRAPPED STACK.

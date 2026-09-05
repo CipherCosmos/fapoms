@@ -64,9 +64,11 @@ const NEVER_EXPOSED = ['passwordHash'];
  * The roles that onboard and pay assayers, and therefore see the whole record.
  *
  * Deliberately short. Adding a role here hands it every assayer's identity documents and bank
- * account at once — there is no partial entry.
+ * account at once — there is no partial entry. DEVELOPER carries ADMIN's full reach by product
+ * decision (2026-09-05, role-hierarchy.ts) and is named because this list is matched against
+ * raw role names, not through the implication-aware guards.
  */
-const FULL_ACCESS: string[] = [SystemRole.ADMIN, SystemRole.OPERATIONS];
+const FULL_ACCESS: string[] = [SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DEVELOPER];
 
 /**
  * The three identifiers a full-access role sees as last-4 rather than whole.

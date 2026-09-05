@@ -340,8 +340,10 @@ export interface Assignment extends ExtendedAuditMetadata {
   status: AssignmentStatus;
   proposedFee?: number;
   agreedFee?: number;
-  // Number of counter-offer rounds; present on assignment payloads and read by negotiation UIs.
-  negotiationCount?: number;
+  // `negotiationCount` was declared here while in-app fee negotiation existed. The column
+  // survives in the database (historical rows) but no longer belongs to the shared contract:
+  // the UIs that read it are gone, and assayer-facing responses strip it at the boundary
+  // (AssayerMoneyRedactionInterceptor) along with every fee field above.
   scheduledDate?: string;
   completionDate?: string;
   remarks?: string;

@@ -1,10 +1,10 @@
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueries, useMutation, useQueryClient } from '@tanstack/react-query';
 import { queryKeys } from './queryKeys';
 import { billingApi } from '../services/billing';
 import type {
   PageParams, PayPayoutsPayload, CreateInvoicePayload, InvoicePaymentPayload, ClientLinePatch,
 } from '../services/billing';
-import type { InvoiceStatus, AssayerPayableStatus } from '@fapoms/shared';
+import type { InvoiceStatus, AssayerPayableStatus, AssayerInvoiceStatus, AssayerInvoiceInvitation } from '@fapoms/shared';
 
 /**
  * Mount control for the list queries. The billing workspace shows one tab at a time; every
@@ -67,6 +67,54 @@ export function useBillingInvoice(id: string | null) {
   });
 }
 
+export function useAssayerInvoices(
+  params: { status?: AssayerInvoiceStatus; assayerId?: string } & PageParams = {},
+  options: BillingQueryOptions = {},
+) {
+  return useQuery({
+    queryKey: queryKeys.billing.assayerInvoices(params),
+    queryFn: () => billingApi.listAssayerInvoices(params),
+    staleTime: 30_000,
+    enabled: options.enabled ?? true,
+  });
+}
+
+export function useAssayerInvoice(id: string | null) {
+  return useQuery({
+    queryKey: queryKeys.billing.assayerInvoice(id ?? ''),
+    queryFn: () => billingApi.getAssayerInvoice(id!),
+    enabled: !!id,
+    staleTime: 30_000,
+  });
+}
+
+/**
+ * invoice id → invoice, for the ids a screen can currently see.
+ *
+ * Payout rows (and the assignment money line's payable) carry `assayerInvoiceId` ONLY — the
+ * backend attaches invoice number/status to the statement's rows, not to the payouts page — so
+ * screens that want a chip resolve the few distinct ids on screen here. One query per id, under
+ * the SAME key as the review drawer (`queryKeys.billing.assayerInvoice`), so a drawer open and
+ * fifty chips cost one fetch per invoice between them, and a mutation's `billing.all`
+ * invalidation refreshes both alike. Ids that fail to resolve are simply absent from the map —
+ * a chip without a label is not worth an error state.
+ */
+export function useAssayerInvoiceLookup(ids: Array<string | null | undefined>) {
+  const distinct = [...new Set(ids.filter((id): id is string => !!id))].sort();
+  return useQueries({
+    queries: distinct.map((id) => ({
+      queryKey: queryKeys.billing.assayerInvoice(id),
+      queryFn: () => billingApi.getAssayerInvoice(id),
+      staleTime: 30_000,
+    })),
+    combine: (results) => {
+      const byId = new Map<string, AssayerInvoiceInvitation>();
+      results.forEach((r) => { if (r.data) byId.set(r.data.id, r.data); });
+      return byId;
+    },
+  });
+}
+
 export function useAssayerStatement(assayerId: string | null) {
   return useQuery({
     queryKey: queryKeys.billing.assayerStatement(assayerId ?? ''),
@@ -121,6 +169,23 @@ export function useHoldPayout() {
 export function useReopenAssignment() {
   return useBillingMutation(({ assignmentId, reason }: { assignmentId: string; reason: string }) =>
     billingApi.reopenAssignment(assignmentId, reason));
+}
+
+export function useInviteAssayerInvoice() {
+  return useBillingMutation((assayerId: string) => billingApi.inviteAssayerInvoice(assayerId));
+}
+
+export function useInviteAllAssayerInvoices() {
+  // `void` args so callers may write `mutateAsync()` — the round takes no parameters.
+  return useBillingMutation((_: void) => billingApi.inviteAllAssayerInvoices());
+}
+
+export function useApproveAssayerInvoice() {
+  return useBillingMutation((id: string) => billingApi.approveAssayerInvoice(id));
+}
+
+export function useCancelAssayerInvoice() {
+  return useBillingMutation(({ id, reason }: { id: string; reason: string }) => billingApi.cancelAssayerInvoice(id, reason));
 }
 
 export function useCreateBillingInvoice() {

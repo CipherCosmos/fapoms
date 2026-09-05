@@ -36,6 +36,16 @@ const DATE_LOOKUP_CONCURRENCY = 8;
 /** How far ahead spreading is allowed to push a branch before it gives up and reports why. */
 const MAX_SPREAD_DAYS = 365;
 
+/**
+ * How many real `assignmentService.create` attempts one branch may burn retrying past a holiday
+ * it collided with. Bounded separately from `MAX_SPREAD_DAYS` — the in-memory capacity hops
+ * above are free (a Map lookup), but each retry here is a real write attempt the server rejects,
+ * and a plan spanning a genuinely unworkable stretch must not turn into hundreds of sequential
+ * round trips for one branch. A fortnight of holiday collisions in a row does not happen; this
+ * still leaves generous headroom over the worst realistic case (two adjacent state holidays).
+ */
+const MAX_CREATE_ATTEMPTS_PER_BRANCH = 10;
+
 export interface PlanDeploymentResult {
   deployed: Array<{ branchId: string; assignmentId: string; scheduledDate: string }>;
   skipped: Array<{ clusterId: string; branchId: string | null; reason: string }>;
@@ -309,8 +319,33 @@ export class OperationsPlanningService {
     const branchDates = await this.resolveWorkableDates(allocations.map((a) => a.branchId));
 
     // Spread: walk allocations in plan order, giving each branch the first date that is
-    // workable FOR THAT BRANCH (holidays/Sundays already excluded by suggestAuditDate) and on
-    // which its assayer still has capacity. Purely in-memory — no extra queries per attempt.
+    // workable FOR THAT BRANCH and on which its assayer still has capacity.
+    //
+    // `branchDate.blocked` is NOT a complete holiday calendar — it is only the handful of dates
+    // `suggestAuditDate` happened to step over on its own one-time search for the branch's
+    // EARLIEST workable date, resolved once, up front (see `resolveWorkableDates`). A candidate
+    // this loop pushes past that narrow window — by the campaign's own per-branch offset, or by
+    // colliding with another branch's assayer on the same day, which is the ordinary case for
+    // exactly the multi-branch bundling this executor exists to deploy — can land on a real
+    // holiday or non-working Saturday `blocked` never recorded. `nextWorkableDate` on its own
+    // only catches a plain Sunday.
+    //
+    // Found live: a 3-branch same-assayer cluster starting 2026-09-10 placed branch 1 on
+    // 2026-09-11 after a cross-cluster capacity collision, which pushed branch 2 to
+    // 2026-09-12 (a non-working Saturday `blocked` had no entry for) and branch 3 all the way to
+    // 2026-09-14 (a real state holiday, same reason) — both rejected by `assignmentService.create`
+    // and simply abandoned, even though 2026-09-15 was perfectly workable and never tried.
+    //
+    // `assignmentService.create` is the one place that always knows (see `resolveWorkableDates`'
+    // own comment) — a "Holiday Conflict:" rejection from it now advances the candidate and
+    // retries, the same way a capacity collision already did, instead of giving up on the branch.
+    // Any OTHER rejection (fee ceiling, eligibility, ...) is not a date problem and advancing the
+    // date cannot fix it, so it still fails the branch immediately, unchanged from before.
+    //
+    // The capacity slot is booked only once `create` actually succeeds — booking it on a merely
+    // locally-computed candidate let one branch's later-rejected attempt silently consume a day
+    // no one else's assignment ever used, which is why the third branch above was pushed two
+    // holidays deep instead of one.
     const loadByAssayerDate = new Map<string, number>();
     for (const alloc of allocations) {
       const branchDate = branchDates.get(alloc.branchId);
@@ -320,37 +355,43 @@ export class OperationsPlanningService {
       let candidate = this.nextWorkableDate(addDays(floor, alloc.earliestOffsetDays), branchDate?.blocked);
 
       let placed: string | null = null;
+      let lastRejection: string | null = null;
+      let createAttempts = 0;
       for (let hop = 0; hop < MAX_SPREAD_DAYS; hop++) {
         const loadKey = `${alloc.assayerId}|${candidate}`;
-        if ((loadByAssayerDate.get(loadKey) ?? 0) < MAX_AUDITS_PER_ASSAYER_PER_DAY) {
+        if ((loadByAssayerDate.get(loadKey) ?? 0) >= MAX_AUDITS_PER_ASSAYER_PER_DAY) {
+          candidate = this.nextWorkableDate(addDays(candidate, 1), branchDate?.blocked);
+          continue;
+        }
+        if (createAttempts >= MAX_CREATE_ATTEMPTS_PER_BRANCH) break;
+        createAttempts++;
+        try {
+          // Still an OFFER: `assignmentService.create` writes a PENDING proposal at the fee the
+          // human approved. Nothing here grants an assayer's commitment or a rupee of it.
+          const assignment = await this.assignmentService.create({
+            projectBranchId: alloc.projectBranchId,
+            assayerId: alloc.assayerId,
+            proposedFee: alloc.fee,
+            scheduledDate: candidate,
+          }, userId);
           loadByAssayerDate.set(loadKey, (loadByAssayerDate.get(loadKey) ?? 0) + 1);
           placed = candidate;
+          deployed.push({ branchId: alloc.branchId, assignmentId: assignment.id, scheduledDate: placed });
           break;
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          lastRejection = message;
+          if (!message.startsWith('Holiday Conflict:')) break;
+          candidate = this.nextWorkableDate(addDays(candidate, 1), branchDate?.blocked);
         }
-        candidate = this.nextWorkableDate(addDays(candidate, 1), branchDate?.blocked);
       }
 
       if (!placed) {
         skipped.push({
           clusterId: alloc.clusterId,
           branchId: alloc.branchId,
-          reason: `No workable date within a year — the assigned assayer is already at capacity on every available day.`,
+          reason: lastRejection ?? `No workable date within a year — the assigned assayer is already at capacity on every available day.`,
         });
-        continue;
-      }
-
-      try {
-        // Still an OFFER: `assignmentService.create` writes a PENDING proposal at the fee the
-        // human approved. Nothing here grants an assayer's commitment or a rupee of it.
-        const assignment = await this.assignmentService.create({
-          projectBranchId: alloc.projectBranchId,
-          assayerId: alloc.assayerId,
-          proposedFee: alloc.fee,
-          scheduledDate: placed,
-        }, userId);
-        deployed.push({ branchId: alloc.branchId, assignmentId: assignment.id, scheduledDate: placed });
-      } catch (err) {
-        skipped.push({ clusterId: alloc.clusterId, branchId: alloc.branchId, reason: err instanceof Error ? err.message : String(err) });
       }
     }
 

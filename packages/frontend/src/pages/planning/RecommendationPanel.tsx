@@ -1,6 +1,5 @@
 import React from 'react';
 import { RefreshCw } from 'lucide-react';
-import { NegotiationBanner } from './NegotiationBanner';
 import { ProjectBranch } from './BranchListPanel';
 
 import { branchStatusLabel } from '@fapoms/shared';
@@ -38,6 +37,12 @@ export const RecommendationPanel: React.FC<{
    * labelled with their clash on the row.
    */
   ignoreDateAvailability?: boolean;
+  /** Rank people the client has not empanelled. Defaults ON — see the note on the control. */
+  ignoreClientPolicy?: boolean;
+  onToggleIgnoreClientPolicy?: (next: boolean) => void;
+  /** Search the whole workforce instead of a disc around the branch. */
+  ignoreDistancePolicy?: boolean;
+  onToggleIgnoreDistancePolicy?: (next: boolean) => void;
   onToggleIgnoreDateAvailability?: (v: boolean) => void;
   /**
    * Advanced view. Simple shows the handful of controls the everyday task needs and states the
@@ -53,9 +58,6 @@ export const RecommendationPanel: React.FC<{
   /** Name of the branch that button would open, so the empty state can say where it leads. */
   nextBranchName?: string | null;
   onRefresh: () => void;
-  onAccept: (assignmentId: string, proposedFee: number) => void;
-  onCounter: (assignment: NonNullable<ProjectBranch['assignment']>) => void;
-  onDecline: (assignmentId: string) => void;
   onViewHistory: (projectBranchId: string) => void;
 }> = ({
   selectedPb, renderCandidatesList, width = 380, flex = false, horizontal = false,
@@ -63,8 +65,10 @@ export const RecommendationPanel: React.FC<{
   maxRadiusEnabled, onToggleMaxRadius, maxRadius, onMaxRadiusChange,
   planDate, onPlanDateChange,
   ignoreDateAvailability = false, onToggleIgnoreDateAvailability,
+  ignoreClientPolicy = true, onToggleIgnoreClientPolicy,
+  ignoreDistancePolicy = false, onToggleIgnoreDistancePolicy,
   advanced = false, onNextUnassigned, nextBranchName,
-  onRefresh, onAccept, onCounter, onDecline, onViewHistory,
+  onRefresh, onViewHistory,
 }) => {
   /**
    * The single "Nearby only" answer, derived from the two pieces of state that used to be two
@@ -152,15 +156,6 @@ export const RecommendationPanel: React.FC<{
           </div>
         ) : (
           <>
-            {selectedPb.status === 'NEGOTIATION' && selectedPb.assignment && (
-              <NegotiationBanner
-                assignment={selectedPb.assignment}
-                onAccept={() => onAccept(selectedPb.assignment!.id, selectedPb.assignment!.proposedFee)}
-                onCounter={() => onCounter(selectedPb.assignment!)}
-                onDecline={() => onDecline(selectedPb.assignment!.id)}
-              />
-            )}
-
             <div style={{ padding: '12px 14px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-surface-2)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <div>
@@ -198,6 +193,37 @@ export const RecommendationPanel: React.FC<{
                     title="Ranks everyone nearby even if they are booked or on leave that day. Each clash is still shown on the person's card.">
                     <input type="checkbox" checked={ignoreDateAvailability} onChange={(e) => onToggleIgnoreDateAvailability(e.target.checked)} />
                     Also show people who are busy that day
+                  </label>
+                )}
+
+                {/*
+                  On by default, and named for what it does rather than what it switches off.
+                  More than half the active workforce has no Active or Recommended standing
+                  recorded with any client, so the strict list is frequently empty — and an empty
+                  candidate list gets worked around outside the system rather than inside it.
+                  Relaxed is not ignored: the standing is printed on every card it applies to,
+                  and creating the assignment still needs a recorded reason.
+                */}
+                {onToggleIgnoreClientPolicy && (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: ignoreClientPolicy ? 'var(--accent-secondary)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}
+                    title="Ranks people who are not on this client's panel. Their standing is still shown on their card, and assigning one still needs a recorded reason.">
+                    <input type="checkbox" checked={ignoreClientPolicy} onChange={(e) => onToggleIgnoreClientPolicy(e.target.checked)} />
+                    Also show people not on this client&rsquo;s panel
+                  </label>
+                )}
+
+                {/*
+                  The pre-filter, which is the only distance rule that removes somebody without
+                  giving a reason — it runs before every filter, so anyone it drops appears in
+                  neither list. The conflict-of-interest minimum is a different rule and is not
+                  affected; the title says so, because a control that seems to switch off a
+                  compliance floor and does not is worse than no control.
+                */}
+                {onToggleIgnoreDistancePolicy && (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: ignoreDistancePolicy ? 'var(--accent-secondary)' : 'var(--text-secondary)', cursor: 'pointer', userSelect: 'none' }}
+                    title="Searches the whole workforce instead of a radius around the branch. The client's conflict-of-interest minimum still applies — that one is not an operator's to waive.">
+                    <input type="checkbox" checked={ignoreDistancePolicy} onChange={(e) => onToggleIgnoreDistancePolicy(e.target.checked)} />
+                    Search every distance
                   </label>
                 )}
 
