@@ -90,6 +90,7 @@ import {
   AADHAAR_PATTERN,
   ASSAYER_ERROR_CODES,
   AUTH_ERROR_CODES,
+  DocumentVerification, DocumentRejectionReason,
 } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
 import { AuditRead } from '../../core/audit/audit-read.decorator';
@@ -187,6 +188,52 @@ const CONTACT_CHANNELS = ['AUTO', 'APP', 'PHONE'] as const;
  * `:requirement` route parameter, which a DTO cannot see. It is enforced in `setDocument` on the
  * service, using the same `@fapoms/shared` validators the DTOs use, so the two cannot disagree.
  */
+
+/**
+ * What a reviewer attests to when they say a document was checked against its original.
+ *
+ * Typed rather than `@Body() body: any`, which is what the sibling route was and is precisely how
+ * the paperwork path reached `assayers.pan_number` with no format check at all. The values here are
+ * read off a card by the person holding it, so they are the one place in the system where identity
+ * data is not self-asserted — and they are what the record's own name is then compared against.
+ */
+class VerifyDocumentRequestDto {
+  @IsIn(Object.values(DocumentVerification))
+  verdict: string;
+
+  /** Required to VERIFY anything that prints a name; refused for the Aadhaar back, which does not. */
+  @IsOptional() @IsString() @MaxLength(200)
+  holderName?: string;
+
+  @IsOptional() @IsDateString()
+  holderDateOfBirth?: string;
+
+  @IsOptional() @IsString() @MaxLength(20)
+  holderGender?: string;
+
+  /** What a PAN card prints where other documents print an address. */
+  @IsOptional() @IsString() @MaxLength(200)
+  holderGuardianName?: string;
+
+  @IsOptional() @IsString() @MaxLength(500)
+  holderAddress?: string;
+
+  /**
+   * Required on a rejection, and validated against the enum rather than accepted as free text:
+   * this value is translated and shown to the appraiser on their phone, so an unrecognised string
+   * would reach them as a blank space where the instruction should be.
+   */
+  @IsOptional() @IsIn(Object.values(DocumentRejectionReason))
+  rejectionReason?: DocumentRejectionReason;
+
+  /** Why the reviewer accepted a name that does not agree with the record. */
+  @IsOptional() @IsString() @MaxLength(2000)
+  nameMismatchNote?: string;
+
+  @IsOptional() @IsString() @MaxLength(2000)
+  remarks?: string;
+}
+
 class SetDocumentRequestDto {
   @IsOptional() @IsString() @MaxLength(50)
   documentNumber?: string;
@@ -1424,6 +1471,21 @@ export class AssayerController {
     };
   }
 
+  /**
+   * Live workload and open data-integrity flags — the two facts the Planning candidate-detail
+   * view needs that `/profile` deliberately does not carry (see `getPlanningSnapshot`'s own
+   * comment). Staff-only: unlike `/profile`, the mobile app never calls this.
+   */
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('planning:view:organization')
+  @Get(':assayerId/planning-snapshot')
+  @ApiOperation({ summary: 'Live workload and open data-integrity flags, for the planning candidate-detail view' })
+  async getPlanningSnapshot(@Param('assayerId', ParseUUIDPipe) assayerId: string, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
+    const data = await this.assayerService.getPlanningSnapshot(assayerId);
+    return { success: true, data };
+  }
+
   // Was @Public(): unauthenticated callers could rewrite any assayer's banking
   // details, contact information and workload limits.
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
@@ -1449,7 +1511,11 @@ export class AssayerController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateAssayerRequestDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    // No-op for the assayer's own self-edit — an ASSAYER principal has no `users` row and so no
+    // region assignment to check against; this only bites a region-scoped staff editor.
+    await this.regionGuard.assertAssayerInScope(id, scope);
     // ASSAYER is on this route so the mobile app can maintain its own profile.
     // Without these two checks that also let any assayer rewrite any *other*
     // assayer's record — including their bank account — which is what the role
@@ -1630,7 +1696,8 @@ export class AssayerController {
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:delete:organization')
   @ApiOperation({ summary: 'Soft delete assayer profile' })
-  async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any): Promise<void> {
+  async remove(@Param('id', ParseUUIDPipe) id: string, @Req() req: any, @GlobalScopeFilter() scope?: GlobalScope): Promise<void> {
+    await this.regionGuard.assertAssayerInScope(id, scope);
     await this.assayerService.remove(id, req.user.id);
   }
 
@@ -1652,7 +1719,9 @@ export class AssayerController {
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
     @Body() dto: CreateCommercialProfileRequestDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const profile = await this.assayerService.createCommercialProfile(assayerId, dto, req.user.id);
     return {
       success: true,
@@ -1681,7 +1750,8 @@ export class AssayerController {
   @Get(':assayerId/commercial')
   @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'Get all commercial profiles for an assayer' })
-  async getCommercials(@Param('assayerId', ParseUUIDPipe) assayerId: string) {
+  async getCommercials(@Param('assayerId', ParseUUIDPipe) assayerId: string, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const profiles = await this.assayerService.getCommercialProfiles(assayerId);
     return {
       success: true,
@@ -1696,7 +1766,9 @@ export class AssayerController {
   async getActiveCommercial(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
     @Query('date') dateStr?: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const date = dateStr ? new Date(dateStr) : new Date();
     const profile = await this.assayerService.getActiveCommercialProfile(assayerId, date);
     return {
@@ -1728,7 +1800,9 @@ export class AssayerController {
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
     @Body() dto: CreateWorkforceAttributeRequestDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const attr = await this.assayerService.addWorkforceAttribute(assayerId, dto, req.user.id);
     return {
       success: true,
@@ -1771,7 +1845,9 @@ export class AssayerController {
   async getWorkforceAttributes(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
     @Query('type') type?: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const attrs = await this.assayerService.getWorkforceAttributes(assayerId, type);
     return {
       success: true,
@@ -1802,7 +1878,9 @@ export class AssayerController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: TransitionLifecycleDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertAssayerInScope(id, scope);
     const assayer = await this.assayerService.transitionLifecycle(id, dto.targetStatus, req.user.id, dto.reason);
     return { success: true, data: assayer };
   }
@@ -1827,7 +1905,8 @@ export class AssayerController {
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'Everything the roster holds about one person beyond their own row' })
-  async getDossier(@Param('assayerId', ParseUUIDPipe) assayerId: string) {
+  async getDossier(@Param('assayerId', ParseUUIDPipe) assayerId: string, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const data = await this.rosterRecords.dossier(assayerId);
     return { success: true, data };
   }
@@ -1843,7 +1922,8 @@ export class AssayerController {
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'The qualification profile: 0–100 dimensions, overall score, weights, print summary' })
-  async getQualification(@Param('assayerId', ParseUUIDPipe) assayerId: string) {
+  async getQualification(@Param('assayerId', ParseUUIDPipe) assayerId: string, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const data = await this.qualificationScores.qualification(assayerId);
     return { success: true, data };
   }
@@ -1852,7 +1932,8 @@ export class AssayerController {
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
   @RequirePermissions('assayer:view:organization')
   @ApiOperation({ summary: 'How qualified this person is for each partner, with standing and gaps' })
-  async getPartnerQualifications(@Param('assayerId', ParseUUIDPipe) assayerId: string) {
+  async getPartnerQualifications(@Param('assayerId', ParseUUIDPipe) assayerId: string, @GlobalScopeFilter() scope?: GlobalScope) {
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const data = await this.qualificationScores.partnerQualifications(assayerId);
     return { success: true, data };
   }
@@ -1865,7 +1946,9 @@ export class AssayerController {
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
     @Body() body: any,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const data = await this.qualificationScores.setOverride(assayerId, body ?? {}, req.user.id);
     return { success: true, data };
   }
@@ -1888,7 +1971,9 @@ export class AssayerController {
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
     @Body() body: any,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const data = await this.rosterRecords.saveReference(assayerId, body, req.user.id);
     return { success: true, data };
   }
@@ -1902,7 +1987,9 @@ export class AssayerController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: any,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const data = await this.rosterRecords.saveReference(assayerId, body, req.user.id, id);
     return { success: true, data };
   }
@@ -1938,7 +2025,9 @@ export class AssayerController {
     @Param('clientId', ParseUUIDPipe) clientId: string,
     @Body() body: any,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const data = await this.rosterRecords.setEmpanelment(assayerId, clientId, body, req.user.id);
     return { success: true, data };
   }
@@ -1966,7 +2055,9 @@ export class AssayerController {
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
     @Body() body: any,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const data = await this.rosterRecords.recordBackgroundCheck(assayerId, body, req.user.id);
     return { success: true, data };
   }
@@ -1997,8 +2088,12 @@ export class AssayerController {
     @Param('requirement') requirement: string,
     @Body() body: SetDocumentRequestDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     assertSelfOrPrivileged(req.user, assayerId, 'update documents');
+    // No-op for the assayer's own self-service upload — an ASSAYER principal has no `users` row
+    // and so no region assignment to check against; this only bites a region-scoped staff member.
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
 
     /**
      * An assayer may not set their own PAN or Aadhaar here.
@@ -2057,8 +2152,11 @@ export class AssayerController {
     @Param('requirement') requirement: string,
     @UploadedFile() file: any,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     assertSelfOrPrivileged(req.user, assayerId, 'attach documents');
+    // No-op for the assayer's own self-upload — see `setDocument` next to this route.
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
     // A submitted form with no file reaches here as `undefined`; reading `.buffer` off it is a
     // TypeError the caller sees as "Internal server error" instead of "choose a file".
     if (!file?.buffer?.length) {
@@ -2129,7 +2227,8 @@ export class AssayerController {
   @Get(':assayerId/photo')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
   @ApiOperation({ summary: "Fetch the person's photograph" })
-  async getPhoto(@Param('assayerId', ParseUUIDPipe) assayerId: string, @Res() res: any): Promise<void> {
+  async getPhoto(@Param('assayerId', ParseUUIDPipe) assayerId: string, @Res() res: any, @GlobalScopeFilter() scope?: GlobalScope): Promise<void> {
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const assayer = await this.assayerService.findOne(assayerId);
     if (!assayer?.photograph) throw new NotFoundException('No photograph on this record.');
     const stream = await this.storage.getFileStream(assayer.photograph);
@@ -2170,10 +2269,21 @@ export class AssayerController {
   @ApiOperation({ summary: 'Record that an identity document was checked against the original' })
   async verifyDocument(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() body: { verdict: string; remarks?: string },
+    @Body() body: VerifyDocumentRequestDto,
     @Req() req: any,
   ) {
-    const data = await this.rosterRecords.verifyDocument(id, body?.verdict as any, req.user.id, body?.remarks);
+    const data = await this.rosterRecords.verifyDocument(
+      id, body?.verdict as any, req.user.id, body?.remarks,
+      {
+        holderName: body?.holderName,
+        holderDateOfBirth: body?.holderDateOfBirth,
+        holderGender: body?.holderGender,
+        holderGuardianName: body?.holderGuardianName,
+        holderAddress: body?.holderAddress,
+        rejectionReason: body?.rejectionReason,
+        nameMismatchNote: body?.nameMismatchNote,
+      },
+    );
     return { success: true, data };
   }
 
@@ -2192,7 +2302,9 @@ export class AssayerController {
     // `skip` not a number) — this route feeds the same `(page - 1) * limit` shape.
     @Query('page', new ParsePagePipe()) page: number,
     @Query('limit', new ParseLimitPipe({ default: 20, max: 200 })) limit: number,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const { activities, total } = await this.assayerService.getActivityTimeline(assayerId, page, limit);
     return {
       success: true,
@@ -2422,7 +2534,9 @@ export class AssayerController {
   async issueAppAccess(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const data = await this.assayerService.issueAppAccess(assayerId, req.user.id);
     return {
       success: true,
@@ -2442,7 +2556,9 @@ export class AssayerController {
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
     @Body() dto: ResetAssayerPasswordRequestDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
     const result = await this.assayerService.resetPasswordByStaff(assayerId, dto?.newPassword, req.user.id);
     return {
       success: true,

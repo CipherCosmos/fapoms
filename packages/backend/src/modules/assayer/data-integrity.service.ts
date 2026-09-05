@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { In, IsNull, Repository } from 'typeorm';
 import {
   AssayerLifecycleStatus, DocumentVerification, EmpanelmentStatus, businessTodayDateKey, PLACEHOLDER_PIN_METRES, hasLeftWorkforce,
+  DOCUMENT_REJECTION_LABELS, DocumentRejectionReason, ONBOARDING_DOCUMENT_LABELS, OnboardingDocument,
 } from '@fapoms/shared';
 import { isAddressUsable } from '../geo/indian-address';
 import { AssayerEntity } from './assayer.entity';
@@ -84,6 +85,8 @@ export const CHECK_TITLES = {
   placeholderPin: 'Home pin is a placeholder, not a home',
   blankAddress: 'No home address on the record',
   unusableAddress: 'Home address has no place a map can find',
+  identityRejected: 'Identity document sent back, not replaced',
+  noPhotograph: 'No photograph on the record',
   noPhone: 'No phone number on the record',
   claimedNoScan: 'Ticked as received, but no scan was kept',
   docsNeverVerified: 'Documents received but never verified',
@@ -316,6 +319,8 @@ export class DataIntegrityService {
       ...this.placeholderPin(people),
       ...this.blankAddress(people),
       ...this.unusableAddress(people),
+      ...(await this.identityRejected(people)),
+      ...this.noPhotograph(people),
       ...this.noPhone(people),
       ...(await this.documentsNeverVerified()),
       ...(await this.claimedWithoutScan()),
@@ -376,6 +381,7 @@ export class DataIntegrityService {
       ...this.placeholderPin([person]),
       ...this.blankAddress([person]),
       ...this.unusableAddress([person]),
+      ...(await this.identityRejected([person])),
       ...this.noPhone([person]),
     ];
     summary.findings = findings.length;
@@ -1194,6 +1200,75 @@ export class DataIntegrityService {
         assayerId: p.id,
         sourceAssayerCode: p.assayerCode,
       }));
+  }
+
+  /**
+   * Check 12c — a scan was sent back and nothing has replaced it.
+   *
+   * This is the one finding with a person waiting on the other end of it. A rejected identity
+   * document means somebody looked at a photograph of a card and could not accept it, and until a
+   * replacement arrives that appraiser cannot be activated. The appraiser is told on their phone;
+   * this row is so the desk knows too, because a rejection that only the rejected person can see is
+   * a queue of one.
+   *
+   * Per person, and only while nothing newer has arrived: `attachFile` clears the rejection the
+   * moment a replacement is uploaded, so this closes itself without anybody working it.
+   */
+  private async identityRejected(people: AssayerEntity[]): Promise<Finding[]> {
+    const ids = people.filter((p) => this.stillOnTheRoster(p)).map((p) => p.id);
+    if (ids.length === 0) return [];
+
+    const rows = await this.documents.find({
+      where: { assayerId: In(ids), isActive: true, verificationStatus: DocumentVerification.REJECTED },
+    });
+    const byPerson = new Map(people.map((p) => [p.id, p]));
+
+    return rows.flatMap((row) => {
+      const person = byPerson.get(row.assayerId);
+      if (!person) return [];
+      const label = ONBOARDING_DOCUMENT_LABELS[row.requirement as OnboardingDocument] ?? row.requirement;
+      const why = row.rejectionReason
+        ? DOCUMENT_REJECTION_LABELS[row.rejectionReason as DocumentRejectionReason] ?? row.rejectionReason
+        : 'no reason was recorded';
+      return [{
+        title: CHECK_TITLES.identityRejected,
+        suffix: `${person.assayerCode} · ${row.requirement}`,
+        rawValue: why,
+        reason: `${person.displayName ?? person.assayerCode}'s ${label} was sent back — ${why.toLowerCase()} `
+          + '— and no replacement has arrived. They have been told on their phone; this is here so the '
+          + 'desk can chase it, because until it is replaced they cannot be activated.',
+        assayerId: person.id,
+        sourceAssayerCode: person.assayerCode,
+      }];
+    });
+  }
+
+  /**
+   * Check 12d — aggregate: nobody has a photograph.
+   *
+   * Field staff are dispatched to bank branches by people who have never met them, and the record
+   * has had somewhere to keep a face for as long as it has existed — 0 of 1,163 hold one, because
+   * the only route to it was an onboarding checklist nobody has been through.
+   *
+   * One row, not N: the answer is the same for everybody in the class ("ask them to send one from
+   * the app"), so a row per person would be a thousand copies of one decision, burying the findings
+   * that each need a different human to look at a different record.
+   */
+  private noPhotograph(people: AssayerEntity[]): Finding[] {
+    const without = people.filter((p) => this.stillOnTheRoster(p)
+      && String((p as any).photograph ?? '').trim() === '');
+    if (without.length === 0) return [];
+    return [{
+      title: CHECK_TITLES.noPhotograph,
+      suffix: null,
+      rawValue: 'no photograph',
+      reason: `${without.length} of ${people.length} appraisers have no photograph on their record, so `
+        + 'a branch expecting one of them has no way to know who turned up, and nobody dispatching '
+        + 'them has ever seen their face. They can send one themselves from the app in a few '
+        + 'seconds — it is the first item on their paperwork list.',
+      assayerId: null,
+      sourceAssayerCode: null,
+    }];
   }
 
   /**

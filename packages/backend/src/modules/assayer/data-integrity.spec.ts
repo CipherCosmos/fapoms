@@ -184,6 +184,9 @@ const person = (over: Partial<Record<keyof AssayerEntity, any>> & { assayerCode:
   id: `id-${over.assayerCode}`,
   displayName: `Person ${over.assayerCode}`,
   lifecycleStatus: 'ACTIVE',
+  // The default person has a photograph, so the aggregate check for missing ones fires only in the
+  // tests that are about it rather than adding a finding to every other test's count.
+  photograph: 'scans/photo.jpg',
   dateOfBirth: '1980-06-15',
   joiningDate: '2020-01-01',
   exitDate: null,
@@ -206,6 +209,7 @@ describe('DataIntegrityService', () => {
   let people: AssayerEntity[];
   let receivedDocs: number;
   let verifiedDocs: number;
+  let rejectedDocs: any[];
   let empanelmentRows: any[];
 
   const scan = () => service.scan();
@@ -215,6 +219,7 @@ describe('DataIntegrityService', () => {
     people = [];
     receivedDocs = 0;
     verifiedDocs = 0;
+    rejectedDocs = [];
     empanelmentRows = [];
 
     const mod = await Test.createTestingModule({
@@ -232,6 +237,8 @@ describe('DataIntegrityService', () => {
           useValue: {
             // First shape (array where = OR) is the received count; the object shape is verified.
             count: jest.fn(async (opts: any) => (Array.isArray(opts?.where) ? receivedDocs : verifiedDocs)),
+            // The rejected-document check reads rows rather than counting them.
+            find: jest.fn(async () => rejectedDocs),
           },
         },
         {
@@ -462,6 +469,78 @@ describe('DataIntegrityService', () => {
 
       expect(raise(issues.scanner())).toBeUndefined();
       expect(issues.scanner().some((r: any) => r.sourceColumn.startsWith('No home address'))).toBe(true);
+    });
+  });
+
+  /**
+   * The two findings the identity work adds, and the shapes they deliberately take.
+   *
+   * A rejected document is per person because each is a different card that a different human has
+   * to chase. A missing photograph is aggregate because the answer is the same for everybody in the
+   * class, and a thousand copies of one decision would bury the findings that each need a
+   * different record looked at.
+   */
+  describe('identity findings', () => {
+    const rejectedRow = (over: Record<string, unknown> = {}) => ({
+      assayerId: 'id-AS0900', requirement: 'AADHAAR_FRONT',
+      verificationStatus: 'REJECTED', rejectionReason: 'ILLEGIBLE', ...over,
+    });
+
+    it('raises a sent-back document per person, in the words the reviewer chose', async () => {
+      people = [person({ assayerCode: 'AS0900' })];
+      rejectedDocs = [rejectedRow()];
+
+      await scan();
+
+      const row = issues.scanner().find((r: any) => r.sourceColumn.startsWith('Identity document sent back'));
+      expect(row).toBeDefined();
+      expect(row.sourceColumn).toContain('AS0900');
+      expect(row.rawValue).toBe('Too blurred or dark to read');
+      // It must say who is waiting and what it blocks, or the desk has no reason to work it.
+      expect(row.reason).toMatch(/told on their phone/);
+      expect(row.reason).toMatch(/cannot be activated/);
+    });
+
+    it('survives a rejection whose reason predates the reason column', async () => {
+      people = [person({ assayerCode: 'AS0901' })];
+      rejectedDocs = [rejectedRow({ assayerId: 'id-AS0901', rejectionReason: null })];
+
+      await scan();
+
+      const row = issues.scanner().find((r: any) => r.sourceColumn.startsWith('Identity document sent back'));
+      expect(row.rawValue).toMatch(/no reason was recorded/);
+    });
+
+    it('says nothing once a replacement has arrived', async () => {
+      // `attachFile` clears the rejection, so this finding closes itself without anyone working it.
+      people = [person({ assayerCode: 'AS0902' })];
+      rejectedDocs = [];
+
+      await scan();
+
+      expect(issues.scanner().some((r: any) => r.sourceColumn.startsWith('Identity document sent back'))).toBe(false);
+    });
+
+    it('reports missing photographs as one row, not one per person', async () => {
+      people = [
+        person({ assayerCode: 'AS0903', photograph: null }),
+        person({ assayerCode: 'AS0904', photograph: '' }),
+        person({ assayerCode: 'AS0905' }),
+      ];
+
+      await scan();
+
+      const rows = issues.scanner().filter((r: any) => r.sourceColumn.startsWith('No photograph'));
+      expect(rows).toHaveLength(1);
+      expect(rows[0].reason).toMatch(/2 of 3/);
+      // It has to say the appraiser can fix it themselves, or the desk starts chasing photographs.
+      expect(rows[0].reason).toMatch(/from the app/);
+    });
+
+    it('says nothing when everybody has a photograph', async () => {
+      people = [person({ assayerCode: 'AS0906' })];
+      await scan();
+      expect(issues.scanner().some((r: any) => r.sourceColumn.startsWith('No photograph'))).toBe(false);
     });
   });
 
@@ -958,7 +1037,7 @@ describe('DataIntegrityService', () => {
           find: jest.fn(async () => many),
           findOne: jest.fn(async (opts: any) => many.find((p) => p.id === opts.where.id) ?? null),
         } },
-        { provide: getRepositoryToken(AssayerDocumentEntity), useValue: { count: jest.fn(async () => 0) } },
+        { provide: getRepositoryToken(AssayerDocumentEntity), useValue: { count: jest.fn(async () => 0), find: jest.fn(async () => []) } },
         { provide: getRepositoryToken(AssayerClientEmpanelmentEntity), useValue: { find: jest.fn(async () => []) } },
         { provide: getRepositoryToken(AssayerImportIssueEntity), useValue: issues },
       ],
