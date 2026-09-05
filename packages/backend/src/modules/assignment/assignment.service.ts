@@ -38,7 +38,8 @@ import { ValidationService } from '../validation/validation.service';
 import { DocumentService } from '../document/document.service';
 import { FeePolicyService } from '../pricing/fee-policy.service';
 import { withCode } from '../../infrastructure/http/api-error';
-import { EventCategory, ScheduleStatus, AssignmentStatus, ProjectBranchStatus, CustomerMasterStatus, Priority, SystemRole, calculateHaversineDistance, assignmentIssueCategoryLabel, isAssignmentTerminal, BypassableRule, businessDateKey, businessTodayDateKey, standingAllowsPlanning } from '@fapoms/shared';
+import { EventCategory, ScheduleStatus, AssignmentStatus, ProjectBranchStatus, CustomerMasterStatus, Priority, SystemRole, calculateHaversineDistance, assignmentIssueCategoryLabel, isAssignmentTerminal, BypassableRule, businessDateKey, businessTodayDateKey, standingAllowsPlanning,
+  AssignmentRule, canOverrideAssignmentRule, overrideAdviceFor, ASSIGNMENT_ERROR_CODES } from '@fapoms/shared';
 import { NO_EMPANELMENT_ROW_SETTING } from '../planning/recommendation.engine';
 import { applyBranchScope, branchScopeWhere, needsBranchJoin } from '../../infrastructure/scope/apply-scope';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
