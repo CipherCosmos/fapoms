@@ -1,6 +1,6 @@
 import { Inject, forwardRef, Injectable, Logger, NotFoundException, BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { DataSource, Repository, In, Not, LessThan, Raw, EntityManager, IsNull } from 'typeorm';
+import { DataSource, Repository, In, LessThan, Raw, EntityManager, IsNull } from 'typeorm';
 import { InjectDataSource } from '@nestjs/typeorm';
 
 import { AssignmentEntity } from './assignment.entity';
@@ -23,7 +23,6 @@ import { AssayerEntity } from '../assayer/assayer.entity';
 import { AssayerService } from '../assayer/assayer.service';
 import { LocationTrailService } from '../assayer/location-trail.service';
 import { LocationPingSource } from '../assayer/assayer-location-ping.entity';
-import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
 import { ProjectService } from '../project/project.service';
 import { ProjectQueryService } from '../project/project-query.service';
 import { AssignmentStateMachine } from './assignment.state-machine';
@@ -518,7 +517,6 @@ export class AssignmentService {
     // `null` is a real, distinct outcome here — see the `dto.noFee` branch below — so the
     // variable has to be able to hold it rather than only a number or 'not decided yet'.
     let resolvedProposedFee: number | null | undefined = dto.proposedFee;
-    let calculatedTravelFee = 0;
     let distanceKm = 0;
     /**
      * The whole routing answer, not just its distance. `source` says whether the kilometres
@@ -539,7 +537,7 @@ export class AssignmentService {
           { latitude: Number(assayer.homeLatitude), longitude: Number(assayer.homeLongitude) }
         );
         distanceKm = route?.distanceKm || 0;
-      } catch (e) {
+      } catch {
         // Routing unavailable — the quote below falls back to zero travel rather than
         // guessing a distance, so ops sees base fee only instead of a fabricated allowance.
         route = null;
@@ -711,8 +709,6 @@ export class AssignmentService {
         ? { distanceKm: route.distanceKm, durationMinutes: route.durationMinutes, source: route.source ?? 'ESTIMATE' }
         : null,
     });
-    const baseFee = quote.baseFee;
-    calculatedTravelFee = quote.travelFee;
 
     if (dto.noFee) {
       /**

@@ -10,7 +10,7 @@
 
 import { Controller, Get, Post, Body, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsUUID, IsDateString, IsIn, Min } from 'class-validator';
+import { IsString, IsOptional, IsNumber, IsUUID, IsDateString, IsIn, Min } from 'class-validator';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 

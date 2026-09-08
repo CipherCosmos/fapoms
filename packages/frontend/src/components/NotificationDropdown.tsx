@@ -246,7 +246,7 @@ export const NotificationDropdown: React.FC = () => {
             body: msg,
             icon: '/favicon.ico',
           });
-        } catch (e) {}
+        } catch {}
       }
     };
 

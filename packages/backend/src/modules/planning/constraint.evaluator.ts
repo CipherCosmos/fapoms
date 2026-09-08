@@ -7,7 +7,7 @@ import { HolidayService } from '../holiday/holiday.service';
 import { AssayerEntity, AssayerWithWorkforceAttributes } from '../assayer/assayer.entity';
 import { BranchEntity } from '../branch/branch.entity';
 import { ProjectEntity } from '../project/project.entity';
-import { AssignmentStatus, businessDateKey, BypassableRule, AssignmentRule } from '@fapoms/shared';
+import { businessDateKey, BypassableRule, AssignmentRule } from '@fapoms/shared';
 import { COMMITTED_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
 import { RuleBypassService } from '../platform/rule-bypass/rule-bypass.service';
 

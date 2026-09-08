@@ -375,7 +375,7 @@ export const Branches: React.FC = () => {
       const response = await api.request<ClientOption[]>('/clients');
       setClients(response);
       if (response.length > 0 && !selectedClientId) setSelectedClientId(response[0].id);
-    } catch (err) { console.error('Failed to load clients'); }
+    } catch { console.error('Failed to load clients'); }
   };
 
   /** One screenful. The server caps anything larger at 200, so this is the real ceiling too. */
@@ -409,7 +409,7 @@ export const Branches: React.FC = () => {
       setBranches(rows);
       setBranchesTotal(response?.meta?.pagination?.total ?? rows.length);
       setSummary(summary);
-    } catch (err) { console.error('Failed to load branches'); }
+    } catch { console.error('Failed to load branches'); }
     finally { setIsLoading(false); }
   };
 
@@ -418,7 +418,7 @@ export const Branches: React.FC = () => {
     try {
       const detail = await api.request<BranchDetail>(`/branches/${branch.id}`);
       setBranchDetail(detail);
-    } catch (err) { console.error('Failed to load branch details'); }
+    } catch { console.error('Failed to load branch details'); }
   };
 
   const handleDelete = async (branch: Branch) => {

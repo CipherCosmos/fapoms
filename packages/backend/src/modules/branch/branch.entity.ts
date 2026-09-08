@@ -1,7 +1,6 @@
 import { Entity, Column, Index, ManyToOne, OneToMany, JoinColumn } from 'typeorm';
 import { BaseEntity } from '../../core/entities/base.entity';
 import { ClientEntity } from '../client/client.entity';
-import type { ZoneEntity } from '../zone/zone.entity';
 import type { BranchContactEntity } from './branch-contact.entity';
 import type { BranchDocumentEntity } from './branch-document.entity';
 

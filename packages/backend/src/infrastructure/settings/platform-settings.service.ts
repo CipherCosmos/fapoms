@@ -284,7 +284,7 @@ export class PlatformSettingsService implements OnModuleInit {
       if (row.isSecret) {
         try {
           out[row.key] = decryptField(String(row.value));
-        } catch (err: any) {
+        } catch {
           // A key rotation that left old ciphertext behind. Treat it as unset — falling back
           // to the environment beats handing a mail server a string of gibberish.
           this.logger.warn(`Could not decrypt setting "${row.key}"; treating it as unset.`);

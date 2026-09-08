@@ -16,7 +16,7 @@ import {
 } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
-import { IsString, IsNotEmpty, IsOptional, IsObject, IsArray, ArrayNotEmpty, IsUUID, IsEnum, IsDateString, IsNumber, Min, MaxLength, ValidateIf } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsObject, IsArray, IsUUID, IsEnum, IsDateString, IsNumber, Min, MaxLength, ValidateIf } from 'class-validator';
 
 import { CommandCenterService } from './command-center.service';
 import { PlanningService, CreateBusinessRuleDto, UpdateBusinessRuleDto } from './planning.service';
@@ -127,12 +127,6 @@ export class UpdateBusinessRuleRequestDto implements UpdateBusinessRuleDto {
 class ExecutePlanRequestDto {
   @IsOptional() @IsDateString()
   scheduledDate?: string;
-}
-
-/** Resolving anything operational requires a stated reason — that is the point of the record. */
-class JustificationRequestDto {
-  @IsString() @IsNotEmpty() @MaxLength(2000)
-  justification: string;
 }
 
 class CreateCoveragePlanRequestDto {

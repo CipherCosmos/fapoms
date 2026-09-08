@@ -1,7 +1,6 @@
 import { Injectable, NotFoundException, Inject } from '@nestjs/common';
 import { ProjectQueryService } from '../project/project-query.service';
 import { PlanningService, AssayerRecommendation } from './planning.service';
-import { ConstraintEvaluator } from './constraint.evaluator';
 import { DEFAULT_WEEKLY_CAPACITY } from '../assignment/assignment-workload';
 import { WorkloadProvider } from './planning-providers.interface';
 

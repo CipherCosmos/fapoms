@@ -24,7 +24,7 @@ export class DocumentDispatchWorker {
   ) {}
 
   @Process('auto-dispatch')
-  async autoDispatch(job: Job) {
+  async autoDispatch(_job: Job) {
     this.logger.log('Running auto-dispatch scan...');
 
     const docs = await this.documentRepository.find({

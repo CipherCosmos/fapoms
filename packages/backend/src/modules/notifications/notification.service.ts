@@ -138,7 +138,7 @@ export class NotificationService {
         dto.message,
         dto.data || (dto.link ? { link: dto.link } : undefined),
       );
-    } catch (err: any) {
+    } catch {
       // Don't break notification creation if push fails
     }
 
@@ -154,7 +154,7 @@ export class NotificationService {
         isRead: false,
         createdAt: saved.createdAt?.toISOString?.() || new Date().toISOString(),
       });
-    } catch (err: any) {
+    } catch {
       // Don't break if event publish fails
     }
 

@@ -1703,7 +1703,7 @@ export class DocumentService {
       const chunks: Buffer[] = [];
       for await (const chunk of stream) chunks.push(Buffer.from(chunk));
       content = Buffer.concat(chunks);
-    } catch (err) {
+    } catch {
       throw new BadRequestException(
         `The file for "${doc.fileName}" could not be read from storage, so nothing was sent.`,
       );

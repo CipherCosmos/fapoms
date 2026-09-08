@@ -17,7 +17,6 @@ import { IsString, IsOptional, IsBoolean, IsArray, IsInt, IsEmail, Min, Max, IsO
 import { SystemRole, NotificationChannel, NotificationPriority, NotificationCategory } from '@fapoms/shared';
 
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, RoleOnly } from '../auth/guards';
-import { STAFF_ROLES } from '../auth/staff-roles';
 import { NotificationSettingsService, EffectiveNotificationType } from './notification-settings.service';
 import { NOTIFICATION_CATALOG } from './notification-catalog';
 import { EmailProvider, appPublicUrl, renderEmailHtml } from '../../infrastructure/notifications/email-provider';

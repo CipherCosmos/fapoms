@@ -157,7 +157,7 @@ function getInitialTheme(): string {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (KNOWN_IDS.has(saved as string)) return saved as string;
     if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) return 'noir';
-  } catch (e) {
+  } catch {
     /* ignore */
   }
   return DEFAULT_THEME;
@@ -172,7 +172,7 @@ function getInitialCustom(): CustomThemeConfig {
         return { base: parsed.base, accent: parsed.accent };
       }
     }
-  } catch (e) {
+  } catch {
     /* ignore */
   }
   return { base: 'noir', accent: '#D8AE47' };
@@ -238,7 +238,7 @@ export function useTheme() {
     try {
       localStorage.setItem(STORAGE_KEY, theme);
       localStorage.setItem(CUSTOM_KEY, customActive ? JSON.stringify(custom) : '');
-    } catch (e) {
+    } catch {
       /* ignore */
     }
   }, [theme, custom, customActive, effectiveBase]);

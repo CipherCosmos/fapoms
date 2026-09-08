@@ -74,7 +74,7 @@ class WorkingHoursDto {
 import { AssayerService, CreateAssayerDto, UpdateAssayerDto } from './assayer.service';
 import { LocationTrailService } from './location-trail.service';
 import { LocationPingSource } from './assayer-location-ping.entity';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, RolesFallbackPermissions, Public, AnyAuthenticated, PasswordChangeExempt, OnboardingAllowed, RoleOnly, permissionKeysHeldBy } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, RolesFallbackPermissions, AnyAuthenticated, PasswordChangeExempt, OnboardingAllowed, RoleOnly, permissionKeysHeldBy } from '../auth/guards';
 import {
   SystemRole,
   AssayerLifecycleStatus,
@@ -1577,7 +1577,7 @@ export class AssayerController {
   @Get('profile/editable-fields')
   @OnboardingAllowed()
   @ApiOperation({ summary: 'Fields the current caller may self-edit, and those HR maintains' })
-  async getEditableFields(@Req() req: any) {
+  getEditableFields(@Req() req: any) {
     const isStaff = isStaffAssayerEditor(req.user);
     return {
       success: true,

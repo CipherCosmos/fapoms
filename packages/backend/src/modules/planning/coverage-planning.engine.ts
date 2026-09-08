@@ -3,7 +3,7 @@ import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { ProjectQueryService } from '../project/project-query.service';
 import { RecommendationEngine } from './recommendation.engine';
 import { ConstraintEvaluator } from './constraint.evaluator';
-import { ClusterManager, BranchCluster } from './cluster.manager';
+import { ClusterManager } from './cluster.manager';
 import { PlanningBranchProvider, AssayerAvailabilityProvider, WorkloadProvider } from './planning-providers.interface';
 import { FeePolicyService } from '../pricing/fee-policy.service';
 import { DEFAULT_WEEKLY_CAPACITY } from '../assignment/assignment-workload';

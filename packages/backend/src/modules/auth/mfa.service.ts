@@ -18,7 +18,6 @@ const MFA_LOCK_MS = 15 * 60_000;
 
 /** The factor types a user can enrol. TOTP is authenticator-app; EMAIL/SMS are delivered codes. */
 export type MfaFactorType = 'TOTP' | 'EMAIL' | 'SMS';
-const DELIVERED_FACTORS: MfaFactorType[] = ['EMAIL', 'SMS'];
 /** A delivered login/enrolment code lives this long. Kept at or under the challenge's own TTL. */
 const DELIVERED_CODE_TTL_S = 300;
 

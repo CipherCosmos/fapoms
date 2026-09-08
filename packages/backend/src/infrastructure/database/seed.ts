@@ -103,15 +103,8 @@ async function seed() {
     const permissionRepository = AppDataSource.getRepository(PermissionEntity);
     const existingPermissions = await permissionRepository.find();
     
-    const permissionsToSeed: Partial<PermissionEntity>[] = [];
-    
-    // Define core permissions across all resources
-    const resources = Object.values(PermissionResource);
-    const actions = Object.values(PermissionAction);
-    const scopes = Object.values(AuthorizationScope);
-
-    // Let's create specific logical permissions instead of full matrix to avoid clutter,
-    // but cover all required ones for default roles.
+    // Specific logical permissions rather than the full resource x action x scope matrix, which
+    // would be mostly combinations nothing grants.
     const permissionMap = new Map<string, PermissionEntity>();
 
     const defaultPermissions = [

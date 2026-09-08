@@ -1,7 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { ProjectQueryService } from '../project/project-query.service';
-import { RecommendationEngine } from './recommendation.engine';
 import { PlanningService, AssayerRecommendation } from './planning.service';
 // Type-only: the report counts branches, and stays ignorant of whether a queue is watching.
 import type { ProgressCallback } from '../../infrastructure/queue/queued-job';

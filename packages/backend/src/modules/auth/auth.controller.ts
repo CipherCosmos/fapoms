@@ -117,7 +117,7 @@ export class AuthController {
   @Get('status')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Check API and database connectivity status' })
-  async status() {
+  status() {
     return {
       success: true,
       data: {

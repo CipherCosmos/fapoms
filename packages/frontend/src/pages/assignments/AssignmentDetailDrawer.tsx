@@ -104,7 +104,7 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
       });
       await refetchExpenses();
       onClearActionError();
-    } catch (err: any) {
+    } catch {
       // Handled upstream or silently flagged
     } finally {
       setReviewingExpenseId(null);
@@ -121,7 +121,7 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
       });
       setNewComment('');
       queryClient.invalidateQueries({ queryKey: queryKeys.assignments.timeline(assignment.id) });
-    } catch (err: any) {
+    } catch {
       // comment error
     }
   };

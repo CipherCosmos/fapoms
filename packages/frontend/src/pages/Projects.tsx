@@ -422,7 +422,7 @@ export const Projects: React.FC = () => {
     try {
       const response = await api.request<ClientOption[]>('/clients?limit=200', { method: 'GET' });
       setClients(response);
-    } catch (err) {
+    } catch {
       console.error('Failed to load clients options');
     }
   };
@@ -465,7 +465,7 @@ export const Projects: React.FC = () => {
       if (response && response.clientId) {
         loadClientBranches(response.clientId);
       }
-    } catch (err) {
+    } catch {
       console.error('Failed to load project detail');
       setDetail(null);
       setProjectBranches([]);
@@ -898,7 +898,7 @@ export const Projects: React.FC = () => {
               const url = URL.createObjectURL(blob);
               const a = document.createElement('a'); a.href = url; a.download = `projects_export_${new Date().toISOString().split('T')[0]}.csv`; a.click();
               URL.revokeObjectURL(url);
-            } catch (e) { setMessage({ type: 'error', text: 'Export failed' }); }
+            } catch { setMessage({ type: 'error', text: 'Export failed' }); }
           }} className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px', padding: '8px 16px', minHeight: '38px', fontSize: '13px', fontWeight: 700 }}>
             <FileSpreadsheet size={15} /> Export
           </button>

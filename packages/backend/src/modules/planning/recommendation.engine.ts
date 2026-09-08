@@ -7,7 +7,7 @@ import { BranchEntity } from '../branch/branch.entity';
 import { RoutingService, RouteSource } from '../geo/routing.provider';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { BusinessRuleEntity } from '../platform/rules/business-rule.entity';
-import { AssignmentStatus, AssayerStatus, AssayerLifecycleStatus, EmpanelmentStatus, PLANNABLE_EMPANELMENT_STANDINGS, calculateHaversineDistance, businessDateKey, BypassableRule, ONBOARDING_STAGES, onboardingNextStep } from '@fapoms/shared';
+import { AssignmentStatus, AssayerStatus, EmpanelmentStatus, PLANNABLE_EMPANELMENT_STANDINGS, calculateHaversineDistance, businessDateKey, BypassableRule, ONBOARDING_STAGES, onboardingNextStep } from '@fapoms/shared';
 import { RuleBypassService } from '../platform/rule-bypass/rule-bypass.service';
 import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';
 import { ClientEntity } from '../client/client.entity';

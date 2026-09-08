@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
-import { DataSource, In } from 'typeorm';
+import { DataSource } from 'typeorm';
 import { applyBranchScope, branchScopeWhere } from '../../infrastructure/scope/apply-scope';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { AssignmentEntity } from './assignment.entity';

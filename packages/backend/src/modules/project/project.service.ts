@@ -594,11 +594,9 @@ export class ProjectService implements OnModuleInit {
   }
 
   async generateBranchTemplate(projectId: string): Promise<Buffer> {
-    const project = await this.findOne(projectId);
-    const client = project.clientId
-      ? await this.clientRepository.findOne({ where: { id: project.clientId } })
-      : null;
-
+    // Called for its check, not its value: findOne throws NotFoundException, so this is what
+    // stops the endpoint handing back a valid-looking template for a project that does not exist.
+    await this.findOne(projectId);
     /**
      * Only what the person filling this in can actually know.
      *

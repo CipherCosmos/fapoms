@@ -467,7 +467,7 @@ export function canonicalState(state?: string | null): string {
 
 /** Look up a district centroid from the static database.
  *  Matches against normalised district name. */
-function districtCentroidFallback(district: string, state: string): GeocodeResult | null {
+function districtCentroidFallback(district: string, _state: string): GeocodeResult | null {
   const d = norm(district);
   if (!d) return null;
 

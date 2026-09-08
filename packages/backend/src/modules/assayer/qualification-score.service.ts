@@ -8,7 +8,6 @@ import {
   ScoreOverrideView,
   OverridableScoreKey,
   QUALIFICATION_DIMENSIONS,
-  QualificationDimensionKey,
   EmpanelmentStatus,
   empanelmentCapsFrom,
   DEFAULT_STANDING_CAP_NEGATIVE,
@@ -201,7 +200,6 @@ export class QualificationScoreService {
     const overridesByClient = new Map<string, AssayerScoreOverrideEntity[]>();
     for (const o of overrideRows) (overridesByClient.get(o.clientId!) ?? overridesByClient.set(o.clientId!, []).get(o.clientId!)!).push(o);
 
-    const held = this.heldCredentials(assayer as AssayerWithWorkforceAttributes);
     // One `partnerView` per active client, independent of every other — a client with overrides
     // issues its own query (see `overrideViews`), so a sequential loop serialized what were
     // otherwise unrelated round trips against however many clients are active.
