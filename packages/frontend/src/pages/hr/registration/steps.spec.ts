@@ -24,9 +24,12 @@ jest.mock('../../../services/api', () => ({ api: { request: jest.fn() } }));
 const keysOnSomeStep = new Set(REGISTRATION_STEP_KEYS.flatMap((k) => [...STEP_FIELDS[k]]));
 
 describe('what a step may refuse', () => {
-  it('blocks only on the three the create API itself declares NOT NULL', () => {
+  it('blocks only on the two the create API itself declares NOT NULL', () => {
+    // Was three problems — one each for a first and a last name. The server now takes a single
+    // `fullName` and derives the legacy pair itself, so there is one name to be missing, and the
+    // message it is missing with matches the server's own 400 rather than a Western-shaped pair.
     expect(validateStep('person', {})).toEqual([
-      'a first name', 'a last name', 'the state they work in',
+      'their full name — exactly as printed on their Aadhaar or PAN', 'the state they work in',
     ]);
   });
 
@@ -35,7 +38,14 @@ describe('what a step may refuse', () => {
     // register them end to end from their side." A registration that asks for a mobile number
     // cannot do that, and the form this replaces made phone mandatory in its fast path while the
     // server treated it as optional — so the quick route was the one that could not enrol them.
-    expect(validateStep('person', { firstName: 'Ramesh', lastName: 'Iyer', state: 'Kerala' })).toEqual([]);
+    expect(validateStep('person', { fullName: 'Ramesh Iyer', state: 'Kerala' })).toEqual([]);
+  });
+
+  it('accepts a single-token name — the roster is full of people with only one', () => {
+    // "First Name" + "Last Name" was the Western assumption this field replaced. A name is not a
+    // PAN: there is no format to police, and a name with nothing to put in a second box is not an
+    // incomplete one.
+    expect(validateStep('person', { fullName: 'Kumaran', state: 'Tamil Nadu' })).toEqual([]);
   });
 
   it('never blocks any later step, however empty it is', () => {
@@ -114,6 +124,12 @@ describe('the fields a registration offers', () => {
 
   it('marks the state mandatory here even though the record page leaves it optional', () => {
     expect(REGISTRATION_FIELDS.find((f) => f.key === 'state')?.required).toBe(true);
+  });
+
+  it('offers one full-name field instead of the old First/Last pair', () => {
+    expect(REGISTRATION_FIELDS.some((f) => f.key === 'fullName')).toBe(true);
+    expect(REGISTRATION_FIELDS.some((f) => f.key === 'firstName' || f.key === 'lastName')).toBe(false);
+    expect(keysOnSomeStep.has('fullName')).toBe(true);
   });
 });
 

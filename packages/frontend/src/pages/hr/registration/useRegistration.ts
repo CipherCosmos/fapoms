@@ -44,6 +44,16 @@ export function snapshotRecord(record: Partial<Assayer>): Record<string, string>
   for (const field of REGISTRATION_FIELDS) {
     const raw = (record as Record<string, unknown>)[field.key];
     /**
+     * `fullName` is not a column — `displayName` is what it seeds from.
+     *
+     * The box the clerk types into and the field the record actually stores are two different
+     * names on purpose: `fullName` is what a save SENDS, `displayName` is what the server stores
+     * it as and hands back. Falling through to the generic `raw === record.fullName` read below
+     * would open every resumed registration on an empty box, because no such column exists to
+     * read — the person's real name would look unset on a record that has one.
+     */
+    if (field.key === 'fullName') { form.fullName = String(record.displayName ?? ''); continue; }
+    /**
      * A KYC identifier never comes back into a box from the record.
      *
      * PAN, Aadhaar and bank account arrive from the server masked (`••••••234F`), and a resumed
@@ -119,6 +129,12 @@ export interface Registration extends RegistrationState {
   /** Re-reads the record — after a map pin, which is written by an endpoint of its own. */
   refresh: () => Promise<void>;
   dismissError: () => void;
+  /**
+   * Would any of these boxes be lost by leaving now? The page's "← Back to People" link asks this
+   * of the CURRENT step's own fields before it confirms — the same "differs from last saved"
+   * test `commit` itself runs, exposed so the page does not have to reach into `saved` directly.
+   */
+  isDirty: (keys: readonly string[]) => boolean;
 }
 
 export function useRegistration(resumeAssayerId?: string): Registration {
@@ -305,9 +321,14 @@ export function useRegistration(resumeAssayerId?: string): Registration {
     }
   }, [adopt]);
 
+  const isDirty = useCallback((keys: readonly string[]): boolean => {
+    const { form: f, saved: s } = latest.current;
+    return keys.some((k) => (f[k] ?? '') !== (s[k] ?? ''));
+  }, []);
+
   return {
     form, record, assayerId, busy, error, loadError, loading,
-    set, merge, reveal, commit, refresh, dismissError: () => setError(null),
+    set, merge, reveal, commit, refresh, dismissError: () => setError(null), isDirty,
   };
 }
 

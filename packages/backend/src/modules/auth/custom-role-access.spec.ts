@@ -1,19 +1,22 @@
 import { ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { RolesGuard, ROLES_KEY, PERMISSIONS_KEY, ANY_AUTHENTICATED_KEY, ROLE_ONLY_KEY } from './guards';
+import {
+  RolesGuard,
+  ROLES_KEY,
+  PERMISSIONS_KEY,
+  ANY_AUTHENTICATED_KEY,
+  ROLE_ONLY_KEY,
+  ALLOW_PERMISSION_FALLBACK_KEY,
+  ROLES_FALLBACK_PERMISSIONS_KEY,
+} from './guards';
 
 /**
- * A role built in Admin → Roles can reach what its permissions say it can.
+ * A role built in Admin → Roles can reach what its permissions say it can ONLY when
+ * the route explicitly opts into fallback (via @AllowPermissionFallback or @RolesFallbackPermissions),
+ * or when the route is purely permission-based.
  *
- * Every route names the built-in roles it serves — `@Roles(ADMIN, OPERATIONS)` — and that list is
- * a closed set written in code. A role created in the admin screen is a database row with no entry
- * in `SystemRole`, so its name matched nothing and `RolesGuard` refused it before
- * `PermissionsGuard` ever saw the permissions somebody had deliberately attached. The screen
- * offered a role builder that could not grant access to anything, and said "Insufficient role
- * permissions" while the permissions sat in the database.
- *
- * The name is now a shortcut rather than the whole rule. What this suite has to hold is that it is
- * only a shortcut — that widening the door did not also unlatch it.
+ * An explicit @Roles(...) whitelist without fallback strictly denies custom roles,
+ * preventing accidental privilege expansion.
  */
 describe('a role the route has never heard of', () => {
   const ctx = (user: any): ExecutionContext => ({
@@ -39,15 +42,41 @@ describe('a role the route has never heard of', () => {
     [PERMISSIONS_KEY]: ['assayer:view:organization'],
   };
 
-  it('gets in when it holds what the route asks for', () => {
+  const HR_ROUTE_WITH_FALLBACK = {
+    [ROLES_KEY]: ['ADMIN', 'OPERATIONS'],
+    [PERMISSIONS_KEY]: ['assayer:view:organization'],
+    [ALLOW_PERMISSION_FALLBACK_KEY]: true,
+  };
+
+  const HR_ROUTE_WITH_FALLBACK_PERMS = {
+    [ROLES_KEY]: ['ADMIN', 'OPERATIONS'],
+    [ROLES_FALLBACK_PERMISSIONS_KEY]: ['assayer:view:organization'],
+  };
+
+  it('is refused when the route declares @Roles without explicit fallback, even if holding the permission', () => {
+    // Explicit whitelist rule: @Roles(...) without fallback is a strict role whitelist
     const guard = new RolesGuard(reflectorReturning(HR_ROUTE));
+    const hr = withPermissions('HR_OPERATOR', [['ASSAYER', 'VIEW', 'ORGANIZATION']]);
+
+    expect(() => guard.canActivate(ctx(hr))).toThrow(ForbiddenException);
+  });
+
+  it('gets in when explicit fallback is enabled and it holds what the route asks for', () => {
+    const guard = new RolesGuard(reflectorReturning(HR_ROUTE_WITH_FALLBACK));
     const hr = withPermissions('HR_OPERATOR', [['ASSAYER', 'VIEW', 'ORGANIZATION']]);
 
     expect(guard.canActivate(ctx(hr))).toBe(true);
   });
 
-  it('is still refused when it does not', () => {
-    const guard = new RolesGuard(reflectorReturning(HR_ROUTE));
+  it('gets in when @RolesFallbackPermissions is declared and it holds the fallback permission', () => {
+    const guard = new RolesGuard(reflectorReturning(HR_ROUTE_WITH_FALLBACK_PERMS));
+    const hr = withPermissions('HR_OPERATOR', [['ASSAYER', 'VIEW', 'ORGANIZATION']]);
+
+    expect(guard.canActivate(ctx(hr))).toBe(true);
+  });
+
+  it('is still refused when explicit fallback is enabled but it does not hold the permission', () => {
+    const guard = new RolesGuard(reflectorReturning(HR_ROUTE_WITH_FALLBACK));
     const wrong = withPermissions('HR_OPERATOR', [['BILLING', 'VIEW', 'ORGANIZATION']]);
 
     expect(() => guard.canActivate(ctx(wrong))).toThrow(ForbiddenException);
@@ -59,6 +88,7 @@ describe('a role the route has never heard of', () => {
     const guard = new RolesGuard(reflectorReturning({
       [ROLES_KEY]: ['ADMIN'],
       [PERMISSIONS_KEY]: ['assayer:view:organization', 'assayer:edit:organization'],
+      [ALLOW_PERMISSION_FALLBACK_KEY]: true,
     }));
     const halfway = withPermissions('HR_OPERATOR', [['ASSAYER', 'VIEW', 'ORGANIZATION']]);
 
@@ -83,7 +113,7 @@ describe('a role the route has never heard of', () => {
   });
 
   it('honours the PLATFORM widening, so a platform grant satisfies a narrower ask', () => {
-    const guard = new RolesGuard(reflectorReturning(HR_ROUTE));
+    const guard = new RolesGuard(reflectorReturning(HR_ROUTE_WITH_FALLBACK));
     const platform = withPermissions('HR_OPERATOR', [['ASSAYER', 'VIEW', 'PLATFORM']]);
 
     expect(guard.canActivate(ctx(platform))).toBe(true);

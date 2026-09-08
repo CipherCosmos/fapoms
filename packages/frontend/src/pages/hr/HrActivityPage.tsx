@@ -1,8 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Clock } from 'lucide-react';
 import { card, label, Empty, OpenLink, fmtWhen } from './hr-ui';
-import { DataTable } from '../../components/ui';
+import { DataTable, SearchInput } from '../../components/ui';
 import type { HrWorkforceOverview } from '../../hooks/useHrWorkforce';
 import { useHr } from './HrLayout';
 import { activityEventLabel, assayerLifecycleLabel } from '@fapoms/shared';
@@ -15,7 +15,21 @@ import { activityEventLabel, assayerLifecycleLabel } from '@fapoms/shared';
  * that job needs without competing for room with seven other concerns.
  */
 
-const ActivityTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate: (path: string) => void }) => (
+const ActivityTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate: (path: string) => void }) => {
+  /**
+   * The trail is capped server-side at the 40 most recent entries, and with eleven hundred
+   * people on the roster the entry being looked for is rarely on screen. A name/event search
+   * narrows it; the count beside it says how many of the 40 are showing.
+   */
+  const [query, setQuery] = useState('');
+  const q = query.trim().toLowerCase();
+  const rows = q
+    ? d.activity.filter((a) => (
+      `${a.displayName} ${activityEventLabel(a.eventType)} ${assayerLifecycleLabel(a.previousState)} `
+      + `${assayerLifecycleLabel(a.newState)} ${a.performedBy ?? ''} ${a.remarks ?? ''}`
+    ).toLowerCase().includes(q))
+    : d.activity;
+  return (
   <section style={card}>
     <div style={{ ...label, marginBottom: '4px' }}>Workforce audit trail</div>
     <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 12px' }}>
@@ -28,10 +42,26 @@ const ActivityTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate: (p
         fill in on this screen.
       </Empty>
     ) : (
+      <>
+        <SearchInput
+          value={query}
+          onChange={setQuery}
+          placeholder="Find a person, event or note…"
+          compact
+          style={{ marginBottom: '10px', maxWidth: '340px' }}
+        />
+        {q && (
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+            Showing {rows.length} of {d.activity.length} recent changes.
+          </div>
+        )}
+        {rows.length === 0 ? (
+          <Empty>Nothing in the recent trail matches that.</Empty>
+        ) : (
       <DataTable
         density="compact"
         minWidth={false}
-        rows={d.activity}
+        rows={rows}
         rowKey={(a) => a.id}
         columns={[
           {
@@ -57,9 +87,12 @@ const ActivityTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate: (p
           { key: 'open', header: '', render: (a) => <OpenLink onClick={() => navigate(`/assayers/${a.assayerId}`)} /> },
         ]}
       />
+        )}
+      </>
     )}
   </section>
-);
+  );
+};
 
 // ── Shared bits ────────────────────────────────────────────────────────────
 

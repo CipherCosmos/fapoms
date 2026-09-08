@@ -146,6 +146,9 @@ export class AssayerDocumentEntity extends BaseEntity {
   @Column({ name: 'file_paths', type: 'jsonb', default: () => "'[]'::jsonb" })
   filePaths: string[];
 
+  @Column({ name: 'current_version_id', type: 'uuid', nullable: true })
+  currentVersionId: string | null;
+
   @Column({ type: 'text', nullable: true })
   remarks: string | null;
 }

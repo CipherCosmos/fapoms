@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { AlertCircle } from 'lucide-react';
 import {
   INDIAN_STATES, REGION_ORDER, REGION_LABELS, AssayerEngagementType, AssayerUnavailableReason,
   isValidPan, isValidIfsc, isValidAadhaar, AADHAAR_PATTERN, CRITICAL_ASSAYER_RECORD_FIELDS,
+  normalisePhone, todayDateKey,
 } from '@fapoms/shared';
 import { fetchWholeAssayerRoster } from '../../services/assayer-roster';
 import { fetchStaffDirectory } from '../../services/staff-directory';
@@ -31,7 +33,11 @@ import { api } from '../../services/api';
 // and the flow's audience is a desk clerk who may not read English comfortably; 11px captions
 // over 13px inputs is the size at which a hint stops being read at all.
 const labelStyle = { display: 'block', fontSize: '12px', color: 'var(--text-muted)', fontWeight: 600, marginBottom: '4px' };
-const formFieldStyle = { padding: '10px 12px', background: 'var(--bg-page)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', width: '100%', boxSizing: 'border-box' as const, outline: 'none', fontSize: '13px' };
+// `--bg-input`, not `--bg-page`: in the dark themes the two are literally the same colour, so a
+// plain text box drawn against the page was indistinguishable from the page itself — every
+// select, date and number box on this form (which already used `--bg-input` via the shared
+// Select/StyledInput primitives) stood out while every text box vanished into the background.
+const formFieldStyle = { padding: '10px 12px', background: 'var(--bg-input)', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)', color: 'var(--text-primary)', width: '100%', boxSizing: 'border-box' as const, outline: 'none', fontSize: '13px' };
 
 const FIELD_TEXTAREA = new Set(['address', 'notes']);
 const FIELD_MONO = new Set(['assayerCode', 'employeeCode', 'employeeId', 'panNumber', 'aadhaarNumber', 'bankAccountNumber', 'ifscCode']);
@@ -320,6 +326,21 @@ export interface IfscInfo {
 }
 
 /**
+ * One roster row that already carries the phone/PAN/Aadhaar the clerk just typed — one row of
+ * `GET /assayers/identifier-check`'s `matches[]`. Defined here rather than in `registration/`
+ * because it is this file's `renderFormField` that renders the warning card; the fetching hook
+ * (`registration/useDuplicateCheck.ts`) imports the shape from here, the same direction
+ * `FieldDef`/`IfscInfo` already flow.
+ */
+export interface DuplicateMatch {
+  id: string;
+  assayerCode: string;
+  displayName: string;
+  lifecycleStatus: string;
+  matchedOn: string;
+}
+
+/**
  * IFSC → bank/branch lookup, on the same "advisory, never blocking" terms as `resolvePincode`.
  *
  * Unlike the pincode check this goes through OUR backend (`GET /geo/ifsc/:code`, not a third
@@ -398,16 +419,37 @@ const REGION_FIELD: FieldDef = {
  * server can see the codes that deleted assayers still hold.
  */
 export const ASSAYER_CODE_FIELD: FieldDef = {
-  key: 'assayerCode', label: 'Assayer code', placeholder: 'Left blank, one is given',
+  key: 'assayerCode', label: 'Assayer code', placeholder: 'Leave blank — given automatically',
   // Kept to two short lines. The hint sits in an auto-fit grid cell, so a paragraph here stretches
   // its row and pushes the next field a screen down — which is what a four-line version of this
   // did to "Qualification" on the first page.
   hint: 'Given automatically when you save. It is also their sign-in username.',
 };
 
+/**
+ * The person's name, as ONE box now, not two.
+ *
+ * India-first naming: "First Name" + "Last Name" was a Western assumption this roster never
+ * matched — Tamil initial-style names ("A K Venkatesan"), father's-name middles, and genuinely
+ * single-token names all exist on the live roster, and none of them has a "last name" to put in
+ * a second box. The authored truth is now the FULL name exactly as printed on the Aadhaar or
+ * PAN — what banks, TDS and background checks are actually run against — and `POST/PUT
+ * /assayers` takes it as `fullName`: stored verbatim (whitespace-squeezed) as `displayName`,
+ * with the legacy `firstName`/`lastName` pair derived by the server itself (all-but-last / last)
+ * for whatever still reads them. A single-token name is valid; there is nothing to split it into.
+ *
+ * No format check beyond non-empty, unlike PAN/Aadhaar/IFSC above and below — a name is not an
+ * identifier with a fixed shape, and policing how many words or which characters somebody's own
+ * name is allowed to contain is not this screen's job.
+ */
+const FULL_NAME_FIELD: FieldDef = {
+  key: 'fullName', label: 'Full name', required: true, full: true,
+  placeholder: 'As printed on their Aadhaar or PAN',
+  hint: 'Type it letter for letter as on the card — banks and tax filings check this name. Initials, middle names and single names are all fine.',
+};
+
 export const EDIT_FIELDS: FieldDef[] = [
-  { key: 'firstName', label: 'First Name', required: true },
-  { key: 'lastName', label: 'Last Name', required: true },
+  FULL_NAME_FIELD,
   { key: 'email', label: 'Email', type: 'email' },
   // Not required here either: this is the form the gap list sends people to via "Fill them in",
   // and a form that refuses to save without a phone cannot be used to fill in anything else.
@@ -541,31 +583,109 @@ export const applyPlace = (fieldKey: string, place: { label: string; state: stri
   setForm(next);
 };
 
-export const renderFormField = (
-  field: FieldDef,
-  form: Record<string, string>,
-  setForm: (v: Record<string, string>) => void,
-  vocabulary?: { skills: string[] | null; languages: string[] | null; certifications: string[] | null },
-  onBlurField?: (key: string) => void,
+/**
+ * What a caller passes in that is not a form value — the wizard's "did you try to move on" flag
+ * and the duplicate-roster warning for this one field.
+ */
+export interface FieldRenderExtras {
+  /**
+   * True once the clerk has tried to leave or save the step this field lives on, successfully or
+   * not. Gates the "needed — blocks X" suffix below — see the comment on `blockingUrgent`.
+   */
+  advanceAttempted?: boolean;
+  /** Roster rows already carrying this value — see `registration/useDuplicateCheck.ts`. */
+  duplicateMatches?: DuplicateMatch[];
+  onOpenDuplicate?: (match: DuplicateMatch) => void;
+  /** "This is a different person" — dismisses the card for the value that produced it. */
+  onDismissDuplicate?: () => void;
+}
+
+/** The look of a plain text action — "Edit anyway", "Open their record", "This is a different person". */
+const linkBtnStyle: React.CSSProperties = {
+  background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+  color: 'var(--accent-primary)', fontWeight: 600, fontSize: '12px', textDecoration: 'underline',
+};
+
+/** Trims and drops the spaces and dashes a clerk pastes from a printed card — nothing cleverer. */
+const stripSeparators = (v: string): string => v.trim().replace(/[\s-]/g, '');
+
+/**
+ * What leaving the box should tidy up, and whether that actually changed anything — the caller
+ * only shows the "Cleaned up: X → Y" caption when this returns non-null.
+ *
+ * Deliberately narrow: this fixes the punctuation a person pastes from a printed card or a phone's
+ * own contact sheet, never a genuinely wrong value. A PAN that still fails after the spaces and
+ * dashes are gone is `formatHint`'s job to flag, not this function's to keep guessing at.
+ */
+const normaliseOnBlur = (key: string, raw: string): string | null => {
+  const v = raw ?? '';
+  if (!v.trim()) return null;
+  if (key === 'pincode') {
+    const clean = stripSeparators(v);
+    return clean !== v ? clean : null;
+  }
+  if (key === 'panNumber' || key === 'ifscCode') {
+    const clean = stripSeparators(v).toUpperCase();
+    return clean !== v ? clean : null;
+  }
+  if (FIELD_TEL.has(key)) {
+    const clean = normalisePhone(v);
+    return clean && clean !== v ? clean : null;
+  }
+  return null;
+};
+
+/** Nobody currently on any roster this system holds was born before 1930. */
+const DOB_MIN = '1930-01-01';
+/** The company has no record predating this system; a year out covers a genuine forward-dated hire. */
+const JOINING_MIN = '2000-01-01';
+const oneYearFromToday = (): string => {
+  const d = new Date();
+  d.setFullYear(d.getFullYear() + 1);
+  return d.toISOString().slice(0, 10);
+};
+/** min/max for the two date boxes a clerk can otherwise walk into any century with a native picker. */
+const DATE_BOUNDS: Record<string, { min: string; max: string }> = {
+  dateOfBirth: { min: DOB_MIN, max: todayDateKey() },
+  joiningDate: { min: JOINING_MIN, max: oneYearFromToday() },
+};
+
+/** "NAME_MISMATCH" -> "Name mismatch" — so a raw enum value can never reach the screen unworded. */
+export const humanize = (raw: string): string => {
+  const spaced = raw.replace(/[_-]+/g, ' ').trim().toLowerCase();
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+};
+
+/** What the identifier-check endpoint calls each field, in the words a clerk reads instead. */
+const MATCHED_ON_LABEL: Record<string, string> = {
+  phone: 'phone', panNumber: 'PAN', aadhaarNumber: 'Aadhaar',
+};
+
+/**
+ * One field: its caption, its box, and everything that can appear under the box.
+ *
+ * A real component now, not a plain function returning JSX — it needs state of its own
+ * (`touched`, the "cleaned up" caption, the bank-name lock) that a function called inline like
+ * `renderFormField(...)` cannot safely hold: React hooks would attach to whichever component
+ * happens to be calling it, and the number of fields — and therefore the number of hook calls —
+ * changes from step to step. `renderFormField` below stays the same plain function every existing
+ * caller already has; it now just returns this component instead of building the JSX itself.
+ */
+const FieldRenderer: React.FC<{
+  field: FieldDef;
+  form: Record<string, string>;
+  setForm: (v: Record<string, string>) => void;
+  vocabulary?: { skills: string[] | null; languages: string[] | null; certifications: string[] | null };
+  onBlurField?: (key: string, value: string) => void;
   people?: {
     options: { value: string; label: string }[] | null;
     failed: string | null;
-    /** Present only when some of the roster could not be loaded — see `useManagerOptions`. */
     incomplete?: { shown: number; total: number } | null;
-  },
-  /** The HR-owner picker's own candidate list — see `useHrOwnerOptions`. */
-  hrOwners?: {
-    options: { value: string; label: string }[] | null;
-    failed: string | null;
-  },
-  /**
-   * The last successful `resolveIfsc` lookup for THIS form's `ifscCode` box, if any — shown as
-   * small read-only supporting text under that one field. Never under `bankName`: that field
-   * stays a plain, overwritable input, and the caller (not this renderer) is what actually calls
-   * `resolveIfsc` and writes the resolved bank name into `bankName` on blur.
-   */
-  ifscInfo?: IfscInfo | null,
-) => {
+  };
+  hrOwners?: { options: { value: string; label: string }[] | null; failed: string | null };
+  ifscInfo?: IfscInfo | null;
+  extras?: FieldRenderExtras;
+}> = ({ field, form, setForm, vocabulary, onBlurField, people, hrOwners, ifscInfo, extras }) => {
   const val = form[field.key] || '';
   const isTextarea = FIELD_TEXTAREA.has(field.key);
   const isMono = FIELD_MONO.has(field.key);
@@ -573,12 +693,44 @@ export const renderFormField = (
   const isNum = FIELD_NUM.has(field.key);
   const isTime = FIELD_TIME.has(field.key);
 
+  /** Set once the box has been left at least once — see `blockingUrgent` and the invalid caption. */
+  const [touched, setTouched] = useState(false);
+  /** "Cleaned up: X → Y", shown once and cleared the moment the clerk types again. */
+  const [cleanedNote, setCleanedNote] = useState<string | null>(null);
+  /**
+   * `bankName` locks to what `resolveIfsc` filled in rather than staying an ordinary overwritable
+   * box — see the note this replaces on `ifscInfo` below. "Edit anyway" is the escape hatch: a
+   * resolved branch name can still be wrong (a bank renames one, a code covers more than one), and
+   * a clerk who knows better must not be locked out of correcting it. Re-locks on the next fresh
+   * resolution, so a new IFSC code does not inherit a stale "already unlocked" state.
+   */
+  const [editBankAnyway, setEditBankAnyway] = useState(false);
+  useEffect(() => { setEditBankAnyway(false); }, [ifscInfo?.bankName, ifscInfo?.branchName]);
+
   const handleChange = (v: string) => {
+    setCleanedNote(null);
     if (field.key === 'panNumber' || field.key === 'ifscCode') {
       setForm({ ...form, [field.key]: v.toUpperCase() });
     } else {
       setForm({ ...form, [field.key]: v });
     }
+  };
+
+  /**
+   * Leaving the box: mark it touched, so an invalid format finally gets to look like one, tidy up
+   * what was pasted without being asked, and pass the CLEANED value on to whatever the step itself
+   * does on blur (the pincode/IFSC lookups, the duplicate check) — never the stale pre-clean one,
+   * which a pincode with a stray space would otherwise send `resolvePincode` to fail on.
+   */
+  const finishBlur = (raw: string) => {
+    setTouched(true);
+    const cleaned = normaliseOnBlur(field.key, raw);
+    const next = cleaned ?? raw;
+    if (cleaned) {
+      setForm({ ...form, [field.key]: cleaned });
+      setCleanedNote(`Cleaned up: ${raw} → ${cleaned}`);
+    }
+    onBlurField?.(field.key, next);
   };
 
   /**
@@ -591,6 +743,26 @@ export const renderFormField = (
    */
   const gap = CRITICAL_ASSAYER_RECORD_FIELDS.find((c) => c.key === field.key);
   const blocking = gap && !String(val ?? '').trim() ? blocksPhrase(gap.blocks) : null;
+  /**
+   * The audit's finding: this used to render in `--danger` red the instant the page opened, on
+   * every critical box that was still empty — Phone included, one line under a header reading
+   * "All optional". Red ink before a clerk has done anything reads as a mistake already made. It
+   * earns the colour once they have actually left the box empty, or tried to move past the whole
+   * step while it still was — `extras.advanceAttempted`, set by the step's own Continue button.
+   */
+  const blockingUrgent = Boolean(blocking) && (touched || Boolean(extras?.advanceAttempted));
+
+  /**
+   * The caption under the box, and whether it is bad news.
+   *
+   * The text is the same either way — a format failure is still the most useful thing to say
+   * under the box — but it only reads as an ERROR (red, with an icon, and the box outlined to
+   * match) once the clerk has actually left the box with it still wrong. Before that, or once the
+   * value is fine, it is exactly the muted routine hint every other field shows.
+   */
+  const rawHint = formatHint(field.key, val);
+  const captionText = rawHint || field.hint;
+  const showInvalid = Boolean(rawHint) && touched;
 
   /**
    * A caption is not a label until something ties it to the box.
@@ -605,14 +777,15 @@ export const renderFormField = (
   const labelId = `${inputId}-label`;
 
   return (
-    <div key={field.key} style={field.full ? { gridColumn: '1 / -1' } : {}}>
+    <div style={field.full ? { gridColumn: '1 / -1' } : {}}>
       <label id={labelId} htmlFor={inputId} style={labelStyle}>
         {field.label}
         {field.required && <span style={{ color: 'var(--danger)', marginLeft: '2px' }}>*</span>}
         {blocking && (
           <span
             style={{
-              marginLeft: '6px', fontWeight: 600, fontSize: '12px', color: 'var(--danger)',
+              marginLeft: '6px', fontWeight: 600, fontSize: '12px',
+              color: blockingUrgent ? 'var(--danger)' : 'var(--text-muted)',
               textTransform: 'none', letterSpacing: 0,
             }}
           >
@@ -620,7 +793,29 @@ export const renderFormField = (
           </span>
         )}
       </label>
-      {field.people ? (
+      {field.key === 'bankName' && ifscInfo && !editBankAnyway ? (
+        /**
+         * Resolved, not merely suggested. `resolveIfsc` already wrote this into the box on the
+         * caller's `ifscCode` blur — showing it as an ordinary editable input beside a code that
+         * just resolved invited a clerk to "correct" a value the server had just supplied, which
+         * is how a real bank name got quietly typo'd back over itself. Locked, with a way out.
+         */
+        <>
+          <input
+            id={inputId}
+            value={val}
+            readOnly
+            aria-readonly="true"
+            style={{ ...formFieldStyle, background: 'var(--bg-surface-2)', color: 'var(--text-secondary)', cursor: 'default' }}
+          />
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px', fontSize: '12px', color: 'var(--text-muted)' }}>
+            <span>Filled in from the IFSC code.</span>
+            <button type="button" onClick={() => setEditBankAnyway(true)} style={linkBtnStyle}>
+              Edit anyway
+            </button>
+          </div>
+        </>
+      ) : field.people ? (
         /**
          * A person picker, not a UUID box. `single` gives it radio behaviour, and an id that is
          * not in the list is still offered back marked "(as recorded)" — so opening the form to
@@ -770,8 +965,10 @@ export const renderFormField = (
           onSelect={(place) => applyPlace(field.key, place, form, setForm)}
           // Real prop now, instead of a wrapper <div> listening for bubbled focusout. The
           // wrapper fired on the way into the suggestion list too, so the pincode check ran
-          // against the fragment the user was still replacing.
-          onBlur={() => onBlurField?.(field.key)}
+          // against the fragment the user was still replacing. Passed the LIVE value Autocomplete
+          // hands back, not the closed-over `val` — `finishBlur` needs the text as it stood the
+          // instant focus left, not whatever this render started with.
+          onBlur={(v) => finishBlur(v)}
           placeholder={field.placeholder || (field.key === 'pincode' ? 'Search pincode…' : `Type to search ${field.label.toLowerCase()}…`)}
           filterType={(r) => field.key === 'pincode' ? !!r.pincode : true}
         />
@@ -787,15 +984,25 @@ export const renderFormField = (
             type={isTime ? 'time' : isTel ? 'tel' : isNum ? 'number' : field.type || 'text'}
             value={val}
             onChange={(e) => handleChange(e.target.value)}
-            onBlur={() => onBlurField?.(field.key)}
+            onBlur={(e) => finishBlur(e.target.value)}
+            // A wheel event over a focused number spinner changes its value, which is a scroll
+            // gesture doing the box's job by accident — the fee/workload boxes sit in a page that
+            // scrolls, so the natural gesture to move past one silently edited it instead. Every
+            // native number input this form draws goes through this one branch, so the blur fixes
+            // it everywhere at once rather than field by field.
+            onWheel={isNum ? (e) => (e.target as HTMLInputElement).blur() : undefined}
             required={field.required}
             placeholder={
               field.placeholder ||
               (isTel ? '9876543210' : field.key === 'pincode' ? '6-digit pincode' : field.key === 'email' ? 'name@example.com' : field.key === 'panNumber' ? 'ABCDE1234F' : field.key === 'ifscCode' ? 'HDFC0001234' : field.key === 'bankAccountNumber' ? 'Account number' : `Enter ${field.label.toLowerCase().replace(' *', '')}`)
             }
             inputMode={isNum || field.key === 'pincode' || isTel ? 'numeric' : field.key === 'email' ? 'email' : 'text'}
-            maxLength={field.key === 'pincode' ? 6 : field.key === 'panNumber' ? 10 : field.key === 'ifscCode' ? 11 : undefined}
-            min={isNum ? 0 : undefined}
+            // No more hard `maxLength` on pincode/PAN/IFSC: a clerk pasting "ABCDE 1234 F" or
+            // "682 001" used to have the tail of it silently swallowed at the character cap,
+            // which looks like the box ate a keystroke. `finishBlur` above cleans the punctuation
+            // out on the way out instead, so nothing is ever truncated on the way in.
+            min={isNum ? 0 : DATE_BOUNDS[field.key]?.min}
+            max={DATE_BOUNDS[field.key]?.max}
             step={isNum ? '1' : undefined}
             autoComplete="off"
             style={{
@@ -804,20 +1011,35 @@ export const renderFormField = (
               textTransform: (field.key === 'panNumber' || field.key === 'ifscCode') ? 'uppercase' : 'none',
               letterSpacing: isMono ? '0.5px' : 'normal',
               ...(isTel ? { paddingLeft: '42px' } : {}),
+              ...(showInvalid ? { borderColor: 'var(--danger)' } : {}),
             }} />
         </div>
       )}
-      {/* Advisory, shown while the operator is still on the field — never a reason to refuse a save. */}
-      {(formatHint(field.key, val) || field.hint) && (
-        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
-          {formatHint(field.key, val) || field.hint}
+      {/*
+        Routine hint, or a real error — same text, different weight. Muted for a field that is
+        blank, unremarkable, or simply not yet finished; red with a small icon only once the clerk
+        has left it behind still wrong, which is the "real invalid state" a plain muted caption
+        could never tell apart from ordinary help text.
+      */}
+      {captionText && (
+        <div style={{
+          display: 'flex', alignItems: 'flex-start', gap: '4px', fontSize: '12px', marginTop: '4px',
+          color: showInvalid ? 'var(--danger)' : 'var(--text-muted)', fontWeight: showInvalid ? 600 : 400,
+        }}>
+          {showInvalid && <AlertCircle size={12} style={{ flexShrink: 0, marginTop: '1px' }} aria-hidden />}
+          <span>{captionText}</span>
+        </div>
+      )}
+      {/* What leaving the box just tidied up, said once rather than left for the clerk to notice on their own. */}
+      {cleanedNote && (
+        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '2px', fontStyle: 'italic' }}>
+          {cleanedNote}
         </div>
       )}
       {/*
-        What the code resolved to, printed beside the code rather than turned into new input
-        boxes — `bankName` is the only field this is allowed to change, and it stays a plain,
-        overwritable box even after this fires. Branch/city/state are shown so the operator can
-        tell a wrong code from a right one before saving, not stored anywhere new.
+        What the code resolved to, printed beside the code — `ifscCode` itself stays a plain,
+        overwritable box even after this fires; `bankName` is the field this changes, and it is
+        handled above (locked, with "Edit anyway") rather than here.
       */}
       {field.key === 'ifscCode' && ifscInfo && (
         <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '4px' }}>
@@ -827,9 +1049,93 @@ export const renderFormField = (
           {ifscInfo.state ? `, ${ifscInfo.state}` : ''}
         </div>
       )}
+      {/*
+        Already on the roster, maybe. Never a reason to refuse the save — the two actions either
+        send the clerk to look, or dismiss the card for exactly this value, which is what makes it
+        safe to show again if the box changes to something that matches somebody else.
+      */}
+      {extras?.duplicateMatches && extras.duplicateMatches.length > 0 && (
+        <div style={{
+          marginTop: '6px', padding: '9px 11px', borderRadius: 'var(--radius-md)',
+          background: 'var(--status-pending-bg)', border: '1px solid var(--warning)',
+          display: 'flex', flexDirection: 'column', gap: '8px', fontSize: '12.5px',
+        }}>
+          {extras.duplicateMatches.map((m) => (
+            <div key={m.id} style={{ display: 'flex', flexDirection: 'column', gap: '5px' }}>
+              <div style={{ display: 'flex', gap: '6px', alignItems: 'flex-start' }}>
+                <AlertCircle size={13} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: '1px' }} aria-hidden />
+                <span style={{ color: 'var(--text-primary)' }}>
+                  Already on the roster: <strong>{m.displayName}</strong> ({m.assayerCode}, {humanize(m.lifecycleStatus)})
+                  {' '}— matched by {MATCHED_ON_LABEL[m.matchedOn] ?? humanize(m.matchedOn)}.
+                </span>
+              </div>
+              <div style={{ display: 'flex', gap: '16px', marginLeft: '19px' }}>
+                <button type="button" onClick={() => extras.onOpenDuplicate?.(m)} style={linkBtnStyle}>
+                  Open their record
+                </button>
+                <button
+                  type="button"
+                  onClick={() => extras.onDismissDuplicate?.()}
+                  style={{ ...linkBtnStyle, color: 'var(--text-muted)', textDecoration: 'none' }}
+                >
+                  This is a different person
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 };
+
+/**
+ * The one entry point every caller already has. Same name, same positional arguments in the same
+ * order as before `FieldRenderer` existed — this file's only real caller (`RegistrationWizard.tsx`)
+ * and any other that calls this directly keep working unchanged; `extras` is new and optional, so
+ * a call site that never heard of duplicate warnings or progressive disclosure gets the plain,
+ * always-muted-until-touched behaviour and nothing else changes shape under it.
+ */
+export const renderFormField = (
+  field: FieldDef,
+  form: Record<string, string>,
+  setForm: (v: Record<string, string>) => void,
+  vocabulary?: { skills: string[] | null; languages: string[] | null; certifications: string[] | null },
+  onBlurField?: (key: string, value: string) => void,
+  people?: {
+    options: { value: string; label: string }[] | null;
+    failed: string | null;
+    /** Present only when some of the roster could not be loaded — see `useManagerOptions`. */
+    incomplete?: { shown: number; total: number } | null;
+  },
+  /** The HR-owner picker's own candidate list — see `useHrOwnerOptions`. */
+  hrOwners?: {
+    options: { value: string; label: string }[] | null;
+    failed: string | null;
+  },
+  /**
+   * The last successful `resolveIfsc` lookup for THIS form's `ifscCode` box, if any — shown as
+   * small read-only supporting text under that field, and also what locks `bankName` to a
+   * resolved-read-only box with an "Edit anyway" way out (see `FieldRenderer`). The caller — not
+   * this renderer — is what actually calls `resolveIfsc` and writes the resolved name into
+   * `bankName`; this only decides how the two fields are drawn once that has happened.
+   */
+  ifscInfo?: IfscInfo | null,
+  extras?: FieldRenderExtras,
+) => (
+  <FieldRenderer
+    key={field.key}
+    field={field}
+    form={form}
+    setForm={setForm}
+    vocabulary={vocabulary}
+    onBlurField={onBlurField}
+    people={people}
+    hrOwners={hrOwners}
+    ifscInfo={ifscInfo}
+    extras={extras}
+  />
+);
 
 // The Express/Advanced create modal that used to close this file is gone. Registering a person
 // is now a stepped flow with its own folder (see registration/RegistrationWizard), because the

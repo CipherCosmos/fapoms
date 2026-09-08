@@ -1,4 +1,5 @@
 import React from 'react';
+import { Link } from 'react-router-dom';
 import { card, label, Stat, Empty, POSTURE } from './hr-ui';
 import { DataTable } from '../../components/ui';
 import type { HrWorkforceOverview } from '../../hooks/useHrWorkforce';
@@ -14,18 +15,13 @@ import { useHr } from './HrLayout';
 
 const DeploymentTabBody = ({ d }: { d: HrWorkforceOverview }) => (
   <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
-    <div style={{ ...card, fontSize: '13px', color: 'var(--text-secondary)' }}>
-      Branches carry the work and assayers carry the capacity, so the gap between them is the hiring brief.
-      State names are normalised across the branch and assayer imports before comparison — they are spelled
-      differently in each source.
+    <div style={{ fontSize: '13px', color: 'var(--text-secondary)', maxWidth: '86ch' }}>
+      Branches carry the work and assayers carry the capacity, so the gap between them is the
+      hiring brief. Open a state to see its people on the roster.
     </div>
 
     <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
       <Stat value={d.deployment.hiringNeeded.length} caption="States that need more people" tone={d.deployment.hiringNeeded.length ? 'var(--danger)' : 'var(--success)'} />
-      {/* "Territories in play" is a sales phrase for a plain fact: every state that has either a
-          branch to visit or somebody living there. */}
-      <Stat value={d.deployment.territories.length} caption="States with work or people"
-        hint="Counted once for each state that has at least one branch or one assayer" />
       {/* This counts states whose posture is NO_WORK — assayers living where we have no branches at
           all. It used to be captioned "no local work", which reads as "they are idle" and collides
           with the Workload chip's idle figure; the two count different things. */}
@@ -47,6 +43,19 @@ const DeploymentTabBody = ({ d }: { d: HrWorkforceOverview }) => (
         rowKey={(t) => t.state}
         columns={[
           { key: 'state', header: 'State', render: (t) => <strong>{t.state}</strong> },
+          {
+            key: 'people',
+            header: '',
+            render: (t) => (
+              <Link
+                to={`/hr/roster?f_state=${encodeURIComponent(t.state)}`}
+                title={`See everyone living in ${t.state} on the roster`}
+                style={{ fontSize: '12px', fontWeight: 600, color: 'var(--accent)', whiteSpace: 'nowrap' }}
+              >
+                See people →
+              </Link>
+            ),
+          },
           { key: 'branches', header: 'Branches', render: (t) => <>{t.branches}</> },
           { key: 'assayers', header: 'Assayers', render: (t) => <>{t.assayers}</> },
           { key: 'active', header: 'Active', render: (t) => <>{t.active}</> },

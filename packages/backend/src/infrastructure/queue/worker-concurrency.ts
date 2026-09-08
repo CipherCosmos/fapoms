@@ -99,7 +99,7 @@ export const WORKER_CONCURRENCY = {
   /** Single-slot workers, each for its own reason documented at its `@Process`. */
   retention: { purge: 1 },
   outbox: { drain: 1 },
-  billing: { syncAssignments: 1 },
+  billing: { reconcile: 1, bookAssignment: 1 },
   documents: { autoDispatch: 1 },
   imports: { branchImport: 1 },
   /**

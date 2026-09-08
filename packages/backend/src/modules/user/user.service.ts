@@ -244,6 +244,13 @@ export class UserService {
       await this.assertNotLastActiveSuperAdmin(id);
     }
 
+    // Self-escalation prevention: a user cannot expand or modify their own region/client scope
+    if (id === updatedById && updatedById !== 'system') {
+      if (dto.regions !== undefined || dto.clientId !== undefined) {
+        throw new ForbiddenException('You cannot modify your own regional or client scope assignments.');
+      }
+    }
+
     if (dto.firstName !== undefined) user.firstName = dto.firstName;
     if (dto.lastName !== undefined) user.lastName = dto.lastName;
     if (dto.firstName || dto.lastName) {
@@ -282,6 +289,7 @@ export class UserService {
     // scope change must take effect on the next request, not when the TTL happens to expire —
     // `user:role-changed` is the invalidation the auth service already listens for.
     if (scopeChanged) {
+      await this.cache.del(rbacPrincipalCacheKey(saved.id));
       this.eventPublisher.publish('user:role-changed', { userId: saved.id });
     }
 
@@ -579,9 +587,21 @@ export class UserService {
       await this.assertNotLastActiveSuperAdmin(userId);
     }
 
+    // Self-escalation prevention: a user cannot grant themselves new roles
+    if (userId === assignedById && assignedById !== 'system') {
+      const currentRoleIds = new Set((user.roles ?? []).map((r) => r.id));
+      const hasNewRoles = roleIds.some((id) => !currentRoleIds.has(id));
+      if (hasNewRoles) {
+        throw new ForbiddenException('You cannot grant yourself new roles.');
+      }
+    }
+
     user.roles = roles;
     user.updatedBy = assignedById;
     const saved = await this.userRepository.save(user);
+
+    // Deterministic, awaited invalidation of cached RBAC principal
+    await this.cache.del(rbacPrincipalCacheKey(userId));
 
     await this.auditService.recordEvent({
       category: EventCategory.USER,
@@ -655,6 +675,7 @@ export class UserService {
       .getRawMany();
 
     for (const h of holders) {
+      await this.cache.del(rbacPrincipalCacheKey(h.id));
       this.eventPublisher.publish('user:role-changed', { userId: h.id });
     }
   }
@@ -667,7 +688,7 @@ export class UserService {
     if (!name) throw new BadRequestException('A role name is required.');
 
     const existing = await this.roleRepository.findOne({ where: { name } });
-    if (existing) throw new ConflictException(`A role named ${name} already exists.`);
+    if (existing || this.isSystemRole(name)) throw new ConflictException(`A role named ${name} already exists.`);
 
     const displayName = dto.displayName?.trim() || name;
     // `name` above is the internal reference and already unique; `display_name` is what every
@@ -681,6 +702,10 @@ export class UserService {
     const permissions = dto.permissionIds?.length
       ? await this.permissionRepository.find({ where: { id: In(dto.permissionIds) } })
       : [];
+
+    if (permissions.some((p) => p.resource?.toUpperCase() === 'SYSTEM')) {
+      throw new ForbiddenException('Custom roles cannot be granted SYSTEM-level permissions.');
+    }
 
     const role = await this.roleRepository.save(
       this.roleRepository.create({
@@ -766,6 +791,10 @@ export class UserService {
       throw new BadRequestException(
         'The Super Administrator role cannot be stripped of every permission — no one would be able to restore access.',
       );
+    }
+
+    if (!this.isSystemRole(role.name) && permissions.some((p) => p.resource?.toUpperCase() === 'SYSTEM')) {
+      throw new ForbiddenException('Custom roles cannot be granted SYSTEM-level permissions.');
     }
 
     const before = role.permissions?.length ?? 0;

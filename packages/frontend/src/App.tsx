@@ -63,6 +63,14 @@ const AssayerRecordPage = React.lazy(() => import('./pages/hr/AssayerRecordPage'
 const HrPayPage = React.lazy(() => import('./pages/hr/HrPayPage').then((m) => ({ default: m.HrPayPage })));
 const HrIssuesPage = React.lazy(() => import('./pages/hr/HrIssuesPage').then((m) => ({ default: m.HrIssuesPage })));
 const HrWherePeopleArePage = React.lazy(() => import('./pages/hr/HrWherePeopleArePage').then((m) => ({ default: m.HrWherePeopleArePage })));
+/**
+ * Registering an assayer — its own page now, not a modal the roster launched. Outside the `/hr`
+ * layout route deliberately: `HrLayout` draws its own PageHeader and the section's four-tab strip,
+ * and a focused, single-task flow with a page header and footer of its own has no use for either —
+ * see `RegistrationPage.tsx`. Two paths, one component: `/hr/register` starts fresh, `/hr/register/
+ * :assayerId` resumes somebody already begun.
+ */
+const RegistrationPage = React.lazy(() => import('./pages/hr/registration/RegistrationPage').then((m) => ({ default: m.RegistrationPage })));
 const DataEntryOverview = React.lazy(() => import('./pages/dataentry/DataEntryOverview'));
 const PacketsQueue = React.lazy(() => import('./pages/dataentry/PacketsQueue'));
 const ReviewsQueue = React.lazy(() => import('./pages/dataentry/ReviewsQueue'));
@@ -458,6 +466,13 @@ export const App: React.FC = () => {
             <Route path="clarifications" element={<ClarificationsPage />} />
           </Route>
           <Route path="/users" element={<Users />} />
+          {/*
+            Registering an assayer. Sits beside `/hr`, not inside it — see the comment on the lazy
+            import above. `route-permissions.ts` carries both paths as their own literal entries,
+            mirroring canCreateAssayers() rather than `/hr`'s own view-only gate.
+          */}
+          <Route path="/hr/register" element={<RegistrationPage />} />
+          <Route path="/hr/register/:assayerId" element={<RegistrationPage />} />
           {/*
             HR is a section, not a page. It briefly had eleven URLs, three of which badged off the
             same number — Records, Compliance and Documents all pointed at "this person's file is

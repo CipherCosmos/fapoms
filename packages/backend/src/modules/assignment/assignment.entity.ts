@@ -5,6 +5,7 @@ import { AssessmentEntity } from '../project/assessment.entity';
 import { ProjectEntity } from '../project/project.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
 import { AssignmentStatus, Priority } from '@fapoms/shared';
+import { AssignmentReassignmentEntity } from './assignment-reassignment.entity';
 
 @Entity('assignments')
 @Index(['assignmentNumber'])
@@ -12,6 +13,10 @@ import { AssignmentStatus, Priority } from '@fapoms/shared';
 @Index(['assessmentId'])
 @Index(['projectId'])
 @Index(['assayerId'])
+@Index('idx_assignments_single_active_branch', ['projectBranchId'], {
+  unique: true,
+  where: `"is_active" = true AND "project_branch_id" IS NOT NULL AND "status" IN ('PENDING', 'ACCEPTED', 'CHECKED_IN', 'IN_PROGRESS')`,
+})
 /**
  * The scale indexes — declared here as well as in `1790300000000-RestoreScaleIndexes`.
  *
@@ -30,6 +35,8 @@ import { AssignmentStatus, Priority } from '@fapoms/shared';
 @Index('idx_assignments_assayer_day', ['assayerId', 'scheduledDate', 'status'], { where: '"is_active" = true' })
 @Index('idx_assignments_branch_recent', ['projectBranchId', 'createdAt'])
 @Index('idx_assignments_sla_status_status_active', ['slaStatus', 'status'], { where: '"is_active" = true' })
+@Index('idx_assignments_assayer_feed', ['assayerId', 'createdAt', 'id'], { where: `"is_active" = true` })
+@Index('idx_assignments_completed_reconcile', ['completionDate', 'createdAt'], { where: `"status" = 'COMPLETED'` })
 export class AssignmentEntity extends BaseEntity {
   @Column({ name: 'assignment_number', length: 50, unique: true })
   assignmentNumber: string;
@@ -195,6 +202,33 @@ export class AssignmentEntity extends BaseEntity {
   @Column({ name: 'entity_version', type: 'integer', default: 1 })
   entityVersion: number;
 
+  @Column({ name: 'empanelment_standing_at_creation', type: 'varchar', length: 50, nullable: true })
+  empanelmentStandingAtCreation: string | null;
+
+  @Column({ name: 'empanelment_id', type: 'uuid', nullable: true })
+  empanelmentId: string | null;
+
+  @Column({ name: 'empanelment_version_at_creation', type: 'integer', nullable: true })
+  empanelmentVersionAtCreation: number | null;
+
+  @Column({ name: 'empanelment_effective_at', type: 'timestamptz', nullable: true })
+  empanelmentEffectiveAt: Date | null;
+
+  @Column({ name: 'empanelment_verified_at', type: 'timestamptz', nullable: true })
+  empanelmentVerifiedAt: Date | null;
+
+  @Column({ name: 'empanelment_override_used', type: 'boolean', default: false })
+  empanelmentOverrideUsed: boolean;
+
+  @Column({ name: 'empanelment_override_reason', type: 'text', nullable: true })
+  empanelmentOverrideReason: string | null;
+
+  @Column({ name: 'empanelment_override_by', type: 'uuid', nullable: true })
+  empanelmentOverrideBy: string | null;
+
+  @Column({ name: 'current_ownership_started_at', type: 'timestamptz', nullable: true })
+  currentOwnershipStartedAt: Date | null;
+
   @Column({ name: 'sla_due_date', type: 'timestamptz', nullable: true })
   slaDueDate: Date | null;
 
@@ -252,4 +286,7 @@ export class AssignmentEntity extends BaseEntity {
    */
   @OneToMany('ExpenseEntity', 'assignment')
   expenses: any[];
+
+  @OneToMany(() => AssignmentReassignmentEntity, (r) => r.assignment)
+  reassignments: AssignmentReassignmentEntity[];
 }

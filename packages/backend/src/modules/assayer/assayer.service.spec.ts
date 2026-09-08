@@ -536,11 +536,16 @@ describe('AssayerService', () => {
     });
 
     it('records the phone number in clear, since it is not a sensitive field', async () => {
+      // Registration normalisation (2026-09-07) stores phones as `+91XXXXXXXXXX` — see
+      // `normaliseIdentityFields` in assayer.service.ts — so the recorded "to" value is the
+      // normalised form actually persisted, not the bare 10 digits the request sent. `fromValue`
+      // stays the legacy, un-normalised shape already on this fixture's record: normalisation
+      // only ever touches an INCOMING write, never rewrites a value nobody submitted.
       await service.update('as-1', { phone: '9800000099' } as any, 'u-1');
 
       const call = mockAuditService.recordEvent.mock.calls.find((c: any) => c[0].eventType === 'ASSAYER_UPDATED');
       const change = call[0].metadata.changes.find((c: any) => c.field === 'phone');
-      expect(change).toMatchObject({ fromValue: '9800000001', toValue: '9800000099' });
+      expect(change).toMatchObject({ fromValue: '9800000001', toValue: '+919800000099' });
     });
 
     it('omits metadata entirely when nothing in the tracked field list changed', async () => {

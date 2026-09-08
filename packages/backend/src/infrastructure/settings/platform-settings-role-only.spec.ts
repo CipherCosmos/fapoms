@@ -2,7 +2,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { RolesGuard, ROLES_KEY, PERMISSIONS_KEY, ROLE_ONLY_KEY } from '../../modules/auth/guards';
+import { RolesGuard, ROLES_KEY, PERMISSIONS_KEY, ROLE_ONLY_KEY, ALLOW_PERMISSION_FALLBACK_KEY } from '../../modules/auth/guards';
 import { PlatformSettingsController } from './platform-settings.controller';
 import { SETTINGS_GROUPS } from './settings.registry';
 
@@ -65,16 +65,23 @@ describe('PlatformSettingsController — set/reset resist the custom-role permis
   });
 
   it(
-    'sanity check: the exact same custom role WOULD have gotten in without @RoleOnly — proving ' +
+    'sanity check: the exact same custom role WOULD have gotten in if fallback were enabled — proving ' +
       'the two tests above are actually exercising the decorator, not passing for an unrelated reason',
     () => {
-      const routeWithoutRoleOnly = {
+      const routeWithExplicitFallback = {
         [ROLES_KEY]: ['ADMIN'],
         [PERMISSIONS_KEY]: ['configuration:edit:platform'],
-        // No ROLE_ONLY_KEY — this is the pre-fix shape, reproducing the live finding.
+        [ALLOW_PERMISSION_FALLBACK_KEY]: true,
       };
-      const guard = new RolesGuard(reflectorReturning(routeWithoutRoleOnly));
+      const guard = new RolesGuard(reflectorReturning(routeWithExplicitFallback));
       expect(guard.canActivate(ctx(configEditorOnly))).toBe(true);
+
+      const routeWithoutFallback = {
+        [ROLES_KEY]: ['ADMIN'],
+        [PERMISSIONS_KEY]: ['configuration:edit:platform'],
+      };
+      const guardStrict = new RolesGuard(reflectorReturning(routeWithoutFallback));
+      expect(() => guardStrict.canActivate(ctx(configEditorOnly))).toThrow(ForbiddenException);
     },
   );
 

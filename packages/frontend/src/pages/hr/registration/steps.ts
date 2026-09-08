@@ -54,7 +54,7 @@ export const REGISTRATION_STEPS: readonly RegistrationStep[] = [
   {
     key: 'person',
     title: 'The person',
-    caption: 'Who they are, and which state they will work in. Saving this page creates their record.',
+    caption: 'Who they are. Saving this page creates their record.',
   },
   {
     key: 'address',
@@ -186,7 +186,7 @@ export const RATE_KEYS: readonly string[] = RATE_FIELDS.map((f) => f.key);
 /** Which boxes appear on which step. Order within a step is the order they are drawn in. */
 export const STEP_FIELDS: Record<RegistrationStepKey, readonly string[]> = {
   person: [
-    'firstName', 'lastName', 'assayerCode', 'dateOfBirth', 'qualification',
+    'fullName', 'assayerCode', 'dateOfBirth', 'qualification',
     'phone', 'alternatePhone', 'email',
     'state', 'engagementType', 'employmentType', 'joiningDate',
   ],
@@ -280,20 +280,24 @@ export function isPlannableForSomeone(standings: readonly ClientStanding[] | nul
 }
 
 /**
- * The three boxes a save genuinely cannot go without, and nothing else.
+ * The two boxes a save genuinely cannot go without, and nothing else.
  *
  * Everything else on every step is optional, and the steps say so out loud. This list exists
- * because `CreateAssayerRequestDto` declares exactly these three `@IsNotEmpty()` — so blocking on
- * them here turns a 400 after a full page of typing into a red asterisk before it. A rule that is
- * not the server's rule does not belong in this function: the identity numbers, for instance, are
+ * because `CreateAssayerRequestDto` declares exactly these `@IsNotEmpty()` — so blocking on them
+ * here turns a 400 after a full page of typing into a red asterisk before it. A rule that is not
+ * the server's rule does not belong in this function: the identity numbers, for instance, are
  * checked live in the field for the clerk's benefit but are never a reason to refuse a step,
  * because the server's message is the authoritative one and it is shown when it arrives.
+ *
+ * Was three checks, one each for `firstName` and `lastName`. The server now takes a single
+ * `fullName` and derives the legacy pair itself, so there is one name to be missing, not two —
+ * and the message it is missing with matches the server's own 400 ("it needs their full name —
+ * exactly as printed on their Aadhaar or PAN") rather than the old, Western-shaped "a first name".
  */
 export function validateStep(step: RegistrationStepKey, form: Record<string, string>): string[] {
   if (step !== 'person') return [];
   const problems: string[] = [];
-  if (!(form.firstName || '').trim()) problems.push('a first name');
-  if (!(form.lastName || '').trim()) problems.push('a last name');
+  if (!(form.fullName || '').trim()) problems.push('their full name — exactly as printed on their Aadhaar or PAN');
   if (!(form.state || '').trim()) problems.push('the state they work in');
   return problems;
 }
@@ -306,6 +310,63 @@ export function stepOfField(fieldKey: string): RegistrationStepKey | null {
   // The coordinate pair has no box — it is placed with the map pin control on the address step.
   if (fieldKey === 'latitude' || fieldKey === 'longitude') return 'address';
   return null;
+}
+
+/** One field a server error named, and where a clerk can go to fix it. */
+export interface ErrorField {
+  key: string;
+  label: string;
+  step: RegistrationStepKey;
+}
+
+/**
+ * "3 fields need attention: Pan Number, Phone, Aadhaar Number." back to the boxes it means, so
+ * the banner can ALSO offer a "Go to field" for each one.
+ *
+ * `services/errors.ts` — not this track's to edit — collapses a NestJS validation array into
+ * exactly that sentence (`fieldOf()` there: a message's first word, camelCase split into spaced
+ * words, only the very first letter capitalised) and keeps nothing more structured; by the time an
+ * `AppError` reaches this flow there is no field list left, only this prose. So the same transform
+ * is replayed here against every key this flow can write, and matched by exact text against the
+ * comma list. A single-field failure never goes through that sentence at all — `joinServerMessage`
+ * only builds it for more than one — so it is handled separately, off the message's own first word
+ * ("panNumber must match…" keeps that spelling, camelCase and all, with only its first letter
+ * capitalised by `sentence()`), lower-cased back to a key and checked directly.
+ *
+ * Never guesses: a field this cannot place is simply left out of the returned list, and the
+ * banner's own sentence — which callers keep showing verbatim — is unaffected either way.
+ */
+export function mappedFieldsFromError(message: string): ErrorField[] {
+  const fields = [...REGISTRATION_FIELDS, ...RATE_FIELDS];
+  const labelOf = (key: string): string =>
+    key.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/^./, (c) => c.toUpperCase());
+  const keyByLabel = new Map(fields.map((f) => [labelOf(f.key), f.key]));
+
+  const found: ErrorField[] = [];
+  const addIfKnown = (key: string | undefined) => {
+    if (!key || found.some((f) => f.key === key)) return;
+    const field = fields.find((f) => f.key === key);
+    const step = stepOfField(key);
+    if (field && step) found.push({ key, label: field.label, step });
+  };
+
+  const multi = message.match(/^\d+\s+fields?\s+need attention:\s*(.+)\.\s*$/i);
+  if (multi) {
+    for (const label of multi[1].split(',').map((s) => s.trim()).filter(Boolean)) {
+      addIfKnown(keyByLabel.get(label));
+    }
+    return found;
+  }
+
+  // A single-field message starts with that field's own key, first letter capitalised and
+  // nothing else touched — "PanNumber must match…" — never spaced the way the multi-field
+  // sentence spaces it, so lower-casing just the one leading letter recovers the key directly.
+  const firstWord = (message.trim().split(/\s+/)[0] ?? '').replace(/[.,:;]+$/, '');
+  if (firstWord) {
+    const asKey = firstWord.charAt(0).toLowerCase() + firstWord.slice(1);
+    if (fields.some((f) => f.key === asKey)) addIfKnown(asKey);
+  }
+  return found;
 }
 
 export interface ActivationGap {

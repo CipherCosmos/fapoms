@@ -944,6 +944,38 @@ describe('AuthService', () => {
     });
   });
 
+  describe('System permission integrity guard (runSystemPermissionIntegrityCheck)', () => {
+    it('detects and logs error when a custom role possesses SYSTEM:* permission', async () => {
+      mockUserRepo.manager.query.mockResolvedValueOnce([
+        { role_name: 'CUSTOM_AUDITOR', resource: 'SYSTEM', action: 'EDIT', scope: 'PLATFORM' },
+      ]);
+      const errorSpy = jest.spyOn((service as any).logger, 'error');
+
+      await service.runSystemPermissionIntegrityCheck();
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining('CRITICAL SECURITY VIOLATION: Role "CUSTOM_AUDITOR" possesses privileged system permission "SYSTEM:EDIT:PLATFORM"'),
+      );
+    });
+
+    it('remains silent when only authorized platform roles hold SYSTEM:* permission', async () => {
+      mockUserRepo.manager.query.mockResolvedValueOnce([]);
+      const errorSpy = jest.spyOn((service as any).logger, 'error');
+
+      await service.runSystemPermissionIntegrityCheck();
+
+      expect(errorSpy).not.toHaveBeenCalled();
+    });
+
+    it('never crashes on query failure', async () => {
+      mockUserRepo.manager.query.mockRejectedValueOnce(new Error('db connection lost'));
+      const warnSpy = jest.spyOn((service as any).logger, 'warn');
+
+      await expect(service.runSystemPermissionIntegrityCheck()).resolves.not.toThrow();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('System permission integrity check failed to run'));
+    });
+  });
+
   /**
    * MFA challenge flow at the AuthService boundary. Verifies the security contract the login gate
    * depends on: a confirmed second factor yields a challenge and NO session; a session is minted

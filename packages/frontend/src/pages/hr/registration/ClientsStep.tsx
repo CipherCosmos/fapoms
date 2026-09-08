@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Building2, Search } from 'lucide-react';
-import { standingAllowsPlanning } from '@fapoms/shared';
-import { AlertBanner, Select, useToast } from '../../../components/ui';
+import { EmpanelmentStatus, standingAllowsPlanning } from '@fapoms/shared';
+import { AlertBanner, Select, useConfirm, useToast } from '../../../components/ui';
 import { api } from '../../../services/api';
 import { userMessage } from '../../../services/errors';
 import { STANDING_CHOICES } from './steps';
@@ -38,16 +38,19 @@ const cardStyle: React.CSSProperties = {
   padding: '12px 14px',
 };
 
+// `--bg-surface-2`, not `--bg-page`: both boxes sit inside `cardStyle` (`--bg-card`), which in
+// the dark themes is the same colour as `--bg-page` — a box drawn against the page colour
+// vanished into the card around it instead of standing out as something to type into.
 const searchStyle: React.CSSProperties = {
   width: '100%', padding: '8px 10px 8px 32px', fontSize: '13px',
-  background: 'var(--bg-page)', color: 'var(--text-primary)',
+  background: 'var(--bg-surface-2)', color: 'var(--text-primary)',
   border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)',
   outline: 'none', boxSizing: 'border-box',
 };
 
 const reasonStyle: React.CSSProperties = {
   width: '100%', padding: '7px 9px', fontSize: '12.5px', marginTop: '8px',
-  background: 'var(--bg-page)', color: 'var(--text-primary)',
+  background: 'var(--bg-surface-2)', color: 'var(--text-primary)',
   border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)',
   outline: 'none', boxSizing: 'border-box',
 };
@@ -172,6 +175,15 @@ export const ClientsStep: React.FC<{
   const [query, setQuery] = useState('');
   const [error, setError] = useState<string | null>(null);
   const { toast } = useToast();
+  const { confirm, confirmDialog } = useConfirm();
+  /**
+   * The standing the bulk action files. Almost every assayer is eligible for almost every
+   * client, so the normal pass is "accept them everywhere, then take off the few exceptions"
+   * rather than picking two dozen rows one by one. Defaults to Accepted; the clerk picks
+   * "Put forward" instead on the days the banks have not decided yet.
+   */
+  const [bulkStatus, setBulkStatus] = useState<EmpanelmentStatus>(EmpanelmentStatus.ACTIVE);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   const standings = useMemo(() => {
     const byClient = new Map<string, DossierEmpanelment>();
@@ -223,6 +235,65 @@ export const ClientsStep: React.FC<{
     [rows, standings],
   );
 
+  /** Clients with nothing recorded yet — the only ones a bulk action may touch. */
+  const unset = useMemo(
+    () => (clients ?? []).filter((c) => !standings.has(c.id)),
+    [clients, standings],
+  );
+
+  /**
+   * One standing for every client still without one, so the clerk's remaining work is the few
+   * exceptions, not the whole list.
+   *
+   * Only the unset rows are written: a standing already on file — including a deliberate "not
+   * going forward" — is somebody's decision, and a bulk pass that silently replaced those would
+   * turn exceptions into acceptances. One dossier reload at the end rather than one per row, and
+   * one summary toast rather than two dozen, because each row landing separately is noise when
+   * the clerk asked for all of them at once.
+   */
+  const applyToAllUnset = async () => {
+    if (!assayerId || unset.length === 0 || bulkBusy) return;
+    const choice = STANDING_CHOICES.find((c) => c.value === bulkStatus) ?? STANDING_CHOICES[0];
+    const ok = await confirm({
+      title: `Mark all ${unset.length} remaining as “${choice.label}”?`,
+      message: 'Every client with nothing recorded gets this standing. Clients that already '
+        + 'have one — including any marked as not going forward — are left exactly as they are, '
+        + 'and you can still change individual clients afterwards.',
+      confirmLabel: `Mark all ${unset.length}`,
+    });
+    if (!ok) return;
+    setBulkBusy(true);
+    onBusy(true);
+    setError(null);
+    let saved = 0;
+    try {
+      for (const client of unset) {
+        try {
+          await api.request(`/assayers/${assayerId}/empanelment/${client.id}`, {
+            method: 'PUT',
+            body: JSON.stringify({ status: choice.value }),
+          });
+          saved += 1;
+        } catch (e) {
+          setError((prev) => prev
+            ? `${prev} ${client.name}: ${userMessage(e)}`
+            : `${client.name}: ${userMessage(e)}`);
+        }
+      }
+      if (saved > 0) {
+        toast({
+          type: 'success',
+          title: `${choice.label} — ${saved} client${saved === 1 ? '' : 's'}`,
+          message: choice.consequence,
+        });
+      }
+      onChanged();
+    } finally {
+      setBulkBusy(false);
+      onBusy(false);
+    }
+  };
+
   if (!assayerId) {
     return (
       <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>
@@ -233,6 +304,7 @@ export const ClientsStep: React.FC<{
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      {confirmDialog}
       {error && <AlertBanner type="error" message={error} onClose={() => setError(null)} />}
       {clientsFailed && (
         <AlertBanner
@@ -257,6 +329,34 @@ export const ClientsStep: React.FC<{
           have accepted. Set every bank this person has been put forward to — you can finish
           without doing it, and come back to their record later.
         </div>
+        {clients !== null && (
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginTop: '10px' }}>
+            <div style={{ flex: '1 1 240px', minWidth: 0 }}>
+              <Select
+                value={bulkStatus}
+                onChange={(v) => setBulkStatus(v as EmpanelmentStatus)}
+                options={STANDING_CHOICES.map((c) => ({
+                  value: c.value,
+                  label: c.label,
+                  sublabel: c.consequence,
+                }))}
+                aria-label="Standing to apply to every client still without one"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => void applyToAllUnset()}
+              disabled={unset.length === 0 || bulkBusy || Boolean(clientsFailed)}
+              className="btn btn-secondary"
+              style={{ fontSize: '12px', padding: '8px 14px', width: 'auto' }}
+              title={unset.length === 0
+                ? 'Every client already has a standing recorded'
+                : 'Files the chosen standing for every client with nothing recorded yet'}
+            >
+              {bulkBusy ? 'Setting…' : unset.length === 0 ? 'All clients recorded' : `Apply to all ${unset.length} remaining`}
+            </button>
+          </div>
+        )}
       </div>
 
       {(clients?.length ?? 0) > 7 && (
@@ -289,7 +389,7 @@ export const ClientsStep: React.FC<{
               key={c.id}
               client={c}
               standing={standings.get(c.id)}
-              disabled={Boolean(clientsFailed)}
+              disabled={Boolean(clientsFailed) || bulkBusy}
               onSet={setStanding}
             />
           ))}

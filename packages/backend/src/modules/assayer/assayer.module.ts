@@ -12,6 +12,8 @@ import { AssayerClientEmpanelmentEntity } from './assayer-client-empanelment.ent
 import { AssayerBackgroundCheckEntity } from './assayer-background-check.entity';
 import { AssayerImportIssueEntity } from './assayer-import-issue.entity';
 import { AssayerScoreOverrideEntity } from './assayer-score-override.entity';
+import { AssayerIdempotencyEntity } from './assayer-idempotency.entity';
+import { AssayerDocumentVersionEntity } from './assayer-document-version.entity';
 import { QualificationScoreService } from './qualification-score.service';
 import { ClientEntity } from '../client/client.entity';
 import { RosterImportService } from './roster-import.service';
@@ -48,6 +50,8 @@ import { GeoModule } from '../geo/geo.module';
       AssayerCommercialProfileEntity,
       WorkforceAttributeEntity,
       AssayerDocumentEntity,
+      AssayerDocumentVersionEntity,
+      AssayerIdempotencyEntity,
       AssayerRemarkEntity,
       AssayerActivityEntity,
       AssayerLocationPingEntity,

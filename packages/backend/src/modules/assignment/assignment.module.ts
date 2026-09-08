@@ -8,6 +8,7 @@ import { OperationsInboxService } from './operations-inbox.service';
 import { AssignmentController } from './assignment.controller';
 import { AssignmentEntity } from './assignment.entity';
 import { AssignmentCommentEntity } from './assignment-comment.entity';
+import { AssignmentReassignmentEntity } from './assignment-reassignment.entity';
 import { HolidayModule } from '../holiday/holiday.module';
 import { PlatformModule } from '../platform/platform.module';
 import { NotificationsModule } from '../notifications/notifications.module';
@@ -19,9 +20,11 @@ import { GeoModule } from '../geo/geo.module';
 import { ValidationModule } from '../validation/validation.module';
 import { BillingEngineModule } from '../billing-engine/billing-engine.module';
 
+import { OperationalIntegrityService } from './operational-integrity.service';
+
 @Module({
   imports: [
-    TypeOrmModule.forFeature([AssignmentEntity, AssignmentCommentEntity]),
+    TypeOrmModule.forFeature([AssignmentEntity, AssignmentCommentEntity, AssignmentReassignmentEntity]),
     HolidayModule,
     PlatformModule,
     NotificationsModule,
@@ -35,8 +38,8 @@ import { BillingEngineModule } from '../billing-engine/billing-engine.module';
     forwardRef(() => PlanningModule),
   ],
   controllers: [AssignmentController],
-  providers: [AssignmentService, OperationsInboxService],
-  exports: [AssignmentService, OperationsInboxService],
+  providers: [AssignmentService, OperationsInboxService, OperationalIntegrityService],
+  exports: [AssignmentService, OperationsInboxService, OperationalIntegrityService],
 })
 export class AssignmentModule {}
 

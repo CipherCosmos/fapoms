@@ -6,7 +6,8 @@ import {
 } from '@fapoms/shared';
 
 import { api } from '../../services/api';
-import { Select, useConfirm, useToast, AlertBanner, SkeletonList, DataTable } from '../../components/ui';
+import { Select, useConfirm, useToast, AlertBanner, SkeletonList, DataTable, StatusBadge } from '../../components/ui';
+import { RejectDocumentModal } from './registration/DocumentsStep';
 import {
   label, Empty, Section, Notice, Lede, LinkButton, RowActions, Field, fieldInput, Editor,
 } from './hr-ui';
@@ -31,7 +32,9 @@ import { EMPANELMENT_STATUS_REASONS, OTHER_STATUS_REASON } from './empanelment-r
  * the first two got their grounds.
  */
 
-const VERDICT_LABELS: Record<string, string> = {
+// Exported so the record's own move-confirm (AssayerRecord.tsx) can name a verdict in the exact
+// words this tab already uses, instead of growing a second, smaller copy of the same five lines.
+export const VERDICT_LABELS: Record<string, string> = {
   [BackgroundCheckVerdict.CLEAR]: 'Clear',
   [BackgroundCheckVerdict.CRIMINAL_CASE]: 'Criminal case',
   [BackgroundCheckVerdict.CIVIL_CASE]: 'Civil case',
@@ -51,6 +54,33 @@ const verdictTone = (v?: string | null): string =>
     : v === BackgroundCheckVerdict.CIVIL_CASE
       ? 'var(--warning)'
       : 'var(--text-primary)';
+
+/** The background that pairs with each of `verdictTone`'s three foregrounds, for the chip form. */
+const VERDICT_TONE_BG: Record<string, string> = {
+  'var(--danger)': 'var(--status-cancelled-bg)',
+  'var(--warning)': 'var(--status-pending-bg)',
+  'var(--text-primary)': 'var(--bg-surface-2)',
+};
+
+/**
+ * Verdicts serious enough that carrying somebody forward anyway is a decision, not a formality —
+ * exported for the record's own move-confirm (AssayerRecord.tsx), which stops and names the
+ * finding before letting a background-verification move go through on top of one of these.
+ */
+export const ADVERSE_BACKGROUND_VERDICTS: readonly string[] = [
+  BackgroundCheckVerdict.CRIMINAL_CASE,
+  BackgroundCheckVerdict.ADVERSE_FINDING,
+];
+
+/**
+ * The plain-English stand-in for a raw enum value that reached the screen with no label mapped to
+ * it — a value added to the database before this screen (or a caller reusing its vocabulary) was
+ * taught the word for it. "ADVERSE_FINDING" shouted at an HR clerk reads like the software is
+ * broken; "Adverse finding" reads like an answer. This is the fallback, never the first choice —
+ * every label map above stays the source of truth, and this only runs when a lookup misses.
+ */
+export const humanizeEnum = (v: string): string =>
+  v.replace(/_/g, ' ').toLowerCase().replace(/^./, (c) => c.toUpperCase());
 
 const RISK_LABELS: Record<string, string> = {
   [RiskGrade.LOW]: 'Low risk', [RiskGrade.MEDIUM]: 'Medium risk',
@@ -224,9 +254,9 @@ const NoScan: React.FC<{ claimed: boolean | null | undefined }> = ({ claimed }) 
  * rather than showing a blank the eye slides over.
  */
 const VerificationChip: React.FC<{ status?: string | null }> = ({ status }) => {
-  if (status === 'VERIFIED') return <span style={{ color: 'var(--success)' }}>Verified</span>;
-  if (status === 'REJECTED') return <span style={{ color: 'var(--danger)' }}>Rejected</span>;
-  return <span style={{ color: 'var(--text-muted)' }}>Not checked</span>;
+  if (status === 'VERIFIED') return <StatusBadge color="var(--success)" bg="var(--status-active-bg)" label="Verified" />;
+  if (status === 'REJECTED') return <StatusBadge color="var(--danger)" bg="var(--status-cancelled-bg)" label="Rejected" />;
+  return <StatusBadge color="var(--text-muted)" bg="var(--bg-surface-2)" label="Not checked" />;
 };
 
 /**
@@ -438,60 +468,80 @@ type EditorState =
   | { kind: 'standing'; clientId: string; clientName: string; status: string; statusReason: string; adding: boolean };
 
 /**
- * Why a scan was sent back, in the words a reviewer picks from — and, translated, the words the
- * appraiser reads on their phone. A fixed list rather than free text for exactly that reason: a
- * typed note cannot be translated and would reach them as a sentence nobody wrote for them.
- */
-const REJECTION_REASONS: Array<[string, string]> = [
-  ['ILLEGIBLE', 'Too blurred or dark to read'],
-  ['INCOMPLETE_CAPTURE', 'Part of the document is cut off'],
-  ['WRONG_DOCUMENT', 'This is a different document'],
-  ['NAME_MISMATCH', 'The name does not match the record'],
-  ['NUMBER_MISMATCH', 'The number does not match the record'],
-  ['EXPIRED', 'The document has expired'],
-  ['NOT_THE_PERSON', 'This does not belong to this person'],
-  ['ALTERED_OR_SUSPECT', 'The document looks altered'],
-];
-
-async function askRejectionReason(label: string): Promise<string | null> {
-  const menu = REJECTION_REASONS.map(([, text], i) => `${i + 1}. ${text}`).join('\n');
-  const answer = window.prompt(
-    `Why is ${label} being sent back?\n\n${menu}\n\nType the number. They are told this, with what to do about it.`,
-  );
-  return REJECTION_REASONS[Number(answer) - 1]?.[0] ?? null;
-}
-
-/**
- * Ask what the card says, field by field, and only for the fields it prints.
+ * What the card says, typed into the app's own dialog instead of a run of browser prompts.
  *
- * An Aadhaar's address is on the BACK, and a PAN prints a father's name where other documents print
- * an address; `prints` comes from the server so this screen and the registration form cannot drift
- * about it. Prompts rather than a form, deliberately and temporarily — the value of doing it now is
- * that the 1,163-person backlog can be worked today, and the proper panel is a later, purely
- * visual change to the same call.
+ * This used to be `window.prompt` once per field — the browser's grey box, outside the app,
+ * with no memory of which document was being verified and an Escape key that silently abandoned
+ * a half-typed attestation. One form now asks only for the fields the card prints (`prints`
+ * comes from the server, as before), pre-filled with whatever is already on file, and Cancel
+ * still abandons the whole verification: a half-filled attestation is not one.
  */
-async function askPrintedDetails(
-  label: string,
-  prints: { name: boolean; dateOfBirth: boolean; gender: boolean; guardianName: boolean; address: boolean },
-  existing: any,
-): Promise<Record<string, string> | null> {
-  const fields: Array<[string, string, boolean]> = [
-    ['holderName', `Name exactly as printed on the ${label}`, prints.name],
-    ['holderDateOfBirth', 'Date of birth on the card (YYYY-MM-DD)', prints.dateOfBirth],
-    ['holderGender', 'Gender on the card', prints.gender],
-    ['holderGuardianName', "Father's or guardian's name on the card", prints.guardianName],
-    ['holderAddress', 'Address as printed', prints.address],
-  ];
-  const out: Record<string, string> = {};
-  for (const [key, question, wanted] of fields) {
-    if (!wanted) continue;
-    const answer = window.prompt(question, existing?.[key] ?? '');
-    // Cancel abandons the whole verification: a half-filled attestation is not one.
-    if (answer === null) return null;
-    if (answer.trim()) out[key] = answer.trim();
-  }
-  return out;
-}
+const PRINTED_FIELD_LABELS: Record<string, string> = {
+  holderName: 'Name exactly as printed',
+  holderDateOfBirth: 'Date of birth on the card (YYYY-MM-DD)',
+  holderGender: 'Gender on the card',
+  holderGuardianName: "Father's or guardian's name on the card",
+  holderAddress: 'Address as printed',
+};
+
+const PrintedDetailsModal: React.FC<{
+  label: string;
+  prints: { name: boolean; dateOfBirth: boolean; gender: boolean; guardianName: boolean; address: boolean };
+  existing: any;
+  onCancel: () => void;
+  onSubmit: (values: Record<string, string>) => void;
+}> = ({ label, prints, existing, onCancel, onSubmit }) => {
+  const wanted: Array<[string, 'name' | 'dateOfBirth' | 'gender' | 'guardianName' | 'address']> = ([
+    ['holderName', 'name'],
+    ['holderDateOfBirth', 'dateOfBirth'],
+    ['holderGender', 'gender'],
+    ['holderGuardianName', 'guardianName'],
+    ['holderAddress', 'address'],
+  ] as Array<[string, 'name' | 'dateOfBirth' | 'gender' | 'guardianName' | 'address']>).filter(([, flag]) => prints[flag]);
+  const [values, setValues] = useState<Record<string, string>>(() => ({
+    holderName: existing?.holderName ?? '',
+    holderDateOfBirth: (existing?.holderDateOfBirth ?? '').slice(0, 10),
+    holderGender: existing?.holderGender ?? '',
+    holderGuardianName: existing?.holderGuardianName ?? '',
+    holderAddress: existing?.holderAddress ?? '',
+  }));
+  const submit = () => {
+    const out: Record<string, string> = {};
+    for (const [key] of wanted) {
+      if (String(values[key] ?? '').trim()) out[key] = String(values[key]).trim();
+    }
+    onSubmit(out);
+  };
+  return (
+    <Editor
+      title={`What does the ${label} say?`}
+      intro="Read off the document itself — this is what the record's name is checked against."
+      onCancel={onCancel}
+      onSave={submit}
+      saveLabel="Use these details"
+    >
+      {wanted.map(([key]) => (
+        <div key={key}>
+          <label htmlFor={`vetting-printed-${key}`} style={{ display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px' }}>
+            {PRINTED_FIELD_LABELS[key]}
+          </label>
+          <input
+            id={`vetting-printed-${key}`}
+            type={key === 'holderDateOfBirth' ? 'date' : 'text'}
+            value={values[key] ?? ''}
+            onChange={(e) => setValues({ ...values, [key]: e.target.value })}
+            style={{
+              width: '100%', padding: '8px 10px', fontSize: '13px',
+              background: 'var(--bg-surface-2)', color: 'var(--text-primary)',
+              border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)',
+              outline: 'none', boxSizing: 'border-box',
+            }}
+          />
+        </div>
+      ))}
+    </Editor>
+  );
+};
 
 export const AssayerVettingTab: React.FC<{
   assayerId: string;
@@ -532,8 +582,12 @@ export const AssayerVettingTab: React.FC<{
   const [busy, setBusy] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
   const [editor, setEditor] = useState<EditorState | null>(null);
-  const { confirm, confirmDialog } = useConfirm();
+  const { confirm, confirmWithReason, confirmDialog } = useConfirm();
   const { toast } = useToast();
+  /** The document a "Send it back" click is choosing a reason for — the dialog is open exactly when this is set. */
+  const [rejectTarget, setRejectTarget] = useState<any | null>(null);
+  /** The document whose card details are being read off — the dialog is open exactly when this is set. */
+  const [printedTarget, setPrintedTarget] = useState<any | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -765,11 +819,7 @@ export const AssayerVettingTab: React.FC<{
    * nothing. The server refuses a name that does not agree, and that refusal names both names, so
    * it is put in front of the reviewer rather than replaced with something generic.
    */
-  const verify = async (doc: any) => {
-    const prints = doc.prints ?? { name: true, dateOfBirth: false, gender: false, guardianName: false, address: false };
-    const printed = await askPrintedDetails(doc.label, prints, doc);
-    if (!printed) return;
-
+  const verify = async (doc: any, printed: Record<string, string>) => {
     const ok = await confirm({
       title: `Confirm ${doc.label} against the original?`,
       message: `This records that you checked ${doc.documentNumber} and the name `
@@ -788,17 +838,31 @@ export const AssayerVettingTab: React.FC<{
     } catch (e) {
       const message = userMessage(e);
       if (/does not match the name on the record/i.test(message)) {
-        const why = window.prompt(`${message}\n\nIf it is the same person, say why:`);
-        if (why && why.trim().length >= 10) {
-          try {
-            await api.request(`/assayers/document/${doc.id}/verify`, {
-              method: 'POST',
-              body: JSON.stringify({ verdict: 'VERIFIED', ...printed, nameMismatchNote: why.trim() }),
-            });
-            reload();
-            return;
-          } catch (retry) { setErr(userMessage(retry)); return; }
+        // Genuinely the same person under a different name — maiden versus married, initials
+        // expanded — is routine, so the reviewer answers in the app's own dialog rather than
+        // the browser's. Ten characters minimum, as before: the note is the audit trail.
+        const { confirmed, reason } = await confirmWithReason({
+          title: 'The name does not match',
+          message,
+          confirmLabel: 'Verify anyway',
+          reasonPrompt: {
+            label: 'If it is the same person, say why:',
+            placeholder: 'e.g. Maiden name on the card, married name already on the record',
+          },
+        });
+        if (!confirmed) { setErr(message); return; }
+        if (reason.length < 10) {
+          setErr(`${message} If it is the same person, say why in at least 10 characters.`);
+          return;
         }
+        try {
+          await api.request(`/assayers/document/${doc.id}/verify`, {
+            method: 'POST',
+            body: JSON.stringify({ verdict: 'VERIFIED', ...printed, nameMismatchNote: reason }),
+          });
+          reload();
+          return;
+        } catch (retry) { setErr(userMessage(retry)); return; }
       }
       setErr(message);
     } finally { setBusy(false); }
@@ -811,13 +875,16 @@ export const AssayerVettingTab: React.FC<{
    * A document too dark to read had no outcome at all: it sat as PENDING forever, the person who
    * sent it was told nothing, and the desk had no queue to work.
    */
-  const reject = async (doc: any) => {
-    const reason = await askRejectionReason(doc.label);
-    if (!reason) return;
+  const reject = async (doc: any, reason: string, note: string) => {
     setBusy(true);
     try {
       await api.request(`/assayers/document/${doc.id}/verify`, {
-        method: 'POST', body: JSON.stringify({ verdict: 'REJECTED', rejectionReason: reason }),
+        method: 'POST',
+        body: JSON.stringify({
+          verdict: 'REJECTED',
+          rejectionReason: reason,
+          ...(note.trim() ? { remarks: note.trim() } : {}),
+        }),
       });
       reload();
     } catch (e) { setErr(userMessage(e)); } finally { setBusy(false); }
@@ -912,6 +979,30 @@ export const AssayerVettingTab: React.FC<{
   return (
     <div style={{ opacity: busy ? 0.6 : 1, transition: 'opacity .15s' }}>
       {confirmDialog}
+      {rejectTarget && (
+        <RejectDocumentModal
+          label={rejectTarget.label}
+          onCancel={() => setRejectTarget(null)}
+          onSubmit={(reason, note) => {
+            const doc = rejectTarget;
+            setRejectTarget(null);
+            void reject(doc, reason, note);
+          }}
+        />
+      )}
+      {printedTarget && (
+        <PrintedDetailsModal
+          label={printedTarget.label}
+          prints={printedTarget.prints ?? { name: true, dateOfBirth: false, gender: false, guardianName: false, address: false }}
+          existing={printedTarget}
+          onCancel={() => setPrintedTarget(null)}
+          onSubmit={(printed) => {
+            const doc = printedTarget;
+            setPrintedTarget(null);
+            void verify(doc, printed);
+          }}
+        />
+      )}
       {errorBanner}
 
       <Lede>{lede}</Lede>
@@ -955,7 +1046,7 @@ export const AssayerVettingTab: React.FC<{
               value={editor.status}
               onChange={(v) => setEditor({ ...editor, status: String(v) })}
               options={Object.values(EmpanelmentStatus).map((v) => ({
-                value: v, label: STANDING_LABELS[v] ?? v,
+                value: v, label: STANDING_LABELS[v] ?? humanizeEnum(v),
               }))}
             />
           </Field>
@@ -1114,18 +1205,21 @@ export const AssayerVettingTab: React.FC<{
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '18px', marginBottom: data.backgroundChecks.length > 1 ? '12px' : 0 }}>
             <div>
               <div style={label}>Verdict</div>
-              <div style={{ fontSize: '15px', fontWeight: 700, color: verdictTone(check.verdict) }}>
-                {VERDICT_LABELS[check.verdict] ?? check.verdict}
-              </div>
+              <StatusBadge
+                size="md"
+                color={verdictTone(check.verdict)}
+                bg={VERDICT_TONE_BG[verdictTone(check.verdict)]}
+                label={VERDICT_LABELS[check.verdict] ?? humanizeEnum(check.verdict)}
+              />
             </div>
             {check.riskGrade && (
-              <div><div style={label}>Risk</div><div style={{ fontSize: '13px' }}>{RISK_LABELS[check.riskGrade] ?? check.riskGrade}</div></div>
+              <div><div style={label}>Risk</div><div style={{ fontSize: '13px' }}>{RISK_LABELS[check.riskGrade] ?? humanizeEnum(check.riskGrade)}</div></div>
             )}
             {check.cibilBand && (
               <div>
                 <div style={label}>Credit</div>
                 <div style={{ fontSize: '13px' }}>
-                  {CIBIL_LABELS[check.cibilBand] ?? check.cibilBand}
+                  {CIBIL_LABELS[check.cibilBand] ?? humanizeEnum(check.cibilBand)}
                   {check.cibilScore ? ` (${check.cibilScore})` : ''}
                 </div>
               </div>
@@ -1150,9 +1244,15 @@ export const AssayerVettingTab: React.FC<{
               {
                 key: 'verdict',
                 header: 'Verdict',
-                render: (c) => <span style={{ color: verdictTone(c.verdict) }}>{VERDICT_LABELS[c.verdict] ?? c.verdict}</span>,
+                render: (c) => (
+                  <StatusBadge
+                    color={verdictTone(c.verdict)}
+                    bg={VERDICT_TONE_BG[verdictTone(c.verdict)]}
+                    label={VERDICT_LABELS[c.verdict] ?? humanizeEnum(c.verdict)}
+                  />
+                ),
               },
-              { key: 'risk', header: 'Risk', render: (c) => <>{c.riskGrade ? (RISK_LABELS[c.riskGrade] ?? c.riskGrade) : '—'}</> },
+              { key: 'risk', header: 'Risk', render: (c) => <>{c.riskGrade ? (RISK_LABELS[c.riskGrade] ?? humanizeEnum(c.riskGrade)) : '—'}</> },
               // Free prose written by whoever did the check — the one column here that is a
               // paragraph rather than a value, so it wraps instead of stretching the table.
               { key: 'findings', header: 'Findings', wrap: true, render: (c) => <>{c.findings || '—'}</> },
@@ -1224,7 +1324,7 @@ export const AssayerVettingTab: React.FC<{
                 header: 'Standing',
                 render: (e) => (
                   <span style={{ fontWeight: 600, color: STANDING_STANCE_TONE[standingStance(e.status)].fg }}>
-                    {STANDING_LABELS[e.status] ?? e.status}
+                    {STANDING_LABELS[e.status] ?? humanizeEnum(e.status)}
                   </span>
                 ),
               },
@@ -1406,8 +1506,8 @@ export const AssayerVettingTab: React.FC<{
                   </LinkButton>
                   {d.id && d.documentNumber && d.verificationStatus !== 'VERIFIED' && (
                     <>
-                      <LinkButton onClick={() => verify(d)}>Verify</LinkButton>
-                      <LinkButton onClick={() => reject(d)}>Send back</LinkButton>
+                      <LinkButton onClick={() => setPrintedTarget(d)}>Verify</LinkButton>
+                      <LinkButton onClick={() => setRejectTarget(d)}>Send back</LinkButton>
                     </>
                   )}
                   <UploadButton requirement={d.requirement} onPick={attach} documentLabel={d.label} />

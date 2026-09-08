@@ -220,116 +220,113 @@ export class RolesGuard implements CanActivate {
      * audience — either @Roles(...), or @AnyAuthenticated() where open access is intended, or
      * @Public() for genuinely unauthenticated endpoints.
      */
-    if (!requiredRoles || requiredRoles.length === 0) {
-      const anyAuthenticated = this.reflector.getAllAndOverride<boolean>(
-        ANY_AUTHENTICATED_KEY,
-        [context.getHandler(), context.getClass()],
-      );
-      if (anyAuthenticated) {
-        return true;
-      }
-      throw new ForbiddenException(
-        'This action is not available to your role. If you believe it should be, ask an administrator to review your access.',
-      );
-    }
-
-    const { user } = context.switchToHttp().getRequest();
-    if (!user || !user.roles) {
+    const { user } = context.switchToHttp().getRequest() ?? {};
+    if (!user || !user.roles || !Array.isArray(user.roles)) {
       throw new ForbiddenException('Insufficient permissions');
     }
 
-    // Expanded through the one implication map (shared/role-hierarchy.ts): a DEVELOPER passes
-    // any gate naming ADMIN or PRODUCT_SUPPORT, one-way — an ADMIN does not pass a
-    // DEVELOPER-only gate. Only this name match expands; the custom-role fallback below stays
-    // on the caller's actual role rows.
-    const userRoles = expandRoles(user.roles.map((r: { name: string }) => r.name));
-    if (requiredRoles.some((role) => userRoles.includes(role))) return true;
+    // -------------------------------------------------------------------------
+    // Branch 1: Route declares an explicit role whitelist (@Roles(...))
+    // -------------------------------------------------------------------------
+    if (requiredRoles && requiredRoles.length > 0) {
+      const userRoleNames = (user.roles as any[])
+        .map((r) => (typeof r === 'string' ? r : r?.name))
+        .filter((n): n is string => typeof n === 'string' && n.trim().length > 0);
 
-    /**
-     * A role this route never heard of still gets in, if it holds the permissions the route asks
-     * for.
-     *
-     * Every route names the built-in roles it serves — `@Roles(ADMIN, OPERATIONS)` and so on — and
-     * that list is a closed set written in code. A role built in Admin → Roles is a database row
-     * with no entry in `SystemRole`, so its name matched nothing and this guard refused it before
-     * `PermissionsGuard` ever saw the permissions somebody had deliberately attached to it. The
-     * administrator screen offered a role builder that could not grant access to anything, and the
-     * refusal read "Insufficient role permissions" while the permissions were sitting right there.
-     *
-     * So the name is now a shortcut, not the whole rule: match it and you are in, exactly as
-     * before — no existing role gains or loses anything — and otherwise the question becomes
-     * whether you hold what the route requires.
-     *
-     * FAIL CLOSED, and this is the part to keep. A route that declares no `@RequirePermissions`
-     * offers nothing to check, so an unrecognised role is still refused. That is deliberate: the
-     * alternative — treating "nothing declared" as "nothing required" — is the exact defect the
-     * deny-by-default note above records, where a missing decorator granted access instead of
-     * withholding it. `route-permission-parity.spec.ts` is what stops routes staying in that
-     * state; it lists every role-gated route that declares no permission.
-     *
-     * `every`, not `some`: holding one of three required permissions is not holding what the route
-     * asked for, and `PermissionsGuard` downstream applies the same rule to the same list.
-     */
-    // A route may opt out of the fall-through entirely — see `@RoleOnly()`.
-    const roleOnly = this.reflector.getAllAndOverride<boolean>(
-      ROLE_ONLY_KEY,
-      [context.getHandler(), context.getClass()],
-    );
-    /**
-     * `@RequirePermissions` first, `@RolesFallbackPermissions` only if that is absent — never
-     * both read together, and never on the same route. `@RequirePermissions` is ALSO read,
-     * unconditionally, by `PermissionsGuard` immediately after this guard: whoever gets past
-     * `RolesGuard`, by name match or by this fallback, is then re-checked against it with no
-     * exceptions. That is harmless on a route whose `@Roles` list holds only names the parity
-     * spec has confirmed all hold the permission — the common case — but SystemRole.ASSAYER
-     * holds NONE, ever (`ROLE_PERMISSIONS[ASSAYER] = []`; it authenticates from its own table
-     * and carries no role row), so a route open to ASSAYER can never safely carry
-     * `@RequirePermissions`: PermissionsGuard would refuse every genuine field assayer outright,
-     * the opposite of what such a route is for. `PUT /assayers/:id` and its three siblings
-     * (`base-location`, `document/:requirement`, `document/:requirement/file`) are exactly this
-     * shape — self-service for ASSAYER, whole-roster for ADMIN/OPERATIONS, and, once HR_OPERATOR
-     * needed the same door, nothing whatsoever for a custom role, because there was nothing here
-     * for its permission to be checked against.
-     *
-     * `@RolesFallbackPermissions` is the second decorator for that shape: read ONLY here, in the
-     * branch already scoped to roles `@Roles` did not recognise, so a name-matched caller (the
-     * ASSAYER whose access must not gain a second, unconditional gate) never has it evaluated at
-     * all, and `PermissionsGuard` — which reads `PERMISSIONS_KEY` alone — never sees it either.
-     */
-    const requiredPermissions = roleOnly ? undefined : (
-      this.reflector.getAllAndOverride<string[]>(PERMISSIONS_KEY, [context.getHandler(), context.getClass()])
-      ?? this.reflector.getAllAndOverride<string[]>(ROLES_FALLBACK_PERMISSIONS_KEY, [context.getHandler(), context.getClass()])
-    );
-    if (requiredPermissions?.length) {
-      /**
-       * Only a role this route has genuinely never heard of gets judged by permissions alone.
-       *
-       * A role whose NAME matches a built-in `SystemRole` was excluded from this route's
-       * `@Roles(...)` on purpose — that list is what "this route never heard of it" is supposed
-       * to mean, and a coincidence should not override a decision someone actually made. This is
-       * exactly how CLIENT_USER reached `GET /schedules`: its dashboard-only
-       * `SCHEDULING:VIEW:PLATFORM` grant happened to satisfy `scheduling:view:organization` here,
-       * despite `@Roles(ADMIN, OPERATIONS, DESK, AUDITOR)` never naming it. Found and fixed live
-       * during a chaos-testing pass, once as `@RoleOnly()` on the one route it was caught on
-       * (`system-dashboard/metrics`) — this is the systemic version, so the same coincidence
-       * cannot open a different route serving the same permission tomorrow.
-       *
-       * Filtering to unrecognised roles before computing `held` (rather than filtering the
-       * result) matters when a principal holds both a built-in role and a custom one: a custom
-       * role's own permissions still count, but nothing borrowed from the excluded built-in role
-       * does.
-       */
-      const knownRoleNames = new Set<string>(Object.values(SystemRole));
-      const unrecognisedRoles = (user.roles as any[]).filter((r) => !knownRoleNames.has(r?.name));
-      if (unrecognisedRoles.length > 0) {
-        const held = permissionKeysHeldBy({ roles: unrecognisedRoles });
-        // `toUpperCase` because routes declare these in lower case (`assayer:view:organization`)
-        // while the stored rows are upper case — the same normalisation PermissionsGuard applies.
-        if (requiredPermissions.every((perm) => held.has(perm.toUpperCase()))) return true;
+      if (userRoleNames.length === 0) {
+        throw new ForbiddenException('Insufficient permissions');
       }
+
+      // 1. Direct role match or hierarchy implication (e.g. DEVELOPER -> ADMIN)
+      const userRoles = expandRoles(userRoleNames);
+      if (requiredRoles.some((role) => userRoles.includes(role))) {
+        return true;
+      }
+
+      // 2. Custom-role permission fallback: allowed ONLY if explicitly enabled
+      const roleOnly = this.reflector.getAllAndOverride<boolean>(
+        ROLE_ONLY_KEY,
+        [context.getHandler(), context.getClass()],
+      );
+      if (roleOnly) {
+        throw new ForbiddenException('Insufficient role permissions');
+      }
+
+      const explicitFallbackPerms = this.reflector.getAllAndOverride<string[]>(
+        ROLES_FALLBACK_PERMISSIONS_KEY,
+        [context.getHandler(), context.getClass()],
+      );
+      const allowPermissionFallback = this.reflector.getAllAndOverride<boolean>(
+        ALLOW_PERMISSION_FALLBACK_KEY,
+        [context.getHandler(), context.getClass()],
+      );
+
+      // Explicit whitelist rule: if no explicit fallback is declared, deny!
+      // An explicit role whitelist cannot be bypassed by implicit permission fallback.
+      if (!explicitFallbackPerms && !allowPermissionFallback) {
+        throw new ForbiddenException('Insufficient role permissions');
+      }
+
+      const fallbackPerms = explicitFallbackPerms ?? this.reflector.getAllAndOverride<string[]>(
+        PERMISSIONS_KEY,
+        [context.getHandler(), context.getClass()],
+      );
+
+      if (fallbackPerms && fallbackPerms.length > 0) {
+        const knownRoleNames = new Set<string>(Object.values(SystemRole));
+        const unrecognisedRoles = (user.roles as any[]).filter((r) => {
+          const name = typeof r === 'string' ? r : r?.name;
+          return typeof name === 'string' && !knownRoleNames.has(name);
+        });
+
+        if (unrecognisedRoles.length > 0) {
+          const held = permissionKeysHeldBy({ roles: unrecognisedRoles });
+          const upperHeld = new Set<string>();
+          for (const p of held) upperHeld.add(p.toUpperCase());
+
+          if (fallbackPerms.every((perm) => typeof perm === 'string' && upperHeld.has(perm.trim().toUpperCase()))) {
+            return true;
+          }
+        }
+      }
+
+      throw new ForbiddenException('Insufficient role permissions');
     }
 
-    throw new ForbiddenException('Insufficient role permissions');
+    // -------------------------------------------------------------------------
+    // Branch 2: Route declares NO @Roles(...)
+    // -------------------------------------------------------------------------
+    const requiredPermissions = this.reflector.getAllAndOverride<string[]>(
+      PERMISSIONS_KEY,
+      [context.getHandler(), context.getClass()],
+    );
+
+    // Permission-only routing: if @RequirePermissions is declared without @Roles,
+    // evaluate permission grants across the user's roles.
+    if (requiredPermissions && requiredPermissions.length > 0) {
+      const held = permissionKeysHeldBy(user);
+      const upperHeld = new Set<string>();
+      for (const p of held) upperHeld.add(p.toUpperCase());
+
+      if (requiredPermissions.every((perm) => typeof perm === 'string' && upperHeld.has(perm.trim().toUpperCase()))) {
+        return true;
+      }
+      throw new ForbiddenException('Insufficient permissions');
+    }
+
+    // Genuinely open to any authenticated caller?
+    const anyAuthenticated = this.reflector.getAllAndOverride<boolean>(
+      ANY_AUTHENTICATED_KEY,
+      [context.getHandler(), context.getClass()],
+    );
+    if (anyAuthenticated) {
+      return true;
+    }
+
+    // Deny by default
+    throw new ForbiddenException(
+      'This action is not available to your role. If you believe it should be, ask an administrator to review your access.',
+    );
   }
 }
 
@@ -357,12 +354,29 @@ export function permissionKeysHeldBy(user: any): Set<string> {
     'ORGANIZATION', 'CLIENT', 'STATE', 'REGION', 'DEPARTMENT', 'TEAM', 'SELF',
   ];
   const held = new Set<string>();
-  for (const role of user?.roles ?? []) {
-    for (const perm of role?.permissions ?? []) {
-      held.add(`${perm.resource}:${perm.action}:${perm.scope}`);
-      if (perm.scope === 'PLATFORM') {
-        for (const scope of NARROWER_THAN_PLATFORM) {
-          held.add(`${perm.resource}:${perm.action}:${scope}`);
+  if (!user || !Array.isArray(user.roles)) return held;
+
+  for (const role of user.roles) {
+    if (!role || !Array.isArray(role.permissions)) continue;
+    for (const perm of role.permissions) {
+      if (
+        !perm ||
+        typeof perm.resource !== 'string' ||
+        typeof perm.action !== 'string' ||
+        typeof perm.scope !== 'string'
+      ) {
+        continue;
+      }
+      const resource = perm.resource.trim();
+      const action = perm.action.trim();
+      const scope = perm.scope.trim();
+      if (!resource || !action || !scope) continue;
+
+      held.add(`${resource}:${action}:${scope}`);
+      if (scope.toUpperCase() === 'PLATFORM') {
+        for (const narrower of NARROWER_THAN_PLATFORM) {
+          const narrowScope = scope === 'platform' ? narrower.toLowerCase() : narrower;
+          held.add(`${resource}:${action}:${narrowScope}`);
         }
       }
     }
@@ -432,6 +446,15 @@ export const ROLES_FALLBACK_PERMISSIONS_KEY = 'rolesFallbackPermissions';
 export const RolesFallbackPermissions = (...permissions: string[]) =>
   SetMetadata(ROLES_FALLBACK_PERMISSIONS_KEY, permissions);
 
+export const ALLOW_PERMISSION_FALLBACK_KEY = 'allowPermissionFallback';
+/**
+ * Opts a route with @Roles(...) into permission fallback for custom roles holding the route's
+ * @RequirePermissions(...) permissions. Without this decorator or @RolesFallbackPermissions(...),
+ * an explicit @Roles(...) decorator acts as a strict role whitelist that cannot be bypassed
+ * by custom roles merely holding matching permissions.
+ */
+export const AllowPermissionFallback = () => SetMetadata(ALLOW_PERMISSION_FALLBACK_KEY, true);
+
 @Injectable()
 export class PermissionsGuard implements CanActivate {
   constructor(private reflector: Reflector) {}
@@ -453,16 +476,18 @@ export class PermissionsGuard implements CanActivate {
       return true; // No permission restriction
     }
 
-    const { user } = context.switchToHttp().getRequest();
-    if (!user || !user.roles) {
+    const { user } = context.switchToHttp().getRequest() ?? {};
+    if (!user || !user.roles || !Array.isArray(user.roles)) {
       throw new ForbiddenException('Insufficient permissions');
     }
 
     // Build flat permission set from user's roles
     const userPermissions = permissionKeysHeldBy(user);
+    const upperUserPermissions = new Set<string>();
+    for (const p of userPermissions) upperUserPermissions.add(p.toUpperCase());
 
     const hasPermission = requiredPermissions.every((perm) =>
-      userPermissions.has(perm.toUpperCase()),
+      typeof perm === 'string' && upperUserPermissions.has(perm.trim().toUpperCase()),
     );
 
     if (!hasPermission) {

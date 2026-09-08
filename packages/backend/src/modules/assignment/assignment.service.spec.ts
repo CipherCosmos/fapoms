@@ -16,7 +16,7 @@ import { NotificationDispatchService } from '../notifications/notification-dispa
 import { PushNotificationService } from '../notifications/push-notification.service';
 import { HolidayService } from '../holiday/holiday.service';
 import { AuditService } from '../../core/audit/audit.service';
-import { AssignmentStatus, ProjectBranchStatus, EventCategory, Priority, businessTodayDateKey, BypassableRule } from '@fapoms/shared';
+import { AssignmentStatus, ProjectBranchStatus, EventCategory, Priority, businessTodayDateKey, BypassableRule, AssayerStatus, AssayerLifecycleStatus } from '@fapoms/shared';
 import { ProjectService } from '../project/project.service';
 import { ProjectQueryService } from '../project/project-query.service';
 import { AssayerService } from '../assayer/assayer.service';
@@ -161,10 +161,25 @@ const mockNotificationService = {
       // The counter-offer CAS re-reads the assignment FOR UPDATE inside the transaction; serve it
       // from whatever the repository's findOne last resolved (the object the test set up), so the
       // locked re-read sees the same row.
-      findOne: jest.fn((_entity: any, _opts?: any) => mockAssignmentRepo.findOne()),
+      findOne: jest.fn((entity: any, _opts?: any) => {
+        if (entity === AssayerEntity || entity?.name === 'AssayerEntity') {
+          return Promise.resolve({
+            id: 'assayer-1',
+            status: AssayerStatus.ACTIVE,
+            lifecycleStatus: AssayerLifecycleStatus.ACTIVE,
+            isActive: true,
+          });
+        }
+        return mockAssignmentRepo.findOne();
+      }),
       save: jest.fn((arg) => Promise.resolve(arg)),
       getRepository: jest.fn().mockReturnValue({
-        findOne: jest.fn(),
+        findOne: jest.fn((_opts?: any) => Promise.resolve({
+          id: 'assayer-1',
+          status: AssayerStatus.ACTIVE,
+          lifecycleStatus: AssayerLifecycleStatus.ACTIVE,
+          isActive: true,
+        })),
         save: jest.fn((arg) => Promise.resolve(arg)),
         create: jest.fn((arg) => arg),
       }),

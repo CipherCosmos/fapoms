@@ -1,6 +1,6 @@
 import React from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
-import { Users, ExternalLink, AlertTriangle, Info } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { ExternalLink, AlertTriangle, Info } from 'lucide-react';
 import type { HrWorkforceOverview } from '../../hooks/useHrWorkforce';
 import { Modal } from '../../components/ui';
 
@@ -73,11 +73,9 @@ export const label: React.CSSProperties = {
   color: 'var(--text-muted)', fontWeight: 700,
 };
 
-// Imported (rather than a pure re-export) because this file also uses fmtWhen itself below;
-// re-exported so the 5 pages already importing these from here don't need touching — the one
-// definition now lives in utils/dates.ts, same treatment utils/money.ts already got (see
+// Re-exported so the pages already importing these from here don't need touching — the one
+// definition lives in utils/dates.ts, same treatment utils/money.ts already got (see
 // assayer-shared.ts, which does the same for `money`).
-import { fmtWhen } from '../../utils/dates';
 export { fmtDate, fmtWhen } from '../../utils/dates';
 import { counted } from '../../utils/plural';
 
@@ -353,21 +351,6 @@ export const Editor: React.FC<{
   </Modal>
 );
 
-export const HrHeader: React.FC<{ data: HrWorkforceOverview; canManage: boolean }> = ({ data, canManage }) => (
-  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '16px', flexWrap: 'wrap' }}>
-    <div>
-      <h1 style={{ fontSize: '22px', fontWeight: 700, margin: 0 }}>Workforce</h1>
-      <p style={{ color: 'var(--text-secondary)', fontSize: '13px', marginTop: '4px' }}>
-        {data.headcount.active} active · {data.headcount.onboarding} onboarding · {data.headcount.exited} exited
-        {' · '}updated {fmtWhen(data.generatedAt)}
-      </p>
-    </div>
-    <Link to="/hr/roster" className="btn btn-secondary" style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 14px', textDecoration: 'none' }}>
-      <Users size={14} /> {canManage ? 'Manage roster' : 'View roster'}
-    </Link>
-  </div>
-);
-
 /**
  * The words under the attrition percentage — written once, because two screens print that number.
  *
@@ -438,26 +421,28 @@ export const ViewChips = <K extends string>({ options, value, onChange }: {
   value: K;
   onChange: (key: K) => void;
 }) => (
-  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '16px' }} role="tablist">
+  // Secondary to the shell's own tab strip above: smaller, square-edged, no tablist chrome.
+  // These switch a view inside one destination; dressing them as a second row of tabs made the
+  // page read as tabs-inside-tabs.
+  <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '14px' }}>
     {options.map((o) => {
       const active = o.key === value;
       return (
         <button
           key={o.key}
-          role="tab"
-          aria-selected={active}
+          aria-pressed={active}
           title={o.hint}
           onClick={() => onChange(o.key)}
           style={{
-            display: 'inline-flex', alignItems: 'center', gap: '7px',
-            padding: '7px 14px', fontSize: '12.5px', fontWeight: 600, cursor: 'pointer',
-            borderRadius: '999px',
+            display: 'inline-flex', alignItems: 'center', gap: '6px',
+            padding: '6px 12px', fontSize: '12.5px', fontWeight: 600, cursor: 'pointer',
+            borderRadius: '7px',
             border: `1px solid ${active ? 'var(--accent)' : 'var(--border-color)'}`,
             // Mixed from the theme's own accent rather than written out as the gold one theme
             // happens to use: rgba(216,174,71,…) is the dark-gold palette's accent, so on the
             // light and flame themes the selected chip was tinted a colour nothing else on the
             // page used. There are eight themes; only one of them was right.
-            background: active ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'var(--bg-surface-2)',
+            background: active ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'transparent',
             color: active ? 'var(--accent)' : 'var(--text-secondary)',
           }}
         >

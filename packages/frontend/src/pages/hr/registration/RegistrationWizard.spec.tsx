@@ -1,9 +1,10 @@
 import React from 'react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useSearchParams } from 'react-router-dom';
 import { render, screen, waitFor, act, fireEvent, within } from '@testing-library/react';
 import { RegistrationWizard } from './RegistrationWizard';
 import { ToastProvider } from '../../../components/ui';
 import { api } from '../../../services/api';
+import { AppError } from '../../../services/errors';
 
 jest.mock('../../../services/api', () => ({ api: { request: jest.fn() } }));
 const mockRequest = api.request as jest.Mock;
@@ -64,12 +65,17 @@ const wireApi = (overrides: Record<string, unknown> = {}) => {
  * vocabulary, the dossier, and (when resuming) the record itself. Without it every test prints a
  * wall of "not wrapped in act" warnings for state that settled correctly.
  */
-const mount = async (props: Partial<React.ComponentProps<typeof RegistrationWizard>> = {}) => {
+const mount = async (
+  props: Partial<React.ComponentProps<typeof RegistrationWizard>> = {},
+  /** A sibling to render inside the same router/toast tree — a probe reading `useSearchParams()`. */
+  extra?: React.ReactNode,
+) => {
   await act(async () => {
     render(
       <MemoryRouter>
         <ToastProvider>
           <RegistrationWizard onClose={jest.fn()} onCreated={jest.fn()} {...props} />
+          {extra}
         </ToastProvider>
       </MemoryRouter>,
     );
@@ -106,11 +112,13 @@ const callsTo = (method: string, matcher: (url: string) => boolean) =>
 beforeEach(() => { mockRequest.mockReset(); wireApi(); });
 
 describe('page one', () => {
-  it('refuses to save without the three the API itself requires, and names them', async () => {
+  it('refuses to save without the two the API itself requires, and names them', async () => {
     await mount();
     await click(/Save and continue/);
 
-    expect(await screen.findByText(/needs a first name, a last name and the state they work in/i)).toBeInTheDocument();
+    expect(await screen.findByText(
+      /needs their full name — exactly as printed on their Aadhaar or PAN and the state they work in/i,
+    )).toBeInTheDocument();
     expect(callsTo('POST', (u) => u === '/assayers')).toHaveLength(0);
   });
 
@@ -123,6 +131,23 @@ describe('page one', () => {
     expect(screen.getByText(/no mobile phone and no email address is registered exactly the same way/i))
       .toBeInTheDocument();
   });
+
+  /**
+   * The audit's finding: "Phone needed — blocks calling…" rendered in `--danger` red the instant
+   * the page opened, one line under a header that says every box here is optional — a mistake the
+   * clerk had not made yet, dressed up as one. It still SAYS so (the box genuinely is a gap until
+   * something is typed); it just does not shout until the clerk has actually left it empty, or
+   * tried to move past the page with it still blank.
+   */
+  it('keeps the Phone gap notice muted until the clerk has touched it or tried to move on', async () => {
+    await mount();
+    const phoneInput = screen.getByLabelText(/^Phone/);
+    const phoneLabel = document.querySelector(`label[for="${phoneInput.id}"]`) as HTMLElement;
+    expect(within(phoneLabel).getByText(/needed — blocks/i)).toHaveStyle({ color: 'var(--text-muted)' });
+
+    await click(/Save and continue/); // blocked on name/state, but also marks "an advance was tried"
+    expect(within(phoneLabel).getByText(/needed — blocks/i)).toHaveStyle({ color: 'var(--danger)' });
+  });
 });
 
 describe('a person with no phone, no email and no device', () => {
@@ -130,15 +155,19 @@ describe('a person with no phone, no email and no device', () => {
     const onCreated = jest.fn();
     await mount({ onCreated });
 
-    type(/^First Name/, 'Ramesh');
-    type(/^Last Name/, 'Iyer');
+    type(/^Full name/, 'Ramesh Iyer');
     await choose(/^State they work in/, 'Kerala');
     await click(/Save and continue/);
 
     const created = callsTo('POST', (u) => u === '/assayers');
     expect(created).toHaveLength(1);
     const body = bodyOf(created[0]);
-    expect(body).toMatchObject({ firstName: 'Ramesh', lastName: 'Iyer', state: 'Kerala' });
+    // The India-first naming fix: one authored `fullName`, verbatim — never a rebuilt
+    // first/last pair, which the server now derives itself and which this payload must not
+    // pre-empt it on.
+    expect(body).toMatchObject({ fullName: 'Ramesh Iyer', state: 'Kerala' });
+    expect(body).not.toHaveProperty('firstName');
+    expect(body).not.toHaveProperty('lastName');
     expect(body).not.toHaveProperty('phone');
     expect(body).not.toHaveProperty('email');
 
@@ -168,10 +197,10 @@ describe('a person with no phone, no email and no device', () => {
  * complete, ACTIVE, and unable to be offered a single assignment.
  */
 describe('which banks will take them', () => {
-  const openClients = async () => {
+  const openClients = async (overrides: Record<string, unknown> = {}) => {
+    if (Object.keys(overrides).length > 0) wireApi(overrides);
     await mount();
-    type(/^First Name/, 'Ramesh');
-    type(/^Last Name/, 'Iyer');
+    type(/^Full name/, 'Ramesh Iyer');
     await choose(/^State they work in/, 'Kerala');
     await click(/Save and continue/);
     await click(/Who they can work for/);
@@ -227,13 +256,45 @@ describe('which banks will take them', () => {
   it('never blocks finishing, because a bank may not have decided yet', async () => {
     const onCreated = jest.fn();
     await mount({ onCreated });
-    type(/^First Name/, 'Ramesh');
-    type(/^Last Name/, 'Iyer');
+    type(/^Full name/, 'Ramesh Iyer');
     await choose(/^State they work in/, 'Kerala');
     await click(/Save and continue/);
     await click(/Check and finish/);
     await click(/Finish/);
     expect(onCreated).toHaveBeenCalled();
+  });
+
+  it('marks every client without a standing accepted in one pass', async () => {
+    await openClients();
+    await click(/Apply to all 2 remaining/);
+    await click(/Mark all 2/);
+
+    await waitFor(() => {
+      expect(callsTo('PUT', (u) => u === '/assayers/asr-1/empanelment/cli-1')).toHaveLength(1);
+      expect(callsTo('PUT', (u) => u === '/assayers/asr-1/empanelment/cli-2')).toHaveLength(1);
+    });
+    expect(bodyOf(callsTo('PUT', (u) => u === '/assayers/asr-1/empanelment/cli-1')[0]))
+      .toEqual({ status: 'ACTIVE' });
+  });
+
+  it('leaves clients that already carry a standing — including a refusal — exactly as they are', async () => {
+    await openClients({
+      'GET /assayers/asr-1/dossier': {
+        onboarding: REQUIREMENTS,
+        references: [],
+        empanelments: [{
+          id: 'emp-1', clientId: 'cli-1', status: 'NOT_RECOMMENDED', statusReason: null,
+          client: { id: 'cli-1', name: 'ICICI Bank' },
+        }],
+      },
+    });
+    await click(/Apply to all 1 remaining/);
+    await click(/Mark all 1/);
+
+    await waitFor(() => {
+      expect(callsTo('PUT', (u) => u === '/assayers/asr-1/empanelment/cli-2')).toHaveLength(1);
+    });
+    expect(callsTo('PUT', (u) => u === '/assayers/asr-1/empanelment/cli-1')).toHaveLength(0);
   });
 });
 
@@ -249,8 +310,7 @@ describe('which banks will take them', () => {
 describe('references', () => {
   it('offers the same fixed relationship list the vetting tab uses, and posts the picked value', async () => {
     await mount();
-    type(/^First Name/, 'Ramesh');
-    type(/^Last Name/, 'Iyer');
+    type(/^Full name/, 'Ramesh Iyer');
     await choose(/^State they work in/, 'Kerala');
     await click(/Save and continue/);
     await click(/Contacts and pay/);
@@ -268,8 +328,7 @@ describe('references', () => {
 describe('saving as you go', () => {
   const startAtIdentity = async () => {
     await mount();
-    type(/^First Name/, 'Ramesh');
-    type(/^Last Name/, 'Iyer');
+    type(/^Full name/, 'Ramesh Iyer');
     await choose(/^State they work in/, 'Kerala');
     await click(/Save and continue/);
     await click(/^Continue/); // address → ID and bank
@@ -295,8 +354,7 @@ describe('saving as you go', () => {
 
   it('offers the map pin as soon as the record exists, which is why the record is made first', async () => {
     await mount();
-    type(/^First Name/, 'Ramesh');
-    type(/^Last Name/, 'Iyer');
+    type(/^Full name/, 'Ramesh Iyer');
     await choose(/^State they work in/, 'Kerala');
     await click(/Save and continue/);
     expect(await screen.findByRole('button', { name: /Pin the exact location/i })).toBeInTheDocument();
@@ -306,8 +364,7 @@ describe('saving as you go', () => {
 describe('the pay rates, which used to be a second unwatched request', () => {
   it('keeps the record, says the rates failed, and does not move on', async () => {
     await mount();
-    type(/^First Name/, 'Ramesh');
-    type(/^Last Name/, 'Iyer');
+    type(/^Full name/, 'Ramesh Iyer');
     await choose(/^State they work in/, 'Kerala');
     await click(/Save and continue/);
     await click(/^Continue/); // address → ID and bank
@@ -329,8 +386,7 @@ describe('the pay rates, which used to be a second unwatched request', () => {
 describe('the papers step', () => {
   const openDocuments = async () => {
     await mount();
-    type(/^First Name/, 'Ramesh');
-    type(/^Last Name/, 'Iyer');
+    type(/^Full name/, 'Ramesh Iyer');
     await choose(/^State they work in/, 'Kerala');
     await click(/Save and continue/);
     await click(/^Continue/);
@@ -384,8 +440,7 @@ describe('the papers step', () => {
       },
     });
     await mount();
-    type(/^First Name/, 'Ramesh');
-    type(/^Last Name/, 'Iyer');
+    type(/^Full name/, 'Ramesh Iyer');
     await choose(/^State they work in/, 'Kerala');
     await click(/Save and continue/);
     await click(/^Continue/);
@@ -400,6 +455,55 @@ describe('the papers step', () => {
     });
     expect(bodyOf(callsTo('POST', (u) => u === '/assayers/document/doc-1/verify')[0]))
       .toEqual({ verdict: 'VERIFIED' });
+  });
+
+  /**
+   * Client-side, against the same accept-list and size cap the server enforces
+   * (`SCAN_UPLOAD_MIME_TYPES`/`DEFAULT_MAX_UPLOAD_MB` from `@fapoms/shared`) — so a clerk on a
+   * slow office link learns a file is the wrong kind before waiting out an upload that was
+   * always going to fail. The server stays the authority; nothing here claims otherwise.
+   */
+  describe('refusing an obviously bad file before it is ever sent', () => {
+    it('refuses a file over the 50 MB limit without calling the upload endpoint', async () => {
+      await openDocuments();
+      const picker = document.querySelector('input[type="file"]') as HTMLInputElement;
+      const huge = new File(['x'], 'huge.jpg', { type: 'image/jpeg' });
+      Object.defineProperty(huge, 'size', { value: 60 * 1024 * 1024 });
+
+      await act(async () => { fireEvent.change(picker, { target: { files: [huge] } }); });
+
+      expect(await screen.findByText(/over the 50 MB limit/i)).toBeInTheDocument();
+      expect(callsTo('POST', (u) => u.includes('/document/AADHAAR_FRONT/file'))).toHaveLength(0);
+    });
+
+    it('refuses a file of the wrong kind, in the same words the server refuses it with', async () => {
+      await openDocuments();
+      const picker = document.querySelector('input[type="file"]') as HTMLInputElement;
+      const spreadsheet = new File(['data'], 'sheet.xlsx', { type: 'application/vnd.ms-excel' });
+
+      await act(async () => { fireEvent.change(picker, { target: { files: [spreadsheet] } }); });
+
+      expect(await screen.findByText(/PDF or an image \(JPEG\/PNG\/WebP\/HEIC\/TIFF\/BMP\/GIF\)/i)).toBeInTheDocument();
+      expect(callsTo('POST', (u) => u.includes('/document/AADHAAR_FRONT/file'))).toHaveLength(0);
+    });
+
+    it('never refuses a blank declared type, which is what phones send for an ordinary HEIC photo', async () => {
+      await openDocuments();
+      const picker = document.querySelector('input[type="file"]') as HTMLInputElement;
+      const noType = new File(['a'], 'photo.heic'); // no `type` option — exactly what Android sends
+
+      await act(async () => { fireEvent.change(picker, { target: { files: [noType] } }); });
+
+      await waitFor(() => {
+        expect(callsTo('POST', (u) => u === '/assayers/asr-1/document/AADHAAR_FRONT/file')).toHaveLength(1);
+      });
+    });
+
+    it('offers the camera as well as the gallery on a phone (capture="environment")', async () => {
+      await openDocuments();
+      const picker = document.querySelector('input[type="file"]') as HTMLInputElement;
+      expect(picker.getAttribute('capture')).toBe('environment');
+    });
   });
 });
 
@@ -416,7 +520,8 @@ describe('resuming an interrupted registration', () => {
 
     // Straight to ID and bank — the PAN, account and IFSC are what is still blank.
     expect(await screen.findByText(/Where their money goes/i)).toBeInTheDocument();
-    await click(/Back/);
+    // Exact name: "Back to People" (the page header's own link) also matches a loose /Back/.
+    await click(/^Back$/);
     // The address it already holds is shown, not an empty form: a resumed registration that makes
     // you re-type what is on file is a resumed registration nobody uses.
     expect(await screen.findByDisplayValue('12 MG Road')).toBeInTheDocument();
@@ -427,18 +532,41 @@ describe('resuming an interrupted registration', () => {
     await mount({ resumeAssayerId: 'asr-9' });
     expect(await screen.findByText(/That registration could not be opened/i)).toBeInTheDocument();
   });
+
+  /**
+   * The India-first naming fix's own round trip: `fullName` is not a column, so a resume has to
+   * seed the box from `displayName` — the server's authored, stored truth — rather than rebuild
+   * it from the retired `firstName`/`lastName` pair, which a name like this one (three initials,
+   * no surname) cannot pass through without losing a word.
+   */
+  it('seeds the full-name box from the record\'s displayName on a resume', async () => {
+    wireApi({
+      'GET /assayers/asr-9': { ...CREATED, id: 'asr-9', assayerCode: 'WIZ-0009', displayName: 'A K Venkatesan' },
+    });
+    await mount({ resumeAssayerId: 'asr-9' });
+    // Phone (among others) is still blank on this record, so `firstIncompleteStep` lands the
+    // wizard on "The person" directly — no navigation needed to see the seeded box.
+    expect(await screen.findByDisplayValue('A K Venkatesan')).toBeInTheDocument();
+  });
 });
 
 describe('the last page', () => {
   const openReview = async (overrides: Record<string, unknown> = {}) => {
     wireApi(overrides);
     await mount();
-    type(/^First Name/, 'Ramesh');
-    type(/^Last Name/, 'Iyer');
+    type(/^Full name/, 'Ramesh Iyer');
     await choose(/^State they work in/, 'Kerala');
     await click(/Save and continue/);
     await click(/Check and finish/);
   };
+
+  it('shows the full name once, labelled the way Aadhaar/PAN checks expect', async () => {
+    // The India-first naming fix: the review page states, in so many words, that what was typed
+    // is what the record now holds — not a rebuild from a retired first/last pair.
+    await openReview();
+    expect(await screen.findByText('Full name (as on Aadhaar/PAN)')).toBeInTheDocument();
+    expect(screen.getAllByText(/Ramesh Iyer/).length).toBeGreaterThan(0);
+  });
 
   it('says in plain words that nobody can be given work, rather than flagging it', async () => {
     await openReview();
@@ -472,27 +600,54 @@ describe('the last page', () => {
 });
 
 describe('the progress rail', () => {
-  it('names all seven steps and locks the later ones until the record exists', async () => {
+  it('names all seven steps, none of them disabled, before the record exists at all', async () => {
     await mount();
     for (const title of ['The person', 'Where they live', 'ID and bank', 'Papers and scans', 'Contacts and pay', 'Who they can work for', 'Check and finish']) {
-      expect(screen.getByRole('button', { name: new RegExp(title) })).toBeInTheDocument();
+      const step = screen.getByRole('button', { name: new RegExp(title) });
+      expect(step).toBeInTheDocument();
+      // The rail itself never locks — only a step's own Save does, and only once it is opened.
+      expect(step).not.toBeDisabled();
     }
-    expect(screen.getByRole('button', { name: /Where they live/ })).toBeDisabled();
     expect(screen.getByRole('button', { name: /The person/ })).toHaveAttribute('aria-current', 'step');
   });
 
-  it('lets a step be jumped to directly once the record is saved, and keeps the step in the URL', async () => {
+  /**
+   * The gate this replaces (`disabledAfterFirst`) made every step past the first unreachable
+   * until the record existed. Looking at one now costs nothing; what still waits on the record is
+   * SAVING it — see the next test.
+   */
+  it('opens any step on a click, with nothing typed and no record yet', async () => {
     await mount();
-    type(/^First Name/, 'Ramesh');
-    type(/^Last Name/, 'Iyer');
+    await click(/ID and bank/);
+    expect(await screen.findByText(/Their identity numbers/i)).toBeInTheDocument();
+
+    await click(/Who they can work for/);
+    expect(await screen.findByText(/Available once their record is saved/i)).toBeInTheDocument();
+
+    await click(/Papers and scans/);
+    expect(await screen.findByText(/Their record has not been created yet/i)).toBeInTheDocument();
+  });
+
+  it('says why, and disables Continue, on a step that would try to save before the record exists', async () => {
+    await mount();
+    await click(/Contacts and pay/);
+
+    expect(await screen.findByText(/The person creates their record — save it before this page can hold anything/i))
+      .toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Continue/ })).toBeDisabled();
+  });
+
+  it('lets a step be jumped to directly once the record is saved, and keeps the step in ?step=', async () => {
+    const StepProbe: React.FC = () => <span data-testid="step-param">{useSearchParams()[0].get('step')}</span>;
+    await mount({}, <StepProbe />);
+    type(/^Full name/, 'Ramesh Iyer');
     await choose(/^State they work in/, 'Kerala');
     await click(/Save and continue/);
 
     await click(/Contacts and pay/);
     expect(await screen.findByText(/If something happens while they are out/i)).toBeInTheDocument();
-    // Linkable, not component state: a colleague can be sent to a particular page of a particular
-    // person's registration.
-    expect(window.location.search || document.location.search).toBeDefined();
+    // `?step=`, this flow's own key — not `?view=`, which every other HR page's chip strip owns.
+    expect(screen.getByTestId('step-param')).toHaveTextContent('people');
   });
 });
 
@@ -513,8 +668,7 @@ describe('the papers step — sending a scan back', () => {
 
   const reachPapers = async () => {
     await mount();
-    type(/^First Name/, 'Ramesh');
-    type(/^Last Name/, 'Iyer');
+    type(/^Full name/, 'Ramesh Iyer');
     await choose(/^State they work in/, 'Kerala');
     await click(/Save and continue/);
     await click(/^Continue/);
@@ -546,29 +700,337 @@ describe('the papers step — sending a scan back', () => {
       .toMatchObject({ verdict: 'VERIFIED', holderName: 'Ramesh Iyer' });
   });
 
+  /**
+   * Both `window.prompt` call sites (the reason picker here, the name-mismatch override below)
+   * are a proper `Modal` form now — see `RejectDocumentModal`/`NameMismatchModal` in
+   * DocumentsStep.tsx. `window.prompt` is not mocked anywhere in this describe block any more:
+   * a leftover mock would hide a regression back to it just as effectively as removing the assertion.
+   */
   it('sends a scan back with a reason, which is what reaches their phone', async () => {
     wireApi({ 'GET /assayers/asr-1/dossier': { onboarding: [AADHAAR_FRONT], references: [] } });
-    const prompt = jest.spyOn(window, 'prompt').mockReturnValue('1');
     await reachPapers();
 
     await click(/Send it back/i);
+    expect(await screen.findByText(/Why is Aadhaar — front being sent back/i)).toBeInTheDocument();
+    await choose(/Why this document is being sent back/i, 'Too blurred or dark to read');
+    await click(/Yes, send it back/i);
 
     await waitFor(() => {
       expect(callsTo('POST', (u) => u === '/assayers/document/doc-1/verify')).toHaveLength(1);
     });
     expect(bodyOf(callsTo('POST', (u) => u === '/assayers/document/doc-1/verify')[0]))
       .toEqual({ verdict: 'REJECTED', rejectionReason: 'ILLEGIBLE' });
-    prompt.mockRestore();
   });
 
-  it('sends nothing when the reviewer backs out of choosing a reason', async () => {
+  it('also sends a free-text note, kept on the record and never shown to the appraiser', async () => {
     wireApi({ 'GET /assayers/asr-1/dossier': { onboarding: [AADHAAR_FRONT], references: [] } });
-    const prompt = jest.spyOn(window, 'prompt').mockReturnValue(null);
     await reachPapers();
 
     await click(/Send it back/i);
+    await choose(/Why this document is being sent back/i, 'This is a different document');
+    type(/Note \(optional/i, 'Brought a driving licence by mistake.');
+    await click(/Yes, send it back/i);
 
+    await waitFor(() => {
+      expect(bodyOf(callsTo('POST', (u) => u === '/assayers/document/doc-1/verify')[0]))
+        .toEqual({ verdict: 'REJECTED', rejectionReason: 'WRONG_DOCUMENT', remarks: 'Brought a driving licence by mistake.' });
+    });
+  });
+
+  it('the confirm button stays disabled until a reason is actually chosen', async () => {
+    wireApi({ 'GET /assayers/asr-1/dossier': { onboarding: [AADHAAR_FRONT], references: [] } });
+    await reachPapers();
+
+    await click(/Send it back/i);
+    expect(screen.getByRole('button', { name: /Yes, send it back/i })).toBeDisabled();
+  });
+
+  it('sends nothing when the reviewer cancels out of the reason dialog', async () => {
+    wireApi({ 'GET /assayers/asr-1/dossier': { onboarding: [AADHAAR_FRONT], references: [] } });
+    await reachPapers();
+
+    await click(/Send it back/i);
+    await click(/^Cancel$/);
+
+    expect(screen.queryByText(/Why is Aadhaar — front being sent back/i)).not.toBeInTheDocument();
     expect(callsTo('POST', (u) => u === '/assayers/document/doc-1/verify')).toHaveLength(0);
-    prompt.mockRestore();
+  });
+
+  /**
+   * The other `window.prompt` this step used to have: accepting a name that does not match the
+   * record. `NameMismatchModal` keeps the prompt's own wording ("If it is the same person, say
+   * why:") and its ten-character floor, now as a real dialog with the reason for the floor visible
+   * instead of a silently-discarded short answer.
+   */
+  it('offers a modal, not a native prompt, when a checked name disagrees with the record', async () => {
+    wireApi({
+      'GET /assayers/asr-1/dossier': { onboarding: [AADHAAR_FRONT], references: [] },
+      'POST /assayers/document/doc-1/verify': new Error('The name “Ramesh Iyer” does not match the name on the record, “Suresh Iyer”.'),
+    });
+    await reachPapers();
+
+    type(/Name exactly as printed/i, 'Ramesh Iyer');
+    await click(/I have checked this against the original/i);
+    await click(/Yes, I checked it/i);
+
+    expect(await screen.findByText(/does not match the name on the record/i)).toBeInTheDocument();
+    expect(screen.getByText(/If it is the same person, say why:/i)).toBeInTheDocument();
+    // The floor is stated, not silently enforced — a short answer is refused with a reason.
+    expect(screen.getByRole('button', { name: /Verify anyway/i })).toBeDisabled();
+  });
+
+  it('retries with the reviewer\'s note once it clears the ten-character floor', async () => {
+    let attempt = 0;
+    mockRequest.mockImplementation((url: string, opts?: RequestInit) => {
+      const method = (opts?.method ?? 'GET').toUpperCase();
+      if (method === 'POST' && url === '/assayers/document/doc-1/verify') {
+        attempt += 1;
+        return attempt === 1
+          ? Promise.reject(new Error('The name does not match the name on the record.'))
+          : Promise.resolve({ success: true });
+      }
+      if (url.includes('workforce-attribute/vocabulary')) return Promise.resolve({ skills: [], certifications: [], languages: [] });
+      if (url.startsWith('/clients')) return Promise.resolve({ items: CLIENTS });
+      if (url.includes('/dossier')) return Promise.resolve({ onboarding: [AADHAAR_FRONT], references: [] });
+      if (method === 'POST' && url === '/assayers') return Promise.resolve({ ...CREATED });
+      if (method === 'PUT' && url.startsWith('/assayers/')) return Promise.resolve({ ...CREATED });
+      if (method === 'GET' && /^\/assayers\/[^/]+$/.test(url)) return Promise.resolve({ ...CREATED });
+      return Promise.resolve({ success: true, data: [] });
+    });
+    await reachPapers();
+
+    type(/Name exactly as printed/i, 'Ramesh Iyer');
+    await click(/I have checked this against the original/i);
+    await click(/Yes, I checked it/i);
+    await screen.findByText(/If it is the same person, say why:/i);
+
+    type(/If it is the same person, say why/i, 'Maiden name on the card.');
+    await click(/Verify anyway/i);
+
+    await waitFor(() => {
+      const retried = callsTo('POST', (u) => u === '/assayers/document/doc-1/verify');
+      expect(retried).toHaveLength(2);
+      expect(bodyOf(retried[1])).toMatchObject({ nameMismatchNote: 'Maiden name on the card.' });
+    });
+  });
+});
+
+/**
+ * Tidying up what was pasted, on the way out of the box — never on the way in, so a clerk mid
+ * keystroke never has letters silently disappear from under the caret the way a hard `maxLength`
+ * used to make them.
+ */
+describe('normalising what was pasted, on blur', () => {
+  it('strips the spaces and dashes out of a pasted PAN, and says what it did', async () => {
+    await mount();
+    type(/^Full name/, 'Ramesh Iyer');
+    await choose(/^State they work in/, 'Kerala');
+    await click(/Save and continue/);
+    await click(/ID and bank/);
+
+    const panBox = await screen.findByLabelText(/^PAN Number/);
+    fireEvent.change(panBox, { target: { value: 'ABCDE 1234-F' } });
+    fireEvent.blur(panBox);
+
+    expect(await screen.findByDisplayValue('ABCDE1234F')).toBeInTheDocument();
+    expect(screen.getByText('Cleaned up: ABCDE 1234-F → ABCDE1234F')).toBeInTheDocument();
+  });
+
+  it('runs a pasted phone number through the shared normalisePhone on blur', async () => {
+    await mount();
+    const phoneBox = screen.getByLabelText(/^Phone/);
+    fireEvent.change(phoneBox, { target: { value: '+91 98765-43210' } });
+    fireEvent.blur(phoneBox);
+
+    expect(await screen.findByDisplayValue('9876543210')).toBeInTheDocument();
+    expect(screen.getByText('Cleaned up: +91 98765-43210 → 9876543210')).toBeInTheDocument();
+  });
+
+  it('leaves an already-clean value alone — no caption for nothing to clean up', async () => {
+    await mount();
+    const phoneBox = screen.getByLabelText(/^Phone/);
+    fireEvent.change(phoneBox, { target: { value: '9876543210' } });
+    fireEvent.blur(phoneBox);
+
+    expect(screen.queryByText(/^Cleaned up:/)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The audit's #1 error-proneness finding: a format failure rendered exactly like a routine hint,
+ * so a clerk had no visual reason to believe anything was wrong until the server said so.
+ */
+describe('a format failure looks like an error once the box has been left, not before', () => {
+  const gotoIdentity = async () => {
+    await mount();
+    type(/^Full name/, 'Ramesh Iyer');
+    await choose(/^State they work in/, 'Kerala');
+    await click(/Save and continue/);
+    await click(/ID and bank/);
+    return (await screen.findByLabelText(/^PAN Number/)) as HTMLInputElement;
+  };
+
+  it('stays a muted, routine-looking hint while the box is still being typed into', async () => {
+    const panBox = await gotoIdentity();
+    fireEvent.change(panBox, { target: { value: 'NOTAPAN' } });
+
+    const hint = screen.getByText(/A PAN looks like ABCDE1234F/i);
+    expect(hint.parentElement).toHaveStyle({ color: 'var(--text-muted)' });
+    expect(panBox).not.toHaveStyle({ borderColor: 'var(--danger)' });
+  });
+
+  it('turns red, with an icon, and tints the box border once the invalid value is left', async () => {
+    const panBox = await gotoIdentity();
+    fireEvent.change(panBox, { target: { value: 'NOTAPAN' } });
+    fireEvent.blur(panBox);
+
+    const hint = await screen.findByText(/A PAN looks like ABCDE1234F/i);
+    expect(hint.parentElement).toHaveStyle({ color: 'var(--danger)' });
+    expect(hint.parentElement?.querySelector('svg')).toBeInTheDocument();
+    // A raw-attribute check rather than `toHaveStyle`: jsdom's CSSOM does not recompute the
+    // `border` shorthand when `border-color` is layered on afterward in the same style object,
+    // so it never reports the merged colour — a real browser applies exactly this override.
+    expect(panBox.getAttribute('style')).toMatch(/border-color:\s*var\(--danger\)/);
+  });
+
+  it('goes back to looking routine once the value is fixed', async () => {
+    const panBox = await gotoIdentity();
+    fireEvent.change(panBox, { target: { value: 'NOTAPAN' } });
+    fireEvent.blur(panBox);
+    await screen.findByText(/A PAN looks like ABCDE1234F/i);
+
+    fireEvent.change(panBox, { target: { value: 'ABCDE1234F' } });
+    expect(screen.queryByText(/A PAN looks like ABCDE1234F/i)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Helping a clerk notice somebody is already on the roster — never blocking the save either way.
+ * Track 1's endpoint contract, coded to verbatim: `GET /assayers/identifier-check?phone=&panNumber=
+ * &aadhaarNumber=&excludeId=` -> `{ success, data: { matches: [...] } }` on the wire — but `api.request` unwraps the envelope, so the hook (and this mock) see `{ matches: [...] }`. The envelope-typed version of this mock shipped the same silent-empty bug the Approvals queue had.
+ */
+describe('the duplicate check', () => {
+  const MATCH = {
+    id: 'existing-1', assayerCode: 'AS0042', displayName: 'Prakash Menon',
+    lifecycleStatus: 'ACTIVE', matchedOn: 'phone',
+  };
+
+  it('shows a card naming the roster match, in plain English, once the phone is format-valid', async () => {
+    wireApi({
+      'GET /assayers/identifier-check': { matches: [MATCH] },
+    });
+    await mount();
+    const phoneBox = screen.getByLabelText(/^Phone/);
+    fireEvent.change(phoneBox, { target: { value: '9876543210' } });
+    fireEvent.blur(phoneBox);
+
+    expect(await screen.findByText(/Already on the roster:/i)).toBeInTheDocument();
+    expect(screen.getByText(/Prakash Menon/)).toBeInTheDocument();
+    expect(screen.getByText(/AS0042/)).toBeInTheDocument();
+    // The lifecycle value reads as words, never the bare enum.
+    expect(screen.queryByText('ACTIVE')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open their record' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'This is a different person' })).toBeInTheDocument();
+  });
+
+  it('never blocks saving — the step still commits with the match on screen', async () => {
+    wireApi({
+      'GET /assayers/identifier-check': { matches: [MATCH] },
+    });
+    await mount();
+    type(/^Full name/, 'Ramesh Iyer');
+    await choose(/^State they work in/, 'Kerala');
+    const phoneBox = screen.getByLabelText(/^Phone/);
+    fireEvent.change(phoneBox, { target: { value: '9876543210' } });
+    fireEvent.blur(phoneBox);
+    await screen.findByText(/Already on the roster:/i);
+
+    await click(/Save and continue/);
+    expect(callsTo('POST', (u) => u === '/assayers')).toHaveLength(1);
+  });
+
+  it('"This is a different person" dismisses the card for that value', async () => {
+    wireApi({
+      'GET /assayers/identifier-check': { matches: [MATCH] },
+    });
+    await mount();
+    const phoneBox = screen.getByLabelText(/^Phone/);
+    fireEvent.change(phoneBox, { target: { value: '9876543210' } });
+    fireEvent.blur(phoneBox);
+    await screen.findByText(/Already on the roster:/i);
+
+    await click('This is a different person');
+    expect(screen.queryByText(/Already on the roster:/i)).not.toBeInTheDocument();
+  });
+
+  it('never checks a value that does not look like a real phone number yet', async () => {
+    wireApi({
+      'GET /assayers/identifier-check': { matches: [MATCH] },
+    });
+    await mount();
+    const phoneBox = screen.getByLabelText(/^Phone/);
+    fireEvent.change(phoneBox, { target: { value: '123' } });
+    fireEvent.blur(phoneBox);
+
+    await new Promise((r) => setTimeout(r, 450));
+    expect(callsTo('GET', (u) => u.startsWith('/assayers/identifier-check'))).toHaveLength(0);
+  });
+
+  it('degrades silently once the endpoint answers 404 — not built yet', async () => {
+    wireApi({ 'GET /assayers/identifier-check': new AppError('Not found', 'Not found', 404) });
+    await mount();
+    const phoneBox = screen.getByLabelText(/^Phone/);
+    fireEvent.change(phoneBox, { target: { value: '9876543210' } });
+    fireEvent.blur(phoneBox);
+
+    await new Promise((r) => setTimeout(r, 450));
+    expect(screen.queryByText(/Already on the roster:/i)).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * `bankName` used to stay a plain, overwritable box even after `resolveIfsc` had just filled it —
+ * the comment on `renderFormField`'s old `ifscInfo` parameter said so explicitly. It locks now,
+ * with a deliberate way out.
+ */
+describe('bankName locks once the IFSC code resolves it', () => {
+  const gotoIdentity = async () => {
+    await mount();
+    type(/^Full name/, 'Ramesh Iyer');
+    await choose(/^State they work in/, 'Kerala');
+    await click(/Save and continue/);
+    await click(/ID and bank/);
+  };
+
+  it('turns read-only, showing the resolved name, once the code resolves', async () => {
+    wireApi({
+      'GET /geo/ifsc/HDFC0001234': { bankName: 'HDFC Bank', branchName: 'MG Road', city: 'Kochi', state: 'Kerala', address: null },
+    });
+    await gotoIdentity();
+
+    const ifscBox = screen.getByLabelText(/^IFSC Code/);
+    fireEvent.change(ifscBox, { target: { value: 'HDFC0001234' } });
+    fireEvent.blur(ifscBox);
+
+    const bankNameBox = await screen.findByDisplayValue('HDFC Bank') as HTMLInputElement;
+    expect(bankNameBox).toHaveAttribute('readonly');
+    expect(screen.getByText(/Filled in from the IFSC code/i)).toBeInTheDocument();
+  });
+
+  it('"Edit anyway" turns it back into an ordinary, overwritable box', async () => {
+    wireApi({
+      'GET /geo/ifsc/HDFC0001234': { bankName: 'HDFC Bank', branchName: 'MG Road', city: 'Kochi', state: 'Kerala', address: null },
+    });
+    await gotoIdentity();
+    fireEvent.change(screen.getByLabelText(/^IFSC Code/), { target: { value: 'HDFC0001234' } });
+    fireEvent.blur(screen.getByLabelText(/^IFSC Code/));
+    await screen.findByDisplayValue('HDFC Bank');
+
+    await click(/Edit anyway/i);
+
+    const bankNameBox = screen.getByDisplayValue('HDFC Bank') as HTMLInputElement;
+    expect(bankNameBox).not.toHaveAttribute('readonly');
+    fireEvent.change(bankNameBox, { target: { value: 'HDFC Bank — Fort Kochi branch' } });
+    expect(screen.getByDisplayValue('HDFC Bank — Fort Kochi branch')).toBeInTheDocument();
   });
 });

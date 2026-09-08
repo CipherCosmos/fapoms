@@ -21,12 +21,9 @@ export class AssignmentStateMachine {
     // after work has already started. Refusing that would fail a legitimate retry, so it is
     // allowed here rather than being a backwards move nobody intended.
     [AssignmentStatus.IN_PROGRESS]: [AssignmentStatus.IN_PROGRESS, AssignmentStatus.CHECKED_IN, AssignmentStatus.COMPLETED, AssignmentStatus.CANCELLED],
-    // Reopening exists only for the owner-decision void path: an admin/ops actor voiding the
-    // payable a wrong completion booked needs the assignment back in a state work can resume
-    // from. ACCEPTED, not CHECKED_IN, because `checkedInAt` is the field evidence of a real
-    // visit and a reopen must not manufacture that evidence — the assayer checks in again if
-    // they genuinely return to the branch.
-    [AssignmentStatus.COMPLETED]: [AssignmentStatus.ACCEPTED],
+    // COMPLETED is a terminal workflow state that cannot be exited through generic transition endpoints.
+    // Reopening is strictly a privileged back-office operational command via AssignmentStateMachine.reopen().
+    [AssignmentStatus.COMPLETED]: [],
     [AssignmentStatus.REJECTED]: [AssignmentStatus.PENDING],
     [AssignmentStatus.CANCELLED]: [AssignmentStatus.PENDING],
   };
@@ -137,12 +134,20 @@ export class AssignmentStateMachine {
    * to being closed correctly.
    */
   static reopen(assignment: AssignmentEntity, userId: string, reason: string) {
-    AssignmentStateMachine.validateTransition(assignment.status, AssignmentStatus.ACCEPTED);
+    if (assignment.status !== AssignmentStatus.COMPLETED) {
+      throw new BadRequestException(
+        `Cannot reopen assignment in state '${assignment.status}'. Only COMPLETED assignments can be reopened.`,
+      );
+    }
+    const stated = (reason ?? '').trim();
+    if (!stated) {
+      throw new BadRequestException('A reason is required to reopen a completed assignment.');
+    }
     const prev = assignment.status;
     assignment.status = AssignmentStatus.ACCEPTED;
     assignment.completionDate = null;
     assignment.completedWithoutCheckInReason = null;
-    assignment.remarks = reason;
+    assignment.remarks = stated;
     return { previousState: prev, newState: assignment.status, userId };
   }
 }

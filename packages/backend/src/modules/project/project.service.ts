@@ -465,7 +465,9 @@ export class ProjectService implements OnModuleInit {
 
     // Deactivate associated assignments
     await this.dataSource.query(
-      `UPDATE assignments SET is_active = false, updated_by = $1 WHERE project_id = $2 AND is_active = true`,
+      `UPDATE assignments SET is_active = false, updated_by = $1,
+          entity_version = COALESCE(entity_version, 1) + 1, updated_at = NOW()
+        WHERE project_id = $2 AND is_active = true`,
       [userId, id]
     );
 
@@ -1685,6 +1687,30 @@ export class ProjectService implements OnModuleInit {
 
   async cancelProject(id: string, userId: string, role = SystemRole.ADMIN): Promise<ProjectEntity> {
     const project = await this.findOne(id);
+
+    // State-specific assignment integrity checks
+    const assignments: Array<{
+      id: string;
+      assignment_number: string;
+      status: string;
+      project_branch_id: string;
+    }> = await this.dataSource.query(
+      `SELECT a.id, a.assignment_number, a.status, a.project_branch_id
+       FROM assignments a
+       INNER JOIN project_branches pb ON a.project_branch_id = pb.id
+       WHERE pb.project_id = $1 AND a.is_active = true`,
+      [id],
+    ).catch(() => []);
+
+    const inProgress = assignments.find(
+      (a) => a.status === AssignmentStatus.CHECKED_IN || a.status === AssignmentStatus.IN_PROGRESS,
+    );
+    if (inProgress) {
+      throw new ConflictException(
+        `Cannot cancel project "${project.name}": Assignment ${inProgress.assignment_number} is currently ${inProgress.status}. Field audit is actively in progress on site. Operational intervention required before cancelling this project.`,
+      );
+    }
+
     const prev = project.status;
     const next = ProjectStatus.CANCELLED;
     return this.workflowEngine.executeCommand(
@@ -1697,6 +1723,41 @@ export class ProjectService implements OnModuleInit {
       role,
       [SystemRole.ADMIN, SystemRole.OPERATIONS],
       async () => {
+        // Safely cancel pending or accepted assignments transactionally with outbox/audit events
+        const cancellable = assignments.filter(
+          (a) => a.status === AssignmentStatus.PENDING || a.status === AssignmentStatus.ACCEPTED,
+        );
+        for (const a of cancellable) {
+          await this.dataSource.query(
+            `UPDATE assignments
+             SET status = 'CANCELLED',
+                 cancel_reason = 'Project cancelled by operations',
+                 updated_by = $1,
+                 entity_version = COALESCE(entity_version, 1) + 1,
+                 updated_at = NOW()
+             WHERE id = $2`,
+            [userId, a.id],
+          );
+          await this.auditService.recordEvent({
+            category: EventCategory.WORKFLOW,
+            eventType: 'ASSIGNMENT_CANCELLED',
+            entityType: 'ASSIGNMENT',
+            entityId: a.id,
+            previousState: a.status,
+            newState: AssignmentStatus.CANCELLED,
+            userId,
+            remarks: `Auto-cancelled due to cancellation of project ${project.name}`,
+          });
+          this.eventPublisher.publish('assignment:status-changed', {
+            eventType: 'assignment:status-changed',
+            assignmentId: a.id,
+            assignmentNumber: a.assignment_number,
+            previousState: a.status,
+            newState: AssignmentStatus.CANCELLED,
+            userId,
+          });
+        }
+
         const event = ProjectStateMachine.cancelProject(project, userId);
         const saved = await this.projectRepository.save(project);
         this.eventPublisher.publish(event.constructor.name, event);

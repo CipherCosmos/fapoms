@@ -47,6 +47,8 @@ const REQUIRED_MIGRATION_INDEXES = [
   'IDX_client_configurations_client_effective',
   'IDX_clients_organization',
   'IDX_clients_lifecycle_status',
+  'idx_assignments_assayer_feed',
+  'idx_assignments_completed_reconcile',
 ];
 
 /** The same set minus the functional index, mapped to the entity file that must declare it. */
@@ -57,6 +59,8 @@ const REQUIRED_ENTITY_DECLARATIONS: Record<string, string[]> = {
     'idx_assignments_assayer_day',
     'idx_assignments_branch_recent',
     'idx_assignments_sla_status_status_active',
+    'idx_assignments_assayer_feed',
+    'idx_assignments_completed_reconcile',
   ],
   'modules/project/project-branch.entity.ts': ['IDX_project_branches_scheduled_date_active'],
   'modules/notifications/notification.entity.ts': ['IDX_notifications_assayer_created', 'IDX_notifications_group_key'],

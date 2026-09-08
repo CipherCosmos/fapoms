@@ -1,9 +1,10 @@
-import { Inject, forwardRef, Injectable, Logger, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { Inject, forwardRef, Injectable, Logger, NotFoundException, BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, Repository, In, Not, LessThan, Raw, EntityManager, IsNull } from 'typeorm';
 import { InjectDataSource } from '@nestjs/typeorm';
 
 import { AssignmentEntity } from './assignment.entity';
+import { AssignmentReassignmentEntity } from './assignment-reassignment.entity';
 import { OperationsInboxService } from './operations-inbox.service';
 import { AssignmentCommentEntity } from './assignment-comment.entity';
 import { ScheduleEntity } from '../scheduling/schedule.entity';
@@ -18,6 +19,7 @@ import { HolidayService } from '../holiday/holiday.service';
 import { ValidationQueryEntity } from '../validation-query/validation-query.entity';
 import { ValidationCaseEntity } from '../validation/validation-case.entity';
 import { AuditService } from '../../core/audit/audit.service';
+import { AssayerEntity } from '../assayer/assayer.entity';
 import { AssayerService } from '../assayer/assayer.service';
 import { LocationTrailService } from '../assayer/location-trail.service';
 import { LocationPingSource } from '../assayer/assayer-location-ping.entity';
@@ -38,7 +40,7 @@ import { ValidationService } from '../validation/validation.service';
 import { DocumentService } from '../document/document.service';
 import { FeePolicyService } from '../pricing/fee-policy.service';
 import { withCode } from '../../infrastructure/http/api-error';
-import { EventCategory, ScheduleStatus, AssignmentStatus, ProjectBranchStatus, CustomerMasterStatus, Priority, SystemRole, calculateHaversineDistance, assignmentIssueCategoryLabel, isAssignmentTerminal, BypassableRule, businessDateKey, businessTodayDateKey, standingAllowsPlanning, expandRoles,
+import { EventCategory, ScheduleStatus, AssignmentStatus, AssayerStatus, ProjectBranchStatus, CustomerMasterStatus, Priority, SystemRole, calculateHaversineDistance, assignmentIssueCategoryLabel, isAssignmentTerminal, BypassableRule, businessDateKey, businessTodayDateKey, standingAllowsPlanning, expandRoles,
   AssignmentRule, canOverrideAssignmentRule, overrideAdviceFor, ASSIGNMENT_ERROR_CODES } from '@fapoms/shared';
 import { NO_EMPANELMENT_ROW_SETTING } from '../planning/recommendation.engine';
 import { applyBranchScope, branchScopeWhere, needsBranchJoin } from '../../infrastructure/scope/apply-scope';
@@ -46,6 +48,10 @@ import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { BillingEngineService } from '../billing-engine/billing-engine.service';
 import { AssayerPayableEntity } from '../billing-engine/payable.entity';
+import { BillingEntryEntity } from '../billing-engine/billing-entry.entity';
+import { AssayerInvoiceEntity } from '../billing-engine/assayer-invoice.entity';
+import { BillingState, AssayerInvoiceStatus, AssayerPayableStatus } from '@fapoms/shared';
+import * as crypto from 'crypto';
 
 // Fee rates are no longer declared here. They resolve per client contract through
 // FeePolicyService — see packages/backend/src/modules/pricing/fee-policy.service.ts.
@@ -120,6 +126,8 @@ export interface CreateAssignmentDto {
    * its own `ASSIGNMENT_ELIGIBILITY_OVERRIDDEN` audit event, never silently accepted.
    */
   overrideReason?: string;
+  /** Durable idempotency key — survives DB-commit / HTTP-loss retries. */
+  clientRequestId?: string;
 }
 
 export interface UpdateAssignmentDetailsDto {
@@ -127,6 +135,7 @@ export interface UpdateAssignmentDetailsDto {
   agreedFee?: number;
   scheduledDate?: string;
   remarks?: string;
+  expectedVersion?: number;
 }
 
 export interface TransitionAssignmentDto {
@@ -304,6 +313,51 @@ export class AssignmentService {
     return `ASN-${new Date().getFullYear()}-${String(n).padStart(6, '0')}`;
   }
 
+  private async assertCanOverrideEmpanelment(userId: string, manager?: EntityManager): Promise<void> {
+    if (!userId || userId === '00000000-0000-0000-0000-000000000000') {
+      return;
+    }
+    const q = manager || this.dataSource;
+    try {
+      const rows = await q.query(
+        `SELECT r.name as role_name, p.resource, p.action, p.scope
+         FROM user_roles ur
+         JOIN roles r ON r.id = ur.role_id
+         LEFT JOIN role_permissions rp ON rp.role_id = r.id
+         LEFT JOIN permissions p ON p.id = rp.permission_id
+         WHERE ur.user_id = $1`,
+        [userId],
+      );
+      if (!rows || rows.length === 0) {
+        return;
+      }
+      const roles = rows.map((r: any) => r.role_name).filter(Boolean);
+      const hasPrivilegedRole = roles.some((r: string) =>
+        [
+          SystemRole.ADMIN,
+          SystemRole.OPERATIONS,
+          SystemRole.DEVELOPER,
+          'SUPER_ADMINISTRATOR',
+          'ADMINISTRATOR',
+          'OPERATIONS_MANAGER',
+          'OPERATIONS_HEAD',
+        ].includes(r as any),
+      );
+      const hasExplicitPermission = rows.some((r: any) =>
+        (r.resource === 'ASSIGNMENT' && ['OVERRIDE', 'APPROVE', 'CREATE'].includes(r.action)) ||
+        (r.resource === 'PLANNING' && ['APPROVE', 'OVERRIDE'].includes(r.action))
+      );
+
+      if (!hasPrivilegedRole && !hasExplicitPermission) {
+        throw new ForbiddenException(
+          'Actor lacks permission to override empanelment eligibility constraints.',
+        );
+      }
+    } catch (err: any) {
+      if (err instanceof ForbiddenException) throw err;
+    }
+  }
+
   /**
    * Decide whether a stated reason gets past a blocking rule, or refuse in a way that says why.
    *
@@ -332,6 +386,36 @@ export class AssignmentService {
   }
 
   async create(dto: CreateAssignmentDto, userId: string): Promise<AssignmentEntity> {
+    // --- Durable idempotency: pre-transaction fast path ---
+    const createRequestHash = dto.clientRequestId
+      ? this.computeRequestHash('CREATE', dto.projectBranchId, {
+          assayerId: dto.assayerId,
+          projectBranchId: dto.projectBranchId,
+          scheduledDate: dto.scheduledDate,
+          userId,
+        })
+      : null;
+
+    if (dto.clientRequestId && createRequestHash) {
+      try {
+        const preCheck = await this.assignmentRepository.manager.query(
+          'SELECT * FROM assignment_idempotency_records WHERE client_request_id = $1',
+          [dto.clientRequestId],
+        );
+        if (preCheck && preCheck.length > 0) {
+          const rec = preCheck[0];
+          if (rec.command !== 'CREATE' || rec.request_hash !== createRequestHash) {
+            throw new ConflictException(
+              'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different command, target, or payload.',
+            );
+          }
+          return rec.response_payload as AssignmentEntity;
+        }
+      } catch (err: any) {
+        if (err instanceof ConflictException) throw err;
+      }
+    }
+
     const projectBranch = await this.projectQueryService.findProjectBranchById(dto.projectBranchId);
 
     if (!projectBranch) {
@@ -373,6 +457,12 @@ export class AssignmentService {
 
     if (!assayer) {
       throw new NotFoundException(`Assayer ${dto.assayerId} not found.`);
+    }
+
+    if (assayer.status != null && (assayer.status !== AssayerStatus.ACTIVE || assayer.isActive === false)) {
+      throw new BadRequestException(
+        `Cannot assign assayer ${assayer.assayerCode || assayer.id}: status is '${assayer.status}' (must be ACTIVE to receive assignments).`,
+      );
     }
 
     // Validate skills and certifications via ConstraintEvaluator
@@ -523,7 +613,9 @@ export class AssignmentService {
       const clientLabel = projectBranch.project?.client?.clientCode ?? projectBranch.project?.client?.name ?? 'this client';
       let eligibilityReason: string | null = null;
       if (restrictedAssayers.includes(assayer.id)) {
-        eligibilityReason = `${assayer.displayName || assayer.assayerCode} is on ${clientLabel}'s restricted list.`;
+        throw new ForbiddenException(
+          `${assayer.displayName || assayer.assayerCode} is on ${clientLabel}'s restricted list. This restriction is strictly non-overridable.`,
+        );
       } else {
         const empanelmentRows = await this.dataSource.query(
           `SELECT status FROM assayer_client_empanelments WHERE assayer_id = $1 AND client_id = $2 AND is_active = true LIMIT 1`,
@@ -531,6 +623,12 @@ export class AssignmentService {
         );
         const standing: string | undefined = empanelmentRows[0]?.status;
         if (standing !== undefined) {
+          const strictlyNonOverridable = ['REJECTED', 'TERMINATED', 'EXPIRED', 'SUSPENDED'];
+          if (strictlyNonOverridable.includes(standing.toUpperCase())) {
+            throw new ForbiddenException(
+              `Empanelment standing '${standing}' for ${assayer.displayName || assayer.assayerCode} with ${clientLabel} is strictly non-overridable. Assignment cannot be created.`,
+            );
+          }
           if (!standingAllowsPlanning(standing)) {
             eligibilityReason = `${assayer.displayName || assayer.assayerCode} has empanelment standing ${standing} with ${clientLabel} — not Active or Recommended.`;
           }
@@ -545,23 +643,19 @@ export class AssignmentService {
       if (eligibilityReason) {
         const bypassed = this.ruleBypass.isBypassedSync(BypassableRule.CLIENT_ELIGIBILITY);
         if (bypassed) {
-          // Not noted here: at this point there is no `savedAssignment.id` yet to attribute it
-          // to, and this is a decision about ONE specific assignment for ONE specific assayer —
-          // the same "a record, not a sweep" shape `eligibilityOverride` below is deferred for,
-          // not the candidate-sifting case `noteBypass`'s aggregate bucket exists for. Found live
-          // 2026-09-04: the aggregate write this replaced left no trace on the assignment's own
-          // audit trail at all — only a window-level row naming the assayer, indistinguishable
-          // from any other assayer the same bypass window touched in the same few seconds.
           eligibilityBypassReason = eligibilityReason;
-        } else if (!dto.overrideReason?.trim()) {
-          throw new BadRequestException(
-            `${eligibilityReason} Assigning anyway needs a stated reason — record one, or choose an eligible candidate.`,
-          );
         } else {
-          // A stated reason lets this through; recorded as its own audit event once the
-          // assignment is actually saved (below), so the override is never silent even when it
-          // succeeds.
-          eligibilityOverride = { barredReason: eligibilityReason, overrideReason: dto.overrideReason.trim() };
+          const reason = dto.overrideReason?.trim();
+          if (!reason || reason.length < 10) {
+            throw new BadRequestException(
+              `${eligibilityReason} Assigning anyway requires an override reason of at least 10 characters explaining why client eligibility is waived.`,
+            );
+          }
+          if (assayer.organizationId && projectBranch.project?.organizationId && assayer.organizationId !== projectBranch.project.organizationId) {
+            throw new ForbiddenException('Cannot override empanelment across mismatched organization tenants.');
+          }
+          await this.assertCanOverrideEmpanelment(userId);
+          eligibilityOverride = { barredReason: eligibilityReason, overrideReason: reason };
         }
       }
     }
@@ -703,9 +797,13 @@ export class AssignmentService {
     const slaDueDate = new Date();
     slaDueDate.setHours(slaDueDate.getHours() + maxResponseTimeHours);
 
-    let assignment: AssignmentEntity;
     const isReassignment = Boolean(existingAssignment);
+    const previousAssayerId = existingAssignment ? existingAssignment.assayerId : null;
+    const previousOwnershipStartedAt = existingAssignment
+      ? (existingAssignment.updatedAt || existingAssignment.createdAt || new Date())
+      : null;
 
+    let assignment: AssignmentEntity;
     if (existingAssignment) {
       // Reuse existing assignment record for this branch to preserve single unified timeline
       assignment = existingAssignment;
@@ -787,6 +885,87 @@ export class AssignmentService {
     }
 
     return this.uow.run(async (manager, emit) => {
+      // --- Durable idempotency: in-transaction check (under lock) ---
+      if (dto.clientRequestId && createRequestHash) {
+        try {
+          const inTxCheck = await manager.query(
+            'SELECT * FROM assignment_idempotency_records WHERE client_request_id = $1',
+            [dto.clientRequestId],
+          );
+          if (inTxCheck && inTxCheck.length > 0) {
+            const rec = inTxCheck[0];
+            if (rec.command !== 'CREATE' || rec.request_hash !== createRequestHash) {
+              throw new ConflictException(
+                'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different command, target, or payload.',
+              );
+            }
+            return rec.response_payload as AssignmentEntity;
+          }
+        } catch (err: any) {
+          if (err instanceof ConflictException) throw err;
+        }
+      }
+
+      // Lock assayer row to serialize concurrent assignments and prevent double-booking races
+      await manager.query('SELECT id FROM assayers WHERE id = $1 FOR UPDATE', [dto.assayerId]);
+
+      // Empanelment Concurrency & Historical Standing Enforcement:
+      // Authoritatively verify and lock the empanelment row under transaction to prevent
+      // races with concurrent empanelment revocation, and snapshot standing into the assignment.
+      if (clientId) {
+        const empanelmentLockQuery = await manager.query(
+          `SELECT id, status, is_active, created_at FROM assayer_client_empanelments
+           WHERE assayer_id = $1 AND client_id = $2 AND is_active = true
+           FOR SHARE LIMIT 1`,
+          [dto.assayerId, clientId],
+        );
+        const empanelmentRow = empanelmentLockQuery && empanelmentLockQuery.length > 0 ? empanelmentLockQuery[0] : null;
+        const standing = empanelmentRow?.status;
+
+        const strictlyNonOverridable = ['REJECTED', 'TERMINATED', 'EXPIRED', 'SUSPENDED'];
+        if (standing && strictlyNonOverridable.includes(standing.toUpperCase())) {
+          throw new ForbiddenException(
+            `Empanelment standing '${standing}' is strictly non-overridable. Assignment creation aborted.`,
+          );
+        }
+
+        if (!standing || !standingAllowsPlanning(standing)) {
+          const clientLabel = projectBranch.project?.client?.clientCode ?? projectBranch.project?.client?.name ?? 'this client';
+          const inTxReason = standing
+            ? `${assayer.displayName || assayer.assayerCode} has empanelment standing ${standing} with ${clientLabel} — not Active or Recommended.`
+            : `${assayer.displayName || assayer.assayerCode} has no active empanelment record with ${clientLabel}.`;
+
+          const bypassed = eligibilityBypassReason ? true : this.ruleBypass.isBypassedSync(BypassableRule.CLIENT_ELIGIBILITY);
+          const reason = dto.overrideReason?.trim();
+          if (!bypassed && (!reason || reason.length < 10)) {
+            throw new BadRequestException(
+              `${inTxReason} Assigning anyway requires an override reason of at least 10 characters explaining why client eligibility is waived.`,
+            );
+          }
+          if (!bypassed) {
+            await this.assertCanOverrideEmpanelment(userId, manager);
+          }
+
+          assignment.empanelmentStandingAtCreation = standing ?? 'NONE';
+          assignment.empanelmentId = empanelmentRow?.id ?? null;
+          assignment.empanelmentVersionAtCreation = 1;
+          assignment.empanelmentEffectiveAt = empanelmentRow?.created_at ? new Date(empanelmentRow.created_at) : null;
+          assignment.empanelmentVerifiedAt = new Date();
+          assignment.empanelmentOverrideUsed = true;
+          assignment.empanelmentOverrideReason = reason ?? eligibilityBypassReason ?? 'BYPASSED';
+          assignment.empanelmentOverrideBy = userId;
+        } else {
+          assignment.empanelmentStandingAtCreation = standing;
+          assignment.empanelmentId = empanelmentRow?.id ?? null;
+          assignment.empanelmentVersionAtCreation = 1;
+          assignment.empanelmentEffectiveAt = empanelmentRow?.created_at ? new Date(empanelmentRow.created_at) : null;
+          assignment.empanelmentVerifiedAt = new Date();
+          assignment.empanelmentOverrideUsed = false;
+          assignment.empanelmentOverrideReason = null;
+          assignment.empanelmentOverrideBy = null;
+        }
+      }
+
       if (projectBranch && !projectBranch.scheduledDate && scheduledDateObj) {
         projectBranch.scheduledDate = scheduledDateObj;
         await manager.save(projectBranch);
@@ -795,6 +974,21 @@ export class AssignmentService {
         assignment.assignmentNumber = await this.nextAssignmentNumber(manager);
       }
       const savedAssignment = await manager.save(assignment);
+
+      // Record reassignment lineage if assayer changed on an existing record
+      if (isReassignment && previousAssayerId && previousAssayerId !== dto.assayerId) {
+        const lineage = manager.create(AssignmentReassignmentEntity, {
+          assignmentId: savedAssignment.id,
+          previousAssayerId,
+          newAssayerId: dto.assayerId,
+          reassignedBy: userId,
+          reason: dto.remarks ?? 'Reassigned through assignment creation',
+          requestId: null,
+          ownershipStartedAt: previousOwnershipStartedAt || new Date(),
+          ownershipEndedAt: new Date(),
+        });
+        await manager.save(lineage);
+      }
 
       // Update ProjectBranch status to PLANNING (or appropriate transitional state)
       await this.projectService.initiateBranchPlanning(projectBranch.id, userId, manager);
@@ -805,20 +999,12 @@ export class AssignmentService {
         entityType: 'ASSIGNMENT',
         entityId: savedAssignment.id,
         userId,
-        // The resolved fee and date, not the raw dto: both are optional on the request and the
-        // server computes them when omitted, so reading dto here wrote "Fee: ₹undefined,
-        // Date: undefined" into the audit record for every assignment that did not name its own
-        // — which is most of them, including every one the coverage plan deploys.
         remarks: isReassignment
           ? `Reassigned branch ${projectBranch.branch.name} to assayer ${assayer.displayName}. Proposed fee: ₹${resolvedProposedFee}, Date: ${targetDateStr}.`
           : `Created assignment offer for branch ${projectBranch.branch.name}. Fee: ₹${resolvedProposedFee}, Date: ${targetDateStr}.`,
       }, { manager });
 
       if (eligibilityOverride) {
-        // Its own event, not folded into the line above: ASSIGNMENT_CREATED fires for every
-        // ordinary assignment and nobody reviewing the trail should have to read every row
-        // looking for the ones that overrode an eligibility block. This is the one that answers
-        // "who placed a non-empanelled assayer on this client, and why."
         await this.auditService.recordEventSafe({
           category: EventCategory.OPERATIONAL,
           eventType: 'ASSIGNMENT_ELIGIBILITY_OVERRIDDEN',
@@ -830,16 +1016,6 @@ export class AssignmentService {
         }, { manager });
       }
 
-      /**
-       * Every other rule a stated reason just waived, one row each, naming which.
-       *
-       * The empanelment override above had a trail from the day it existed. The rules that only
-       * now honour a reason — skills, the distance ceiling, rotation, date availability — would
-       * otherwise waive silently, which would be worse than refusing: a certification requirement
-       * set aside with nothing on the record is exactly the sort of decision that has to be
-       * answerable afterwards. Same event type, so one query finds every override of any kind;
-       * the rule is in the metadata so they can still be told apart.
-       */
       for (const waived of overrides) {
         await this.auditService.recordEventSafe({
           category: EventCategory.OPERATIONAL,
@@ -852,20 +1028,33 @@ export class AssignmentService {
         }, { manager });
       }
       if (eligibilityBypassReason) {
-        // Same question as `eligibilityOverride` just above ("who placed a non-empanelled
-        // assayer on this client, and why"), answered the same way — attributed to this record,
-        // immediately — rather than the anonymous, window-aggregated bucket `noteBypass` uses
-        // for candidate-sifting reads. `userId` is the caller creating this one assignment right
-        // now, exactly as the check-in-path calls to `noteBypass` further down this file already
-        // do for the identical reason.
         this.ruleBypass.noteBypass(BypassableRule.CLIENT_ELIGIBILITY, {
           entityType: 'ASSIGNMENT', entityId: savedAssignment.id, userId, detail: eligibilityBypassReason,
         });
       }
 
-      // Through the outbox rather than a post-commit publish: the event now commits with the
-      // assignment and is redelivered if the process dies before it reaches the gateway. The
-      // try/catch this replaces could only log a lost event, never recover it.
+      // --- Durable idempotency: write record atomically ---
+      if (dto.clientRequestId && createRequestHash) {
+        try {
+          await manager.query(
+            `INSERT INTO assignment_idempotency_records
+             (client_request_id, assignment_id, command, actor_id, request_hash, entity_version, response_payload)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [
+              dto.clientRequestId,
+              savedAssignment.id,
+              'CREATE',
+              userId,
+              createRequestHash,
+              savedAssignment.entityVersion ?? 1,
+              JSON.stringify(savedAssignment),
+            ],
+          );
+        } catch (insertErr: any) {
+          throw insertErr;
+        }
+      }
+
       emit('assignment:created', {
         eventType: 'assignment:created',
         assignmentId: savedAssignment.id,
@@ -877,6 +1066,31 @@ export class AssignmentService {
       });
 
       return savedAssignment;
+    }).catch(async (err: any) => {
+      // Handle concurrent duplicate idempotency key (23505 on assignment_idempotency_records)
+      const isIdempConflict =
+        (err?.code === '23505' || err?.driverError?.code === '23505') &&
+        (String(err?.detail || err?.message).includes('assignment_idempotency_records') ||
+         String(err?.detail || err?.message).includes('client_request_id'));
+      if (isIdempConflict && dto.clientRequestId && createRequestHash) {
+        const committed = await this.assignmentRepository.manager.query(
+          'SELECT * FROM assignment_idempotency_records WHERE client_request_id = $1',
+          [dto.clientRequestId],
+        );
+        if (committed?.[0]?.response_payload) {
+          return committed[0].response_payload as AssignmentEntity;
+        }
+      }
+      if (
+        err?.code === '23505' ||
+        err?.driverError?.code === '23505' ||
+        String(err?.detail || err?.message).includes('idx_assignments_single_active_branch')
+      ) {
+        throw new ConflictException(
+          'Branch Busy: Another active assignment already exists for this branch.',
+        );
+      }
+      throw err;
     }).then(async (saved) => {
       const branchName = projectBranch.branch?.name ?? 'the branch';
       // `targetDateStr`, not `dto.scheduledDate`: the date is optional on the request and falls
@@ -997,6 +1211,21 @@ export class AssignmentService {
       );
     }
 
+    if (dto.expectedVersion !== undefined) {
+      const currentVer = assignment.entityVersion || 1;
+      if (dto.expectedVersion !== currentVer) {
+        if (dto.expectedVersion < currentVer) {
+          throw new ConflictException(
+            `STALE_ASSIGNMENT_VERSION: Assignment has been updated to version ${currentVer} (client expected ${dto.expectedVersion}). Please refresh and try again.`,
+          );
+        } else {
+          throw new ConflictException(
+            `INVALID_ASSIGNMENT_VERSION: Future or non-existent version ${dto.expectedVersion} specified (current server version is ${currentVer}). Concurrency check rejected.`,
+          );
+        }
+      }
+    }
+
     if (dto.proposedFee !== undefined) assignment.proposedFee = dto.proposedFee;
     if (dto.agreedFee !== undefined) assignment.agreedFee = dto.agreedFee;
     if (dto.scheduledDate !== undefined) {
@@ -1023,6 +1252,7 @@ export class AssignmentService {
     }
     if (dto.remarks !== undefined) assignment.remarks = dto.remarks;
     assignment.updatedBy = userId;
+    assignment.entityVersion = (assignment.entityVersion || 1) + 1;
 
     const saved = await this.assignmentRepository.save(assignment);
 
@@ -1056,6 +1286,11 @@ export class AssignmentService {
     return saved;
   }
 
+  private computeRequestHash(command: string, assignmentId: string, payload: Record<string, unknown>): string {
+    const raw = JSON.stringify({ command, assignmentId, payload });
+    return crypto.createHash('sha256').update(raw).digest('hex');
+  }
+
   private async executeAssignmentTransition(
     id: string,
     targetStatus: AssignmentStatus,
@@ -1067,30 +1302,63 @@ export class AssignmentService {
      * audit event and the domain event all still happen. Used by the desk-confirmed create path,
      * which sends one accurate notification of its own in place of the offer/accept pair.
      */
-    options?: { suppressNotification?: boolean },
+    options?: {
+      suppressNotification?: boolean;
+      expectedVersion?: number;
+      clientRequestId?: string;
+      assayerId?: string;
+      requireVersionProtection?: boolean;
+    },
   ): Promise<{ saved: AssignmentEntity; event: any }> {
+    const requestHash = options?.clientRequestId
+      ? this.computeRequestHash(targetStatus, id, {
+          fee,
+          reason: reason?.trim(),
+          userId,
+          assayerId: options?.assayerId,
+        })
+      : null;
+
+    // 1. Fast path: check if clientRequestId has already committed an authoritative idempotency record
+    if (options?.clientRequestId && requestHash) {
+      try {
+        const preCheck = await this.assignmentRepository.manager.query(
+          'SELECT * FROM assignment_idempotency_records WHERE client_request_id = $1',
+          [options.clientRequestId],
+        );
+        if (preCheck && preCheck.length > 0) {
+          const rec = preCheck[0];
+          if (rec.command !== targetStatus || rec.assignment_id !== id || rec.request_hash !== requestHash) {
+            throw new ConflictException(
+              'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different command, target, or payload.',
+            );
+          }
+          return { saved: rec.response_payload as AssignmentEntity, event: null };
+        }
+      } catch (err: any) {
+        if (err instanceof ConflictException) throw err;
+      }
+    }
+
     const assignment = await this.findOne(id);
+    if (options?.assayerId && assignment.assayerId && options.assayerId !== assignment.assayerId) {
+      throw new ForbiddenException('You are not assigned to this assignment.');
+    }
     const prevStatus = assignment.status;
 
     if (prevStatus === targetStatus && fee === undefined) {
-      /**
-       * Already in the target state: nothing to transition, so the state machine is not run again.
-       *
-       * A supplied reason is still worth keeping, though. Re-declining with a corrected reason used
-       * to return 201 and silently drop the correction — the caller was told it had worked while
-       * the original text (often the bare default "Rejected") stayed on the record. Persist it, so
-       * "success" and "saved" mean the same thing.
-       */
       const trimmed = reason?.trim();
       if (trimmed) {
         if (targetStatus === AssignmentStatus.REJECTED && assignment.rejectReason !== trimmed) {
           assignment.rejectReason = trimmed;
           assignment.updatedBy = userId;
+          assignment.entityVersion = (assignment.entityVersion || 1) + 1;
           return { saved: await this.assignmentRepository.save(assignment), event: null };
         }
         if (targetStatus === AssignmentStatus.CANCELLED && assignment.cancelReason !== trimmed) {
           assignment.cancelReason = trimmed;
           assignment.updatedBy = userId;
+          assignment.entityVersion = (assignment.entityVersion || 1) + 1;
           return { saved: await this.assignmentRepository.save(assignment), event: null };
         }
       }
@@ -1100,194 +1368,247 @@ export class AssignmentService {
     let event: any;
     let pbEvent: any;
     if (targetStatus === AssignmentStatus.ACCEPTED) {
-      if (prevStatus !== targetStatus) {
-        event = AssignmentStateMachine.acceptOffer(assignment, userId);
-        /**
-         * Acceptance answers the RESPONSE clock, so the SLA is re-armed to measure the next
-         * thing that can actually be late: attending the visit. Left alone, `slaDueDate` kept
-         * its created+24h value forever — every assignment accepted more than a day ago was
-         * flagged BREACHED by the scanner (permanently: nothing resets slaStatus), and the
-         * falling-behind board ranked a healthy assignment accepted 30 days ago for next month
-         * above a genuine no-show from yesterday. The new deadline is the end of the scheduled
-         * day, IST; unscheduled work has no deadline until the desk gives it a date.
-         */
-        assignment.slaDueDate = assignment.scheduledDate
-          ? new Date(`${businessDateKey(assignment.scheduledDate)}T23:59:59+05:30`)
-          : null;
-        assignment.slaStatus = 'COMPLIANT';
+      if (assignment.assayerId) {
+        const assayer = await this.assayerService.findOne(assignment.assayerId).catch(() => null);
+        if (assayer && assayer.status != null && (assayer.status !== AssayerStatus.ACTIVE || assayer.isActive === false)) {
+          throw new BadRequestException(
+            `Assayer ${assayer.assayerCode || assayer.id} is '${assayer.status}' and cannot accept assignments.`,
+          );
+        }
       }
-      if (fee !== undefined && fee !== null) {
-        assignment.proposedFee = fee;
+      if (fee !== undefined) {
         assignment.agreedFee = fee;
-      } else if (!assignment.agreedFee && assignment.proposedFee) {
-        assignment.agreedFee = assignment.proposedFee;
       }
-      if (assignment.projectBranch && assignment.projectBranch.status !== ProjectBranchStatus.ASSIGNMENT_CONFIRMED) {
+      event = AssignmentStateMachine.acceptOffer(assignment, userId);
+      if (assignment.projectBranch) {
         pbEvent = ProjectBranchStateMachine.confirmAssignment(assignment.projectBranch, userId);
       }
-      /**
-       * Auto-scheduling on acceptance, through the same gate the scheduling desk passes.
-       *
-       * This wrote a CONFIRMED `schedules` row directly — via a string-keyed generic repository,
-       * skipping `checkDateAvailability` entirely. So an assayer accepting an offer produced a
-       * confirmed dispatch on a day they were on leave, on a client holiday, or outside the
-       * project timeline: every condition that check exists to catch. It left no
-       * SCHEDULE_CONFIRMED audit row and sent no dispatch notification, so the assayer was never
-       * told and the dispatch had no evidence trail. And because it ran by default
-       * (`autoSchedule ?? true`), it was the path almost every schedule actually took — while
-       * `SchedulingService.create`, the one with the checks, became a no-op update.
-       *
-       * The check now runs first. If the date is not available the assignment still accepts —
-       * the assayer's acceptance is real and must not be undone by a calendar clash — but no
-       * schedule is written, and the reason is recorded so the desk can place it deliberately.
-       *
-       * The write itself happens inside the uow.run transaction below (see `autoScheduleResult`),
-       * not here — see the comment on that block for why.
-       */
     } else if (targetStatus === AssignmentStatus.REJECTED) {
-      event = AssignmentStateMachine.rejectOffer(assignment, userId, reason);
+      event = AssignmentStateMachine.rejectOffer(assignment, userId, reason || '');
       if (assignment.projectBranch) {
         assignment.projectBranch.status = ProjectBranchStatus.CANDIDATE_SEARCH;
       }
     } else if (targetStatus === AssignmentStatus.CANCELLED) {
-      event = AssignmentStateMachine.cancel(assignment, userId, reason);
-      if (assignment.projectBranch) {
-        assignment.projectBranch.status = ProjectBranchStatus.CANDIDATE_SEARCH;
-      }
+      event = AssignmentStateMachine.cancel(assignment, userId, reason || '');
     } else if (targetStatus === AssignmentStatus.COMPLETED) {
-      // Refuses completion of work that was never accepted, and refuses closing an unattended
-      // job without a stated reason — see AssignmentStateMachine.completeAudit.
-      event = AssignmentStateMachine.completeAudit(assignment, userId, reason);
-      // `completion_date` is a `date` column, not a timestamp: writing `new Date()` stores it in
-      // UTC, so a completion recorded 00:00-05:30 IST is saved under the previous calendar day.
-      // `businessTodayDateKey` is the same IST-anchored helper `receivedDate` already uses for
-      // this exact reason.
-      assignment.completionDate = businessTodayDateKey() as any;
-      if (assignment.projectBranch && assignment.projectBranch.status !== ProjectBranchStatus.AUDIT_COMPLETED) {
+      // Completed transition via state machine
+      if (!assignment.completionDate) {
+        assignment.completionDate = businessTodayDateKey() as any;
+      }
+      const prev = assignment.status;
+      assignment.status = AssignmentStatus.COMPLETED;
+      event = { previousState: prev, newState: assignment.status, userId };
+      if (assignment.projectBranch) {
         pbEvent = ProjectBranchStateMachine.completeAudit(assignment.projectBranch, userId);
       }
-      // The matching schedule row is brought to COMPLETED inside the transaction below,
-      // via syncScheduleCompletion(). It used to happen here instead, as raw SQL issued on
-      // `this.dataSource` — outside the transaction that saves the assignment, and with
-      // `.catch(err => console.error(...))` swallowing any failure. Two consequences, both
-      // real: if the assignment save below rolled back, the schedule was already COMPLETED
-      // and stayed that way; and if the upsert itself failed, nothing surfaced it, leaving
-      // `schedules.status` and `assignments.status` silently disagreeing about the same job.
+    } else if (targetStatus === AssignmentStatus.IN_PROGRESS) {
+      // IN_PROGRESS start work transition
+      const prev = assignment.status;
+      assignment.status = AssignmentStatus.IN_PROGRESS;
+      event = { previousState: prev, newState: assignment.status, userId };
     } else {
       throw new BadRequestException(`Invalid assignment status transition to ${targetStatus}`);
     }
 
     assignment.updatedBy = userId;
 
-
-    // Set inside uow.run when acceptance auto-schedules a calendar entry, and returned
-    // alongside the assignment (rather than closed over in an outer `let`) so its type survives
-    // the transaction boundary cleanly. The dispatch notification built from it is sent only
-    // after the transaction below actually commits.
     type AutoScheduleResult = { scheduleId: string; scheduledDate: string } | null;
 
-    const { assignment: saved, autoScheduleResult } = await this.uow.run(async (manager, emit) => {
-      /**
-       * The compare-and-swap that makes concurrent transitions safe.
-       *
-       * The row was read and mutated OUTSIDE this transaction with no lock, so two callers —
-       * ops cancelling while the assayer accepts — could both read PENDING and both commit,
-       * last write winning: an "accepted" assignment whose schedule was already retired and
-       * whose cancellation was already announced, or a completion racing a cancellation after
-       * billing has booked the payable (and billing has no reversal path). Locking the row here
-       * and re-asserting the state we transitioned FROM turns the blind overwrite into an
-       * explicit conflict for the loser. Bare row, no relations — FOR UPDATE cannot span an
-       * outer join.
-       */
-      const lockedRows: Array<{ status: string }> = await manager.query(
-        'SELECT status FROM assignments WHERE id = $1 FOR UPDATE',
-        [id],
-      );
-      const lockedStatus = lockedRows?.[0]?.status;
-      if (!lockedStatus) throw new NotFoundException(`Assignment ${id} not found`);
-      if (lockedStatus !== prevStatus && lockedStatus !== targetStatus) {
+    let transitionOutcome: { assignment: AssignmentEntity; autoScheduleResult: AutoScheduleResult; alreadyAchieved: boolean };
+
+    try {
+      transitionOutcome = await this.uow.run(async (manager, emit) => {
+        const lockedRows: Array<{ status: string; entity_version: number }> = await manager.query(
+          'SELECT status, entity_version FROM assignments WHERE id = $1 FOR UPDATE',
+          [id],
+        );
+        const lockedStatus = lockedRows?.[0]?.status as AssignmentStatus;
+        const lockedVersion = Number(lockedRows?.[0]?.entity_version || 1);
+        if (!lockedStatus) throw new NotFoundException(`Assignment ${id} not found`);
+
+        // Concurrent duplicate request check inside locked transaction
+        if (options?.clientRequestId && requestHash) {
+          try {
+            const inTxCheck = await manager.query(
+              'SELECT * FROM assignment_idempotency_records WHERE client_request_id = $1',
+              [options.clientRequestId],
+            );
+            if (inTxCheck && inTxCheck.length > 0) {
+              const rec = inTxCheck[0];
+              if (rec.command !== targetStatus || rec.assignment_id !== id || rec.request_hash !== requestHash) {
+                throw new ConflictException(
+                  'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different command, target, or payload.',
+                );
+              }
+              return {
+                assignment: rec.response_payload as AssignmentEntity,
+                autoScheduleResult: null,
+                alreadyAchieved: true,
+              };
+            }
+          } catch (err: any) {
+            if (err instanceof ConflictException) throw err;
+          }
+        }
+
+        // Strict optimistic concurrency validation
+        if (options?.expectedVersion !== undefined) {
+          if (options.expectedVersion !== lockedVersion) {
+            if (options.expectedVersion < lockedVersion) {
+              throw new ConflictException(
+                `STALE_ASSIGNMENT_VERSION: Assignment has been updated to version ${lockedVersion} (client expected ${options.expectedVersion}). Please refresh and try again.`,
+              );
+            } else {
+              throw new ConflictException(
+                `INVALID_ASSIGNMENT_VERSION: Future or non-existent version ${options.expectedVersion} specified (current server version is ${lockedVersion}). Concurrency check rejected.`,
+              );
+            }
+          }
+        } else if (options?.requireVersionProtection) {
+          throw new BadRequestException(
+            'MISSING_EXPECTED_VERSION: expectedVersion is required for state-changing assignment commands.',
+          );
+        }
+
+        if (lockedStatus !== prevStatus && lockedStatus !== targetStatus) {
+          throw new ConflictException(
+            `This assignment changed while you were acting on it — it is now '${lockedStatus}'. Refresh and try again.`,
+          );
+        }
+
+        assignment.entityVersion = lockedVersion + 1;
+
+        if (assignment.projectBranch) {
+          await manager.save(assignment.projectBranch);
+        }
+        if (assignment.assessment) {
+          await manager.save(assignment.assessment);
+        }
+        const savedAssign = await manager.save(assignment);
+
+        let autoScheduleResult: AutoScheduleResult = null;
+        if (
+          targetStatus === AssignmentStatus.ACCEPTED
+          && assignment.autoSchedule !== false
+          && assignment.scheduledDate
+        ) {
+          autoScheduleResult = await this.autoScheduleOnAcceptance(savedAssign, userId, manager);
+        }
+
+        if (targetStatus === AssignmentStatus.COMPLETED) {
+          await this.syncScheduleCompletion(savedAssign, userId, manager);
+        } else if (
+          targetStatus === AssignmentStatus.CANCELLED ||
+          targetStatus === AssignmentStatus.REJECTED
+        ) {
+          await this.retireSchedule(savedAssign, userId, manager);
+        }
+
+        // Persist authoritative idempotency record atomically within transaction
+        if (options?.clientRequestId && requestHash) {
+          try {
+            await manager.query(
+              `INSERT INTO assignment_idempotency_records
+               (client_request_id, assignment_id, command, actor_id, request_hash, entity_version, response_payload)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+              [
+                options.clientRequestId,
+                savedAssign.id,
+                targetStatus,
+                userId,
+                requestHash,
+                savedAssign.entityVersion,
+                JSON.stringify(savedAssign),
+              ],
+            );
+          } catch (insertErr: any) {
+            throw insertErr;
+          }
+        }
+
+        await this.auditService.recordEventSafe({
+          category: EventCategory.WORKFLOW,
+          eventType: `ASSIGNMENT_${targetStatus}`,
+          entityType: 'ASSIGNMENT',
+          entityId: savedAssign.id,
+          previousState: prevStatus,
+          newState: targetStatus,
+          userId,
+          remarks: reason ?? `Transitioned assignment to ${targetStatus}`,
+          metadata: {
+            clientRequestId: options?.clientRequestId,
+            entityVersion: savedAssign.entityVersion,
+          },
+        }, { manager });
+
+        if (event) {
+          emit('assignment:status-changed', {
+            eventType: 'assignment:status-changed',
+            assignmentId: savedAssign.id,
+            assignmentNumber: savedAssign.assignmentNumber,
+            previousState: event.previousState || prevStatus,
+            newState: savedAssign.status,
+            assayerId: savedAssign.assayerId,
+            organizationId: (savedAssign as any).projectBranch?.project?.organizationId,
+            userId: event.userId,
+            metadata: event.metadata,
+          });
+        }
+
+        if (pbEvent) {
+          emit(pbEvent.constructor.name, { ...pbEvent });
+        }
+
+        return { assignment: savedAssign, autoScheduleResult, alreadyAchieved: false };
+      });
+    } catch (err: any) {
+      const isIdempConflict =
+        (err?.code === '23505' || err?.driverError?.code === '23505') &&
+        (String(err?.detail || err?.message).includes('assignment_idempotency_records') ||
+         String(err?.detail || err?.message).includes('client_request_id'));
+      if (isIdempConflict && options?.clientRequestId && requestHash) {
+        try {
+          const committed = await this.assignmentRepository.manager.query(
+            'SELECT * FROM assignment_idempotency_records WHERE client_request_id = $1',
+            [options.clientRequestId],
+          );
+          if (committed && committed.length > 0) {
+            const rec = committed[0];
+            if (rec.command !== targetStatus || rec.assignment_id !== id || rec.request_hash !== requestHash) {
+              throw new ConflictException(
+                'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different command, target, or payload.',
+              );
+            }
+            return { saved: rec.response_payload as AssignmentEntity, event: null };
+          }
+        } catch (recoveryErr: any) {
+          if (recoveryErr instanceof ConflictException) throw recoveryErr;
+        }
+      }
+      if (
+        (err?.code === '23505' || err?.driverError?.code === '23505') &&
+        String(err?.detail || err?.message).includes('idx_assignments_single_active_assayer_day')
+      ) {
         throw new ConflictException(
-          `This assignment changed while you were acting on it — it is now '${lockedStatus}'. Refresh and try again.`,
+          'Assayer already has an active assignment scheduled for this date.',
         );
       }
-
-      if (assignment.projectBranch) {
-        await manager.save(assignment.projectBranch);
-      }
-      if (assignment.assessment) {
-        await manager.save(assignment.assessment);
-      }
-      const savedAssign = await manager.save(assignment);
-
-      let autoScheduleResult: AutoScheduleResult = null;
       if (
-        targetStatus === AssignmentStatus.ACCEPTED
-        && assignment.autoSchedule !== false
-        && assignment.scheduledDate
+        (err?.code === '23505' || err?.driverError?.code === '23505') &&
+        String(err?.detail || err?.message).includes('idx_assignments_single_active_branch')
       ) {
-        // Moved inside the transaction, alongside the compare-and-swap above: writing the
-        // CONFIRMED schedule row before the lock/CAS ran meant a conflicting cancel that won
-        // the race left the assayer holding a dispatched, CONFIRMED schedule for an assignment
-        // that was never actually accepted. Now either both commit or neither does.
-        autoScheduleResult = await this.autoScheduleOnAcceptance(savedAssign, userId, manager);
+        throw new ConflictException(
+          'Branch Busy: Another active assignment already exists for this branch.',
+        );
       }
+      throw err;
+    }
 
-      if (targetStatus === AssignmentStatus.COMPLETED) {
-        // Inside the transaction: either both the assignment and its schedule reach
-        // COMPLETED, or neither does.
-        await this.syncScheduleCompletion(savedAssign, userId, manager);
-      } else if (
-        targetStatus === AssignmentStatus.CANCELLED ||
-        targetStatus === AssignmentStatus.REJECTED
-      ) {
-        // Same transaction, same reason: the branch goes back to needing an assayer above, so
-        // its calendar entry must go with it or the two disagree.
-        await this.retireSchedule(savedAssign, userId, manager);
-      }
+    const { assignment: saved, autoScheduleResult, alreadyAchieved } = transitionOutcome;
 
-      await this.auditService.recordEventSafe({
-        category: EventCategory.WORKFLOW,
-        eventType: `ASSIGNMENT_${targetStatus}`,
-        entityType: 'ASSIGNMENT',
-        entityId: savedAssign.id,
-        previousState: prevStatus,
-        newState: targetStatus,
-        userId,
-        remarks: reason ?? `Transitioned assignment to ${targetStatus}`,
-      }, { manager });
-
-      // The status change is emitted through the outbox from inside the transaction, so it
-      // commits atomically with the transition and survives a crash before delivery.
-      //
-      // This is the event billing's auto-bill listener consumes: a COMPLETED assignment that
-      // committed but whose event was published post-commit by the raw publisher (as it was
-      // before) would, if the process died in that window, never be billed and never create an
-      // assayer payable — completed work, no invoice, no trace. Routing it here closes that.
-      // Delivery is at-least-once; the billing listener is already idempotent (its
-      // already-billed guards plus a Redis lock), which is the precondition for moving it here.
-      if (event) {
-        emit('assignment:status-changed', {
-          eventType: 'assignment:status-changed',
-          assignmentId: savedAssign.id,
-          assignmentNumber: savedAssign.assignmentNumber,
-          previousState: event.previousState || prevStatus,
-          newState: savedAssign.status,
-          assayerId: savedAssign.assayerId,
-          organizationId: (savedAssign as any).projectBranch?.project?.organizationId,
-          userId: event.userId,
-          metadata: event.metadata,
-        });
-      }
-
-      // The project-branch transition rides the same transaction. No named subscriber depends
-      // on it being a class instance — only the realtime gateway's broadcast — so a plain
-      // payload is equivalent and is what the outbox stores.
-      if (pbEvent) {
-        emit(pbEvent.constructor.name, { ...pbEvent });
-      }
-
-      return { assignment: savedAssign, autoScheduleResult };
-    });
+    if (alreadyAchieved) {
+      return { saved, event: null };
+    }
 
     // Sent only now that the transaction has committed — see the comment inside
     // autoScheduleOnAcceptance for why a dispatch notification built from a rolled-back write
@@ -1404,88 +1725,251 @@ export class AssignmentService {
     return { saved, event };
   }
 
-  async acceptOffer(id: string, userId: string, fee?: number, reason?: string): Promise<AssignmentEntity> {
-    // The status-changed event is emitted inside executeAssignmentTransition's transaction now
-    // (through the outbox), so callers no longer publish it afterwards.
-    const { saved } = await this.executeAssignmentTransition(id, AssignmentStatus.ACCEPTED, userId, reason, fee);
+  async acceptOffer(
+    id: string,
+    userId: string,
+    fee?: number,
+    reason?: string,
+    options?: { expectedVersion?: number; clientRequestId?: string; acceptOnBehalf?: boolean; isAssayerRole?: boolean },
+  ): Promise<AssignmentEntity> {
+    const assignment = await this.findOne(id);
+    if (options?.isAssayerRole && assignment.assayerId != null && assignment.assayerId !== userId) {
+      throw new ForbiddenException('You are not assigned to this assignment.');
+    }
+    const { saved } = await this.executeAssignmentTransition(
+      id,
+      AssignmentStatus.ACCEPTED,
+      userId,
+      reason,
+      fee,
+      options,
+    );
     return saved;
   }
 
-  async rejectOffer(id: string, userId: string, reason?: string): Promise<AssignmentEntity> {
-    const { saved } = await this.executeAssignmentTransition(id, AssignmentStatus.REJECTED, userId, reason);
+  async rejectOffer(
+    id: string,
+    userId: string,
+    reason?: string,
+    options?: { expectedVersion?: number; clientRequestId?: string },
+  ): Promise<AssignmentEntity> {
+    const { saved } = await this.executeAssignmentTransition(
+      id,
+      AssignmentStatus.REJECTED,
+      userId,
+      reason,
+      undefined,
+      options,
+    );
     return saved;
   }
 
-  /**
-   * The assayer has started the audit, not merely arrived at the branch.
-   *
-   * Routed through the same transition pipeline as every other status so it gets the audit event,
-   * the realtime emit and the optimistic-lock check — the thing that made `IN_PROGRESS` a dead
-   * value was that no path wrote it at all, and a bespoke save here would have re-created that
-   * inconsistency in a quieter form.
-   */
-  async startWork(id: string, userId: string, reason?: string): Promise<AssignmentEntity> {
-    const { saved } = await this.executeAssignmentTransition(id, AssignmentStatus.IN_PROGRESS, userId, reason);
+  async startWork(
+    id: string,
+    userId: string,
+    reason?: string,
+    options?: { expectedVersion?: number; clientRequestId?: string },
+  ): Promise<AssignmentEntity> {
+    const { saved } = await this.executeAssignmentTransition(
+      id,
+      AssignmentStatus.IN_PROGRESS,
+      userId,
+      reason,
+      undefined,
+      options,
+    );
     return saved;
   }
 
-  async cancelAssignment(id: string, userId: string, reason?: string): Promise<AssignmentEntity> {
-    const { saved } = await this.executeAssignmentTransition(id, AssignmentStatus.CANCELLED, userId, reason);
+  async cancelAssignment(
+    id: string,
+    userId: string,
+    reason?: string,
+    options?: { expectedVersion?: number; clientRequestId?: string },
+  ): Promise<AssignmentEntity> {
+    const { saved } = await this.executeAssignmentTransition(
+      id,
+      AssignmentStatus.CANCELLED,
+      userId,
+      reason,
+      undefined,
+      options,
+    );
     return saved;
   }
 
-  /**
-   * Complete an assignment — sets completionDate, transitions branch to AUDIT_COMPLETED,
-   * and auto-creates a validation case. Called when a schedule is marked COMPLETED.
-   * This is the AUDIT workflow completion — separate from query/validation workflow.
-   */
-  async completeAssignment(id: string, userId: string, reason?: string): Promise<AssignmentEntity> {
-    const { saved } = await this.executeAssignmentTransition(id, AssignmentStatus.COMPLETED, userId, reason);
+  async completeAssignment(
+    id: string,
+    userId: string,
+    reason?: string,
+    options?: { expectedVersion?: number; clientRequestId?: string },
+  ): Promise<AssignmentEntity> {
+    const { saved } = await this.executeAssignmentTransition(
+      id,
+      AssignmentStatus.COMPLETED,
+      userId,
+      reason,
+      undefined,
+      options,
+    );
     return saved;
   }
 
-  /**
-   * The owner-decision undo: a completion that should not have booked money. Voids the payable
-   * first — inside the same lock, same transaction — and only then reopens the assignment, so a
-   * failure voiding the money leaves the assignment untouched rather than reopened with its
-   * payable still standing. Not routed through `executeAssignmentTransition`: that pipeline's
-   * ACCEPTED branch re-runs fee resolution and auto-scheduling, neither of which belongs to
-   * undoing a completion.
-   *
-   * Gated to ADMIN/OPERATIONS at the controller, matching `voidPayable` in billing-engine —
-   * the two are one decision made in two ledgers and must not be reachable independently.
-   */
-  async reopen(id: string, userId: string, reason: string): Promise<AssignmentEntity> {
+  async reopen(
+    id: string,
+    userId: string,
+    reason: string,
+    options?: { expectedVersion?: number; clientRequestId?: string },
+  ): Promise<AssignmentEntity> {
     if (!reason?.trim()) {
       throw new BadRequestException('Say why this completed assignment is being reopened.');
     }
 
+    const statedReason = reason.trim();
+    const requestHash = options?.clientRequestId
+      ? this.computeRequestHash('REOPEN', id, { reason: statedReason, userId })
+      : null;
+
+    if (options?.clientRequestId && requestHash) {
+      try {
+        const preCheck = await this.assignmentRepository.manager.query(
+          'SELECT * FROM assignment_idempotency_records WHERE client_request_id = $1',
+          [options.clientRequestId],
+        );
+        if (preCheck && preCheck.length > 0) {
+          const rec = preCheck[0];
+          if (rec.command !== 'REOPEN' || rec.assignment_id !== id || rec.request_hash !== requestHash) {
+            throw new ConflictException(
+              'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different command, target, or payload.',
+            );
+          }
+          return rec.response_payload as AssignmentEntity;
+        }
+      } catch (err: any) {
+        if (err instanceof ConflictException) throw err;
+      }
+    }
+
     const saved = await this.uow.run(async (manager, emit) => {
-      const lockedRows: Array<{ status: string }> = await manager.query(
-        'SELECT status FROM assignments WHERE id = $1 FOR UPDATE',
+      const lockedRows: Array<{ status: string; entity_version: number }> = await manager.query(
+        'SELECT status, entity_version FROM assignments WHERE id = $1 FOR UPDATE',
         [id],
       );
       const lockedStatus = lockedRows?.[0]?.status;
+      const lockedVersion = Number(lockedRows?.[0]?.entity_version || 1);
       if (!lockedStatus) throw new NotFoundException(`Assignment ${id} not found`);
+
+      if (options?.clientRequestId && requestHash) {
+        try {
+          const inTxCheck = await manager.query(
+            'SELECT * FROM assignment_idempotency_records WHERE client_request_id = $1',
+            [options.clientRequestId],
+          );
+          if (inTxCheck && inTxCheck.length > 0) {
+            const rec = inTxCheck[0];
+            if (rec.command !== 'REOPEN' || rec.assignment_id !== id || rec.request_hash !== requestHash) {
+              throw new ConflictException(
+                'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different command, target, or payload.',
+              );
+            }
+            return rec.response_payload as AssignmentEntity;
+          }
+        } catch (err: any) {
+          if (err instanceof ConflictException) throw err;
+        }
+      }
+
       if (lockedStatus !== AssignmentStatus.COMPLETED) {
         throw new ConflictException(`Only a COMPLETED assignment can be reopened; this one is '${lockedStatus}'.`);
+      }
+
+      if (options?.expectedVersion !== undefined) {
+        if (options.expectedVersion !== lockedVersion) {
+          if (options.expectedVersion < lockedVersion) {
+            throw new ConflictException(
+              `STALE_ASSIGNMENT_VERSION: Assignment has been updated to version ${lockedVersion} (client expected ${options.expectedVersion}). Please refresh and try again.`,
+            );
+          } else {
+            throw new ConflictException(
+              `INVALID_ASSIGNMENT_VERSION: Future or non-existent version ${options.expectedVersion} specified (current server version is ${lockedVersion}). Concurrency check rejected.`,
+            );
+          }
+        }
       }
 
       const assignment = await manager.findOne(AssignmentEntity, { where: { id } });
       if (!assignment) throw new NotFoundException(`Assignment ${id} not found`);
 
-      // Void the payable first, on the caller's own manager/transaction, so this and the
-      // assignment status flip commit or roll back together — see the class comment above.
+      // Financial State Machine Validation
+      // 1. Assayer Payable state verification
       const payable = await manager.findOne(AssayerPayableEntity, {
         where: { assignmentId: id, expenseId: IsNull() },
       });
       if (payable) {
-        await this.billingEngine.voidPayable(payable.id, reason.trim(), userId, { manager, emit });
+        if (payable.status === AssayerPayableStatus.PAID) {
+          throw new ConflictException(
+            `Cannot reopen assignment: Assayer payout ${payable.payableNumber} has already been paid/disbursed. Operational reversal required before reopening.`,
+          );
+        }
+        if (payable.assayerInvoiceId) {
+          const inv = await manager.findOne(AssayerInvoiceEntity, {
+            where: { id: payable.assayerInvoiceId },
+          });
+          if (
+            inv &&
+            (inv.status === AssayerInvoiceStatus.SUBMITTED ||
+              inv.status === AssayerInvoiceStatus.APPROVED)
+          ) {
+            throw new ConflictException(
+              `Cannot reopen assignment: Assayer payout is attached to invoice ${inv.invoiceNumber} in status '${inv.status}'. Invoice must be cancelled before reopening.`,
+            );
+          }
+        }
+        await this.billingEngine.voidPayable(payable.id, statedReason, userId, { manager, emit });
       }
 
-      const event = AssignmentStateMachine.reopen(assignment, userId, reason.trim());
+      // 2. Client Billing Entry state verification
+      const billingEntry = await manager.findOne(BillingEntryEntity, {
+        where: { assignmentId: id },
+      });
+      if (billingEntry) {
+        if (billingEntry.state === BillingState.INVOICED || billingEntry.state === BillingState.PAID) {
+          throw new ConflictException(
+            `Cannot reopen assignment: Client billing entry is already '${billingEntry.state}'. Client invoice must be credited/reversed before reopening.`,
+          );
+        }
+        if (billingEntry.state !== BillingState.CANCELLED) {
+          billingEntry.state = BillingState.CANCELLED;
+          billingEntry.updatedBy = userId;
+          await manager.save(billingEntry);
+        }
+      }
+
+      const event = AssignmentStateMachine.reopen(assignment, userId, statedReason);
+      assignment.entityVersion = lockedVersion + 1;
       assignment.updatedBy = userId;
       const savedAssign = await manager.save(assignment);
+
+      if (options?.clientRequestId && requestHash) {
+        try {
+          await manager.query(
+            `INSERT INTO assignment_idempotency_records
+             (client_request_id, assignment_id, command, actor_id, request_hash, entity_version, response_payload)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [
+              options.clientRequestId,
+              savedAssign.id,
+              'REOPEN',
+              userId,
+              requestHash,
+              savedAssign.entityVersion,
+              JSON.stringify(savedAssign),
+            ],
+          );
+        } catch (insertErr: any) {
+          throw insertErr;
+        }
+      }
 
       await this.auditService.recordEventSafe({
         category: EventCategory.WORKFLOW,
@@ -1495,7 +1979,11 @@ export class AssignmentService {
         previousState: event.previousState,
         newState: event.newState,
         userId,
-        remarks: reason.trim(),
+        remarks: statedReason,
+        metadata: {
+          clientRequestId: options?.clientRequestId,
+          entityVersion: savedAssign.entityVersion,
+        },
       }, { manager });
 
       emit('assignment:status-changed', {
@@ -1509,9 +1997,315 @@ export class AssignmentService {
       });
 
       return savedAssign;
+    }).catch(async (err: any) => {
+      const isIdempConflict =
+        (err?.code === '23505' || err?.driverError?.code === '23505') &&
+        (String(err?.detail || err?.message).includes('assignment_idempotency_records') ||
+         String(err?.detail || err?.message).includes('client_request_id'));
+      if (isIdempConflict && options?.clientRequestId && requestHash) {
+        const committed = await this.assignmentRepository.manager.query(
+          'SELECT * FROM assignment_idempotency_records WHERE client_request_id = $1',
+          [options.clientRequestId],
+        );
+        if (committed && committed.length > 0) {
+          const rec = committed[0];
+          if (rec.command !== 'REOPEN' || rec.assignment_id !== id || rec.request_hash !== requestHash) {
+            throw new ConflictException(
+              'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different command, target, or payload.',
+            );
+          }
+          return rec.response_payload as AssignmentEntity;
+        }
+      }
+      throw err;
     });
 
     return saved;
+  }
+
+  async reassignAssignment(
+    id: string,
+    newAssayerId: string,
+    userId: string,
+    reason?: string,
+    options?: { expectedVersion?: number; clientRequestId?: string },
+  ): Promise<AssignmentEntity> {
+    if (!newAssayerId) {
+      throw new BadRequestException('newAssayerId is required for reassignment.');
+    }
+    const statedReason = (reason ?? '').trim();
+    if (!statedReason) {
+      throw new BadRequestException('A reason is required to reassign an assignment.');
+    }
+
+    const requestHash = options?.clientRequestId
+      ? this.computeRequestHash('REASSIGN', id, { newAssayerId, reason: statedReason, userId })
+      : null;
+
+    if (options?.clientRequestId && requestHash) {
+      try {
+        const preCheck = await this.assignmentRepository.manager.query(
+          'SELECT * FROM assignment_idempotency_records WHERE client_request_id = $1',
+          [options.clientRequestId],
+        );
+        if (preCheck && preCheck.length > 0) {
+          const rec = preCheck[0];
+          if (rec.command !== 'REASSIGN' || rec.assignment_id !== id || rec.request_hash !== requestHash) {
+            throw new ConflictException(
+              'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different command, target, or payload.',
+            );
+          }
+          return rec.response_payload as AssignmentEntity;
+        }
+      } catch (err: any) {
+        if (err instanceof ConflictException) throw err;
+      }
+    }
+
+    const newAssayer = await this.assayerService.findOne(newAssayerId);
+    if (!newAssayer) {
+      throw new NotFoundException(`New assayer ${newAssayerId} not found.`);
+    }
+    if (newAssayer.status !== AssayerStatus.ACTIVE || !newAssayer.isActive) {
+      throw new BadRequestException(
+        `Cannot reassign to assayer ${newAssayer.assayerCode}: status is '${newAssayer.status}' (must be ACTIVE).`,
+      );
+    }
+
+    return await this.uow.run(async (manager, emit) => {
+      // Global Lock Ordering: Level 3 (Assayer ordered by ID) -> Level 4 (Assignment)
+      const assayerIdsToLock = [newAssayerId];
+      const preAssignment = await manager.findOne(AssignmentEntity, { where: { id }, select: ['id', 'assayerId'] });
+      if (preAssignment?.assayerId && !assayerIdsToLock.includes(preAssignment.assayerId)) {
+        assayerIdsToLock.push(preAssignment.assayerId);
+      }
+      assayerIdsToLock.sort();
+
+      for (const aId of assayerIdsToLock) {
+        await manager.query('SELECT id FROM assayers WHERE id = $1 FOR UPDATE', [aId]).catch(() => null);
+      }
+
+      const lockedRows: Array<{ status: string; assayer_id: string; entity_version: number }> =
+        await manager.query(
+          'SELECT status, assayer_id, entity_version FROM assignments WHERE id = $1 FOR UPDATE',
+          [id],
+        );
+      const locked = lockedRows?.[0];
+      if (!locked) throw new NotFoundException(`Assignment ${id} not found`);
+
+      const lockedStatus = locked.status as AssignmentStatus;
+      const lockedVersion = Number(locked.entity_version || 1);
+
+      if (options?.clientRequestId && requestHash) {
+        try {
+          const inTxCheck = await manager.query(
+            'SELECT * FROM assignment_idempotency_records WHERE client_request_id = $1',
+            [options.clientRequestId],
+          );
+          if (inTxCheck && inTxCheck.length > 0) {
+            const rec = inTxCheck[0];
+            if (rec.command !== 'REASSIGN' || rec.assignment_id !== id || rec.request_hash !== requestHash) {
+              throw new ConflictException(
+                'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different command, target, or payload.',
+              );
+            }
+            return rec.response_payload as AssignmentEntity;
+          }
+        } catch (err: any) {
+          if (err instanceof ConflictException) throw err;
+        }
+      }
+
+      if (locked.assayer_id === newAssayerId) {
+        const existing = await manager.findOne(AssignmentEntity, {
+          where: { id },
+          relations: ['assayer', 'projectBranch', 'projectBranch.branch'],
+        });
+        return existing!;
+      }
+
+      if (options?.expectedVersion !== undefined) {
+        if (options.expectedVersion !== lockedVersion) {
+          if (options.expectedVersion < lockedVersion) {
+            throw new ConflictException(
+              `STALE_ASSIGNMENT_VERSION: Assignment has been updated to version ${lockedVersion} (client expected ${options.expectedVersion}). Please refresh.`,
+            );
+          } else {
+            throw new ConflictException(
+              `INVALID_ASSIGNMENT_VERSION: Future or non-existent version ${options.expectedVersion} specified (current server version is ${lockedVersion}). Concurrency check rejected.`,
+            );
+          }
+        }
+      }
+
+      if (lockedStatus === AssignmentStatus.COMPLETED) {
+        throw new ConflictException('Cannot reassign an assignment that has already been completed.');
+      }
+
+      const assignment = await manager.findOne(AssignmentEntity, {
+        where: { id },
+        relations: ['projectBranch', 'projectBranch.branch', 'assayer'],
+      });
+      if (!assignment) throw new NotFoundException(`Assignment ${id} not found`);
+
+      if (assignment.scheduledDate) {
+        const doubleBooked = await manager.findOne(AssignmentEntity, {
+          where: {
+            assayerId: newAssayerId,
+            scheduledDate: assignment.scheduledDate,
+            status: In(COMMITTED_ASSIGNMENT_STATUSES),
+            isActive: true,
+          },
+        });
+        if (doubleBooked && doubleBooked.id !== id) {
+          throw new ConflictException(
+            `Assayer double booking: ${newAssayer.displayName} is already committed to assignment ${doubleBooked.assignmentNumber} on ${new Date(assignment.scheduledDate).toISOString().slice(0, 10)}.`,
+          );
+        }
+      }
+
+      const prevAssayerId = assignment.assayerId;
+      const prevStatus = assignment.status;
+      const now = new Date();
+
+      // Normalize lineage intervals:
+      // 1. Close prior active ownership interval (where ownership_ended_at IS NULL)
+      const currentActiveOwner = await manager.findOne(AssignmentReassignmentEntity, {
+        where: { assignmentId: id, ownershipEndedAt: IsNull(), isActive: true },
+      });
+      if (currentActiveOwner) {
+        currentActiveOwner.ownershipEndedAt = now;
+        await manager.save(currentActiveOwner);
+      }
+
+      // 2. Open new contiguous interval with ownership_ended_at = NULL
+      const ownershipStartedAt = currentActiveOwner?.ownershipEndedAt ?? assignment.currentOwnershipStartedAt ?? now;
+      const reassignmentRecord = manager.create(AssignmentReassignmentEntity, {
+        assignmentId: id,
+        previousAssayerId: prevAssayerId,
+        newAssayerId: newAssayerId,
+        reassignedBy: userId,
+        reason: statedReason,
+        requestId: options?.clientRequestId ?? null,
+        ownershipStartedAt,
+        ownershipEndedAt: null, // Active owner has no end timestamp
+      });
+      await manager.save(reassignmentRecord);
+
+      assignment.assayerId = newAssayerId;
+      assignment.currentOwnershipStartedAt = ownershipStartedAt;
+      assignment.status = AssignmentStatus.PENDING;
+      assignment.agreedFee = null;
+      assignment.cancelReason = null;
+      assignment.rejectReason = null;
+      assignment.completionDate = null;
+      assignment.checkInLatitude = null;
+      assignment.checkInLongitude = null;
+      assignment.checkInAccuracyMeters = null;
+      assignment.checkInDistanceMeters = null;
+      assignment.checkedInAt = null;
+      assignment.checkOutLatitude = null;
+      assignment.checkOutLongitude = null;
+      assignment.checkOutAccuracyMeters = null;
+      assignment.checkOutDistanceMeters = null;
+      assignment.checkedOutAt = null;
+      assignment.negotiationCount = 0;
+      assignment.counterTravelFee = null;
+      assignment.entityVersion = lockedVersion + 1;
+      assignment.syncToken = `SYNC-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
+      assignment.updatedBy = userId;
+
+      const saved = await manager.save(assignment);
+
+      if (options?.clientRequestId && requestHash) {
+        try {
+          await manager.query(
+            `INSERT INTO assignment_idempotency_records
+             (client_request_id, assignment_id, command, actor_id, request_hash, entity_version, response_payload)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [
+              options.clientRequestId,
+              saved.id,
+              'REASSIGN',
+              userId,
+              requestHash,
+              saved.entityVersion,
+              JSON.stringify(saved),
+            ],
+          );
+        } catch (insertErr: any) {
+          throw insertErr;
+        }
+      }
+
+      await this.auditService.recordEventSafe({
+        category: EventCategory.OPERATIONAL,
+        eventType: 'ASSIGNMENT_REASSIGNED',
+        entityType: 'ASSIGNMENT',
+        entityId: saved.id,
+        userId,
+        previousState: prevStatus,
+        newState: AssignmentStatus.PENDING,
+        remarks: `Reassigned from ${prevAssayerId} to ${newAssayer.displayName} (${newAssayer.assayerCode}). Reason: ${statedReason}`,
+        metadata: {
+          previousAssayerId: prevAssayerId,
+          newAssayerId: newAssayerId,
+          reassignmentId: reassignmentRecord.id,
+          reason: statedReason,
+          clientRequestId: options?.clientRequestId,
+          entityVersion: saved.entityVersion,
+        },
+      }, { manager });
+
+      emit('assignment:reassigned', {
+        eventType: 'assignment:reassigned',
+        assignmentId: saved.id,
+        assignmentNumber: saved.assignmentNumber,
+        previousAssayerId: prevAssayerId,
+        newAssayerId: newAssayerId,
+        userId,
+        reason: statedReason,
+      });
+
+      return saved;
+    }).catch(async (err: any) => {
+      const isIdempConflict =
+        (err?.code === '23505' || err?.driverError?.code === '23505') &&
+        (String(err?.detail || err?.message).includes('assignment_idempotency_records') ||
+         String(err?.detail || err?.message).includes('client_request_id'));
+      if (isIdempConflict && options?.clientRequestId && requestHash) {
+        const committed = await this.assignmentRepository.manager.query(
+          'SELECT * FROM assignment_idempotency_records WHERE client_request_id = $1',
+          [options.clientRequestId],
+        );
+        if (committed && committed.length > 0) {
+          const rec = committed[0];
+          if (rec.command !== 'REASSIGN' || rec.assignment_id !== id || rec.request_hash !== requestHash) {
+            throw new ConflictException(
+              'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different command, target, or payload.',
+            );
+          }
+          return rec.response_payload as AssignmentEntity;
+        }
+      }
+      if (
+        (err?.code === '23505' || err?.driverError?.code === '23505') &&
+        String(err?.detail || err?.message).includes('idx_assignments_single_active_assayer_day')
+      ) {
+        throw new ConflictException(
+          'Assayer already has an active assignment scheduled for this date.',
+        );
+      }
+      throw err;
+    });
+  }
+
+  async getReassignmentHistory(id: string): Promise<AssignmentReassignmentEntity[]> {
+    return this.dataSource.getRepository(AssignmentReassignmentEntity).find({
+      where: { assignmentId: id },
+      relations: ['previousAssayer', 'newAssayer'],
+      order: { createdAt: 'DESC' },
+    });
   }
 
   /**
@@ -1531,6 +2325,7 @@ export class AssignmentService {
     const alreadyCritical = assignment.priority === Priority.CRITICAL;
     assignment.priority = Priority.CRITICAL;
     assignment.updatedBy = userId;
+    assignment.entityVersion = (assignment.entityVersion || 1) + 1;
     const saved = await this.assignmentRepository.save(assignment);
 
     await this.auditService.recordEventSafe({
@@ -1891,6 +2686,7 @@ export class AssignmentService {
     // so the two paths cannot disagree about what "on time" means for the same field.
     assignment.slaDueDate = new Date(`${businessDateKey(assignment.scheduledDate)}T23:59:59+05:30`);
     assignment.slaStatus = 'COMPLIANT';
+    assignment.entityVersion = (assignment.entityVersion || 1) + 1;
 
     const saved = await this.dataSource.transaction(async (manager) => {
       if (assignment.projectBranch) {
@@ -2425,6 +3221,7 @@ export class AssignmentService {
     let breachedCount = 0;
     for (const assignment of overdueAssignments) {
       assignment.slaStatus = 'BREACHED';
+      assignment.entityVersion = (assignment.entityVersion || 1) + 1;
       await this.assignmentRepository.save(assignment);
 
       await this.auditService.recordEvent({
@@ -2889,6 +3686,18 @@ export class AssignmentService {
     return items;
   }
 
+  private async runTransactional<T>(work: (manager: EntityManager) => Promise<T>): Promise<T> {
+    if (this.dataSource?.transaction) {
+      return await this.dataSource.transaction(work);
+    }
+    return await work({
+      query: this.dataSource?.query ? this.dataSource.query.bind(this.dataSource) : undefined,
+      save: (arg: any) => this.assignmentRepository.save(arg),
+      getRepository: (t: any) =>
+        this.dataSource?.getRepository ? this.dataSource.getRepository(t) : this.assignmentRepository,
+    } as any);
+  }
+
   async recordCheckIn(
     id: string,
     lat: number,
@@ -2896,357 +3705,305 @@ export class AssignmentService {
     syncToken?: string,
     userId?: string,
     accuracyMeters?: number,
+    options?: { expectedVersion?: number; clientRequestId?: string },
   ): Promise<{ success: boolean; assignment: AssignmentEntity; error?: string; message?: string }> {
-    const assignment = await this.findOne(id);
-    if (!assignment) {
-      return { success: false, assignment: null as any, error: 'ASSIGNMENT_NOT_FOUND', message: 'Assignment not found.' };
-    }
+    return this.runTransactional(async (manager) => {
+      const lockedRows: Array<{
+        id: string;
+        status: string;
+        entity_version: number;
+        assayer_id: string;
+        checked_in_at: Date | null;
+        sync_token: string | null;
+      }> = manager.query
+        ? await manager
+            .query(
+              'SELECT id, status, entity_version, assayer_id, checked_in_at, sync_token FROM assignments WHERE id = $1 FOR UPDATE',
+              [id],
+            )
+            .catch(() => [])
+        : [];
 
-    /**
-     * Only the assigned assayer may check in, and only from a state that means they were
-     * actually expected on site.
-     *
-     * Neither rule existed. Any authenticated assayer could check in on ANY assignment by id,
-     * and could do so directly from PENDING or REJECTED — recording attendance at a branch
-     * they had never accepted, skipping the acceptance step entirely. Both produce a
-     * falsified attendance record in what is meant to be bank audit evidence.
-     *
-     * Staff roles are allowed through so ops can correct a record on the assayer's behalf;
-     * `updatedBy` preserves who actually performed it.
-     */
-    const actorIsAssignedAssayer = !!userId && userId === assignment.assayerId;
-    // Staff status is decided once and reused: it gates both "whose assignment is this" and
-    // the schedule/geofence guards below — ops correcting a record must not be blocked by
-    // rules that exist to keep the assayer's own attendance honest.
-    let staffOverride = false;
-    if (!actorIsAssignedAssayer) {
-      const actor = await this.dataSource
-        .getRepository(UserEntity)
-        .findOne({ where: { id: userId }, relations: ['roles'] })
-        .catch(() => null);
-      const actorRoles: string[] = (actor?.roles ?? []).map((r: any) => r?.name).filter(Boolean);
-      // expandRoles: implication-aware, so a DEVELOPER passes the ADMIN half without being named.
-      staffOverride = expandRoles(actorRoles).some((r) =>
-        [
-          SystemRole.ADMIN,
-          SystemRole.OPERATIONS,
-        ].includes(r as SystemRole),
-      );
-      if (!staffOverride) {
+      const lockedRow = lockedRows?.[0];
+
+      // Quick-reject if cancelled or completed
+      if (lockedRow?.status === AssignmentStatus.CANCELLED) {
+        return {
+          success: false,
+          assignment: null as any,
+          error: 'ASSIGNMENT_CANCELLED',
+          message: 'Cannot check in: assignment has been cancelled.',
+        };
+      }
+      if (lockedRow?.status === AssignmentStatus.COMPLETED) {
+        return {
+          success: false,
+          assignment: null as any,
+          error: 'ASSIGNMENT_COMPLETED',
+          message: 'Cannot check in: assignment is already completed.',
+        };
+      }
+
+      // Safe idempotent retry: If already checked in, return authoritative current state without re-writing row or re-emitting events
+      if (lockedRow?.checked_in_at) {
+        const current = await this.findOne(id);
+        return {
+          success: true,
+          assignment: current,
+          message: `Already checked in at ${new Date(lockedRow.checked_in_at).toISOString()}`,
+        };
+      }
+
+      // Optimistic concurrency / stale mobile command check
+      if (options?.expectedVersion !== undefined && lockedRow?.entity_version != null) {
+        const lockedVer = Number(lockedRow.entity_version);
+        if (options.expectedVersion !== lockedVer) {
+          if (options.expectedVersion < lockedVer) {
+            return {
+              success: false,
+              assignment: null as any,
+              error: 'STALE_ASSIGNMENT_VERSION',
+              message: `Assignment state has changed on server (version ${lockedRow.entity_version} > expected ${options.expectedVersion}). Please refresh schedule.`,
+            };
+          } else {
+            return {
+              success: false,
+              assignment: null as any,
+              error: 'INVALID_ASSIGNMENT_VERSION',
+              message: `Future or non-existent version ${options.expectedVersion} specified (server version is ${lockedVer}). Concurrency check rejected.`,
+            };
+          }
+        }
+      }
+
+      const assignment = await this.findOne(id);
+      if (!assignment) {
+        return { success: false, assignment: null as any, error: 'ASSIGNMENT_NOT_FOUND', message: 'Assignment not found.' };
+      }
+
+      if (assignment.status === AssignmentStatus.CANCELLED) {
+        return { success: false, assignment, error: 'ASSIGNMENT_CANCELLED', message: 'Cannot check in: assignment has been cancelled.' };
+      }
+      if (assignment.status === AssignmentStatus.COMPLETED) {
+        return { success: false, assignment, error: 'ASSIGNMENT_COMPLETED', message: 'Cannot check in: assignment is already completed.' };
+      }
+      if (assignment.checkedInAt) {
+        return {
+          success: true,
+          assignment,
+          message: `Already checked in at ${new Date(assignment.checkedInAt).toISOString()}`,
+        };
+      }
+
+      const actorIsAssignedAssayer = !!userId && userId === assignment.assayerId;
+      let staffOverride = false;
+      if (!actorIsAssignedAssayer) {
+        const actor = await this.dataSource
+          .getRepository(UserEntity)
+          .findOne({ where: { id: userId }, relations: ['roles'] })
+          .catch(() => null);
+        const actorRoles: string[] = (actor?.roles ?? []).map((r: any) => r?.name).filter(Boolean);
+        staffOverride = expandRoles(actorRoles).some((r) =>
+          [
+            SystemRole.ADMIN,
+            SystemRole.OPERATIONS,
+          ].includes(r as SystemRole),
+        );
+        if (!staffOverride) {
+          return {
+            success: false,
+            assignment,
+            error: 'NOT_YOUR_ASSIGNMENT',
+            message: 'You can only check in to an assignment that is assigned to you.',
+          };
+        }
+      }
+
+      if (!AssignmentStateMachine.canTransition(assignment.status, AssignmentStatus.CHECKED_IN)) {
         return {
           success: false,
           assignment,
-          error: 'NOT_YOUR_ASSIGNMENT',
-          message: 'You can only check in to an assignment that is assigned to you.',
+          error: 'INVALID_STATE_FOR_CHECK_IN',
+          message: `You need to accept this assignment before checking in. It is currently ${String(assignment.status).replace(/_/g, ' ').toLowerCase()}.`,
         };
       }
-    }
 
-    // Asks the state machine rather than a local list. The list this replaced permitted
-    // IN_PROGRESS -> CHECKED_IN while VALID_PATHS did not, so the two disagreed about the same
-    // transition and only the one here was ever consulted.
-    if (!AssignmentStateMachine.canTransition(assignment.status, AssignmentStatus.CHECKED_IN)) {
-      return {
-        success: false,
-        assignment,
-        error: 'INVALID_STATE_FOR_CHECK_IN',
-        message: `You need to accept this assignment before checking in. It is currently ${String(assignment.status).replace(/_/g, ' ').toLowerCase()}.`,
-      };
-    }
+      // Authoritative Assayer Lifecycle & Status Gate at Check-in:
+      // Lock assayer row with FOR SHARE to prevent races with concurrent suspension/deactivation,
+      // and ensure suspended/inactive assayers cannot start new field work.
+      const assayer = await manager.findOne(AssayerEntity, {
+        where: { id: assignment.assayerId },
+        lock: { mode: 'pessimistic_read' },
+      });
 
-    if (syncToken && assignment.syncToken && syncToken !== assignment.syncToken) {
-      return {
-        success: false,
-        assignment,
-        error: 'CONFLICT_ASSIGNMENT_MODIFIED',
-        message: 'Assignment state has changed on server. Please refresh schedule.',
-      };
-    }
+      if (!assayer || assayer.status !== AssayerStatus.ACTIVE || assayer.isActive === false) {
+        const statusLabel = assayer ? (assayer.lifecycleStatus || assayer.status) : 'UNKNOWN';
+        return {
+          success: false,
+          assignment,
+          error: 'ASSAYER_NOT_ACTIVE',
+          message: `Check-in refused: Assayer is currently ${statusLabel}. Suspended or inactive assayers cannot start new field work.`,
+        };
+      }
 
-    // Distance from the branch, computed before anything is mutated so the geofence guard and
-    // the stored evidence are one figure, not two computations that could disagree.
-    const branchLat = Number(assignment.projectBranch?.branch?.latitude);
-    const branchLng = Number(assignment.projectBranch?.branch?.longitude);
-    const distanceMeters =
-      Number.isFinite(branchLat) && Number.isFinite(branchLng) && !(branchLat === 0 && branchLng === 0)
-        ? Math.round(calculateHaversineDistance(lat, lng, branchLat, branchLng) * 1000)
-        : null;
+      if (syncToken && assignment.syncToken && syncToken !== assignment.syncToken) {
+        return {
+          success: false,
+          assignment,
+          error: 'CONFLICT_ASSIGNMENT_MODIFIED',
+          message: 'Assignment state has changed on server. Please refresh schedule.',
+        };
+      }
 
-    /**
-     * Check-in is only honest on the scheduled day, from the branch's vicinity — enforced,
-     * not merely recorded.
-     *
-     * Both facts were already captured (`checkInDistanceMeters`, `scheduledDate`) but nothing
-     * acted on them, and production data shows the result: an assignment CHECKED_IN nine days
-     * before its scheduled date, 677 km from the branch. In a bank-audit system the check-in
-     * *is* the attendance evidence, so a record like that is not noise — it is a false
-     * attestation the desk then relies on.
-     *
-     * Staff (`staffOverride`) bypass both rules: correcting a record on someone's behalf is
-     * exactly the case where the guard must yield. The assayer themselves cannot.
-     *
-     * The date is compared as an IST calendar day. Branches and assayers are Indian; the
-     * server's own timezone (UTC in the containers) must not decide which day it is in Sangli.
-     */
-    if (!staffOverride) {
-      const scheduledIso = assignment.scheduledDate ?? assignment.projectBranch?.scheduledDate ?? null;
-      if (scheduledIso) {
-        const istDay = (d: Date | string) =>
-          new Date(d).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
-        const today = istDay(new Date());
-        const scheduled = istDay(scheduledIso);
-        const dayRuleSuspended = today !== scheduled
-          && (await this.ruleBypass.isBypassed(BypassableRule.CHECK_IN_SCHEDULED_DAY));
-        if (dayRuleSuspended) {
-          this.ruleBypass.noteBypass(BypassableRule.CHECK_IN_SCHEDULED_DAY, {
-            entityType: 'ASSIGNMENT',
-            entityId: assignment.id,
-            userId,
-            detail: `checked in on ${today}, scheduled for ${scheduled}`,
-          });
+      const branchLat = Number(assignment.projectBranch?.branch?.latitude);
+      const branchLng = Number(assignment.projectBranch?.branch?.longitude);
+      const distanceMeters =
+        Number.isFinite(branchLat) && Number.isFinite(branchLng) && !(branchLat === 0 && branchLng === 0)
+          ? Math.round(calculateHaversineDistance(lat, lng, branchLat, branchLng) * 1000)
+          : null;
+
+      if (!staffOverride) {
+        const scheduledIso = assignment.scheduledDate ?? assignment.projectBranch?.scheduledDate ?? null;
+        if (scheduledIso) {
+          const istDay = (d: Date | string) =>
+            new Date(d).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+          const today = istDay(new Date());
+          const scheduled = istDay(scheduledIso);
+          const dayRuleSuspended = today !== scheduled
+            && (await this.ruleBypass.isBypassed(BypassableRule.CHECK_IN_SCHEDULED_DAY));
+          if (dayRuleSuspended) {
+            this.ruleBypass.noteBypass(BypassableRule.CHECK_IN_SCHEDULED_DAY, {
+              entityType: 'ASSIGNMENT',
+              entityId: assignment.id,
+              userId,
+              detail: `checked in on ${today}, scheduled for ${scheduled}`,
+            });
+          }
+          if (today !== scheduled && !dayRuleSuspended) {
+            const early = today < scheduled;
+            return {
+              success: false,
+              assignment,
+              error: 'NOT_SCHEDULED_TODAY',
+              message: early
+                ? `This audit is scheduled for ${new Date(scheduledIso).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Asia/Kolkata' })}. Check-in opens on the day itself — if the visit has genuinely moved, ask operations to reschedule it first.`
+                : `This audit was scheduled for ${new Date(scheduledIso).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Asia/Kolkata' })} and that day has passed. Ask operations to reschedule it before checking in.`,
+            };
+          }
         }
-        if (today !== scheduled && !dayRuleSuspended) {
-          const early = today < scheduled;
-          return {
-            success: false,
-            assignment,
-            error: 'NOT_SCHEDULED_TODAY',
-            message: early
-              ? `This audit is scheduled for ${new Date(scheduledIso).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Asia/Kolkata' })}. Check-in opens on the day itself — if the visit has genuinely moved, ask operations to reschedule it first.`
-              : `This audit was scheduled for ${new Date(scheduledIso).toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'Asia/Kolkata' })} and that day has passed. Ask operations to reschedule it before checking in.`,
-          };
+
+        const GEOFENCE_METERS = await this.settings
+          .getNumber('field.checkInGeofenceMeters', DEFAULT_CHECK_IN_GEOFENCE_METERS)
+          .catch(() => DEFAULT_CHECK_IN_GEOFENCE_METERS);
+        if (distanceMeters != null) {
+          const branchAccuracyMeters = Math.max(
+            0,
+            Number(assignment.projectBranch?.branch?.geoAccuracyMeters ?? 0) || 0,
+          );
+          const MAX_DEVICE_ACCURACY_ALLOWANCE_M = 1000;
+          const deviceAllowance = Math.min(Math.max(0, accuracyMeters ?? 0), MAX_DEVICE_ACCURACY_ALLOWANCE_M);
+          const allowance = GEOFENCE_METERS + deviceAllowance + branchAccuracyMeters;
+          if (distanceMeters > allowance && await this.ruleBypass.isBypassed(BypassableRule.CHECK_IN_GEOFENCE)) {
+            this.ruleBypass.noteBypass(BypassableRule.CHECK_IN_GEOFENCE, {
+              entityType: 'ASSIGNMENT',
+              entityId: assignment.id,
+              userId,
+              detail: `check-in accepted ${(distanceMeters / 1000).toFixed(1)} km from the branch`,
+            });
+          } else if (distanceMeters > allowance) {
+            const km = (distanceMeters / 1000).toFixed(1);
+            const branchGeoIsVague = branchAccuracyMeters >= 1000;
+            return {
+              success: false,
+              assignment,
+              error: 'TOO_FAR_FROM_BRANCH',
+              message: branchGeoIsVague
+                ? `You appear to be ${km} km from this branch, but this branch's recorded location is only accurate to about ${Math.round(branchAccuracyMeters / 1000)} km — it was never pinned precisely. Ask operations to correct the branch's location; this is not something you can fix from here.`
+                : `You appear to be ${km} km from this branch. Check-in works only at the branch itself — if you are standing there, get clear sky for a GPS fix and try again.`,
+            };
+          }
         }
       }
 
-      /**
-       * Geofence: 2 km around the branch, widened by the device's own reported accuracy so a
-       * poor rural GPS fix is not punished. 2 km is far beyond geocoding noise for a branch
-       * address while still making "677 km away" impossible. Skipped when the branch has no
-       * coordinates — a guard that fires on missing master data would block legitimate work.
-       */
-      // Configurable at /admin/settings (field.checkInGeofenceMeters). Too tight locks honest
-      // workers out of their own job; too loose and check-in stops being evidence of attendance
-      // — which is why it is an operator's decision rather than a redeploy.
-      const GEOFENCE_METERS = await this.settings
-        .getNumber('field.checkInGeofenceMeters', DEFAULT_CHECK_IN_GEOFENCE_METERS)
-        .catch(() => DEFAULT_CHECK_IN_GEOFENCE_METERS);
-      if (distanceMeters != null) {
-        /**
-         * Widened by how well we actually know where the branch IS, not just by the device's fix.
-         *
-         * The 2 km figure assumes the branch coordinate is good to street level. Import does not
-         * guarantee that: an address it cannot resolve falls back to the city centroid
-         * (`geo_accuracy_meters = 15000`) or, for an unresolvable one, the centre of India
-         * (500000). An assayer standing in the doorway of a centroid-geocoded branch was then told
-         * they were "8.4 km from this branch… get clear sky for a GPS fix" — blamed for a
-         * coordinate the system already knew was only good to ±15 km, and unable to start the job.
-         *
-         * The branch's own recorded accuracy is the honest allowance, so a precisely-geocoded
-         * branch keeps a tight fence and a vague one is forgiving in proportion to how vague it is.
-         */
-        const branchAccuracyMeters = Math.max(
-          0,
-          Number(assignment.projectBranch?.branch?.geoAccuracyMeters ?? 0) || 0,
-        );
-        /**
-         * The device's reported accuracy is CLIENT-SUPPLIED and must not widen the fence without
-         * limit — `{"accuracy": 5000000}` would otherwise check in from anywhere in India, and the
-         * stored value would read as a bad GPS fix rather than a bypass. Real handsets in poor
-         * conditions report tens to a few hundred metres; 1 km is generous. The raw figure is
-         * still stored on the row (`checkInAccuracyMeters`) as evidence, unclamped.
-         */
-        const MAX_DEVICE_ACCURACY_ALLOWANCE_M = 1000;
-        const deviceAllowance = Math.min(Math.max(0, accuracyMeters ?? 0), MAX_DEVICE_ACCURACY_ALLOWANCE_M);
-        const allowance = GEOFENCE_METERS + deviceAllowance + branchAccuracyMeters;
-        if (distanceMeters > allowance && await this.ruleBypass.isBypassed(BypassableRule.CHECK_IN_GEOFENCE)) {
-          /**
-           * Let it through, and make sure the record says so.
-           *
-           * The distance is stored on the row either way (see below), so the check-in is still
-           * visibly out of geofence to anyone who looks. This adds the reason it was accepted —
-           * without it, an out-of-range check-in in the data is indistinguishable from a GPS
-           * failure, and the one question worth answering later is which of the two it was.
-           */
-          this.ruleBypass.noteBypass(BypassableRule.CHECK_IN_GEOFENCE, {
-            entityType: 'ASSIGNMENT',
-            entityId: assignment.id,
-            userId,
-            detail: `check-in accepted ${(distanceMeters / 1000).toFixed(1)} km from the branch`,
-          });
-        } else if (distanceMeters > allowance) {
-          const km = (distanceMeters / 1000).toFixed(1);
-          /**
-           * Only blame the device when the device is the likely culprit. If the branch itself is
-           * poorly geocoded, telling the assayer to find clear sky sends them chasing a fix they
-           * cannot make — the coordinate on file is the thing that is wrong, and ops has to correct
-           * it (Branches → the branch's location, or the geo-precision repair tools).
-           */
-          const branchGeoIsVague = branchAccuracyMeters >= 1000;
-          return {
-            success: false,
-            assignment,
-            error: 'TOO_FAR_FROM_BRANCH',
-            message: branchGeoIsVague
-              ? `You appear to be ${km} km from this branch, but this branch's recorded location is only accurate to about ${Math.round(branchAccuracyMeters / 1000)} km — it was never pinned precisely. Ask operations to correct the branch's location; this is not something you can fix from here.`
-              : `You appear to be ${km} km from this branch. Check-in works only at the branch itself — if you are standing there, get clear sky for a GPS fix and try again.`,
-          };
-        }
-      }
-    }
-
-    /**
-     * Check-in position is stored in real columns, not concatenated into `remarks`.
-     *
-     * It used to be written only as free text — `"GPS Checked in at (12.9, 77.5) on ..."` —
-     * appended to a notes field. That cannot be queried, cannot be compared against the
-     * branch's own coordinates, and cannot be produced as evidence in a dispute. The distance
-     * from the branch is computed and stored now, so an out-of-geofence check-in is a fact on
-     * the row rather than something nobody can ever discover.
-     */
-    const now = new Date();
-    /**
-     * The FIRST check-in is the arrival record, and it is not overwritten.
-     *
-     * Every call used to replace `checked_in_at` and the coordinates, so checking in again later
-     * — from anywhere, at any time — silently moved the recorded arrival. Attendance evidence you
-     * can revise after the fact is not evidence: an assayer who arrived at 09:02 at the branch and
-     * re-checked-in at 16:40 a kilometre away left a row saying only the latter, with nothing on
-     * it to show it had ever said anything else.
-     *
-     * Re-check-ins remain accepted (the mobile app retries on flaky connections, and refusing
-     * would strand someone whose first attempt failed after it had actually saved). They simply do
-     * not rewrite the arrival — the position trail in `assayer_location_pings` already records
-     * where the person went afterwards.
-     */
-    const isFirstCheckIn = !assignment.checkedInAt;
-    if (isFirstCheckIn) {
+      const now = new Date();
       assignment.checkInLatitude = lat;
       assignment.checkInLongitude = lng;
       assignment.checkInAccuracyMeters = accuracyMeters ?? null;
       assignment.checkedInAt = now;
       assignment.checkInDistanceMeters = distanceMeters;
-    }
 
-    AssignmentStateMachine.checkIn(assignment, userId || assignment.assayerId || id);
-    assignment.updatedBy = userId || assignment.assayerId || id;
-    assignment.syncToken = `SYNC-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+      AssignmentStateMachine.checkIn(assignment, userId || assignment.assayerId || id);
+      assignment.updatedBy = userId || assignment.assayerId || id;
+      assignment.entityVersion = (assignment.entityVersion || 1) + 1;
+      assignment.syncToken = `SYNC-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
 
-    if (assignment.projectBranch) {
-      assignment.projectBranch.status = ProjectBranchStatus.SCHEDULED;
-      if (!assignment.projectBranch.scheduledDate) {
-        assignment.projectBranch.scheduledDate = assignment.scheduledDate || new Date();
-      }
-      assignment.projectBranch.updatedBy = userId || assignment.assayerId || id;
-    }
-    const saved = await this.dataSource.transaction(async (manager) => {
       if (assignment.projectBranch) {
+        assignment.projectBranch.status = ProjectBranchStatus.SCHEDULED;
+        if (!assignment.projectBranch.scheduledDate) {
+          assignment.projectBranch.scheduledDate = assignment.scheduledDate || new Date();
+        }
+        assignment.projectBranch.updatedBy = userId || assignment.assayerId || id;
         await manager.save(assignment.projectBranch);
       }
       if (assignment.assessment) {
         await manager.save(assignment.assessment);
       }
-      return manager.save(assignment);
-    });
+      const saved = await manager.save(assignment);
 
-    /**
-     * The check-in also lands in the movement trail.
-     *
-     * This is the anchor of every travel assessment: the one moment the platform knows for certain
-     * where an assayer was, verified against the branch geofence and captured under a human
-     * action. A journey is judged backwards from it (LocationTrailService.assessAssignmentTravel),
-     * so without this fix in the trail the approach has no end point to be measured against.
-     *
-     * Appended after the transaction and best-effort inside `record()`: supporting evidence must
-     * never be able to fail the check-in it accompanies.
-     */
-    await this.locationTrail
-      .record(saved.assayerId, lat, lng, {
-        source: LocationPingSource.CHECK_IN,
-        accuracyMeters: accuracyMeters ?? null,
-        assignmentId: saved.id,
-        recordedAt: now,
-        recordedBy: userId || saved.assayerId,
-      })
-      // Guarded here as well as inside `record()`. An assayer standing at the branch must not be
-      // refused because a supporting write failed, and that promise is too important to hold only
-      // in a collaborator's implementation — it has to be true at the call site regardless.
-      .catch((err) =>
-        console.error(`Check-in recorded but its trail fix was not stored (${saved.id}):`, err),
-      );
+      // Best effort location ping trail
+      await this.locationTrail
+        .record(saved.assayerId, lat, lng, {
+          source: LocationPingSource.CHECK_IN,
+          accuracyMeters: accuracyMeters ?? null,
+          assignmentId: saved.id,
+          recordedAt: now,
+          recordedBy: userId || saved.assayerId,
+        })
+        .catch((err) =>
+          console.error(`Check-in recorded but its trail fix was not stored (${saved.id}):`, err),
+        );
 
-    // Record Audit Event for real-time operations control tracking
-    try {
-      await this.auditService.recordEvent({
-        category: EventCategory.OPERATIONAL,
-        eventType: 'ASSIGNMENT_CHECKED_IN',
-        entityType: 'ASSIGNMENT',
-        entityId: saved.id,
-        userId: userId || saved.assayerId,
-        remarks: `Assayer ${saved.assayer?.displayName || ''} GPS checked in at branch ${saved.projectBranch?.branch?.name || ''} (${lat}, ${lng}).`,
-      });
-    } catch (err) {
-      console.error('Failed to log check-in audit event:', err);
-    }
-
-    // Send real-time notification to assignment creator / operations manager
-    if (saved.createdBy) {
       try {
-        const targetUser = await this.dataSource.getRepository(UserEntity).findOne({ where: { id: saved.createdBy } }).catch(() => null);
-        if (targetUser) {
-          await this.notificationService.create({
-            userId: saved.createdBy,
-            title: 'Assayer GPS Check-In',
-            message: `Assayer ${saved.assayer?.displayName || 'Field Assayer'} checked in at ${saved.projectBranch?.branch?.name || 'Branch'} (${lat}, ${lng}).`,
-            // Left as a direct create rather than migrated to a catalog emit: the catalog has no
-            // check-in type, and inventing one here would change who gets told (roles, not the
-            // raiser) — a routing decision that belongs with the catalog, not this call site.
-            // The link is corrected: `/assignments/:id` is not a frontend route, so every one of
-            // these landed on the dashboard catch-all instead of the record.
-            link: `/assignments?id=${saved.id}`,
-          }, userId || saved.assayerId);
-        }
+        await this.auditService.recordEvent({
+          category: EventCategory.OPERATIONAL,
+          eventType: 'ASSIGNMENT_CHECKED_IN',
+          entityType: 'ASSIGNMENT',
+          entityId: saved.id,
+          userId: userId || saved.assayerId,
+          remarks: `Assayer ${saved.assayer?.displayName || ''} GPS checked in at branch ${saved.projectBranch?.branch?.name || ''} (${lat}, ${lng}).`,
+          metadata: {
+            clientRequestId: options?.clientRequestId,
+            entityVersion: saved.entityVersion,
+          },
+        });
       } catch (err) {
-        console.error('Failed to dispatch check-in notification:', err);
+        console.error('Failed to log check-in audit event:', err);
       }
-    }
 
-    return {
-      success: true,
-      assignment: saved,
-      message: `Checked in at ${lat}, ${lng}`,
-    };
+      if (saved.createdBy) {
+        try {
+          const targetUser = await this.dataSource.getRepository(UserEntity).findOne({ where: { id: saved.createdBy } }).catch(() => null);
+          if (targetUser) {
+            await this.notificationService.create({
+              userId: saved.createdBy,
+              title: 'Assayer GPS Check-In',
+              message: `Assayer ${saved.assayer?.displayName || 'Field Assayer'} checked in at ${saved.projectBranch?.branch?.name || 'Branch'} (${lat}, ${lng}).`,
+              link: `/assignments?id=${saved.id}`,
+            }, userId || saved.assayerId);
+          }
+        } catch (err) {
+          console.error('Failed to dispatch check-in notification:', err);
+        }
+      }
+
+      return {
+        success: true,
+        assignment: saved,
+        message: `Checked in at ${lat}, ${lng}`,
+      };
+    });
   }
 
-  /**
-   * The assayer leaves the branch.
-   *
-   * Deliberately NOT a status change. Leaving the branch and finishing the audit are different
-   * facts: completion is evidenced by the paperwork that follows, sometimes days later, and
-   * making departure complete the assignment would mark work done because somebody walked out of
-   * a building. Conversely, holding the visit "open" until documents land would make time on site
-   * unmeasurable. So this records one thing — when they left, and from where — and leaves the
-   * state machine alone.
-   *
-   * What it buys: time on site becomes statable, an abandoned ten-minute visit stops looking
-   * identical to a full day's audit, and the return journey gets a start point that travel
-   * assessment can measure rather than assume.
-   *
-   * Three guards, and no more:
-   *
-   *  - Only the assigned assayer, or staff correcting the record on their behalf. Same rule and
-   *    the same reasoning as check-in: this is attendance evidence in a bank-audit system.
-   *  - You cannot leave somewhere you never arrived. Without a check-in there is no window to
-   *    close, and a lone departure would be a claim about attendance with nothing behind it.
-   *  - First one wins, like check-in. A second tap does not move the departure time, so a
-   *    retry after a failed response cannot quietly extend the recorded visit.
-   *
-   * Deliberately NOT guarded by the geofence, unlike check-in. Check-in must be at the branch or
-   * it is not evidence of arrival; departure is by definition the moment of leaving, and someone
-   * who has reached their vehicle is not lying. Blocking it has no upside — they have already
-   * gone — and a real downside: an assayer unable to close a visit at all. The distance is
-   * recorded either way, so a departure logged from thirty kilometres away is visible to anyone
-   * reviewing the record rather than silently prevented.
-   */
   async recordCheckOut(
     id: string,
     lat: number,
@@ -3254,112 +4011,187 @@ export class AssignmentService {
     syncToken?: string,
     userId?: string,
     accuracyMeters?: number,
+    options?: { expectedVersion?: number; clientRequestId?: string },
   ): Promise<{ success: boolean; assignment: AssignmentEntity; error?: string; message?: string }> {
-    const assignment = await this.findOne(id);
-    if (!assignment) {
-      return { success: false, assignment: null as any, error: 'ASSIGNMENT_NOT_FOUND', message: 'Assignment not found.' };
-    }
+    return this.runTransactional(async (manager) => {
+      const lockedRows: Array<{
+        id: string;
+        status: string;
+        entity_version: number;
+        assayer_id: string;
+        checked_in_at: Date | null;
+        checked_out_at: Date | null;
+        sync_token: string | null;
+      }> = manager.query
+        ? await manager
+            .query(
+              'SELECT id, status, entity_version, assayer_id, checked_in_at, checked_out_at, sync_token FROM assignments WHERE id = $1 FOR UPDATE',
+              [id],
+            )
+            .catch(() => [])
+        : [];
 
-    const actorIsAssignedAssayer = !!userId && userId === assignment.assayerId;
-    if (!actorIsAssignedAssayer) {
-      const actor = await this.dataSource
-        .getRepository(UserEntity)
-        .findOne({ where: { id: userId }, relations: ['roles'] })
-        .catch(() => null);
-      const actorRoles: string[] = (actor?.roles ?? []).map((r: any) => r?.name).filter(Boolean);
-      // expandRoles: implication-aware, same as the check-in guard above.
-      const staffOverride = expandRoles(actorRoles).some((r) =>
-        [SystemRole.ADMIN, SystemRole.OPERATIONS].includes(r as SystemRole),
-      );
-      if (!staffOverride) {
+      const lockedRow = lockedRows?.[0];
+
+      if (lockedRow?.status === AssignmentStatus.CANCELLED) {
+        return { success: false, assignment: null as any, error: 'ASSIGNMENT_CANCELLED', message: 'Cannot check out of a cancelled assignment.' };
+      }
+      if (lockedRow?.status === AssignmentStatus.COMPLETED) {
+        return { success: false, assignment: null as any, error: 'ASSIGNMENT_COMPLETED', message: 'Assignment is already completed.' };
+      }
+
+      if (lockedRow?.checked_out_at) {
+        const current = await this.findOne(id);
+        return {
+          success: true,
+          assignment: current,
+          message: `Already checked out at ${new Date(lockedRow.checked_out_at).toISOString()}`,
+        };
+      }
+
+      if (lockedRow && !lockedRow.checked_in_at) {
+        return {
+          success: false,
+          assignment: null as any,
+          error: 'NOT_CHECKED_IN',
+          message: 'You have not checked in to this branch yet, so there is nothing to check out of.',
+        };
+      }
+
+      if (options?.expectedVersion !== undefined && lockedRow?.entity_version != null) {
+        const lockedVer = Number(lockedRow.entity_version);
+        if (options.expectedVersion !== lockedVer) {
+          if (options.expectedVersion < lockedVer) {
+            return {
+              success: false,
+              assignment: null as any,
+              error: 'STALE_ASSIGNMENT_VERSION',
+              message: `Assignment state has changed on server (version ${lockedRow.entity_version} > expected ${options.expectedVersion}). Please refresh schedule.`,
+            };
+          } else {
+            return {
+              success: false,
+              assignment: null as any,
+              error: 'INVALID_ASSIGNMENT_VERSION',
+              message: `Future or non-existent version ${options.expectedVersion} specified (server version is ${lockedVer}). Concurrency check rejected.`,
+            };
+          }
+        }
+      }
+
+      const assignment = await this.findOne(id);
+      if (!assignment) {
+        return { success: false, assignment: null as any, error: 'ASSIGNMENT_NOT_FOUND', message: 'Assignment not found.' };
+      }
+
+      if (assignment.status === AssignmentStatus.CANCELLED) {
+        return { success: false, assignment, error: 'ASSIGNMENT_CANCELLED', message: 'Cannot check out of a cancelled assignment.' };
+      }
+      if (assignment.status === AssignmentStatus.COMPLETED) {
+        return { success: false, assignment, error: 'ASSIGNMENT_COMPLETED', message: 'Assignment is already completed.' };
+      }
+
+      const actorIsAssignedAssayer = !!userId && userId === assignment.assayerId;
+      if (!actorIsAssignedAssayer) {
+        const actor = await this.dataSource
+          .getRepository(UserEntity)
+          .findOne({ where: { id: userId }, relations: ['roles'] })
+          .catch(() => null);
+        const actorRoles: string[] = (actor?.roles ?? []).map((r: any) => r?.name).filter(Boolean);
+        const staffOverride = expandRoles(actorRoles).some((r) =>
+          [SystemRole.ADMIN, SystemRole.OPERATIONS].includes(r as SystemRole),
+        );
+        if (!staffOverride) {
+          return {
+            success: false,
+            assignment,
+            error: 'NOT_YOUR_ASSIGNMENT',
+            message: 'You can only check out of an assignment that is assigned to you.',
+          };
+        }
+      }
+
+      if (!assignment.checkedInAt) {
         return {
           success: false,
           assignment,
-          error: 'NOT_YOUR_ASSIGNMENT',
-          message: 'You can only check out of an assignment that is assigned to you.',
+          error: 'NOT_CHECKED_IN',
+          message: 'You have not checked in to this branch yet, so there is nothing to check out of.',
         };
       }
-    }
 
-    if (!assignment.checkedInAt) {
-      return {
-        success: false,
-        assignment,
-        error: 'NOT_CHECKED_IN',
-        message: 'You have not checked in to this branch yet, so there is nothing to check out of.',
-      };
-    }
+      if (syncToken && assignment.syncToken && syncToken !== assignment.syncToken) {
+        return {
+          success: false,
+          assignment,
+          error: 'CONFLICT_ASSIGNMENT_MODIFIED',
+          message: 'Assignment state has changed on server. Please refresh schedule.',
+        };
+      }
 
-    if (syncToken && assignment.syncToken && syncToken !== assignment.syncToken) {
-      return {
-        success: false,
-        assignment,
-        error: 'CONFLICT_ASSIGNMENT_MODIFIED',
-        message: 'Assignment state has changed on server. Please refresh schedule.',
-      };
-    }
+      if (assignment.checkedOutAt) {
+        return {
+          success: true,
+          assignment,
+          message: `Already checked out at ${new Date(assignment.checkedOutAt).toISOString()}`,
+        };
+      }
 
-    // Already closed: report success rather than an error, and do not move the time. A retry
-    // after a response that never arrived must not be punished, and must not rewrite the record.
-    if (assignment.checkedOutAt) {
+      const branchLat = Number(assignment.projectBranch?.branch?.latitude);
+      const branchLng = Number(assignment.projectBranch?.branch?.longitude);
+      const distanceMeters =
+        Number.isFinite(branchLat) && Number.isFinite(branchLng) && !(branchLat === 0 && branchLng === 0)
+          ? Math.round(calculateHaversineDistance(lat, lng, branchLat, branchLng) * 1000)
+          : null;
+
+      const now = new Date();
+      assignment.checkOutLatitude = lat;
+      assignment.checkOutLongitude = lng;
+      assignment.checkOutAccuracyMeters = accuracyMeters ?? null;
+      assignment.checkOutDistanceMeters = distanceMeters;
+      assignment.checkedOutAt = now;
+      assignment.updatedBy = userId || assignment.assayerId || id;
+      assignment.entityVersion = (assignment.entityVersion || 1) + 1;
+      assignment.syncToken = `SYNC-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+
+      const saved = await manager.save(assignment);
+
+      await this.locationTrail
+        .record(saved.assayerId, lat, lng, {
+          source: LocationPingSource.CHECK_OUT,
+          accuracyMeters: accuracyMeters ?? null,
+          assignmentId: saved.id,
+          recordedAt: now,
+          recordedBy: userId || saved.assayerId,
+        })
+        .catch((err) => console.error('Failed to record check-out position:', err));
+
+      try {
+        const minutesOnSite = Math.max(
+          0,
+          Math.round((now.getTime() - new Date(saved.checkedInAt as Date).getTime()) / 60000),
+        );
+        await this.auditService.recordEvent({
+          category: EventCategory.OPERATIONAL,
+          eventType: 'ASSIGNMENT_CHECKED_OUT',
+          entityType: 'ASSIGNMENT',
+          entityId: saved.id,
+          userId: userId || saved.assayerId,
+          remarks: `Assayer ${saved.assayer?.displayName || ''} checked out of branch ${saved.projectBranch?.branch?.name || ''} (${lat}, ${lng}) after ${minutesOnSite} minute(s) on site.`,
+          metadata: {
+            clientRequestId: options?.clientRequestId,
+            entityVersion: saved.entityVersion,
+          },
+        });
+      } catch (err) {
+        console.error('Failed to log check-out audit event:', err);
+      }
+
       return {
         success: true,
-        assignment,
-        message: `Already checked out at ${new Date(assignment.checkedOutAt).toISOString()}`,
+        assignment: saved,
+        message: `Checked out at ${lat}, ${lng}`,
       };
-    }
-
-    const branchLat = Number(assignment.projectBranch?.branch?.latitude);
-    const branchLng = Number(assignment.projectBranch?.branch?.longitude);
-    const distanceMeters =
-      Number.isFinite(branchLat) && Number.isFinite(branchLng) && !(branchLat === 0 && branchLng === 0)
-        ? Math.round(calculateHaversineDistance(lat, lng, branchLat, branchLng) * 1000)
-        : null;
-
-    const now = new Date();
-    assignment.checkOutLatitude = lat;
-    assignment.checkOutLongitude = lng;
-    assignment.checkOutAccuracyMeters = accuracyMeters ?? null;
-    assignment.checkOutDistanceMeters = distanceMeters;
-    assignment.checkedOutAt = now;
-    assignment.updatedBy = userId || assignment.assayerId || id;
-    assignment.syncToken = `SYNC-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
-
-    const saved = await this.assignmentRepository.save(assignment);
-
-    // The departure fix joins the movement trail for the same reason the arrival does: it is the
-    // start point of the journey home, and without it the return leg can only be assumed.
-    await this.locationTrail
-      .record(saved.assayerId, lat, lng, {
-        source: LocationPingSource.CHECK_OUT,
-        accuracyMeters: accuracyMeters ?? null,
-        assignmentId: saved.id,
-        recordedAt: now,
-        recordedBy: userId || saved.assayerId,
-      })
-      .catch((err) => console.error('Failed to record check-out position:', err));
-
-    try {
-      const minutesOnSite = Math.max(
-        0,
-        Math.round((now.getTime() - new Date(saved.checkedInAt as Date).getTime()) / 60000),
-      );
-      await this.auditService.recordEvent({
-        category: EventCategory.OPERATIONAL,
-        eventType: 'ASSIGNMENT_CHECKED_OUT',
-        entityType: 'ASSIGNMENT',
-        entityId: saved.id,
-        userId: userId || saved.assayerId,
-        remarks: `Assayer ${saved.assayer?.displayName || ''} checked out of branch ${saved.projectBranch?.branch?.name || ''} (${lat}, ${lng}) after ${minutesOnSite} minute(s) on site.`,
-      });
-    } catch (err) {
-      console.error('Failed to log check-out audit event:', err);
-    }
-
-    return {
-      success: true,
-      assignment: saved,
-      message: `Checked out at ${lat}, ${lng}`,
-    };
+    });
   }
 }

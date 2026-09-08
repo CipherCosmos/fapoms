@@ -3,7 +3,7 @@ import {
   Edit2, ArrowRightLeft, AlertTriangle, CheckCircle2,
   User, CreditCard, Award, Clock, MessageSquare, Phone, Mail, MapPin, KeyRound, ShieldCheck, FileCheck, Gauge, Info,
 } from 'lucide-react';
-import { nextAssayerLifecycleStates, nextOnboardingStep, AssayerLifecycleStatus, assayerLifecycleLabel, activityEventLabel, employmentTypeLabel, AssayerEngagementType, AssayerUnavailableReason, ASSAYER_RECORD_FIELDS, isValidIfsc } from '@fapoms/shared';
+import { nextAssayerLifecycleStates, nextOnboardingStep, AssayerLifecycleStatus, assayerLifecycleLabel, activityEventLabel, employmentTypeLabel, AssayerEngagementType, AssayerUnavailableReason, ASSAYER_RECORD_FIELDS, isValidIfsc, IDENTITY_GATE_DOCUMENTS } from '@fapoms/shared';
 
 import { useSearchParams } from 'react-router-dom';
 import { api } from '../../services/api';
@@ -28,12 +28,15 @@ import { fmtDate, fmtWhen } from '../../utils/dates';
 import { userMessage } from '../../services/errors';
 import { CommercialProfileModal, type CommercialProfile } from './CommercialProfileModal';
 import { AssayerRemarks } from '../../components/AssayerRemarks';
-import { AssayerVettingTab, STANDING_LABELS, standingStance, STANDING_STANCE_TONE } from './AssayerVettingTab';
+import {
+  AssayerVettingTab, STANDING_LABELS, standingStance, STANDING_STANCE_TONE,
+  VERDICT_LABELS, ADVERSE_BACKGROUND_VERDICTS, humanizeEnum,
+} from './AssayerVettingTab';
 import { AssayerQualificationTab } from './AssayerQualificationTab';
 import { AssayerSkillsPanel } from './AssayerSkillsPanel';
 import { todayDateKey, localDateKey } from '../../utils/statusLabels';
 import { counted } from '../../utils/plural';
-import { LIFECYCLE_MOVE_REASONS, OTHER_LIFECYCLE_REASON } from './lifecycle-reason-vocabulary';
+import { LIFECYCLE_MOVE_REASONS, OTHER_LIFECYCLE_REASON, REHIRE_REASON } from './lifecycle-reason-vocabulary';
 import { resolveRecordSection, type SummaryGroupKey } from './record-sections';
 
 /**
@@ -259,15 +262,38 @@ export const AssayerRecord: React.FC<{
    * "what banks can we send them to?" meant knowing which tab to open. One dossier read (the
    * same endpoint the Vetting tab uses; the browser caches nothing here but the payload is
    * small); a viewer whose role cannot read the dossier simply does not get the strip.
+   *
+   * The same read now also backs the substance in the move-confirms below (`move`): whether any
+   * of the 21 dossier documents have actually been checked, the verdict and findings on the
+   * current background check, and whether the two identity-gate documents (Aadhaar front, PAN
+   * card) are verified. It is deliberately not a second fetch — this endpoint already carries all
+   * of it — and everything derived from it degrades the same way the strip above already does:
+   * absent for a viewer not entitled to the dossier, rather than blocking the move.
    */
   const [dossierGlance, setDossierGlance] = useState<{
     empanelments: Array<{ id: string; status: string; statusReason?: string | null; client?: { id: string; name: string } | null }>;
-    currentCheck: { cibilScore?: number | null; cibilBand?: string | null; checkedOn?: string | null } | null;
+    currentCheck: { cibilScore?: number | null; cibilBand?: string | null; checkedOn?: string | null; verdict?: string | null; findings?: string | null } | null;
+    documentsTotal: number;
+    documentsVerified: number;
+    /** Labels of the identity-gate documents (Aadhaar front, PAN card) not yet verified. */
+    identityGapLabels: string[];
   } | null>(null);
   useEffect(() => {
     let cancelled = false;
     api.request<any>(`/assayers/${assayerId}/dossier`)
-      .then((d) => { if (!cancelled) setDossierGlance({ empanelments: d?.empanelments ?? [], currentCheck: d?.currentCheck ?? null }); })
+      .then((d) => {
+        if (cancelled) return;
+        const onboarding: any[] = Array.isArray(d?.onboarding) ? d.onboarding : [];
+        setDossierGlance({
+          empanelments: d?.empanelments ?? [],
+          currentCheck: d?.currentCheck ?? null,
+          documentsTotal: onboarding.length,
+          documentsVerified: onboarding.filter((r) => r.verificationStatus === 'VERIFIED').length,
+          identityGapLabels: onboarding
+            .filter((r) => IDENTITY_GATE_DOCUMENTS.includes(r.requirement) && r.verificationStatus !== 'VERIFIED')
+            .map((r) => r.label ?? humanizeEnum(String(r.requirement))),
+        });
+      })
       .catch(() => { /* not entitled to the dossier — the strip just does not render */ });
     return () => { cancelled = true; };
   }, [assayerId, reloadKey]);
@@ -579,6 +605,20 @@ export const AssayerRecord: React.FC<{
   const needsReason = (to: string) => LIFECYCLE_MOVES_NEEDING_A_REASON.includes(to);
 
   /**
+   * The one move that runs the lifecycle the OTHER way.
+   *
+   * INVITED is otherwise never a legal `to` here — a brand-new profile is created directly at
+   * INVITED (`AssayerService.create`), and no other stage transitions into it — so if this record
+   * is offering it at all, it is always because `a.lifecycleStatus` is RESIGNED or TERMINATED and
+   * somebody is coming BACK. Checked against `from` as well as `to` anyway, defensively: it costs
+   * nothing, and it means a future edge added into INVITED from somewhere else could not silently
+   * be mislabelled as a rehire by this code.
+   */
+  const isRehireMove = (from: string | undefined | null, to: string): boolean =>
+    to === AssayerLifecycleStatus.INVITED
+    && (from === AssayerLifecycleStatus.RESIGNED || from === AssayerLifecycleStatus.TERMINATED);
+
+  /**
    * Moving someone's stage, with the consequence stated before it happens.
    *
    * This used to be a dropdown of filing states and a button labelled "Move", which meant walking a
@@ -597,9 +637,83 @@ export const AssayerRecord: React.FC<{
    * does not run backwards — so those ask first, in a dialog naming the person. Routine moves stay
    * one click, because making a clerk confirm every ordinary step is how people learn to click
    * through dialogs unread.
+   *
+   * THREE OF THE ROUTINE MOVES ARE NO LONGER SILENT, EITHER — not because they became irreversible,
+   * but because the record already knows something worth saying before they fire, and saying
+   * nothing is not the same as there being nothing to say:
+   *
+   *  - Document verification → Background verification, when not one of the dossier's documents
+   *    has actually been checked.
+   *  - Background verification → Training, when the background check on file recorded a criminal
+   *    case or an adverse finding — moving forward does not clear it, so the reader is told before
+   *    they do.
+   *  - Training → Active, which always confirms: it names the record's remaining critical gaps
+   *    (the same `missingAssayerRecordFields` the Summary banner counts) and, when nothing is
+   *    missing, says so plainly.
+   *
+   * None of the three refuses anything — proceeding is still one more click away in every case.
+   * The identity gate itself (`onboarding.identityGate.mode`) is a setting this screen cannot read
+   * — it is a Developer-only technical setting, not something HR's role can query — so the
+   * sentence below states its shipped default (warn) as information, not a live read; if it has
+   * been switched to Enforce, the server refuses the move on its own terms and the failure lands
+   * in the ordinary error banner, same as any other refused request.
    */
   const move = async (to: string, why: string) => {
     if (!to || !a) return;
+
+    if (
+      a.lifecycleStatus === AssayerLifecycleStatus.DOCUMENT_VERIFICATION
+      && to === AssayerLifecycleStatus.BACKGROUND_VERIFICATION
+      && dossierGlance && dossierGlance.documentsTotal > 0 && dossierGlance.documentsVerified === 0
+    ) {
+      const ok = await confirm({
+        title: `Move ${a.displayName} to ${assayerLifecycleLabel(to)}?`,
+        message: `No documents have been checked yet — 0 of ${dossierGlance.documentsTotal} on `
+          + 'their dossier are verified. Move them on anyway?',
+        confirmLabel: `Move to ${assayerLifecycleLabel(to)}`,
+      });
+      if (!ok) return;
+    }
+
+    if (
+      a.lifecycleStatus === AssayerLifecycleStatus.BACKGROUND_VERIFICATION
+      && to === AssayerLifecycleStatus.TRAINING
+      && dossierGlance?.currentCheck?.verdict
+      && ADVERSE_BACKGROUND_VERDICTS.includes(dossierGlance.currentCheck.verdict)
+    ) {
+      const verdict = dossierGlance.currentCheck.verdict;
+      const finding = (VERDICT_LABELS[verdict] ?? humanizeEnum(verdict))
+        + (dossierGlance.currentCheck.findings ? ` — ${dossierGlance.currentCheck.findings}` : '');
+      const ok = await confirm({
+        title: `Move ${a.displayName} to ${assayerLifecycleLabel(to)}?`,
+        message: (
+          <>
+            Their background check recorded: <strong style={{ color: 'var(--warning)' }}>{finding}</strong>.
+            {' '}Moving them forward does not clear it. Continue?
+          </>
+        ),
+        confirmLabel: `Move to ${assayerLifecycleLabel(to)}`,
+      });
+      if (!ok) return;
+    }
+
+    if (a.lifecycleStatus === AssayerLifecycleStatus.TRAINING && to === AssayerLifecycleStatus.ACTIVE) {
+      // The same critical-field gaps the Summary banner already counts, plus — when the dossier
+      // read succeeded — the two identity-gate documents specifically, since a record can hold a
+      // PAN number in full (so `missing` is empty) while the PAN *card* has never been checked
+      // against the original.
+      const gaps = [...missing.map((f) => f.label), ...(dossierGlance?.identityGapLabels ?? [])];
+      const ok = await confirm({
+        title: `Move ${a.displayName} to ${assayerLifecycleLabel(to)}?`,
+        message: gaps.length === 0
+          ? 'Everything needed is on file.'
+          : `Still missing: ${gaps.join(', ')}. The identity gate is set to warn, so activation `
+            + 'will proceed — these gaps stay on their record.',
+        confirmLabel: `Move to ${assayerLifecycleLabel(to)}`,
+      });
+      if (!ok) return;
+    }
+
     if (HARD_TO_REVERSE_STAGES.includes(to)) {
       const ok = await confirm({
         title: `Move ${a.displayName} to ${assayerLifecycleLabel(to)}?`,
@@ -639,8 +753,16 @@ export const AssayerRecord: React.FC<{
    * would sit there empty beside four buttons, three of which do not want it, and the clerk would
    * have to work out which. Pressing "Move to Inactive" asks why, and nothing else on the panel
    * changes.
+   *
+   * A rehire (see `isRehireMove`) opens the same box even though the server does not itself
+   * require a reason for a move to INVITED — this one is not on `LIFECYCLE_MOVES_NEEDING_A_REASON`
+   * because it mirrors the server's own list, and the server was never asked to require one here.
+   * But "why is this person suddenly back at the start of joining" is worth a word on the
+   * employment record regardless, so the box opens pre-filled with `REHIRE_REASON` — a sensible
+   * default that lets the move go straight through, rather than a blank the clerk must fill first.
    */
   const startMove = (to: string) => {
+    if (isRehireMove(a?.lifecycleStatus, to)) { setTarget(to); setReason(REHIRE_REASON); return; }
     if (needsReason(to)) { setTarget(to); setReason(''); return; }
     void move(to, '');
   };
@@ -788,6 +910,23 @@ export const AssayerRecord: React.FC<{
                     <span style={{ color: tone, fontWeight: 700 }}>{assayerLifecycleLabel(a.lifecycleStatus)}</span>
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '3px' }}><MapPin size={10} /> {[a.city, a.state].filter(Boolean).join(', ') || '—'}</span>
                   </div>
+                  {/*
+                    THE NEXT STEP, WHEREVER THE CLERK LANDED.
+
+                    The Summary tab's "What happens next" section further down says the same
+                    sentence, but only while that tab is open and only to somebody who can manage
+                    the record — so a record reached on Vetting or Documents (a deep link from
+                    record-sections.ts, or simply left open there) showed neither. The header
+                    renders for every tab and every viewer, so this is the one place a clerk
+                    landing on the record reads the immediate next action without switching tabs
+                    or hovering anything.
+                  */}
+                  {onboardingNextStep(a) && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginTop: '5px', fontSize: '12px', color: 'var(--text-secondary)' }}>
+                      <ArrowRightLeft size={11} style={{ flexShrink: 0 }} />
+                      Next: they are {onboardingNextStep(a)}.
+                    </div>
+                  )}
                 </div>
                 </div>
               </div>
@@ -946,6 +1085,7 @@ export const AssayerRecord: React.FC<{
                         <StageStep
                           to={forwardStep}
                           primary
+                          rehire={isRehireMove(a.lifecycleStatus, forwardStep)}
                           busy={busy}
                           asking={target === forwardStep}
                           reason={reason}
@@ -971,6 +1111,7 @@ export const AssayerRecord: React.FC<{
                               <StageStep
                                 key={t}
                                 to={t}
+                                rehire={isRehireMove(a.lifecycleStatus, t)}
                                 busy={busy}
                                 asking={target === t}
                                 reason={reason}
@@ -1065,10 +1206,6 @@ export const AssayerRecord: React.FC<{
                           <button onClick={resetPassword} disabled={!!issuing} className="btn btn-secondary" style={{ fontSize: '12px', padding: '7px 13px', display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
                             <KeyRound size={13} /> {issuing === 'reset' ? 'Resetting…' : 'Reset password'}
                           </button>
-                          <span style={{ fontSize: '12px', color: 'var(--text-muted)', flex: '1 1 220px', lineHeight: 1.5 }}>
-                            The first is for somebody getting the app for the first time; the second
-                            is for somebody locked out of it.
-                          </span>
                         </div>
                       )}
                     </section>
@@ -1125,7 +1262,7 @@ export const AssayerRecord: React.FC<{
                             }}>
                               <span style={{ fontWeight: 700 }}>{e.client?.name ?? 'Unknown client'}</span>
                               <span style={{ color: tone.fg }}>
-                                {STANDING_LABELS[e.status] ?? e.status}
+                                {STANDING_LABELS[e.status] ?? humanizeEnum(e.status)}
                               </span>
                             </span>
                           );
@@ -1154,7 +1291,12 @@ export const AssayerRecord: React.FC<{
                       </div>
                     </section>
                   )}
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px' }}>
+                  {/*
+                    A stable two-column grid, not wrapping flex: `flex: 1 1 340px` let each panel
+                    size itself, so the six groups came out ragged — wide ones beside narrow ones
+                    with uneven rows inside. One column on a narrow screen, two above it.
+                  */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(380px, 100%), 1fr))', gap: '12px' }}>
                   <FactGroup edit={editCtx} anchor="contact" flash={flashGroup} title="How to reach them" rows={[
                     ['Phone', a.phone, 'phone'],
                     ['Alternate phone', a.alternatePhone, 'alternatePhone'],
@@ -1349,29 +1491,36 @@ export const AssayerRecord: React.FC<{
                     at all about where the money is actually sent. It says so now, and the button
                     opens the same form on the same person.
                   */}
-                  <div style={{
-                    padding: '11px 13px', borderRadius: '8px', marginBottom: '12px',
-                    background: bankMissing ? 'var(--status-pending-bg)' : 'var(--bg-surface-2)',
-                    border: `1px solid ${bankMissing ? 'color-mix(in srgb, var(--warning) 30%, transparent)' : 'var(--border-color)'}`,
-                  }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '7px', fontWeight: 700, fontSize: '12.5px', color: bankMissing ? 'var(--warning)' : 'var(--success)' }}>
-                      {bankMissing ? <AlertTriangle size={14} /> : <CheckCircle2 size={14} />}
-                      {bankMissing ? 'No bank details — cannot be paid' : 'Bank details on file'}
+                  {bankMissing ? (
+                    <div style={{
+                      padding: '11px 13px', borderRadius: '8px', marginBottom: '12px',
+                      background: 'var(--status-pending-bg)',
+                      border: '1px solid color-mix(in srgb, var(--warning) 30%, transparent)',
+                    }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '7px', fontWeight: 700, fontSize: '12.5px', color: 'var(--warning)' }}>
+                        <AlertTriangle size={14} />
+                        No bank details — cannot be paid
+                      </div>
+                      <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                        The rates below decide what this assayer earns; the account they are paid into is on their record, under Financial.
+                      </div>
+                      {canManage && (
+                        /* Editing opens on the Summary — so also scroll to the bank boxes there,
+                           or the button teleports to the top of a forty-field form and leaves
+                           finding the three relevant ones to the clerk. */
+                        <button onClick={() => { startEdit(); setFlashGroup('financial'); }} className="btn btn-secondary" style={{ fontSize: '12px', padding: '5px 10px', marginTop: '9px' }}>
+                          Add bank details
+                        </button>
+                      )}
                     </div>
-                    <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
-                      {bankMissing
-                        ? 'The rates below decide what this assayer earns; the account they are paid into is on their record, under Financial.'
-                        : `Account ${maskedIdentifier(a.bankAccountNumber)} · IFSC ${a.ifscCode}`}
+                  ) : (
+                    /* One quiet line when there is nothing to do: the green card restated the
+                       "How they are paid" Summary group, which sits one tab away with the same
+                       account and IFSC on it. */
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+                      Paid into account {maskedIdentifier(a.bankAccountNumber)} · IFSC {a.ifscCode}
                     </div>
-                    {canManage && bankMissing && (
-                      /* Editing opens on the Summary — so also scroll to the bank boxes there,
-                         or the button teleports to the top of a forty-field form and leaves
-                         finding the three relevant ones to the clerk. */
-                      <button onClick={() => { startEdit(); setFlashGroup('financial'); }} className="btn btn-secondary" style={{ fontSize: '12px', padding: '5px 10px', marginTop: '9px' }}>
-                        Add bank details
-                      </button>
-                    )}
-                  </div>
+                  )}
                   {canManage && (
                     <button onClick={() => setPayModal({ open: true, profile: null })}
                       className="btn btn-primary" style={{ fontSize: '12px', padding: '7px 12px', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}>
@@ -1490,15 +1639,23 @@ export const AssayerRecord: React.FC<{
  *
  * The consequence is beside the button rather than revealed after choosing, which is what the
  * dropdown did — "Inactive" told a clerk parking somebody for a fortnight nothing about having
- * just removed them from every planning list. It is `STAGE_CONSEQUENCE`, unchanged, in its own
- * words; this component adds no copy of its own beyond the label the stage already has.
+ * just removed them from every planning list. It is `STAGE_CONSEQUENCE`, in its own words, for
+ * every stage except one: a rehire (`rehire` true) is a legal move from `ASSAYER_LIFECYCLE_
+ * TRANSITIONS` like any other, but "Move to Invited" would describe the destination and hide what
+ * is actually happening, so that one case gets its own label and explainer instead of the shared
+ * map's.
  *
  * A move the server will not accept without a reason opens the box here instead of firing, and the
- * button becomes the confirmation. Two clicks for those, one for the ordinary steps.
+ * button becomes the confirmation. Two clicks for those, one for the ordinary steps. A rehire is
+ * not on the server's list of moves needing a reason, but it opens the same box anyway — see
+ * `startMove` — because "why are they suddenly back at the start of joining" is worth a word even
+ * when nothing downstream requires one.
  */
 const StageStep: React.FC<{
   to: string;
   primary?: boolean;
+  /** A departed → Invited move — the one edge that runs the lifecycle backwards. See `isRehireMove`. */
+  rehire?: boolean;
   busy: boolean;
   /** True while this is the move waiting for its reason. */
   asking: boolean;
@@ -1507,13 +1664,34 @@ const StageStep: React.FC<{
   onPress: () => void;
   onConfirm: () => void;
   onCancel: () => void;
-}> = ({ to, primary, busy, asking, reason, onReason, onPress, onConfirm, onCancel }) => {
+}> = ({ to, primary, rehire, busy, asking, reason, onReason, onPress, onConfirm, onCancel }) => {
   const stage = assayerLifecycleLabel(to);
+  /**
+   * A rehire does not read as "Move to Invited" — that names the destination but not what is
+   * actually happening, and "Invited" on its own is the word for a brand-new joiner who has never
+   * worked here. Both the button and the line beside it say what this move really is instead:
+   * the whole onboarding chain, walked again, for somebody who already left once.
+   */
+  const buttonLabel = rehire ? 'Rehire — start onboarding again' : `Move to ${stage}`;
+  const explainer = rehire
+    ? 'They rejoin at the start: documents, background check and training are done again before they can work.'
+    : (STAGE_CONSEQUENCE[to] ?? `They are moved to ${stage}.`);
   // Whether the free-text box is showing. Seeded false and reset the moment the box closes, so
   // reopening this same stage later starts from the dropdown again rather than stranding the
   // clerk in "Other" from a previous, cancelled attempt.
   const [other, setOther] = useState(false);
   useEffect(() => { if (!asking) setOther(false); }, [asking]);
+  /**
+   * A rehire's picker offers one thing, not the whole departure vocabulary. None of "Behaviour
+   * issue" or "Background/criminal-record issue" — the reasons somebody LEFT — answers "why is
+   * this person back at the start of joining", so the ordinary `LIFECYCLE_MOVE_REASONS` list is
+   * replaced rather than extended. `REHIRE_REASON` is also what `startMove` pre-fills the box
+   * with, so the move can go through on the default without the clerk touching this control at
+   * all — "Other" still lets them say something more specific instead.
+   */
+  const reasonChoices = rehire
+    ? [{ value: REHIRE_REASON, label: REHIRE_REASON }]
+    : LIFECYCLE_MOVE_REASONS.map((r) => ({ value: r, label: r }));
   return (
     <div
       style={{
@@ -1530,10 +1708,10 @@ const StageStep: React.FC<{
           className={primary ? 'btn btn-primary' : 'btn btn-secondary'}
           style={{ fontSize: '12px', padding: primary ? '8px 14px' : '6px 12px', whiteSpace: 'nowrap' }}
         >
-          {busy ? 'Moving…' : `Move to ${stage}`}
+          {busy ? 'Moving…' : buttonLabel}
         </button>
         <span style={{ fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.5, flex: '1 1 220px' }}>
-          {STAGE_CONSEQUENCE[to] ?? `They are moved to ${stage}.`}
+          {explainer}
         </span>
       </div>
       {asking && (
@@ -1551,6 +1729,8 @@ const StageStep: React.FC<{
                 takes anything: the server only ever checked that `reason` was non-blank
                 (`AssayerService.LIFECYCLE_MOVES_NEEDING_A_REASON`), and this dropdown does not
                 add a constraint on top of that — it sends the same free string either way.
+
+                `reasonChoices` swaps this list out entirely for a rehire — see above.
               */}
               <Select
                 id={`reason-${to}`}
@@ -1560,7 +1740,7 @@ const StageStep: React.FC<{
                 }}
                 options={[
                   { value: '', label: 'Choose a reason…' },
-                  ...LIFECYCLE_MOVE_REASONS.map((r) => ({ value: r, label: r })),
+                  ...reasonChoices,
                   { value: OTHER_LIFECYCLE_REASON, label: 'Other (type it in)' },
                 ]}
                 error={!reason.trim()}
@@ -1838,7 +2018,7 @@ const FactGroup: React.FC<{
         background: 'var(--bg-card)', border: `1px solid ${ringed ? 'var(--accent)' : 'var(--border-color)'}`,
         boxShadow: ringed ? '0 0 0 2px var(--accent)' : 'none',
         transition: 'border-color 0.6s ease, box-shadow 0.6s ease',
-        borderRadius: '10px', padding: '14px 16px', flex: '1 1 340px', minWidth: 0,
+        borderRadius: '10px', padding: '14px 16px', minWidth: 0,
       }}
     >
       <div style={{ ...label, marginBottom: '10px' }}>{title}</div>

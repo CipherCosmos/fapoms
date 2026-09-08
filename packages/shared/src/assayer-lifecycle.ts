@@ -50,8 +50,24 @@ export const ASSAYER_LIFECYCLE_TRANSITIONS: Record<string, AssayerLifecycleStatu
     AssayerLifecycleStatus.ACTIVE,
     AssayerLifecycleStatus.ARCHIVED,
   ],
-  [AssayerLifecycleStatus.RESIGNED]: [AssayerLifecycleStatus.ARCHIVED],
-  [AssayerLifecycleStatus.TERMINATED]: [AssayerLifecycleStatus.ARCHIVED],
+  /**
+   * The rehire edge (2026-09-07). Until now RESIGNED and TERMINATED led only to ARCHIVED — no
+   * path ever returned to work, so a genuine rehire (people do come back) was impossible
+   * without raw SQL. Rehiring restarts onboarding from INVITED on purpose: identity was
+   * verified against documents that may have expired, bank details go stale, and a termination
+   * usually happened for a reason someone should re-examine — so the person walks the whole
+   * document → background → training path again rather than snapping straight back to ACTIVE
+   * (which is precisely the shortcut INACTIVE → ACTIVE already takes, deliberately, for people
+   * who never actually left).
+   */
+  [AssayerLifecycleStatus.RESIGNED]: [
+    AssayerLifecycleStatus.INVITED,
+    AssayerLifecycleStatus.ARCHIVED,
+  ],
+  [AssayerLifecycleStatus.TERMINATED]: [
+    AssayerLifecycleStatus.INVITED,
+    AssayerLifecycleStatus.ARCHIVED,
+  ],
 };
 
 /** States an assayer can never leave — nothing further is offered from here. */

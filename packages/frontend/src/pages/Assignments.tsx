@@ -522,16 +522,22 @@ export const Assignments: React.FC = () => {
 
   const reviewExpense = async (expenseId: string, approve: boolean) => {
     // A rejection the assayer cannot understand is one they cannot correct, and the server
-    // requires a reason for exactly that reason.
+    // requires a reason for exactly that reason. Asked in the app's own dialog — `window.prompt`
+    // was the browser's grey box, dismissable by Escape with the decision silently abandoned.
     let notes: string | undefined;
     if (!approve) {
-      const entered = window.prompt('Why is this claim being rejected? The assayer will see this.');
-      if (entered === null) return;
-      if (!entered.trim()) {
-        setActionError('A reason is required to reject a claim.');
-        return;
-      }
-      notes = entered.trim();
+      const { confirmed, reason } = await confirmWithReason({
+        title: 'Reject this claim?',
+        message: 'The assayer will see the reason and can correct the claim from it.',
+        confirmLabel: 'Reject claim',
+        reversible: true,
+        reasonPrompt: {
+          label: 'Why is this claim being rejected? The assayer will see this.',
+          placeholder: 'e.g. Fuel bill is for a branch this assignment never visited',
+        },
+      });
+      if (!confirmed) return;
+      notes = reason;
     }
     setReviewingExpenseId(expenseId);
     try {

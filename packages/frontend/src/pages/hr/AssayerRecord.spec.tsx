@@ -35,6 +35,12 @@ jest.mock('./AssayerVettingTab', () => ({
   // the exact drift this replaced come back unnoticed.
   standingStance: jest.requireActual('./AssayerVettingTab').standingStance,
   STANDING_STANCE_TONE: jest.requireActual('./AssayerVettingTab').STANDING_STANCE_TONE,
+  // Real, not stubbed, for the same reason: the record's move-confirm for an adverse background
+  // verdict names the finding using these two exports, and a fake map or a fake "nothing is ever
+  // adverse" predicate would prove nothing about the real wording or the real gate.
+  VERDICT_LABELS: jest.requireActual('./AssayerVettingTab').VERDICT_LABELS,
+  ADVERSE_BACKGROUND_VERDICTS: jest.requireActual('./AssayerVettingTab').ADVERSE_BACKGROUND_VERDICTS,
+  humanizeEnum: jest.requireActual('./AssayerVettingTab').humanizeEnum,
 }));
 jest.mock('./AssayerQualificationTab', () => ({ AssayerQualificationTab: () => null }));
 jest.mock('./AssayerSkillsPanel', () => ({ AssayerSkillsPanel: () => null }));
@@ -123,6 +129,31 @@ const serve = (row: ReturnType<typeof record>) => {
     return Promise.reject(new Error('not served in this test'));
   });
 };
+
+/**
+ * A dossier row, in the shape `RosterRecordsService.dossier` actually returns for one of the 21
+ * onboarding requirements — `identity`/`label`/`verificationStatus` are the fields the record's
+ * `dossierGlance` reads for the move-confirm substance checks.
+ */
+const doc = (over: Record<string, unknown> = {}) => ({
+  requirement: 'JOINING_FORM', label: 'Joining form', identity: false, verificationStatus: null, ...over,
+});
+
+/** Like `serve`, but also answers the dossier read the move-confirms get their substance from. */
+const serveWithDossier = (row: ReturnType<typeof record>, dossier: Record<string, unknown>) => {
+  mockRequest.mockImplementation((url: string) => {
+    if (url === '/assayers/a-1') return Promise.resolve(row);
+    if (url.endsWith('/dossier')) {
+      return Promise.resolve({ empanelments: [], currentCheck: null, onboarding: [], ...dossier });
+    }
+    if (url.endsWith('/lifecycle')) return Promise.resolve({ success: true });
+    if (url.endsWith('/pin')) return Promise.resolve({});
+    return Promise.reject(new Error('not served in this test'));
+  });
+};
+
+/** The dossier strip ("Banks & standing") only appears once `dossierGlance` has actually loaded — waiting for it is how a test avoids clicking a move button before the substance it should show is in. */
+const waitForDossier = () => waitFor(() => expect(screen.getByText(/Banks & standing/)).toBeInTheDocument());
 
 const renderRecord = () => render(
   <AssayerRecord assayerId="a-1" canManage onClose={jest.fn()} onChanged={jest.fn()} />,
@@ -238,9 +269,13 @@ describe('AssayerRecord — the lifecycle as next steps', () => {
     serve(record({ lifecycleStatus: AssayerLifecycleStatus.TRAINING }));
     renderRecord();
 
+    // Twice on purpose: once in the header (every tab, every viewer — see the "Next:" line) and
+    // once leading the Summary tab's "What happens next" section (canManage only, above the
+    // buttons). Both have to say the planner's exact words, so both are asserted rather than
+    // picking one and leaving the other undefended.
     await waitFor(() => expect(
-      screen.getByText(/in training — mark training complete on the HR roster to activate/),
-    ).toBeInTheDocument());
+      screen.getAllByText(/in training — mark training complete on the HR roster to activate/),
+    ).toHaveLength(2));
   });
 
   it('moves exactly one stage per press, and no further', async () => {
@@ -586,5 +621,301 @@ describe('AssayerRecord — inline editor IFSC autofill', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save changes' }));
     await waitFor(() => expect(mockRequest).toHaveBeenCalledWith('/assayers/a-1', expect.objectContaining({ method: 'PUT' })));
     expect(putBody().bankName).toBeUndefined(); // no resolve, so bankName was never touched
+  });
+});
+
+/**
+ * REHIRE — the one move that runs the lifecycle backwards.
+ *
+ * The shared map (`ASSAYER_LIFECYCLE_TRANSITIONS`) now legally offers RESIGNED/TERMINATED →
+ * INVITED, on purpose: people do come back, and rehiring is meant to restart the whole onboarding
+ * chain rather than snap straight to Active. A bare "Move to Invited" button would say none of
+ * that — it is also the exact words a brand-new joiner's record would use for a stage they have
+ * never seen. These hold the record to reading the move as what it actually is.
+ */
+describe('AssayerRecord — rehire', () => {
+  it('reads as a rehire rather than a bare "Move to Invited", for someone who resigned', async () => {
+    serve(record({ lifecycleStatus: AssayerLifecycleStatus.RESIGNED }));
+    renderRecord();
+    await waitFor(() => expect(screen.getByText('Person One')).toBeInTheDocument());
+
+    expect(screen.getByRole('button', { name: 'Rehire — start onboarding again' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Move to Invited' })).not.toBeInTheDocument();
+    expect(screen.getByText(
+      'They rejoin at the start: documents, background check and training are done again before they can work.',
+    )).toBeInTheDocument();
+  });
+
+  it('reads as a rehire for someone who was terminated too', async () => {
+    serve(record({ lifecycleStatus: AssayerLifecycleStatus.TERMINATED }));
+    renderRecord();
+    await waitFor(() => expect(screen.getByText('Person One')).toBeInTheDocument());
+
+    expect(screen.getByRole('button', { name: 'Rehire — start onboarding again' })).toBeInTheDocument();
+  });
+
+  it('opens the reason box pre-filled with "Rehired…", and posts it without the clerk touching the picker', async () => {
+    // `serveWithDossier` rather than the plain `serve`, specifically so `/lifecycle` resolves
+    // instead of rejecting — this test checks the record is actually RE-READ afterwards, which
+    // `move()` only reaches once the post itself has succeeded.
+    serveWithDossier(record({ lifecycleStatus: AssayerLifecycleStatus.RESIGNED }), {});
+    renderRecord();
+    await waitFor(() => expect(screen.getByText('Person One')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rehire — start onboarding again' }));
+    // The reason box is open (same mechanism every reason-needing move uses) and pre-filled —
+    // not blank, and not one of the ordinary departure reasons.
+    expect(screen.getByLabelText(/Why\? This is kept on their employment record/)).toBeInTheDocument();
+    expect(screen.getByText('Rehired — returning to the workforce')).toBeInTheDocument();
+
+    // The second press — same button, now acting as the confirmation — sends it straight
+    // through with no further typing.
+    fireEvent.click(screen.getByRole('button', { name: 'Rehire — start onboarding again' }));
+
+    await waitFor(() => expect(mockRequest).toHaveBeenCalledWith('/assayers/a-1/lifecycle', expect.anything()));
+    const [, options] = mockRequest.mock.calls.find(([url]) => url.endsWith('/lifecycle'))!;
+    expect(JSON.parse(options.body)).toMatchObject({
+      targetStatus: AssayerLifecycleStatus.INVITED,
+      reason: 'Rehired — returning to the workforce',
+    });
+    // The record is re-read after the move, same as every other stage change — the page never
+    // just trusts its own optimistic state for what Track 1's date reconciliation actually did.
+    await waitFor(() => expect(
+      mockRequest.mock.calls.filter(([url]) => url === '/assayers/a-1').length,
+    ).toBeGreaterThan(1));
+  });
+
+  it('offers only the rehire reason and "Other" — none of the departure reasons fit coming back', async () => {
+    serve(record({ lifecycleStatus: AssayerLifecycleStatus.TERMINATED }));
+    renderRecord();
+    await waitFor(() => expect(screen.getByText('Person One')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rehire — start onboarding again' }));
+    fireEvent.click(screen.getByLabelText(/Why\? This is kept on their employment record/));
+
+    expect(await screen.findByRole('option', { name: 'Rehired — returning to the workforce' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Other (type it in)' })).toBeInTheDocument();
+    // A reason for having LEFT is not a reason for being rehired.
+    expect(screen.queryByRole('option', { name: 'Behaviour issue' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'Background/criminal-record issue' })).not.toBeInTheDocument();
+  });
+
+  it('still lets "Other" override the default for a rehire that needs a different word', async () => {
+    serve(record({ lifecycleStatus: AssayerLifecycleStatus.RESIGNED }));
+    renderRecord();
+    await waitFor(() => expect(screen.getByText('Person One')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: 'Rehire — start onboarding again' }));
+    fireEvent.click(screen.getByLabelText(/Why\? This is kept on their employment record/));
+    fireEvent.click(await screen.findByText('Other (type it in)'));
+
+    const freeText = await screen.findByLabelText(/Reason, in your own words/i);
+    fireEvent.change(freeText, { target: { value: 'Asked to come back for the festive-season surge' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Rehire — start onboarding again' }));
+
+    await waitFor(() => expect(mockRequest).toHaveBeenCalledWith('/assayers/a-1/lifecycle', expect.anything()));
+    const [, options] = mockRequest.mock.calls.find(([url]) => url.endsWith('/lifecycle'))!;
+    expect(JSON.parse(options.body)).toMatchObject({
+      targetStatus: AssayerLifecycleStatus.INVITED,
+      reason: 'Asked to come back for the festive-season surge',
+    });
+  });
+});
+
+/**
+ * SUBSTANCE BEFORE THE THREE FORWARD ONBOARDING MOVES.
+ *
+ * These three used to fire the instant the button was pressed — none is in `HARD_TO_REVERSE_
+ * STAGES`, so none got so much as a confirm dialog. Each now stops and says something the record
+ * already knows, built from the one dossier read the record already makes (`dossierGlance`) —
+ * and none of the three refuses the move; proceeding is always still one more click away.
+ */
+describe('AssayerRecord — substance before a forward onboarding move', () => {
+  it('warns when not one document has been checked, before moving to background verification', async () => {
+    serveWithDossier(
+      record({ lifecycleStatus: AssayerLifecycleStatus.DOCUMENT_VERIFICATION }),
+      { onboarding: Array.from({ length: 21 }, (_, i) => doc({ requirement: `REQ_${i}`, label: `Document ${i}` })) },
+    );
+    renderRecord();
+    await waitForDossier();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move to Background Verification' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(
+      'No documents have been checked yet — 0 of 21 on their dossier are verified. Move them on anyway?',
+    )).toBeInTheDocument();
+
+    // Proceeding is still allowed — this is an informed confirm, not a gate.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move to Background Verification' }));
+    await waitFor(() => expect(mockRequest).toHaveBeenCalledWith('/assayers/a-1/lifecycle', expect.anything()));
+    const [, options] = mockRequest.mock.calls.find(([url]) => url.endsWith('/lifecycle'))!;
+    expect(JSON.parse(options.body)).toMatchObject({ targetStatus: AssayerLifecycleStatus.BACKGROUND_VERIFICATION });
+  });
+
+  it('does not interrupt the move once at least one document has actually been checked', async () => {
+    serveWithDossier(
+      record({ lifecycleStatus: AssayerLifecycleStatus.DOCUMENT_VERIFICATION }),
+      {
+        onboarding: [
+          doc({ requirement: 'AADHAAR_FRONT', label: 'Aadhaar — front', identity: true, verificationStatus: 'VERIFIED' }),
+          doc({ requirement: 'PAN_CARD', label: 'PAN card', identity: true }),
+        ],
+      },
+    );
+    renderRecord();
+    await waitForDossier();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move to Background Verification' }));
+
+    await waitFor(() => expect(mockRequest).toHaveBeenCalledWith('/assayers/a-1/lifecycle', expect.anything()));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('names the finding, in amber, before carrying an adverse background verdict forward', async () => {
+    serveWithDossier(
+      record({ lifecycleStatus: AssayerLifecycleStatus.BACKGROUND_VERIFICATION }),
+      { currentCheck: { verdict: 'CRIMINAL_CASE', findings: 'Bribery case pending in Nashik sessions court' } },
+    );
+    renderRecord();
+    await waitForDossier();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move to Training' }));
+
+    const dialog = await screen.findByRole('dialog');
+    // The message is built from mixed plain text and a highlighted <strong> fragment, so the
+    // assertion reads the dialog's whole text rather than one node RTL might or might not
+    // consider "the" matching element.
+    expect(dialog.textContent).toContain(
+      'Their background check recorded: Criminal case — Bribery case pending in Nashik sessions court. '
+      + 'Moving them forward does not clear it. Continue?',
+    );
+    // "in amber" — the finding itself, not the whole sentence, carries the warning colour.
+    const finding = within(dialog).getByText('Criminal case — Bribery case pending in Nashik sessions court');
+    expect(finding.tagName).toBe('STRONG');
+    expect(finding).toHaveStyle({ color: 'var(--warning)' });
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move to Training' }));
+    await waitFor(() => expect(mockRequest).toHaveBeenCalledWith('/assayers/a-1/lifecycle', expect.anything()));
+    const [, options] = mockRequest.mock.calls.find(([url]) => url.endsWith('/lifecycle'))!;
+    expect(JSON.parse(options.body)).toMatchObject({ targetStatus: AssayerLifecycleStatus.TRAINING });
+  });
+
+  it('does not interrupt a clear background check', async () => {
+    serveWithDossier(
+      record({ lifecycleStatus: AssayerLifecycleStatus.BACKGROUND_VERIFICATION }),
+      { currentCheck: { verdict: 'CLEAR', checkedOn: '2026-01-01' } },
+    );
+    renderRecord();
+    await waitForDossier();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move to Training' }));
+
+    await waitFor(() => expect(mockRequest).toHaveBeenCalledWith('/assayers/a-1/lifecycle', expect.anything()));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('lists the record\'s remaining critical gaps before activating, with the identity-gate note', async () => {
+    serveWithDossier(
+      record({ lifecycleStatus: AssayerLifecycleStatus.TRAINING, panNumber: null, bankAccountNumber: null }),
+      {},
+    );
+    renderRecord();
+    await waitForDossier();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move to Active' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(
+      'Still missing: PAN, Bank account. The identity gate is set to warn, so activation will '
+      + 'proceed — these gaps stay on their record.',
+    )).toBeInTheDocument();
+  });
+
+  it('folds in an unverified identity document even when the record\'s own fields are all filled in', async () => {
+    serveWithDossier(
+      record({ lifecycleStatus: AssayerLifecycleStatus.TRAINING }), // nothing critical missing
+      {
+        onboarding: [
+          doc({ requirement: 'AADHAAR_FRONT', label: 'Aadhaar — front', identity: true }), // not verified
+          doc({ requirement: 'PAN_CARD', label: 'PAN card', identity: true, verificationStatus: 'VERIFIED' }),
+        ],
+      },
+    );
+    renderRecord();
+    await waitForDossier();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move to Active' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(
+      'Still missing: Aadhaar — front. The identity gate is set to warn, so activation will '
+      + 'proceed — these gaps stay on their record.',
+    )).toBeInTheDocument();
+  });
+
+  it('says everything needed is on file when nothing — record or identity — is missing', async () => {
+    serveWithDossier(
+      record({ lifecycleStatus: AssayerLifecycleStatus.TRAINING }),
+      {
+        onboarding: [
+          doc({ requirement: 'AADHAAR_FRONT', label: 'Aadhaar — front', identity: true, verificationStatus: 'VERIFIED' }),
+          doc({ requirement: 'PAN_CARD', label: 'PAN card', identity: true, verificationStatus: 'VERIFIED' }),
+        ],
+      },
+    );
+    renderRecord();
+    await waitForDossier();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move to Active' }));
+
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText('Everything needed is on file.')).toBeInTheDocument();
+
+    // Still just an informed confirm — proceeding is one click away either way.
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Move to Active' }));
+    await waitFor(() => expect(mockRequest).toHaveBeenCalledWith('/assayers/a-1/lifecycle', expect.anything()));
+    const [, options] = mockRequest.mock.calls.find(([url]) => url.endsWith('/lifecycle'))!;
+    expect(JSON.parse(options.body)).toMatchObject({ targetStatus: AssayerLifecycleStatus.ACTIVE });
+  });
+
+  it('always confirms the move to Active, even with nothing to report — the biggest step gets a check-in', async () => {
+    serveWithDossier(record({ lifecycleStatus: AssayerLifecycleStatus.TRAINING }), {});
+    renderRecord();
+    await waitForDossier();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move to Active' }));
+    expect(await screen.findByRole('dialog')).toBeInTheDocument();
+    // Unlike the other two, no missing-substance condition gates whether this one asks at all.
+    expect(mockRequest).not.toHaveBeenCalledWith('/assayers/a-1/lifecycle', expect.anything());
+  });
+});
+
+/**
+ * THE ONBOARDING NEXT STEP, ON EVERY TAB.
+ *
+ * `ONBOARDING_NEXT_STEP` (@fapoms/shared) is the same sentence the planner prints when it refuses
+ * an unfinished joiner work. The Summary tab's own "What happens next" section already led with
+ * it, but only while that tab was open and only for `canManage` — so a record reached on Vetting
+ * or Documents, or by a viewer who cannot manage it, showed nothing. The header renders for every
+ * tab and does not check `canManage`, because reading the next step is not the same act as taking
+ * it.
+ */
+describe('AssayerRecord — onboarding guidance in the header', () => {
+  it('names the next step in the header for someone mid-onboarding', async () => {
+    serve(record({ lifecycleStatus: AssayerLifecycleStatus.BACKGROUND_VERIFICATION }));
+    renderRecord();
+
+    await waitFor(() => expect(
+      screen.getByText(/Next: they are in background verification — complete it on the HR roster/),
+    ).toBeInTheDocument());
+  });
+
+  it('says nothing extra once somebody is past onboarding', async () => {
+    serve(record({ lifecycleStatus: AssayerLifecycleStatus.ACTIVE }));
+    renderRecord();
+
+    await waitFor(() => expect(screen.getByText('Person One')).toBeInTheDocument());
+    expect(screen.queryByText(/^Next:/)).not.toBeInTheDocument();
   });
 });

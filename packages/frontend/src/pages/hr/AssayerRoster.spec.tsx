@@ -1,5 +1,5 @@
 import React from 'react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, Routes, Route, useLocation } from 'react-router-dom';
 import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AssayerLifecycleStatus } from '@fapoms/shared';
@@ -199,8 +199,29 @@ describe('AssayerRoster — the joining queues', () => {
     await waitFor(() => expect(screen.getByText('Ready Person')).toBeInTheDocument());
 
     const row = screen.getByText('Ready Person').closest('tr') as HTMLElement;
-    expect(within(row).getByTitle(/in training — mark training complete on the HR roster to activate/))
+    // Two carriers now, deliberately: the stage pill's tooltip (hover-only, unchanged) AND a
+    // second, muted line printed under it — see the next test — so both match the fragment.
+    expect(within(row).getAllByTitle(/in training — mark training complete on the HR roster to activate/).length)
+      .toBeGreaterThanOrEqual(2);
+  });
+
+  /**
+   * The audit's own finding: the sentence above was hover-only, and nobody scanning a
+   * thousand-row table lingers on a stage pill long enough to learn it is there. A clerk must be
+   * able to read it without hovering.
+   */
+  it('also prints the next-step sentence as a plain second line, not only on hover', async () => {
+    serve(roster);
+    renderRoster();
+    await waitFor(() => expect(screen.getByText('Ready Person')).toBeInTheDocument());
+
+    const row = screen.getByText('Ready Person').closest('tr') as HTMLElement;
+    expect(within(row).getByText('in training — mark training complete on the HR roster to activate'))
       .toBeInTheDocument();
+    // Fully active already, so there is no next step to print — a blank second line would be
+    // worse than none, reading as a fact this person is missing something.
+    const activeRow = screen.getByText('Working Already').closest('tr') as HTMLElement;
+    expect(within(activeRow).queryByText(/mark training complete|no client standing|blocks/i)).not.toBeInTheDocument();
   });
 
   it('names the row actions rather than leaving two unlabelled icons per person', async () => {
@@ -323,6 +344,8 @@ describe('AssayerRoster — filtering by anything', () => {
   ];
 
   const openFilters = () => fireEvent.click(screen.getByRole('button', { name: /^Filters/ }));
+  // Only the first group opens with the panel; the rest expand on demand.
+  const openGroup = (name: RegExp) => fireEvent.click(screen.getByRole('button', { name }));
 
   it('offers the axes this screen never had, grouped so they can be found', async () => {
     serve(roster);
@@ -335,9 +358,12 @@ describe('AssayerRoster — filtering by anything', () => {
     expect(screen.getByRole('button', { name: /The person/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Where they are/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Paperwork and money/ })).toBeInTheDocument();
+    // The first group opens with the panel; the rest expand on demand.
+    expect(screen.getByText('Qualification')).toBeInTheDocument();
+    expect(screen.queryByText('Region')).not.toBeInTheDocument();
+    openGroup(/Where they are/);
     // A sample of what was simply unaskable before: region, qualification, home-pin quality.
     expect(screen.getByText('Region')).toBeInTheDocument();
-    expect(screen.getByText('Qualification')).toBeInTheDocument();
     expect(screen.getByText('Home location on the map')).toBeInTheDocument();
   });
 
@@ -346,6 +372,7 @@ describe('AssayerRoster — filtering by anything', () => {
     renderRoster();
     await waitFor(() => expect(screen.getByText('Goa One')).toBeInTheDocument());
     openFilters();
+    openGroup(/Where they are/);
 
     expect(screen.getByRole('checkbox', { name: /^Kerala/ })).toBeInTheDocument();
     expect(screen.getByRole('checkbox', { name: /^Kerala/ }).closest('label')).toHaveTextContent('Kerala2');
@@ -357,6 +384,7 @@ describe('AssayerRoster — filtering by anything', () => {
     renderRoster();
     await waitFor(() => expect(screen.getByText('Goa One')).toBeInTheDocument());
     openFilters();
+    openGroup(/Where they are/);
 
     fireEvent.click(screen.getByRole('checkbox', { name: /^Kerala/ }));
 
@@ -377,6 +405,7 @@ describe('AssayerRoster — filtering by anything', () => {
 
     fireEvent.click(chip('Cannot be paid'));
     openFilters();
+    openGroup(/Where they are/);
     fireEvent.click(screen.getByRole('checkbox', { name: /^Kerala/ }));
 
     expect(screen.getByText('Kerala Two')).toBeInTheDocument();
@@ -459,7 +488,7 @@ describe('AssayerRoster — exporting what you need', () => {
     await waitFor(() => expect(screen.getByText('Goa One')).toBeInTheDocument());
     await openExport();
 
-    expect(screen.getByText(/cannot be exported in full/)).toBeInTheDocument();
+    expect(screen.getByText(/export covered/)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('checkbox', { name: /^PAN \(last 4 only/ }));
     expect(screen.getByText(/1 masked column ticked/)).toBeInTheDocument();
   });
@@ -487,10 +516,11 @@ describe('AssayerRoster — exporting what you need', () => {
     await waitFor(() => expect(screen.getByText('Goa One')).toBeInTheDocument());
 
     fireEvent.click(screen.getByRole('button', { name: /^Filters/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Where they are/ }));
     fireEvent.click(screen.getByRole('checkbox', { name: /^Kerala/ }));
     await openExport();
 
-    fireEvent.click(screen.getByRole('radio', { name: /Everyone loaded/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Everyone loaded/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Untick everything' }));
     fireEvent.click(screen.getByRole('checkbox', { name: 'Name' }));
     fireEvent.click(screen.getByRole('button', { name: /Download CSV/ }));
@@ -539,6 +569,57 @@ describe('finishing a registration somebody abandoned', () => {
     renderRoster();
     const btn = await screen.findByLabelText('Finish registering Half Done');
     expect(btn.getAttribute('aria-label')).toContain('Half Done');
+  });
+});
+
+/**
+ * Registering is a page now (`/hr/register`, `/hr/register/:assayerId`), not a modal this
+ * component mounts — see `RegistrationPage.tsx`. These walk the real navigation rather than
+ * asserting on component state that no longer exists, with a probe standing in for the page the
+ * router would actually load.
+ */
+describe('the roster sends registration to its own page', () => {
+  const Probe: React.FC = () => <div data-testid="landed">{useLocation().pathname}</div>;
+
+  const renderWithRegisterRoute = (initialEntry = '/hr/roster') => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    return render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={[initialEntry]}>
+          <Routes>
+            <Route path="/hr/roster" element={<AssayerRoster />} />
+            <Route path="/hr/register" element={<Probe />} />
+            <Route path="/hr/register/:id" element={<Probe />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+  };
+
+  it('"Add assayer" navigates to /hr/register rather than opening a modal in place', async () => {
+    serve([person({ id: 'a-1', displayName: 'Someone' })]);
+    renderWithRegisterRoute();
+    await screen.findByText('Someone');
+
+    fireEvent.click(screen.getByRole('button', { name: /Add assayer/ }));
+
+    expect(await screen.findByTestId('landed')).toHaveTextContent('/hr/register');
+  });
+
+  it('the resume icon navigates to /hr/register/:id', async () => {
+    serve([person({ id: 'a-7', assayerCode: 'AS0007', displayName: 'Half Done', lifecycleStatus: AssayerLifecycleStatus.INVITED })]);
+    renderWithRegisterRoute();
+
+    fireEvent.click(await screen.findByLabelText('Finish registering Half Done'));
+
+    expect(await screen.findByTestId('landed')).toHaveTextContent('/hr/register/a-7');
+  });
+
+  it('an old ?register=<id> link still lands on the new page', async () => {
+    serve([person({ id: 'a-9', displayName: 'Someone Else' })]);
+    renderWithRegisterRoute('/hr/roster?register=a-9');
+
+    expect(await screen.findByTestId('landed')).toHaveTextContent('/hr/register/a-9');
   });
 });
 

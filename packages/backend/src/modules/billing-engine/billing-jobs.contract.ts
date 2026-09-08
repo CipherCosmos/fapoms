@@ -20,6 +20,7 @@ export const BILLING_QUEUE = 'billing-jobs';
  */
 export const BILLING_JOB = {
   RECONCILE: 'reconcile',
+  BOOK_ASSIGNMENT: 'book-assignment',
 } as const;
 
 export type BillingJobName = (typeof BILLING_JOB)[keyof typeof BILLING_JOB];
@@ -38,7 +39,17 @@ export interface ReconcileJobData extends QueuedJobEnvelope {
 }
 
 /**
- * How long a completed reconcile is kept.
+ * The durable payload for booking a completed assignment.
+ * Kept to minimum durable identity: assignmentId, userId and tracing outboxEventId.
+ */
+export interface BookAssignmentJobData {
+  assignmentId: string;
+  userId?: string;
+  outboxEventId?: string;
+}
+
+/**
+ * How long a completed reconcile or booking job is kept.
  *
  * Unlike the planning queue, the result here is a small summary — counts plus a bounded error
  * list — not the deliverable itself, so the sizing constraint is "long enough for an operator to
@@ -46,6 +57,21 @@ export interface ReconcileJobData extends QueuedJobEnvelope {
  * is more history than anyone reads. Both bounds apply together.
  */
 export const BILLING_COMPLETED_RETENTION: KeepJobsOptions = { age: 60 * 60, count: 20 };
+
+/**
+ * Options for single-assignment booking jobs.
+ *
+ * Automatic retries with exponential backoff for transient failures (DB connection blips, lock contention),
+ * bounded to 5 attempts. Failures are retained in BullMQ's failed list (FAILED_JOB_RETENTION) so they
+ * remain operationally visible in the dead-letter queue.
+ */
+export const BOOK_ASSIGNMENT_JOB_OPTIONS: JobOptions = {
+  attempts: 5,
+  backoff: { type: 'exponential', delay: 2000 },
+  timeout: 60_000,
+  removeOnComplete: BILLING_COMPLETED_RETENTION,
+  removeOnFail: FAILED_JOB_RETENTION,
+};
 
 /**
  * Options every billing job is enqueued with.

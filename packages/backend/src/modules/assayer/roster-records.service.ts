@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException, BadRequestException, Optional } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ConflictException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull, SelectQueryBuilder } from 'typeorm';
 import type { GlobalScope } from '../../infrastructure/scope/global-scope';
@@ -14,6 +14,7 @@ import { AssayerReferenceEntity } from './assayer-reference.entity';
 import { AssayerClientEmpanelmentEntity } from './assayer-client-empanelment.entity';
 import { AssayerBackgroundCheckEntity } from './assayer-background-check.entity';
 import { AssayerDocumentEntity } from './assayer-document.entity';
+import { AssayerDocumentVersionEntity } from './assayer-document-version.entity';
 import { AssayerImportIssueEntity } from './assayer-import-issue.entity';
 import { ASSAYER_ERROR_CODES, EventCategory } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
@@ -71,6 +72,7 @@ export class RosterRecordsService {
     @InjectRepository(AssayerBackgroundCheckEntity) private readonly checks: Repository<AssayerBackgroundCheckEntity>,
     @InjectRepository(AssayerDocumentEntity) private readonly onboarding: Repository<AssayerDocumentEntity>,
     @InjectRepository(AssayerImportIssueEntity) private readonly issues: Repository<AssayerImportIssueEntity>,
+    @Optional() @InjectRepository(AssayerDocumentVersionEntity) private readonly docVersions?: Repository<AssayerDocumentVersionEntity>,
     // Optional so existing specs that build this service through Nest's DI without an audit
     // collaborator still resolve; DI always supplies the real one. The `?` alone only helps
     // TypeScript — `@Optional()` is what stops Nest throwing when no provider is registered.
@@ -462,10 +464,74 @@ export class RosterRecordsService {
    * copy: leaving a clerk to tick a box next to a file they just uploaded is asking them to
    * state something the system can see for itself.
    */
-  async attachFile(assayerId: string, requirement: OnboardingDocument, key: string, actorId: string) {
+  async attachFile(
+    assayerId: string,
+    requirement: OnboardingDocument,
+    key: string,
+    actorId: string,
+    metadata?: {
+      checksum?: string;
+      contentSha256?: string;
+      storageObjectId?: string;
+      fileSize?: number;
+      mimeType?: string;
+    },
+  ) {
     this.assertKnownRequirement(requirement);
-    const existing = await this.onboarding.findOne({ where: { assayerId, requirement } });
-    const row = existing ?? this.onboarding.create({ assayerId, requirement, createdBy: actorId });
+    let existing = await this.onboarding.findOne({ where: { assayerId, requirement } });
+    let row = existing ?? this.onboarding.create({ assayerId, requirement, createdBy: actorId, filePaths: [] });
+    if (!row.id) {
+      row = await this.onboarding.save(row);
+    }
+
+    // Determine next version number for this document
+    let nextVersion = 1;
+    if (this.docVersions && row.id) {
+      const latest = await this.docVersions.findOne({
+        where: { documentId: row.id },
+        order: { version: 'DESC' },
+      });
+      if (latest) {
+        nextVersion = latest.version + 1;
+      }
+    }
+
+    let newVersionRecord: AssayerDocumentVersionEntity | null = null;
+    if (this.docVersions && row.id) {
+      const sha256 = metadata?.contentSha256 ?? metadata?.checksum ?? null;
+      newVersionRecord = this.docVersions.create({
+        documentId: row.id,
+        assayerId,
+        requirement,
+        version: nextVersion,
+        filePath: key,
+        fileChecksum: sha256,
+        contentSha256: sha256,
+        storageObjectId: metadata?.storageObjectId ?? key,
+        fileSize: metadata?.fileSize ?? null,
+        mimeType: metadata?.mimeType ?? null,
+        uploadedBy: actorId,
+        verificationStatus: DocumentVerification.PENDING,
+        verifiedAt: null,
+        verifiedBy: null,
+        rejectionReason: null,
+        supersededByVersionId: null,
+        supersededAt: null,
+      });
+      newVersionRecord = await this.docVersions.save(newVersionRecord);
+
+      // If there was a previous version, link supersession relationship
+      if (row.currentVersionId) {
+        await this.docVersions.update(
+          { id: row.currentVersionId },
+          {
+            supersededByVersionId: newVersionRecord.id,
+            supersededAt: new Date(),
+          },
+        );
+      }
+      row.currentVersionId = newVersionRecord.id;
+    }
 
     /**
      * A photograph is replaced; a document accumulates.
@@ -482,11 +548,11 @@ export class RosterRecordsService {
     if (row.softCopyReceived !== true) row.softCopyReceived = true;
 
     /**
-     * A new scan on a verified document undoes the verification.
+     * A new scan on a verified document undoes the verification on the active row.
      *
-     * Somebody checked the picture that was there. This is a different picture — and the commonest
-     * reason for sending one is that the last was refused, so leaving VERIFIED standing would mark
-     * the replacement as already checked without anybody looking at it.
+     * The previous version (v1) retains its historical verification record in
+     * `assayer_document_versions`, while the current state becomes v2 pending review.
+     * v2 does NOT implicitly inherit v1 approval.
      */
     const withdrawn = this.undoVerification(row, 'a new scan was uploaded');
     // A rejection is answered by the new scan, so it stops being the current state of this row.
@@ -526,9 +592,15 @@ export class RosterRecordsService {
         entityType: 'ASSAYER',
         entityId: assayerId,
         userId: actorId,
-        remarks: `A scan of ${ONBOARDING_DOCUMENT_LABELS[requirement]} was uploaded.`,
+        remarks: `A scan of ${ONBOARDING_DOCUMENT_LABELS[requirement]} (v${nextVersion}) was uploaded.`,
         // The key, never the image, and never the number the image shows.
-        metadata: { requirement, fileCount: row.filePaths.length, withdrewVerification: withdrawn },
+        metadata: {
+          requirement,
+          version: nextVersion,
+          versionId: newVersionRecord?.id ?? null,
+          fileCount: row.filePaths.length,
+          withdrewVerification: withdrawn,
+        },
       });
     }
     return saved;
@@ -638,6 +710,50 @@ export class RosterRecordsService {
   }
 
   /**
+   * Invalidate document verification for a specific field change (PAN, Aadhaar, Bank Details).
+   * Ensures surgical field-specific re-verification without resetting unrelated evidence.
+   */
+  async invalidateDocumentForFieldChange(
+    assayerId: string,
+    requirement: OnboardingDocument,
+    reason: string,
+    actorId: string,
+  ): Promise<boolean> {
+    const row = await this.onboarding.findOne({
+      where: { assayerId, requirement, isActive: true },
+    });
+    if (!row || row.verificationStatus !== DocumentVerification.VERIFIED) return false;
+
+    this.undoVerification(row, reason);
+    row.updatedBy = actorId;
+    await this.onboarding.save(row);
+
+    // If versioning entity is active, mark version pending as well
+    if (this.docVersions && row.currentVersionId) {
+      await this.docVersions.update(
+        { id: row.currentVersionId },
+        { verificationStatus: DocumentVerification.PENDING, verifiedAt: null, verifiedBy: null },
+      );
+    }
+
+    await this.auditService?.recordEventSafe({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'DOCUMENT_VERIFICATION_INVALIDATED',
+      entityType: 'ASSAYER',
+      entityId: assayerId,
+      userId: actorId,
+      remarks: `${ONBOARDING_DOCUMENT_LABELS[requirement]} verification invalidated: ${reason}. Re-verification required.`,
+      metadata: { requirement, reason },
+    });
+
+    if (requirement === OnboardingDocument.BANK_PASSBOOK) {
+      await this.assayers.update({ id: assayerId }, { identityVerifiedAt: null });
+    }
+
+    return true;
+  }
+
+  /**
    * Has this person's identity actually been established, and if not, what is missing?
    *
    * One home for the question, because it is asked from three places that must not be able to
@@ -725,15 +841,62 @@ export class RosterRecordsService {
       rejectionReason?: DocumentRejectionReason | null;
       /** The reviewer has seen that the name does not agree, and says why they accepted it. */
       nameMismatchNote?: string | null;
+      /** Explicit version to bind verification to */
+      targetVersionId?: string | null;
+      /** Optimistic concurrency version check */
+      expectedDocVersion?: number;
+      /** Exact content SHA-256 hash reviewer attested against */
+      expectedContentHash?: string | null;
     },
   ) {
     const row = await this.onboarding.findOne({ where: { id } });
     if (!row) throw new NotFoundException('No such document.');
+
+    // Row-level optimistic concurrency check
+    if (attested?.expectedDocVersion !== undefined && (row as any).version !== attested.expectedDocVersion) {
+      throw new ConflictException(
+        `DOCUMENT_VERSION_STALE: Expected document version ${attested.expectedDocVersion} but found ${(row as any).version}. The document was modified concurrently.`,
+      );
+    }
+
     if (!isIdentityDocument(row.requirement)) {
       throw new BadRequestException(
         `${ONBOARDING_DOCUMENT_LABELS[row.requirement]} is not an identity document. `
         + 'Record whether it arrived instead.',
       );
+    }
+
+    // Bind verification to specific document version
+    const targetVersionId = attested?.targetVersionId ?? row.currentVersionId;
+    let targetVersionRecord: AssayerDocumentVersionEntity | null = null;
+    if (this.docVersions && targetVersionId) {
+      targetVersionRecord = await this.docVersions.findOne({ where: { id: targetVersionId } });
+      if (!targetVersionRecord) {
+        throw new NotFoundException(`Document version ${targetVersionId} not found.`);
+      }
+
+      if (targetVersionRecord.supersededByVersionId || (row.currentVersionId && row.currentVersionId !== targetVersionId)) {
+        throw new ConflictException(
+          `CANNOT_VERIFY_SUPERSEDED_VERSION: Document version v${targetVersionRecord.version} has been superseded by a newer upload. Only the current version can be verified.`,
+        );
+      }
+
+      // Invariant: Verification must bind to exact document version AND content hash
+      const versionHash = targetVersionRecord.contentSha256 ?? targetVersionRecord.fileChecksum;
+      if (attested?.expectedContentHash && versionHash && versionHash !== attested.expectedContentHash) {
+        throw new ConflictException(
+          `CONTENT_HASH_MISMATCH: Document content hash has changed (${versionHash} vs expected ${attested.expectedContentHash}). Verification cannot silently apply to a different content hash.`,
+        );
+      }
+
+      if (
+        targetVersionRecord.verificationStatus !== DocumentVerification.PENDING &&
+        targetVersionRecord.verificationStatus !== verdict
+      ) {
+        throw new ConflictException(
+          `DOCUMENT_ALREADY_REVIEWED: This document version has already been marked ${targetVersionRecord.verificationStatus} by another reviewer.`,
+        );
+      }
     }
     /**
      * The number is read from wherever it actually lives, which for the three that matter most is
@@ -860,6 +1023,16 @@ export class RosterRecordsService {
         row.nameMatchGrade = nameMatch;
         row.nameMatchNote = note || null;
       }
+    }
+
+    if (this.docVersions && targetVersionRecord) {
+      targetVersionRecord.verificationStatus = verdict;
+      targetVersionRecord.verifiedAt = verdict === DocumentVerification.PENDING ? null : new Date();
+      targetVersionRecord.verifiedBy = verdict === DocumentVerification.PENDING ? null : actorId;
+      targetVersionRecord.rejectionReason = verdict === DocumentVerification.REJECTED
+        ? (attested?.rejectionReason ?? null)
+        : null;
+      await this.docVersions.save(targetVersionRecord);
     }
 
     const previousStatus = row.verificationStatus;
@@ -989,6 +1162,42 @@ export class RosterRecordsService {
 
     const [rows, openCount] = await Promise.all([rowsQb.getMany(), countQb.getCount()]);
     return { rows, openCount };
+  }
+
+  /**
+   * Files a district-vs-pincode disagreement as a review-queue row, for a record the API just
+   * wrote — not a spreadsheet import. `AssayerService.create`/`update` used to 400 on this
+   * mismatch outright, which directly contradicted the registration wizard's own promise that
+   * such a record "will be saved as entered". The record is now saved exactly as the clerk typed
+   * it; this is the queue entry that says so, in the same table and under the same operating
+   * rule every other row here already follows — nothing guessed or changed automatically, every
+   * one waits for a person to decide.
+   *
+   * `source_sheet`/`source_row`/`source_column` exist for a spreadsheet cell — see the entity's
+   * own comment — and there is no sheet or row behind a live API write, so `sourceSheet` carries
+   * a constant that names the KIND of issue instead of a real sheet, `sourceRow` is `0` (never a
+   * value `roster-import.service.ts` produces — its rows start at 2), and `sourceColumn` names
+   * the field in question. `resolveIssue`/`listIssues` read this row exactly like an importer one;
+   * neither cares where a row came from.
+   */
+  async recordDistrictPincodeMismatch(
+    assayerId: string,
+    info: { enteredDistrict: string; authorityDistrict: string; authorityState: string; pincode: string },
+    actorId: string,
+  ): Promise<AssayerImportIssueEntity> {
+    const row = this.issues.create({
+      assayerId,
+      sourceAssayerCode: null,
+      sourceSheet: 'DISTRICT_PINCODE_MISMATCH',
+      sourceRow: 0,
+      sourceColumn: 'District',
+      rawValue: info.enteredDistrict,
+      reason: `Pincode ${info.pincode} is in ${info.authorityDistrict} district (${info.authorityState}), but ` +
+        `the record says "${info.enteredDistrict}". Saved as entered — confirm which is right.`,
+      createdBy: actorId,
+      updatedBy: actorId,
+    });
+    return this.issues.save(row);
   }
 
   async resolveIssue(id: string, resolution: string, actorId: string) {

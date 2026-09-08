@@ -311,8 +311,9 @@ export class AuthService implements OnModuleInit {
       if (id) void this.revokeAllSessions(id);
     });
 
-    // Fire-and-forget: a boot check that never blocks or fails startup. See runRbacDriftCheck.
+    // Fire-and-forget: boot checks that never block or fail startup.
     void this.runRbacDriftCheck();
+    void this.runSystemPermissionIntegrityCheck();
   }
 
   /**
@@ -358,6 +359,38 @@ export class AuthService implements OnModuleInit {
     } catch (err) {
       // Never let a diagnostic query prevent the service from starting.
       this.logger.warn(`RBAC drift check failed to run: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * Startup integrity check: detect if any custom or non-platform role holds a SYSTEM:* permission.
+   *
+   * Only built-in platform system roles (ADMIN, DEVELOPER) are permitted to hold SYSTEM:*
+   * permissions under any circumstances. Custom roles created in the role editor or imported
+   * from external data must NEVER possess SYSTEM-level capabilities.
+   * If a violation is detected, alert loudly and fail safely.
+   */
+  async runSystemPermissionIntegrityCheck(): Promise<void> {
+    try {
+      const rows: Array<{ role_name: string; resource: string; action: string; scope: string }> =
+        await this.userRepository.manager.query(`
+          SELECT DISTINCT r.name AS role_name, p.resource, p.action, p.scope
+          FROM roles r
+          JOIN role_permissions rp ON rp.role_id = r.id
+          JOIN permissions p ON p.id = rp.permission_id
+          WHERE UPPER(p.resource) = 'SYSTEM'
+            AND r.name NOT IN ('ADMIN', 'DEVELOPER')
+        `);
+      if (rows.length > 0) {
+        for (const row of rows) {
+          this.logger.error(
+            `CRITICAL SECURITY VIOLATION: Role "${row.role_name}" possesses privileged system permission ` +
+            `"${row.resource}:${row.action}:${row.scope}". SYSTEM:* permissions must NEVER be granted to non-platform roles!`,
+          );
+        }
+      }
+    } catch (err) {
+      this.logger.warn(`System permission integrity check failed to run: ${(err as Error).message}`);
     }
   }
 

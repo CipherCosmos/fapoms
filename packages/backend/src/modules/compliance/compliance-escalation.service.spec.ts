@@ -94,4 +94,45 @@ describe('ComplianceEscalationService', () => {
       }),
     );
   });
+
+  it('stays silent on a resolved or closed incident even with breached clocks', async () => {
+    // The live failure: QA probes closed without filing anything re-alerted every day forever,
+    // because an overdue clock ignores status. Closure is the sign-off; the scanner must not
+    // second-guess it daily.
+    incidents.list.mockResolvedValue([
+      incidentView({
+        status: 'RESOLVED',
+        clocks: {
+          certIn: { applicable: true, overdue: true, satisfied: false },
+          dpdpBoard: { applicable: true, overdue: true, satisfied: false },
+          dpdpPrincipals: { applicable: true, overdue: false, satisfied: false },
+        },
+      }),
+      incidentView({
+        id: 'inc-2', status: 'CLOSED',
+        clocks: {
+          certIn: { applicable: true, overdue: true, satisfied: false },
+          dpdpBoard: { applicable: false, overdue: false, satisfied: false },
+          dpdpPrincipals: { applicable: false, overdue: false, satisfied: false },
+        },
+      }),
+    ]);
+    await service.scan();
+    expect(notificationDispatch.emitSafe).not.toHaveBeenCalled();
+  });
+
+  it('still escalates an open incident with breached clocks', async () => {
+    incidents.list.mockResolvedValue([
+      incidentView({
+        status: 'OPEN',
+        clocks: { ...incidentView({}).clocks, certIn: { applicable: true, overdue: true, satisfied: false } },
+      }),
+      incidentView({
+        id: 'inc-2', status: 'CONTAINED',
+        clocks: { ...incidentView({}).clocks, dpdpBoard: { applicable: true, overdue: true, satisfied: false } },
+      }),
+    ]);
+    await service.scan();
+    expect(notificationDispatch.emitSafe).toHaveBeenCalledTimes(2);
+  });
 });

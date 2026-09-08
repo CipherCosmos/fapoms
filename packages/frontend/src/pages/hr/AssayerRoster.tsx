@@ -6,7 +6,7 @@ import {
 import { api } from '../../services/api';
 import { userMessage } from '../../services/errors';
 import { fetchWholeAssayerRoster } from '../../services/assayer-roster';
-import { Select, UploadExcelControls, useConfirm, AlertBanner, DataTable, StatusBadge } from '../../components/ui';
+import { Select, UploadExcelControls, useConfirm, AlertBanner, DataTable, StatusBadge, Modal } from '../../components/ui';
 import { listPhase } from '../../components/ui/list-phase';
 import { ImportIssuesPanel } from './ImportIssuesPanel';
 import { visibleSelection, hiddenSelectionNote } from '../../utils/selection';
@@ -14,7 +14,6 @@ import { useSearchParams } from 'react-router-dom';
 import { useCurrentRoles, canManageAssayers, canCreateAssayers } from '../../hooks/useCurrentRoles';
 import { useQueuedExcelExport } from '../../hooks/useQueuedExcelExport';
 import { useClientOptions } from '../../hooks/useClients';
-import { RegistrationWizard } from './registration/RegistrationWizard';
 import {
   STATUS_COLORS, onboardingNextStep, stillWorkable, isRecordedDeceased,
 } from './assayer-shared';
@@ -118,6 +117,7 @@ export const AssayerRoster: React.FC<{
 
   const [showFilters, setShowFilters] = useState(false);
   const [showExport, setShowExport] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [sort, setSort] = useState<{ key: SortKey; dir: 'asc' | 'desc' }>({ key: 'displayName', dir: 'asc' });
 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -204,25 +204,20 @@ export const AssayerRoster: React.FC<{
     const qs = forwarded.toString();
     navigate(`/hr/roster/${encodeURIComponent(wanted)}${qs ? `?${qs}` : ''}`, { replace: true });
   }, [searchParams, navigate]);
-  const [creating, setCreating] = useState(false);
   /**
-   * `?register=<id>` reopens the registration flow on somebody already on the roster.
-   *
-   * Held in the URL rather than in state so the link survives being bookmarked, pasted to a
-   * colleague, or reached after the tab was closed mid-registration. Closing the flow clears both
-   * halves, and `?view=` with it — that is the flow's own step, and leaving it behind would make
-   * the next Add button land on whichever page the last registration stopped on.
+   * `?register=<id>` used to reopen the registration flow as a modal over this exact list. The
+   * flow is a page of its own now (`/hr/register/:assayerId`) — see `RegistrationPage.tsx` — but
+   * the parameter itself cannot simply stop working: it rode in notifications and bookmarks, and
+   * `AssayerRoster.tsx`'s own resume icon used to set it. Old links land on the new page instead
+   * of a blank roster.
    */
-  const resumeRegistrationId = searchParams.get('register');
-  const closeRegistration = () => {
-    setCreating(false);
-    if (resumeRegistrationId || searchParams.get('view')) {
-      const next = new URLSearchParams(searchParams);
-      next.delete('register');
-      next.delete('view');
-      setSearchParams(next, { replace: true });
-    }
-  };
+  useEffect(() => {
+    const id = searchParams.get('register');
+    if (id) navigate(`/hr/register/${encodeURIComponent(id)}`, { replace: true });
+    // Fires once per distinct `?register=` value; `navigate` and `searchParams` are stable/derived
+    // and would only cause this to loop on themselves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams.get('register')]);
   const [bulkTarget, setBulkTarget] = useState('');
   /**
    * The one reason that applies to the whole batch, from the same picker the single-person path
@@ -257,32 +252,6 @@ export const AssayerRoster: React.FC<{
    * upload screens cannot drift into three different ideas of what "finished" means.
    */
   const rosterImport = useImportJob<RosterImportSummary>();
-  /**
-   * The per-row outcome of the last bulk move. Names are captured *at send time*: the report is
-   * read after `refresh()` has replaced the roster, and a row that was archived out of the
-   * current view then had no name left to look up — the skipped list rendered as a bare stage
-   * with no indication of who it was about, and failures as eight characters of a UUID.
-   */
-  const [bulkReport, setBulkReport] = useState<{
-    target: string;
-    succeeded: string[];
-    skipped: { id: string; current: string; reason: string }[];
-    failed: { id: string; reason: string }[];
-    names: Record<string, string>;
-  } | null>(null);
-  /**
-   * The per-person outcome of the last bulk app-access run. Kept separate from `bulkReport`
-   * (the lifecycle-move one) rather than folded in, because the two shapes don't overlap —
-   * this one carries delivery channels and skip/fail reasons that have nothing to do with a
-   * lifecycle stage — and a batch of one kind can run right after the other without either
-   * report clobbering the other's names lookup.
-   */
-  const [appAccessReport, setAppAccessReport] = useState<{
-    succeeded: { id: string; channels: ('EMAIL' | 'SMS')[] }[];
-    skipped: { id: string; reason: string }[];
-    failed: { id: string; reason: string }[];
-    names: Record<string, string>;
-  } | null>(null);
   const [appAccessBusy, setAppAccessBusy] = useState(false);
   const RENDER_CHUNK = 200;
   const [visibleCount, setVisibleCount] = useState(RENDER_CHUNK);
@@ -537,8 +506,10 @@ export const AssayerRoster: React.FC<{
     });
     if (!ok) return;
     setBusy(true);
-    setBulkReport(null);
     const ids = selectedVisibleIds;
+    // Names captured at send time: the notice is read after `refresh()` has replaced the
+    // roster, and a row archived out of the current view then has no name left to look up.
+    const nameById = Object.fromEntries(selected.map((a) => [a.id, `${a.displayName} (${a.assayerCode})`]));
     try {
       const res = await api.request<{ succeeded: { id: string; from: string; to: string }[]; skipped: { id: string; current: string; reason: string }[]; failed: { id: string; reason: string }[] }>(
         '/assayers/bulk/lifecycle',
@@ -548,19 +519,19 @@ export const AssayerRoster: React.FC<{
         },
       );
       const { succeeded, skipped, failed } = res ?? { succeeded: [], skipped: [], failed: [] };
-      setBulkReport({
-        target: bulkTarget,
-        succeeded: succeeded.map((s) => s.id),
-        skipped,
-        failed,
-        names: Object.fromEntries(selected.map((a) => [a.id, `${a.displayName} (${a.assayerCode})`])),
-      });
+      // One outcome channel, not two: the per-row report card duplicated this banner, so the
+      // skipped/failed names ride the notice's own expandable details instead.
       const moved = succeeded.length;
+      const details = [
+        ...skipped.map((s) => `${nameById[s.id] ?? 'This assayer'} — is ${assayerLifecycleLabel(s.current)}: ${s.reason}`),
+        ...failed.map((f) => `${nameById[f.id] ?? 'This assayer'} — failed: ${f.reason}`),
+      ];
       setNotice(
         failed.length || skipped.length
           ? {
               tone: 'err',
               text: `${moved} moved to ${assayerLifecycleLabel(bulkTarget)}, ${skipped.length} skipped, ${failed.length} failed.`,
+              details,
             }
           : { tone: 'ok', text: `${counted(moved, 'person', 'people')} moved to ${assayerLifecycleLabel(bulkTarget)}.` },
       );
@@ -617,7 +588,6 @@ export const AssayerRoster: React.FC<{
     if (!ok) return;
 
     setAppAccessBusy(true);
-    setAppAccessReport(null);
     const ids = selectedVisibleIds;
     const nameById = Object.fromEntries(selected.map((a) => [a.id, `${a.displayName} (${a.assayerCode})`]));
     try {
@@ -627,16 +597,22 @@ export const AssayerRoster: React.FC<{
         failed: { id: string; reason: string }[];
       }>('/assayers/app-access/bulk', { method: 'POST', body: JSON.stringify({ ids }) });
       const { succeeded, skipped, failed } = res ?? { succeeded: [], skipped: [], failed: [] };
-      setAppAccessReport({ succeeded, skipped, failed, names: nameById });
 
       const byEmail = succeeded.filter((s) => s.channels.includes('EMAIL')).length;
       const bySms = succeeded.filter((s) => s.channels.includes('SMS')).length;
+      const channelOf = (s: { channels: ('EMAIL' | 'SMS')[] }) =>
+        s.channels.length > 0 ? `sent by ${s.channels.join(' and ').toLowerCase()}` : 'not reachable on any channel';
       setNotice(
         skipped.length || failed.length
           ? {
               tone: 'err',
               text: `${succeeded.length} issued (${byEmail} by email, ${bySms} by SMS), `
                 + `${skipped.length} skipped, ${failed.length} failed.`,
+              details: [
+                ...succeeded.map((s) => `${nameById[s.id] ?? 'This assayer'} — ${channelOf(s)}`),
+                ...skipped.map((s) => `${nameById[s.id] ?? 'This assayer'} — skipped: ${s.reason}`),
+                ...failed.map((f) => `${nameById[f.id] ?? 'This assayer'} — failed: ${f.reason}`),
+              ],
             }
           : {
               tone: 'ok',
@@ -862,17 +838,15 @@ export const AssayerRoster: React.FC<{
         </AlertBanner>
       )}
       {/*
-        TWO ROWS, BECAUSE THESE CHIPS WERE DOING TWO JOBS AT ONCE.
+        ONE STRIP, NOT TWO ROWS.
 
-        Twelve pills in one undifferentiated line: four of them answer "who am I looking at" and
-        the other eight are worklists — people somebody has to ring up today. Read as one row
-        they look like twelve ways to slice a list, and the queues, which are the reason the row
-        exists, are the hardest thing in it to find. Same chips, same keys, same deep links; a
-        heading each and a rule about what may be hidden.
-
-        A queue with nobody in it is not shown. "Certificate lapsed 0" is a question already
-        answered, and eight of those are the clutter this row was accused of. The selected one is
-        always shown, so `?segment=lapsed` still lands somewhere that explains itself.
+        Twelve pills in two labelled rows ("Who to show" over "Needs chasing") read as two
+        toolbars and pushed the table down another line. Four of them answer "who am I looking
+        at" and the rest are worklists — people somebody has to ring up today — so one strip
+        with a divider between the populations and the queues says the same thing in half the
+        height. Same chips, same keys, same deep links; a queue with nobody in it is still not
+        shown, and the selected one always is, so `?segment=lapsed` still lands somewhere that
+        explains itself.
 
         EVERY CHIP IS SERVER TRUTH NOW, not just the two the Overview happened to carry an
         aggregate for. `HrRosterPage` passes the workforce overview's whole `segments` map, keyed
@@ -881,44 +855,51 @@ export const AssayerRoster: React.FC<{
         is now only what a chip shows for the instant before that overview has loaded, not a
         second, disagreeing population living alongside the first.
       */}
-      {([
-        { key: 'who', label: 'Who to show', chips: ROSTER_SEGMENTS.filter((s) => !s.queue) },
-        { key: 'chase', label: 'Needs chasing', chips: ROSTER_SEGMENTS.filter((s) => s.queue) },
-      ] as const).map((row) => {
-        const chips = row.chips
+      <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }} role="tablist" aria-label="Who to show">
+        {ROSTER_SEGMENTS.filter((s) => !s.queue).map((s) => {
+          const n = exactCounts?.[s.key] ?? assayers.filter(s.match).length;
+          const on = filters.segment === s.key;
+          return (
+            <button
+              key={s.key}
+              role="tab"
+              aria-selected={on}
+              onClick={() => setFilters({ ...filters, segment: s.key })}
+              style={{
+                padding: '5px 11px', borderRadius: '999px', fontSize: '12px', fontWeight: 600, cursor: 'pointer',
+                border: `1px solid ${on ? 'transparent' : 'var(--border-color)'}`,
+                background: on ? 'var(--accent)' : 'transparent',
+                color: on ? 'var(--on-accent)' : 'var(--text-secondary)',
+              }}
+            >
+              {s.label} <span style={{ opacity: 0.75 }}>{n}</span>
+            </button>
+          );
+        })}
+        <span aria-hidden style={{ width: '1px', alignSelf: 'stretch', background: 'var(--border-color)', margin: '4px 2px' }} />
+        {ROSTER_SEGMENTS.filter((s) => s.queue)
           .map((s) => ({ s, n: exactCounts?.[s.key] ?? assayers.filter(s.match).length }))
-          .filter(({ s, n }) => !s.queue || n > 0 || filters.segment === s.key);
-        if (chips.length === 0) return null;
-        return (
-          <div key={row.key} style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }} role="tablist">
-            <span style={{
-              fontSize: '12px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.05em',
-              color: 'var(--text-muted)', marginRight: '2px',
-            }}>
-              {row.label}
-            </span>
-            {chips.map(({ s, n }) => {
-              const on = filters.segment === s.key;
-              return (
-                <button
-                  key={s.key}
-                  role="tab"
-                  aria-selected={on}
-                  onClick={() => setFilters({ ...filters, segment: s.key })}
-                  style={{
-                    padding: '5px 11px', borderRadius: '999px', fontSize: '12px', fontWeight: 600, cursor: 'pointer',
-                    border: `1px solid ${on ? 'transparent' : 'var(--border-color)'}`,
-                    background: on ? 'var(--accent)' : 'transparent',
-                    color: on ? 'var(--on-accent)' : 'var(--text-secondary)',
-                  }}
-                >
-                  {s.label} <span style={{ opacity: 0.75 }}>{n}</span>
-                </button>
-              );
-            })}
-          </div>
-        );
-      })}
+          .filter(({ s, n }) => n > 0 || filters.segment === s.key)
+          .map(({ s, n }) => {
+            const on = filters.segment === s.key;
+            return (
+              <button
+                key={s.key}
+                role="tab"
+                aria-selected={on}
+                onClick={() => setFilters({ ...filters, segment: s.key })}
+                style={{
+                  padding: '5px 11px', borderRadius: '999px', fontSize: '12px', fontWeight: 600, cursor: 'pointer',
+                  border: `1px solid ${on ? 'transparent' : 'color-mix(in srgb, var(--warning) 45%, transparent)'}`,
+                  background: on ? 'var(--accent)' : 'color-mix(in srgb, var(--warning) 10%, transparent)',
+                  color: on ? 'var(--on-accent)' : 'var(--text-secondary)',
+                }}
+              >
+                {s.label} <span style={{ opacity: 0.75 }}>{n}</span>
+              </button>
+            );
+          })}
+      </div>
 
       {/*
         What the selected queue is, and what to do with the people in it.
@@ -1014,42 +995,21 @@ export const AssayerRoster: React.FC<{
         </ToolbarMenu>
         {canCreate && (
           <>
-            <ToolbarMenu label="Import" icon={<Upload size={13} />} panelWidth={260}>
-              <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
-                Bring in a client's appraiser workbook. Every import is rehearsed first and shows
-                what it would change before anything is written.
-              </div>
-              <label style={{
-                display: 'flex', alignItems: 'flex-start', gap: '6px', fontSize: '12px',
-                color: 'var(--text-secondary)', cursor: 'pointer', lineHeight: 1.4,
-              }}>
-                <input
-                  type="checkbox"
-                  checked={overwriteConflicts}
-                  onChange={(e) => setOverwriteConflicts(e.target.checked)}
-                  style={{ marginTop: '2px' }}
-                />
-                <span>
-                  Sheet wins conflicts
-                  <span style={{ display: 'block', color: 'var(--text-muted)' }}>
-                    Off: a disagreeing value is left alone and filed for review. On: the sheet
-                    replaces it.
-                  </span>
-                </span>
-              </label>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'stretch' }}>
-                <UploadExcelControls
-                  onUpload={handleUpload}
-                  onDownloadTemplate={downloadTemplate}
-                  accept=".xlsx,.xls"
-                  busy={uploading}
-                  busyLabel="Importing roster…"
-                  uploadLabel="Upload a filled workbook"
-                  templateLabel="Download the blank template"
-                />
-              </div>
-            </ToolbarMenu>
-            <button onClick={() => setCreating(true)} className="btn btn-primary"
+            {/*
+              Import is one action opening one dialog, not a menu holding a form. The dropdown
+              carried an explainer paragraph, a persistent conflict checkbox and the upload
+              controls in 260px of menu that stayed open with state in it — a form wearing a
+              menu's clothes, closed by an outside click that could lose nothing but still felt
+              precarious. The dialog below holds the same controls with room to read them.
+            */}
+            <button
+              onClick={() => setShowImport(true)}
+              className="btn btn-secondary"
+              style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '8px 12px' }}
+            >
+              <Upload size={13} /> Import
+            </button>
+            <button onClick={() => navigate('/hr/register')} className="btn btn-primary"
               style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '13px', padding: '8px 14px' }}>
               <Plus size={14} /> Add assayer
             </button>
@@ -1201,97 +1161,6 @@ export const AssayerRoster: React.FC<{
         </div>
       )}
 
-      {/* Bulk result report — what actually moved, and which rows could not reach
-          the target, with per-row reasons. */}
-      {bulkReport && (
-        <div style={{
-          marginTop: '10px', padding: '12px 14px', borderRadius: '8px', fontSize: '12px',
-          background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)',
-        }}>
-          <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', fontWeight: 600, marginBottom: '8px' }}>
-            <span style={{ color: 'var(--status-active-text)' }}>{bulkReport.succeeded.length} moved</span>
-            <span style={{ color: 'var(--text-muted)' }}>{bulkReport.skipped.length} skipped</span>
-            {bulkReport.failed.length > 0 && <span style={{ color: 'var(--status-danger-text)' }}>{bulkReport.failed.length} failed</span>}
-            <button onClick={() => setBulkReport(null)} className="btn btn-secondary" style={{ fontSize: '12px', padding: '2px 8px', marginLeft: 'auto' }}>Dismiss</button>
-          </div>
-          {bulkReport.skipped.length > 0 && (
-            <div style={{ marginTop: '6px' }}>
-              <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Could not reach {assayerLifecycleLabel(bulkReport.target)}:</div>
-              {bulkReport.skipped.map((s) => (
-                <div key={s.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
-                  <span style={{ color: 'inherit' }}>{bulkReport.names[s.id] ?? 'This assayer'} — {assayerLifecycleLabel(s.current)}</span>
-                  <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>— {s.reason}</span>
-                </div>
-              ))}
-            </div>
-          )}
-          {bulkReport.failed.length > 0 && (
-            <div style={{ marginTop: '6px' }}>
-              <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Failed:</div>
-              {bulkReport.failed.map((f) => (
-                <div key={f.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
-                  <span style={{ color: 'inherit' }}>{bulkReport.names[f.id] ?? 'This assayer'}</span>
-                  <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>— {f.reason}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Bulk app-access result — who was issued a credential and by which channel(s), who was
-          skipped for lacking any contact detail, and who failed outright. The password itself
-          never appears here or anywhere else in this component: the server delivered it
-          straight to each person and told this screen only whether that delivery succeeded. */}
-      {appAccessReport && (
-        <div style={{
-          marginTop: '10px', padding: '12px 14px', borderRadius: '8px', fontSize: '12px',
-          background: 'var(--bg-surface-2)', border: '1px solid var(--border-color)',
-        }}>
-          <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap', fontWeight: 600, marginBottom: '8px' }}>
-            <span style={{ color: 'var(--status-active-text)' }}>{appAccessReport.succeeded.length} issued</span>
-            <span style={{ color: 'var(--text-muted)' }}>{appAccessReport.skipped.length} skipped</span>
-            {appAccessReport.failed.length > 0 && <span style={{ color: 'var(--status-danger-text)' }}>{appAccessReport.failed.length} failed</span>}
-            <button onClick={() => setAppAccessReport(null)} className="btn btn-secondary" style={{ fontSize: '12px', padding: '2px 8px', marginLeft: 'auto' }}>Dismiss</button>
-          </div>
-          {appAccessReport.succeeded.length > 0 && (
-            <div style={{ marginTop: '6px' }}>
-              <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Issued:</div>
-              {appAccessReport.succeeded.map((s) => (
-                <div key={s.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
-                  <span style={{ color: 'inherit' }}>{appAccessReport.names[s.id] ?? 'This assayer'}</span>
-                  <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>
-                    — {s.channels.length > 0 ? `sent by ${s.channels.join(' and ').toLowerCase()}` : 'not reachable on any channel'}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-          {appAccessReport.skipped.length > 0 && (
-            <div style={{ marginTop: '6px' }}>
-              <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Skipped:</div>
-              {appAccessReport.skipped.map((s) => (
-                <div key={s.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
-                  <span style={{ color: 'inherit' }}>{appAccessReport.names[s.id] ?? 'This assayer'}</span>
-                  <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>— {s.reason}</span>
-                </div>
-              ))}
-            </div>
-          )}
-          {appAccessReport.failed.length > 0 && (
-            <div style={{ marginTop: '6px' }}>
-              <div style={{ color: 'var(--text-muted)', marginBottom: '4px' }}>Failed:</div>
-              {appAccessReport.failed.map((f) => (
-                <div key={f.id} style={{ display: 'flex', gap: '8px', alignItems: 'baseline' }}>
-                  <span style={{ color: 'inherit' }}>{appAccessReport.names[f.id] ?? 'This assayer'}</span>
-                  <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>— {f.reason}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
       {/*
         Roster.
 
@@ -1385,14 +1254,34 @@ export const AssayerRoster: React.FC<{
               // with it unchanged.
               render: (a) => {
                 const tone = STATUS_COLORS[a.lifecycleStatus] ?? 'var(--text-muted)';
+                const nextStep = onboardingNextStep(a);
                 return (
-                  <StatusBadge
-                    label={assayerLifecycleLabel(a.lifecycleStatus)}
-                    color={tone}
-                    bg={`color-mix(in srgb, ${tone} 14%, transparent)`}
-                    variant="tag"
-                    title={onboardingNextStep(a) ? `Onboarding not finished: ${onboardingNextStep(a)}.` : undefined}
-                  />
+                  <>
+                    <StatusBadge
+                      label={assayerLifecycleLabel(a.lifecycleStatus)}
+                      color={tone}
+                      bg={`color-mix(in srgb, ${tone} 14%, transparent)`}
+                      variant="tag"
+                      title={nextStep ? `Onboarding not finished: ${nextStep}.` : undefined}
+                    />
+                    {/*
+                      The sentence above was hover-only, which the audit called out: a clerk
+                      scanning a table of a thousand rows never lingers long enough to learn it is
+                      there. A second, muted line costs one row of height and is read at a glance;
+                      the tooltip stays so the full sentence survives being cut short here.
+                    */}
+                    {nextStep && (
+                      <div
+                        title={nextStep}
+                        style={{
+                          fontSize: '12px', color: 'var(--text-muted)', marginTop: '3px', maxWidth: '190px',
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}
+                      >
+                        {nextStep}
+                      </div>
+                    )}
+                  </>
                 );
               },
             },
@@ -1469,11 +1358,7 @@ export const AssayerRoster: React.FC<{
                   {canCreate && isOnboardingStage(a.lifecycleStatus) && (
                     <IconBtn
                       label={`Finish registering ${a.displayName}`}
-                      onClick={() => setSearchParams((prev) => {
-                        const next = new URLSearchParams(prev);
-                        next.set('register', a.id);
-                        return next;
-                      })}
+                      onClick={() => navigate(`/hr/register/${a.id}`)}
                     >
                       <PlayCircle size={13} />
                     </IconBtn>
@@ -1487,42 +1372,20 @@ export const AssayerRoster: React.FC<{
         />
         {!loading && rows.length > 0 && (
           <div style={{ padding: '8px 12px', fontSize: '12px', color: 'var(--text-muted)', borderTop: '1px solid var(--border-color)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px', flexWrap: 'wrap' }}>
+            {/* Counts only. Record health already has its own carriers — the queue chips above
+                and the Record column on every row — so repeating both sentences here made the
+                footer a third copy, recomputed over the whole roster on every render. */}
             <span>
               Showing {Math.min(visibleCount, rows.length)} of {rows.length}
-              {rows.filter((r) => missingFields(r).length > 0).length > 0 &&
-                ` · ${rows.filter((r) => missingFields(r).length > 0).length} with an incomplete record`}
-              {/* Stated separately from "incomplete", because a roster where everyone is Active
-                  and nobody has bank details looks entirely healthy until this sentence. */}
-              {rows.filter((r) => payoutBlockers(r).length > 0).length > 0 &&
-                ` · ${rows.filter((r) => payoutBlockers(r).length > 0).length} cannot be paid yet`}
             </span>
             {rows.length > visibleCount && (
-              // "Show more" alone, over a roster that is now always loaded in full, would read as
-              // though more people might still be coming from the server — this is a DOM reveal
-              // of rows already in hand, not another page being fetched, so the count says so.
               <button onClick={() => setVisibleCount((c) => c + RENDER_CHUNK)} className="btn btn-secondary" style={{ padding: '4px 12px', fontSize: '12px' }}>
-                Show {Math.min(RENDER_CHUNK, rows.length - visibleCount)} more ({visibleCount} of {rows.length} shown)
+                Show {Math.min(RENDER_CHUNK, rows.length - visibleCount)} more
               </button>
             )}
           </div>
         )}
       </div>
-
-      {/*
-        * Opened either by the Add button or by `?register=<id>`, which is what makes an
-        * interrupted registration resumable: every step of the flow writes to the person's real
-        * record, so there is no draft to reopen — only the person, and a link that reopens the
-        * flow on them at the first thing still missing. Without the URL half, a clerk whose
-        * browser closed on step 4 would have to finish the person field by field on the record
-        * page, which is the screen the flow exists to spare them.
-        */}
-      {(creating || resumeRegistrationId) && (
-        <RegistrationWizard
-          resumeAssayerId={resumeRegistrationId ?? undefined}
-          onClose={closeRegistration}
-          onCreated={() => { closeRegistration(); refresh(); }}
-        />
-      )}
 
       {/*
         Choosing what leaves the building. Handed `filtered` rather than `rows` because the sort
@@ -1544,6 +1407,54 @@ export const AssayerRoster: React.FC<{
         onExcelExport={handleExportExcel}
         excelBusy={exporting}
       />
+      {/*
+        The import dialog. Picking a file closes it at once: the rehearse confirm and then the
+        progress panel take over from there, so nothing stacks. Downloading the template closes
+        it too, so a failed download's notice is on screen rather than behind this dialog.
+      */}
+      <Modal
+        open={showImport}
+        onClose={() => setShowImport(false)}
+        title="Import the roster from a workbook"
+        width="460px"
+        footer={(
+          <button type="button" onClick={() => setShowImport(false)} className="btn btn-secondary" style={{ fontSize: '12px', padding: '8px 14px' }}>
+            Close
+          </button>
+        )}
+      >
+        <div style={{ fontSize: '13px', color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+          Bring in a client's appraiser workbook. Every import is rehearsed first and shows
+          what it would change before anything is written.
+        </div>
+        <label style={{
+          display: 'flex', alignItems: 'flex-start', gap: '8px', fontSize: '13px',
+          color: 'var(--text-secondary)', cursor: 'pointer', lineHeight: 1.45,
+        }}>
+          <input
+            type="checkbox"
+            checked={overwriteConflicts}
+            onChange={(e) => setOverwriteConflicts(e.target.checked)}
+            style={{ marginTop: '3px' }}
+          />
+          <span>
+            Sheet wins conflicts
+            <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: '12px' }}>
+              Off: a disagreeing value is left alone and filed for review. On: the sheet
+              replaces it.
+            </span>
+          </span>
+        </label>
+        <UploadExcelControls
+          onUpload={(file) => { setShowImport(false); void handleUpload(file); }}
+          onDownloadTemplate={() => { setShowImport(false); void downloadTemplate(); }}
+          accept=".xlsx,.xls"
+          busy={uploading}
+          busyLabel="Importing roster…"
+          uploadLabel="Upload a filled workbook"
+          templateLabel="Download the blank template"
+        />
+      </Modal>
     </div>
   );
 };
@@ -1617,7 +1528,7 @@ const IconBtn: React.FC<{ label: string; onClick: () => void; tone?: string; chi
     aria-label={text}
     title={text}
     onClick={onClick}
-    style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '4px 5px', color: tone ?? 'var(--text-muted)' }}
+    style={{ background: 'none', border: 'none', cursor: 'pointer', padding: '8px', color: tone ?? 'var(--text-muted)' }}
   >
     {children}
   </button>

@@ -15,16 +15,17 @@ import {
   UseGuards,
   Req,
   ParseUUIDPipe,
-  BadRequestException, ForbiddenException } from '@nestjs/common';
+  BadRequestException, ForbiddenException, NotFoundException, ConflictException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 
-import { SystemRole, ASSIGNMENT_ISSUE_CATEGORIES } from '@fapoms/shared';
+import { SystemRole, ASSIGNMENT_ISSUE_CATEGORIES, AssignmentStatus } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 import { ParsePagePipe } from '../../infrastructure/http/parse-page.pipe';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { AssignmentService, CreateAssignmentDto, UpdateAssignmentDetailsDto } from './assignment.service';
 import { OperationsInboxService, SUGGEST_NEXT_AFTER_ATTEMPTS } from './operations-inbox.service';
+import { OperationalIntegrityService } from './operational-integrity.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsUUID, IsBoolean, IsDateString, IsIn, Min, MaxLength } from 'class-validator';
@@ -85,6 +86,8 @@ class CreateAssignmentRequestDto implements CreateAssignmentDto {
    */
   @IsOptional() @IsString() @MaxLength(1000)
   overrideReason?: string;
+  /** Durable idempotency key for retryable creation. */
+  clientRequestId?: string;
 }
 
 /** Escalation reason is free text and optional; the endpoint applies a default when absent. */
@@ -120,6 +123,9 @@ class UpdateAssignmentDetailsRequestDto implements UpdateAssignmentDetailsDto {
 
   @IsOptional() @IsString()
   remarks?: string;
+
+  @IsOptional() @IsNumber()
+  expectedVersion?: number;
 }
 
 /**
@@ -172,7 +178,15 @@ export class AssignmentController {
     private readonly assignmentService: AssignmentService,
     private readonly operationsInbox: OperationsInboxService,
     private readonly regionGuard: RegionGuardService,
+    private readonly operationalIntegrityService?: OperationalIntegrityService,
   ) {}
+
+  @Get('operational-integrity/scan')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR)
+  @ApiOperation({ summary: 'Run read-only operational invariant scanner for state integrity' })
+  async scanOperationalIntegrity() {
+    return this.operationalIntegrityService ? await this.operationalIntegrityService.scan() : { message: 'Scanner unavailable' };
+  }
 
   // Was @Public(), and any non-UUID path segment fell through to findAll() — so
   // `GET /assignments/assayer/x` returned the entire assignment book to an
@@ -243,7 +257,10 @@ export class AssignmentController {
     const accuracy = Number.isFinite(Number(body.accuracy)) ? Number(body.accuracy) : undefined;
     const userId = req.user.id;
 
-    const result = await this.assignmentService.recordCheckIn(id, lat, lng, body.syncToken, userId, accuracy);
+    const result = await this.assignmentService.recordCheckIn(id, lat, lng, body.syncToken, userId, accuracy, {
+      expectedVersion: body.expectedVersion != null ? Number(body.expectedVersion) : undefined,
+      clientRequestId: body.clientRequestId,
+    });
     if (!result.success) {
       return {
         success: false,
@@ -280,7 +297,10 @@ export class AssignmentController {
     const accuracy = Number.isFinite(Number(body.accuracy)) ? Number(body.accuracy) : undefined;
 
     const result = await this.assignmentService.recordCheckOut(
-      id, lat, lng, body.syncToken, req.user.id, accuracy,
+      id, lat, lng, body.syncToken, req.user.id, accuracy, {
+        expectedVersion: body.expectedVersion != null ? Number(body.expectedVersion) : undefined,
+        clientRequestId: body.clientRequestId,
+      },
     );
     if (!result.success) {
       return { success: false, error: result.error, message: result.message };
@@ -587,6 +607,21 @@ export class AssignmentController {
       }
     }
 
+    const currentAssignment = await this.assignmentService.findOne(id);
+    if (!currentAssignment) {
+      throw new NotFoundException(`Assignment ${id} not found`);
+    }
+    if (targetStatus === 'ACCEPTED' && currentAssignment.status === AssignmentStatus.COMPLETED) {
+      throw new ForbiddenException(
+        'Reopening a completed assignment requires the privileged /reopen operational command.',
+      );
+    }
+
+    const cmdOptions = {
+      expectedVersion: body.expectedVersion != null ? Number(body.expectedVersion) : undefined,
+      clientRequestId: body.clientRequestId,
+    };
+
     let assignment: any;
     // The counter-offer branch lived here until 2026-09 — parsing `counterTravelFee` (and the
     // legacy whole-fee aliases) and calling `proposeCounterFee`. In-app negotiation is removed;
@@ -608,6 +643,7 @@ export class AssignmentController {
         userId,
         deskSuppliedFee != null && !isNaN(Number(deskSuppliedFee)) ? Number(deskSuppliedFee) : undefined,
         body.reason ?? body.remarks,
+        cmdOptions,
       );
     } else if (targetStatus === 'REJECTED') {
       /**
@@ -625,7 +661,7 @@ export class AssignmentController {
           'A reason is required when declining an assignment — the branch goes back into planning and the next person needs to know why.',
         );
       }
-      assignment = await this.assignmentService.rejectOffer(id, userId, rejectReason);
+      assignment = await this.assignmentService.rejectOffer(id, userId, rejectReason, cmdOptions);
     } else if (targetStatus === 'CHECKED_IN') {
       // Second check-in path. The dedicated POST :id/check-in route validated coordinates, but
       // this one still defaulted to New Delhi (28.6315, 77.2167) — so the same fabricated
@@ -639,7 +675,15 @@ export class AssignmentController {
         throw new BadRequestException('Check-in needs your location. Turn on location for the app and try again.');
       }
       const accuracy = Number.isFinite(Number(body.accuracy)) ? Number(body.accuracy) : undefined;
-      const checkInRes = await this.assignmentService.recordCheckIn(id, lat, lng, body.syncToken, userId, accuracy);
+      const checkInRes = await this.assignmentService.recordCheckIn(
+        id,
+        lat,
+        lng,
+        body.syncToken,
+        userId,
+        accuracy,
+        cmdOptions,
+      );
       /**
        * A refused check-in is a failure, on this route too.
        *
@@ -673,7 +717,7 @@ export class AssignmentController {
        * Deliberately carries no side effects. It does not book, schedule or price anything; the
        * money chain still turns on COMPLETED alone.
        */
-      assignment = await this.assignmentService.startWork(id, userId, body.reason ?? body.remarks);
+      assignment = await this.assignmentService.startWork(id, userId, body.reason ?? body.remarks, cmdOptions);
     } else if (targetStatus === 'CANCELLED') {
       /**
        * Same rule as REJECTED just above, and for the same reason: without it,
@@ -687,9 +731,9 @@ export class AssignmentController {
           'A reason is required when cancelling an assignment — it stays on the record for whoever looks at this branch next.',
         );
       }
-      assignment = await this.assignmentService.cancelAssignment(id, userId, cancelReason);
+      assignment = await this.assignmentService.cancelAssignment(id, userId, cancelReason, cmdOptions);
     } else if (targetStatus === 'COMPLETED') {
-      assignment = await this.assignmentService.completeAssignment(id, userId, body.reason ?? body.remarks);
+      assignment = await this.assignmentService.completeAssignment(id, userId, body.reason ?? body.remarks, cmdOptions);
     } else {
       throw new BadRequestException(`Invalid transition: ${targetStatus}.`);
     }
@@ -697,6 +741,183 @@ export class AssignmentController {
       success: true,
       data: assignment,
     };
+  }
+
+  @Post(':id/accept')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
+  @ApiOperation({ summary: 'Domain Command: Accept assignment offer' })
+  async accept(
+    @Param('id') id: string,
+    @Body() body: any,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertAssignmentInScope(id, scope);
+    const userId = req.user.id;
+    const callerRoles: string[] = (req.user?.roles ?? [])
+      .map((r: any) => (typeof r === 'string' ? r : r?.name))
+      .filter(Boolean);
+    const callerIsAssayer = callerRoles.includes(SystemRole.ASSAYER);
+    if (callerIsAssayer) {
+      const owned = await this.assignmentService.findOne(id);
+      if (!owned || owned.assayerId !== userId) {
+        throw new ForbiddenException('You can only accept an assignment that is assigned to you.');
+      }
+    }
+    const deskSuppliedFee = callerIsAssayer ? undefined : (body?.fee ?? body?.agreedFee);
+    const assignment = await this.assignmentService.acceptOffer(
+      id,
+      userId,
+      deskSuppliedFee != null && !isNaN(Number(deskSuppliedFee)) ? Number(deskSuppliedFee) : undefined,
+      body?.reason ?? body?.remarks,
+      {
+        expectedVersion: body?.expectedVersion != null ? Number(body.expectedVersion) : undefined,
+        clientRequestId: body?.clientRequestId,
+      },
+    );
+    return { success: true, data: assignment };
+  }
+
+  @Post(':id/reject')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
+  @ApiOperation({ summary: 'Domain Command: Reject assignment offer' })
+  async reject(
+    @Param('id') id: string,
+    @Body() body: any,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertAssignmentInScope(id, scope);
+    const userId = req.user.id;
+    const callerRoles: string[] = (req.user?.roles ?? [])
+      .map((r: any) => (typeof r === 'string' ? r : r?.name))
+      .filter(Boolean);
+    const callerIsAssayer = callerRoles.includes(SystemRole.ASSAYER);
+    if (callerIsAssayer) {
+      const owned = await this.assignmentService.findOne(id);
+      if (!owned || owned.assayerId !== userId) {
+        throw new ForbiddenException('You can only reject an assignment that is assigned to you.');
+      }
+    }
+    const rejectReason = (body?.reason ?? body?.remarks ?? '').trim();
+    if (!rejectReason) {
+      throw new BadRequestException('A reason is required when declining an assignment.');
+    }
+    const assignment = await this.assignmentService.rejectOffer(id, userId, rejectReason, {
+      expectedVersion: body?.expectedVersion != null ? Number(body.expectedVersion) : undefined,
+      clientRequestId: body?.clientRequestId,
+    });
+    return { success: true, data: assignment };
+  }
+
+  @Post(':id/cancel')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @ApiOperation({ summary: 'Domain Command: Cancel assignment' })
+  async cancel(
+    @Param('id') id: string,
+    @Body() body: any,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertAssignmentInScope(id, scope);
+    const userId = req.user.id;
+    const cancelReason = (body?.reason ?? body?.remarks ?? '').trim();
+    if (!cancelReason) {
+      throw new BadRequestException('A reason is required when cancelling an assignment.');
+    }
+    const assignment = await this.assignmentService.cancelAssignment(id, userId, cancelReason, {
+      expectedVersion: body?.expectedVersion != null ? Number(body.expectedVersion) : undefined,
+      clientRequestId: body?.clientRequestId,
+    });
+    return { success: true, data: assignment };
+  }
+
+  @Post(':id/start')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.ASSAYER)
+  @ApiOperation({ summary: 'Domain Command: Start work on site' })
+  async start(
+    @Param('id') id: string,
+    @Body() body: any,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertAssignmentInScope(id, scope);
+    const userId = req.user.id;
+    const callerRoles: string[] = (req.user?.roles ?? [])
+      .map((r: any) => (typeof r === 'string' ? r : r?.name))
+      .filter(Boolean);
+    const callerIsAssayer = callerRoles.includes(SystemRole.ASSAYER);
+    if (callerIsAssayer) {
+      const owned = await this.assignmentService.findOne(id);
+      if (!owned || owned.assayerId !== userId) {
+        throw new ForbiddenException('You can only start an assignment that is assigned to you.');
+      }
+    }
+    const assignment = await this.assignmentService.startWork(id, userId, body?.reason ?? body?.remarks, {
+      expectedVersion: body?.expectedVersion != null ? Number(body.expectedVersion) : undefined,
+      clientRequestId: body?.clientRequestId,
+    });
+    return { success: true, data: assignment };
+  }
+
+  @Post(':id/complete')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @ApiOperation({ summary: 'Domain Command: Complete assignment' })
+  async complete(
+    @Param('id') id: string,
+    @Body() body: any,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertAssignmentInScope(id, scope);
+    const userId = req.user.id;
+    const assignment = await this.assignmentService.completeAssignment(id, userId, body?.reason ?? body?.remarks, {
+      expectedVersion: body?.expectedVersion != null ? Number(body.expectedVersion) : undefined,
+      clientRequestId: body?.clientRequestId,
+    });
+    return { success: true, data: assignment };
+  }
+
+  @Post(':id/reassign')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @ApiOperation({ summary: 'Domain Command: Reassign assignment to a new assayer with historical lineage' })
+  async reassign(
+    @Param('id') id: string,
+    @Body() body: { newAssayerId: string; reason: string; expectedVersion?: number; clientRequestId?: string },
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertAssignmentInScope(id, scope);
+    if (!body?.newAssayerId?.trim()) {
+      throw new BadRequestException('newAssayerId is required for reassignment.');
+    }
+    if (!body?.reason?.trim()) {
+      throw new BadRequestException('A reason is required when reassigning work.');
+    }
+    const userId = req.user.id;
+    const assignment = await this.assignmentService.reassignAssignment(
+      id,
+      body.newAssayerId.trim(),
+      userId,
+      body.reason.trim(),
+      {
+        expectedVersion: body.expectedVersion != null ? Number(body.expectedVersion) : undefined,
+        clientRequestId: body.clientRequestId,
+      },
+    );
+    return { success: true, data: assignment };
+  }
+
+  @Get(':id/reassignments')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR)
+  @ApiOperation({ summary: 'Get complete historical reassignment lineage for an assignment' })
+  async getReassignments(
+    @Param('id') id: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertAssignmentInScope(id, scope);
+    const history = await this.assignmentService.getReassignmentHistory(id);
+    return { success: true, data: history };
   }
 
   /**
@@ -710,7 +931,7 @@ export class AssignmentController {
   @ApiOperation({ summary: 'Reopen a completed assignment, voiding the payable it booked' })
   async reopen(
     @Param('id', ParseUUIDPipe) id: string,
-    @Body() body: { reason?: string },
+    @Body() body: { reason?: string; expectedVersion?: number; clientRequestId?: string },
     @Req() req: any,
     @GlobalScopeFilter() scope?: GlobalScope,
   ) {
@@ -718,7 +939,10 @@ export class AssignmentController {
     // enforces, so a region-restricted operator cannot reopen an out-of-region completed assignment.
     await this.regionGuard.assertAssignmentInScope(id, scope);
     const userId = req.user.id;
-    const assignment = await this.assignmentService.reopen(id, userId, body?.reason ?? '');
+    const assignment = await this.assignmentService.reopen(id, userId, body?.reason ?? '', {
+      expectedVersion: body?.expectedVersion != null ? Number(body.expectedVersion) : undefined,
+      clientRequestId: body?.clientRequestId,
+    });
     return {
       success: true,
       data: assignment,
