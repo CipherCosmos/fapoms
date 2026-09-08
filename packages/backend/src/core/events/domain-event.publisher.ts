@@ -3,7 +3,8 @@ import { randomUUID } from 'crypto';
 import type { Redis } from 'ioredis';
 import { REDIS_CLIENT } from '../../infrastructure/redis/redis-client.module';
 
-export type EventCallback = (eventName: string, payload: any) => void;
+export type EventCallback = (eventName: string, payload: any) => any;
+export type EventListener = (payload: any) => any;
 
 /** Channel every process publishes domain events to and subscribes on. One channel, not one per event name. */
 const CHANNEL = 'fapoms:domain-events';
@@ -57,7 +58,7 @@ interface EventEnvelope {
 @Injectable()
 export class DomainEventPublisher implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger('DomainEventPublisher');
-  private listeners: Record<string, ((payload: any) => void)[]> = {};
+  private listeners: Record<string, EventListener[]> = {};
   private globalCallbacks: EventCallback[] = [];
 
   /** Unique per process, so a message this process sent can be told apart from one it merely received. */
@@ -99,7 +100,7 @@ export class DomainEventPublisher implements OnModuleInit, OnModuleDestroy {
     this.globalCallbacks.push(callback);
   }
 
-  subscribe(eventName: string, callback: (payload: any) => void) {
+  subscribe(eventName: string, callback: EventListener) {
     if (!this.listeners[eventName]) {
       this.listeners[eventName] = [];
     }
@@ -107,12 +108,24 @@ export class DomainEventPublisher implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Deliver locally, then hand the same event to Redis so other processes see it too.
+   * Deliver locally, awaiting any promise-returning listeners, then hand the same event to Redis.
    *
-   * The local delivery is unconditional and synchronous, matching the pre-bridge behaviour
-   * exactly. The Redis publish is fire-and-forget: nothing here awaits it, and a failure is
-   * logged rather than thrown, because a caller of `publish()` must never fail because the
-   * cross-process bridge (an optimisation for OTHER replicas) had trouble.
+   * Crucial for durable outbox dispatch: if a subscriber (e.g. durable queue enqueue) throws or rejects,
+   * publishAsync rethrows so the UnitOfWork fast-path or OutboxRelay does NOT mark the outbox record
+   * as dispatched!
+   */
+  async publishAsync(eventName: string, payload: any): Promise<void> {
+    await this.deliverLocallyAsync(eventName, payload);
+
+    if (!this.redisClient) return;
+    const envelope: EventEnvelope = { originId: this.originId, eventName, payload };
+    this.redisClient.publish(CHANNEL, JSON.stringify(envelope)).catch((err: any) => {
+      this.logger.warn(`Could not publish ${eventName} to ${CHANNEL}: ${err?.message}`);
+    });
+  }
+
+  /**
+   * Synchronous / fire-and-forget publish.
    */
   publish(eventName: string, payload: any) {
     this.deliverLocally(eventName, payload);
@@ -124,12 +137,29 @@ export class DomainEventPublisher implements OnModuleInit, OnModuleDestroy {
     });
   }
 
+  /** The listener/global-callback fan-out with Promise awaiting. Rethrows subscriber errors. */
+  private async deliverLocallyAsync(eventName: string, payload: any): Promise<void> {
+    const list = this.listeners[eventName] || [];
+    for (const cb of list) {
+      await cb(payload);
+    }
+
+    for (const cb of this.globalCallbacks) {
+      await cb(eventName, payload);
+    }
+  }
+
   /** The listener/global-callback fan-out. Shared by a local publish() and a remote message. */
   private deliverLocally(eventName: string, payload: any): void {
     const list = this.listeners[eventName] || [];
     for (const cb of list) {
       try {
-        cb(payload);
+        const res = cb(payload);
+        if (res && typeof (res as Promise<any>).catch === 'function') {
+          (res as Promise<any>).catch((err) => {
+            this.logger.error(`Error handling async event ${eventName}`, err);
+          });
+        }
       } catch (err) {
         console.error(`Error handling event ${eventName}`, err);
       }
@@ -137,7 +167,12 @@ export class DomainEventPublisher implements OnModuleInit, OnModuleDestroy {
 
     for (const cb of this.globalCallbacks) {
       try {
-        cb(eventName, payload);
+        const res = cb(eventName, payload);
+        if (res && typeof (res as Promise<any>).catch === 'function') {
+          (res as Promise<any>).catch((err) => {
+            this.logger.error(`Error in global async callback for event ${eventName}`, err);
+          });
+        }
       } catch (err) {
         console.error(`Error in global callback for event ${eventName}`, err);
       }

@@ -1,6 +1,7 @@
 import { Entity, Column, Index } from 'typeorm';
 import { BaseEntity } from '../../core/entities/base.entity';
 import { AssayerPayableStatus } from '@fapoms/shared';
+import { encryptedColumn } from '../../infrastructure/security/field-encryption';
 
 /**
  * What we owe an assayer for one assignment — the assayer-side line.
@@ -124,4 +125,23 @@ export class AssayerPayableEntity extends BaseEntity {
 
   @Column({ type: 'text', nullable: true })
   remarks: string | null;
+
+  // ── Destination Snapshot for Outbound Payouts (Frozen before consumption) ─
+  @Column({ name: 'destination_bank_account_number', type: 'text', nullable: true, transformer: encryptedColumn })
+  destinationBankAccountNumber: string | null;
+
+  @Column({ name: 'destination_ifsc', type: 'varchar', length: 20, nullable: true })
+  destinationIfsc: string | null;
+
+  @Column({ name: 'destination_bank_name', type: 'varchar', length: 150, nullable: true })
+  destinationBankName: string | null;
+
+  @Column({ name: 'destination_account_holder_name', type: 'varchar', length: 200, nullable: true })
+  destinationAccountHolderName: string | null;
+
+  @Column({ name: 'payout_evidence_version_id', type: 'uuid', nullable: true })
+  payoutEvidenceVersionId: string | null;
+
+  @Column({ name: 'destination_verified_at', type: 'timestamptz', nullable: true })
+  destinationVerifiedAt: Date | null;
 }

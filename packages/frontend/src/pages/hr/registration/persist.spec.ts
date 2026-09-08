@@ -23,12 +23,16 @@ jest.mock('../../../services/api', () => ({ api: { request: jest.fn() } }));
 const nothing = { workingHours: null, certifications: null };
 
 describe('creating the record', () => {
-  it('sends the three required fields and nothing that is blank', () => {
+  it('sends the two required fields and nothing that is blank', () => {
+    // The India-first naming fix: one authored `fullName`, not a rebuilt first/last pair — see
+    // `FULL_NAME_FIELD` in AssayerForms.tsx. `REGISTRATION_FIELDS` no longer carries `firstName`/
+    // `lastName` at all, so this is also this suite's own proof that a stray one cannot leak
+    // back into the create body through `fields` without this test catching it.
     const body = buildCreateBody(REGISTRATION_FIELDS, {
-      firstName: 'Ramesh', lastName: 'Iyer', state: 'Kerala',
+      fullName: 'Ramesh Iyer', state: 'Kerala',
       assayerCode: '', email: '', phone: '', joiningDate: '', notes: '',
     });
-    expect(body).toEqual({ firstName: 'Ramesh', lastName: 'Iyer', state: 'Kerala' });
+    expect(body).toEqual({ fullName: 'Ramesh Iyer', state: 'Kerala' });
   });
 
   it('keeps the defaults the step opens with, which a dirty diff would have dropped', () => {

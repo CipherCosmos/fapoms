@@ -5,9 +5,11 @@ import {
   ConflictException,
   Logger,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, In, IsNull, EntityManager } from 'typeorm';
+import { BillingJobsService } from './billing-jobs.service';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { isUniqueViolation } from '../../infrastructure/database/unique-violation';
 import { BillingEntryEntity } from './billing-entry.entity';
@@ -20,6 +22,7 @@ import { BillingHistoryEntity } from './history.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ProjectEntity } from '../project/project.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
+import { AssayerDocumentEntity } from '../assayer/assayer-document.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
@@ -49,6 +52,8 @@ import {
   gstStateCodeToName,
   resolveGstStateCode,
   numberToIndianWords,
+  OnboardingDocument,
+  DocumentVerification,
 } from '@fapoms/shared';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import {
@@ -186,6 +191,7 @@ export class BillingEngineService implements OnModuleInit {
     private readonly uow: UnitOfWork,
     private readonly notificationDispatch: NotificationDispatchService,
     private readonly settings: PlatformSettingsService,
+    @Optional() private readonly billingJobs?: BillingJobsService,
   ) {}
 
   // -----------------------------------------------------------------------
@@ -197,21 +203,24 @@ export class BillingEngineService implements OnModuleInit {
       if (payload?.newState !== AssignmentStatus.COMPLETED) return;
       const assignmentId = payload?.assignmentId;
       if (!assignmentId) return;
-      // Serialise concurrent bookings of the SAME assignment across replicas. Fail-open: if
-      // Redis is unavailable the two unique indexes are the backstop — the loser re-reads the
-      // winner's rows and reports them.
-      await this.cache.withLock(`lock:billing:book:${assignmentId}`, 30, async () => {
-        try {
-          const result = await this.bookAssignment(assignmentId);
-          if (result.booked) {
-            this.logger.log(`Booked assignment ${assignmentId}: entry ${result.entryId}, payable ${result.payableId}.`);
-          } else if (result.reason && result.reason !== 'already booked') {
-            this.logger.warn(`Assignment ${assignmentId} completed but was not booked: ${result.reason}.`);
-          }
-        } catch (err) {
-          this.logger.error(`Booking failed for assignment ${assignmentId}: ${(err as Error).message}`);
-        }
-      });
+
+      // Authoritative durable path: enqueue to Bull queue so billing processing is asynchronous,
+      // retried with exponential backoff on transient failures, visible in DLQ, and
+      // completely decouples assignment completion from transient billing failures.
+      if (!this.billingJobs) {
+        const msg = `BillingJobsService not available to enqueue billing job for assignment ${assignmentId}`;
+        this.logger.error(msg);
+        throw new Error(msg);
+      }
+
+      try {
+        await this.billingJobs.enqueueBookAssignment(assignmentId, payload?.userId, payload?.outboxEventId);
+      } catch (err) {
+        this.logger.error(
+          `Failed to enqueue billing job for assignment ${assignmentId}: ${(err as Error).message}`,
+        );
+        throw err;
+      }
     });
 
     this.eventPublisher.subscribe('assignment:fee-updated', async (payload: any) => {
@@ -282,7 +291,16 @@ export class BillingEngineService implements OnModuleInit {
           this.entryRepository.findOne({ where: { assignmentId } }),
           this.payableRepository.findOne({ where: { assignmentId, expenseId: IsNull() } }),
         ]);
-        return { booked: false, reason: 'already booked (concurrent)', entryId: entry?.id, payableId: payable?.id };
+        // CRITICAL INVARIANT: Only treat as 'already booked' if BOTH legs exist in the database.
+        // If one leg is missing, this is an inconsistent partial state that MUST NOT be acknowledged
+        // cleanly — re-throw so the job/reconcile retries and finishes repairing the missing leg.
+        if (entry && payable) {
+          return { booked: false, reason: 'already booked (concurrent)', entryId: entry.id, payableId: payable.id };
+        }
+        this.logger.warn(
+          `Unique violation on ${assignmentId} caught during booking, but database is in partial state (entry=${Boolean(entry)}, payable=${Boolean(payable)}). Re-throwing for repair.`,
+        );
+        throw err;
       }
       throw err;
     }
@@ -452,6 +470,43 @@ export class BillingEngineService implements OnModuleInit {
       [since],
     );
     return rows.map((r) => r.id);
+  }
+
+  /**
+   * Find completed assignments that are in an inconsistent PARTIAL financial state:
+   * exactly one leg exists (entry without payable, or payable without entry).
+   *
+   * Used by operations and monitoring to pinpoint data inconsistencies caused by
+   * historical bugs, partial migrations, or legacy records.
+   */
+  async partialFinancialStates(since: string | null = null): Promise<Array<{
+    assignmentId: string;
+    hasEntry: boolean;
+    hasPayable: boolean;
+  }>> {
+    const rows: Array<{ id: string; has_entry: boolean; has_payable: boolean }> =
+      await this.assignmentRepository.manager.query(
+        `SELECT a.id,
+                (e.id IS NOT NULL) AS has_entry,
+                (p.id IS NOT NULL) AS has_payable
+           FROM assignments a
+           LEFT JOIN billing_entries e ON e.assignment_id = a.id
+           LEFT JOIN assayer_payables p ON p.assignment_id = a.id AND p.expense_id IS NULL
+          WHERE a.status = 'COMPLETED'
+            AND (
+              (e.id IS NULL AND p.id IS NOT NULL)
+              OR
+              (e.id IS NOT NULL AND p.id IS NULL)
+            )
+            AND ($1::date IS NULL OR a.completion_date >= $1::date)
+          ORDER BY a.completion_date ASC NULLS LAST, a.created_at ASC`,
+        [since],
+      );
+    return rows.map((r) => ({
+      assignmentId: r.id,
+      hasEntry: r.has_entry,
+      hasPayable: r.has_payable,
+    }));
   }
 
   /**
@@ -912,6 +967,45 @@ export class BillingEngineService implements OnModuleInit {
       const assignment = await m.findOne(AssignmentEntity, { where: { id: p.assignmentId } });
       await this.assertSegregationOfDuties(userId, assignment?.createdBy, `book assignment ${p.assignmentId} and also approve its payout`);
     }
+
+    // Freeze immutable payout banking destination snapshot BEFORE approval commits
+    if (p.assayerId) {
+      const assayer = await m.findOne(AssayerEntity, {
+        where: { id: p.assayerId },
+        lock: { mode: 'pessimistic_read' },
+      });
+
+      if (!assayer || !assayer.bankAccountNumber?.trim() || !assayer.ifscCode?.trim()) {
+        throw new BadRequestException(
+          `Cannot approve payout ${p.payableNumber}: Assayer ${assayer?.assayerCode || p.assayerId} is missing bank account or IFSC details. Banking destination is mandatory for payout approval.`,
+        );
+      }
+      if (!assayer.panNumber?.trim()) {
+        throw new BadRequestException(
+          `Cannot approve payout ${p.payableNumber}: Assayer ${assayer?.assayerCode || p.assayerId} is missing PAN. Statutory compliance requires PAN before payout approval.`,
+        );
+      }
+
+      // Check for verified bank passbook document version
+      const bankDoc = await m.findOne(AssayerDocumentEntity, {
+        where: {
+          assayerId: p.assayerId,
+          requirement: OnboardingDocument.BANK_PASSBOOK,
+          isActive: true,
+        },
+      });
+
+      const isVerifiedDoc = bankDoc?.verificationStatus === DocumentVerification.VERIFIED;
+      p.destinationBankAccountNumber = assayer.bankAccountNumber.trim();
+      p.destinationIfsc = assayer.ifscCode.trim().toUpperCase();
+      p.destinationBankName = assayer.bankName?.trim() ?? null;
+      p.destinationAccountHolderName = assayer.legalName?.trim() || assayer.displayName?.trim() || null;
+      p.payoutEvidenceVersionId = isVerifiedDoc ? (bankDoc.currentVersionId ?? null) : null;
+      p.destinationVerifiedAt = isVerifiedDoc
+        ? (bankDoc.verifiedAt ?? new Date())
+        : (assayer.identityVerifiedAt ?? new Date());
+    }
+
     p.status = AssayerPayableStatus.APPROVED;
     p.approvedAt = new Date();
     p.approvedBy = userId;
@@ -1287,6 +1381,73 @@ export class BillingEngineService implements OnModuleInit {
             : `${payable.payableNumber} has not been approved yet.`,
         );
       }
+
+      // Operational KYC boundary & Destination Snapshot:
+      // Payout disbursement strictly consumes the frozen destination snapshot from the payable.
+      let destinationSnapshot = {
+        destinationBankAccountNumber: payable.destinationBankAccountNumber ?? null,
+        destinationIfsc: payable.destinationIfsc ?? null,
+        destinationBankName: payable.destinationBankName ?? null,
+        destinationAccountHolderName: payable.destinationAccountHolderName ?? null,
+        payoutEvidenceVersionId: payable.payoutEvidenceVersionId ?? null,
+        destinationVerifiedAt: payable.destinationVerifiedAt ?? null,
+      };
+
+      // If payable was approved prior to frozen schema, freeze snapshot under lock now
+      if (!destinationSnapshot.destinationBankAccountNumber || !destinationSnapshot.destinationIfsc) {
+        if (payable.assayerId) {
+          const assayer = await m.findOne(AssayerEntity, {
+            where: { id: payable.assayerId },
+            lock: { mode: 'pessimistic_read' },
+          });
+
+          if (assayer) {
+            if (!assayer.bankAccountNumber?.trim() || !assayer.ifscCode?.trim()) {
+              throw new BadRequestException(
+                `Cannot disburse payout ${payable.payableNumber}: Assayer ${assayer.assayerCode || payable.assayerId} is missing bank account or IFSC details. Operational payout safety boundary blocked disbursement.`,
+              );
+            }
+            if (!assayer.panNumber?.trim()) {
+              throw new BadRequestException(
+                `Cannot disburse payout ${payable.payableNumber}: Assayer ${assayer.assayerCode || payable.assayerId} is missing PAN. Indian statutory compliance requires PAN before disbursement.`,
+              );
+            }
+
+            const bankDoc = await m.findOne(AssayerDocumentEntity, {
+              where: {
+                assayerId: payable.assayerId,
+                requirement: OnboardingDocument.BANK_PASSBOOK,
+                isActive: true,
+              },
+            });
+
+            const isVerifiedDoc = bankDoc?.verificationStatus === DocumentVerification.VERIFIED;
+            const payoutEvidenceVersionId = isVerifiedDoc ? (bankDoc.currentVersionId ?? null) : null;
+            const destinationVerifiedAt = isVerifiedDoc
+              ? (bankDoc.verifiedAt ?? new Date())
+              : (assayer.identityVerifiedAt ?? new Date());
+
+            destinationSnapshot = {
+              destinationBankAccountNumber: assayer.bankAccountNumber.trim(),
+              destinationIfsc: assayer.ifscCode.trim().toUpperCase(),
+              destinationBankName: assayer.bankName?.trim() ?? null,
+              destinationAccountHolderName: assayer.legalName?.trim() || assayer.displayName?.trim() || null,
+              payoutEvidenceVersionId,
+              destinationVerifiedAt,
+            };
+
+            // Freeze onto payable record
+            payable.destinationBankAccountNumber = destinationSnapshot.destinationBankAccountNumber;
+            payable.destinationIfsc = destinationSnapshot.destinationIfsc;
+            payable.destinationBankName = destinationSnapshot.destinationBankName;
+            payable.destinationAccountHolderName = destinationSnapshot.destinationAccountHolderName;
+            payable.payoutEvidenceVersionId = destinationSnapshot.payoutEvidenceVersionId;
+            payable.destinationVerifiedAt = destinationSnapshot.destinationVerifiedAt;
+            await m.save(payable);
+          }
+        }
+      }
+
       await this.assertSegregationOfDuties(userId, payable.approvedBy, `approve payout ${payable.payableNumber} and also pay it`);
       const outstanding = round2(Number(payable.totalAmount) - Number(payable.paidAmount));
       if (outstanding <= 0) throw new ConflictException(`${payable.payableNumber} is already fully paid.`);
@@ -1322,6 +1483,12 @@ export class BillingEngineService implements OnModuleInit {
         runningBalance: balance,
         invoiceId: null,
         notes: dto.notes ?? null,
+        destinationBankAccountNumber: destinationSnapshot.destinationBankAccountNumber,
+        destinationIfsc: destinationSnapshot.destinationIfsc,
+        destinationBankName: destinationSnapshot.destinationBankName,
+        destinationAccountHolderName: destinationSnapshot.destinationAccountHolderName,
+        payoutEvidenceVersionId: destinationSnapshot.payoutEvidenceVersionId,
+        destinationVerifiedAt: destinationSnapshot.destinationVerifiedAt,
         createdBy: userId,
         updatedBy: userId,
       });
@@ -2605,15 +2772,17 @@ export class BillingEngineService implements OnModuleInit {
 
     const rows = payable.map((p) => {
       const a = byAssayer.get(p.assayerId);
-      const account = a?.bankAccountNumber ?? null;
-      const ifsc = a?.ifscCode ?? null;
+      // Strictly consume frozen destination banking details from payable snapshot — NEVER from live mutable assayer fields
+      const account = p.destinationBankAccountNumber ?? null;
+      const ifsc = p.destinationIfsc ?? null;
+      const beneficiaryName = p.destinationAccountHolderName ?? a?.displayName ?? null;
       return {
         payableId: p.id,
         payableNumber: p.payableNumber,
         assignmentNumber: null as string | null, // filled below from a names lookup
         assayerName: a?.displayName ?? null,
         assayerCode: a?.assayerCode ?? null,
-        beneficiaryName: a?.displayName ?? null,
+        beneficiaryName,
         accountNumber: account,
         ifsc,
         pan: a?.panNumber ?? null,

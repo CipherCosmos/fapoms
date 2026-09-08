@@ -1,33 +1,59 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   User, MapPin, CreditCard, FileText, Users, Building2, ClipboardCheck,
-  Check, ChevronLeft, ChevronRight, X, AlertTriangle, Plus, Phone,
+  Check, ChevronLeft, ChevronRight, AlertTriangle, Plus, Phone,
 } from 'lucide-react';
-import { Modal, AlertBanner, Select, useToast } from '../../../components/ui';
+import { AlertBanner, Select, StatusBadge, PageHeader, useToast, useConfirm } from '../../../components/ui';
 import { PinCoordinateControl } from '../../../components/PinCoordinateControl';
 import { useWorkforceVocabulary } from '../../../hooks/useWorkforceVocabulary';
 import { api } from '../../../services/api';
 import { userMessage } from '../../../services/errors';
-import { useViewParam } from '../hr-ui';
 import { useCurrentRoles, canManageAssayers } from '../../../hooks/useCurrentRoles';
 import {
   renderFormField, resolvePincode, addressConflict, resolveIfsc, useHrOwnerOptions,
-  type FieldDef, type IfscInfo,
+  type FieldDef, type IfscInfo, type DuplicateMatch,
 } from '../AssayerForms';
 import { isSensitiveKey } from '../assayer-shared';
 import { SensitiveValue } from '../SensitiveValue';
 import {
   REGISTRATION_FIELDS, RATE_FIELDS, REGISTRATION_STEPS, REGISTRATION_STEP_KEYS,
   STEP_FIELDS, activationGaps, firstIncompleteStep, isPlannableForSomeone, validateStep,
-  type RegistrationStepKey,
+  mappedFieldsFromError, type RegistrationStepKey,
 } from './steps';
 import {
   useDossier, useRegistration, type DossierEmpanelment, type DossierReference,
 } from './useRegistration';
+import { useDuplicateCheck, type DuplicateCheckKey } from './useDuplicateCheck';
 import { DocumentsStep } from './DocumentsStep';
 import { ClientsStep } from './ClientsStep';
 import { relationshipOptions } from '../reference-vocabulary';
+
+/**
+ * Collapses the vertical step rail to a horizontal scroller once the page cannot hold rail and
+ * content side by side — the same pattern `Projects.tsx` already uses for its own table/detail
+ * split, copied rather than re-invented.
+ */
+const useIsNarrow = (max = 880): boolean => {
+  const [narrow, setNarrow] = useState(
+    typeof window !== 'undefined' ? window.innerWidth <= max : false,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia(`(max-width: ${max}px)`);
+    const handler = () => setNarrow(mq.matches);
+    handler();
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, [max]);
+  return narrow;
+};
+
+/** Steps whose Continue button actually writes to the record — the other three (documents, clients,
+ * review) file through their own endpoints as they go and have nothing of their own to commit. */
+const SAVES_TO_RECORD: readonly RegistrationStepKey[] = ['person', 'address', 'identity', 'people'];
+
+/** The three boxes this step checks against the roster as the clerk types them. */
+const DUPLICATE_CHECK_FIELDS: readonly DuplicateCheckKey[] = ['phone', 'panNumber', 'aadhaarNumber'];
 
 /**
  * Registering an assayer, from the desk, end to end.
@@ -115,41 +141,73 @@ const Block: React.FC<{
  * step here is a real button with its own name, so it is reachable directly and readable by a
  * screen reader as what it is; the tick means the record has been saved past that point, not that
  * the step is "complete", because almost nothing in a registration is compulsory.
+ *
+ * Every step is reachable the moment the page opens. It used to disable every button past the
+ * first until the record existed, on the reasoning that there was nothing there yet to look at —
+ * but LOOKING at "Papers and scans" or "Who they can work for" costs nothing, and a clerk who
+ * wanted to see what was coming, or who arrived here from a link to a step they had already
+ * started, met a wall of greyed-out buttons and a tooltip instead. What still waits on the record
+ * existing is SAVING one of these steps, not reading it — see `SAVES_TO_RECORD` and the inline
+ * note each such step shows for itself.
  */
 const StepRail: React.FC<{
   current: RegistrationStepKey;
   furthest: number;
   onGo: (key: RegistrationStepKey) => void;
-  disabledAfterFirst: boolean;
-}> = ({ current, furthest, onGo, disabledAfterFirst }) => {
+  /** Vertical list on a normal-width screen; a horizontal scroller once it cannot fit beside the content. */
+  narrow: boolean;
+}> = ({ current, furthest, onGo, narrow }) => {
   const currentIndex = REGISTRATION_STEP_KEYS.indexOf(current);
   return (
-    <nav aria-label="Registration steps" style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+    <nav
+      aria-label="Registration steps"
+      style={{
+        display: 'flex', gap: '6px', flexShrink: 0,
+        flexDirection: narrow ? 'row' : 'column',
+        overflowX: narrow ? 'auto' : 'visible',
+        paddingBottom: narrow ? '4px' : 0,
+        width: narrow ? '100%' : '230px',
+        // Pinned to the top of the page's own scroll area on a normal-width screen, so the
+        // rail — the only way to see which step you're on or jump to another — stays in view
+        // while a long step (21 documents, say) scrolls past beside it. Left out on the narrow
+        // layout: there it is a horizontal strip ABOVE the content, not a sidebar beside it, and
+        // pinning it there would permanently claim a strip of a phone's much scarcer height.
+        ...(narrow ? {} : { position: 'sticky' as const, top: 0 }),
+      }}
+    >
       {REGISTRATION_STEPS.map((step, i) => {
         const active = step.key === current;
         const done = i < furthest;
-        const locked = disabledAfterFirst && i > 0;
         return (
           <button
             key={step.key}
             type="button"
             onClick={() => onGo(step.key)}
-            disabled={locked}
             aria-current={active ? 'step' : undefined}
-            title={locked ? 'Save their name and state first — the rest is filed against their record.' : step.caption}
+            title={step.caption}
             style={{
-              display: 'inline-flex', alignItems: 'center', gap: '6px',
-              padding: '6px 12px', fontSize: '12px', fontWeight: active ? 700 : 600,
-              borderRadius: 'var(--radius-full)', cursor: locked ? 'not-allowed' : 'pointer',
+              display: 'flex', alignItems: 'center', gap: '8px', textAlign: 'left',
+              padding: narrow ? '9px 14px' : '10px 12px', fontSize: '13px', fontWeight: active ? 700 : 600,
+              borderRadius: 'var(--radius-md)', cursor: 'pointer',
               border: `1px solid ${active ? 'var(--accent)' : 'var(--border-color)'}`,
               background: active ? 'var(--status-pending-bg)' : 'var(--bg-surface-2)',
               color: active ? 'var(--accent)' : done ? 'var(--success)' : 'var(--text-secondary)',
-              opacity: locked ? 0.5 : 1,
+              flexShrink: 0, whiteSpace: narrow ? 'nowrap' : 'normal', width: narrow ? 'auto' : '100%',
             }}
           >
-            <span aria-hidden style={{ display: 'inline-flex' }}>
-              {done && !active ? <Check size={14} /> : STEP_ICONS[step.key]}
-            </span>
+            {done && !active ? (
+              <StatusBadge
+                variant="tag"
+                size="sm"
+                color="var(--success)"
+                bg="color-mix(in srgb, var(--success) 16%, transparent)"
+                icon={<Check size={11} aria-hidden />}
+                title="Saved"
+                style={{ padding: '4px', minHeight: 'auto', boxShadow: 'none', border: 'none' }}
+              />
+            ) : (
+              <span aria-hidden style={{ display: 'inline-flex', flexShrink: 0 }}>{STEP_ICONS[step.key]}</span>
+            )}
             <span>{i + 1}. {step.title}</span>
           </button>
         );
@@ -202,7 +260,9 @@ const ReferencesBlock: React.FC<{
   };
 
   const inputStyle: React.CSSProperties = {
-    padding: '9px 11px', fontSize: '13px', background: 'var(--bg-page)',
+    // `--bg-input`, not `--bg-page` — the two render identically in the dark themes, which is
+    // why this box used to be invisible against the page it sits directly on.
+    padding: '9px 11px', fontSize: '13px', background: 'var(--bg-input)',
     border: '1px solid var(--border-color)', borderRadius: 'var(--radius-md)',
     color: 'var(--text-primary)', outline: 'none', width: '100%', boxSizing: 'border-box',
   };
@@ -282,7 +342,11 @@ const ReviewStep: React.FC<{
   onGo: (step: RegistrationStepKey) => void;
 }> = ({ record, scannedCount, requirementCount, standings, onGo }) => {
   const gaps = activationGaps(record);
-  const name = [record?.firstName, record?.lastName].filter(Boolean).join(' ').trim();
+  // The record's own authored truth, not a rebuild from the retired first/last pair — see the
+  // India-first naming note on `FULL_NAME_FIELD` in AssayerForms.tsx. `displayName` is what the
+  // server stores verbatim from whatever `fullName` a save sent, so it is the one place on this
+  // page that always matches the card, single-token names and Tamil initials included.
+  const name = (record?.displayName || '').trim();
   const plannable = isPlannableForSomeone(standings);
 
   return (
@@ -294,6 +358,22 @@ const ReviewStep: React.FC<{
         <div style={{ fontSize: '13px', fontWeight: 700, color: 'var(--success)', display: 'flex', alignItems: 'center', gap: '7px' }}>
           <Check size={15} /> {name || 'This person'} is on the roster
         </div>
+        {/*
+          * Named once, in the exact words the desk is meant to trust it in.
+          *
+          * Everywhere above this line "the name" is whatever reads best in a sentence — "Ramesh
+          * Iyer is on the roster" — which is right for a headline and wrong for a check: nothing
+          * on this page, until now, said in so many words that what was typed IS what the bank
+          * and TDS filings will be checked against. One labelled row, once, is that confirmation.
+          */}
+        {name && (
+          <div style={{ marginTop: '8px' }}>
+            <div style={{ fontSize: '12px', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+              Full name (as on Aadhaar/PAN)
+            </div>
+            <div style={{ fontSize: '13px', color: 'var(--text-primary)', fontWeight: 600 }}>{name}</div>
+          </div>
+        )}
         <div style={{ fontSize: '13px', color: 'var(--text-secondary)', marginTop: '6px' }}>
           Their code is <strong style={{ fontFamily: 'var(--font-mono, monospace)' }}>{record?.assayerCode || '—'}</strong>.
           {' '}They are waiting to be taken through onboarding on their record, where the stage is moved by hand.
@@ -403,7 +483,29 @@ const linkButtonStyle: React.CSSProperties = {
   color: 'var(--accent-primary)', fontSize: '12px', fontWeight: 600, textDecoration: 'underline',
 };
 
+/**
+ * `?step=` on this page, replaying `hr-ui.tsx`'s `useViewParam` against a param name of its own
+ * rather than importing it. That file's version is hard-coded to `?view=`, which every OTHER HR
+ * page's chip strip already owns; a second consumer of the same key would have this flow jump to
+ * whatever chip a colleague had last open on an entirely different screen sharing the URL by
+ * coincidence. `?step=` is this flow's own vocabulary, so a deep link into a particular page of
+ * somebody's registration — the audit's `firstIncompleteStep` jump among them — cannot collide
+ * with anything else in the section.
+ */
+function useStepParam<K extends string>(keys: readonly K[], fallback: K): [K, (k: K) => void] {
+  const [params, setParams] = useSearchParams();
+  const raw = params.get('step') as K | null;
+  const value = raw && keys.includes(raw) ? raw : fallback;
+  const set = (k: K) => {
+    const next = new URLSearchParams(params);
+    next.set('step', k);
+    setParams(next, { replace: true });
+  };
+  return [value, set];
+}
+
 export const RegistrationWizard: React.FC<{
+  /** Leaving the page — the header's back-link. Confirmed first when the current step is dirty. */
   onClose: () => void;
   /** Called once the clerk finishes, so the roster behind can pick the new person up. */
   onCreated: () => void;
@@ -411,12 +513,15 @@ export const RegistrationWizard: React.FC<{
   resumeAssayerId?: string;
 }> = ({ onClose, onCreated, resumeAssayerId }) => {
   const reg = useRegistration(resumeAssayerId);
+  const navigate = useNavigate();
+  const narrow = useIsNarrow();
+  const { confirm, confirmDialog } = useConfirm();
   // The same pair the `sensitive/:field` route admits, so the reveal control is offered only to
   // somebody whose click can succeed. This flow is already gated on the roster, but a control that
   // hands out a KYC identifier should ask the question itself rather than inherit the answer.
   const canManage = canManageAssayers(useCurrentRoles());
   const { dossier, dossierError, reloadDossier } = useDossier(reg.assayerId);
-  const [step, setStep] = useViewParam<RegistrationStepKey>(REGISTRATION_STEP_KEYS, 'person');
+  const [step, setStep] = useStepParam<RegistrationStepKey>(REGISTRATION_STEP_KEYS, 'person');
   // Loaded only on the step that shows `hrOwnerName` — see `useHrOwnerOptions`.
   const hrOwnerOpts = useHrOwnerOptions(step === 'people');
   const [stepProblems, setStepProblems] = useState<string[]>([]);
@@ -428,10 +533,30 @@ export const RegistrationWizard: React.FC<{
   const { skills, languages, certifications } = useWorkforceVocabulary();
   const vocabulary = { skills, languages, certifications };
   const { toast } = useToast();
+  const dup = useDuplicateCheck(reg.assayerId);
 
   const stepIndex = REGISTRATION_STEP_KEYS.indexOf(step);
   const [furthest, setFurthest] = useState(0);
   useEffect(() => { setFurthest((f) => Math.max(f, stepIndex)); }, [stepIndex]);
+
+  /**
+   * Did the clerk try to move past THIS step? Read by every field on it to decide whether an
+   * empty critical box has earned red ink yet — see `FieldRenderExtras.advanceAttempted` in
+   * AssayerForms.tsx. Reset the moment the step actually changes, so arriving fresh at a new step
+   * never opens already looking like a failed attempt.
+   */
+  const [advanceAttempted, setAdvanceAttempted] = useState(false);
+  useEffect(() => { setAdvanceAttempted(false); }, [step]);
+
+  /** Set by a "Go to field" click, so the field can claim focus once its step has actually mounted. */
+  const [focusField, setFocusField] = useState<string | null>(null);
+  useEffect(() => {
+    if (!focusField) return undefined;
+    const id = `assayer-field-${focusField}`;
+    const raf = requestAnimationFrame(() => { document.getElementById(id)?.focus(); });
+    setFocusField(null);
+    return () => cancelAnimationFrame(raf);
+  }, [focusField, step]);
 
   /**
    * A resumed registration opens where the work stopped, not at page one.
@@ -442,7 +567,7 @@ export const RegistrationWizard: React.FC<{
   const [jumped, setJumped] = useState(false);
   const [params] = useSearchParams();
   useEffect(() => {
-    if (jumped || !resumeAssayerId || !reg.record || params.get('view')) return;
+    if (jumped || !resumeAssayerId || !reg.record || params.get('step')) return;
     setJumped(true);
     setStep(firstIncompleteStep(reg.record));
     // `setStep` writes the query string; including it would re-run this on its own effect.
@@ -482,6 +607,30 @@ export const RegistrationWizard: React.FC<{
     if (result) reg.merge({ bankName: result.bankName });
   };
 
+  /** Leaving the record's own record open in a new tab, offered from a duplicate-match card. */
+  const openDuplicateMatch = async (match: DuplicateMatch) => {
+    if (reg.isDirty(STEP_FIELDS[step])) {
+      const ok = await confirm({
+        title: 'Leave without saving?',
+        message: `Opening ${match.displayName}'s record now leaves whatever has been typed on this `
+          + 'page unsaved.',
+        confirmLabel: 'Leave without saving',
+      });
+      if (!ok) return;
+    }
+    navigate(`/hr/roster/${match.id}`);
+  };
+
+  /** What a field needs beyond its own value — the wizard's attempt flag, and its own duplicate card. */
+  const fieldExtras = (key: string) => ({
+    advanceAttempted,
+    ...(DUPLICATE_CHECK_FIELDS.includes(key as DuplicateCheckKey) ? {
+      duplicateMatches: dup.matchesFor(key as DuplicateCheckKey),
+      onOpenDuplicate: (m: DuplicateMatch) => void openDuplicateMatch(m),
+      onDismissDuplicate: () => dup.dismiss(key as DuplicateCheckKey),
+    } : {}),
+  });
+
   // No `people` argument: the reporting-manager picker is the one field type this flow used it
   // for, and that field is no longer offered at admission — see `NEVER_KEPT` in `steps.ts`. It
   // took a fetch of the whole roster with it. `hrOwnerName` is still offered here, so its own
@@ -491,13 +640,21 @@ export const RegistrationWizard: React.FC<{
     reg.form,
     formSetter,
     vocabulary,
-    (key) => {
-      if (key === 'pincode') void applyPincodeLookup(reg.form.pincode || '');
-      if (key === 'ifscCode') void applyIfscLookup(reg.form.ifscCode || '');
+    (key, value) => {
+      // The CLEANED value, handed straight over rather than re-read from `reg.form` — a pincode
+      // normalised from "682 001" to "682001" on the same blur would otherwise be looked up before
+      // the state update carrying that clean-up had actually landed, and `resolvePincode` refuses
+      // anything that is not exactly six digits.
+      if (key === 'pincode') void applyPincodeLookup(value);
+      if (key === 'ifscCode') void applyIfscLookup(value);
+      if (key === 'phone' || key === 'panNumber' || key === 'aadhaarNumber') {
+        dup.check(key as DuplicateCheckKey, value);
+      }
     },
     undefined,
     { options: hrOwnerOpts.people, failed: hrOwnerOpts.failed },
     ifscInfo,
+    fieldExtras(field.key),
   );
 
   /**
@@ -540,6 +697,7 @@ export const RegistrationWizard: React.FC<{
    * record a legitimate person.
    */
   const leaveStep = async (): Promise<boolean> => {
+    setAdvanceAttempted(true);
     const problems = validateStep(step, reg.form);
     if (problems.length > 0) { setStepProblems(problems); return false; }
     setStepProblems([]);
@@ -549,15 +707,54 @@ export const RegistrationWizard: React.FC<{
     // A state the postal directory places in another state is the one address answer that cannot
     // be saved as typed; the district disagreement below it is normal and saves fine.
     if (step === 'address' && addrNote?.blocking) return false;
+    /**
+     * Nothing to file yet. The rail is unlocked end to end (see `StepRail`), so a clerk can reach
+     * "ID and bank" or "Contacts and pay" before the record exists at all — there is a real record
+     * ID to write to for none of it until step one's own commit creates one. Treated as a harmless
+     * no-op rather than attempting `reg.commit()`, which would either send a create with most of
+     * the form still blank or, worse, one missing the name and state the server insists on and
+     * this step's own boxes cannot supply. The step's inline note says so; the footer's Continue
+     * is additionally disabled here so nothing invites a click that does nothing.
+     */
+    if (step !== 'person' && !reg.assayerId) return true;
     return reg.commit();
   };
 
+  /** Would a save actually do anything right now, on the step being left? */
+  const canSaveCurrentStep = (): boolean => {
+    if (step === 'documents' || step === 'clients' || step === 'review') return false; // nothing of their own to commit
+    if (step === 'address' && addrNote?.blocking) return false; // an unresolved state/pincode conflict
+    if (step === 'person') return validateStep('person', reg.form).length === 0; // needs a name and a state
+    return Boolean(reg.assayerId); // every later step needs the record step one creates
+  };
+
+  /**
+   * The rail: go anywhere, in either direction, always. Backward never needed validating —
+   * the comment this replaced already said as much — and forward is the same now: a rail click
+   * is "let me look at X", not "I am finished with this step", so step one's three required boxes
+   * must not be able to trap a clerk who only wanted to browse ahead. It still saves whatever IS
+   * already valid on the way out, exactly as the footer's Continue would, so nothing typed is
+   * lost by using the rail instead — it just never REFUSES the move the way Continue does.
+   */
   const goTo = async (target: RegistrationStepKey) => {
     if (target === step) return;
     const targetIndex = REGISTRATION_STEP_KEYS.indexOf(target);
-    // Going back never has to pass validation — the whole point of a rail is being able to look.
-    if (targetIndex < stepIndex) { setStepProblems([]); setStep(target); return; }
-    if (await leaveStep()) setStep(target);
+    setStepProblems([]);
+    if (targetIndex >= stepIndex && canSaveCurrentStep()) await reg.commit();
+    setStep(target);
+  };
+
+  /**
+   * A server error named a field on a DIFFERENT step than the one it was reported on — possible
+   * now that every step is reachable before the record exists, so a clerk can type into three
+   * steps' worth of boxes before the first save that actually sends any of them. Unconditional,
+   * like a rail click backwards: the point is fixing what the banner just named, not re-running
+   * the validation that produced it.
+   */
+  const jumpToField = (key: string, target: RegistrationStepKey) => {
+    setStepProblems([]);
+    setStep(target);
+    setFocusField(key);
   };
 
   const next = async () => {
@@ -574,7 +771,7 @@ export const RegistrationWizard: React.FC<{
    */
   const finish = async () => {
     if (!(await leaveStep())) return;
-    const who = [reg.form.firstName, reg.form.lastName].filter(Boolean).join(' ').trim() || 'This person';
+    const who = (reg.form.fullName || '').trim() || 'This person';
     const plannable = isPlannableForSomeone(dossier?.empanelments ?? []);
     toast({
       type: plannable ? 'success' : 'warning',
@@ -593,56 +790,80 @@ export const RegistrationWizard: React.FC<{
 
   const busy = reg.busy || stepBusy;
   const current = REGISTRATION_STEPS[stepIndex];
+  /** Continue on this step would try to file boxes against a record that does not exist yet. */
+  const cannotSaveYet = step !== 'person' && !reg.assayerId && SAVES_TO_RECORD.includes(step);
+  const typedName = (reg.form.fullName || '').trim();
+
+  /**
+   * "← Back to People", confirmed only when leaving would actually lose something. Checked
+   * against THIS step's own fields, not the whole form — a save on step three does not make
+   * typing on step five any less current, but it also should not make step three's own, already
+   * long-committed boxes look dirty forever.
+   */
+  const handleBack = async () => {
+    if (reg.isDirty(STEP_FIELDS[step])) {
+      const ok = await confirm({
+        title: 'Leave without saving?',
+        message: 'This page has changes that have not been saved yet. Leave without saving them?',
+        confirmLabel: 'Leave without saving',
+      });
+      if (!ok) return;
+    }
+    onClose();
+  };
 
   return (
-    <Modal
-      open
-      onClose={onClose}
-      width="820px"
-      height="min(720px, 88vh)"
-      closeIcon={<X size={18} />}
-      title={<><User size={18} style={{ color: 'var(--accent-primary)' }} aria-hidden /> Register an assayer</>}
-      footer={
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', gap: '10px', flexWrap: 'wrap' }}>
-          <button
-            type="button"
-            onClick={() => void goTo(REGISTRATION_STEP_KEYS[Math.max(stepIndex - 1, 0)])}
-            disabled={stepIndex === 0}
-            className="btn btn-secondary"
-            style={{ padding: '9px 16px', fontSize: '13px', display: 'inline-flex', alignItems: 'center', gap: '6px', visibility: stepIndex === 0 ? 'hidden' : 'visible' }}
-          >
-            <ChevronLeft size={15} aria-hidden /> Back
-          </button>
-          <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-            <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-              Step {stepIndex + 1} of {REGISTRATION_STEPS.length}
-            </span>
-            <button type="button" onClick={onClose} className="btn btn-secondary" style={{ padding: '9px 16px', fontSize: '13px' }}>
-              {reg.assayerId ? 'Close — their record is saved' : 'Cancel'}
-            </button>
-            {step === 'review' ? (
-              <button type="button" onClick={() => void finish()} disabled={busy} className="btn btn-primary" style={{ padding: '9px 20px', fontSize: '13px', display: 'inline-flex', alignItems: 'center', gap: '7px' }}>
-                <Check size={15} aria-hidden /> {busy ? 'Saving…' : 'Finish'}
-              </button>
-            ) : (
-              <button type="button" onClick={() => void next()} disabled={busy} className="btn btn-primary" style={{ padding: '9px 20px', fontSize: '13px', display: 'inline-flex', alignItems: 'center', gap: '7px' }}>
-                {busy ? 'Saving…' : step === 'person' && !reg.assayerId ? 'Save and continue' : 'Continue'}
-                <ChevronRight size={15} aria-hidden />
-              </button>
-            )}
-          </div>
-        </div>
-      }
-    >
-      <StepRail
-        current={step}
-        furthest={furthest}
-        onGo={(k) => void goTo(k)}
-        disabledAfterFirst={!reg.assayerId}
-      />
+    <div style={{
+      padding: '20px 24px 24px', maxWidth: '1600px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '18px',
+      // Tall enough to fill the visible page even on a short step (an empty "Who they can work
+      // for" is a handful of lines) — otherwise the footer below has nothing to push it down to
+      // the bottom and sits wherever the short content happens to end, which read as the footer
+      // "floating" partway up the screen instead of staying in the same place step to step.
+      // 146px is the app shell above and below this scroll area, not a guess: the 56px header
+      // (Header.tsx) plus the scroll container's own 20px top / 70px bottom padding
+      // (Layout.tsx). A step long enough to need scrolling still grows past this and scrolls
+      // exactly as before — this only fills in the SHORT case.
+      //
+      // Tuning this number WIDER (subtracting more) does not make a borderline step safer — it
+      // was tried and made things worse: shrinking the floor let one step's genuine content
+      // exceed it, which made the page scrollable and put that step back into the sticky-bottom-
+      // footer-overlaps-content case (task_c64403e9) instead of the plain-too-short case this
+      // fixes. That is a real, separate bug in `position: sticky; bottom: 0` itself whenever a
+      // step's content is taller than one screen — this constant should stay derived from the
+      // actual chrome above/below it, not padded to paper over that other bug.
+      minHeight: 'calc(100vh - 146px)',
+    }}>
+      {confirmDialog}
 
+      <div style={{ flex: '1 1 auto', display: 'flex', flexDirection: 'column', gap: '18px' }}>
       <div>
-        <h2 style={{ fontSize: '15px', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>{current.title}</h2>
+        <button
+          type="button"
+          onClick={() => void handleBack()}
+          style={{
+            ...linkButtonStyle, textDecoration: 'none', color: 'var(--text-muted)',
+            display: 'inline-flex', alignItems: 'center', gap: '4px', marginBottom: '10px', fontWeight: 600,
+          }}
+        >
+          <ChevronLeft size={14} aria-hidden /> Back to People
+        </button>
+        <PageHeader
+          icon={<User size={20} />}
+          title="Register an assayer"
+          subtitle={
+            resumeAssayerId
+              ? `Continuing ${typedName || 'their'} registration — pick up wherever it stopped.`
+              : 'Complete from the desk, start to finish. Nothing here needs the person to have a phone, an account, or to be in the room.'
+          }
+        />
+      </div>
+
+      <div style={{ display: 'flex', flexDirection: narrow ? 'column' : 'row', gap: '22px', alignItems: 'flex-start' }}>
+        <StepRail current={step} furthest={furthest} onGo={(k) => void goTo(k)} narrow={narrow} />
+
+        <div style={{ flex: '1 1 0%', minWidth: 0, display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      <div>
+        <h2 style={{ fontSize: '16px', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>{current.title}</h2>
         <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: '4px 0 0' }}>{current.caption}</p>
       </div>
 
@@ -654,7 +875,44 @@ export const RegistrationWizard: React.FC<{
           Before this can be saved, it needs {stepProblems.join(', ').replace(/, ([^,]*)$/, ' and $1')}.
         </AlertBanner>
       )}
-      {reg.error && <AlertBanner type="error" message={reg.error} onClose={reg.dismissError} />}
+      {reg.error && (
+        /*
+          The banner still says exactly what the server said — `userMessage()` (services/errors.ts,
+          outside this track) already passes a human-written server message through untouched and
+          reserves the generic "Someone else changed this record…" 409 wording for the case where
+          the server sent nothing readable, so an identifier-conflict message that actually names
+          the clash keeps reading as itself. What is added here is a way IN: a server validation
+          array collapses to "N fields need attention: A, B" with no structure left for a screen to
+          read, so `mappedFieldsFromError` replays the same collapsing rule against every box this
+          flow owns and offers each recovered one as its own jump, landing on the right step with
+          the box focused rather than leaving the clerk to hunt for what "Aadhaar Number" means here.
+        */
+        <AlertBanner type="error" onClose={reg.dismissError}>
+          <div>{reg.error}</div>
+          {mappedFieldsFromError(reg.error).length > 0 && (
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '4px 16px', marginTop: '8px' }}>
+              {mappedFieldsFromError(reg.error).map((f) => (
+                <button key={f.key} type="button" onClick={() => jumpToField(f.key, f.step)} style={linkButtonStyle}>
+                  {f.label} — Go to field
+                </button>
+              ))}
+            </div>
+          )}
+        </AlertBanner>
+      )}
+      {/*
+        The rail is unlocked, so this step can be looked at long before the record that would hold
+        it exists. Said plainly rather than left for the disabled Continue button below to explain
+        on its own — a greyed-out button with no reason attached reads as something broken.
+      */}
+      {cannotSaveYet && (
+        <div style={{ ...cardish, background: 'var(--bg-surface-2)' }}>
+          <div style={blockTitleStyle}>Saving</div>
+          <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+            The person creates their record — save it before this page can hold anything.
+          </div>
+        </div>
+      )}
 
       {reg.loading ? (
         <div style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Opening their record…</div>
@@ -662,8 +920,8 @@ export const RegistrationWizard: React.FC<{
         <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
           <Block
             title="Who they are"
-            note="Their name is the only thing on this page we cannot do without."
-            keys={['firstName', 'lastName', 'assayerCode', 'dateOfBirth', 'qualification']}
+            note="Their full name — exactly as printed on their Aadhaar or PAN — is the one thing here we cannot do without."
+            keys={['fullName', 'assayerCode', 'dateOfBirth', 'qualification']}
             render={renderOne}
           />
           <Block
@@ -675,7 +933,7 @@ export const RegistrationWizard: React.FC<{
           <Block
             title="Where and how they work"
             note="The state is what makes somebody plannable at all. The rest can be changed at any time."
-            keys={['state', 'engagementType', 'employmentType', 'department', 'joiningDate']}
+            keys={['state', 'engagementType', 'employmentType', 'joiningDate']}
             render={renderOne}
           />
         </div>
@@ -836,7 +1094,59 @@ export const RegistrationWizard: React.FC<{
           onGo={(k) => void goTo(k)}
         />
       )}
-    </Modal>
+        </div>
+      </div>
+      </div>
+
+      {/*
+        Back / where you are / Continue — the whole footer, now that the page's own back-link
+        above carries what the old modal's separate "Close — their record is saved" / "Cancel"
+        button used to. Sticky, not fixed: it travels with this page's own content rather than
+        floating over the app shell's sidebar and header the way a fixed bar would.
+        `marginTop: auto` pins it to the bottom of the page on short steps (a short step has
+        nothing for `position: sticky` to stick against, so without this the footer floats up
+        to wherever the content ends); the container's own bottom padding stays small so the
+        footer actually reaches the bottom instead of hovering above a dead gap.
+      */}
+      <div style={{
+        position: 'sticky', bottom: 0, marginTop: 'auto', zIndex: 1,
+        background: 'var(--bg-page)', borderTop: '1px solid var(--border-color)',
+        padding: '14px 4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        gap: '10px', flexWrap: 'wrap',
+      }}>
+        <button
+          type="button"
+          onClick={() => void goTo(REGISTRATION_STEP_KEYS[Math.max(stepIndex - 1, 0)])}
+          disabled={stepIndex === 0}
+          className="btn btn-secondary"
+          style={{ padding: '9px 16px', fontSize: '13px', display: 'inline-flex', alignItems: 'center', gap: '6px', visibility: stepIndex === 0 ? 'hidden' : 'visible' }}
+        >
+          <ChevronLeft size={15} aria-hidden /> Back
+        </button>
+        <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+          <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+            Step {stepIndex + 1} of {REGISTRATION_STEPS.length}
+          </span>
+          {step === 'review' ? (
+            <button type="button" onClick={() => void finish()} disabled={busy} className="btn btn-primary" style={{ padding: '9px 20px', fontSize: '13px', display: 'inline-flex', alignItems: 'center', gap: '7px' }}>
+              <Check size={15} aria-hidden /> {busy ? 'Saving…' : 'Finish'}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => void next()}
+              disabled={busy || cannotSaveYet}
+              title={cannotSaveYet ? 'Save their name and state on the first page first — the rest is filed against their record.' : undefined}
+              className="btn btn-primary"
+              style={{ padding: '9px 20px', fontSize: '13px', display: 'inline-flex', alignItems: 'center', gap: '7px' }}
+            >
+              {busy ? 'Saving…' : step === 'person' && !reg.assayerId ? 'Save and continue' : 'Continue'}
+              <ChevronRight size={15} aria-hidden />
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
   );
 };
 
@@ -844,6 +1154,7 @@ export const RegistrationWizard: React.FC<{
  * The name the roster has always opened this by.
  *
  * Kept so the entry point reads the same as it did, and because "create" is still what the button
- * does — it is the shape of the thing behind it that changed.
+ * does — it is the shape of the thing behind it that changed. What it renders is a page now, not a
+ * modal — see `RegistrationPage.tsx`, the route this name is actually mounted under.
  */
 export const CreateAssayerModal = RegistrationWizard;

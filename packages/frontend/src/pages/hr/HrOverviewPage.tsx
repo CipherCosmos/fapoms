@@ -1,7 +1,7 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { AlertTriangle, CheckCircle2 } from 'lucide-react';
-import { card, label, Stat, Bar, SEVERITY, actionAreaLabel, attritionExplainer } from './hr-ui';
+import { card, label, Stat, SEVERITY, actionAreaLabel, attritionExplainer } from './hr-ui';
 import type { HrAction, HrWorkforceOverview } from '../../hooks/useHrWorkforce';
 import { useHr, resolveHrDestination } from './HrLayout';
 
@@ -124,39 +124,6 @@ const OverviewTabBody = ({ d, onJump }: { d: HrWorkforceOverview; onJump: (to: s
         {attrition.unaccounted}
       </div>
     )}
-
-    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '14px' }}>
-      <section style={card}>
-        <div style={{ ...label, marginBottom: '12px' }}>Joining, stage by stage</div>
-        {d.pipeline.stages.map((s) => (
-          <div key={s.key} style={{ marginBottom: '10px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}>
-              <span>{s.label}</span>
-              <span style={{ color: 'var(--text-muted)' }}>
-                {s.count}{s.stalled > 0 && <span style={{ color: 'var(--warning)' }}> · {s.stalled} waiting too long</span>}
-              </span>
-            </div>
-            <Bar pct={d.headcount.total ? (s.count / d.headcount.total) * 100 : 0} tone={s.stalled ? 'var(--warning)' : 'var(--accent)'} />
-          </div>
-        ))}
-      </section>
-
-      <section style={card}>
-        <div style={{ ...label, marginBottom: '12px' }}>Record completeness</div>
-        {d.compliance.fields.slice(0, 6).map((f) => (
-          <div key={f.column} style={{ marginBottom: '10px' }} title={f.blocks}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', marginBottom: '4px' }}>
-              <span>{f.label}{f.critical && <span style={{ color: 'var(--danger)' }}> *</span>}</span>
-              <span style={{ color: 'var(--text-muted)' }}>{f.have}/{d.compliance.roster}</span>
-            </div>
-                <Bar pct={f.pct} tone={f.pct === 100 ? 'var(--success)' : f.critical ? 'var(--danger)' : 'var(--warning)'} />
-          </div>
-        ))}
-        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '10px' }}>
-          <span style={{ color: 'var(--danger)' }}>*</span> blocks payroll, statutory filing or duty-of-care
-        </div>
-      </section>
-    </div>
   </div>
   );
 };

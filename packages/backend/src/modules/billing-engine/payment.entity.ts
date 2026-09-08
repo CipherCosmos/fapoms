@@ -3,6 +3,7 @@ import { BaseEntity } from '../../core/entities/base.entity';
 import { BillingInvoiceEntity } from './invoice.entity';
 import { AssayerPayableEntity } from './payable.entity';
 import { PaymentMethod, PaymentDirection } from '@fapoms/shared';
+import { encryptedColumn } from '../../infrastructure/security/field-encryption';
 
 /**
  * Every real movement of money, in either direction.
@@ -65,6 +66,25 @@ export class BillingPaymentEntity extends BaseEntity {
   /** Balance owed to the assayer after this disbursement was applied. */
   @Column({ name: 'running_balance', type: 'decimal', precision: 14, scale: 2, nullable: true })
   runningBalance: number | null;
+
+  // ── Destination Snapshot for Outbound Payouts ──────────────────────────────
+  @Column({ name: 'destination_bank_account_number', type: 'text', nullable: true, transformer: encryptedColumn })
+  destinationBankAccountNumber: string | null;
+
+  @Column({ name: 'destination_ifsc', type: 'varchar', length: 20, nullable: true })
+  destinationIfsc: string | null;
+
+  @Column({ name: 'destination_bank_name', type: 'varchar', length: 150, nullable: true })
+  destinationBankName: string | null;
+
+  @Column({ name: 'destination_account_holder_name', type: 'varchar', length: 200, nullable: true })
+  destinationAccountHolderName: string | null;
+
+  @Column({ name: 'payout_evidence_version_id', type: 'uuid', nullable: true })
+  payoutEvidenceVersionId: string | null;
+
+  @Column({ name: 'destination_verified_at', type: 'timestamptz', nullable: true })
+  destinationVerifiedAt: Date | null;
 
   // Nullable because an OUTBOUND disbursement has no client invoice behind it.
   @ManyToOne(() => BillingInvoiceEntity, (inv) => inv.payments, { onDelete: 'CASCADE', nullable: true })

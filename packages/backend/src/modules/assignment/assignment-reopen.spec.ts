@@ -31,8 +31,8 @@ describe('AssignmentService.reopen', () => {
       }),
       findOne: jest.fn(async (target: any) => {
         if (target === AssignmentEntity) return opts.assignment ?? null;
-        // AssayerPayableEntity lookup.
-        return opts.payable ?? null;
+        if (target?.name === 'AssayerPayableEntity') return opts.payable ?? null;
+        return null;
       }),
       save: jest.fn(async (a: any) => { savedAssignments.push(a); return a; }),
     };

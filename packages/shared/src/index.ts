@@ -14,6 +14,10 @@ export * from './role-hierarchy';
 // The destructive-action two-person rule (developer requests, admin approves, developer executes)
 export * from './destructive-action';
 
+// Upload ceilings and the scan accept-list — one source for server guard and pickers
+export * from './upload-limits';
+
+
 // Canonical geographic regions and the state → region map
 export * from './regions';
 export * from './pincode';
@@ -38,9 +42,6 @@ export * from './gst';
 export * from './assayer-lifecycle';
 export * from './assayer-record';
 export * from './rule-bypass';
-
-// Upload size limits shared by the API and every client that offers a file picker
-export * from './upload-limits';
 
 // The roster spreadsheet's own words, and the vocabularies they are read into
 export * from './assayer-roster-vocabulary';

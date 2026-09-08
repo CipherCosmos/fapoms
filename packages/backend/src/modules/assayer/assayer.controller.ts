@@ -87,6 +87,7 @@ import {
   isValidAadhaar,
   isPlaceholderAadhaar,
   normalisePhone,
+  pincodeFromAddress,
   AADHAAR_PATTERN,
   ASSAYER_ERROR_CODES,
   AUTH_ERROR_CODES,
@@ -103,6 +104,7 @@ import { ParsePagePipe } from '../../infrastructure/http/parse-page.pipe';
 import { RosterImportService } from './roster-import.service';
 import { ImportJobService } from '../import/import-job.service';
 import { RosterRecordsService } from './roster-records.service';
+import { DataIntegrityService } from './data-integrity.service';
 import { QualificationScoreService } from './qualification-score.service';
 import { RosterQueryService, RosterFilters, rosterCursorFor } from './roster-query.service';
 import { STAFF_ROLES } from '../auth/staff-roles';
@@ -230,6 +232,14 @@ class VerifyDocumentRequestDto {
   @IsOptional() @IsString() @MaxLength(2000)
   nameMismatchNote?: string;
 
+  /** Explicit document version to bind verification to */
+  @IsOptional() @IsUUID()
+  targetVersionId?: string;
+
+  /** Optimistic concurrency version check */
+  @IsOptional() @IsInt()
+  expectedDocVersion?: number;
+
   @IsOptional() @IsString() @MaxLength(2000)
   remarks?: string;
 }
@@ -329,6 +339,25 @@ const IsAadhaarNumber = identityFormatRule('isAadhaarNumber', isValidAadhaar,
 const IsIndianMobile = identityFormatRule('isIndianMobile', (value) => normalisePhone(value) !== null,
   "This phone number doesn't look right — please enter a 10-digit Indian mobile number, like 98765 43210 (with or without +91).");
 
+/**
+ * Shape only — nothing checked this before, and any string passed. Reuses the same
+ * postal-circle plausibility rule `pincodeFromAddress` already applies to a roster import
+ * (packages/shared/src/pincode.ts), rather than a second, looser `/^\d{6}$/` invented here:
+ * `pincodeFromAddress` reads a pincode OUT of free text, so passing it this field's own value
+ * with no state to cross-check against still gets the one thing a bare digit-count regex cannot
+ * — a civilian-impossible first digit (9 is the Army Postal Service; no assayer's home address
+ * carries one) is refused too. The exact-length pre-check on the left guards the gap that
+ * design leaves open: `pincodeFromAddress` finds the last SIX-DIGIT RUN in a string, so on its
+ * own it would wave through a 7+ digit typo that happens to contain a plausible run.
+ *
+ * The state-vs-pincode cross-check itself is NOT here — that stays in
+ * `AssayerService.assertAddressConsistent`, which asks the geocoder rather than guessing from
+ * the postal-circle table alone, and (for district) files a review row instead of refusing.
+ */
+const IsPincodeFormat = identityFormatRule('isPincodeFormat',
+  (value) => /^\d{6}$/.test(value.trim()) && pincodeFromAddress(value).pincode !== null,
+  "This pincode doesn't look right — it should be a 6-digit Indian PIN code, like 400001.");
+
 class CreateAssayerRequestDto implements CreateAssayerDto {
   /**
    * Optional: leave it out and the server allocates the next free code.
@@ -341,11 +370,32 @@ class CreateAssayerRequestDto implements CreateAssayerDto {
   @IsOptional() @IsString() @IsNotEmpty()
   assayerCode?: string;
 
-  @IsString() @IsNotEmpty()
-  firstName: string;
+  @IsOptional() @IsString()
+  clientRequestId?: string;
 
-  @IsString() @IsNotEmpty()
-  lastName: string;
+  @IsOptional() @IsBoolean()
+  allowSharedContact?: boolean;
+
+  @IsOptional() @IsString()
+  sharedContactReason?: string;
+
+  /**
+   * The name exactly as printed on their Aadhaar or PAN — the one banks, TDS filings and
+   * background checks verify against. This is the authored truth (2026-09-07); first/last
+   * survive below only as derived legacy tokens. Indian names don't split into first/last:
+   * the roster is full of Tamil initial-style names ("A K Venkatesan"), father's-name middles
+   * ("Aatish Anantkumar Pala") and legitimate single-token names — so no format is policed
+   * here beyond "not blank".
+   */
+  @IsOptional() @IsString() @IsNotEmpty()
+  fullName?: string;
+
+  /** Legacy pair, still accepted (imports, older clients). Either fullName or this pair. */
+  @IsOptional() @IsString() @IsNotEmpty()
+  firstName?: string;
+
+  @IsOptional() @IsString() @IsNotEmpty()
+  lastName?: string;
 
   @IsOptional() @IsEmail()
   email?: string;
@@ -375,7 +425,7 @@ class CreateAssayerRequestDto implements CreateAssayerDto {
   @IsOptional() @IsString()
   city?: string;
 
-  @IsOptional() @IsString()
+  @IsOptional() @IsString() @IsPincodeFormat()
   pincode?: string;
 
   @IsOptional() @IsNumber()
@@ -518,6 +568,10 @@ class CreateAssayerRequestDto implements CreateAssayerDto {
 }
 
 class UpdateAssayerRequestDto implements UpdateAssayerDto {
+  /** The Aadhaar/PAN-printed name, authored whole — see CreateAssayerRequestDto.fullName. */
+  @IsOptional() @IsString() @IsNotEmpty()
+  fullName?: string;
+
   @IsOptional() @IsString()
   firstName?: string;
 
@@ -547,7 +601,7 @@ class UpdateAssayerRequestDto implements UpdateAssayerDto {
   @IsOptional() @IsString()
   city?: string;
 
-  @IsOptional() @IsString()
+  @IsOptional() @IsString() @IsPincodeFormat()
   pincode?: string;
 
   @IsOptional() @IsNumber()
@@ -1015,6 +1069,9 @@ export class AssayerController {
     private readonly locationTrail: LocationTrailService,
     private readonly qualificationScores: QualificationScoreService,
     private readonly rosterQuery: RosterQueryService,
+    // Reused for exactly one thing: the phone half of `checkIdentifiers` below, which asks the
+    // same mechanism `duplicatesForPerson` uses rather than inventing a second one.
+    private readonly dataIntegrity: DataIntegrityService,
   ) {}
 
   /**
@@ -1051,7 +1108,8 @@ export class AssayerController {
   @RequirePermissions('assayer:create:organization')
   @ApiOperation({ summary: 'Register a new field assayer' })
   async create(@Body() dto: CreateAssayerRequestDto, @Req() req: any) {
-    const assayer = await this.assayerService.create(dto, req.user.id, req.user.organizationId);
+    const userRoles = (req.user?.roles ?? []).map((r: any) => (typeof r === 'string' ? r : r?.name)).filter(Boolean);
+    const assayer = await this.assayerService.create(dto, req.user.id, req.user.organizationId, userRoles);
     return {
       success: true,
       data: assayer,
@@ -1369,6 +1427,58 @@ export class AssayerController {
   }
 
   /**
+   * Whether a phone (and, in future, a PAN/Aadhaar) already belongs to somebody else — asked as
+   * the registration wizard fills in a field, before the record is ever written. A live probe of
+   * `POST /assayers` found it would accept a phone already on another profile without a word of
+   * complaint; this is what lets the wizard say so while the clerk can still do something about
+   * it, instead of two records for one person quietly coming to exist side by side.
+   *
+   * A GET with no side effect: a match is a SIGNAL for the wizard to show, never a refusal this
+   * route can throw. `create`/`update` still accept the record whether or not this was ever
+   * called — see them for the write-time rules that actually help (normalisation) or file a
+   * review row (the district/pincode disagreement) instead of hard-refusing.
+   *
+   * `excludeId` is the record already being edited or resumed, so its own phone does not read
+   * back as a match against itself.
+   *
+   * Region scope is deliberately NOT applied, unlike `findAll`/`searchAssayers` above: a phone
+   * already used by somebody outside the caller's own region is still a real duplicate, and
+   * hiding it here would let a second profile for the same person be created in a different
+   * territory with nothing ever catching it.
+   *
+   * PAN and Aadhaar matching are UNIMPLEMENTED on purpose, not silently skipped — both live
+   * behind `encryptedColumn` (field-encryption.ts), so an exact match across encryption can only
+   * be found by decrypting every row on the roster (see `DataIntegrityService.findPhoneMatches`'s
+   * own comment for the full reasoning). That is a cost this route does not pay on every field
+   * blur; callers get an empty match set for those two keys rather than a slower or partial
+   * answer. The two query params are still accepted, both so the contract is stable the day this
+   * changes and so Track 2 can send them today without a 400.
+   *
+   * Declared above `@Get(':id')` for the reason `roster/import-issues` already documents in this
+   * file: Nest matches routes in declaration order, and `:id`'s `ParseUUIDPipe` would 400 on the
+   * literal segment "identifier-check" if this were declared any lower.
+   */
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR, SystemRole.DESK, SystemRole.DESK_OPERATOR)
+  @RequirePermissions('assayer:view:organization')
+  @Get('identifier-check')
+  @ApiOperation({ summary: 'Check whether a phone/PAN/Aadhaar already belongs to another assayer' })
+  async checkIdentifiers(
+    @Query('phone') phone?: string,
+    @Query('panNumber') panNumber?: string,
+    @Query('aadhaarNumber') aadhaarNumber?: string,
+    @Query('excludeId') excludeId?: string,
+  ) {
+    const matches = await this.dataIntegrity.findIdentifierMatches({
+      phone,
+      panNumber,
+      aadhaarNumber,
+      excludeId,
+    });
+
+    return { success: true, data: { matches } };
+  }
+
+  /**
    * Whoever may see the roster may open a row on it.
    *
    * These two lists drifted apart in the role consolidation: the list above admitted the desk
@@ -1441,6 +1551,19 @@ export class AssayerController {
       ipAddress: req.ip ?? null,
     });
     return { success: true, data };
+  }
+
+  @Get(':id/payables')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:view:organization')
+  @ApiOperation({ summary: 'Frozen payable disbursement destination snapshots for an assayer' })
+  async getPayables(
+    @Param('id', ParseUUIDPipe) id: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertAssayerInScope(id, scope);
+    const data = await this.assayerService.getPayables(id);
+    return data;
   }
 
   /**
@@ -1911,6 +2034,51 @@ export class AssayerController {
     return { success: true, data: assayer };
   }
 
+  @Post(':id/recovery/reset-onboarding-stage')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: 'Operator recovery: reset stuck onboarding stage' })
+  async operatorResetOnboardingStage(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { targetStage: AssayerLifecycleStatus; reason: string },
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertAssayerInScope(id, scope);
+    const assayer = await this.assayerService.operatorResetOnboardingStage(id, body.targetStage, body.reason, req.user.id);
+    return { success: true, data: assayer };
+  }
+
+  @Post(':id/recovery/revoke-invitation')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: 'Operator recovery: revoke invitation for stuck onboarding assayer' })
+  async operatorRevokeInvitation(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { reason: string },
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertAssayerInScope(id, scope);
+    const assayer = await this.assayerService.operatorRevokeInvitation(id, body.reason, req.user.id);
+    return { success: true, data: assayer };
+  }
+
+  @Post(':id/recovery/reconcile-empanelments')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:edit:organization')
+  @ApiOperation({ summary: 'Operator recovery: reconcile departed assayer empanelments' })
+  async operatorReconcileDepartedEmpanelments(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() body: { reason: string },
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertAssayerInScope(id, scope);
+    const closedCount = await this.assayerService.operatorReconcileDepartedEmpanelments(id, body.reason, req.user.id);
+    return { success: true, data: { closedCount } };
+  }
+
   // ── Roster records: references, client standing, vetting, paperwork ───
   //
   // These were columns in the spreadsheet before they were tables. They are grouped here rather
@@ -2308,6 +2476,8 @@ export class AssayerController {
         holderAddress: body?.holderAddress,
         rejectionReason: body?.rejectionReason,
         nameMismatchNote: body?.nameMismatchNote,
+        targetVersionId: body?.targetVersionId,
+        expectedDocVersion: body?.expectedDocVersion,
       },
     );
     return { success: true, data };

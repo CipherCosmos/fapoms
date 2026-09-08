@@ -166,6 +166,37 @@ export const ROUTE_PERMISSIONS: RoutePermission[] = [
     requiredPermissions: ['ASSAYER:VIEW:ORGANIZATION'],
   },
   {
+    /**
+     * Registering an assayer — a page of its own now, not a modal launched from the roster (see
+     * `registration/RegistrationPage.tsx`). Declared as its own literal entries, longer than `/hr`
+     * itself, rather than left to inherit that entry's prefix match: `/hr` only asks for
+     * `ASSAYER:VIEW:ORGANIZATION`, which is the roster's OWN gate, not the "Add assayer" button's.
+     * canCreateAssayers() — what the roster actually checks before showing that button and the
+     * resume icon — asks for ASSAYER:CREATE:ORGANIZATION, so this mirrors that rather than the
+     * section's read gate; a role that can browse the roster but not create on it would otherwise
+     * land on a page whose own `POST /assayers` the API refuses.
+     */
+    path: '/hr/register',
+    allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS],
+    requiredPermissions: ['ASSAYER:CREATE:ORGANIZATION'],
+  },
+  {
+    /**
+     * The resume path, `/hr/register/:assayerId`. Kept as its own literal entry alongside
+     * `/hr/register` above rather than relying on that one's prefix match, so both read the same
+     * in this table — though the prefix match is what actually governs a real id at runtime:
+     * `canAccessRoute`'s own `:id`-parameterised matching keys on the literal substring `:id`,
+     * which `:assayerId` does not contain, so THIS entry only ever matches its own literal path
+     * text (as the fitness spec below does, substituting `:id` for `some-id` on every entry) and
+     * `/hr/register`'s prefix rule is what actually opens `/hr/register/<real-uuid>`. Named to
+     * match the route it gates (`App.tsx`'s `roster/:assayerId` uses the same word) rather than
+     * `:id`, since nothing here depends on the difference mattering.
+     */
+    path: '/hr/register/:assayerId',
+    allowedRoles: [SystemRole.ADMIN, SystemRole.OPERATIONS],
+    requiredPermissions: ['ASSAYER:CREATE:ORGANIZATION'],
+  },
+  {
     // The comment this replaced ("no permission: gated by role name and declare none") was true
     // of most reads under this controller but not this page's own main content fetch:
     // `Documents.tsx`'s `loadOverview()` calls `GET /documents/operations/overview`, whose handler

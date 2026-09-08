@@ -155,9 +155,17 @@ export const AssayerSkillsPanel: React.FC<{
         method: 'PUT', body: JSON.stringify({ expiryDate }),
       });
       toast({ type: 'success', title: 'Renewal recorded', message: `“${row.name}” now runs to ${fmtDate(expiryDate)}.` });
+      setRenewingId(null);
       await load();
     } catch (e) { setErr(userMessage(e)); } finally { setBusy(false); }
   };
+  /**
+   * The row whose expiry is being set right now, if any. The date box used to sit on every
+   * expirable row at once — four controls per row — saving on change with no sign of having
+   * saved, so a stray click renewed a certificate by accident. Now one "Renew" link per row
+   * opens the box on that row only; Escape backs out.
+   */
+  const [renewingId, setRenewingId] = useState<string | null>(null);
 
   // A skeleton the shape of the rows that are coming, rather than the word "Loading…" in the
   // middle of an empty card — the same treatment the rest of the section now uses.
@@ -269,17 +277,29 @@ export const AssayerSkillsPanel: React.FC<{
                   : ` · expires ${fmtDate(w.expiryDate)}`)}
               </span>
               {canManage && EXPIRES[w.type] && (
-                <input
-                  type="date"
-                  defaultValue={w.expiryDate ? String(w.expiryDate).slice(0, 10) : ''}
-                  onChange={(e) => renew(w, e.target.value)}
-                  // Named, not just titled: a bare date box beside a certificate name is the same
-                  // problem an unlabelled icon button is — the control is reachable and says
-                  // nothing about which of the rows it belongs to.
-                  aria-label={w.expiryDate ? `Record a renewal for ${w.name}` : `Record when ${w.name} stops working`}
-                  title={w.expiryDate ? 'Record a renewal' : 'Record when it stops working'}
-                  style={inlineDate}
-                />
+                renewingId === w.id ? (
+                  <input
+                    type="date"
+                    autoFocus
+                    defaultValue={w.expiryDate ? String(w.expiryDate).slice(0, 10) : ''}
+                    onChange={(e) => void renew(w, e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Escape') setRenewingId(null); }}
+                    onBlur={() => setRenewingId((id) => (id === w.id ? null : id))}
+                    // Named, not just titled: a bare date box beside a certificate name is the same
+                    // problem an unlabelled icon button is — the control is reachable and says
+                    // nothing about which of the rows it belongs to.
+                    aria-label={w.expiryDate ? `Record a renewal for ${w.name}` : `Record when ${w.name} stops working`}
+                    title={w.expiryDate ? 'Record a renewal' : 'Record when it stops working'}
+                    style={inlineDate}
+                  />
+                ) : (
+                  <LinkButton
+                    onClick={() => setRenewingId(w.id)}
+                    label={w.expiryDate ? `Record a renewal for ${w.name}` : `Record when ${w.name} stops working`}
+                  >
+                    {w.expiryDate ? 'Renew' : 'Set expiry'}
+                  </LinkButton>
+                )
               )}
               {canManage && (
                 <LinkButton

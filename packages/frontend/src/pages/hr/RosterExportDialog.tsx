@@ -83,29 +83,21 @@ export const RosterExportDialog: React.FC<{
     onClose();
   };
 
-  const scopeChoice = (value: 'filtered' | 'all', label: string, hint: string) => (
-    <label
-      key={value}
-      style={{
-        display: 'flex', gap: '8px', alignItems: 'flex-start', padding: '8px 10px',
-        borderRadius: '8px', cursor: 'pointer', fontSize: '12.5px', flex: '1 1 240px',
-        border: `1px solid ${scope === value ? 'var(--accent)' : 'var(--border-color)'}`,
-        background: scope === value ? 'color-mix(in srgb, var(--accent) 10%, transparent)' : 'transparent',
-      }}
-    >
-      <input
-        type="radio"
-        name="roster-export-scope"
-        checked={scope === value}
-        onChange={() => setScope(value)}
-        style={{ marginTop: '2px' }}
-      />
-      <span>
-        <span style={{ fontWeight: 600 }}>{label}</span>
-        <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: '12px', lineHeight: 1.45 }}>{hint}</span>
-      </span>
-    </label>
-  );
+  const scopeOptions = [
+    {
+      value: 'filtered' as const,
+      label: `Filtered · ${counted(filtered.length, 'person', 'people')}`,
+      hint: filterSummary,
+    },
+    {
+      value: 'all' as const,
+      label: `Everyone loaded · ${all.length}`,
+      hint: truncated
+        ? `Ignores the filters. The server holds ${rosterTotal} — this dialog has the ${all.length} it could load.`
+        : 'Ignores the filters and covers the whole roster — the server confirms nobody was left out.',
+    },
+  ];
+  const activeScope = scopeOptions.find((o) => o.value === scope) ?? scopeOptions[0];
 
   return (
     <Modal
@@ -119,7 +111,21 @@ export const RosterExportDialog: React.FC<{
           <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
             {counted(selected.length, 'column')} × {counted(rows.length, 'person', 'people')}
           </span>
-          <button onClick={onClose} className="btn btn-secondary" style={{ fontSize: '12.5px', padding: '8px 14px', marginLeft: 'auto' }}>
+          {/*
+            The server workbook sits beside the CSV action, not in a card of its own in the
+            body: two downloads in two places read as one flow with a spare, and the card's
+            four-line explanation repeated what the footer choice already says.
+          */}
+          <button
+            onClick={onExcelExport}
+            disabled={excelBusy}
+            className="btn btn-secondary"
+            title="Pay rates and assignment counts live outside this screen — the server builds those into a two-sheet Excel workbook for everyone."
+            style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12.5px', padding: '8px 14px', color: 'var(--success)', marginLeft: 'auto' }}
+          >
+            <FileSpreadsheet size={13} /> {excelBusy ? 'Preparing…' : 'Full workbook'}
+          </button>
+          <button onClick={onClose} className="btn btn-secondary" style={{ fontSize: '12.5px', padding: '8px 14px' }}>
             Cancel
           </button>
           <button
@@ -133,47 +139,53 @@ export const RosterExportDialog: React.FC<{
         </div>
       )}
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', fontSize: '12.5px' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '14px', fontSize: '12.5px' }}>
         <section>
           <h3 style={{ fontSize: '13px', fontWeight: 700, margin: '0 0 6px' }}>Who goes in the file</h3>
-          <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-            {/*
-              "The people on screen" would be a lie by 141: the table draws 200 rows at a time
-              behind a "Show more", and the file gets every row the filters leave.
-            */}
-            {scopeChoice(
-              'filtered',
-              `The ${counted(filtered.length, 'person', 'people')} these filters leave`,
-              filterSummary,
-            )}
-            {scopeChoice(
-              'all',
-              `Everyone loaded (${all.length})`,
-              /*
-                `truncated` is now only ever true past the roster walker's own 20,000-person
-                ceiling (`fetchWholeAssayerRoster`'s `missing`) — the roster no longer stops at a
-                thousand-row window, so "everyone loaded" really is everyone bar that rare case.
-                The old wording ("this page has the N most recently added") described the ordinary
-                state of an 11,000-person roster; it would now be a lie on every roster this
-                product actually meets, so it is said only in the case that still makes it true.
-              */
-              truncated
-                ? `Ignores the filters. The server holds ${rosterTotal} — this dialog has the ${all.length} it could load, past which the whole roster is more than one screen can hold at once.`
-                : 'Ignores the filters and covers the whole roster — the server confirms nobody was left out.',
-            )}
+          {/*
+            "The people on screen" would be a lie by 141: the table draws 200 rows at a time
+            behind a "Show more", and the file gets every row the filters leave.
+          */}
+          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }} role="group" aria-label="Who goes in the file">
+            {scopeOptions.map((o) => (
+              <button
+                key={o.value}
+                type="button"
+                onClick={() => setScope(o.value)}
+                aria-pressed={scope === o.value}
+                style={{
+                  padding: '6px 12px', borderRadius: '999px', fontSize: '12px', fontWeight: 600,
+                  cursor: 'pointer',
+                  border: `1px solid ${scope === o.value ? 'var(--accent)' : 'var(--border-color)'}`,
+                  background: scope === o.value ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'transparent',
+                  color: scope === o.value ? 'var(--accent)' : 'var(--text-secondary)',
+                }}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '6px', lineHeight: 1.5 }}>
+            {activeScope.hint}
           </div>
         </section>
 
         <section>
-          <h3 style={{ fontSize: '13px', fontWeight: 700, margin: '0 0 6px' }}>Start from a job</h3>
-          <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' }}>
+            <h3 style={{ fontSize: '13px', fontWeight: 700, margin: '0 0 6px' }}>Columns</h3>
+            {/*
+              Presets live here, beside the boxes they tick, rather than in a section of their
+              own — a preset only ticks boxes, so giving it a heading, a row and an explanatory
+              line tripled the chrome for what is really a shortcut. The hint survives as hover
+              text on each preset.
+            */}
             {EXPORT_PRESETS.map((p) => (
               <button
                 key={p.key}
                 onClick={() => setSelected(p.columns)}
-                title={p.hint}
+                title={`${p.hint} Ticks the boxes below — change anything before you download.`}
                 style={{
-                  padding: '5px 11px', borderRadius: '999px', fontSize: '12px', fontWeight: 600,
+                  padding: '4px 10px', borderRadius: '999px', fontSize: '12px', fontWeight: 600,
                   cursor: 'pointer', border: '1px solid var(--border-color)',
                   background: 'var(--bg-surface-2)', color: 'var(--text-secondary)',
                 }}
@@ -181,18 +193,9 @@ export const RosterExportDialog: React.FC<{
                 {p.label}
               </button>
             ))}
-          </div>
-          <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginTop: '5px', lineHeight: 1.5 }}>
-            A preset only ticks boxes — change anything below before you download.
-          </div>
-        </section>
-
-        <section>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: '10px', flexWrap: 'wrap' }}>
-            <h3 style={{ fontSize: '13px', fontWeight: 700, margin: '0 0 6px' }}>Columns</h3>
             <button
               onClick={() => setSelected([])}
-              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '12px', fontWeight: 600, color: 'var(--accent)', padding: 0 }}
+              style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '12px', fontWeight: 600, color: 'var(--accent)', padding: 0, marginLeft: 'auto' }}
             >
               Untick everything
             </button>
@@ -213,7 +216,7 @@ export const RosterExportDialog: React.FC<{
                       key={c.key}
                       title={off ? 'Your account is not allowed to read this field, so it would export blank.' : undefined}
                       style={{
-                        display: 'flex', alignItems: 'flex-start', gap: '6px', padding: '2px 0',
+                        display: 'flex', alignItems: 'flex-start', gap: '6px', padding: '4px 0',
                         fontSize: '12px', lineHeight: 1.4,
                         cursor: off ? 'not-allowed' : 'pointer',
                         color: off ? 'var(--text-muted)' : (c.masked ? 'var(--warning)' : 'var(--text-primary)'),
@@ -251,12 +254,8 @@ export const RosterExportDialog: React.FC<{
         }}>
           <ShieldAlert size={15} style={{ color: 'var(--warning)', flexShrink: 0, marginTop: '1px' }} />
           <div style={{ fontSize: '12px' }}>
-            <strong style={{ fontWeight: 700 }}>PAN, Aadhaar and bank account numbers cannot be exported in full.</strong>{' '}
-            They reach this screen already covered, so those three columns hold the last four
-            characters and nothing more — which is why their headings say so. Use{' '}
-            <em>PAN on file</em>, <em>Aadhaar on file</em> and <em>Bank account on file</em> when
-            the question is whether the record has one. A whole number is shown one person at a
-            time on their own record, and that request is recorded against your name.
+            <strong style={{ fontWeight: 700 }}>PAN, Aadhaar and bank numbers export covered</strong>{' '}
+            (last four characters only) — whole numbers are shown one person at a time on their record.
             {chosenMasked.length > 0 && (
               <div style={{ marginTop: '6px', fontWeight: 600, color: 'var(--warning)' }}>
                 {counted(chosenMasked.length, 'masked column')} ticked — the file will contain
@@ -266,31 +265,6 @@ export const RosterExportDialog: React.FC<{
           </div>
         </section>
 
-        {/*
-          The server workbook, kept and explained rather than quietly replaced. It holds the pay
-          rates and assignment history, which are not in the roster response at all — no column
-          picker here could produce them.
-        */}
-        <section style={{
-          display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap',
-          padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--border-color)',
-        }}>
-          <div style={{ flex: '1 1 320px', fontSize: '12px', color: 'var(--text-secondary)', lineHeight: 1.55 }}>
-            <strong style={{ fontWeight: 700, color: 'var(--text-primary)' }}>Need pay rates?</strong>{' '}
-            The payroll rate card and each person's assignment counts are not on this screen, so no
-            choice of columns above can include them — this is a different export, not a bigger
-            version of the CSV above. The server builds those into a two-sheet Excel workbook
-            covering everyone, which takes a few seconds.
-          </div>
-          <button
-            onClick={onExcelExport}
-            disabled={excelBusy}
-            className="btn btn-secondary"
-            style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '12px', padding: '7px 12px', color: 'var(--success)' }}
-          >
-            <FileSpreadsheet size={13} /> {excelBusy ? 'Preparing…' : 'Full roster + pay rates (workbook, everyone)'}
-          </button>
-        </section>
       </div>
     </Modal>
   );

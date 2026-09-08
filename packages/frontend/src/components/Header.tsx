@@ -222,8 +222,8 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
             </span>
           </div>
         ) : (
-          <span style={{ fontSize: '15px', fontWeight: 700, fontFamily: 'var(--font-display)', color: 'var(--accent)', whiteSpace: 'nowrap' }}>
-            Sumeru Audit Suite
+          <span style={{ fontSize: 'var(--text-base, 14px)', fontWeight: 700, fontFamily: 'var(--font-sans)', color: 'var(--accent-primary)', whiteSpace: 'nowrap' }}>
+            FAPOMS Operations Suite
           </span>
         )}
       </div>

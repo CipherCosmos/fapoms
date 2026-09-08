@@ -27,6 +27,68 @@ describe('AssayerStateMachine', () => {
       AssayerStateMachine.activate(assayer, 'user-1');
     }).toThrow(BadRequestException);
   });
+
+  /**
+   * The rehire edge (2026-09-07): RESIGNED/TERMINATED → INVITED, added to the shared lifecycle
+   * map (`@fapoms/shared/assayer-lifecycle.ts`) so someone who left can genuinely come back. See
+   * `AssayerStateMachine.rehire`'s own comment for why it targets INVITED — restarting onboarding
+   * — rather than snapping back to ACTIVE, and why it returns a plain `DomainEvent`.
+   */
+  describe('rehire — RESIGNED/TERMINATED → INVITED', () => {
+    const resigned = () => ({
+      id: 'asr-1', lifecycleStatus: AssayerLifecycleStatus.RESIGNED, status: 'INACTIVE', isActive: true,
+    } as AssayerEntity);
+    const terminated = () => ({
+      id: 'asr-2', lifecycleStatus: AssayerLifecycleStatus.TERMINATED, status: 'INACTIVE', isActive: true,
+    } as AssayerEntity);
+
+    it('moves a resigned assayer back to INVITED', () => {
+      const a = resigned();
+      const event = AssayerStateMachine.rehire(a, 'user-1');
+
+      expect(a.lifecycleStatus).toBe(AssayerLifecycleStatus.INVITED);
+      expect(event.previousState).toBe(AssayerLifecycleStatus.RESIGNED);
+      expect(event.newState).toBe(AssayerLifecycleStatus.INVITED);
+    });
+
+    it('moves a terminated assayer back to INVITED', () => {
+      const a = terminated();
+      AssayerStateMachine.rehire(a, 'user-1');
+
+      expect(a.lifecycleStatus).toBe(AssayerLifecycleStatus.INVITED);
+    });
+
+    it('refuses a rehire from a state that never left — ACTIVE has no edge to INVITED', () => {
+      const a = {
+        id: 'asr-3', lifecycleStatus: AssayerLifecycleStatus.ACTIVE, status: 'ACTIVE', isActive: true,
+      } as AssayerEntity;
+
+      expect(() => AssayerStateMachine.rehire(a, 'user-1')).toThrow(BadRequestException);
+    });
+
+    it('sets the operational status the same way onboarding always has — INACTIVE, not ACTIVE', () => {
+      const a = resigned();
+      AssayerStateMachine.rehire(a, 'user-1');
+
+      expect(a.status).toBe('INACTIVE');
+    });
+
+    /**
+     * Same contract as every other move on this class: status changes, dates do not.
+     * `AssayerService.reconcileDepartureDates` is the single writer for `exitDate`/
+     * `terminationDate` on a rehire exactly as on every departure — see "recording the day
+     * someone left is not this machine's job" below, which pins that division for the outbound
+     * moves this one mirrors.
+     */
+    it("does not touch exit/termination dates — clearing them is the service's job, not this machine's", () => {
+      const a = { ...resigned(), exitDate: new Date('2024-01-01'), terminationDate: null } as any;
+
+      AssayerStateMachine.rehire(a, 'user-1');
+
+      expect(a.exitDate).toEqual(new Date('2024-01-01'));
+      expect(a.terminationDate).toBeNull();
+    });
+  });
   /**
    * Departure was recorded only in `lifecycleStatus`, while every count and filter of departures
    * reads `exitDate`/`terminationDate` — which nothing set. The roster's "Exited" chip and the
@@ -144,6 +206,11 @@ describe('AssayerStateMachine', () => {
 
     it('returns an empty path when already there', () => {
       expect(AssayerStateMachine.findPathTo('ACTIVE', 'ACTIVE')).toEqual([]);
+    });
+
+    it('reaches the rehire edge directly — RESIGNED and TERMINATED both lead straight to INVITED', () => {
+      expect(AssayerStateMachine.findPathTo('RESIGNED', 'INVITED')).toEqual(['INVITED']);
+      expect(AssayerStateMachine.findPathTo('TERMINATED', 'INVITED')).toEqual(['INVITED']);
     });
   });
 });

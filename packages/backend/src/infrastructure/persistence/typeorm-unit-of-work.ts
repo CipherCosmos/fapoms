@@ -31,13 +31,14 @@ export class TypeOrmUnitOfWork extends UnitOfWork {
 
     const result = await this.dataSource.transaction('READ COMMITTED', async (manager) => {
       const value = await work(manager, (eventName, payload) => {
+        const id = randomUUID();
         staged.push({
-          id: randomUUID(),
+          id,
           eventName,
           // Stamped here rather than at publish time so the row and the in-process event
           // carry the same payload — a relayed event must be indistinguishable from one the
           // fast path delivered.
-          payload: { ...payload, timestamp: new Date() },
+          payload: { ...payload, outboxEventId: id, timestamp: new Date() },
         });
       });
 
@@ -68,7 +69,11 @@ export class TypeOrmUnitOfWork extends UnitOfWork {
   private async dispatch(staged: StagedEvent[]): Promise<void> {
     for (const event of staged) {
       try {
-        this.eventPublisher.publish(event.eventName, event.payload);
+        if (typeof this.eventPublisher.publishAsync === 'function') {
+          await this.eventPublisher.publishAsync(event.eventName, event.payload);
+        } else {
+          this.eventPublisher.publish(event.eventName, event.payload);
+        }
         await this.outbox.update(event.id, { dispatchedAt: new Date() });
       } catch (err) {
         this.logger.error(

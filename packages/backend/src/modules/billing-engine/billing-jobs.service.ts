@@ -5,6 +5,7 @@ import {
   BILLING_JOB,
   BILLING_JOB_OPTIONS,
   BILLING_QUEUE,
+  BOOK_ASSIGNMENT_JOB_OPTIONS,
   ReconcileJobData,
 } from './billing-jobs.contract';
 import {
@@ -59,6 +60,55 @@ export class BillingJobsService {
     const job = await this.queue.add(BILLING_JOB.RECONCILE, data, BILLING_JOB_OPTIONS);
     this.logger.log(`Enqueued billing reconcile ${job.id}.`);
     return { jobId: String(job.id), deduplicated: false };
+  }
+
+  /**
+   * Enqueue a durable job to book a completed assignment.
+   *
+   * Uses deterministic jobId `book-assignment:${assignmentId}` to prevent duplicate pending jobs in Redis.
+   * Leverages BOOK_ASSIGNMENT_JOB_OPTIONS (5 attempts, exponential backoff, dead-letter visibility).
+   *
+   * If a previous job with this ID failed permanently and remains in Redis failed retention:
+   * checks its state and removes the dead job so an operator-triggered outbox replay or reconcile
+   * can create a new active job instead of silently failing or being rejected by Bull.
+   */
+  async enqueueBookAssignment(
+    assignmentId: string,
+    userId = 'system',
+    outboxEventId?: string,
+  ): Promise<Job> {
+    const jobId = `book-assignment:${assignmentId}`;
+
+    // Bull retains failed jobs. If a job exists in 'failed' state, remove it to allow replay.
+    try {
+      const existing = await this.queue.getJob(jobId);
+      if (existing) {
+        const state = await existing.getState();
+        if (state === 'failed') {
+          this.logger.warn(
+            `Removing previously failed billing job ${jobId} (failedReason: ${existing.failedReason}) to allow replay.`,
+          );
+          await existing.remove();
+        }
+      }
+    } catch (checkErr) {
+      this.logger.warn(
+        `Failed checking existing job status for ${jobId} (${(checkErr as Error).message}); proceeding with add.`,
+      );
+    }
+
+    const job = await this.queue.add(
+      BILLING_JOB.BOOK_ASSIGNMENT,
+      { assignmentId, userId, outboxEventId },
+      {
+        ...BOOK_ASSIGNMENT_JOB_OPTIONS,
+        jobId,
+      },
+    );
+    this.logger.log(
+      `Enqueued durable billing job ${job.id} for assignment ${assignmentId} (outboxEventId: ${outboxEventId ?? 'none'}).`,
+    );
+    return job;
   }
 
   /**

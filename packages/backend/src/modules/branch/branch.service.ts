@@ -10,7 +10,7 @@ import { GeoStateEntity, GeoDistrictEntity, GeoCityEntity } from '../geo/geo.ent
 import { AuditService } from '../../core/audit/audit.service';
 import { BranchQueryService } from './branch-query.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { EventCategory, resolveRegion, canonicalStateName } from '@fapoms/shared';
+import { EventCategory, resolveRegion, canonicalStateName, AssignmentStatus } from '@fapoms/shared';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { autocompleteIndia, isPlaceLookupConfigured } from '../geo/india-autocomplete.helper';
 import { resolveCoordinates, GeoFields } from '../geo/coordinate-resolution';
@@ -520,6 +520,65 @@ export class BranchService {
 
   async remove(id: string, userId: string): Promise<void> {
     const branch = await this.findOne(id);
+
+    // State-specific assignment integrity checks
+    const assignments: Array<{
+      id: string;
+      assignment_number: string;
+      status: string;
+      project_branch_id: string;
+    }> = await this.dataSource.query(
+      `SELECT a.id, a.assignment_number, a.status, a.project_branch_id
+       FROM assignments a
+       INNER JOIN project_branches pb ON a.project_branch_id = pb.id
+       WHERE pb.branch_id = $1 AND a.is_active = true`,
+      [id],
+    ).catch(() => []);
+
+    const inProgress = assignments.find(
+      (a) => a.status === AssignmentStatus.CHECKED_IN || a.status === AssignmentStatus.IN_PROGRESS,
+    );
+    if (inProgress) {
+      throw new ConflictException(
+        `Cannot deactivate branch "${branch.name}": Assignment ${inProgress.assignment_number} is currently ${inProgress.status}. Field audit is actively in progress on site. Operational intervention required before deactivating this branch.`,
+      );
+    }
+
+    // Safely cancel pending or accepted assignments transactionally with outbox/audit events
+    const cancellable = assignments.filter(
+      (a) => a.status === AssignmentStatus.PENDING || a.status === AssignmentStatus.ACCEPTED,
+    );
+    for (const a of cancellable) {
+      await this.dataSource.query(
+        `UPDATE assignments
+         SET status = 'CANCELLED',
+             cancel_reason = 'Branch deactivated by operations',
+             updated_by = $1,
+             entity_version = COALESCE(entity_version, 1) + 1,
+             updated_at = NOW()
+         WHERE id = $2`,
+        [userId, a.id],
+      );
+      await this.auditService.recordEvent({
+        category: EventCategory.WORKFLOW,
+        eventType: 'ASSIGNMENT_CANCELLED',
+        entityType: 'ASSIGNMENT',
+        entityId: a.id,
+        previousState: a.status,
+        newState: AssignmentStatus.CANCELLED,
+        userId,
+        remarks: `Auto-cancelled due to deactivation of branch ${branch.name}`,
+      });
+      this.eventPublisher.publish('assignment:status-changed', {
+        eventType: 'assignment:status-changed',
+        assignmentId: a.id,
+        assignmentNumber: a.assignment_number,
+        previousState: a.status,
+        newState: AssignmentStatus.CANCELLED,
+        userId,
+      });
+    }
+
     branch.isActive = false;
     branch.updatedBy = userId;
     await this.branchRepository.save(branch);

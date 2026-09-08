@@ -3,6 +3,7 @@ import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
 import { ConflictException, BadRequestException, NotFoundException } from '@nestjs/common';
 import { DataSource } from 'typeorm';
 import { BillingEngineService } from './billing-engine.service';
+import { BillingJobsService } from './billing-jobs.service';
 import { BillingEntryEntity } from './billing-entry.entity';
 import { BillingInvoiceEntity } from './invoice.entity';
 import { BillingPaymentEntity } from './payment.entity';
@@ -11,6 +12,7 @@ import { BillingHistoryEntity } from './history.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ProjectEntity } from '../project/project.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
+import { AssayerDocumentEntity } from '../assayer/assayer-document.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
@@ -19,7 +21,7 @@ import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import { TypeOrmUnitOfWork } from '../../infrastructure/persistence/typeorm-unit-of-work';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
-import { BillingState, AssayerPayableStatus, PaymentMethod, PaymentDirection, InvoiceStatus, AssignmentStatus, EventCategory } from '@fapoms/shared';
+import { BillingState, AssayerPayableStatus, PaymentMethod, PaymentDirection, InvoiceStatus, AssignmentStatus, EventCategory, OnboardingDocument, DocumentVerification } from '@fapoms/shared';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 
 /**
@@ -126,6 +128,17 @@ describe('BillingEngineService', () => {
   // Read-only in the service (bank file, TDS report, PAN on the statement); the entity load is
   // what decrypts PAN/account, so tests stub it with plain objects.
   const assayerRepo: any = { find: jest.fn(async () => []), findOne: jest.fn(async () => null) };
+  const documentRepo: any = {
+    find: jest.fn(async () => []),
+    findOne: jest.fn(async () => ({
+      id: 'doc-1',
+      assayerId: 'assayer-1',
+      requirement: OnboardingDocument.BANK_PASSBOOK,
+      verificationStatus: DocumentVerification.VERIFIED,
+      currentVersionId: 'ver-bank-1',
+      isActive: true,
+    })),
+  };
 
   const repoForEntity = (target: any): any => {
     if (target === BillingEntryEntity) return entryRepo;
@@ -136,6 +149,7 @@ describe('BillingEngineService', () => {
     if (target === AssignmentEntity) return assignmentRepo;
     if (target === ProjectEntity) return projectRepo;
     if (target === AssayerEntity) return assayerRepo;
+    if (target === AssayerDocumentEntity) return documentRepo;
     throw new Error(`No repository double registered for ${target?.name ?? target}`);
   };
 
@@ -230,7 +244,13 @@ describe('BillingEngineService', () => {
     id: 'payable-1', payableNumber: 'PY-1', assayerId: 'assayer-1', clientId: 'client-1', projectId: 'project-1',
     assignmentId: 'asn-1', expenseId: null, status: AssayerPayableStatus.PENDING, onHold: false, holdReason: null,
     baseAmount: '1700.00', travelAmount: '300.00', taxAmount: '0.00', tdsAmount: '200.00', totalAmount: '1800.00',
-    currency: 'INR', paidAmount: '0.00', rateSnapshot: { feeAmount: 2000, settled: true }, ...over,
+    currency: 'INR', paidAmount: '0.00', rateSnapshot: { feeAmount: 2000, settled: true },
+    destinationBankAccountNumber: '9876543210',
+    destinationIfsc: 'HDFC0001234',
+    destinationBankName: 'HDFC Bank',
+    destinationAccountHolderName: 'Assayer One',
+    destinationVerifiedAt: new Date(),
+    ...over,
   });
   const line = (over: Partial<any> = {}) => ({
     id: 'entry-1', entryNumber: 'BE-1', clientId: 'client-1', projectId: 'project-1', assignmentId: 'asn-1', assayerId: 'assayer-1',
@@ -254,10 +274,28 @@ describe('BillingEngineService', () => {
     for (const k of Object.keys(settingsValues)) delete settingsValues[k];
     jest.clearAllMocks();
     managerQuery.mockImplementation(defaultManagerQuery);
-    for (const r of [entryRepo, payableRepo, invoiceRepo, paymentRepo, historyRepo, assignmentRepo, projectRepo, assayerRepo]) {
+    for (const r of [entryRepo, payableRepo, invoiceRepo, paymentRepo, historyRepo, assignmentRepo, projectRepo]) {
       r.findOne.mockImplementation(async () => null);
       r.find.mockImplementation(async () => []);
     }
+    assayerRepo.findOne.mockImplementation(async () => ({
+      id: 'assayer-1',
+      bankAccountNumber: '9876543210',
+      ifscCode: 'HDFC0001234',
+      bankName: 'HDFC Bank',
+      bankAccountHolderName: 'Assayer One',
+      panNumber: 'ABCDE1234F',
+    }));
+    assayerRepo.find.mockImplementation(async () => []);
+    documentRepo.findOne.mockImplementation(async () => ({
+      id: 'doc-1',
+      assayerId: 'assayer-1',
+      requirement: OnboardingDocument.BANK_PASSBOOK,
+      verificationStatus: DocumentVerification.VERIFIED,
+      currentVersionId: 'ver-bank-1',
+      isActive: true,
+    }));
+    documentRepo.find.mockImplementation(async () => []);
     entryRepo.createQueryBuilder.mockImplementation(() => queryBuilderStub());
     payableRepo.createQueryBuilder.mockImplementation(() => queryBuilderStub());
     invoiceRepo.createQueryBuilder.mockImplementation(() => queryBuilderStub());
@@ -1328,6 +1366,156 @@ describe('BillingEngineService', () => {
       expect(page.items).toHaveLength(1); // unfiltered
       expect(warn).toHaveBeenCalledWith(expect.stringContaining('would filter 1 of 1'));
       warn.mockRestore();
+    });
+  });
+
+  describe('onModuleInit event subscriber & durable queue delegation', () => {
+    it('enqueues durable billing job when billingJobs service is injected and assignment completes', async () => {
+      const mockBillingJobs = {
+        enqueueBookAssignment: jest.fn().mockResolvedValue({ id: 'job-1' }),
+      };
+      const subscriptions: Record<string, Function> = {};
+      const mockEventPublisher = {
+        publish: jest.fn(),
+        subscribe: jest.fn((event: string, cb: Function) => {
+          subscriptions[event] = cb;
+        }),
+      };
+
+      const testModule = await Test.createTestingModule({
+        providers: [
+          BillingEngineService,
+          { provide: getRepositoryToken(BillingEntryEntity), useValue: entryRepo },
+          { provide: getRepositoryToken(BillingInvoiceEntity), useValue: invoiceRepo },
+          { provide: getRepositoryToken(BillingPaymentEntity), useValue: paymentRepo },
+          { provide: getRepositoryToken(AssayerPayableEntity), useValue: payableRepo },
+          { provide: getRepositoryToken(BillingHistoryEntity), useValue: historyRepo },
+          { provide: getRepositoryToken(AssignmentEntity), useValue: assignmentRepo },
+          { provide: getRepositoryToken(ProjectEntity), useValue: projectRepo },
+          { provide: getRepositoryToken(AssayerEntity), useValue: assayerRepo },
+          { provide: getDataSourceToken(), useValue: dataSource },
+          { provide: DataSource, useValue: dataSource },
+          { provide: DomainEventPublisher, useValue: mockEventPublisher },
+          { provide: NotificationDispatchService, useValue: { emit: jest.fn(), emitSafe: jest.fn() } },
+          { provide: AuditService, useValue: { recordEvent, recordEventSafe: jest.fn() } },
+          { provide: RegionGuardService, useValue: regionGuard },
+          { provide: UnitOfWork, useValue: {} },
+          { provide: CacheService, useValue: { withLock: jest.fn() } },
+          { provide: PlatformSettingsService, useValue: { get: jest.fn() } },
+          { provide: BillingJobsService, useValue: mockBillingJobs },
+        ],
+      }).compile();
+
+      const svc = testModule.get(BillingEngineService);
+      svc.onModuleInit();
+
+      expect(mockEventPublisher.subscribe).toHaveBeenCalledWith('assignment:status-changed', expect.any(Function));
+
+      // 1. Non-completed event should be ignored
+      await subscriptions['assignment:status-changed']({
+        assignmentId: 'asn-1',
+        newState: AssignmentStatus.IN_PROGRESS,
+      });
+      expect(mockBillingJobs.enqueueBookAssignment).not.toHaveBeenCalled();
+
+      // 2. Completed event delegates to durable queue with outboxEventId
+      await subscriptions['assignment:status-changed']({
+        assignmentId: 'asn-1',
+        newState: AssignmentStatus.COMPLETED,
+        userId: 'actor-1',
+        outboxEventId: 'outbox-1',
+      });
+      expect(mockBillingJobs.enqueueBookAssignment).toHaveBeenCalledWith('asn-1', 'actor-1', 'outbox-1');
+    });
+
+    it('rethrows enqueue errors so outbox relay / caller detects the failure', async () => {
+      const mockBillingJobs = {
+        enqueueBookAssignment: jest.fn().mockRejectedValue(new Error('Redis connection lost')),
+      };
+      const subscriptions: Record<string, Function> = {};
+      const mockEventPublisher = {
+        publish: jest.fn(),
+        subscribe: jest.fn((event: string, cb: Function) => {
+          subscriptions[event] = cb;
+        }),
+      };
+
+      const testModule = await Test.createTestingModule({
+        providers: [
+          BillingEngineService,
+          { provide: getRepositoryToken(BillingEntryEntity), useValue: entryRepo },
+          { provide: getRepositoryToken(BillingInvoiceEntity), useValue: invoiceRepo },
+          { provide: getRepositoryToken(BillingPaymentEntity), useValue: paymentRepo },
+          { provide: getRepositoryToken(AssayerPayableEntity), useValue: payableRepo },
+          { provide: getRepositoryToken(BillingHistoryEntity), useValue: historyRepo },
+          { provide: getRepositoryToken(AssignmentEntity), useValue: assignmentRepo },
+          { provide: getRepositoryToken(ProjectEntity), useValue: projectRepo },
+          { provide: getRepositoryToken(AssayerEntity), useValue: assayerRepo },
+          { provide: getDataSourceToken(), useValue: dataSource },
+          { provide: DataSource, useValue: dataSource },
+          { provide: DomainEventPublisher, useValue: mockEventPublisher },
+          { provide: NotificationDispatchService, useValue: { emit: jest.fn(), emitSafe: jest.fn() } },
+          { provide: AuditService, useValue: { recordEvent, recordEventSafe: jest.fn() } },
+          { provide: RegionGuardService, useValue: regionGuard },
+          { provide: UnitOfWork, useValue: {} },
+          { provide: CacheService, useValue: { withLock: jest.fn() } },
+          { provide: PlatformSettingsService, useValue: { get: jest.fn() } },
+          { provide: BillingJobsService, useValue: mockBillingJobs },
+        ],
+      }).compile();
+
+      const svc = testModule.get(BillingEngineService);
+      svc.onModuleInit();
+
+      await expect(
+        subscriptions['assignment:status-changed']({
+          assignmentId: 'asn-1',
+          newState: AssignmentStatus.COMPLETED,
+        }),
+      ).rejects.toThrow('Redis connection lost');
+    });
+
+    it('throws error and does not silently swallow or fallback if BillingJobsService is missing', async () => {
+      const subscriptions: Record<string, Function> = {};
+      const mockEventPublisher = {
+        publish: jest.fn(),
+        subscribe: jest.fn((event: string, cb: Function) => {
+          subscriptions[event] = cb;
+        }),
+      };
+
+      const testModule = await Test.createTestingModule({
+        providers: [
+          BillingEngineService,
+          { provide: getRepositoryToken(BillingEntryEntity), useValue: entryRepo },
+          { provide: getRepositoryToken(BillingInvoiceEntity), useValue: invoiceRepo },
+          { provide: getRepositoryToken(BillingPaymentEntity), useValue: paymentRepo },
+          { provide: getRepositoryToken(AssayerPayableEntity), useValue: payableRepo },
+          { provide: getRepositoryToken(BillingHistoryEntity), useValue: historyRepo },
+          { provide: getRepositoryToken(AssignmentEntity), useValue: assignmentRepo },
+          { provide: getRepositoryToken(ProjectEntity), useValue: projectRepo },
+          { provide: getRepositoryToken(AssayerEntity), useValue: assayerRepo },
+          { provide: getDataSourceToken(), useValue: dataSource },
+          { provide: DataSource, useValue: dataSource },
+          { provide: DomainEventPublisher, useValue: mockEventPublisher },
+          { provide: NotificationDispatchService, useValue: { emit: jest.fn(), emitSafe: jest.fn() } },
+          { provide: AuditService, useValue: { recordEvent, recordEventSafe: jest.fn() } },
+          { provide: RegionGuardService, useValue: regionGuard },
+          { provide: UnitOfWork, useValue: {} },
+          { provide: CacheService, useValue: { withLock: jest.fn() } },
+          { provide: PlatformSettingsService, useValue: { get: jest.fn() } },
+        ],
+      }).compile();
+
+      const svc = testModule.get(BillingEngineService);
+      svc.onModuleInit();
+
+      await expect(
+        subscriptions['assignment:status-changed']({
+          assignmentId: 'asn-1',
+          newState: AssignmentStatus.COMPLETED,
+        }),
+      ).rejects.toThrow('BillingJobsService not available to enqueue billing job');
     });
   });
 });

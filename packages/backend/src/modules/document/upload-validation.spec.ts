@@ -81,6 +81,17 @@ describe('assertUploadAllowed', () => {
       }
     });
 
+    it('takes desk-scanner output (TIFF/BMP/GIF), by declared type or by extension', () => {
+      for (const contentType of ['image/tiff', 'image/bmp', 'image/gif']) {
+        expect(() => assertUploadAllowed({ contentType, size: 10, allowed: SCAN_UPLOAD_TYPES })).not.toThrow();
+      }
+      for (const fileName of ['scan.tiff', 'scan.tif', 'scan.bmp', 'scan.gif']) {
+        expect(() => assertUploadAllowed({
+          contentType: 'application/octet-stream', fileName, size: 10, allowed: SCAN_UPLOAD_TYPES,
+        })).not.toThrow();
+      }
+    });
+
     it('refuses a spreadsheet, which the general list allows', () => {
       const contentType = 'application/vnd.ms-excel';
       expect(() => assertUploadAllowed({ contentType, size: 10 })).not.toThrow();

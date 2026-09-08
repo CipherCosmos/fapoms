@@ -29,24 +29,9 @@ export const HrIssuesPage: React.FC = () => {
       <div>
         <h2 style={{ fontSize: '17px', fontWeight: 700, margin: 0 }}>Review queue</h2>
         <p style={{ fontSize: '13px', color: 'var(--text-secondary)', margin: '5px 0 0', lineHeight: 1.55, maxWidth: '760px' }}>
-          {/*
-            Two writers, one queue, and the distinction matters to whoever is clearing it: an
-            import problem is about a cell in a spreadsheet somebody uploaded, a scan finding is
-            about a record that is live right now. Neither ever changed anything on its own —
-            which is why they are all still here waiting.
-
-            Deliberately NOT a list of the checks. The scanner's set moves — four titles were
-            added in the last change alone ("Home pin is a placeholder, not a home", "No home
-            address on the record", "No phone number on the record", "Ticked as received, but no
-            scan was kept") — and a hand-written list on this page is a list that goes stale
-            silently. The findings themselves name their own check, and the two examples below
-            are chosen as illustrations of the KIND of thing, not as an inventory.
-          */}
           Everything the system found but would not decide for you: cells the roster import could
-          not read, and things the standing data checks keep finding on live records — a missing
-          date of birth, a home pin that is really the middle of a state, one bank account under
-          two people. Nothing was guessed and nothing was changed automatically, so each one is
-          here until somebody says what should happen to it.
+          not read, and failing checks on live records. Nothing was guessed and nothing was changed
+          automatically — each one waits here until somebody decides what should happen to it.
         </p>
       </div>
 

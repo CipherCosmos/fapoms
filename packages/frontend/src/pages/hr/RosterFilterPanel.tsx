@@ -39,7 +39,7 @@ const ChoiceRow: React.FC<{
 }> = ({ label, count, checked, onToggle }) => (
   <label
     style={{
-      display: 'flex', alignItems: 'center', gap: '7px', padding: '3px 2px',
+      display: 'flex', alignItems: 'center', gap: '7px', padding: '6px 4px',
       fontSize: FONT.body, cursor: 'pointer',
       // A zero option stays readable and stays clickable — it is an answer ("nobody is in that
       // state"), and hiding it would make the panel change shape as people are filtered.
@@ -205,7 +205,7 @@ export const RosterFilterPanel: React.FC<{
   defs?: RosterFilter[];
 }> = ({ rows, state, onChange, onClearAll, defs: providedDefs = ROSTER_FILTERS }) => {
   const defs = useMemo(() => availableFilters(rows, providedDefs), [rows, providedDefs]);
-  const [openGroups, setOpenGroups] = useState<string[]>(['person', 'place', 'paperwork', 'dates']);
+  const [openGroups, setOpenGroups] = useState<string[]>(['person']);
 
   /**
    * The population each axis counts against: everything else applied, that axis left open.
@@ -319,7 +319,7 @@ export const AppliedFilterBar: React.FC<{
           title={`Remove ${pill.label}`}
           style={{
             display: 'inline-flex', alignItems: 'center', gap: '5px',
-            padding: '3px 8px', borderRadius: '999px', cursor: 'pointer',
+            padding: '5px 10px', borderRadius: '999px', cursor: 'pointer',
             fontSize: FONT.small, fontWeight: 600,
             border: '1px solid color-mix(in srgb, var(--accent) 40%, transparent)',
             background: 'color-mix(in srgb, var(--accent) 12%, transparent)',
@@ -327,7 +327,7 @@ export const AppliedFilterBar: React.FC<{
           }}
         >
           {pill.label}
-          <X size={11} />
+          <X size={13} />
         </button>
       ))}
       <button

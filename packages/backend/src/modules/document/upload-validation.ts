@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { MAX_UPLOAD_MB, MAX_RESUMABLE_UPLOAD_MB } from '@fapoms/shared';
+import { DEFAULT_MAX_UPLOAD_MB, SCAN_UPLOAD_MIME_TYPES } from '@fapoms/shared';
 import { ASSAYER_ERROR_CODES } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
 
@@ -55,8 +55,12 @@ export const ALLOWED_UPLOAD_TYPES = new Set([
  * The default comes from `@fapoms/shared` because the web and mobile file pickers need to state
  * the limit *before* a file is chosen, and a hand-copied 50 in a React component is exactly the
  * copy that would still say 50 the day this becomes 80.
+ *
+ * `MAX_UPLOAD_MB` (this constant's old name in `@fapoms/shared`) was renamed to
+ * `DEFAULT_MAX_UPLOAD_MB` when the registration overhaul's shared accept-list
+ * (`SCAN_UPLOAD_MIME_TYPES`) was added alongside it — same value (50), new name only.
  */
-export const MAX_UPLOAD_BYTES = (Number(process.env.DOCUMENT_MAX_UPLOAD_MB) || MAX_UPLOAD_MB) * 1024 * 1024;
+export const MAX_UPLOAD_BYTES = (Number(process.env.DOCUMENT_MAX_UPLOAD_MB) || DEFAULT_MAX_UPLOAD_MB) * 1024 * 1024;
 
 /**
  * Hard ceiling on a *resumable* (chunked) upload — deliberately higher than the single-request one.
@@ -74,14 +78,21 @@ export const MAX_UPLOAD_BYTES = (Number(process.env.DOCUMENT_MAX_UPLOAD_MB) || M
  * before choosing a file. Both now live here, both are enforced through `assertUploadAllowed`, and
  * `DOCUMENT_MAX_RESUMABLE_UPLOAD_MB` is the deployment escape hatch — the same shape as the other
  * cap, so raising one does not silently teach anybody to edit the other by hand.
+ *
+ * The default (100) is a literal here, not a shared import: `@fapoms/shared` dropped
+ * `MAX_RESUMABLE_UPLOAD_MB` in the same pass that added `SCAN_UPLOAD_MIME_TYPES`, and only the
+ * single-request default (`DEFAULT_MAX_UPLOAD_MB`) has a replacement there — no client picker
+ * needs to know the resumable ceiling ahead of time the way it needs the plain one, so there was
+ * nothing on the client side for a shared constant to serve. Same value as before; raise it via
+ * the env var above, not by editing this number.
  */
 export const MAX_RESUMABLE_UPLOAD_BYTES =
-  (Number(process.env.DOCUMENT_MAX_RESUMABLE_UPLOAD_MB) || MAX_RESUMABLE_UPLOAD_MB) * 1024 * 1024;
+  (Number(process.env.DOCUMENT_MAX_RESUMABLE_UPLOAD_MB) || 100) * 1024 * 1024;
 
 const HUMAN_ALLOWED = 'PDF, images (JPEG/PNG/WebP/HEIC), Excel and CSV';
 
 /** What the narrower set is called when a route refuses something for being outside it. */
-const HUMAN_SCANS = 'PDF or an image (JPEG/PNG/WebP/HEIC)';
+const HUMAN_SCANS = 'PDF or an image (JPEG/PNG/WebP/HEIC/TIFF/BMP/GIF)';
 
 /** As above, for the spreadsheet-only routes. */
 const HUMAN_SPREADSHEETS = 'an Excel (.xlsx/.xls) or CSV file';
@@ -108,11 +119,8 @@ function mb(bytes: number): string {
  * the type is all we can know, and the cap is applied again on finalize once the object's real
  * size is observable. Every route that already holds the bytes must pass both.
  */
-/** PDFs and pictures. What an identity document or a signed form can actually be. */
-export const SCAN_UPLOAD_TYPES = new Set([
-  'application/pdf',
-  'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif',
-]);
+// Built from the shared accept-list (packages/shared/src/upload-limits.ts) so the server and every client picker read one definition.
+export const SCAN_UPLOAD_TYPES = new Set(SCAN_UPLOAD_MIME_TYPES);
 
 /** Spreadsheets and CSV. What a customer-master batch can actually be — never a PDF, an image, or anything else `ALLOWED_UPLOAD_TYPES` waves through for the scan routes. */
 export const SPREADSHEET_UPLOAD_TYPES = new Set([
@@ -133,6 +141,7 @@ const EXTENSION_TYPES: Record<string, string> = {
   pdf: 'application/pdf',
   jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp',
   heic: 'image/heic', heif: 'image/heif',
+  tif: 'image/tiff', tiff: 'image/tiff', bmp: 'image/bmp', gif: 'image/gif',
   xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   xls: 'application/vnd.ms-excel',
   csv: 'text/csv',

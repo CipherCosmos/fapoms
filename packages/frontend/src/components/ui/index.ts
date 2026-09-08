@@ -19,5 +19,12 @@ export type { ConfirmOptions, ConfirmTone } from './ConfirmDialog';
 export { ChipMultiSelect } from './ChipMultiSelect';
 export type { ChipOption, ChipMultiSelectProps } from './ChipMultiSelect';
 export { PageHeader } from './PageHeader';
+export type { PageHeaderProps, BreadcrumbItem } from './PageHeader';
 export { EmptyState } from './EmptyState';
-export { FilterBar } from './FilterBar';
+export { FilterBar, FilterChip } from './FilterBar';
+export type { FilterBarProps, FilterChipItem } from './FilterBar';
+export { ConflictModal } from './ConflictModal';
+export type { ConflictModalProps } from './ConflictModal';
+export { FormField, FormSection } from './FormPrimitives';
+export type { FormFieldProps, FormSectionProps, FieldVerificationState } from './FormPrimitives';
+

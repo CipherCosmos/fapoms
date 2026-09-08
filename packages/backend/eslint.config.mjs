@@ -1,4 +1,5 @@
 import js from '@eslint/js';
+import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
 /**
@@ -45,6 +46,22 @@ export default tseslint.config(
       '@typescript-eslint/no-empty-object-type': 'off',
       'no-empty': ['warn', { allowEmptyCatch: true }],
       'no-constant-condition': ['error', { checkLoops: false }],
+    },
+  },
+  {
+    // Hand-run ESM utility scripts. They live under src/ for discoverability but are not part of
+    // the compiled application, so they are in no tsconfig — and the type-aware project service
+    // fails outright on a file it cannot resolve to a project ("was not found by the project
+    // service"), which is an error, not a warning, and takes the whole lint run down with it.
+    //
+    // Linted with the plain JS rules rather than excluded, so a genuine mistake in one — an
+    // undefined variable, an unreachable branch — is still caught. The type-aware rules are the
+    // only thing switched off, because there are no types here to check against.
+    files: ['**/*.mjs', '**/*.js'],
+    ...tseslint.configs.disableTypeChecked,
+    languageOptions: {
+      parserOptions: { projectService: false },
+      globals: globals.node,
     },
   },
 );

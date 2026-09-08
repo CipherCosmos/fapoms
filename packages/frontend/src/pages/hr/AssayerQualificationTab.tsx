@@ -153,11 +153,15 @@ export const AssayerQualificationTab: React.FC<{
       {/* One failure channel per screen — see AssayerRecord.tsx. */}
       <AlertBanner type="error" message={err} onClose={() => setErr(null)} />
 
+      {/*
+        One line carries what to do; the Overall card beside it already says what the number is.
+        The old two-sentence version restated the card's own "out of 100, worked out fresh" line
+        before getting to the point.
+      */}
       <Lede>
         {overall.effective == null
-          ? 'How ready this person is for work, out of 100 — not yet assessable, because nothing scoreable is on their file yet.'
-          : 'How ready this person is for work, out of 100, worked out fresh from their file each time this opens. '
-            + 'Anything below is raised by filling the gap it names, not by editing the number.'}
+          ? 'Not yet assessable — nothing scoreable is on their file yet.'
+          : 'A low score is raised by filling the gap it names, not by editing the number.'}
       </Lede>
 
       {/* ── Overall ── */}

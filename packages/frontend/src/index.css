@@ -63,13 +63,72 @@
   --on-gradient: #211A14;
 
   /* ------------------------------------------------------------------ */
-  /* Radius / motion / layout — shared across all themes                 */
+  /* Canonical Geometry, Typography & Spacing Scale (Universal Tokens)   */
   /* ------------------------------------------------------------------ */
+
+  /* Typography Scale */
+  --text-3xs: 0.625rem;  /* 10px */
+  --text-2xs: 0.6875rem; /* 11px */
+  --text-xs:  0.75rem;   /* 12px */
+  --text-sm:  0.8125rem; /* 13px */
+  --text-base:0.875rem;  /* 14px */
+  --text-md:  1rem;      /* 16px */
+  --text-lg:  1.125rem;  /* 18px */
+  --text-xl:  1.25rem;   /* 20px */
+  --text-2xl: 1.5rem;    /* 24px */
+  --text-3xl: 1.875rem;  /* 30px */
+
+  --font-regular: 400;
+  --font-medium: 500;
+  --font-semibold: 600;
+  --font-bold: 700;
+  --font-extrabold: 800;
+
+  --leading-tight: 1.25;
+  --leading-snug: 1.375;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.625;
+
+  /* Full Typography Contracts (Size, Line-Height, Weight, Letter-Spacing) */
+  --type-display: var(--font-bold) var(--text-3xl)/var(--leading-tight) system-ui, -apple-system, sans-serif;
+  --type-title-lg: var(--font-semibold) var(--text-2xl)/var(--leading-snug) system-ui, -apple-system, sans-serif;
+  --type-title-md: var(--font-semibold) var(--text-xl)/var(--leading-snug) system-ui, -apple-system, sans-serif;
+  --type-title-sm: var(--font-semibold) var(--text-lg)/var(--leading-snug) system-ui, -apple-system, sans-serif;
+  --type-body-md: var(--font-regular) var(--text-base)/var(--leading-normal) system-ui, -apple-system, sans-serif;
+  --type-body-sm: var(--font-regular) var(--text-sm)/var(--leading-normal) system-ui, -apple-system, sans-serif;
+  --type-caption: var(--font-medium) var(--text-xs)/var(--leading-snug) system-ui, -apple-system, sans-serif;
+  --type-badge: var(--font-semibold) var(--text-2xs)/1.2 system-ui, -apple-system, sans-serif;
+
+  /* Spacing Scale (4px/8px Geometric Scale) */
+  --space-0-5: 2px;
+  --space-1:   4px;
+  --space-1-5: 6px;
+  --space-2:   8px;
+  --space-2-5: 10px;
+  --space-3:   12px;
+  --space-3-5: 14px;
+  --space-4:   16px;
+  --space-5:   20px;
+  --space-6:   24px;
+  --space-7:   28px;
+  --space-8:   32px;
+  --space-10:  40px;
+  --space-12:  48px;
+  --space-16:  64px;
+
+  /* Radius Scale */
+  --radius-2xs: 2px;
   --radius-xs: 4px;
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 14px;
+  --radius-xl: 18px;
   --radius-full: 9999px;
+
+  /* Interactive, Accessibility & Layout */
+  --touch-target-min: 44px;
+  --focus-ring: 0 0 0 2px var(--bg-page), 0 0 0 4px var(--accent-primary);
+  --focus-ring-inset: inset 0 0 0 2px var(--accent-primary);
 
   --sidebar-width: 260px;
   --transition-fast: 0.15s ease;
@@ -77,6 +136,41 @@
 
   /* Surface blur — 0 for solid themes, >0 for glass themes */
   --surface-blur: 0px;
+
+  /* Canonical Semantic Status Tokens (Light Default) */
+  --status-active-fg: #1e7040;
+  --status-active-bg: rgba(30, 112, 64, 0.12);
+  --status-active-border: rgba(30, 112, 64, 0.28);
+  --status-positive-fg: var(--status-active-fg);
+  --status-positive-bg: var(--status-active-bg);
+  --status-positive-border: var(--status-active-border);
+
+  --status-pending-fg: #945900;
+  --status-pending-bg: rgba(148, 89, 0, 0.12);
+  --status-pending-border: rgba(148, 89, 0, 0.28);
+
+  --status-warning-fg: #a14400;
+  --status-warning-bg: rgba(161, 68, 0, 0.12);
+  --status-warning-border: rgba(161, 68, 0, 0.28);
+
+  --status-danger-fg: #b3261e;
+  --status-danger-bg: rgba(179, 38, 30, 0.12);
+  --status-danger-border: rgba(179, 38, 30, 0.28);
+
+  --status-info-fg: #1d5cb8;
+  --status-info-bg: rgba(29, 92, 184, 0.12);
+  --status-info-border: rgba(29, 92, 184, 0.28);
+
+  --status-inactive-fg: #616e7c;
+  --status-inactive-bg: rgba(97, 110, 124, 0.12);
+  --status-inactive-border: rgba(97, 110, 124, 0.26);
+  --status-neutral-fg: var(--status-inactive-fg);
+  --status-neutral-bg: var(--status-inactive-bg);
+  --status-neutral-border: var(--status-inactive-border);
+
+  --status-archived-fg: #3e4c59;
+  --status-archived-bg: rgba(62, 76, 89, 0.10);
+  --status-archived-border: rgba(62, 76, 89, 0.22);
 }
 
 /* ===========================================================================
@@ -276,6 +370,54 @@
 /* ===========================================================================
    DARK THEMES
    =========================================================================== */
+
+/* Shared Dark Semantic Status Tokens (applied across all dark and glass themes) */
+[data-theme="noir"],
+[data-theme="slate"],
+[data-theme="midnight"],
+[data-theme="black-gold"],
+[data-theme="black-white"],
+[data-theme="glass-dark"],
+[data-theme="glass-obsidian"],
+[data-theme="glass-cyberpunk"],
+[data-theme="glass-emerald"],
+[data-theme="glass-amethyst"],
+[data-theme="glass-sapphire"],
+[data-theme="carbon"] {
+  --status-active-fg: #4ade80;
+  --status-active-bg: rgba(74, 222, 128, 0.16);
+  --status-active-border: rgba(74, 222, 128, 0.32);
+  --status-positive-fg: var(--status-active-fg);
+  --status-positive-bg: var(--status-active-bg);
+  --status-positive-border: var(--status-active-border);
+
+  --status-pending-fg: #fbbf24;
+  --status-pending-bg: rgba(251, 191, 36, 0.16);
+  --status-pending-border: rgba(251, 191, 36, 0.32);
+
+  --status-warning-fg: #fb923c;
+  --status-warning-bg: rgba(251, 146, 60, 0.16);
+  --status-warning-border: rgba(251, 146, 60, 0.32);
+
+  --status-danger-fg: #f87171;
+  --status-danger-bg: rgba(248, 113, 113, 0.18);
+  --status-danger-border: rgba(248, 113, 113, 0.35);
+
+  --status-info-fg: #60a5fa;
+  --status-info-bg: rgba(96, 165, 250, 0.16);
+  --status-info-border: rgba(96, 165, 250, 0.32);
+
+  --status-inactive-fg: #94a3b8;
+  --status-inactive-bg: rgba(148, 163, 184, 0.14);
+  --status-inactive-border: rgba(148, 163, 184, 0.25);
+  --status-neutral-fg: var(--status-inactive-fg);
+  --status-neutral-bg: var(--status-inactive-bg);
+  --status-neutral-border: var(--status-inactive-border);
+
+  --status-archived-fg: #cbd5e1;
+  --status-archived-bg: rgba(203, 213, 225, 0.12);
+  --status-archived-border: rgba(203, 213, 225, 0.25);
+}
 
 /* --------------------------------------------------------------------------- */
 /* NOIR  (default dark) — warm gold-on-charcoal                                 */
@@ -1179,16 +1321,21 @@ body {
 ::-webkit-scrollbar-thumb { background: var(--bg-surface-2); border-radius: var(--radius-full); }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-muted); }
 
-/* Typography — display serif for headings only */
+/* Typography — functional sans-serif for operational headings; serif display reserved for brand */
 h1, h2, h3, h4, h5, h6 {
-  font-family: var(--font-display);
+  font-family: var(--font-sans);
   font-weight: 600;
-  letter-spacing: -0.01em;
-  line-height: 1.15;
+  letter-spacing: var(--tracking-tight);
+  line-height: var(--leading-tight);
+  color: var(--text-primary);
+}
+
+.font-display, .brand-display {
+  font-family: var(--font-display);
 }
 
 /* Numerals — tabular figures for audit data */
-table, .data-table, .financial, .tabular-nums, td, th {
+table, .data-table, .financial, .tabular-nums, td, th, .metric-value {
   font-variant-numeric: tabular-nums;
 }
 
@@ -1786,4 +1933,76 @@ html, body {
 /* Someone who asked for less motion gets a flat placeholder, not a moving one. */
 @media (prefers-reduced-motion: reduce) {
   .skeleton-bar { animation: none; }
+}
+
+/* ===========================================================================
+   TYPOGRAPHY CONTRACTS (Shared hierarchy)
+   =========================================================================== */
+.type-display {
+  font-size: var(--text-3xl);
+  line-height: var(--leading-tight);
+  font-weight: var(--font-bold);
+  letter-spacing: -0.025em;
+}
+.type-title-lg {
+  font-size: var(--text-2xl);
+  line-height: var(--leading-snug);
+  font-weight: var(--font-semibold);
+  letter-spacing: -0.02em;
+}
+.type-title-md {
+  font-size: var(--text-xl);
+  line-height: var(--leading-snug);
+  font-weight: var(--font-semibold);
+  letter-spacing: -0.015em;
+}
+.type-title-sm {
+  font-size: var(--text-lg);
+  line-height: var(--leading-snug);
+  font-weight: var(--font-semibold);
+  letter-spacing: -0.01em;
+}
+.type-body-md {
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  font-weight: var(--font-regular);
+  letter-spacing: 0;
+}
+.type-body-sm {
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  font-weight: var(--font-regular);
+  letter-spacing: 0.005em;
+}
+.type-caption {
+  font-size: var(--text-xs);
+  line-height: var(--leading-snug);
+  font-weight: var(--font-medium);
+  letter-spacing: 0.01em;
+}
+.type-badge {
+  font-size: var(--text-2xs);
+  line-height: 1.2;
+  font-weight: var(--font-semibold);
+  letter-spacing: 0.02em;
+}
+
+/* --------------------------------------------------------------------------- */
+/* Roster Responsive Layout Breakpoint                                        */
+/* --------------------------------------------------------------------------- */
+@media (max-width: 768px) {
+  .roster-desktop-view {
+    display: none !important;
+  }
+  .roster-mobile-view {
+    display: flex !important;
+  }
+}
+@media (min-width: 769px) {
+  .roster-desktop-view {
+    display: block !important;
+  }
+  .roster-mobile-view {
+    display: none !important;
+  }
 }

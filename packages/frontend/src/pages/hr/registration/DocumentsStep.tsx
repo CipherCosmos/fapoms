@@ -1,9 +1,12 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Paperclip, Trash2, Check, FileText, IdCard, ShieldCheck } from 'lucide-react';
+import { SCAN_UPLOAD_MIME_TYPES, SCAN_UPLOAD_ACCEPT, DEFAULT_MAX_UPLOAD_MB } from '@fapoms/shared';
 import { api } from '../../../services/api';
 import { userMessage } from '../../../services/errors';
-import { AlertBanner, useConfirm, useToast } from '../../../components/ui';
+import { AlertBanner, Select, useConfirm, useToast } from '../../../components/ui';
+import { Editor } from '../hr-ui';
 import { looksLikeMask } from '../assayer-shared';
+import { humanize } from '../AssayerForms';
 import type { Dossier, DossierDocument } from './useRegistration';
 
 /**
@@ -35,9 +38,12 @@ const cardStyle: React.CSSProperties = {
   padding: '12px 14px',
 };
 
+// `--bg-surface-2`, not `--bg-page`: this box sits inside a document's `cardStyle` card
+// (`--bg-card`), which is the same colour as `--bg-page` in the dark themes — so the box read
+// as part of the card rather than as something to type into.
 const numberInputStyle: React.CSSProperties = {
   width: '100%', padding: '7px 9px', fontSize: '13px', fontFamily: 'monospace',
-  background: 'var(--bg-page)', color: 'var(--text-primary)',
+  background: 'var(--bg-surface-2)', color: 'var(--text-primary)',
   border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', outline: 'none',
 };
 
@@ -83,7 +89,9 @@ const Scans: React.FC<{
   };
 
   if (filePaths.length === 0) return null;
-  const isImage = (key: string) => /\.(jpe?g|png|webp|heic|heif)$/i.test(key);
+  // TIFF is deliberately not here: browsers cannot render it, so a TIFF page stays a download
+  // link rather than a broken thumbnail.
+  const isImage = (key: string) => /\.(jpe?g|png|webp|gif|bmp|heic|heif)$/i.test(key);
 
   return (
     <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginTop: '8px' }}>
@@ -138,24 +146,6 @@ const Scans: React.FC<{
  * writes is the same column the ID step writes, so leaving it unsaved would mean the two screens
  * disagree about the same person's Aadhaar.
  */
-/**
- * Ask which of the fixed reasons applies.
- *
- * A native prompt rather than a modal, deliberately and temporarily: the value has to be one of a
- * known set — it is translated and shown to the appraiser as an instruction, so free text would
- * reach them as a blank space — and a numbered list satisfies that in eight lines while the proper
- * picker is designed. It is refused by the server if it is not a known reason, so the worst a
- * mistyped answer can do is nothing.
- */
-async function chooseRejectionReason(label: string): Promise<string | null> {
-  const reasons = Object.entries(REJECTION_LABELS);
-  const menu = reasons.map(([, text], i) => `${i + 1}. ${text}`).join('\n');
-  const answer = window.prompt(
-    `Why is ${label} being sent back?\n\n${menu}\n\nType the number. They are told this, with what to do about it.`,
-  );
-  const index = Number(answer) - 1;
-  return reasons[index]?.[0] ?? null;
-}
 
 /** What a reviewer types off the card. Held per row until the verdict is sent with it. */
 export interface PrintedValues {
@@ -177,6 +167,142 @@ const REJECTION_LABELS: Record<string, string> = {
   NOT_THE_PERSON: 'This does not belong to this person',
   ALTERED_OR_SUSPECT: 'The document looks altered',
 };
+
+// `--bg-surface-2`, not `--bg-page`: the modal panel itself renders at `--bg-card`, the same
+// colour as `--bg-page` in the dark themes, so a field at the page colour disappeared into the
+// dialog around it.
+const modalFieldStyle: React.CSSProperties = {
+  width: '100%', padding: '8px 10px', fontSize: '13px', fontFamily: 'inherit',
+  background: 'var(--bg-surface-2)', color: 'var(--text-primary)',
+  border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', outline: 'none',
+  boxSizing: 'border-box',
+};
+const modalLabelStyle: React.CSSProperties = {
+  display: 'block', fontSize: '12px', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '4px',
+};
+
+/**
+ * Which of the fixed reasons applies, and anything worth remembering about it — a small form now,
+ * where this used to be a native `window.prompt` reading a numbered list back at whoever was
+ * sending a scan back. The value still has to be one of the known set: it is translated and shown
+ * to the appraiser as an instruction, so free text in ITS place would reach them as a blank space.
+ * The note is different — it stays on this record, for whoever looks at it next, and is never
+ * shown to the appraiser at all.
+ *
+ * Exported for the record's vetting tab, which sends scans back for the same reasons through the
+ * same endpoint — one list of reasons, one dialog, two call sites.
+ */
+export const RejectDocumentModal: React.FC<{
+  label: string;
+  onCancel: () => void;
+  onSubmit: (reason: string, note: string) => void;
+}> = ({ label, onCancel, onSubmit }) => {
+  const [reason, setReason] = useState('');
+  const [note, setNote] = useState('');
+  return (
+    <Editor
+      title={`Why is ${label} being sent back?`}
+      intro="They are told this, on their phone, with what to do about it."
+      onCancel={onCancel}
+      onSave={() => onSubmit(reason, note)}
+      // Not "Send it back" again — that is the row's own button, which stays on screen
+      // behind this dialog, and two controls with one name is confusing to click and to
+      // test alike. Matches "Yes, I checked it", this file's other confirm-and-go label.
+      saveLabel="Yes, send it back"
+      saveDisabled={!reason}
+    >
+      <div>
+        <label style={modalLabelStyle}>Reason</label>
+        {/* `Select` takes no `id`/`for`, so it is named directly rather than through the visual
+            label above it — the same pattern `renderFormField`'s own place fields use. */}
+        <Select
+          value={reason}
+          onChange={(v) => setReason(String(v))}
+          options={Object.entries(REJECTION_LABELS).map(([value, text]) => ({ value, label: text }))}
+          placeholder="-- Choose a reason --"
+          aria-label="Why this document is being sent back"
+        />
+      </div>
+      <div>
+        <label htmlFor="reject-note" style={modalLabelStyle}>
+          Note (optional — kept on the record, not shown to them)
+        </label>
+        <textarea
+          id="reject-note"
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          rows={3}
+          placeholder="Anything worth remembering about this, for whoever looks at this record next."
+          style={{ ...modalFieldStyle, resize: 'vertical' }}
+        />
+      </div>
+    </Editor>
+  );
+};
+
+/**
+ * Accepting a name that does not agree with the record, and saying why — a small form where this
+ * used to be a native `window.prompt`. Wording kept as it was: a reviewer who has already read the
+ * server's own refusal is being asked one question, not re-taught what it means.
+ */
+const NameMismatchModal: React.FC<{
+  message: string;
+  onCancel: () => void;
+  onSubmit: (note: string) => void;
+}> = ({ message, onCancel, onSubmit }) => {
+  const [why, setWhy] = useState('');
+  const ready = why.trim().length >= 10;
+  return (
+    <Editor
+      title="The name does not match"
+      intro={message}
+      onCancel={onCancel}
+      onSave={() => onSubmit(why.trim())}
+      saveLabel="Verify anyway"
+      saveDisabled={!ready}
+      note={!ready ? 'At least 10 characters, so the reason is actually useful to whoever reads it later.' : undefined}
+    >
+      <div>
+        <label htmlFor="name-mismatch-why" style={modalLabelStyle}>If it is the same person, say why:</label>
+        <textarea
+          id="name-mismatch-why"
+          value={why}
+          onChange={(e) => setWhy(e.target.value)}
+          rows={3}
+          placeholder="e.g. Maiden name on the card, married name already on the record"
+          style={{ ...modalFieldStyle, resize: 'vertical' }}
+        />
+      </div>
+    </Editor>
+  );
+};
+
+/** "PDF or an image (JPEG/PNG/WebP/HEIC/TIFF/BMP/GIF)" — the same words `assertUploadAllowed` refuses with on the server, so a clerk never learns two different names for what this box takes. */
+const HUMAN_SCAN_TYPES = 'PDF or an image (JPEG/PNG/WebP/HEIC/TIFF/BMP/GIF)';
+
+/**
+ * The same check `assertUploadAllowed` runs server-side, run here first so a clerk on a slow
+ * connection learns a scan is the wrong kind of file before waiting for the upload to fail. The
+ * server stays the authority — this is a courtesy, not a second copy of the rule with its own idea
+ * of what is allowed, which is why it shares the one accept-list (`SCAN_UPLOAD_MIME_TYPES`) rather
+ * than declaring its own.
+ *
+ * A blank declared type is let through deliberately. Android and older browsers leave `type` empty
+ * for a HEIC/HEIF photo often enough that refusing it here would bounce an ordinary phone photo the
+ * server's own filename-extension fallback would have accepted — only a type that positively names
+ * something else is refused before the request is even made.
+ */
+function scanUploadProblem(file: File): string | null {
+  const type = (file.type || '').toLowerCase();
+  if (type && !SCAN_UPLOAD_MIME_TYPES.includes(type)) {
+    return `is a "${type}" file — this only takes ${HUMAN_SCAN_TYPES}.`;
+  }
+  const maxBytes = DEFAULT_MAX_UPLOAD_MB * 1024 * 1024;
+  if (file.size > maxBytes) {
+    return `is ${(file.size / 1024 / 1024).toFixed(1)} MB, over the ${DEFAULT_MAX_UPLOAD_MB} MB limit.`;
+  }
+  return null;
+}
 
 const PRINTED_LABELS: Record<keyof PrintedValues, string> = {
   holderName: 'Name exactly as printed',
@@ -274,16 +400,34 @@ const RequirementRow: React.FC<{
   });
   const [uploading, setUploading] = useState(false);
   const [rowError, setRowError] = useState<string | null>(null);
+  /** True while a drag carrying files is over this row's picker — a visual target, nothing more. */
+  const [dragOver, setDragOver] = useState(false);
   const { toast } = useToast();
 
   // The dossier is the truth: a reload after somebody else edited this number, or after the ID
   // step wrote the same column, must show through rather than being hidden by stale local state.
   useEffect(() => { setNumber(boxFor(doc.documentNumber ?? '')); }, [doc.documentNumber]);
 
-  const attach = async (files: FileList) => {
+  const attach = async (files: FileList | File[]) => {
+    /**
+     * Checked before a single byte goes out, against the SAME accept-list and size cap
+     * `assertUploadAllowed` enforces server-side — see `scanUploadProblem`. The server stays the
+     * authority (a file that passes here can still be refused there, and is), but a clerk on a
+     * slow office connection learns a spreadsheet was picked by mistake before waiting out an
+     * upload that was always going to fail.
+     */
+    const all = Array.from(files);
+    const problems: string[] = [];
+    const ok: File[] = [];
+    for (const file of all) {
+      const problem = scanUploadProblem(file);
+      if (problem) problems.push(`"${file.name}" ${problem}`); else ok.push(file);
+    }
+    setRowError(problems.length > 0 ? problems.join(' ') : null);
+    if (ok.length === 0) return;
+
     setUploading(true);
     onBusy(true);
-    setRowError(null);
     try {
       /**
        * One at a time, deliberately.
@@ -294,7 +438,7 @@ const RequirementRow: React.FC<{
        * replaces rather than joins the first. Uploading a card and finding one side of it is a
        * failure nobody would think to look for.
        */
-      for (const file of Array.from(files)) {
+      for (const file of ok) {
         const body = new FormData();
         body.append('file', file);
         await api.request(`/assayers/${assayerId}/document/${doc.requirement}/file`, { method: 'POST', body });
@@ -350,16 +494,38 @@ const RequirementRow: React.FC<{
               : `${scans} ${scans === 1 ? 'page' : 'pages'} on file${verified ? ' · checked against the original' : ''}`}
           </div>
         </div>
+        {/*
+          Also a drop target now — a dashed accent outline is the only tell, since the label was
+          already the obvious place to put a file. `scanUploadProblem` runs on whatever lands here
+          exactly as it does on a picked file, so a dragged spreadsheet is refused the same way.
+        */}
         <label
           className="btn btn-secondary"
-          style={{ fontSize: '12px', padding: '6px 12px', cursor: uploading ? 'wait' : 'pointer', display: 'inline-flex', alignItems: 'center', gap: '6px', width: 'auto' }}
+          style={{
+            fontSize: '12px', padding: '6px 12px', cursor: uploading ? 'wait' : 'pointer',
+            display: 'inline-flex', alignItems: 'center', gap: '6px', width: 'auto',
+            outline: dragOver ? '2px dashed var(--accent)' : undefined, outlineOffset: '2px',
+          }}
+          onDragOver={(e) => { e.preventDefault(); if (!uploading) setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragOver(false);
+            if (uploading) return;
+            const files = e.dataTransfer?.files;
+            if (files && files.length > 0) void attach(files);
+          }}
         >
           <Paperclip size={13} />
           {uploading ? 'Adding…' : scans > 0 ? 'Add another page' : 'Add scan or photo'}
           <input
             type="file"
             multiple
-            accept="application/pdf,image/jpeg,image/png,image/webp,image/heic,image/heif"
+            accept={SCAN_UPLOAD_ACCEPT}
+            // Phone browsers offer the camera directly alongside the gallery when a capture hint
+            // is present, rather than only ever opening the file picker — the same one-tap photo
+            // a native app would offer, on a form that otherwise has no camera of its own.
+            capture="environment"
             style={{ display: 'none' }}
             disabled={uploading}
             onChange={(e) => {
@@ -465,7 +631,10 @@ const RequirementRow: React.FC<{
 
           {doc.verificationStatus === 'REJECTED' && (
             <div style={{ fontSize: '12px', color: 'var(--danger)', marginTop: '8px' }}>
-              Sent back{doc.rejectionReason ? ` — ${REJECTION_LABELS[doc.rejectionReason] ?? doc.rejectionReason}` : ''}.
+              {/* `humanize()` rather than the raw value, so an enum this screen does not recognise
+                  yet still reads as words — "Number mismatch", never "NUMBER_MISMATCH" — instead
+                  of a shouting placeholder the previous fallback would have shown verbatim. */}
+              Sent back{doc.rejectionReason ? ` — ${REJECTION_LABELS[doc.rejectionReason] ?? humanize(doc.rejectionReason)}` : ''}.
               Waiting for them to send it again.
             </div>
           )}
@@ -505,6 +674,12 @@ export const DocumentsStep: React.FC<{
   const { confirm, confirmDialog } = useConfirm();
   const { toast } = useToast();
   const [verifyError, setVerifyError] = useState<string | null>(null);
+  /** The document a "Send it back" click is choosing a reason for — open exactly when this is set. */
+  const [rejectTarget, setRejectTarget] = useState<DossierDocument | null>(null);
+  /** A verify that failed on a name mismatch, waiting on the reviewer's own note before retrying. */
+  const [mismatch, setMismatch] = useState<{
+    doc: DossierDocument; attested: Record<string, unknown>; message: string;
+  } | null>(null);
 
   const groups = useMemo(() => {
     const rows = dossier?.onboarding ?? [];
@@ -557,27 +732,34 @@ export const DocumentsStep: React.FC<{
        * The server refuses a name that does not agree, and that refusal is the useful part.
        *
        * It comes back naming both names, so it is shown as-is rather than replaced with something
-       * generic. If they are genuinely the same person the reviewer answers the follow-up and it
-       * goes through with their reason recorded beside the grade.
+       * generic. If they are genuinely the same person the reviewer answers the follow-up in
+       * `NameMismatchModal` and it goes through with their reason recorded beside the grade.
        */
       const message = userMessage(e);
       if (/does not match the name on the record/i.test(message)) {
-        const why = window.prompt(`${message}\n\nIf it is the same person, say why:`);
-        if (why && why.trim().length >= 10) {
-          try {
-            await api.request(`/assayers/document/${doc.id}/verify`, {
-              method: 'POST',
-              body: JSON.stringify({ verdict: 'VERIFIED', ...attested, nameMismatchNote: why.trim() }),
-            });
-            toast({ type: 'success', title: `${doc.label} checked`, message: 'Recorded with your note.' });
-            onChanged();
-            return;
-          } catch (retry) { setVerifyError(userMessage(retry)); return; }
-        }
-        setVerifyError(message);
+        setMismatch({ doc, attested, message });
         return;
       }
       setVerifyError(message);
+    } finally { onBusy(false); }
+  };
+
+  /** The reviewer's answer to `NameMismatchModal` — verify again, this time with their note attached. */
+  const submitMismatchOverride = async (note: string) => {
+    const target = mismatch;
+    setMismatch(null);
+    if (!target?.doc.id) return;
+    onBusy(true);
+    setVerifyError(null);
+    try {
+      await api.request(`/assayers/document/${target.doc.id}/verify`, {
+        method: 'POST',
+        body: JSON.stringify({ verdict: 'VERIFIED', ...target.attested, nameMismatchNote: note }),
+      });
+      toast({ type: 'success', title: `${target.doc.label} checked`, message: 'Recorded with your note.' });
+      onChanged();
+    } catch (e) {
+      setVerifyError(userMessage(e));
     } finally { onBusy(false); }
   };
 
@@ -587,17 +769,24 @@ export const DocumentsStep: React.FC<{
    * Both review screens hard-coded `verdict: 'VERIFIED'`, so a reviewer could only ever agree: a
    * photograph too dark to read had no outcome except being left alone, and the person who sent it
    * was told nothing and waited. The reason chosen here is translated and shown on their phone with
-   * an instruction, which is why it is a fixed list rather than a free-text note.
+   * an instruction, which is why it is a fixed list rather than a free-text note — `RejectDocumentModal`
+   * offers a second, genuinely free note too, but that one stays on the record and is never sent.
    */
-  const reject = async (doc: DossierDocument) => {
-    if (!doc.id) return;
-    const reason = await chooseRejectionReason(doc.label);
-    if (!reason) return;
+  const reject = (doc: DossierDocument) => setRejectTarget(doc);
+
+  /** The reviewer's answer to `RejectDocumentModal`. */
+  const submitReject = async (reason: string, note: string) => {
+    const doc = rejectTarget;
+    setRejectTarget(null);
+    if (!doc?.id) return;
     onBusy(true);
     setVerifyError(null);
     try {
       await api.request(`/assayers/document/${doc.id}/verify`, {
-        method: 'POST', body: JSON.stringify({ verdict: 'REJECTED', rejectionReason: reason }),
+        method: 'POST',
+        body: JSON.stringify({
+          verdict: 'REJECTED', rejectionReason: reason, ...(note.trim() ? { remarks: note.trim() } : {}),
+        }),
       });
       toast({
         type: 'success',
@@ -626,6 +815,20 @@ export const DocumentsStep: React.FC<{
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '18px' }}>
       {confirmDialog}
+      {rejectTarget && (
+        <RejectDocumentModal
+          label={rejectTarget.label}
+          onCancel={() => setRejectTarget(null)}
+          onSubmit={(reason, note) => void submitReject(reason, note)}
+        />
+      )}
+      {mismatch && (
+        <NameMismatchModal
+          message={mismatch.message}
+          onCancel={() => setMismatch(null)}
+          onSubmit={(note) => void submitMismatchOverride(note)}
+        />
+      )}
       {verifyError && <AlertBanner type="error" message={verifyError} onClose={() => setVerifyError(null)} />}
       <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
         Nothing on this page is required to finish. Scan what the person has brought with them; the
@@ -642,7 +845,7 @@ export const DocumentsStep: React.FC<{
         />
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           {groups.identity.map((doc) => (
-            <RequirementRow key={doc.requirement} doc={doc} assayerId={assayerId} onChanged={onChanged} onBusy={onBusy} onVerify={(d, printed) => void verify(d, printed)} onReject={(d) => void reject(d)} />
+            <RequirementRow key={doc.requirement} doc={doc} assayerId={assayerId} onChanged={onChanged} onBusy={onBusy} onVerify={(d, printed) => void verify(d, printed)} onReject={reject} />
           ))}
         </div>
       </div>
@@ -657,7 +860,7 @@ export const DocumentsStep: React.FC<{
         />
         <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
           {groups.joining.map((doc) => (
-            <RequirementRow key={doc.requirement} doc={doc} assayerId={assayerId} onChanged={onChanged} onBusy={onBusy} onVerify={(d, printed) => void verify(d, printed)} onReject={(d) => void reject(d)} />
+            <RequirementRow key={doc.requirement} doc={doc} assayerId={assayerId} onChanged={onChanged} onBusy={onBusy} onVerify={(d, printed) => void verify(d, printed)} onReject={reject} />
           ))}
         </div>
       </div>

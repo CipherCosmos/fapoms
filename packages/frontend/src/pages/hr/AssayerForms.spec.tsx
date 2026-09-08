@@ -1,10 +1,32 @@
 import React from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
-import { useManagerOptions, useHrOwnerOptions, applyPlace, resolveIfsc } from './AssayerForms';
+import { useManagerOptions, useHrOwnerOptions, applyPlace, resolveIfsc, EDIT_FIELDS } from './AssayerForms';
 import { api } from '../../services/api';
 
 jest.mock('../../services/api', () => ({ api: { request: jest.fn() } }));
 const mockRequest = api.request as jest.Mock;
+
+/**
+ * One full-name box, not a First/Last pair — the India-first naming fix.
+ *
+ * The roster has Tamil initial-style names ("A K Venkatesan"), father's-name middles and
+ * genuinely single-token names, none of which has a "last name" to put in a second box. These
+ * pin the field definition itself, since a form-layout regression that quietly restored the old
+ * pair (or dropped the new one) would not otherwise fail any test that only exercises hooks.
+ */
+describe('the full-name field', () => {
+  it('replaces the old First/Last pair with one required field spanning the row', () => {
+    const fullName = EDIT_FIELDS.find((f) => f.key === 'fullName');
+    expect(fullName).toMatchObject({
+      label: 'Full name',
+      required: true,
+      full: true,
+      placeholder: 'As printed on their Aadhaar or PAN',
+    });
+    expect(fullName?.hint).toMatch(/banks and tax filings check this name/i);
+    expect(EDIT_FIELDS.some((f) => f.key === 'firstName' || f.key === 'lastName')).toBe(false);
+  });
+});
 
 /**
  * The reporting-manager picker, pinned to the roster it claims to be a picker for.

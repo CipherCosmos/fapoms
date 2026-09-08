@@ -2,6 +2,7 @@ import { BadRequestException } from '@nestjs/common';
 import { AssayerEntity } from './assayer.entity';
 import { AssayerLifecycleStatus, AssayerStatus, ASSAYER_LIFECYCLE_TRANSITIONS, assayerLifecyclePath, operationalStatusFor } from '@fapoms/shared';
 import {
+  DomainEvent,
   AssayerDocumentVerificationStartedEvent,
   AssayerBackgroundCheckInitiatedEvent,
   AssayerTrainingStartedEvent,
@@ -48,7 +49,7 @@ export class AssayerStateMachine {
     // persisted — the two must never be able to disagree.
     assayer.status = operationalStatusFor(targetStatus) as AssayerStatus;
     assayer.updatedBy = userId;
-    if (targetStatus === AssayerLifecycleStatus.ARCHIVED) assayer.isActive = false;
+    assayer.isActive = targetStatus !== AssayerLifecycleStatus.ARCHIVED;
 
     /**
      * Departure dates are deliberately NOT stamped here any more.
@@ -136,5 +137,30 @@ export class AssayerStateMachine {
     const prev = assayer.lifecycleStatus;
     this.applyTransition(assayer, AssayerLifecycleStatus.ARCHIVED, userId);
     return new AssayerArchivedEvent(assayer.id, prev, assayer.lifecycleStatus, userId);
+  }
+
+  /**
+   * Re-entering the workforce after resigning or being terminated (2026-09-07).
+   *
+   * What makes RESIGNED/TERMINATED → INVITED legal at all is the shared lifecycle map
+   * (`@fapoms/shared/assayer-lifecycle.ts`) — see its own comment on why a rehire restarts
+   * onboarding from INVITED rather than snapping straight back to ACTIVE. This method only
+   * validates and applies that edge, exactly like every other method on this class.
+   *
+   * Departure dates are NOT cleared here, for the same reason `applyTransition` above stamps no
+   * dates for any move: `AssayerService.reconcileDepartureDates` is the single writer for
+   * `exit_date`/`termination_date`, and clearing them here too would be the same two-writers
+   * defect that comment already describes for the outbound moves.
+   *
+   * Returns a plain `DomainEvent` rather than a new named subtype. Every subtype above exists
+   * because something already publishes and, in principle, could listen for it; nothing listens
+   * for a rehire yet. Add a dedicated `AssayerRehiredEvent` to `domain-events.ts` the day a real
+   * consumer needs to tell this apart from another transition by type rather than by `newState`.
+   */
+  static rehire(assayer: AssayerEntity, userId: string): DomainEvent {
+    this.validateTransition(assayer, AssayerLifecycleStatus.INVITED);
+    const prev = assayer.lifecycleStatus;
+    this.applyTransition(assayer, AssayerLifecycleStatus.INVITED, userId);
+    return new DomainEvent(assayer.id, prev, assayer.lifecycleStatus, userId);
   }
 }

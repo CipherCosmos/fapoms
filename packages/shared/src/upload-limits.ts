@@ -63,3 +63,39 @@ export function uploadSizeProblem(
   const mb = (file.size / 1024 / 1024).toFixed(file.size < 10 * 1024 * 1024 ? 1 : 0);
   return `"${file.name}" is ${mb} MB, over the ${maxMb} MB limit. Scan it at a lower resolution or split it, then try again.`;
 }
+
+// ---------------------------------------------------------------------------
+// Scan accept-list (2026-09-07)
+// ---------------------------------------------------------------------------
+// The server's accepted-type list, lifted here so the backend guard and every file picker's
+// `accept` attribute are built from one list. NOTE the decision documented above still stands:
+// clients must not REFUSE on type — browsers report MIME strings too inconsistently (empty,
+// octet-stream) and the false refusal is the costlier mistake. Use this for the picker's
+// `accept` filter and, at most, a soft "this may be refused" caption; `uploadSizeProblem`
+// remains the only client-side hard check. The server stays the authority on both.
+
+export const SCAN_UPLOAD_MIME_TYPES: string[] = [
+  'application/pdf',
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/heic',
+  'image/heif',
+  // Desk-scanner output: a flatbed or feeder scanner at the desk writes TIFF (often multi-page)
+  // or BMP, and refusing those meant a clerk who had just scanned a whole file had to convert
+  // every page before the registration would take it. Still images only — never spreadsheets,
+  // archives or executables — so the identity-document routes keep their narrower door.
+  'image/tiff',
+  'image/bmp',
+  'image/gif',
+];
+
+/** The same list in `<input accept>` form, so the picker and the guard cannot drift. */
+export const SCAN_UPLOAD_ACCEPT = SCAN_UPLOAD_MIME_TYPES.join(',');
+
+/**
+ * Alias kept for callers written against the brief-lived rewrite of this file (2026-09-07,
+ * restored the same day after it clobbered the feedback constants): same figure as
+ * MAX_UPLOAD_MB, one rule.
+ */
+export const DEFAULT_MAX_UPLOAD_MB = MAX_UPLOAD_MB;

@@ -36,3 +36,13 @@ export const LIFECYCLE_MOVE_REASONS = [
  * before this dropdown existed.
  */
 export const OTHER_LIFECYCLE_REASON = '__OTHER__';
+
+/**
+ * Why somebody moved back to INVITED — a rehire, the one move in the lifecycle that runs the
+ * other way. It does not belong in `LIFECYCLE_MOVE_REASONS` above: that list is what HR actually
+ * typed for people who LEFT, clustered from `assayers.notes`, and none of "Behaviour issue" or
+ * "Background/criminal-record issue" is a sensible answer to "why is this person coming back".
+ * Offered on its own, and it is the one reason a rehire move suggests by default — the picker
+ * still lets it be swapped for "Other" and typed over, same as every other move.
+ */
+export const REHIRE_REASON = 'Rehired — returning to the workforce';

@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, within } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ImportIssuesPanel } from './ImportIssuesPanel';
 import { api } from '../../services/api';
@@ -102,7 +102,9 @@ describe('ImportIssuesPanel', () => {
 
     await waitFor(() => expect(screen.getByText(/One distinct problem/)).toBeInTheDocument());
     fireEvent.click(screen.getByText(/2 record problems to review/));
-    await waitFor(() => expect(screen.getByText(/2 people/)).toBeInTheDocument());
+    // One row in the list — the detail beside it names the same count, so scope to the list.
+    const list = await screen.findByTestId('queue-group-list');
+    expect(within(list).getByText(/2 people/)).toBeInTheDocument();
   });
 
   it('renders nothing at all while the queue is empty', async () => {
@@ -147,10 +149,11 @@ describe('ImportIssuesPanel', () => {
       await waitFor(() => expect(screen.getByText(/One distinct problem/)).toBeInTheDocument());
       fireEvent.click(screen.getByText(/3 record problems to review/));
       // One heading carrying the check's name — the appraiser code is on the person chip, not
-      // in the heading.
-      await waitFor(() => expect(screen.getByText('No date of birth')).toBeInTheDocument());
-      expect(screen.getByText(/3 people/)).toBeInTheDocument();
-      expect(screen.queryByText(/No date of birth · AS0001/)).not.toBeInTheDocument();
+      // in the heading. Scoped to the list; the detail beside it shows the same title.
+      const list = await screen.findByTestId('queue-group-list');
+      expect(within(list).getByText('No date of birth')).toBeInTheDocument();
+      expect(within(list).getByText(/3 people/)).toBeInTheDocument();
+      expect(within(list).queryByText(/No date of birth · AS0001/)).not.toBeInTheDocument();
     });
 
     it('labels the one sentence it can show as an example, not as a description of all of them', async () => {
@@ -192,8 +195,9 @@ describe('ImportIssuesPanel', () => {
 
       await waitFor(() => expect(screen.getByText(/2 distinct problems/)).toBeInTheDocument());
       fireEvent.click(screen.getByText(/2 record problems to review/));
-      await waitFor(() => expect(screen.getByText('No date of birth')).toBeInTheDocument());
-      expect(screen.getByText('Home pin is a placeholder, not a home')).toBeInTheDocument();
+      const list = await screen.findByTestId('queue-group-list');
+      expect(within(list).getByText('No date of birth')).toBeInTheDocument();
+      expect(within(list).getByText('Home pin is a placeholder, not a home')).toBeInTheDocument();
     });
 
     it('still splits import cells by the text in them — two unreadable words are two decisions', async () => {
@@ -212,8 +216,9 @@ describe('ImportIssuesPanel', () => {
 
       await waitFor(() => expect(screen.getByText(/2 distinct problems/)).toBeInTheDocument());
       fireEvent.click(screen.getByText(/2 record problems to review/));
-      await waitFor(() => expect(screen.getByText(/“\?\?\?” —/)).toBeInTheDocument());
-      expect(screen.getByText(/“N\/A” —/)).toBeInTheDocument();
+      const list = await screen.findByTestId('queue-group-list');
+      expect(within(list).getByText(/“\?\?\?” —/)).toBeInTheDocument();
+      expect(within(list).getByText(/“N\/A” —/)).toBeInTheDocument();
     });
   });
 
@@ -252,8 +257,8 @@ describe('ImportIssuesPanel', () => {
       renderPanel(<ImportIssuesPanel canManage />);
       await waitFor(() => expect(screen.getByText(/3 record problems to review/)).toBeInTheDocument());
       fireEvent.click(screen.getByText(/3 record problems to review/));
-      fireEvent.click(await screen.findByText('Decide this'));
-      fireEvent.change(screen.getByLabelText(/What was decided/), {
+      // The first group is selected on open, so its decision form is already on screen.
+      fireEvent.change(await screen.findByLabelText(/What was decided/), {
         target: { value: 'Availability note in the wrong column — ignore.' },
       });
     };
@@ -289,8 +294,7 @@ describe('ImportIssuesPanel', () => {
       renderPanel(<ImportIssuesPanel canManage />);
       await waitFor(() => expect(screen.getByText(/3 record problems to review/)).toBeInTheDocument());
       fireEvent.click(screen.getByText(/3 record problems to review/));
-      fireEvent.click(await screen.findByText('Decide this'));
-      fireEvent.click(screen.getByRole('button', { name: /Close 3 cells/ }));
+      fireEvent.click(await screen.findByRole('button', { name: /Close 3 cells/ }));
 
       expect(screen.getByRole('alert')).toHaveTextContent(/Say what was decided/);
       // And nothing was posted — a blank close would put the guess back with no record of it.
@@ -308,6 +312,100 @@ describe('ImportIssuesPanel', () => {
         expect(posted).toHaveLength(3);
       });
       expect(screen.queryByText(/could not be/)).not.toBeInTheDocument();
+    });
+  });
+
+  /**
+   * The queue is written per person per check, so one person lands under as many headings as
+   * they have problems. Filed by person, each one appears once with everything open against
+   * them — the shape the fix takes, since the record is opened and corrected once.
+   */
+  describe('filing the queue by person', () => {
+    const personIssue = (id: string, column: string, reason: string) => issue({
+      id,
+      sourceSheet: 'Data integrity',
+      sourceColumn: `${column} · AS0001`,
+      rawValue: column.toLowerCase(),
+      reason,
+      sourceAssayerCode: 'AS0001',
+      assayer: { id: 'a-1', assayerCode: 'AS0001', firstName: 'Person', lastName: 'One' },
+    });
+    const serveTwoPeople = () => {
+      mockRequest.mockResolvedValue({
+        rows: [
+          personIssue('i-1', 'No date of birth', 'AS0001 (Person One) has no date of birth on the record.'),
+          personIssue('i-2', 'No phone number on the record', 'AS0001 (Person One) has no phone number on the record.'),
+          issue({
+            id: 'i-3', sourceSheet: 'Assayers', sourceColumn: 'Active / Inactive', rawValue: '???',
+            reason: 'Could not be read.', sourceAssayerCode: 'AS0002',
+            assayer: { id: 'a-2', assayerCode: 'AS0002', firstName: 'Person', lastName: 'Two' },
+          }),
+        ],
+        openCount: 3,
+      });
+    };
+
+    const openPersonView = async () => {
+      renderPanel(<ImportIssuesPanel canManage />);
+      await waitFor(() => expect(screen.getByText(/3 record problems to review/)).toBeInTheDocument());
+      fireEvent.click(screen.getByText(/3 record problems to review/));
+      fireEvent.click(screen.getByRole('button', { name: /By person/ }));
+    };
+
+    it('lists each person once, with everything open against them behind the row', async () => {
+      serveTwoPeople();
+      await openPersonView();
+
+      await waitFor(() => expect(screen.getByRole('button', { name: /AS0001 — Person One/ })).toBeInTheDocument());
+      // Both of their checks named on the one row, not two rows in two places.
+      expect(screen.getByText(/No date of birth · No phone number on the record/)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /2 open issues/ })).toBeInTheDocument();
+    });
+
+    it('closes everything for the person in one pass', async () => {
+      serveTwoPeople();
+      await openPersonView();
+
+      fireEvent.click(await screen.findByRole('button', { name: /AS0001 — Person One/ }));
+      fireEvent.change(screen.getByLabelText(/What was decided/), {
+        target: { value: 'Corrected on their record while it was open.' },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /Close 2 issues/ }));
+
+      await waitFor(() => {
+        const posted = mockRequest.mock.calls.filter(([url]) => String(url).endsWith('/resolve'));
+        expect(posted).toHaveLength(2);
+      });
+    });
+
+    it('separates import cells from data checks, so each writer is worked its own way', async () => {
+      serveTwoPeople();
+      renderPanel(<ImportIssuesPanel canManage={false} />);
+      await waitFor(() => expect(screen.getByText(/3 record problems to review/)).toBeInTheDocument());
+      fireEvent.click(screen.getByText(/3 record problems to review/));
+
+      fireEvent.click(screen.getByRole('button', { name: /Import cells/ }));
+      const list = screen.getByTestId('queue-group-list');
+      expect(within(list).queryByText('No date of birth')).not.toBeInTheDocument();
+      expect(within(list).getByText('Active / Inactive')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /Data checks/ }));
+      expect(within(list).queryByText('Active / Inactive')).not.toBeInTheDocument();
+      expect(within(list).getByText('No date of birth')).toBeInTheDocument();
+    });
+
+    it('finds one problem in a long list by search', async () => {
+      serveTwoPeople();
+      renderPanel(<ImportIssuesPanel canManage={false} />);
+      await waitFor(() => expect(screen.getByText(/3 record problems to review/)).toBeInTheDocument());
+      fireEvent.click(screen.getByText(/3 record problems to review/));
+
+      fireEvent.change(screen.getByLabelText(/Find a problem/), { target: { value: 'phone number' } });
+
+      const list = screen.getByTestId('queue-group-list');
+      expect(within(list).queryByText('No date of birth')).not.toBeInTheDocument();
+      expect(within(list).getByText('No phone number on the record')).toBeInTheDocument();
+      expect(screen.getByText(/1 matching problem/)).toBeInTheDocument();
     });
   });
 });

@@ -6,7 +6,7 @@ import { api } from '../services/api';
 import { fetchWholeBranchDirectory } from '../services/branch-directory';
 import { queryKeys } from '../hooks/queryKeys';
 import { useClientOptions } from '../hooks/useClients';
-import { StatusBadge, Modal, SearchInput, FilterSelect, PrimaryButton, Select, ChipMultiSelect } from '../components/ui';
+import { StatusBadge, Modal, SearchInput, FilterSelect, PrimaryButton, Select, ChipMultiSelect, useConfirm } from '../components/ui';
 import { useWorkforceVocabulary, asOptions } from '../hooks/useWorkforceVocabulary';
 import { useCurrentRoles, canManageRules, canDeleteRules } from '../hooks/useCurrentRoles';
 
@@ -112,6 +112,9 @@ export const RulesSection: React.FC = () => {
   const [err, setErr] = useState<string | null>(null);
 
   const [form, setForm] = useState(emptyForm);
+  // The app's own dialog, not the browser's: `window.confirm` renders a grey box whose OK/Cancel
+  // buttons say nothing about scoring, and which office staff dismiss like an ad pop-up.
+  const { confirm, confirmDialog } = useConfirm();
 
   /**
    * A rule's skill/certification is compared to an assayer's recorded competencies by exact
@@ -220,7 +223,15 @@ export const RulesSection: React.FC = () => {
   };
 
   const handleDelete = async (id: string) => {
-    if (!confirm('Delete this rule? Candidate scoring will stop applying it immediately.')) return;
+    const rule = rules.find((r) => r.id === id);
+    const ok = await confirm({
+      title: `Delete “${rule?.name ?? 'this rule'}”?`,
+      message: 'Candidate scoring will stop applying it immediately.',
+      confirmLabel: 'Delete rule',
+      tone: 'danger',
+      reversible: false,
+    });
+    if (!ok) return;
     try { await api.request(`/planning/rules/${id}`, { method: 'DELETE' }); fetchRules(); }
     catch (e) { setErr(e instanceof Error ? e.message : 'Failed to delete rule'); }
   };
@@ -253,6 +264,7 @@ export const RulesSection: React.FC = () => {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
+      {confirmDialog}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12 }}>
         <p style={{ color: 'var(--text-secondary)', fontSize: '13px', margin: 0, maxWidth: '62ch', lineHeight: 1.55 }}>
           A rule can require a skill or a certificate, keep work out of a state, or cap how many

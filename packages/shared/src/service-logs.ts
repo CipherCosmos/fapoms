@@ -30,7 +30,11 @@ export interface LogServiceDescriptor {
  * livekit, no caddy) without either needing its own copy.
  */
 export const LOG_SERVICES: readonly LogServiceDescriptor[] = [
-  { service: 'backend',   label: 'Backend API',      description: 'NestJS — HTTP, websockets, queues and workers.' },
+  { service: 'backend',   label: 'Backend API',      description: 'NestJS — HTTP, websockets, and (where the roles are not split) queues too.' },
+  // Split out on the production stack via PROCESS_ROLE, where it runs every scheduled job and
+  // queue consumer. Omitting it hid the logs for the SLA scanner, the outbox drain, notification
+  // delivery and document dispatch — none of which appear in the API container's output at all.
+  { service: 'backend-worker', label: 'Background worker', description: 'Scheduled jobs and queue consumers, when run as a separate process.' },
   { service: 'frontend',  label: 'Web app',          description: 'The web bundle: Vite in development, nginx in production.' },
   { service: 'postgres',  label: 'PostgreSQL',       description: 'The system of record. Slow queries and connection errors surface here.' },
   { service: 'redis',     label: 'Redis',            description: 'Queues, cache and rate-limit counters.' },

@@ -4,6 +4,7 @@ import { In, IsNull, Repository } from 'typeorm';
 import {
   AssayerLifecycleStatus, DocumentVerification, EmpanelmentStatus, businessTodayDateKey, PLACEHOLDER_PIN_METRES, hasLeftWorkforce,
   DOCUMENT_REJECTION_LABELS, DocumentRejectionReason, ONBOARDING_DOCUMENT_LABELS, OnboardingDocument,
+  normalisePhone,
 } from '@fapoms/shared';
 import { isAddressUsable } from '../geo/indian-address';
 import { AssayerEntity } from './assayer.entity';
@@ -1041,6 +1042,140 @@ export class DataIntegrityService {
       findings.push(...this.findingsForDuplicateGroup(kind, members, importerGroups, summary));
     }
     return findings;
+  }
+
+  /**
+   * Phone matches for one candidate number, across the WHOLE roster — the mechanism behind
+   * `GET /assayers/identifier-check`, which the registration wizard calls on every field blur,
+   * before a record is ever saved.
+   *
+   * Deliberately narrower than `duplicatesForPerson` above: `phone` is a plain column, never
+   * behind `encryptedColumn`, so this selects only the two phone columns instead of the five
+   * identifier columns that check pays for — cheap enough to call on every blur, not only on a
+   * debounced rescan of one already-saved record.
+   *
+   * Compared through `normalisePhone` on BOTH sides rather than a literal string match:
+   * `AssayerService.normaliseIdentityFields` now stores phones as `+91XXXXXXXXXX`, but rows
+   * written before that normalisation existed can still hold "+91 98765-00011" or a bare 10
+   * digits, and `=` would miss every one of those against a freshly normalised candidate.
+   *
+   * PAN and Aadhaar are NOT covered here, and this is the one mechanism this service exposes for
+   * a live per-field check. Both live behind `encryptedColumn`, so an exact match across
+   * encryption can only be found by decrypting every row on the roster — exactly what
+   * `duplicatesForPerson` above already pays for, but only on a debounced rescan of ONE saved
+   * record. Paying that cost again, for every blur of a wizard field, over the whole roster, is a
+   * different and heavier trade than a live check should make silently.
+   * `AssayerController.checkIdentifiers` returns an empty match set for those two keys instead of
+   * guessing at a cheaper, partial answer.
+   */
+  async findPhoneMatches(
+    phone: string,
+    excludeId?: string,
+  ): Promise<Array<{ id: string; assayerCode: string; displayName: string; lifecycleStatus: AssayerLifecycleStatus }>> {
+    const target = normalisePhone(phone);
+    if (!target) return [];
+
+    const roster = await this.assayers.find({
+      // Live rows only: a soft-deleted person is not "already on the roster", and telling a
+      // clerk a number belongs to somebody who was removed sends them chasing a ghost.
+      where: { isActive: true },
+      select: ['id', 'assayerCode', 'displayName', 'lifecycleStatus', 'phone', 'alternatePhone'],
+    });
+
+    return roster
+      .filter((p) => p.id !== excludeId
+        && (normalisePhone(p.phone) === target || normalisePhone(p.alternatePhone) === target))
+      .map((p) => ({
+        id: p.id, assayerCode: p.assayerCode, displayName: p.displayName, lifecycleStatus: p.lifecycleStatus,
+      }));
+  }
+
+  /**
+   * Evaluates identifier collisions across the live roster for phone, PAN, and Aadhaar.
+   *
+   * PAN and Aadhaar are stored encrypted with AES-256-GCM behind TypeORM's entity transformer.
+   * Safe comparison is performed in-memory without exposing decrypted values in API responses.
+   */
+  async findIdentifierMatches(criteria: {
+    phone?: string;
+    panNumber?: string;
+    aadhaarNumber?: string;
+    excludeId?: string;
+  }): Promise<Array<{
+    id: string;
+    assayerCode: string;
+    displayName: string;
+    lifecycleStatus: AssayerLifecycleStatus;
+    matchedOn: 'phone' | 'panNumber' | 'aadhaarNumber';
+  }>> {
+    const targetPhone = criteria.phone ? normalisePhone(criteria.phone) : null;
+    const targetPan = criteria.panNumber ? criteria.panNumber.trim().toUpperCase() : null;
+    const targetAadhaar = criteria.aadhaarNumber ? criteria.aadhaarNumber.replace(/\s+/g, '') : null;
+
+    if (!targetPhone && !targetPan && !targetAadhaar) return [];
+
+    const selectFields: Array<keyof AssayerEntity> = ['id', 'assayerCode', 'displayName', 'lifecycleStatus'];
+    if (targetPhone) selectFields.push('phone', 'alternatePhone');
+    if (targetPan) selectFields.push('panNumber');
+    if (targetAadhaar) selectFields.push('aadhaarNumber');
+
+    const roster = await this.assayers.find({
+      where: { isActive: true },
+      select: selectFields,
+    });
+
+    const matches: Array<{
+      id: string;
+      assayerCode: string;
+      displayName: string;
+      lifecycleStatus: AssayerLifecycleStatus;
+      matchedOn: 'phone' | 'panNumber' | 'aadhaarNumber';
+    }> = [];
+
+    for (const p of roster) {
+      if (p.id === criteria.excludeId) continue;
+
+      if (
+        targetPhone &&
+        (normalisePhone(p.phone) === targetPhone || normalisePhone(p.alternatePhone) === targetPhone)
+      ) {
+        matches.push({
+          id: p.id,
+          assayerCode: p.assayerCode,
+          displayName: p.displayName,
+          lifecycleStatus: p.lifecycleStatus,
+          matchedOn: 'phone',
+        });
+        continue;
+      }
+
+      if (targetPan && p.panNumber && p.panNumber.trim().toUpperCase() === targetPan) {
+        matches.push({
+          id: p.id,
+          assayerCode: p.assayerCode,
+          displayName: p.displayName,
+          lifecycleStatus: p.lifecycleStatus,
+          matchedOn: 'panNumber',
+        });
+        continue;
+      }
+
+      if (
+        targetAadhaar &&
+        p.aadhaarNumber &&
+        p.aadhaarNumber.replace(/\s+/g, '') === targetAadhaar
+      ) {
+        matches.push({
+          id: p.id,
+          assayerCode: p.assayerCode,
+          displayName: p.displayName,
+          lifecycleStatus: p.lifecycleStatus,
+          matchedOn: 'aadhaarNumber',
+        });
+      }
+    }
+
+    return matches;
   }
 
   /**

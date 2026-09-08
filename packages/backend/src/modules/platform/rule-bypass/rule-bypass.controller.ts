@@ -1,7 +1,7 @@
 import { Controller, Get, Post, Delete, Body, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsArray, IsString, IsNumber, IsOptional, IsNotEmpty } from 'class-validator';
-import { JwtAuthGuard, RolesGuard, Roles, RequirePermissions, AnyAuthenticated, RoleOnly } from '../../auth/guards';
+import { JwtAuthGuard, RolesGuard, Roles, RequirePermissions, AnyAuthenticated, RoleOnly, AllowPermissionFallback } from '../../auth/guards';
 import { SystemRole, BypassableRule, BYPASSABLE_RULES, DEFAULT_BYPASS_HOURS } from '@fapoms/shared';
 import { RuleBypassService } from './rule-bypass.service';
 
@@ -44,6 +44,7 @@ export class RuleBypassController {
   /** The catalogue, so the admin screen renders what each rule protects rather than a raw key. */
   @Get('catalogue')
   @Roles(SystemRole.ADMIN)
+  @AllowPermissionFallback()
   @RequirePermissions('configuration:view:platform')
   @ApiOperation({ summary: 'The rules that can be suspended, and what each one protects' })
   async catalogue() {
@@ -100,6 +101,7 @@ export class RuleBypassController {
   /** Every window ever opened, with what it was used for. */
   @Get('history')
   @Roles(SystemRole.ADMIN)
+  @AllowPermissionFallback()
   @RequirePermissions('configuration:view:platform')
   @ApiOperation({ summary: 'Past bypass windows, newest first' })
   async history(@Query('limit') limit = 50) {

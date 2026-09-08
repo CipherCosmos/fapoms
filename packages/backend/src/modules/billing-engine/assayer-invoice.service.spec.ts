@@ -14,6 +14,7 @@ import { BillingHistoryEntity } from './history.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
 import { ProjectEntity } from '../project/project.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
+import { AssayerDocumentEntity } from '../assayer/assayer-document.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
@@ -154,7 +155,27 @@ describe('AssayerInvoiceService', () => {
     manager: { query: managerQuery },
   };
   const projectRepo: any = { find: jest.fn(async () => []), findOne: jest.fn(async () => null) };
-  const assayerRepo: any = { find: jest.fn(async () => []), findOne: jest.fn(async () => null) };
+  const assayerRepo: any = {
+    find: jest.fn(async () => []),
+    findOne: jest.fn(async () => ({
+      id: 'assayer-1',
+      assayerCode: 'AS0001',
+      bankAccountNumber: '1234567890',
+      ifscCode: 'HDFC0001234',
+      bankName: 'HDFC Bank',
+      panNumber: 'ABCDE1234F',
+      accountHolderName: 'Assayer One',
+    })),
+  };
+  const assayerDocRepo: any = {
+    find: jest.fn(async () => []),
+    findOne: jest.fn(async () => ({
+      id: 'doc-1',
+      requirement: 'BANK_PASSBOOK',
+      verificationStatus: 'VERIFIED',
+      currentVersionId: 'v-1',
+    })),
+  };
 
   const repoForEntity = (target: any): any => {
     if (target === BillingEntryEntity) return entryRepo;
@@ -166,6 +187,7 @@ describe('AssayerInvoiceService', () => {
     if (target === AssignmentEntity) return assignmentRepo;
     if (target === ProjectEntity) return projectRepo;
     if (target === AssayerEntity) return assayerRepo;
+    if (target === AssayerDocumentEntity) return assayerDocRepo;
     throw new Error(`No repository double registered for ${target?.name ?? target}`);
   };
 
@@ -268,10 +290,25 @@ describe('AssayerInvoiceService', () => {
     for (const k of Object.keys(settingsValues)) delete settingsValues[k];
     jest.clearAllMocks();
     managerQuery.mockImplementation(defaultManagerQuery);
-    for (const r of [entryRepo, payableRepo, invoiceRepo, assayerInvoiceRepo, paymentRepo, historyRepo, assignmentRepo, projectRepo, assayerRepo]) {
+    for (const r of [entryRepo, payableRepo, invoiceRepo, assayerInvoiceRepo, paymentRepo, historyRepo, assignmentRepo, projectRepo, assayerRepo, assayerDocRepo]) {
       r.findOne.mockImplementation(async () => null);
       r.find.mockImplementation(async () => []);
     }
+    assayerRepo.findOne.mockImplementation(async () => ({
+      id: 'assayer-1',
+      assayerCode: 'AS0001',
+      bankAccountNumber: '1234567890',
+      ifscCode: 'HDFC0001234',
+      bankName: 'HDFC Bank',
+      panNumber: 'ABCDE1234F',
+      accountHolderName: 'Assayer One',
+    }));
+    assayerDocRepo.findOne.mockImplementation(async () => ({
+      id: 'doc-1',
+      requirement: 'BANK_PASSBOOK',
+      verificationStatus: 'VERIFIED',
+      currentVersionId: 'v-1',
+    }));
     payableRepo.createQueryBuilder.mockImplementation(() => queryBuilderStub(() => lockedPayableRows as any));
     assayerInvoiceRepo.save.mockImplementation(async (d: any) => { const r = { id: d.id ?? `ainvoice-${saved.length + 1}`, ...d }; saved.push(r); return r; });
 
@@ -298,6 +335,7 @@ describe('AssayerInvoiceService', () => {
         { provide: getRepositoryToken(AssignmentEntity), useValue: assignmentRepo },
         { provide: getRepositoryToken(ProjectEntity), useValue: projectRepo },
         { provide: getRepositoryToken(AssayerEntity), useValue: assayerRepo },
+        { provide: getRepositoryToken(AssayerDocumentEntity), useValue: assayerDocRepo },
         { provide: getDataSourceToken(), useValue: dataSource },
         { provide: DataSource, useValue: dataSource },
         { provide: DomainEventPublisher, useValue: { publish, subscribe: jest.fn() } },

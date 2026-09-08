@@ -106,6 +106,10 @@ const IMPORTS_TYPEORM = [
   // so only the decrypting repository read can see two records agree once the key is set.
   'modules/assayer/data-integrity.service.ts',
   'modules/assignment/assignment.service.ts',
+  // Read-only operational-invariant scanner (Phase 2 integrity audit); queries only, no writes,
+  // no transactions. Holds a DataSource for the same reason operations-inbox does — it runs
+  // aggregate queries across multiple tables that no single repository owns.
+  'modules/assignment/operational-integrity.service.ts',
   // Read-only cross-aggregate queue aggregator (Operations Inbox); queries only, no writes.
   'modules/assignment/operations-inbox.service.ts',
   // LiveKit voice-call lifecycle (parallel feature work); writes call outcomes into query threads.
@@ -226,6 +230,9 @@ const OPENS_ITS_OWN_TRANSACTIONS = [
   'infrastructure/scope/region-guard.service.ts',
   'modules/assayer/hr-workforce.service.ts',
   'modules/assignment/assignment.service.ts',
+  // Read-only operational-invariant scanner; holds a DataSource for aggregate queries, opens
+  // no transaction.
+  'modules/assignment/operational-integrity.service.ts',
   // Read-only cross-aggregate queue aggregator (Operations Inbox); queries only, no writes.
   'modules/assignment/operations-inbox.service.ts',
   'modules/customer-master/customer-master.service.ts',

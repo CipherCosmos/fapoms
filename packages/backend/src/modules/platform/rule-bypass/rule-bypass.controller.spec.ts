@@ -2,7 +2,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { ExecutionContext, ForbiddenException } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import { RolesGuard, ROLES_KEY, PERMISSIONS_KEY, ROLE_ONLY_KEY } from '../../auth/guards';
+import { RolesGuard, ROLES_KEY, PERMISSIONS_KEY, ROLE_ONLY_KEY, ALLOW_PERMISSION_FALLBACK_KEY } from '../../auth/guards';
 
 /**
  * `enable()`/`disable()` must stay reachable by the ADMIN role ONLY — never by a custom role
@@ -28,12 +28,11 @@ import { RolesGuard, ROLES_KEY, PERMISSIONS_KEY, ROLE_ONLY_KEY } from '../../aut
  * decorator that makes that comment true; this suite pins it.
  *
  * Two layers, both needed:
- *  1. A behavioural test proves `RolesGuard` actually refuses this shape of caller when
- *     `ROLE_ONLY_KEY` is set — using the same map-mocked `Reflector` convention as
- *     `custom-role-access.spec.ts` and `guards.spec.ts`, not a re-implementation of the guard.
- *  2. A source check confirms `@RoleOnly()` decorates the real `enable`/`disable` handlers in the
- *     real controller file — because (1) alone would keep passing even if someone deleted the
- *     decorator from the source, as long as no test recomputed what the route actually declares.
+ * 1. RolesGuard canActivate() directly on the metadata map each route declares, asserting the
+ *    repro is dead and ADMIN still gets in.
+ * 2. AST / text scan of the real controller file, asserting the @RoleOnly() decorator is
+ *    physically present above each handler — so a refactoring that drops the decorator cannot
+ *    pass just because the test above was written against a synthetic map.
  */
 describe('RuleBypassController — enable/disable resist the custom-role permission fallback', () => {
   const ctx = (user: any): ExecutionContext => ({
@@ -45,7 +44,7 @@ describe('RuleBypassController — enable/disable resist the custom-role permiss
   const reflectorReturning = (map: Record<string, any>) =>
     ({ getAllAndOverride: (key: string) => map[key] }) as unknown as Reflector;
 
-  /** Shaped exactly like the real QATRACK_L_CONFIG_EDITOR role used in the live repro. */
+  /** A custom role user holding nothing but configuration:edit:platform — the exact repro principal. */
   const configEditorOnly = {
     id: 'u-config-editor',
     roles: [{
@@ -54,7 +53,10 @@ describe('RuleBypassController — enable/disable resist the custom-role permiss
     }],
   };
 
-  const admin = { id: 'u-admin', roles: [{ name: 'ADMIN', permissions: [] }] };
+  const admin = {
+    id: 'u-admin',
+    roles: [{ name: 'ADMIN', permissions: [] }],
+  };
 
   /** The metadata `enable()`/`disable()` carry as of this fix. */
   const ROUTE_AS_FIXED = {
@@ -74,16 +76,23 @@ describe('RuleBypassController — enable/disable resist the custom-role permiss
   });
 
   it(
-    'sanity check: the exact same custom role WOULD have gotten in without @RoleOnly — proving ' +
+    'sanity check: the exact same custom role WOULD have gotten in if fallback were enabled — proving ' +
       'the two tests above are actually exercising the decorator, not passing for an unrelated reason',
     () => {
-      const routeWithoutRoleOnly = {
+      const routeWithExplicitFallback = {
         [ROLES_KEY]: ['ADMIN'],
         [PERMISSIONS_KEY]: ['configuration:edit:platform'],
-        // No ROLE_ONLY_KEY — this is the pre-fix shape, reproducing the live finding.
+        [ALLOW_PERMISSION_FALLBACK_KEY]: true,
       };
-      const guard = new RolesGuard(reflectorReturning(routeWithoutRoleOnly));
+      const guard = new RolesGuard(reflectorReturning(routeWithExplicitFallback));
       expect(guard.canActivate(ctx(configEditorOnly))).toBe(true);
+
+      const routeWithoutFallback = {
+        [ROLES_KEY]: ['ADMIN'],
+        [PERMISSIONS_KEY]: ['configuration:edit:platform'],
+      };
+      const guardStrict = new RolesGuard(reflectorReturning(routeWithoutFallback));
+      expect(() => guardStrict.canActivate(ctx(configEditorOnly))).toThrow(ForbiddenException);
     },
   );
 
@@ -99,7 +108,7 @@ describe('RuleBypassController — enable/disable resist the custom-role permiss
       const readRoute = {
         [ROLES_KEY]: ['ADMIN'],
         [PERMISSIONS_KEY]: ['configuration:view:platform'],
-        // No ROLE_ONLY_KEY on catalogue()/history() — confirmed against the source below too.
+        [ALLOW_PERMISSION_FALLBACK_KEY]: true,
       };
       const guard = new RolesGuard(reflectorReturning(readRoute));
       const viewerOnly = {

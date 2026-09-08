@@ -55,12 +55,20 @@ export const formatMoney = (value: number | string | null | undefined, currency?
  */
 const NUMERIC_FIELDS: { key: string; label: string; hint?: string }[] = [
   { key: 'baseFee', label: 'Base fee — per audit', hint: 'Flat amount for one audit visit. This is the figure assignments are priced and paid at. Leave it at 0 and the client’s default fee is used instead.' },
-  { key: 'hourlyRate', label: 'Hourly rate — per hour', hint: 'On record only. Not used to price or pay assignments.' },
-  { key: 'dailyRate', label: 'Daily rate — per day', hint: 'Counted against the budget when the system compares candidates, but not paid out. Assignments are still paid on the base fee.' },
-  { key: 'travelReimbursement', label: 'Travel reimbursement — per trip', hint: 'On record only. Actual travel is costed from the transport rate card, not from this figure.' },
-  { key: 'accommodationAllowance', label: 'Accommodation allowance — per night', hint: 'On record only. Not used to price or pay assignments.' },
-  { key: 'mealAllowance', label: 'Meal allowance — per day', hint: 'On record only. Not used to price or pay assignments.' },
+  { key: 'hourlyRate', label: 'Hourly rate — per hour' },
+  { key: 'dailyRate', label: 'Daily rate — per day' },
+  { key: 'travelReimbursement', label: 'Travel reimbursement — per trip' },
+  { key: 'accommodationAllowance', label: 'Accommodation allowance — per night' },
+  { key: 'mealAllowance', label: 'Meal allowance — per day' },
 ];
+
+/**
+ * What the five non-base figures are for, said once under the grid instead of five times
+ * beside it. Each box used to carry its own "on record only, not paid out" sentence, which
+ * turned the dialog into a wall of grey 12px text restating the intro above it.
+ */
+const OTHER_RATES_NOTE =
+  'Only the base fee prices and pays assignments. The daily rate counts against the budget when comparing candidates, actual travel is costed from the transport rate card, and the rest are agreed terms kept on record.';
 
 const CURRENCIES = ['INR', 'USD', 'EUR', 'GBP', 'AED', 'SAR'];
 
@@ -257,11 +265,16 @@ export const CommercialProfileModal: React.FC<{
       <div style={{ flexBasis: '100%' }}>
         <AlertBanner type="error" message={err} onClose={() => setErr(null)} />
       </div>
-      {NUMERIC_FIELDS.map((f) => (
-        <Field key={f.key} title={f.label} hint={f.hint} wide={f.key === 'baseFee'}>
-          <input type="number" min={0} step="0.01" value={form[f.key] || ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} style={fieldInput} placeholder="0.00" />
-        </Field>
+      {NUMERIC_FIELDS.map((f, i) => (
+        <div key={f.key} style={i === 0 ? { flexBasis: '100%' } : { flex: '1 1 200px', minWidth: 0 }}>
+          <Field title={f.label} hint={f.hint}>
+            <input type="number" min={0} step="0.01" value={form[f.key] || ''} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} style={fieldInput} placeholder="0.00" />
+          </Field>
+        </div>
       ))}
+      <div style={{ flexBasis: '100%', fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.5 }}>
+        {OTHER_RATES_NOTE}
+      </div>
       <Field title="Currency">
         <Select
           value={form.currency || 'INR'}

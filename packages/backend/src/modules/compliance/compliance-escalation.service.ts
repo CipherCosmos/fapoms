@@ -13,6 +13,13 @@ import { DataRightsRequestService } from './data-rights-request.service';
  * anything overdue" to someone who opens /admin/compliance and looks. One reminder per breach
  * per day (day-bucketed dedupe), reusing each service's own `list()` — which already computes
  * the live clocks — rather than re-deriving the deadline arithmetic here.
+ *
+ * Only OPEN/CONTAINED incidents escalate. An overdue clock ignores status by design (a breach
+ * stays reportable after closure), so without this gate a resolved-but-never-reported row —
+ * typically a QA probe closed without filing anything — re-alerted every day forever, training
+ * everyone to ignore the channel that carries real breaches. Closure is the clerk's sign-off
+ * that the reporting question was dealt with; the count of skipped settled rows is logged, so
+ * silence here is observable rather than silent.
  */
 @Injectable()
 export class ComplianceEscalationService {
@@ -28,9 +35,15 @@ export class ComplianceEscalationService {
     const day = businessTodayDateKey();
     let incidentBreaches = 0;
     let rightsBreaches = 0;
+    let settledSkipped = 0;
 
     const incidents = await this.incidents.list();
     for (const inc of incidents) {
+      // No status on very old fixtures means "unknown" — escalate rather than assume settled.
+      if (inc.status && inc.status !== 'OPEN' && inc.status !== 'CONTAINED') {
+        if (inc.clocks.certIn.overdue || inc.clocks.dpdpBoard.overdue) settledSkipped++;
+        continue;
+      }
       if (inc.clocks.certIn.overdue) {
         incidentBreaches++;
         this.notificationDispatch.emitSafe({
@@ -67,8 +80,8 @@ export class ComplianceEscalationService {
       }
     }
 
-    if (incidentBreaches > 0 || rightsBreaches > 0) {
-      this.logger.warn(`Compliance escalation scan: ${incidentBreaches} incident clock breach(es), ${rightsBreaches} rights-request SLA breach(es).`);
+    if (incidentBreaches > 0 || rightsBreaches > 0 || settledSkipped > 0) {
+      this.logger.warn(`Compliance escalation scan: ${incidentBreaches} incident clock breach(es), ${rightsBreaches} rights-request SLA breach(es), ${settledSkipped} settled incident(s) with breached clocks skipped.`);
     }
   }
 }

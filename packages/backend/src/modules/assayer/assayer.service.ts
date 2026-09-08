@@ -1,8 +1,9 @@
 import {
-  Injectable, NotFoundException, ConflictException, BadRequestException, UnauthorizedException, OnModuleInit, Logger, Optional } from '@nestjs/common'; import { InjectRepository, InjectDataSource } from '@nestjs/typeorm'; import { Repository, LessThanOrEqual, In, DataSource, ILike } from 'typeorm'; import * as xlsx from 'xlsx'; import * as bcrypt from 'bcrypt'; import { randomInt } from 'crypto'; import { AssayerEntity } from './assayer.entity';
+  Injectable, NotFoundException, ConflictException, BadRequestException, UnauthorizedException, ForbiddenException, OnModuleInit, Logger, Optional } from '@nestjs/common'; import { InjectRepository, InjectDataSource } from '@nestjs/typeorm'; import { Repository, LessThanOrEqual, In, DataSource, ILike } from 'typeorm'; import * as xlsx from 'xlsx'; import * as bcrypt from 'bcrypt'; import { randomInt, createHash } from 'crypto'; import { AssayerEntity } from './assayer.entity';
 import { RosterRecordsService } from './roster-records.service';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service'; import { AssayerCommercialProfileEntity } from './assayer-commercial-profile.entity'; import { WorkforceAttributeEntity } from './workforce-attribute.entity'; import { AssayerRemarkEntity } from './assayer-remark.entity'; import { AssayerActivityEntity } from './assayer-activity.entity'; import { TEMP_PASSWORD_WORDS } from './temp-password-words'; import { AuditService } from '../../core/audit/audit.service'; import { AssayerStateMachine } from './assayer.state-machine'; import { DomainEventPublisher } from '../../core/events/domain-event.publisher'; import { WorkflowEngine } from '../platform/workflow/workflow.engine'; import { NotificationDispatchService } from '../notifications/notification-dispatch.service'; import { EmailProvider } from '../../infrastructure/notifications/email-provider'; import { SmsProvider } from '../../infrastructure/notifications/sms-provider'; import { CacheService } from '../../infrastructure/cache/cache.service'; import { rbacPrincipalCacheKey, isOnboardingStage, maySignIn } from '../auth/auth.service'; import { ASSAYER_ERROR_CODES, AUTH_ERROR_CODES, EventCategory, AssayerLifecycleStatus, AssayerStatus, AssignmentStatus, SystemRole, resolveRegion, canonicalStateName, canonicalState, ASSAYER_LIFECYCLE_TRANSITIONS, toWorkflowTransitions, AssayerEngagementType, AssayerUnavailableReason, EmpanelmentStatus, OnboardingDocument, ONBOARDING_DOCUMENT_COLUMNS, ONBOARDING_DOCUMENT_LABELS, businessDateKey, looksMasked, DocumentVerification, PLANNABLE_EMPANELMENT_STANDINGS,
   calculateHaversineDistance,
+  normalisePhone, formatDateOnly, parseCalendarDate,
 } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
@@ -57,11 +58,28 @@ function normalizePlace(s?: string): string {
 }
 
 /**
+ * What a district-vs-pincode disagreement resolves to when it is not a refusal: the facts a
+ * review-queue row needs, for the caller to file once the record they belong to actually has an
+ * id. See the district block inside `assertAddressConsistent` for why this stopped being a 400.
+ */
+export interface DistrictPincodeMismatch {
+  enteredDistrict: string;
+  authorityDistrict: string;
+  authorityState: string;
+  pincode: string;
+}
+
+/**
  * Enforces that an assayer's state, district and pincode all describe the same
  * place, using the pincode as the anchor of truth. A mixed entry — a Bengaluru
  * pincode with "Karnataka" in the state field but a Delhi district, or a Delhi
  * address tagged as Karnataka — produces a clear, actionable error instead of a
  * silently wrong map pin.
+ *
+ * The state check still refuses outright: an unreal or contradicted STATE derives a wrong
+ * region/zone/holiday-calendar for the whole record (see the block below). A district-vs-pincode
+ * disagreement is different in kind — it never miscategorises the record the way a bad state
+ * does — and is reported rather than refused; see the district block for why.
  */
 async function assertAddressConsistent(dto: {
   address?: string;
@@ -69,7 +87,7 @@ async function assertAddressConsistent(dto: {
   district?: string;
   state?: string;
   pincode?: string | null;
-}): Promise<void> {
+}): Promise<{ districtMismatch: DistrictPincodeMismatch | null }> {
   /**
    * The state has to be a real one, with or without a pincode to cross-check it against.
    *
@@ -102,9 +120,9 @@ async function assertAddressConsistent(dto: {
   }
 
   const pin = dto.pincode || (dto.address || '').match(/\b\d{6}\b/)?.[0] || '';
-  if (!/^\d{6}$/.test(pin)) return; // no pincode to anchor on — nothing further to verify
+  if (!/^\d{6}$/.test(pin)) return { districtMismatch: null }; // no pincode to anchor on — nothing further to verify
   const authority = await fetchPincodeAuthority(pin);
-  if (!authority) return; // couldn't verify — skip rather than block on a guess
+  if (!authority) return { districtMismatch: null }; // couldn't verify — skip rather than block on a guess
 
   const where = `${dto.state ?? 'unknown state'}, ${dto.district ?? 'unknown district'}`;
   if (
@@ -117,15 +135,159 @@ async function assertAddressConsistent(dto: {
         `State, district, city, address and pincode must all describe the same place (got ${where}).`,
     );
   }
+
+  /**
+   * WHY this is reported, not refused (2026-09-07): the registration wizard tells the clerk this
+   * record "will be saved as entered" when district and pincode disagree — this 400 fired right
+   * after that promise, discarding the whole request the UI had just said it would keep. The
+   * review queue's own operating rule is already "nothing guessed or changed automatically; each
+   * waits for a decision" (see `roster-records.service.ts`'s import-issues queue) — which is
+   * exactly what a district/pincode disagreement is: not a shape a computer can refuse, a fact
+   * for a person with local knowledge to reconcile. So the record is saved with whatever the
+   * clerk actually typed, and the disagreement is filed for review instead of blocking the save.
+   */
   if (
     dto.district &&
     authority.district &&
     normalizePlace(dto.district) !== normalizePlace(authority.district)
   ) {
-    throw new BadRequestException(
-      `Pincode ${pin} is in ${authority.district} district (${authority.state}), but the entered district is "${dto.district}". ` +
-        `State, district, city, address and pincode must all describe the same place (got ${where}).`,
-    );
+    return {
+      districtMismatch: {
+        enteredDistrict: dto.district,
+        authorityDistrict: authority.district,
+        authorityState: authority.state,
+        pincode: pin,
+      },
+    };
+  }
+
+  return { districtMismatch: null };
+}
+
+/**
+ * PAN and IFSC are stored uppercase, and phones are stored in the roster's own
+ * `+91XXXXXXXXXX` shape — the wizard already does both client-side, but a direct API write
+ * bypasses the browser entirely. A live probe of `POST /assayers` found exactly that: a
+ * lowercase PAN went straight into encryption, and `+91 98765-00011` was stored raw, spaces,
+ * dashes and all. Two callers writing the same PAN in different case is exactly what defeats an
+ * exact-match duplicate scan (see `identity-validation.ts`'s own note on this).
+ *
+ * Mutates `dto` in place: `persistNewAssayer`'s spread and `update`'s copy-loop both read off
+ * `dto` afterwards, so they pick up the normalised values for free instead of a second write path
+ * re-deciding the same shape.
+ *
+ * A value that does not normalise is left exactly as it arrived. The DTO's own format
+ * validators (`IsPanFormat`, `IsIfscFormat`, `IsIndianMobile`) have already refused anything that
+ * would reach here ill-shaped — this function does not invent a second opinion about what
+ * "ill-shaped" means, it only decides the STORED form of what already passed.
+ */
+/**
+ * India-first naming (2026-09-07). The authored truth is `fullName` — the name exactly as
+ * printed on the Aadhaar/PAN, which is what banks, TDS filings and background checks verify
+ * against. Indian names refuse the first/last split this table was born with: Tamil
+ * initial-style names ("A K Venkatesan"), father's-name middles ("Aditya Pramod Dhotre"),
+ * legitimate single-token names. So when `fullName` arrives it is stored VERBATIM (whitespace
+ * squeezed, nothing else policed) as `displayName`, and the legacy first/last columns become
+ * derived tokens — split the same way the roster importer has always split a sheet's name
+ * column (everything-but-last / last), so both entry paths derive identically. Nothing
+ * user-facing should ever be rebuilt from the tokens again.
+ */
+function applyAuthoredName(
+  dto: { fullName?: string; firstName?: string; lastName?: string },
+  current?: { displayName?: string },
+): { displayName?: string; firstName?: string; lastName?: string } {
+  const full = dto.fullName?.replace(/\s+/g, ' ').trim();
+  if (full) {
+    const parts = full.split(' ');
+    return {
+      displayName: full,
+      firstName: parts.length > 1 ? parts.slice(0, -1).join(' ') : parts[0],
+      lastName: parts.length > 1 ? parts[parts.length - 1] : '',
+    };
+  }
+  if (dto.firstName || dto.lastName) {
+    const first = dto.firstName?.trim();
+    const last = dto.lastName?.trim();
+    return {
+      ...(first !== undefined ? { firstName: first } : {}),
+      ...(last !== undefined ? { lastName: last } : {}),
+      displayName: [first, last].filter(Boolean).join(' ') || current?.displayName,
+    };
+  }
+  return {};
+}
+
+function normaliseIdentityFields(dto: {
+  panNumber?: string | null;
+  ifscCode?: string | null;
+  phone?: string | null;
+  alternatePhone?: string | null;
+  emergencyContactPhone?: string | null;
+}): void {
+  if (typeof dto.panNumber === 'string' && dto.panNumber.trim()) {
+    dto.panNumber = dto.panNumber.trim().toUpperCase();
+  }
+  if (typeof dto.ifscCode === 'string' && dto.ifscCode.trim()) {
+    dto.ifscCode = dto.ifscCode.trim().toUpperCase();
+  }
+  for (const field of ['phone', 'alternatePhone', 'emergencyContactPhone'] as const) {
+    const value = dto[field];
+    if (typeof value !== 'string' || !value.trim()) continue;
+    const normalised = normalisePhone(value);
+    // `normalisePhone` returns the bare 10 digits and leaves the prefix to the caller; `+91…` is
+    // the roster importer's own convention (`readPhoneNumbers`) for every row already on file.
+    if (normalised) dto[field] = `+91${normalised}`;
+  }
+}
+
+/**
+ * Refuses only the dates that cannot be real, naming the value so the clerk sees what was typed
+ * rather than has to guess. A district-vs-pincode disagreement gets a review row because it takes
+ * local knowledge to settle; a joining date in 2062 needs no local knowledge, only a second look
+ * at the keyboard — so this one still refuses outright, at both create and update.
+ *
+ * Deliberately loose at both ends: an elderly hire and someone starting next quarter are both
+ * ordinary working lives. Only what cannot be true is refused.
+ */
+function assertDatesAreSane(record: { dateOfBirth?: string | null; joiningDate?: string | null }): void {
+  const human = (value: string) => formatDateOnly(value, { day: '2-digit', month: '2-digit', year: 'numeric' });
+
+  if (record.dateOfBirth) {
+    const dob = parseCalendarDate(record.dateOfBirth);
+    if (dob) {
+      if (dob.getTime() > Date.now()) {
+        throw new BadRequestException(
+          `The date of birth reads ${human(record.dateOfBirth)} — that is in the future; check the year.`,
+        );
+      }
+      if (dob.getFullYear() < 1930) {
+        throw new BadRequestException(
+          `The date of birth reads ${human(record.dateOfBirth)} — that is before 1930; check the year.`,
+        );
+      }
+    }
+  }
+
+  if (record.joiningDate) {
+    const joining = parseCalendarDate(record.joiningDate);
+    if (joining) {
+      const now = new Date();
+      // End-of-day, so a joining date exactly one year out today is not refused for being a few
+      // hours "too far" depending on time zone — only a date genuinely MORE than a year away is
+      // impossible enough to name.
+      const oneYearOut = new Date(now.getFullYear() + 1, now.getMonth(), now.getDate(), 23, 59, 59, 999);
+      if (joining.getTime() > oneYearOut.getTime()) {
+        const years = joining.getFullYear() - now.getFullYear();
+        throw new BadRequestException(
+          `The joining date reads ${human(record.joiningDate)} — that is ${years} years away; check the year.`,
+        );
+      }
+      if (joining.getFullYear() < 2000) {
+        throw new BadRequestException(
+          `The joining date reads ${human(record.joiningDate)} — that is before 2000; check the year.`,
+        );
+      }
+    }
   }
 }
 
@@ -273,9 +435,14 @@ export interface CreateAssayerDto {
   assayerCode?: string;
   employeeId?: string;
   employeeCode?: string;
-  firstName: string;
-  lastName: string;
+  /** The name as printed on Aadhaar/PAN — authored whole; wins over the legacy pair. */
+  fullName?: string;
+  firstName?: string;
+  lastName?: string;
   email?: string;
+  clientRequestId?: string;
+  allowSharedContact?: boolean;
+  sharedContactReason?: string;
   /**
    * Optional on admission. Rosters arrive without a phone column; a missing number blocks ringing
    * this assayer (Call & Assign, phone-channel dispatch), not recording them. See the column
@@ -351,6 +518,32 @@ export interface CreateAssayerDto {
   unavailableReason?: AssayerUnavailableReason;
 }
 
+export function hashAssayerCreationRequest(dto: CreateAssayerDto): string {
+  const canonical = {
+    fullName: (dto.fullName || `${dto.firstName || ''} ${dto.lastName || ''}`).trim().toLowerCase(),
+    phone: dto.phone ? dto.phone.replace(/\D/g, '').slice(-10) : '',
+    alternatePhone: dto.alternatePhone ? dto.alternatePhone.replace(/\D/g, '').slice(-10) : '',
+    email: (dto.email || '').trim().toLowerCase(),
+    panNumber: (dto.panNumber || '').trim().toUpperCase(),
+    aadhaarNumber: (dto.aadhaarNumber || '').replace(/\s+/g, ''),
+    address: (dto.address || '').trim().toLowerCase(),
+    state: (dto.state || '').trim().toLowerCase(),
+    district: (dto.district || '').trim().toLowerCase(),
+    city: (dto.city || '').trim().toLowerCase(),
+    pincode: (dto.pincode || '').trim(),
+    bankAccountNumber: (dto.bankAccountNumber || '').trim(),
+    ifscCode: (dto.ifscCode || '').trim().toUpperCase(),
+    bankName: (dto.bankName || '').trim().toLowerCase(),
+    employeeId: (dto.employeeId || '').trim(),
+    employeeCode: (dto.employeeCode || '').trim(),
+    employmentType: (dto.employmentType || '').trim().toUpperCase(),
+    joiningDate: dto.joiningDate ? String(dto.joiningDate).slice(0, 10) : '',
+    preferredContactChannel: dto.preferredContactChannel || 'AUTO',
+    organizationId: (dto.organizationId || '').trim(),
+  };
+  return createHash('sha256').update(JSON.stringify(canonical)).digest('hex');
+}
+
 export interface UpdateAssayerDto {
   /**
    * `organizationId` is deliberately absent.
@@ -363,6 +556,7 @@ export interface UpdateAssayerDto {
    */
   employeeId?: string;
   employeeCode?: string;
+  fullName?: string;
   firstName?: string;
   lastName?: string;
   email?: string;
@@ -561,7 +755,12 @@ export class AssayerService implements OnModuleInit {
     }, {});
   }
 
-  private async syncWorkforceAttributes(assayerId: string, dto: CreateAssayerDto | UpdateAssayerDto, userId: string): Promise<void> {
+  private async syncWorkforceAttributes(
+    assayerId: string,
+    dto: CreateAssayerDto | UpdateAssayerDto,
+    userId: string,
+    manager?: EntityManager,
+  ): Promise<void> {
     const FIELD_TO_TYPE = {
       skills: 'SKILL',
       certifications: 'CERTIFICATION',
@@ -584,7 +783,9 @@ export class AssayerService implements OnModuleInit {
 
     if (providedTypes.length === 0) return;
 
-    await this.workforceAttributeRepository.delete({
+    const repo = manager ? manager.getRepository(WorkforceAttributeEntity) : this.workforceAttributeRepository;
+
+    await repo.delete({
       assayerId,
       type: In(providedTypes),
     });
@@ -615,7 +816,7 @@ export class AssayerService implements OnModuleInit {
       }
     }
     if (newAttrs.length > 0) {
-      await this.workforceAttributeRepository.save(newAttrs as any[]);
+      await repo.save(newAttrs as any[]);
     }
   }
 
@@ -918,28 +1119,99 @@ export class AssayerService implements OnModuleInit {
    * user typed themselves is never retried — saving somebody under a different code than the
    * one on screen would be worse than the error.
    */
-  async create(dto: CreateAssayerDto, userId: string, organizationId?: string | null): Promise<AssayerEntity> {
+  async create(
+    dto: CreateAssayerDto,
+    userId: string,
+    organizationId?: string | null,
+    actorRoles?: string[],
+  ): Promise<AssayerEntity> {
     // A create carrying a masked value is rarer than an edit — it happens when a form is cloned
     // from a record that was read masked — but it stores the same asterisks, so it is refused the
     // same way rather than left as the one door the guard does not cover.
     assertNoMaskedPii(dto as Record<string, any>);
+    const createRequestHash = dto.clientRequestId ? hashAssayerCreationRequest(dto) : null;
+
+    // Fast-path idempotency pre-check (tenant-scoped)
+    const orgId = organizationId ?? dto.organizationId ?? null;
+    if (dto.clientRequestId && createRequestHash) {
+      const queryRunner = typeof this.assayerRepository?.manager?.query === 'function' ? this.assayerRepository.manager : this.dataSource;
+      const existingIdemp = await queryRunner.query(
+        `SELECT * FROM assayer_idempotency_records
+         WHERE client_request_id = $1
+           AND COALESCE(organization_id, '00000000-0000-0000-0000-000000000000'::uuid) = COALESCE($2, '00000000-0000-0000-0000-000000000000'::uuid)`,
+        [dto.clientRequestId, orgId],
+      );
+      if (existingIdemp && existingIdemp.length > 0) {
+        const rec = existingIdemp[0];
+        if (rec.command !== 'CREATE' || rec.request_hash !== createRequestHash) {
+          throw new ConflictException(
+            'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different assayer registration payload.',
+          );
+        }
+        return rec.response_payload as AssayerEntity;
+      }
+    }
+
     const supplied = dto.assayerCode?.trim();
     if (supplied) {
       const existing = await this.assayerRepository.findOne({ where: { assayerCode: supplied } });
       if (existing) throw new ConflictException(`Assayer code ${supplied} already exists.`);
-      return this.persistNewAssayer(dto, supplied, userId, organizationId);
+      try {
+        return await this.persistNewAssayer(dto, supplied, userId, organizationId, actorRoles, createRequestHash);
+      } catch (err: any) {
+        return await this.handleCreateIdempotencyConflict(err, dto.clientRequestId, createRequestHash, orgId);
+      }
     }
 
     for (let attempt = 0; attempt < 5; attempt++) {
       const candidate = await this.allocateAssayerCode();
       try {
-        return await this.persistNewAssayer(dto, candidate, userId, organizationId);
+        return await this.persistNewAssayer(dto, candidate, userId, organizationId, actorRoles, createRequestHash);
       } catch (err: any) {
-        // 23505 = unique_violation. Anything else is a real failure and must surface.
+        const isIdemp =
+          (err?.code === '23505' || err?.driverError?.code === '23505') &&
+          (String(err?.detail || err?.message).includes('assayer_idempotency_records') ||
+           String(err?.detail || err?.message).includes('client_request_id') ||
+           String(err?.constraint).includes('idempotency'));
+        if (isIdemp && dto.clientRequestId && createRequestHash) {
+          return await this.handleCreateIdempotencyConflict(err, dto.clientRequestId, createRequestHash, orgId);
+        }
+        // 23505 = unique_violation on assayerCode. Anything else is a real failure and must surface.
         if (err?.code !== '23505' && err?.driverError?.code !== '23505') throw err;
       }
     }
     throw new ConflictException('Could not allocate an assayer code just now. Please try again.');
+  }
+
+  private async handleCreateIdempotencyConflict(
+    err: any,
+    clientRequestId?: string,
+    createRequestHash?: string | null,
+    organizationId?: string | null,
+  ): Promise<AssayerEntity> {
+    const isIdempConflict =
+      (err?.code === '23505' || err?.driverError?.code === '23505') &&
+      (String(err?.detail || err?.message).includes('assayer_idempotency_records') ||
+       String(err?.detail || err?.message).includes('client_request_id') ||
+       String(err?.constraint).includes('idempotency'));
+    if (isIdempConflict && clientRequestId && createRequestHash) {
+      const queryRunner = typeof this.assayerRepository?.manager?.query === 'function' ? this.assayerRepository.manager : this.dataSource;
+      const committed = await queryRunner.query(
+        `SELECT * FROM assayer_idempotency_records
+         WHERE client_request_id = $1
+           AND COALESCE(organization_id, '00000000-0000-0000-0000-000000000000'::uuid) = COALESCE($2, '00000000-0000-0000-0000-000000000000'::uuid)`,
+        [clientRequestId, organizationId ?? null],
+      );
+      if (committed?.[0]?.response_payload) {
+        if (committed[0].request_hash !== createRequestHash) {
+          throw new ConflictException(
+            'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different assayer registration payload.',
+          );
+        }
+        return committed[0].response_payload as AssayerEntity;
+      }
+    }
+    throw err;
   }
 
   private async persistNewAssayer(
@@ -947,10 +1219,104 @@ export class AssayerService implements OnModuleInit {
     assayerCode: string,
     userId: string,
     organizationId?: string | null,
+    actorRoles?: string[],
+    createRequestHash?: string | null,
   ): Promise<AssayerEntity> {
     dto = { ...dto, assayerCode };
 
-    await assertAddressConsistent(dto);
+    // The shared rulebook, applied before anything else touches `dto`: PAN/IFSC uppercased and
+    // phones normalised to `+91XXXXXXXXXX` ahead of validation-dependent logic and persistence,
+    // so a direct API write can never store a shape the wizard's own client-side pass would have
+    // caught. See `normaliseIdentityFields`'s own comment for the live probe that found this gap.
+    normaliseIdentityFields(dto);
+
+    const authoredName = applyAuthoredName(dto);
+    if (!authoredName.displayName) {
+      throw new BadRequestException(
+        'Before this can be saved, it needs their full name — exactly as printed on their Aadhaar or PAN.',
+      );
+    }
+    // `fullName` is not a column; keep it out of the entity spread below.
+    dto = { ...dto, ...authoredName };
+    delete (dto as { fullName?: string }).fullName;
+
+    // Duplicate classification & idempotency check
+    const normalizedPhone = dto.phone ? dto.phone.trim() : null;
+    const normalizedEmail = dto.email ? dto.email.trim().toLowerCase() : null;
+    const normalizedPan = dto.panNumber ? dto.panNumber.trim().toUpperCase() : null;
+
+    if (normalizedPan || normalizedPhone || normalizedEmail) {
+      const matchPredicates: any[] = [];
+      if (normalizedPan) matchPredicates.push({ panNumber: normalizedPan });
+      if (normalizedPhone) matchPredicates.push({ phone: normalizedPhone });
+      if (normalizedEmail) matchPredicates.push({ email: normalizedEmail });
+
+      const matchCandidates: AssayerEntity[] = await this.assayerRepository.find({
+        where: matchPredicates,
+      });
+
+      for (const m of matchCandidates) {
+        // Definite Duplicate Check
+        if (normalizedPan && m.panNumber && m.panNumber.toUpperCase() === normalizedPan) {
+          throw new ConflictException(
+            `DEFINITE_DUPLICATE: An assayer with PAN ${normalizedPan} already exists (${m.displayName || m.assayerCode}).`,
+          );
+        }
+
+        const sameName =
+          authoredName.displayName &&
+          m.displayName &&
+          m.displayName.trim().toLowerCase() === authoredName.displayName.trim().toLowerCase();
+
+        if (normalizedPhone && m.phone === normalizedPhone && sameName) {
+          throw new ConflictException(
+            `DEFINITE_DUPLICATE: Assayer ${authoredName.displayName} is already registered with phone ${normalizedPhone} (${m.assayerCode}).`,
+          );
+        }
+
+        if (normalizedEmail && m.email && m.email.toLowerCase() === normalizedEmail && sameName) {
+          throw new ConflictException(
+            `DEFINITE_DUPLICATE: Assayer ${authoredName.displayName} is already registered with email ${normalizedEmail} (${m.assayerCode}).`,
+          );
+        }
+
+        // Probable Duplicate / Shared Contact Check
+        if (normalizedPhone && m.phone === normalizedPhone && !sameName) {
+          if (!dto.allowSharedContact) {
+            throw new ConflictException(
+              `PROBABLE_DUPLICATE: Phone number ${normalizedPhone} is already registered to ${m.displayName || m.assayerCode}. If this is an authorized shared household contact, specify allowSharedContact=true with an authorized role and reason.`,
+            );
+          }
+          const authorizedRoles = [SystemRole.ADMIN, SystemRole.OPERATIONS, 'HR_MANAGER'];
+          const hasPrivilegedRole = actorRoles?.some((r) => authorizedRoles.includes(r as any));
+          if (actorRoles && !hasPrivilegedRole) {
+            throw new ForbiddenException(
+              'Only ADMIN, OPERATIONS, or HR_MANAGER can authorize shared contact duplicate override.',
+            );
+          }
+          if (!dto.sharedContactReason?.trim()) {
+            throw new BadRequestException(
+              'A sharedContactReason is required when authorizing a shared contact duplicate override.',
+            );
+          }
+          await this.auditService.recordEventSafe({
+            category: EventCategory.SYSTEM,
+            eventType: 'ASSAYER_SHARED_CONTACT_OVERRIDDEN',
+            entityType: 'ASSAYER',
+            entityId: m.id,
+            userId,
+            remarks: `Shared contact duplicate override authorized by ${userId}: ${dto.sharedContactReason.trim()}`,
+            metadata: {
+              phone: normalizedPhone,
+              conflictingAssayerCode: m.assayerCode,
+              reason: dto.sharedContactReason.trim(),
+            },
+          });
+        }
+      }
+    }
+
+    const addressCheck = await assertAddressConsistent(dto);
 
     /**
      * Checked on admission too, even though `CreateAssayerDto` carries no exit date today.
@@ -961,6 +1327,7 @@ export class AssayerService implements OnModuleInit {
      * it here because the field does not exist yet is how `create` and `update` drift apart.
      */
     assertEmploymentDatesArePossible(dto);
+    assertDatesAreSane(dto);
 
     /**
      * Resolved through the shared chain, so an assayer's home is placed by the same rules — and
@@ -991,6 +1358,10 @@ export class AssayerService implements OnModuleInit {
       );
     }
 
+    const clientReqId = dto.clientRequestId;
+    delete (dto as any).clientRequestId;
+    delete (dto as any).allowSharedContact;
+
     const geoFields: Partial<GeoFields> = geo ?? {};
     const assayer = this.assayerRepository.create({
       ...dto,
@@ -1003,13 +1374,14 @@ export class AssayerService implements OnModuleInit {
       city: dto.city ?? '',
       district: dto.district ?? '',
       phone: dto.phone || null,
+      notes: dto.notes ?? null,
       // Canonicalised from the state, exactly as branches are. Left to the caller this column
       // arrives null (the seed never sets it) or as a free-text zone name from an Excel import,
       // and either way `region IN ('WEST')` matches nobody — a region-scoped operator would
       // open the map, the roster and the capacity tile and find their workforce empty.
       region: resolveRegion(dto.region) ?? resolveRegion(dto.state) ?? null,
       joiningDate: dto.joiningDate ? new Date(dto.joiningDate) : null,
-      displayName: `${dto.firstName} ${dto.lastName}`,
+      displayName: authoredName.displayName,
       lifecycleStatus: AssayerLifecycleStatus.INVITED,
       status: AssayerStatus.INACTIVE,
       organizationId: organizationId ?? null,
@@ -1017,32 +1389,92 @@ export class AssayerService implements OnModuleInit {
       updatedBy: userId,
     });
 
-    const saved = await this.assayerRepository.save(assayer);
-    await this.syncWorkforceAttributes(saved.id, dto, userId);
-    await this.recordActivity(saved.id, 'ASSAYER_CREATED', null, AssayerLifecycleStatus.INVITED, userId, 'Assayer profile created');
-    await this.auditService.recordEventSafe({
-      category: EventCategory.OPERATIONAL,
-      eventType: 'ASSAYER_CREATED',
-      entityType: 'ASSAYER',
-      entityId: saved.id,
-      userId,
-      remarks: `Created assayer profile: ${saved.displayName} (${saved.assayerCode})`,
+    return this.uow.run(async (manager, emit) => {
+      // In-transaction idempotency check under transaction isolation (tenant-scoped)
+      if (clientReqId && createRequestHash) {
+        const inTxCheck = await manager.query(
+          `SELECT * FROM assayer_idempotency_records
+           WHERE client_request_id = $1
+             AND COALESCE(organization_id, '00000000-0000-0000-0000-000000000000'::uuid) = COALESCE($2, '00000000-0000-0000-0000-000000000000'::uuid)`,
+          [clientReqId, organizationId ?? null],
+        );
+        if (inTxCheck && inTxCheck.length > 0) {
+          const rec = inTxCheck[0];
+          if (rec.command !== 'CREATE' || rec.request_hash !== createRequestHash) {
+            throw new ConflictException(
+              'IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: clientRequestId has already been used for a different assayer registration payload.',
+            );
+          }
+          return rec.response_payload as AssayerEntity;
+        }
+      }
+
+      const assayerRepo = manager.getRepository(AssayerEntity);
+      const saved = await assayerRepo.save(assayer);
+
+      // Filed once the record has an id to hang off. See `assertAddressConsistent`'s district
+      // block for why this is a review-queue row rather than the 400 that used to sit here.
+      if (addressCheck.districtMismatch) {
+        await this.rosterRecords?.recordDistrictPincodeMismatch(saved.id, addressCheck.districtMismatch, userId);
+      }
+
+      await this.syncWorkforceAttributes(saved.id, dto, userId, manager);
+      await this.recordActivity(saved.id, 'ASSAYER_CREATED', null, AssayerLifecycleStatus.INVITED, userId, 'Assayer profile created', manager);
+      await this.auditService.recordEventSafe({
+        category: EventCategory.OPERATIONAL,
+        eventType: 'ASSAYER_CREATED',
+        entityType: 'ASSAYER',
+        entityId: saved.id,
+        userId,
+        remarks: `Created assayer profile: ${saved.displayName} (${saved.assayerCode})`,
+      }, { manager });
+
+      // Atomic write into assayer_idempotency_records in the same transaction
+      if (clientReqId && createRequestHash) {
+        await manager.query(
+          `INSERT INTO assayer_idempotency_records
+           (client_request_id, organization_id, assayer_id, command, actor_id, request_hash, response_payload)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [
+            clientReqId,
+            organizationId ?? null,
+            saved.id,
+            'CREATE',
+            userId,
+            createRequestHash,
+            JSON.stringify(saved),
+          ],
+        );
+      }
+
+      if (typeof emit === 'function') {
+        emit('assayer:created', {
+          eventType: 'assayer:created',
+          aggregateId: saved.id,
+          userId,
+          organizationId: saved.organizationId,
+          payload: { id: saved.id, displayName: saved.displayName, assayerCode: saved.assayerCode },
+        });
+      }
+
+      await this.hydrateWorkforceAttributes(saved);
+      return saved;
     });
-    await this.eventPublisher.publish('assayer:created', {
-      eventType: 'assayer:created',
-      aggregateId: saved.id,
-      userId,
-      organizationId: saved.organizationId,
-      payload: { id: saved.id, displayName: saved.displayName, assayerCode: saved.assayerCode },
-    });
-    await this.hydrateWorkforceAttributes(saved);
-    return saved;
   }
 
   async update(id: string, dto: UpdateAssayerDto, userId: string): Promise<AssayerEntity> {
     // Before anything is merged onto the entity: see `assertNoMaskedPii`. This has to run ahead
     // of the copy loop below, which writes any key of the payload that matches a column.
     assertNoMaskedPii(dto as Record<string, any>);
+
+    // Same rulebook as `create` — PAN/IFSC uppercased, phones normalised to `+91XXXXXXXXXX` —
+    // applied here, before the copy loop below, so that loop (which writes every key of the
+    // payload onto the entity) picks up the normalised values for free. Also ahead of the
+    // impossible-date and district checks further down, which is fail-fast ordering only: none
+    // of these three read anything the copy loop would have merged.
+    normaliseIdentityFields(dto);
+    assertDatesAreSane(dto);
+
     const assayer = await this.findOne(id);
     const orig = {
       address: assayer.address,
@@ -1076,12 +1508,12 @@ export class AssayerService implements OnModuleInit {
      * rule outliving that: an internal caller passing the interface a wider object, or a field
      * added to the DTO by somebody who did not read this far, would otherwise reopen the hole.
      */
-    for (const decided of ['status', 'lifecycleStatus'] as const) {
+    for (const decided of ['status', 'lifecycleStatus', 'isActive'] as const) {
       if ((dto as Record<string, unknown>)[decided] !== undefined) {
         throw new BadRequestException(
-          "An assayer's status is changed with the lifecycle actions on their record — activate, " +
-          'put on leave, suspend, resign, terminate — which ask for a reason and record who ' +
-          'decided. It cannot be set from the profile form.',
+          "An assayer's status, lifecycle, and active state are changed with the lifecycle actions on their record " +
+          '— activate, put on leave, suspend, resign, terminate, archive — which record who decided and why. ' +
+          'They cannot be directly modified from the profile form or update body.',
         );
       }
     }
@@ -1099,6 +1531,12 @@ export class AssayerService implements OnModuleInit {
      * null, and stays an empty string where it does not. The client sends `''` and stops
      * needing to carry a copy of the table definition.
      */
+    // Resolve the authored name first and fold its derived tokens into the ordinary column
+    // copy below; `fullName` itself is not a column and must not ride the generic loop.
+    const authoredName = applyAuthoredName(dto, assayer);
+    dto = { ...dto, ...authoredName };
+    delete (dto as { fullName?: string }).fullName;
+
     const columns = this.assayerRepository.metadata;
     Object.keys(dto).forEach((key) => {
       const incoming = (dto as any)[key];
@@ -1113,8 +1551,8 @@ export class AssayerService implements OnModuleInit {
       (assayer as any)[key] = incoming === '' && column?.isNullable ? null : incoming;
     });
     const nameBefore = assayer.displayName;
-    if (dto.firstName || dto.lastName) {
-      assayer.displayName = `${dto.firstName ?? assayer.firstName} ${dto.lastName ?? assayer.lastName}`;
+    if (authoredName.displayName) {
+      assayer.displayName = authoredName.displayName;
     }
     // Region follows the state unless named explicitly, and is canonicalised either way —
     // the same rule create() applies, so an edit cannot un-canonicalise the column.
@@ -1148,14 +1586,16 @@ export class AssayerService implements OnModuleInit {
     const districtChanged = dto.district !== undefined && dto.district !== orig.district;
     const stateChanged = dto.state !== undefined && dto.state !== orig.state;
 
+    let districtMismatch: DistrictPincodeMismatch | null = null;
     if (addressChanged || cityChanged || districtChanged || stateChanged) {
-      await assertAddressConsistent({
+      const addressCheck = await assertAddressConsistent({
         address: dto.address ?? orig.address,
         city: dto.city ?? orig.city,
         district: dto.district ?? orig.district,
         state: dto.state ?? orig.state,
         pincode: dto.pincode ?? orig.pincode,
       });
+      districtMismatch = addressCheck.districtMismatch;
     }
 
     const coordsSupplied = dto.latitude !== undefined && dto.longitude !== undefined;
@@ -1185,6 +1625,12 @@ export class AssayerService implements OnModuleInit {
     assayer.updatedBy = userId;
     const saved = await this.assayerRepository.save(assayer);
 
+    // Filed once the save has gone through. See `assertAddressConsistent`'s district block for
+    // why this is a review-queue row rather than the 400 that used to sit here.
+    if (districtMismatch) {
+      await this.rosterRecords?.recordDistrictPincodeMismatch(saved.id, districtMismatch, userId);
+    }
+
     /**
      * A verified identity document was checked against the name this record used to carry.
      *
@@ -1201,6 +1647,51 @@ export class AssayerService implements OnModuleInit {
           + `previous name ("${nameBefore}").`,
         ).catch(() => undefined);
       }
+    }
+
+    // Field-Specific Document Evidence Invalidation:
+    // 1. Bank Account / IFSC change: invalidate only BANK_PASSBOOK evidence and clear identityVerifiedAt
+    const bankDetailsChanged =
+      (dto.bankAccountNumber !== undefined && dto.bankAccountNumber !== orig.bankAccountNumber) ||
+      (dto.ifscCode !== undefined && dto.ifscCode !== orig.ifscCode);
+    if (bankDetailsChanged && this.rosterRecords) {
+      await this.rosterRecords.invalidateDocumentForFieldChange(
+        saved.id,
+        OnboardingDocument.BANK_PASSBOOK,
+        'Bank account or IFSC details were updated',
+        userId,
+      );
+      if (saved.identityVerifiedAt) {
+        await this.assayerRepository.update(saved.id, { identityVerifiedAt: null });
+      }
+    }
+
+    // 2. PAN Number change: invalidate only PAN_CARD evidence
+    const panChanged = dto.panNumber !== undefined && dto.panNumber !== orig.panNumber;
+    if (panChanged && typeof this.rosterRecords?.invalidateDocumentForFieldChange === 'function') {
+      await this.rosterRecords.invalidateDocumentForFieldChange(
+        saved.id,
+        OnboardingDocument.PAN_CARD,
+        'PAN number was updated',
+        userId,
+      );
+    }
+
+    // 3. Aadhaar Number change: invalidate only AADHAAR_FRONT and AADHAAR_BACK evidence
+    const aadhaarChanged = dto.aadhaarNumber !== undefined && dto.aadhaarNumber !== orig.aadhaarNumber;
+    if (aadhaarChanged && typeof this.rosterRecords?.invalidateDocumentForFieldChange === 'function') {
+      await this.rosterRecords.invalidateDocumentForFieldChange(
+        saved.id,
+        OnboardingDocument.AADHAAR_FRONT,
+        'Aadhaar number was updated',
+        userId,
+      );
+      await this.rosterRecords.invalidateDocumentForFieldChange(
+        saved.id,
+        OnboardingDocument.AADHAAR_BACK,
+        'Aadhaar number was updated',
+        userId,
+      );
     }
 
     await this.syncWorkforceAttributes(saved.id, dto, userId);
@@ -1528,6 +2019,8 @@ export class AssayerService implements OnModuleInit {
   async remove(id: string, userId: string): Promise<void> {
     const assayer = await this.findOne(id);
     assayer.isActive = false;
+    assayer.lifecycleStatus = AssayerLifecycleStatus.ARCHIVED;
+    assayer.status = AssayerStatus.INACTIVE;
     assayer.updatedBy = userId;
 
     /**
@@ -1607,7 +2100,8 @@ export class AssayerService implements OnModuleInit {
        */
       .then(() => manager.query(
         `UPDATE assignments SET is_active = false, status = $1,
-            cancel_reason = 'Assayer profile soft deleted', updated_by = $2
+            cancel_reason = 'Assayer profile soft deleted', updated_by = $2,
+            entity_version = COALESCE(entity_version, 1) + 1, updated_at = NOW()
           WHERE assayer_id = $3 AND is_active = true AND status != $4`,
         [AssignmentStatus.CANCELLED, userId, id, AssignmentStatus.COMPLETED],
       ))
@@ -1663,6 +2157,13 @@ export class AssayerService implements OnModuleInit {
     AssayerLifecycleStatus.INACTIVE,
     AssayerLifecycleStatus.RESIGNED,
     AssayerLifecycleStatus.TERMINATED,
+    /**
+     * INVITED only has one inbound edge in the shared map: the rehire from RESIGNED/TERMINATED
+     * (see `AssayerStateMachine.rehire`). "Why was this person re-invited" deserves the same
+     * answer on file that "why were they terminated" already gets — it is not a step of ordinary
+     * onboarding progress the way DOCUMENT_VERIFICATION or TRAINING are.
+     */
+    AssayerLifecycleStatus.INVITED,
   ]);
 
   /**
@@ -1723,6 +2224,9 @@ export class AssayerService implements OnModuleInit {
       return this.terminateAssayer(id, userId, reason);
     } else if (targetStatus === AssayerLifecycleStatus.ARCHIVED) {
       return this.archiveAssayer(id, userId, reason);
+    } else if (targetStatus === AssayerLifecycleStatus.INVITED) {
+      // The rehire edge: RESIGNED/TERMINATED → INVITED. See `AssayerStateMachine.rehire`.
+      return this.rehireAssayer(id, userId, reason);
     } else {
       throw new BadRequestException(`Invalid target status: ${targetStatus}`);
     }
@@ -1865,6 +2369,8 @@ export class AssayerService implements OnModuleInit {
       event = AssayerStateMachine.terminate(assayer, userId);
     } else if (targetStatus === AssayerLifecycleStatus.ARCHIVED) {
       event = AssayerStateMachine.archive(assayer, userId);
+    } else if (targetStatus === AssayerLifecycleStatus.INVITED) {
+      event = AssayerStateMachine.rehire(assayer, userId);
     } else {
       throw new BadRequestException(`Invalid lifecycle status: ${targetStatus}`);
     }
@@ -2022,6 +2528,33 @@ export class AssayerService implements OnModuleInit {
       return corrections.length ? corrections.join(', ') : null;
     }
 
+    /**
+     * Rehire: RESIGNED/TERMINATED → INVITED (2026-09-07). Load-bearing, not cosmetic — shared
+     * `hasLeftWorkforce` (packages/shared/src/assayer-lifecycle.ts) reads `lifecycleStatus` alone
+     * for this class of departure, so the status flip above already makes `stillWorkable`/
+     * `ON_ROSTER` see this person as back. But every OTHER reader of a departure date — HR's
+     * attrition figures, the roster's "Exited" chip, the workforce header's exit count — reads
+     * `exitDate`/`terminationDate` regardless of status, and a stale departure date left in place
+     * would keep counting a rehired, actively-onboarding person as an exit.
+     *
+     * Unconditional, unlike the ACTIVE branch above: that branch only clears a date already in
+     * the past, leaving a future one alone because it could be a genuine notice period on someone
+     * who never actually left. INVITED has no such case — its only inbound edge is this rehire,
+     * which only exists because the person genuinely left before — so there is nothing to protect
+     * by leaving either date in place.
+     */
+    if (target === AssayerLifecycleStatus.INVITED) {
+      if (assayer.exitDate) {
+        corrections.push(`exit date ${calendarDay(assayer.exitDate)} cleared on rehire`);
+        assayer.exitDate = null;
+      }
+      if (assayer.terminationDate) {
+        corrections.push(`termination date ${calendarDay(assayer.terminationDate)} cleared on rehire`);
+        assayer.terminationDate = null;
+      }
+      return corrections.length ? corrections.join(', ') : null;
+    }
+
     return null;
   }
 
@@ -2120,7 +2653,8 @@ export class AssayerService implements OnModuleInit {
     const reason = `Assayer workforce record moved to ${target} on ${calendarDay(new Date())}; ` +
       'the work could not proceed as planned. Reassign it if it still needs doing.';
     const [, assignmentsAffected] = await runner.query(
-      `UPDATE assignments SET status = $1, cancel_reason = $2, updated_by = $3
+      `UPDATE assignments SET status = $1, cancel_reason = $2, updated_by = $3,
+          entity_version = COALESCE(entity_version, 1) + 1, updated_at = NOW()
         WHERE assayer_id = $4 AND is_active = true AND status != $5`,
       [AssignmentStatus.CANCELLED, reason, userId, assayerId, AssignmentStatus.COMPLETED],
     ) ?? [];
@@ -2196,6 +2730,143 @@ export class AssayerService implements OnModuleInit {
     const { saved, event } = await this.doTransitionLifecycle(id, AssayerLifecycleStatus.ARCHIVED, userId, reason);
     if (event) this.eventPublisher.publish(event.constructor.name, event);
     return saved;
+  }
+
+  /** RESIGNED/TERMINATED → INVITED. See `AssayerStateMachine.rehire`. */
+  async rehireAssayer(id: string, userId: string, reason?: string): Promise<AssayerEntity> {
+    const { saved, event } = await this.doTransitionLifecycle(id, AssayerLifecycleStatus.INVITED, userId, reason);
+    if (event) this.eventPublisher.publish(event.constructor.name, event);
+    return saved;
+  }
+
+  // ---- Controlled Operator Recovery Actions ----
+
+  /**
+   * Controlled operator recovery for stuck onboarding states.
+   *
+   * Allows resetting an assayer's onboarding progress to an earlier onboarding stage
+   * (e.g. from TRAINING back to DOCUMENT_VERIFICATION when a credential failed).
+   * Refuses jumping directly into ACTIVE or terminal states.
+   */
+  async operatorResetOnboardingStage(
+    id: string,
+    targetStage: AssayerLifecycleStatus,
+    reason: string,
+    userId: string,
+  ): Promise<AssayerEntity> {
+    const validOnboardingStages = [
+      AssayerLifecycleStatus.INVITED,
+      AssayerLifecycleStatus.DOCUMENT_VERIFICATION,
+      AssayerLifecycleStatus.BACKGROUND_VERIFICATION,
+      AssayerLifecycleStatus.TRAINING,
+    ];
+
+    if (!validOnboardingStages.includes(targetStage)) {
+      throw new BadRequestException(
+        `Cannot reset to ${targetStage}: Operator onboarding recovery only allows resetting to early onboarding stages (INVITED, DOCUMENT_VERIFICATION, BACKGROUND_VERIFICATION, TRAINING).`,
+      );
+    }
+
+    if (!reason || reason.trim().length < 10) {
+      throw new BadRequestException('A substantive operational reason (minimum 10 characters) is required to reset an onboarding stage.');
+    }
+
+    const assayer = await this.findOne(id);
+    const prevStatus = assayer.lifecycleStatus;
+
+    if (assayer.lifecycleStatus === AssayerLifecycleStatus.ACTIVE) {
+      throw new BadRequestException('Cannot reset onboarding stage on an ACTIVE assayer. Use suspend or deactivate instead.');
+    }
+
+    assayer.lifecycleStatus = targetStage;
+    assayer.deriveOperationalStatus();
+    assayer.isActive = targetStage !== AssayerLifecycleStatus.ARCHIVED;
+    assayer.updatedBy = userId;
+
+    const saved = await this.assayerRepository.save(assayer);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.WORKFLOW,
+      eventType: 'ASSAYER_ONBOARDING_STAGE_RESET',
+      entityType: 'ASSAYER',
+      entityId: saved.id,
+      previousState: prevStatus,
+      newState: targetStage,
+      userId,
+      remarks: `Operator reset onboarding stage from ${prevStatus} to ${targetStage}: ${reason.trim()}`,
+      metadata: { previousStage: prevStatus, newStage: targetStage, reason: reason.trim() },
+    });
+
+    return saved;
+  }
+
+  /**
+   * Operator recovery: revoke an invitation for an assayer who never completed onboarding.
+   */
+  async operatorRevokeInvitation(id: string, reason: string, userId: string): Promise<AssayerEntity> {
+    if (!reason || reason.trim().length < 10) {
+      throw new BadRequestException('A substantive operational reason (minimum 10 characters) is required to revoke an invitation.');
+    }
+
+    const assayer = await this.findOne(id);
+    const allowedStatuses = [AssayerLifecycleStatus.INVITED, AssayerLifecycleStatus.DOCUMENT_VERIFICATION];
+    if (!allowedStatuses.includes(assayer.lifecycleStatus)) {
+      throw new BadRequestException(`Cannot revoke invitation: assayer is currently in ${assayer.lifecycleStatus} stage.`);
+    }
+
+    const prev = assayer.lifecycleStatus;
+    assayer.lifecycleStatus = AssayerLifecycleStatus.ARCHIVED;
+    assayer.status = AssayerStatus.INACTIVE;
+    assayer.isActive = false;
+    assayer.updatedBy = userId;
+
+    const saved = await this.assayerRepository.save(assayer);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.WORKFLOW,
+      eventType: 'ASSAYER_INVITATION_REVOKED',
+      entityType: 'ASSAYER',
+      entityId: saved.id,
+      previousState: prev,
+      newState: AssayerLifecycleStatus.ARCHIVED,
+      userId,
+      remarks: `Invitation revoked: ${reason.trim()}`,
+      metadata: { reason: reason.trim() },
+    });
+
+    return saved;
+  }
+
+  /**
+   * Reconcile departed assayer empanelments: closes active/recommended empanelments
+   * for an assayer whose workforce status is RESIGNED, TERMINATED, ARCHIVED, or INACTIVE.
+   */
+  async operatorReconcileDepartedEmpanelments(assayerId: string, reason: string, userId: string): Promise<number> {
+    const assayer = await this.findOne(assayerId);
+    const isDeparted = [
+      AssayerLifecycleStatus.RESIGNED,
+      AssayerLifecycleStatus.TERMINATED,
+      AssayerLifecycleStatus.ARCHIVED,
+      AssayerLifecycleStatus.INACTIVE,
+    ].includes(assayer.lifecycleStatus);
+
+    if (!isDeparted) {
+      throw new BadRequestException(`Assayer ${assayer.assayerCode} is currently ${assayer.lifecycleStatus} (not departed). Empanelment reconciliation only applies to departed personnel.`);
+    }
+
+    const closedCount = await this.closeClientEmpanelmentsOnDeparture(assayerId, assayer.lifecycleStatus, userId);
+
+    await this.auditService.recordEvent({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'DEPARTED_EMPANELMENTS_RECONCILED',
+      entityType: 'ASSAYER',
+      entityId: assayerId,
+      userId,
+      remarks: `Operator reconciled departed empanelments (${closedCount} closed): ${reason.trim()}`,
+      metadata: { closedCount, reason: reason.trim() },
+    });
+
+    return closedCount;
   }
 
   // ---- Stats & Profile ----
@@ -3317,4 +3988,23 @@ export class AssayerService implements OnModuleInit {
     }
   }
 
+  /**
+   * Frozen payable disbursement destination snapshots for an assayer.
+   */
+  async getPayables(assayerId: string): Promise<any[]> {
+    return this.dataSource.query(
+      `SELECT id, payable_number as "payableNumber", status, total_amount as "amount",
+              currency, approved_at as "approvedAt",
+              destination_bank_name as "destinationBankName",
+              destination_ifsc as "destinationIfsc",
+              destination_bank_account_number as "destinationBankAccountNumber",
+              destination_account_holder_name as "destinationAccountHolderName",
+              payout_evidence_version_id as "payoutEvidenceVersionId",
+              destination_verified_at as "destinationVerifiedAt"
+       FROM assayer_payables
+       WHERE assayer_id = $1
+       ORDER BY created_at DESC`,
+      [assayerId],
+    );
+  }
 }

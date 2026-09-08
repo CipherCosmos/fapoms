@@ -63,7 +63,11 @@ export class OutboxRelay {
 
     for (const row of due) {
       try {
-        this.eventPublisher.publish(row.eventName, row.payload);
+        if (typeof this.eventPublisher.publishAsync === 'function') {
+          await this.eventPublisher.publishAsync(row.eventName, row.payload);
+        } else {
+          this.eventPublisher.publish(row.eventName, row.payload);
+        }
         dispatchedIds.push(row.id);
         dispatched++;
       } catch (err) {

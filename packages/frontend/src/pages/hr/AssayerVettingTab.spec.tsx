@@ -26,7 +26,14 @@ import { OTHER_STATUS_REASON } from './empanelment-reason-vocabulary';
 jest.mock('../../services/api', () => ({ api: { request: jest.fn() } }));
 jest.mock('../../components/ui', () => ({
   useToast: () => ({ toast: jest.fn() }),
-  useConfirm: () => ({ confirm: () => Promise.resolve(true), confirmDialog: null }),
+  useConfirm: () => ({
+    confirm: () => Promise.resolve(true),
+    confirmWithReason: () => Promise.resolve({
+      confirmed: true,
+      reason: 'Maiden name on the card, married name already on the record',
+    }),
+    confirmDialog: null,
+  }),
   // A real (native) select rather than a plain input, so a test can see the actual option list —
   // in particular the "as recorded"/"Other" escape-hatch entries the relationship and standing-
   // reason dropdowns add for a value that predates their fixed lists (see reference-vocabulary.ts
@@ -50,6 +57,10 @@ jest.mock('../../components/ui', () => ({
   // `footer` (as this one did) hides every Save button on the tab, and a stub that reimplements
   // it is the second dialog the convergence removed.
   Modal: jest.requireActual('../../components/ui/Modal').Modal,
+  // The real one. The verdict and verification chips render through this now, and it is a plain
+  // presentational span — nothing here is worth a stub, and a stub would leave the "Verified" /
+  // "Rejected" / verdict-label assertions below with no text to find.
+  StatusBadge: jest.requireActual('../../components/ui/StatusBadge').StatusBadge,
 }));
 
 const mockRequest = api.request as jest.Mock;
@@ -218,6 +229,54 @@ describe('AssayerVettingTab — documents', () => {
     await waitFor(() => expect(screen.getByText(/Upload scan/)).toBeInTheDocument());
     expect(screen.getByText('Signed paper is here')).toBeInTheDocument();
     expect(screen.queryByText(/^Attach$/)).not.toBeInTheDocument();
+  });
+});
+
+describe('AssayerVettingTab — verify and send back without the browser', () => {
+  const identityDoc = (over: Record<string, unknown> = {}) => ({
+    id: 'd-9',
+    requirement: 'AADHAAR_FRONT',
+    label: 'Aadhaar — front',
+    identity: true,
+    filePaths: [],
+    softCopyReceived: false,
+    hardCopyReceived: false,
+    hardCopyLocation: null,
+    documentNumber: '234567890124',
+    verificationStatus: 'PENDING',
+    ...over,
+  });
+
+  const verifyCall = () =>
+    mockRequest.mock.calls.find(([url, opts]: any[]) =>
+      url === '/assayers/document/d-9/verify' && opts?.method === 'POST');
+
+  it('reads what the card says in the app dialog, then verifies with it', async () => {
+    serve(dossier({ onboarding: [identityDoc()] }));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="documents" />);
+    await waitFor(() => expect(screen.getByText('Verify')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Verify'));
+    await waitFor(() => expect(screen.getByText(/What does the Aadhaar — front say\?/)).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText(/Name exactly as printed/), { target: { value: 'Ramesh Iyer' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Use these details' }));
+
+    await waitFor(() => expect(verifyCall()).toBeDefined());
+    expect(JSON.parse(verifyCall()![1].body)).toMatchObject({ verdict: 'VERIFIED', holderName: 'Ramesh Iyer' });
+  });
+
+  it('sends a scan back through the fixed reason list, not a numbered browser prompt', async () => {
+    serve(dossier({ onboarding: [identityDoc()] }));
+    render(<AssayerVettingTab assayerId="a-1" canManage section="documents" />);
+    await waitFor(() => expect(screen.getByText('Send back')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Send back'));
+    await waitFor(() => expect(screen.getByText(/Why is Aadhaar — front being sent back\?/)).toBeInTheDocument());
+    fireEvent.change(screen.getByLabelText(/Why this document is being sent back/), { target: { value: 'ILLEGIBLE' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Yes, send it back' }));
+
+    await waitFor(() => expect(verifyCall()).toBeDefined());
+    expect(JSON.parse(verifyCall()![1].body)).toMatchObject({ verdict: 'REJECTED', rejectionReason: 'ILLEGIBLE' });
   });
 });
 
@@ -398,7 +457,7 @@ describe('AssayerVettingTab — why a standing is what it is', () => {
   it('lets "Other" carry a reason no cluster covers, end to end', async () => {
     // references: [] — the default fixture's own reference row renders a "Change" button too,
     // and this test is about the standing's, not that one.
-    serve(dossier({ references: [], empanelments: [standing({ status: 'REJECTED', statusReason: null })] }));
+    serve(dossier({ references: [], empanelments: [standing({ status: 'INACTIVE', statusReason: null })] }));
     render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
     await waitFor(() => expect(screen.getByText('Change')).toBeInTheDocument());
 

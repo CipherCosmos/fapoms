@@ -8,7 +8,7 @@ import { fetchWholeAssayerRoster } from '../../services/assayer-roster';
 import { userMessage } from '../../services/errors';
 import { AlertBanner, DataTable, SearchInput } from '../../components/ui';
 import { listPhase } from '../../components/ui/list-phase';
-import { card, label, Empty, Notice, Lede, fmtDate, fmtWhen } from './hr-ui';
+import { card, label, Empty, Notice, fmtDate, fmtWhen } from './hr-ui';
 import { counted } from '../../utils/plural';
 import { useHr } from './HrLayout';
 import { queryKeys } from '../../hooks/queryKeys';
@@ -103,20 +103,6 @@ const rate = (value: number | string | null | undefined, currency?: string | nul
   Number(value ?? 0) > 0
     ? formatMoney(value, currency)
     : <span title="Nothing agreed for this — it was left blank" style={{ color: 'var(--text-muted)' }}>Not set</span>;
-
-/**
- * One rate off a row, and the difference between "no terms exist" and "this box was left blank".
- *
- * Two different absences that must not print the same word: a person with no pay terms at all has
- * nothing to say about their hourly rate, while a person whose terms exist with the hourly box
- * empty has a term nobody agreed. The first is a dash; the second is "Not set".
- */
-const rateOf = (
-  row: RosterPayRow | undefined,
-  pick: (p: CommercialProfile) => number | string | null | undefined,
-): React.ReactNode => (row?.profile
-  ? rate(pick(row.profile), row.profile.currency)
-  : <span style={{ color: 'var(--text-muted)' }}>—</span>);
 
 export const HrPayPage: React.FC = () => {
 
@@ -235,22 +221,20 @@ export const HrPayPage: React.FC = () => {
         </Notice>
       )}
 
-      <Lede>
-        What each person is paid, side by side. {unpricedCount > 0
-          ? `${counted(unpricedCount, 'person', 'people')} have no agreed base fee of their own, so every audit they do is paid at the client’s contracted default — set their terms from the row.`
-          : 'Everybody has their own agreed base fee; nothing here is falling back to a client default.'}
-      </Lede>
-
-      {/*
-        Migrated onto React Query rather than a one-shot `useEffect`/`useState` fetch, this page
-        can now say WHEN its figures were true and offer a way to ask again — something a plain
-        `useEffect` firing once on mount never could. "Figures as of", not "updated": this is one
-        cached read of two endpoints, not a live feed, and the distinction matters exactly here —
-        a rate card is money, and a clerk deciding whether to trust the amber "paid the client
-        default" tag needs to know how old it might be before acting on it.
-      */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '12px', color: 'var(--text-muted)' }}>
-        <span>Figures as of {asOf ? fmtWhen(new Date(asOf).toISOString()) : '—'}</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+        <div style={{ fontSize: '13px', color: 'var(--text-secondary)', flex: '1 1 320px', minWidth: 0 }}>
+          What each person is paid, side by side. {unpricedCount > 0
+            ? `${counted(unpricedCount, 'person', 'people')} have no agreed base fee of their own, so every audit they do is paid at the client’s contracted default.`
+            : 'Everybody has their own agreed base fee.'}
+        </div>
+        {/*
+          "Figures as of", not "updated": this is one cached read of two endpoints, not a live
+          feed — a rate card is money, and a clerk deciding whether to trust the amber "paid the
+          client default" tag needs to know how old it might be before acting on it.
+        */}
+        <span style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+          Figures as of {asOf ? fmtWhen(new Date(asOf).toISOString()) : '—'}
+        </span>
         <button
           onClick={refresh}
           disabled={refreshing}
@@ -304,22 +288,8 @@ export const HrPayPage: React.FC = () => {
         )}
       </div>
 
-      {unbankedCount > 0 && (
-        <Notice tone="danger">
-          Account number, IFSC and PAN are part of the assayer's own record, not their rate card.
-          Use the link on any row below — it opens that person's record to fill in whichever one
-          is missing.
-        </Notice>
-      )}
-
-      {filter === 'unpriced' && unpricedCount > 0 && (
-        <Notice tone="warning">
-          These people have no base fee of their own in force today — either no pay terms at all, or
-          pay terms saved with the base fee left at zero. Either way every audit they do is paid at
-          the client's contracted default fee. Use “Set pay terms” on a row to agree their own.
-        </Notice>
-      )}
-
+      {/* The row-level links below already say which record field is missing and open it for
+          editing — page-level notices repeating the same sentences doubled every payout gap. */}
       <div style={card}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '12px', flexWrap: 'wrap' }}>
           <Wallet size={15} style={{ color: 'var(--accent)' }} />
@@ -448,12 +418,29 @@ export const HrPayPage: React.FC = () => {
                 );
               },
             },
-            { key: 'daily', header: 'Daily rate', align: 'right', render: (a) => <>{rateOf(pay[a.id], (p) => p.dailyRate)}</> },
-            { key: 'hourly', header: 'Hourly rate', align: 'right', render: (a) => <>{rateOf(pay[a.id], (p) => p.hourlyRate)}</> },
-            { key: 'travel', header: 'Travel (per trip)', align: 'right', render: (a) => <>{rateOf(pay[a.id], (p) => p.travelReimbursement)}</> },
+            // Four sparse rate columns became one. Daily, hourly and travel sit empty on most
+            // rows, and none of them is ever paid out — the base fee is the only figure money
+            // moves on. The set ones print as one muted line; the rest stay blank.
+            {
+              key: 'other',
+              header: 'Other agreed rates',
+              render: (a) => {
+                const row = pay[a.id];
+                if (!row?.profile) return <span style={{ color: 'var(--text-muted)' }}>—</span>;
+                const p = row.profile;
+                const bits = [
+                  Number(p.dailyRate) > 0 ? `${formatMoney(p.dailyRate, p.currency)}/day` : null,
+                  Number(p.hourlyRate) > 0 ? `${formatMoney(p.hourlyRate, p.currency)}/hr` : null,
+                  Number(p.travelReimbursement) > 0 ? `travel ${formatMoney(p.travelReimbursement, p.currency)}` : null,
+                ].filter(Boolean);
+                return bits.length > 0
+                  ? <span style={{ color: 'var(--text-muted)', fontSize: '12px' }}>{bits.join(' · ')}</span>
+                  : <span style={{ color: 'var(--text-muted)' }}>—</span>;
+              },
+            },
             {
               key: 'from',
-              header: 'These terms apply from',
+              header: 'From',
               align: 'right',
               render: (a) => {
                 const row = pay[a.id];

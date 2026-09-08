@@ -1,7 +1,7 @@
-import React from 'react';
-import { Link, useNavigate } from 'react-router-dom';
-import { Stat, Empty, OpenLink, fmtDate, attritionExplainer, Section, Notice, Lede } from './hr-ui';
-import { DataTable } from '../../components/ui';
+import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { Stat, Empty, OpenLink, fmtDate, attritionExplainer, Section, Lede } from './hr-ui';
+import { DataTable, SearchInput } from '../../components/ui';
 import { counted } from '../../utils/plural';
 import type { HrWorkforceOverview } from '../../hooks/useHrWorkforce';
 import { useHr } from './HrLayout';
@@ -67,6 +67,26 @@ const UtilisationTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate:
   // where work is created, and stand the per-person amber down for the same reason.
   const noWorkYet = p.totalAssignments === 0 && d.utilisation.idleCount === d.utilisation.neverAssigned;
   const attrition = attritionExplainer(d.attrition);
+  /**
+   * The person-by-person table below is the whole active roster, uncapped — five hundred rows
+   * with no way to narrow them is a wall, not a worklist. A clerk hunting the over-capacity
+   * few typed nothing and scrolled; now a name/state search and a posture pick narrow it, and
+   * the line under them says how many of the roster are on screen.
+   */
+  const [workloadQuery, setWorkloadQuery] = useState('');
+  const [workloadPosture, setWorkloadPosture] = useState<'ALL' | keyof typeof WORKLOAD_POSTURE>('ALL');
+  const workloadRows = d.utilisation.utilization.filter((r) => {
+    if (workloadPosture !== 'ALL' && r.posture !== workloadPosture) return false;
+    const q = workloadQuery.trim().toLowerCase();
+    if (!q) return true;
+    return `${r.displayName} ${r.state ?? ''} ${r.district ?? ''}`.toLowerCase().includes(q);
+  });
+  const POSTURE_FILTERS = [
+    { key: 'ALL', label: 'Everyone', count: d.utilisation.utilizationCounts.total },
+    { key: 'OVER_UTILIZED', label: 'Over capacity', count: d.utilisation.utilizationCounts.overUtilized },
+    { key: 'UNDER_UTILIZED', label: 'Room for more', count: d.utilisation.utilizationCounts.underUtilized },
+    { key: 'IDLE', label: 'No work at all', count: d.utilisation.utilizationCounts.idle },
+  ] as const;
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
       <Lede>
@@ -80,31 +100,10 @@ const UtilisationTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate:
                 : 'Nobody is over capacity and nobody is sitting idle.'}`}
       </Lede>
 
-      {noWorkYet && (
-        <Notice tone="info" title="No work has been assigned to anyone yet.">
-          Everything below is zero because there are no assignments in the system — not because the team is
-          sitting idle. Workload figures start filling in once branches are offered to assayers in{' '}
-          <Link to="/planning" style={{ color: 'var(--accent)', fontWeight: 600 }}>Planning</Link>.
-        </Notice>
-      )}
-      <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-        <Stat
-          value={d.utilisation.idleCount}
-          caption={noWorkYet ? 'Waiting for their first job' : `No work in ${d.utilisation.idleAfterDays} days`}
-          tone={noWorkYet ? undefined : d.utilisation.idleCount ? 'var(--warning)' : 'var(--success)'}
-          hint={noWorkYet ? 'Nobody has been assigned work yet, so nobody can have worked recently' : undefined}
-        />
-        <Stat value={d.utilisation.neverAssigned} caption="Never assigned" tone={noWorkYet ? undefined : d.utilisation.neverAssigned ? 'var(--warning)' : undefined}
-          hint="Onboarded but never deployed — an onboarding failure rather than a lull" />
-        <Stat value={p.avgRating ?? '—'} caption={`Average rating (${p.rated} rated)`} />
-        <Stat value={p.onTimeRate === null ? '—' : `${p.onTimeRate}%`} caption="On-time completion" />
-        <Stat value={p.belowPar} caption="Rated below 3" tone={p.belowPar ? 'var(--warning)' : undefined} />
-      </div>
-
-      {/* The chip that got you here says "Workload", so this section says workload too — it used to
-          say "under or over-utilised", which is a third word for the same thing on the same click.
-          The count is the Section's, not written into the title in brackets: two of the three
-          headings on this page did it that way and the third had no count at all. */}
+      {/* The Lede above already says nothing is measurable yet and where work is created —
+          repeating it as a Notice doubled the same paragraph. The in-section breakdown and the
+          Idle table below carry the figures; the five-tile summary that used to sit here
+          repeated them a third time (idle, never-assigned) beside ratings that are not workload. */}
       <Section title="Workload, person by person" count={d.utilisation.utilizationCounts.total}>
         <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '12px' }}>
           <Stat value={d.utilisation.utilizationCounts.overUtilized} caption="Over capacity" tone={d.utilisation.utilizationCounts.overUtilized ? 'var(--danger)' : undefined} />
@@ -118,11 +117,51 @@ const UtilisationTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate:
         {d.utilisation.utilization.length === 0 ? (
           <Empty>Nobody is on the active roster yet, so there is no workload to measure. Add people in Roster first.</Empty>
         ) : (
-          <DataTable
-            density="compact"
-            minWidth={false}
-            rows={d.utilisation.utilization}
-            rowKey={(r) => r.id}
+          <>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '10px' }}>
+              <SearchInput
+                value={workloadQuery}
+                onChange={setWorkloadQuery}
+                placeholder="Find a person or place…"
+                compact
+                style={{ minWidth: '200px', flex: '1 1 220px' }}
+              />
+              {POSTURE_FILTERS.map((f) => {
+                const on = workloadPosture === f.key;
+                return (
+                  <button
+                    key={f.key}
+                    type="button"
+                    onClick={() => setWorkloadPosture(f.key)}
+                    aria-pressed={on}
+                    style={{
+                      padding: '5px 10px', fontSize: '12px', fontWeight: 600, cursor: 'pointer',
+                      borderRadius: '999px',
+                      border: `1px solid ${on ? 'var(--accent)' : 'var(--border-color)'}`,
+                      background: on ? 'color-mix(in srgb, var(--accent) 12%, transparent)' : 'transparent',
+                      color: on ? 'var(--accent)' : 'var(--text-secondary)',
+                    }}
+                  >
+                    {f.label} · {f.count}
+                  </button>
+                );
+              })}
+            </div>
+            {(workloadQuery.trim() || workloadPosture !== 'ALL') && (
+              <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '8px' }}>
+                Showing {workloadRows.length} of {d.utilisation.utilization.length} people.
+              </div>
+            )}
+            <DataTable
+              density="compact"
+              minWidth={false}
+              rows={workloadRows}
+              rowKey={(r) => r.id}
+              emptyState={(
+                <Empty>
+                  Nobody on the roster matches that. Clear the search or pick Everyone above.
+                </Empty>
+              )}
             columns={[
               // "Loaded" and "Util %" are the model's words, not a clerk's: "Loaded 3 / 6" reads as
               // a fraction of nothing in particular, and "Util %" is an abbreviation of a word this
@@ -148,6 +187,7 @@ const UtilisationTabBody = ({ d, navigate }: { d: HrWorkforceOverview; navigate:
               { key: 'open', header: '', render: (r) => <OpenLink onClick={() => navigate(`/assayers/${r.id}`)} /> },
             ]}
           />
+          </>
         )}
       </Section>
 
