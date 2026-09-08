@@ -30,6 +30,12 @@ export const AssayerRecordPage: React.FC = () => {
     <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
       <Link
         to="/hr/roster"
+        onClick={(e) => {
+          if (window.history.state && window.history.state.idx > 0) {
+            e.preventDefault();
+            navigate(-1);
+          }
+        }}
         style={{
           display: 'inline-flex', alignItems: 'center', gap: '6px', fontSize: '12.5px',
           color: 'var(--text-muted)', textDecoration: 'none', width: 'fit-content',
@@ -41,7 +47,13 @@ export const AssayerRecordPage: React.FC = () => {
       <AssayerRecord
         assayerId={assayerId}
         canManage={canManage}
-        onClose={() => navigate('/hr/roster')}
+        onClose={() => {
+          if (window.history.state && window.history.state.idx > 0) {
+            navigate(-1);
+          } else {
+            navigate('/hr/roster');
+          }
+        }}
         onChanged={() => setVersion((v) => v + 1)}
         reloadKey={version}
       />

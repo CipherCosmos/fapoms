@@ -1553,6 +1553,19 @@ export class AssayerController {
     return { success: true, data };
   }
 
+  @Get(':id/payables')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
+  @RequirePermissions('assayer:view:organization')
+  @ApiOperation({ summary: 'Frozen payable disbursement destination snapshots for an assayer' })
+  async getPayables(
+    @Param('id', ParseUUIDPipe) id: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    await this.regionGuard.assertAssayerInScope(id, scope);
+    const data = await this.assayerService.getPayables(id);
+    return data;
+  }
+
   /**
    * Which profile fields the caller may edit.
    *

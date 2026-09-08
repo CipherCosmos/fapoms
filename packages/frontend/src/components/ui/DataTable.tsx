@@ -129,7 +129,7 @@ export const DataTable = <T,>({
         <thead>
           <tr>
             {selectable && (
-              <th style={{ width: 32, whiteSpace: 'nowrap', padding: d.headPad }}>
+              <th scope="col" style={{ width: 32, whiteSpace: 'nowrap', padding: d.headPad }}>
                 {/* Says what it does. This box ticks the rows of the LOADED PAGE, not everything
                     matching the current filter — the rest of the result set was never fetched, so
                     it could not tick it even if it wanted to. It was previously an unlabelled
@@ -150,6 +150,7 @@ export const DataTable = <T,>({
               return (
                 <th
                   key={c.key}
+                  scope="col"
                   aria-sort={isSorted ? (sortOrder === 'asc' ? 'ascending' : 'descending') : sortable ? 'none' : undefined}
                   style={{ textAlign: c.align ?? 'left', whiteSpace: 'nowrap', padding: d.headPad, width: c.width }}
                 >
@@ -215,7 +216,14 @@ export const DataTable = <T,>({
                 >
                   {selectable && (
                     <td onClick={(e) => e.stopPropagation()} style={{ padding: d.cellPad }}>
-                      <input type="checkbox" checked={isSel} onChange={() => onToggleSelect?.(id)} style={{ cursor: 'pointer' }} />
+                      <input
+                        type="checkbox"
+                        checked={isSel}
+                        onChange={() => onToggleSelect?.(id)}
+                        style={{ cursor: 'pointer' }}
+                        aria-label={`Select row ${id}`}
+                        aria-checked={isSel}
+                      />
                     </td>
                   )}
                   {columns.map((c) => (

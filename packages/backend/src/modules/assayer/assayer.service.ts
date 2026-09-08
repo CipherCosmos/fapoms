@@ -1668,7 +1668,7 @@ export class AssayerService implements OnModuleInit {
 
     // 2. PAN Number change: invalidate only PAN_CARD evidence
     const panChanged = dto.panNumber !== undefined && dto.panNumber !== orig.panNumber;
-    if (panChanged && this.rosterRecords) {
+    if (panChanged && typeof this.rosterRecords?.invalidateDocumentForFieldChange === 'function') {
       await this.rosterRecords.invalidateDocumentForFieldChange(
         saved.id,
         OnboardingDocument.PAN_CARD,
@@ -1679,7 +1679,7 @@ export class AssayerService implements OnModuleInit {
 
     // 3. Aadhaar Number change: invalidate only AADHAAR_FRONT and AADHAAR_BACK evidence
     const aadhaarChanged = dto.aadhaarNumber !== undefined && dto.aadhaarNumber !== orig.aadhaarNumber;
-    if (aadhaarChanged && this.rosterRecords) {
+    if (aadhaarChanged && typeof this.rosterRecords?.invalidateDocumentForFieldChange === 'function') {
       await this.rosterRecords.invalidateDocumentForFieldChange(
         saved.id,
         OnboardingDocument.AADHAAR_FRONT,
@@ -3988,4 +3988,23 @@ export class AssayerService implements OnModuleInit {
     }
   }
 
+  /**
+   * Frozen payable disbursement destination snapshots for an assayer.
+   */
+  async getPayables(assayerId: string): Promise<any[]> {
+    return this.dataSource.query(
+      `SELECT id, payable_number as "payableNumber", status, total_amount as "amount",
+              currency, approved_at as "approvedAt",
+              destination_bank_name as "destinationBankName",
+              destination_ifsc as "destinationIfsc",
+              destination_bank_account_number as "destinationBankAccountNumber",
+              destination_account_holder_name as "destinationAccountHolderName",
+              payout_evidence_version_id as "payoutEvidenceVersionId",
+              destination_verified_at as "destinationVerifiedAt"
+       FROM assayer_payables
+       WHERE assayer_id = $1
+       ORDER BY created_at DESC`,
+      [assayerId],
+    );
+  }
 }

@@ -196,6 +196,11 @@ export function canManageAssayers(roles: SystemRole[], permissions?: string[]): 
   return allowed(roles, [SystemRole.ADMIN, SystemRole.OPERATIONS], 'ASSAYER:EDIT:ORGANIZATION', permissions);
 }
 
+/** Soft deleting an assayer profile requires assayer:delete:organization. */
+export function canDeleteAssayers(roles: SystemRole[], permissions?: string[]): boolean {
+  return allowed(roles, [SystemRole.ADMIN, SystemRole.OPERATIONS], 'ASSAYER:DELETE:ORGANIZATION', permissions);
+}
+
 /**
  * The role editor (RolesPermissionsPanel.tsx): create, rename, re-permission or delete a role.
  *

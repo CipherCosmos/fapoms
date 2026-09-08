@@ -17,6 +17,8 @@ import { userMessage } from '../../services/errors';
 import { counted } from '../../utils/plural';
 import { relationshipOptions } from './reference-vocabulary';
 import { EMPANELMENT_STATUS_REASONS, OTHER_STATUS_REASON } from './empanelment-reason-vocabulary';
+import { queryClient } from '../../queryClient';
+import { invalidateKycMutation } from '../../services/queryInvalidation';
 
 /**
  * May we send this person out, and to whom.
@@ -122,6 +124,16 @@ export const STANDING_LABELS: Record<string, string> = {
 const REFUSED_STANDINGS = new Set<string>([
   EmpanelmentStatus.NOT_RECOMMENDED, EmpanelmentStatus.REJECTED,
   EmpanelmentStatus.RESIGNED, EmpanelmentStatus.TERMINATED,
+]);
+
+/**
+ * Invariant 1: Empanelment hard-blocks that are NEVER overridable in the UI by any role.
+ */
+export const HARD_BLOCKED_STANDINGS = new Set<string>([
+  'REJECTED',
+  'TERMINATED',
+  'EXPIRED',
+  'SUSPENDED',
 ]);
 
 export type StandingStance = 'plannable' | 'refused' | 'notReady';
@@ -668,6 +680,11 @@ export const AssayerVettingTab: React.FC<{
       setErr('Choose the client this standing is about.');
       return;
     }
+    const existing = (data?.empanelments ?? []).find((e) => e.clientId === draft.clientId);
+    if (existing && HARD_BLOCKED_STANDINGS.has(existing.status)) {
+      setErr('Hard-blocked client standings (REJECTED, TERMINATED, EXPIRED, SUSPENDED) are final and cannot be overridden.');
+      return;
+    }
     setBusy(true);
     try {
       await api.request(`/assayers/${assayerId}/empanelment/${draft.clientId}`, {
@@ -830,13 +847,36 @@ export const AssayerVettingTab: React.FC<{
     if (!ok) return;
 
     setBusy(true);
+    const targetVersionId = doc.currentVersionId ?? doc.id;
+    const expectedDocVersion = doc.docVersion ?? doc.version;
+    const expectedContentHash = doc.contentSha256 ?? null;
+
     try {
       await api.request(`/assayers/document/${doc.id}/verify`, {
-        method: 'POST', body: JSON.stringify({ verdict: 'VERIFIED', ...printed }),
+        method: 'POST',
+        body: JSON.stringify({
+          verdict: 'VERIFIED',
+          targetVersionId,
+          expectedDocVersion,
+          expectedContentHash,
+          ...printed,
+        }),
       });
+      void invalidateKycMutation(queryClient, assayerId, doc.id);
       reload();
     } catch (e) {
       const message = userMessage(e);
+      if (
+        message.includes('DOCUMENT_VERSION_STALE') ||
+        message.includes('CANNOT_VERIFY_SUPERSEDED_VERSION') ||
+        message.includes('CONTENT_HASH_MISMATCH') ||
+        message.includes('DOCUMENT_ALREADY_REVIEWED')
+      ) {
+        setErr(`Conflict: ${message}. Stale review discarded. Reloading fresh server truth.`);
+        void invalidateKycMutation(queryClient, assayerId, doc.id);
+        reload();
+        return;
+      }
       if (/does not match the name on the record/i.test(message)) {
         // Genuinely the same person under a different name — maiden versus married, initials
         // expanded — is routine, so the reviewer answers in the app's own dialog rather than
@@ -858,7 +898,14 @@ export const AssayerVettingTab: React.FC<{
         try {
           await api.request(`/assayers/document/${doc.id}/verify`, {
             method: 'POST',
-            body: JSON.stringify({ verdict: 'VERIFIED', ...printed, nameMismatchNote: reason }),
+            body: JSON.stringify({
+              verdict: 'VERIFIED',
+              targetVersionId,
+              expectedDocVersion,
+              expectedContentHash,
+              ...printed,
+              nameMismatchNote: reason,
+            }),
           });
           reload();
           return;
@@ -877,17 +924,39 @@ export const AssayerVettingTab: React.FC<{
    */
   const reject = async (doc: any, reason: string, note: string) => {
     setBusy(true);
+    const targetVersionId = doc.currentVersionId ?? doc.id;
+    const expectedDocVersion = doc.docVersion ?? doc.version;
+    const expectedContentHash = doc.contentSha256 ?? null;
+
     try {
       await api.request(`/assayers/document/${doc.id}/verify`, {
         method: 'POST',
         body: JSON.stringify({
           verdict: 'REJECTED',
           rejectionReason: reason,
+          targetVersionId,
+          expectedDocVersion,
+          expectedContentHash,
           ...(note.trim() ? { remarks: note.trim() } : {}),
         }),
       });
+      void invalidateKycMutation(queryClient, assayerId, doc.id);
       reload();
-    } catch (e) { setErr(userMessage(e)); } finally { setBusy(false); }
+    } catch (e) {
+      const message = userMessage(e);
+      if (
+        message.includes('DOCUMENT_VERSION_STALE') ||
+        message.includes('CANNOT_VERIFY_SUPERSEDED_VERSION') ||
+        message.includes('CONTENT_HASH_MISMATCH') ||
+        message.includes('DOCUMENT_ALREADY_REVIEWED')
+      ) {
+        setErr(`Conflict: ${message}. Stale review discarded. Reloading fresh server truth.`);
+        void invalidateKycMutation(queryClient, assayerId, doc.id);
+        reload();
+        return;
+      }
+      setErr(message);
+    } finally { setBusy(false); }
   };
 
   /**
@@ -1333,17 +1402,30 @@ export const AssayerVettingTab: React.FC<{
               ...(canManage ? [{
                 key: 'act',
                 header: '',
-                render: (e: typeof data.empanelments[number]) => (
-                  <RowActions>
-                    <LinkButton onClick={() => setEditor({
-                      kind: 'standing', adding: false,
-                      clientId: e.clientId, clientName: e.client?.name ?? 'this client',
-                      status: e.status, statusReason: e.statusReason ?? '',
-                    })}>
-                      Change
-                    </LinkButton>
-                  </RowActions>
-                ),
+                render: (e: typeof data.empanelments[number]) => {
+                  if (HARD_BLOCKED_STANDINGS.has(e.status)) {
+                    return (
+                      <span
+                        data-testid="hard-block-tag"
+                        style={{ fontSize: '11px', color: 'var(--danger)', fontWeight: 500 }}
+                        title="This client standing is hard-blocked by policy and cannot be overridden by any user"
+                      >
+                        Hard-blocked
+                      </span>
+                    );
+                  }
+                  return (
+                    <RowActions>
+                      <LinkButton onClick={() => setEditor({
+                        kind: 'standing', adding: false,
+                        clientId: e.clientId, clientName: e.client?.name ?? 'this client',
+                        status: e.status, statusReason: e.statusReason ?? '',
+                      })}>
+                        Change
+                      </LinkButton>
+                    </RowActions>
+                  );
+                },
               }] : []),
             ]}
           />

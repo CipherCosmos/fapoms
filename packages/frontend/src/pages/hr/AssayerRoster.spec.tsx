@@ -762,3 +762,91 @@ describe('AssayerRoster — bulk lifecycle moves need a real reason', () => {
     });
   });
 });
+
+describe('AssayerRoster — single assayer lifecycle modal and consequence banners', () => {
+  const activePerson = person({
+    id: 'act-1',
+    assayerCode: 'AS0301',
+    displayName: 'Active Performer',
+    lifecycleStatus: AssayerLifecycleStatus.ACTIVE,
+  });
+
+  it('opens transition modal with suspension consequence notice and dispatches transition with reason', async () => {
+    mockRequest.mockImplementation((url: string) => {
+      if (url === '/assayers/act-1/lifecycle') {
+        return Promise.resolve({ success: true });
+      }
+      return Promise.resolve({ data: [activePerson], meta: { pagination: { total: 1 } } });
+    });
+
+    renderRoster();
+    await waitFor(() => expect(screen.getByText('Active Performer')).toBeInTheDocument());
+
+    // Select row transition target to SUSPENDED
+    const select = screen.getByRole('combobox', { name: 'Change lifecycle stage for Active Performer' });
+    fireEvent.change(select, { target: { value: 'SUSPENDED' } });
+
+    // Modal opens with consequence notice
+    expect(await screen.findByText(/Mobile application sign-in is revoked immediately/)).toBeInTheDocument();
+    expect(screen.getByText(/Existing assigned visits remain on their schedule/)).toBeInTheDocument();
+
+    // Reason is mandatory
+    const confirmBtn = screen.getByRole('button', { name: 'Confirm Suspended' });
+    expect(confirmBtn).toBeDisabled();
+
+    // Select reason
+    fireEvent.click(screen.getByRole('combobox', { name: 'Reason for lifecycle transition' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Not doing regular/any audit' }));
+    expect(confirmBtn).toBeEnabled();
+
+    fireEvent.click(confirmBtn);
+
+    await waitFor(() => {
+      const call = mockRequest.mock.calls.find(([url]) => url === '/assayers/act-1/lifecycle');
+      expect(call).toBeDefined();
+      const body = JSON.parse((call![1] as any).body);
+      expect(body.targetStatus).toBe('SUSPENDED');
+      expect(body.reason).toBe('Not doing regular/any audit');
+    });
+  });
+
+  it('reports partial bulk execution results with per-record reasons', async () => {
+    const twoActive = [
+      person({ id: 'b-1', assayerCode: 'AS0201', displayName: 'Bulk One', lifecycleStatus: AssayerLifecycleStatus.ACTIVE }),
+      person({ id: 'b-2', assayerCode: 'AS0202', displayName: 'Bulk Two', lifecycleStatus: AssayerLifecycleStatus.ACTIVE }),
+    ];
+
+    mockRequest.mockImplementation((url: string) => {
+      if (url === '/assayers/bulk/lifecycle') {
+        return Promise.resolve({
+          succeeded: [{ id: 'b-1', from: 'ACTIVE', to: 'SUSPENDED' }],
+          skipped: [{ id: 'b-2', reason: 'Assignment lock active' }],
+          failed: [],
+        });
+      }
+      return Promise.resolve({ data: twoActive, meta: { pagination: { total: 2 } } });
+    });
+
+    renderRoster();
+    await waitFor(() => expect(screen.getByText('Bulk Two')).toBeInTheDocument());
+
+    const row1 = screen.getByText('Bulk One').closest('tr') as HTMLElement;
+    const row2 = screen.getByText('Bulk Two').closest('tr') as HTMLElement;
+    fireEvent.click(within(row1).getByRole('checkbox'));
+    fireEvent.click(within(row2).getByRole('checkbox'));
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Move all selected to' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Suspended' }));
+
+    fireEvent.click(screen.getByRole('combobox', { name: 'Reason for the move' }));
+    fireEvent.click(screen.getByRole('option', { name: 'Not doing regular/any audit' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/1 moved to Suspended, 1 skipped, 0 failed/)).toBeInTheDocument();
+      expect(screen.getByText(/Assignment lock active/)).toBeInTheDocument();
+    });
+  });
+});
+

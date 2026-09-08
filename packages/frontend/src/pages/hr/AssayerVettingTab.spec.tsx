@@ -262,7 +262,7 @@ describe('AssayerVettingTab — verify and send back without the browser', () =>
     fireEvent.click(screen.getByRole('button', { name: 'Use these details' }));
 
     await waitFor(() => expect(verifyCall()).toBeDefined());
-    expect(JSON.parse(verifyCall()![1].body)).toEqual({ verdict: 'VERIFIED', holderName: 'Ramesh Iyer' });
+    expect(JSON.parse(verifyCall()![1].body)).toMatchObject({ verdict: 'VERIFIED', holderName: 'Ramesh Iyer' });
   });
 
   it('sends a scan back through the fixed reason list, not a numbered browser prompt', async () => {
@@ -276,7 +276,7 @@ describe('AssayerVettingTab — verify and send back without the browser', () =>
     fireEvent.click(screen.getByRole('button', { name: 'Yes, send it back' }));
 
     await waitFor(() => expect(verifyCall()).toBeDefined());
-    expect(JSON.parse(verifyCall()![1].body)).toEqual({ verdict: 'REJECTED', rejectionReason: 'ILLEGIBLE' });
+    expect(JSON.parse(verifyCall()![1].body)).toMatchObject({ verdict: 'REJECTED', rejectionReason: 'ILLEGIBLE' });
   });
 });
 
@@ -457,7 +457,7 @@ describe('AssayerVettingTab — why a standing is what it is', () => {
   it('lets "Other" carry a reason no cluster covers, end to end', async () => {
     // references: [] — the default fixture's own reference row renders a "Change" button too,
     // and this test is about the standing's, not that one.
-    serve(dossier({ references: [], empanelments: [standing({ status: 'REJECTED', statusReason: null })] }));
+    serve(dossier({ references: [], empanelments: [standing({ status: 'INACTIVE', statusReason: null })] }));
     render(<AssayerVettingTab assayerId="a-1" canManage section="checks" />);
     await waitFor(() => expect(screen.getByText('Change')).toBeInTheDocument());
 

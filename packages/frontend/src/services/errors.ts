@@ -1,20 +1,53 @@
 /**
- * Turns whatever the server (or the network) produced into something a
- * non-technical user can act on.
+ * Domain Error Translation System
  *
- * This application is used by field and back-office staff, not engineers. Left
- * alone, the API layer surfaced things like `API Endpoint /projects returned
- * status 500`, and NestJS validation errors arrive as an *array*, which renders
- * as `name should not be empty,projectNumber must be a string`. Neither tells
- * someone what to do next.
+ * Turns backend HTTP responses, RPC exceptions, and domain violation codes into
+ * clear, actionable, operator-friendly messages.
  *
- * Rules followed here:
- *  - Say what happened, in one sentence, in plain words.
- *  - Say what to do next whenever there is a sensible next step.
- *  - Never show a status code, endpoint path, UUID or stack to the user.
- *  - Keep the technical text on the error object for the console and logs, so
- *    debuggability is not traded away for friendliness.
+ * Classifies errors into canonical behavioral categories with structured output:
+ * category, title, message, action, retryable, requiresRefresh.
  */
+
+export type ErrorTranslationCategory =
+  | 'validation'
+  | 'permission'
+  | 'not_found'
+  | 'conflict'
+  | 'rate_limit'
+  | 'server_failure'
+  | 'network_failure'
+  | 'business_rule';
+
+export interface ErrorTranslation {
+  category: ErrorTranslationCategory;
+  title: string;
+  message: string;
+  action: string;
+  retryable: boolean;
+  requiresRefresh?: boolean;
+  statusCode?: number;
+  domainCode?: string;
+  technical?: string;
+}
+
+// Backwards compatibility types
+export type ErrorCategory =
+  | 'retryable'
+  | 'non-retryable'
+  | 'user-correction-required'
+  | 'permission-required'
+  | 'conflict'
+  | 'system-failure';
+
+export interface ClassifiedError {
+  userMessage: string;
+  category: ErrorCategory;
+  isConflict: boolean;
+  isRetryable: boolean;
+  statusCode?: number;
+  domainCode?: string;
+  technical?: string;
+}
 
 export class AppError extends Error {
   /** Plain-language sentence shown in the UI. */
@@ -22,15 +55,120 @@ export class AppError extends Error {
   /** The original server/network text — for console and bug reports only. */
   readonly technical?: string;
   readonly status?: number;
+  readonly category: ErrorCategory;
+  readonly domainCode?: string;
 
-  constructor(userMessage: string, technical?: string, status?: number) {
+  constructor(
+    userMessage: string,
+    technical?: string,
+    status?: number,
+    category: ErrorCategory = 'user-correction-required',
+    domainCode?: string
+  ) {
     super(userMessage);
     this.name = 'AppError';
     this.userMessage = userMessage;
     this.technical = technical;
     this.status = status;
+    this.category = category;
+    this.domainCode = domainCode;
   }
 }
+
+/** Specific domain error codes mapped to clear, actionable operator guidance */
+const DOMAIN_ERROR_TRANSLATIONS: Record<
+  string,
+  {
+    message: string;
+    category: ErrorCategory;
+    translationCategory: ErrorTranslationCategory;
+    title: string;
+    action: string;
+    requiresRefresh?: boolean;
+  }
+> = {
+  ASSAYER_NOT_ACTIVE: {
+    message: 'This assayer is no longer active and eligible for assignment dispatch.',
+    category: 'user-correction-required',
+    translationCategory: 'business_rule',
+    title: 'Assayer Ineligible',
+    action: 'Select an active assayer or check their onboarding/leave status in Workforce.',
+  },
+  EMPANELMENT_BLOCKED: {
+    message: 'Assignment is blocked: this assayer does not hold an active or recommended empanelment with this client bank.',
+    category: 'user-correction-required',
+    translationCategory: 'business_rule',
+    title: 'Empanelment Required',
+    action: 'Request client empanelment or managerial override before scheduling.',
+  },
+  EMPANELMENT_REVOKED: {
+    message: 'Empanelment has been revoked or terminated by the client bank. Managerial bypass is prohibited by compliance policy.',
+    category: 'non-retryable',
+    translationCategory: 'business_rule',
+    title: 'Empanelment Revoked',
+    action: 'Assign a different qualified assayer. Revoked empanelment cannot be bypassed.',
+  },
+  DOCUMENT_SUPERSEDED: {
+    message: 'A newer document version has already been submitted and is currently under review.',
+    category: 'conflict',
+    translationCategory: 'conflict',
+    title: 'Document Version Superseded',
+    action: 'Reload to review the latest uploaded version.',
+    requiresRefresh: true,
+  },
+  DOCUMENT_ALREADY_REVIEWED: {
+    message: 'This document version has already been reviewed and finalized by another operator.',
+    category: 'conflict',
+    translationCategory: 'conflict',
+    title: 'Already Finalized',
+    action: 'Reload the record to view the current verification verdict.',
+    requiresRefresh: true,
+  },
+  IDENTITY_NOT_VERIFIED: {
+    message: 'Mandatory KYC identity documents (PAN / Aadhaar) must be verified before this assayer can be activated.',
+    category: 'user-correction-required',
+    translationCategory: 'business_rule',
+    title: 'KYC Verification Incomplete',
+    action: 'Verify required identity documents in the assayer profile first.',
+  },
+  PAYOUT_NOT_ELIGIBLE: {
+    message: 'This payout cannot be approved until field attendance and verified bank details are confirmed.',
+    category: 'user-correction-required',
+    translationCategory: 'business_rule',
+    title: 'Payout Ineligible',
+    action: 'Confirm on-site check-in and bank account verification before approving payout.',
+  },
+  IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_REQUEST: {
+    message: 'This request key was already submitted with different details. Please reload and submit a fresh operation.',
+    category: 'conflict',
+    translationCategory: 'conflict',
+    title: 'Request Conflict',
+    action: 'Reload the page and re-apply your changes.',
+    requiresRefresh: true,
+  },
+  RECORD_CONCURRENTLY_MODIFIED: {
+    message: 'This record was modified by another operator while you were working on it. Your changes were not applied.',
+    category: 'conflict',
+    translationCategory: 'conflict',
+    title: 'Concurrent Modification',
+    action: 'Reload authoritative data from the server to reconcile differences before retrying.',
+    requiresRefresh: true,
+  },
+  ACCOUNT_ON_HOLD: {
+    message: 'This account has been placed on hold or suspended. Operational actions are temporarily locked.',
+    category: 'permission-required',
+    translationCategory: 'permission',
+    title: 'Account On Hold',
+    action: 'Contact an administrator to resolve the compliance hold.',
+  },
+  ACCOUNT_CLOSED: {
+    message: 'This account has been closed and archived.',
+    category: 'non-retryable',
+    translationCategory: 'business_rule',
+    title: 'Account Closed',
+    action: 'Closed records cannot accept modifications.',
+  },
+};
 
 /** NestJS sends `message` as a string, or an array of validation failures. */
 function joinServerMessage(raw: unknown): string {
@@ -59,19 +197,20 @@ function sentence(s: string): string {
   return /[.!?]$/.test(capped) ? capped : `${capped}.`;
 }
 
+function extractDomainCode(text: string): string | undefined {
+  const match = text.match(/\b([A-Z][A-Z0-9_]{3,35})\b/);
+  if (match && DOMAIN_ERROR_TRANSLATIONS[match[1]]) {
+    return match[1];
+  }
+  return undefined;
+}
+
 /**
- * Server text that is already written for a human gets shown as-is — several
- * backend messages in this system deliberately explain a business rule
- * ("Cannot cancel a completed project", "Target date is a holiday in KERALA")
- * and rewriting those would lose real information.
+ * Server text that is already written for a human gets shown as-is.
  */
 function isHumanReadable(msg: string): boolean {
   if (!msg) return false;
 
-  // Framework noise and runtime crashes. Matched on shape, not just on the word
-  // "TypeError" — a real crash message reads
-  // "Cannot read properties of undefined (reading 'id')" and never names its own
-  // type, so keying off the type name alone let genuine crashes reach the user.
   const TECHNICAL = [
     /ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN/i,
     /QueryFailedError|SequelizeError|TypeORM/i,
@@ -82,24 +221,26 @@ function isHumanReadable(msg: string): boolean {
   ];
   if (TECHNICAL.some((re) => re.test(msg))) return false;
 
-  // Generic server phrasing that carries no information — the status-based
-  // sentence is strictly more useful than echoing these back.
   const GENERIC = new Set([
-    'internal server error', 'bad request', 'unauthorized', 'forbidden',
-    'not found', 'insufficient permissions', 'insufficient role permissions',
-    'error', 'something went wrong', 'unknown error', 'conflict',
+    'internal server error',
+    'bad request',
+    'unauthorized',
+    'forbidden',
+    'not found',
+    'insufficient permissions',
+    'insufficient role permissions',
+    'error',
+    'something went wrong',
+    'unknown error',
+    'conflict',
   ]);
   if (GENERIC.has(msg.trim().replace(/[.!]$/, '').toLowerCase())) return false;
 
-  if (/^[A-Z_]+$/.test(msg)) return false;             // bare enum-ish token
-  if (msg.length > 200) return false;                   // stack or dump
-  return /\s/.test(msg);                                // more than one word
+  if (/^[A-Z_]+$/.test(msg)) return false;
+  if (msg.length > 250) return false;
+  return /\s/.test(msg);
 }
 
-/**
- * "status must be one of the following values: INVITED, ACTIVE, …" is accurate
- * but reads like a database error. Field name plus a short list is enough.
- */
 function simplifyEnumMessage(msg: string): string | null {
   const m = msg.match(/^(\w+) must be one of the following values:\s*(.+)$/i);
   if (!m) return null;
@@ -110,29 +251,131 @@ function simplifyEnumMessage(msg: string): string | null {
   return `${field} must be one of: ${shown}${more}.`;
 }
 
-const BY_STATUS: Record<number, string> = {
-  400: 'Some of the details entered are not valid. Please check the highlighted fields and try again.',
-  401: 'Your session has expired. Please sign in again.',
-  403: 'You do not have permission to do this. If you believe you should, ask an administrator to update your role.',
-  404: 'That record could not be found. It may have been removed or renamed.',
-  409: 'Someone else changed this record while you were working on it. Refresh the page and try again.',
-  413: 'That file is too large to upload. Try a smaller file.',
-  422: 'Some of the details entered are not valid. Please check the highlighted fields and try again.',
-  429: 'Too many requests at once. Please wait a moment and try again.',
-  500: 'Something went wrong on our side. Your work has not been saved — please try again in a moment.',
-  502: 'The server is not reachable right now. Please try again shortly.',
-  503: 'The system is temporarily unavailable, usually during a restart. Please try again in a minute.',
-  504: 'The server took too long to respond. Please try again.',
+const BY_STATUS: Record<
+  number,
+  {
+    message: string;
+    category: ErrorCategory;
+    translationCategory: ErrorTranslationCategory;
+    title: string;
+    action: string;
+    requiresRefresh?: boolean;
+  }
+> = {
+  400: {
+    message: 'Some of the details entered are not valid. Please check the highlighted fields and try again.',
+    category: 'user-correction-required',
+    translationCategory: 'validation',
+    title: 'Invalid Request',
+    action: 'Check the form entries and correct invalid values.',
+  },
+  401: {
+    message: 'Your session has expired. Please sign in again to continue.',
+    category: 'permission-required',
+    translationCategory: 'permission',
+    title: 'Session Expired',
+    action: 'Sign in again to continue working.',
+  },
+  403: {
+    message: 'You do not have permission to perform this action. Ask an administrator if you require access.',
+    category: 'permission-required',
+    translationCategory: 'permission',
+    title: 'Permission Denied',
+    action: 'Contact an administrator if you need this role or authorization.',
+  },
+  404: {
+    message: 'That record could not be found. It may have been removed or renamed.',
+    category: 'non-retryable',
+    translationCategory: 'not_found',
+    title: 'Record Not Found',
+    action: 'Verify the reference ID or navigate back to the main list.',
+    requiresRefresh: true,
+  },
+  409: {
+    message: 'This record was modified by another operator while you were working on it. Reload the latest version to review changes.',
+    category: 'conflict',
+    translationCategory: 'conflict',
+    title: 'Data Conflict',
+    action: 'Reload authoritative data from the server to reconcile differences before retrying.',
+    requiresRefresh: true,
+  },
+  413: {
+    message: 'The selected file exceeds the maximum allowed upload size. Please upload a smaller file.',
+    category: 'user-correction-required',
+    translationCategory: 'validation',
+    title: 'File Too Large',
+    action: 'Compress or select a file within the allowed size limit.',
+  },
+  422: {
+    message: 'Some of the submitted values failed business validation. Please review the highlighted fields.',
+    category: 'user-correction-required',
+    translationCategory: 'validation',
+    title: 'Validation Failed',
+    action: 'Review and fix the flagged fields.',
+  },
+  429: {
+    message: 'Too many requests in a short period. Please pause a moment before retrying.',
+    category: 'retryable',
+    translationCategory: 'rate_limit',
+    title: 'Rate Limit Reached',
+    action: 'Please wait a moment before trying again.',
+  },
+  500: {
+    message: 'Something went wrong on the server. Your work has not been saved — please try again shortly.',
+    category: 'system-failure',
+    translationCategory: 'server_failure',
+    title: 'Server Error',
+    action: 'The server encountered an unexpected error. Please retry in a few moments.',
+  },
+  502: {
+    message: 'The server is temporarily unreachable. Please try again shortly.',
+    category: 'retryable',
+    translationCategory: 'network_failure',
+    title: 'Bad Gateway',
+    action: 'The server gateway is restarting or unreachable. Retry shortly.',
+  },
+  503: {
+    message: 'The service is temporarily unavailable, usually during maintenance. Please retry in a few moments.',
+    category: 'retryable',
+    translationCategory: 'server_failure',
+    title: 'Service Unavailable',
+    action: 'System maintenance may be underway. Please retry momentarily.',
+  },
+  504: {
+    message: 'The request timed out while waiting for the server. Please check your connection and retry.',
+    category: 'retryable',
+    translationCategory: 'network_failure',
+    title: 'Gateway Timeout',
+    action: 'The request took too long. Check your network connection and retry.',
+  },
 };
 
 /** Builds the error thrown by the API client for a failed HTTP response. */
 export function fromResponse(status: number, body: any): AppError {
   const serverText = joinServerMessage(body?.message);
-  const friendly =
-    (isHumanReadable(serverText) ? sentence(serverText) : '') ||
-    BY_STATUS[status] ||
-    'Something went wrong. Please try again.';
-  return new AppError(friendly, serverText || `HTTP ${status}`, status);
+  const domainCode = extractDomainCode(serverText);
+
+  let friendly = '';
+  let category: ErrorCategory = status >= 500 ? 'system-failure' : 'user-correction-required';
+
+  if (domainCode && DOMAIN_ERROR_TRANSLATIONS[domainCode]) {
+    friendly = DOMAIN_ERROR_TRANSLATIONS[domainCode].message;
+    category = DOMAIN_ERROR_TRANSLATIONS[domainCode].category;
+  } else if (isHumanReadable(serverText)) {
+    friendly = sentence(serverText);
+  }
+
+  if (!friendly) {
+    const statusEntry = BY_STATUS[status];
+    if (statusEntry) {
+      friendly = statusEntry.message;
+      category = statusEntry.category;
+    } else {
+      friendly = 'Something went wrong. Please try again.';
+    }
+  }
+
+  return new AppError(friendly, serverText || `HTTP ${status}`, status, category, domainCode);
 }
 
 /** Builds the error for a fetch that never reached the server at all. */
@@ -140,23 +383,177 @@ export function fromNetwork(err: unknown): AppError {
   const offline = typeof navigator !== 'undefined' && navigator.onLine === false;
   return new AppError(
     offline
-      ? 'You appear to be offline. Check your internet connection — your work has not been lost.'
-      : 'Could not reach the server. Check your connection and try again.',
+      ? 'You appear to be offline. Please check your network connection — your work has not been lost.'
+      : 'Could not reach the server. Please check your internet connection and try again.',
     err instanceof Error ? err.message : String(err),
+    undefined,
+    'retryable'
   );
 }
 
 /**
- * What any component should render. Accepts anything caught, including errors
- * from code that does not use the API client.
+ * Translates any error into a canonical, structured error translation contract.
+ */
+export function translateError(err: unknown): ErrorTranslation {
+  if (err instanceof AppError) {
+    const domainDef = err.domainCode ? DOMAIN_ERROR_TRANSLATIONS[err.domainCode] : undefined;
+    if (domainDef) {
+      return {
+        category: domainDef.translationCategory,
+        title: domainDef.title,
+        message: domainDef.message,
+        action: domainDef.action,
+        retryable: domainDef.translationCategory === 'rate_limit',
+        requiresRefresh: domainDef.requiresRefresh ?? (domainDef.translationCategory === 'conflict'),
+        statusCode: err.status,
+        domainCode: err.domainCode,
+        technical: err.technical,
+      };
+    }
+
+    if (err.status && BY_STATUS[err.status]) {
+      const entry = BY_STATUS[err.status];
+      return {
+        category: entry.translationCategory,
+        title: entry.title,
+        message: err.userMessage || entry.message,
+        action: entry.action,
+        retryable: entry.translationCategory === 'rate_limit' || entry.translationCategory === 'server_failure' || entry.translationCategory === 'network_failure',
+        requiresRefresh: entry.requiresRefresh ?? (err.status === 409 || err.status === 404),
+        statusCode: err.status,
+        technical: err.technical,
+      };
+    }
+
+    if (err.status === 409 || err.category === 'conflict') {
+      return {
+        category: 'conflict',
+        title: 'Data Conflict',
+        message: err.userMessage,
+        action: 'Reload authoritative data from the server to reconcile differences before retrying.',
+        retryable: false,
+        requiresRefresh: true,
+        statusCode: err.status,
+        technical: err.technical,
+      };
+    }
+
+    if (err.category === 'permission-required') {
+      return {
+        category: 'permission',
+        title: 'Permission Denied',
+        message: err.userMessage,
+        action: 'Contact an administrator if you require authorization.',
+        retryable: false,
+        requiresRefresh: false,
+        statusCode: err.status,
+        technical: err.technical,
+      };
+    }
+
+    if (err.status && err.status >= 500) {
+      return {
+        category: 'server_failure',
+        title: 'Server Error',
+        message: err.userMessage,
+        action: 'The server encountered an error. Please try again shortly.',
+        retryable: true,
+        requiresRefresh: false,
+        statusCode: err.status,
+        technical: err.technical,
+      };
+    }
+
+    if (err.category === 'retryable' || err.status === undefined) {
+      return {
+        category: 'network_failure',
+        title: 'Connection Issue',
+        message: err.userMessage,
+        action: 'Check your internet connection and try again.',
+        retryable: true,
+        requiresRefresh: false,
+        statusCode: err.status,
+        technical: err.technical,
+      };
+    }
+
+    return {
+      category: 'validation',
+      title: 'Action Failed',
+      message: err.userMessage,
+      action: 'Check your inputs and try again.',
+      retryable: false,
+      requiresRefresh: false,
+      statusCode: err.status,
+      technical: err.technical,
+    };
+  }
+
+  if (err instanceof Error) {
+    const isNetwork = /network|fetch|abort|failed to fetch/i.test(err.message);
+    if (isNetwork) {
+      return {
+        category: 'network_failure',
+        title: 'Network Issue',
+        message: 'Could not connect to the service. Please check your network connection.',
+        action: 'Verify your internet connection and try again.',
+        retryable: true,
+        requiresRefresh: false,
+        technical: err.message,
+      };
+    }
+
+    return {
+      category: 'server_failure',
+      title: 'Unexpected Error',
+      message: sentence(err.message) || 'Something went wrong. Please try again.',
+      action: 'Retry in a moment. If the issue persists, contact support.',
+      retryable: true,
+      requiresRefresh: false,
+      technical: err.message,
+    };
+  }
+
+  return {
+    category: 'server_failure',
+    title: 'Unexpected Error',
+    message: 'An unknown problem occurred. Please try again.',
+    action: 'Retry in a few moments.',
+    retryable: true,
+    requiresRefresh: false,
+    technical: String(err),
+  };
+}
+
+/**
+ * Classifies any error into an actionable structure (backwards compatibility).
+ */
+export function classifyError(err: unknown): ClassifiedError {
+  if (err instanceof AppError) {
+    return {
+      userMessage: err.userMessage,
+      category: err.category,
+      isConflict: err.category === 'conflict' || err.status === 409,
+      isRetryable: err.category === 'retryable',
+      statusCode: err.status,
+      domainCode: err.domainCode,
+      technical: err.technical,
+    };
+  }
+
+  const translation = translateError(err);
+  return {
+    userMessage: translation.message,
+    category: translation.category === 'conflict' ? 'conflict' : translation.retryable ? 'retryable' : 'system-failure',
+    isConflict: translation.category === 'conflict',
+    isRetryable: translation.retryable,
+    technical: translation.technical,
+  };
+}
+
+/**
+ * What any component should render. Accepts anything caught.
  */
 export function userMessage(err: unknown): string {
-  if (err instanceof AppError) return err.userMessage;
-  if (err instanceof Error) {
-    const isRuntimeCrash = ['TypeError', 'ReferenceError', 'SyntaxError', 'RangeError'].includes(err.name);
-    return !isRuntimeCrash && isHumanReadable(err.message)
-      ? sentence(err.message)
-      : 'Something went wrong. Please try again.';
-  }
-  return 'Something went wrong. Please try again.';
+  return translateError(err).message;
 }

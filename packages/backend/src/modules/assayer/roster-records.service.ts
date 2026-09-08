@@ -90,13 +90,16 @@ export class RosterRecordsService {
     const assayer = await this.assayers.findOne({ where: { id: assayerId } });
     if (!assayer) throw new NotFoundException('No such assayer.');
 
-    const [references, empanelments, checks, onboarding, openIssues] = await Promise.all([
+    const [references, empanelments, checks, onboarding, openIssues, allVersions] = await Promise.all([
       this.references.find({ where: { assayerId, isActive: true }, order: { createdAt: 'ASC' } }),
       this.empanelments.find({ where: { assayerId, isActive: true }, relations: ['client'], order: { createdAt: 'ASC' } }),
       // Newest first: the current standing is the top row, and the rest is why.
       this.checks.find({ where: { assayerId, isActive: true }, order: { checkedOn: 'DESC', createdAt: 'DESC' } }),
       this.onboarding.find({ where: { assayerId, isActive: true } }),
       this.issues.find({ where: { assayerId, resolvedAt: IsNull() }, order: { createdAt: 'ASC' } }),
+      this.docVersions
+        ? this.docVersions.find({ where: { assayerId }, order: { version: 'DESC' } })
+        : Promise.resolve([] as AssayerDocumentVersionEntity[]),
     ]);
 
     return {
@@ -107,7 +110,7 @@ export class RosterRecordsService {
       })),
       backgroundChecks: checks,
       currentCheck: checks[0] ?? null,
-      onboarding: this.paperworkChecklist(onboarding, assayer),
+      onboarding: this.paperworkChecklist(onboarding, assayer, allVersions),
       openIssues,
     };
   }
@@ -119,11 +122,25 @@ export class RosterRecordsService {
    * so every requirement appears whether or not the import found it. Listing only what exists
    * would show a person with nothing on file as having nothing outstanding.
    */
-  private paperworkChecklist(rows: AssayerDocumentEntity[], assayer: AssayerEntity) {
+  private paperworkChecklist(
+    rows: AssayerDocumentEntity[],
+    assayer: AssayerEntity,
+    versions: AssayerDocumentVersionEntity[] = [],
+  ) {
     const byRequirement = new Map(rows.map((r) => [r.requirement, r]));
+    const versionsByRequirement = new Map<string, AssayerDocumentVersionEntity[]>();
+    for (const v of versions) {
+      const list = versionsByRequirement.get(v.requirement) ?? [];
+      list.push(v);
+      versionsByRequirement.set(v.requirement, list);
+    }
+
     return Object.keys(ONBOARDING_DOCUMENT_COLUMNS).map((key) => {
       const requirement = key as OnboardingDocument;
       const row = byRequirement.get(requirement);
+      const rowVersions = versionsByRequirement.get(requirement) ?? [];
+      const currentVerRecord = rowVersions.find((v) => v.id === row?.currentVersionId) ?? rowVersions[0] ?? null;
+
       return {
         requirement,
         label: ONBOARDING_DOCUMENT_LABELS[requirement],
@@ -132,6 +149,26 @@ export class RosterRecordsService {
         // letter, and this is what tells it apart.
         identity: isIdentityDocument(requirement),
         id: row?.id ?? null,
+        currentVersionId: row?.currentVersionId ?? currentVerRecord?.id ?? null,
+        docVersion: (row as any)?.version ?? 1,
+        versions: rowVersions.map((v) => ({
+          id: v.id,
+          version: v.version,
+          filePath: v.filePath,
+          fileChecksum: v.fileChecksum ?? null,
+          contentSha256: v.contentSha256 ?? null,
+          storageObjectId: v.storageObjectId ?? null,
+          fileSize: v.fileSize ? Number(v.fileSize) : null,
+          mimeType: v.mimeType ?? null,
+          uploadedAt: v.uploadedAt,
+          uploadedBy: v.uploadedBy ?? null,
+          verificationStatus: v.verificationStatus,
+          verifiedAt: v.verifiedAt ?? null,
+          verifiedBy: v.verifiedBy ?? null,
+          rejectionReason: v.rejectionReason ?? null,
+          supersededByVersionId: v.supersededByVersionId ?? null,
+          supersededAt: v.supersededAt ?? null,
+        })),
         softCopyReceived: row?.softCopyReceived ?? null,
         hardCopyReceived: row?.hardCopyReceived ?? null,
         hardCopyLocation: row?.hardCopyLocation ?? null,
