@@ -176,14 +176,19 @@ describe('NotificationDispatchService', () => {
    */
   describe('an event whose desk has nobody in it', () => {
     it('falls back to administrators rather than vanishing', async () => {
-      // First call (the catalogued VALIDATION roles) finds nobody; the fallback call finds an admin.
+      // ASSIGNMENT_ACCEPTED: a plain `roles`-only type with no `fallbackPermissions`, chosen
+      // deliberately so `usersInRoles` makes exactly the one byName query this test's mock
+      // sequence expects — VALIDATION_QUERY_ANSWERED would also issue a byPermission query (see
+      // "custom-role permission fallback" below), which is a different mechanism from the one
+      // under test here.
+      // First call (the catalogued OPS roles) finds nobody; the fallback call finds an admin.
       mockUserQb.getMany
         .mockResolvedValueOnce([])
         .mockResolvedValueOnce([{ id: 'admin-1' }]);
 
       const res = await service.emit({
-        type: 'VALIDATION_QUERY_ANSWERED',
-        entityType: 'VALIDATION_QUERY',
+        type: 'ASSIGNMENT_ACCEPTED',
+        entityType: 'ASSIGNMENT',
         entityId: 'q-1',
         payload: { assayerName: 'Nilesh', branchName: 'Thrissur' },
       });
@@ -193,16 +198,18 @@ describe('NotificationDispatchService', () => {
     });
 
     it('does not fall back when the desk is staffed', async () => {
-      mockUserQb.getMany.mockResolvedValue([{ id: 'validator-1' }]);
+      // Same choice of type as above, and for the same reason: this asserts exactly one
+      // `getMany` call, which only holds for a type with no `fallbackPermissions` to also check.
+      mockUserQb.getMany.mockResolvedValue([{ id: 'ops-1' }]);
 
       const res = await service.emit({
-        type: 'VALIDATION_QUERY_ANSWERED',
-        entityType: 'VALIDATION_QUERY',
+        type: 'ASSIGNMENT_ACCEPTED',
+        entityType: 'ASSIGNMENT',
         entityId: 'q-2',
         payload: { assayerName: 'Nilesh', branchName: 'Thrissur' },
       });
 
-      expect(res.recipients.userIds).toEqual(['validator-1']);
+      expect(res.recipients.userIds).toEqual(['ops-1']);
       // One lookup only — the fallback query is never issued.
       expect(mockUserQb.getMany).toHaveBeenCalledTimes(1);
     });
@@ -711,11 +718,14 @@ describe('NotificationDispatchService', () => {
     });
 
     it('skips the region lookup entirely when nobody was resolved, rather than querying for nobody', async () => {
+      // ASSIGNMENT_ACCEPTED again (see the two tests above): no `fallbackPermissions`, so exactly
+      // two queries — the catalogued-roles lookup, then the empty-audience ADMIN fallback — match
+      // this test's two queued results.
       mockUserQb.getMany.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
 
       await service.emit({
-        type: 'VALIDATION_QUERY_ANSWERED',
-        entityType: 'VALIDATION_QUERY',
+        type: 'ASSIGNMENT_ACCEPTED',
+        entityType: 'ASSIGNMENT',
         entityId: 'q-9',
         payload: { assayerName: 'Nilesh', branchName: 'Thrissur' },
       });
