@@ -71,6 +71,20 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # Unit suites only. The two PostgreSQL concurrency suites are named `*.db.spec.ts` and are
+      # held out by jest's `testPathIgnorePatterns`, because they do not stub a database -- they
+      # open a real connection through `AppDataSource` and DELETE rows from live tables. This job
+      # has no `services:` block and no migrated schema, so they can only ever fail here; they
+      # arrived already failing in 942b20e4, masked by a lint failure ahead of them.
+      #
+      # The `.db.spec.ts` suffix is deliberate. Nine guard specs in this repo scan the tree with
+      # `endsWith('.spec.ts')` to exempt test files, so a suffix like `.db-spec.ts` would quietly
+      # enrol these two as production source in every one of them -- derived-status.spec.ts caught
+      # exactly that. Keeping `.spec.ts` at the end means the exclusion lives in one place.
+      #
+      # They are not abandoned: `npm run test:db -w @fapoms/backend` runs them against a real
+      # migrated Postgres, where all 20 pass. Giving CI its own database is the real fix, and that
+      # needs migrations plus fixtures, not just a `services:` block.
       - name: Test
         run: npm test --workspaces --if-present
 
