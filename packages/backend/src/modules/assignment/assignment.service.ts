@@ -1035,24 +1035,20 @@ export class AssignmentService {
 
       // --- Durable idempotency: write record atomically ---
       if (dto.clientRequestId && createRequestHash) {
-        try {
-          await manager.query(
-            `INSERT INTO assignment_idempotency_records
-             (client_request_id, assignment_id, command, actor_id, request_hash, entity_version, response_payload)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-            [
-              dto.clientRequestId,
-              savedAssignment.id,
-              'CREATE',
-              userId,
-              createRequestHash,
-              savedAssignment.entityVersion ?? 1,
-              JSON.stringify(savedAssignment),
-            ],
-          );
-        } catch (insertErr: any) {
-          throw insertErr;
-        }
+        await manager.query(
+          `INSERT INTO assignment_idempotency_records
+           (client_request_id, assignment_id, command, actor_id, request_hash, entity_version, response_payload)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [
+            dto.clientRequestId,
+            savedAssignment.id,
+            'CREATE',
+            userId,
+            createRequestHash,
+            savedAssignment.entityVersion ?? 1,
+            JSON.stringify(savedAssignment),
+          ],
+        );
       }
 
       emit('assignment:created', {
@@ -1506,24 +1502,20 @@ export class AssignmentService {
 
         // Persist authoritative idempotency record atomically within transaction
         if (options?.clientRequestId && requestHash) {
-          try {
-            await manager.query(
-              `INSERT INTO assignment_idempotency_records
-               (client_request_id, assignment_id, command, actor_id, request_hash, entity_version, response_payload)
-               VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-              [
-                options.clientRequestId,
-                savedAssign.id,
-                targetStatus,
-                userId,
-                requestHash,
-                savedAssign.entityVersion,
-                JSON.stringify(savedAssign),
-              ],
-            );
-          } catch (insertErr: any) {
-            throw insertErr;
-          }
+          await manager.query(
+            `INSERT INTO assignment_idempotency_records
+             (client_request_id, assignment_id, command, actor_id, request_hash, entity_version, response_payload)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [
+              options.clientRequestId,
+              savedAssign.id,
+              targetStatus,
+              userId,
+              requestHash,
+              savedAssign.entityVersion,
+              JSON.stringify(savedAssign),
+            ],
+          );
         }
 
         await this.auditService.recordEventSafe({
@@ -1951,24 +1943,20 @@ export class AssignmentService {
       const savedAssign = await manager.save(assignment);
 
       if (options?.clientRequestId && requestHash) {
-        try {
-          await manager.query(
-            `INSERT INTO assignment_idempotency_records
-             (client_request_id, assignment_id, command, actor_id, request_hash, entity_version, response_payload)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-            [
-              options.clientRequestId,
-              savedAssign.id,
-              'REOPEN',
-              userId,
-              requestHash,
-              savedAssign.entityVersion,
-              JSON.stringify(savedAssign),
-            ],
-          );
-        } catch (insertErr: any) {
-          throw insertErr;
-        }
+        await manager.query(
+          `INSERT INTO assignment_idempotency_records
+           (client_request_id, assignment_id, command, actor_id, request_hash, entity_version, response_payload)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [
+            options.clientRequestId,
+            savedAssign.id,
+            'REOPEN',
+            userId,
+            requestHash,
+            savedAssign.entityVersion,
+            JSON.stringify(savedAssign),
+          ],
+        );
       }
 
       await this.auditService.recordEventSafe({
@@ -2218,24 +2206,20 @@ export class AssignmentService {
       const saved = await manager.save(assignment);
 
       if (options?.clientRequestId && requestHash) {
-        try {
-          await manager.query(
-            `INSERT INTO assignment_idempotency_records
-             (client_request_id, assignment_id, command, actor_id, request_hash, entity_version, response_payload)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-            [
-              options.clientRequestId,
-              saved.id,
-              'REASSIGN',
-              userId,
-              requestHash,
-              saved.entityVersion,
-              JSON.stringify(saved),
-            ],
-          );
-        } catch (insertErr: any) {
-          throw insertErr;
-        }
+        await manager.query(
+          `INSERT INTO assignment_idempotency_records
+           (client_request_id, assignment_id, command, actor_id, request_hash, entity_version, response_payload)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [
+            options.clientRequestId,
+            saved.id,
+            'REASSIGN',
+            userId,
+            requestHash,
+            saved.entityVersion,
+            JSON.stringify(saved),
+          ],
+        );
       }
 
       await this.auditService.recordEventSafe({

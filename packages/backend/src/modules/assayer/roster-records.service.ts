@@ -515,7 +515,7 @@ export class RosterRecordsService {
     },
   ) {
     this.assertKnownRequirement(requirement);
-    let existing = await this.onboarding.findOne({ where: { assayerId, requirement } });
+    const existing = await this.onboarding.findOne({ where: { assayerId, requirement } });
     let row = existing ?? this.onboarding.create({ assayerId, requirement, createdBy: actorId, filePaths: [] });
     if (!row.id) {
       row = await this.onboarding.save(row);
