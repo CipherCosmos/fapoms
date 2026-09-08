@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Loader2, CheckCircle2, RotateCcw, Sparkles, Copy, MapPin, Users, Clock } from 'lucide-react';
 import { FeedbackCategory, FeedbackSeverity, FeedbackStatus } from '@fapoms/shared';
 
@@ -26,11 +26,11 @@ export const FeedbackDetail: React.FC<Props> = ({ threadId, isTeam, assignees, o
   const [voting, setVoting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const load = () => {
+  const load = useCallback(() => {
     setMissing(false);
     getThread(threadId).then(setThread).catch(() => { setThread(null); setMissing(true); });
-  };
-  useEffect(() => { setThread(null); load(); /* eslint-disable-next-line */ }, [threadId]);
+  }, [threadId]);
+  useEffect(() => { setThread(null); load(); }, [load]);
 
   const vote = async () => {
     setVoting(true);

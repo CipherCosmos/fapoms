@@ -63,8 +63,8 @@ export function useUpdateClient() {
     mutationFn: ({ id, payload }: { id: string; payload: Parameters<typeof clientApi.update>[1] }) =>
       clientApi.update(id, payload),
     onSuccess: (_data, vars) => {
-      qc.invalidateQueries({ queryKey: queryKeys.clients.all });
-      qc.invalidateQueries({ queryKey: queryKeys.clients.detail(vars.id) });
+      void qc.invalidateQueries({ queryKey: queryKeys.clients.all });
+      void qc.invalidateQueries({ queryKey: queryKeys.clients.detail(vars.id) });
     },
   });
 }
@@ -84,8 +84,8 @@ export function useAddContact() {
     mutationFn: ({ clientId, payload }: { clientId: string; payload: Parameters<typeof clientApi.addContact>[1] }) =>
       clientApi.addContact(clientId, payload),
     onSuccess: (_data, vars) => {
-      qc.invalidateQueries({ queryKey: queryKeys.clients.contacts(vars.clientId) });
-      qc.invalidateQueries({ queryKey: queryKeys.clients.detail(vars.clientId) });
+      void qc.invalidateQueries({ queryKey: queryKeys.clients.contacts(vars.clientId) });
+      void qc.invalidateQueries({ queryKey: queryKeys.clients.detail(vars.clientId) });
     },
   });
 }
@@ -96,8 +96,8 @@ export function useDeleteContact() {
     mutationFn: ({ clientId, contactId }: { clientId: string; contactId: string }) =>
       clientApi.deleteContact(clientId, contactId),
     onSuccess: (_data, vars) => {
-      qc.invalidateQueries({ queryKey: queryKeys.clients.contacts(vars.clientId) });
-      qc.invalidateQueries({ queryKey: queryKeys.clients.detail(vars.clientId) });
+      void qc.invalidateQueries({ queryKey: queryKeys.clients.contacts(vars.clientId) });
+      void qc.invalidateQueries({ queryKey: queryKeys.clients.detail(vars.clientId) });
     },
   });
 }
@@ -108,8 +108,8 @@ export function useAddContract() {
     mutationFn: ({ clientId, payload }: { clientId: string; payload: Parameters<typeof clientApi.addContract>[1] }) =>
       clientApi.addContract(clientId, payload),
     onSuccess: (_data, vars) => {
-      qc.invalidateQueries({ queryKey: queryKeys.clients.contracts(vars.clientId) });
-      qc.invalidateQueries({ queryKey: queryKeys.clients.detail(vars.clientId) });
+      void qc.invalidateQueries({ queryKey: queryKeys.clients.contracts(vars.clientId) });
+      void qc.invalidateQueries({ queryKey: queryKeys.clients.detail(vars.clientId) });
     },
   });
 }
@@ -120,8 +120,8 @@ export function useDeleteContract() {
     mutationFn: ({ clientId, contractId }: { clientId: string; contractId: string }) =>
       clientApi.deleteContract(clientId, contractId),
     onSuccess: (_data, vars) => {
-      qc.invalidateQueries({ queryKey: queryKeys.clients.contracts(vars.clientId) });
-      qc.invalidateQueries({ queryKey: queryKeys.clients.detail(vars.clientId) });
+      void qc.invalidateQueries({ queryKey: queryKeys.clients.contracts(vars.clientId) });
+      void qc.invalidateQueries({ queryKey: queryKeys.clients.detail(vars.clientId) });
     },
   });
 }
@@ -132,8 +132,8 @@ export function useUpdateBilling() {
     mutationFn: ({ clientId, payload }: { clientId: string; payload: Parameters<typeof clientApi.updateBilling>[1] }) =>
       clientApi.updateBilling(clientId, payload),
     onSuccess: (_data, vars) => {
-      qc.invalidateQueries({ queryKey: queryKeys.clients.billing(vars.clientId) });
-      qc.invalidateQueries({ queryKey: queryKeys.clients.detail(vars.clientId) });
+      void qc.invalidateQueries({ queryKey: queryKeys.clients.billing(vars.clientId) });
+      void qc.invalidateQueries({ queryKey: queryKeys.clients.detail(vars.clientId) });
     },
   });
 }

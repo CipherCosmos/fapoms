@@ -547,7 +547,7 @@ export const ImportIssuesPanel: React.FC<{
   /** Open a person's record so the flagged fields can be corrected, then mark them decided. */
   const openRecord = (i: Issue) => {
     const id = i.assayer?.id;
-    if (id) navigate(`/hr/roster/${id}`);
+    if (id) void navigate(`/hr/roster/${id}`);
   };
 
   const onDone = () => {

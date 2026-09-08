@@ -1268,7 +1268,7 @@ export const InteractivePlanningMap: React.FC<InteractivePlanningMapProps> = Rea
     }
     // `mapStyle`/`appTheme` are deliberately absent: the basemap moved to its own effect above,
     // and a theme change is no longer a reason to walk every pin on the map.
-  }, [ensureMap, branches, selectedBranchId, routePoints, showBranches, showAssayers, showRoutes, showSlaRisk, slaRadiusKm, showWorkforceDensity, showRevenueDensity, realAssayers, filteredBranches, filteredAssayers, radiusKm, selectedAssayerForRouting, roadGeometry, travelMode, searchQuery, cityFilter, branchStatusFilter, slaEnabledProp, slaRadiusProp, rankedCandidates, excludedCandidates, colorMode, clientColorOf, assayerClientFilter, spotlightClientId, renderBounds]);
+  }, [ensureMap, branches, selectedBranchId, routePoints, showBranches, showAssayers, showRoutes, showSlaRisk, slaRadiusKm, showWorkforceDensity, showRevenueDensity, realAssayers, filteredBranches, filteredAssayers, radiusKm, selectedAssayerForRouting, roadGeometry, travelMode, searchQuery, cityFilter, branchStatusFilter, slaEnabledProp, slaRadiusProp, effectiveSlaEnabled, effectiveSlaRadius, rankedCandidates, excludedCandidates, colorMode, clientColorOf, assayerClientFilter, spotlightClientId, renderBounds]);
 
   // Travel math calculations based on mode-aware estimates
   const modeSpeeds: Record<string, number> = { driving: 40, 'two-wheeler': 30, walking: 5 };

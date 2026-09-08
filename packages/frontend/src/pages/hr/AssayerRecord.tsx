@@ -369,13 +369,17 @@ export const AssayerRecord: React.FC<{
     : undefined;
 
   // Lifecycle transition handling with 409 concurrency protection
+  // Lifted out of both memos: they only ever depended on this one field, but referencing `a`
+  // inside the callback made the rule ask for the whole record as a dependency -- which changes
+  // identity on every refetch and would have recomputed both on every one.
+  const lifecycleStatus = a?.lifecycleStatus;
   const transitions = useMemo(
-    () => (a ? nextAssayerLifecycleStates(a.lifecycleStatus) : []),
-    [a?.lifecycleStatus],
+    () => (lifecycleStatus ? nextAssayerLifecycleStates(lifecycleStatus) : []),
+    [lifecycleStatus],
   );
   const forwardStep = useMemo(
-    () => (a ? nextOnboardingStep(a.lifecycleStatus) : null),
-    [a?.lifecycleStatus],
+    () => (lifecycleStatus ? nextOnboardingStep(lifecycleStatus) : null),
+    [lifecycleStatus],
   );
 
   const startMove = (to: string) => {

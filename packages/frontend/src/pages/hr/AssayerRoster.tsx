@@ -115,12 +115,12 @@ export const AssayerRoster: React.FC<{
       if (value !== null) forwarded.set(key, value);
     }
     const qs = forwarded.toString();
-    navigate(`/hr/roster/${encodeURIComponent(wanted)}${qs ? `?${qs}` : ''}`, { replace: true });
+    void navigate(`/hr/roster/${encodeURIComponent(wanted)}${qs ? `?${qs}` : ''}`, { replace: true });
   }, [searchParams, navigate]);
 
   useEffect(() => {
     const id = searchParams.get('register');
-    if (id) navigate(`/hr/register/${encodeURIComponent(id)}`, { replace: true });
+    if (id) void navigate(`/hr/register/${encodeURIComponent(id)}`, { replace: true });
   }, [searchParams, navigate]);
 
   // Import finish synchronization

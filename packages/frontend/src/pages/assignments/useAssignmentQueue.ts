@@ -227,7 +227,8 @@ export function useAssignmentQueue() {
     staleTime: 15_000,
   });
 
-  const assignments = mainData?.data ?? [];
+  // Memoised so the `?? []` fallback keeps a stable identity between renders (see RuleBypassPanel).
+  const assignments = useMemo(() => mainData?.data ?? [], [mainData?.data]);
   const total = mainData?.meta?.pagination?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 

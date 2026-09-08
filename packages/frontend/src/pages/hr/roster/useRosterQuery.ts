@@ -110,15 +110,16 @@ export function useRosterQuery(): UseRosterQueryResult {
     placeholderData: keepPreviousData,
   });
 
-  const allAssayers = rosterQuery.data?.people ?? [];
+  // Memoised so the `?? []` fallback keeps a stable identity between renders.
+  const allAssayers = useMemo(() => rosterQuery.data?.people ?? [], [rosterQuery.data?.people]);
   const totalCount = rosterQuery.data?.total ?? 0;
   const missingCount = rosterQuery.data?.missing ?? 0;
   const truncated = missingCount > 0;
   const loading = rosterQuery.isLoading;
 
   const refresh = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: queryKeys.hr.rosterAll });
-    queryClient.invalidateQueries({ queryKey: queryKeys.hr.workforce });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.hr.rosterAll });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.hr.workforce });
   }, [queryClient]);
 
   const selectedSegment = useMemo(() => segmentFor(filters.segment), [filters.segment]);

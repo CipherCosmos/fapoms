@@ -120,7 +120,7 @@ export const AssignmentDetailDrawer: React.FC<AssignmentDetailDrawerProps> = ({
         body: JSON.stringify({ comment: newComment }),
       });
       setNewComment('');
-      queryClient.invalidateQueries({ queryKey: queryKeys.assignments.timeline(assignment.id) });
+      void queryClient.invalidateQueries({ queryKey: queryKeys.assignments.timeline(assignment.id) });
     } catch {
       // comment error
     }

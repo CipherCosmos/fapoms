@@ -190,7 +190,7 @@ export const NotificationDropdown: React.FC = () => {
   };
 
   useEffect(() => {
-    refreshCount();
+    void refreshCount();
 
     if ('Notification' in window && Notification.permission === 'default') {
       Notification.requestPermission().catch(() => {});
@@ -223,8 +223,8 @@ export const NotificationDropdown: React.FC = () => {
     const handleNotification = (data: any) => {
       if (!isFirstSighting(data?.id)) return;
 
-      refreshCount();
-      if (openRef.current) fetchPage();
+      void refreshCount();
+      if (openRef.current) void fetchPage();
 
       playWebNotificationSound();
 
@@ -268,11 +268,11 @@ export const NotificationDropdown: React.FC = () => {
      */
     const interval = setInterval(() => {
       if (document.visibilityState === 'hidden') return;
-      refreshCount();
+      void refreshCount();
     }, 30_000);
 
     const handleVisibility = () => {
-      if (document.visibilityState === 'visible') refreshCount();
+      if (document.visibilityState === 'visible') void refreshCount();
     };
     document.addEventListener('visibilitychange', handleVisibility);
 
@@ -291,7 +291,7 @@ export const NotificationDropdown: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    if (open) fetchPage();
+    if (open) void fetchPage();
   }, [open]);
 
   useEffect(() => {
@@ -361,10 +361,10 @@ export const NotificationDropdown: React.FC = () => {
     const mayOpen = (path: string) => canAccessRoute(roles, permissions, path.split('?')[0]);
 
     if (targetPath && targetPath !== '/dashboard' && mayOpen(targetPath)) {
-      navigate(targetPath);
+      void navigate(targetPath);
     } else {
       const fallback = getCategoryFallback(n.category);
-      navigate(mayOpen(fallback) ? fallback : '/notifications');
+      void navigate(mayOpen(fallback) ? fallback : '/notifications');
     }
   };
 
@@ -585,13 +585,13 @@ export const NotificationDropdown: React.FC = () => {
               */}
             <div style={{ borderTop: '1px solid var(--border-color)', padding: '9px 14px', display: 'flex', gap: '14px', alignItems: 'center' }}>
               <button
-                onClick={() => { setOpen(false); navigate('/notifications'); }}
+                onClick={() => { setOpen(false); void navigate('/notifications'); }}
                 style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: '11.5px', fontWeight: 700, color: 'var(--accent)' }}
               >
                 View all
               </button>
               <button
-                onClick={() => { setOpen(false); navigate('/notifications?tab=preferences'); }}
+                onClick={() => { setOpen(false); void navigate('/notifications?tab=preferences'); }}
                 style={{ background: 'none', border: 'none', padding: 0, cursor: 'pointer', fontSize: '11.5px', color: 'var(--text-muted)', marginLeft: 'auto' }}
               >
                 Choose what reaches me

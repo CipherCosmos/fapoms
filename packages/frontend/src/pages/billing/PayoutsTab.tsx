@@ -80,7 +80,8 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
   const [invoicingDark, setInvoicingDark] = useState(false);
   const [inviteOutcome, setInviteOutcome] = useState<AssayerInvoiceInviteAllResult | null>(null);
 
-  const rows = payouts.data?.items ?? [];
+  // Memoised so the `?? []` fallback keeps a stable identity between renders.
+  const rows = useMemo(() => payouts.data?.items ?? [], [payouts.data?.items]);
   const total = payouts.data?.total ?? 0;
 
   // The invoice each visible row rides, resolved by id — rows carry `assayerInvoiceId` only
@@ -102,7 +103,7 @@ export const PayoutsTab: React.FC<{ filter: PayoutFilter; onFilter: (f: PayoutFi
   const approvable = selectedRows.filter((r) => r.status === AssayerPayableStatus.PENDING && !r.onHold);
   const payable = selectedRows.filter((r) => r.status === AssayerPayableStatus.APPROVED && !r.onHold);
 
-  const toggle = (id: string) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggle = (id: string) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
   const toggleGroup = (ids: string[]) => setSelected((s) => {
     const n = new Set(s);
     const all = ids.every((id) => n.has(id));

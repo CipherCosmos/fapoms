@@ -210,7 +210,7 @@ export const Documents: React.FC = () => {
    */
   useEffect(() => {
     branchQueryRef.current = { page: branchPage, search: branchSearch, stage: branchStage };
-    const t = setTimeout(() => { loadOverview(); }, BRANCH_SEARCH_DEBOUNCE_MS);
+    const t = setTimeout(() => { void loadOverview(); }, BRANCH_SEARCH_DEBOUNCE_MS);
     return () => clearTimeout(t);
   }, [branchPage, branchSearch, branchStage, loadOverview]);
 

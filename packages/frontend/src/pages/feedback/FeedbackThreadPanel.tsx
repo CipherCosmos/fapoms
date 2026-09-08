@@ -188,7 +188,7 @@ export const FeedbackThreadPanel: React.FC<Props> = ({ threadId, isTeam, onChang
           <textarea
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(); } }}
             placeholder={isTeam ? (internal ? 'Note for the team…' : 'Reply to the reporter…') : 'Add to the conversation…'}
             rows={2}
             style={{

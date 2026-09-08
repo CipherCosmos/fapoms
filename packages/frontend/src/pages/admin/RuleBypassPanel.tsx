@@ -121,7 +121,9 @@ export const RuleBypassPanel: React.FC = () => {
   });
 
   const current = state ?? INACTIVE_BYPASS;
-  const rules = catalogue?.rules ?? [];
+  // Memoised: `?? []` allocates a new array on every render where the query has not resolved,
+  // which changed the identity of the dependency below and made its useMemo re-run every time.
+  const rules = useMemo(() => catalogue?.rules ?? [], [catalogue?.rules]);
   const byRule = useMemo(() => new Map(rules.map((r) => [r.rule, r])), [rules]);
 
   // Fixed categories first, then distinct past reasons that aren't already one of them — a flat,
@@ -155,13 +157,13 @@ export const RuleBypassPanel: React.FC = () => {
         method: 'POST',
         body: JSON.stringify({ rules: [...selected], reason, hours }),
       }),
-    onSuccess: () => { setError(null); setSelected(new Set()); setReason(''); refresh(); },
+    onSuccess: () => { setError(null); setSelected(new Set()); setReason(''); void refresh(); },
     onError: (e) => setError(userMessage(e)),
   });
 
   const disable = useMutation({
     mutationFn: () => api.request('/admin/rule-bypass', { method: 'DELETE' }),
-    onSuccess: () => { setError(null); refresh(); },
+    onSuccess: () => { setError(null); void refresh(); },
     onError: (e) => setError(userMessage(e)),
   });
 
@@ -169,7 +171,7 @@ export const RuleBypassPanel: React.FC = () => {
     if (guidance) setGuidance(null);
     setSelected((s) => {
       const next = new Set(s);
-      next.has(rule) ? next.delete(rule) : next.add(rule);
+      if (next.has(rule)) next.delete(rule); else next.add(rule);
       return next;
     });
   };

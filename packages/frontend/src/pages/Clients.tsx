@@ -208,7 +208,7 @@ const Clients: React.FC = () => {
       toast({ type: 'error', title: 'Bulk lifecycle change failed', message: userMessage(err) });
     } finally {
       setBulkBusy(false);
-      refetch();
+      void refetch();
     }
   };
 
@@ -219,7 +219,7 @@ const Clients: React.FC = () => {
       toast('success', `Client "${selectedClient.displayName}" successfully deleted.`);
       setShowDeleteConfirm(false);
       setSelectedId(null);
-      refetch();
+      void refetch();
     } catch (err: any) {
       toast({ type: 'error', title: 'Failed to delete client', message: userMessage(err) });
     }
@@ -228,7 +228,7 @@ const Clients: React.FC = () => {
   const toggleSelect = (id: string) =>
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
 
@@ -430,7 +430,7 @@ const Clients: React.FC = () => {
         // the header box speaks for the page it sits on, and nothing else.
         onSelectAll={(checked) => setSelectedIds((prev) => {
           const next = new Set(prev);
-          for (const c of data?.items ?? []) checked ? next.add(c.id) : next.delete(c.id);
+          for (const c of data?.items ?? []) { if (checked) next.add(c.id); else next.delete(c.id); }
           return next;
         })}
         emptyState={

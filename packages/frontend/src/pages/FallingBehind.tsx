@@ -69,7 +69,7 @@ export const FallingBehind: React.FC = () => {
   /** Route each row to where its next step actually happens — no new mutations on this board. */
   const goToAction = (item: FallingBehindItem) => {
     if (item.nextAction === 'RESCHEDULE') {
-      navigate(`/scheduling?assignmentId=${item.id}`);
+      void navigate(`/scheduling?assignmentId=${item.id}`);
       return;
     }
     if (item.nextAction === 'REASSIGN') {
@@ -78,10 +78,10 @@ export const FallingBehind: React.FC = () => {
       if (item.projectId) params.set('projectId', item.projectId);
       if (item.projectBranchId) params.set('branchId', item.projectBranchId);
       const qs = params.toString();
-      navigate(qs ? `/planning?${qs}` : '/planning');
+      void navigate(qs ? `/planning?${qs}` : '/planning');
       return;
     }
-    navigate(`/assignments?id=${item.id}`);
+    void navigate(`/assignments?id=${item.id}`);
   };
 
   return (

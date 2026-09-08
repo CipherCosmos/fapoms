@@ -132,7 +132,7 @@ export const DirectoryPanel: React.FC = () => {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkReport, setBulkReport] = useState<{ target: string; succeeded: number; skipped: { id: string; current: string; reason: string }[]; failed: { id: string; reason: string }[] } | null>(null);
 
-  useEffect(() => { loadUsers(); loadRoles(); }, []);
+  useEffect(() => { void loadUsers(); void loadRoles(); }, []);
 
   /**
    * The email's local part, lowercased, with anything that is not a letter, digit, dot, dash or
@@ -235,7 +235,7 @@ export const DirectoryPanel: React.FC = () => {
       }
       setUsername(''); setUsernameEdited(false); setEmail('');
       setFirstName(''); setLastName(''); setSelectedRoleIds([]); setSelectedClientId('');
-      loadUsers();
+      void loadUsers();
     } catch (err: any) {
       setError(`Failed to create user. ${userMessage(err)}`);
     } finally {
@@ -289,13 +289,13 @@ export const DirectoryPanel: React.FC = () => {
     } catch (err: any) {
       setError(`Profile saved, but role changes failed: ${userMessage(err)}`);
       setSubmitting(false);
-      loadUsers();
+      void loadUsers();
       return;
     }
     setSubmitting(false);
     setEditingUser(null);
     setNotice('Profile and roles updated.');
-    loadUsers();
+    void loadUsers();
   };
 
   const toggleUserStatus = async (user: UserProfile) => {
@@ -313,7 +313,7 @@ export const DirectoryPanel: React.FC = () => {
     setError(null);
     try {
       await api.request(`/users/${user.id}`, { method: 'PUT', body: JSON.stringify({ status: activating ? 'ACTIVE' : 'SUSPENDED' }) });
-      loadUsers();
+      void loadUsers();
     } catch (err: any) {
       setError(`Failed to change account status. ${userMessage(err)}`);
     }
@@ -338,14 +338,14 @@ export const DirectoryPanel: React.FC = () => {
       setBulkBusy(false);
       setBulkStatus('');
       setSelectedIds(new Set());
-      loadUsers();
+      void loadUsers();
     }
   };
 
   const toggleSelect = (id: string) =>
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id); else next.add(id);
       return next;
     });
 
@@ -364,7 +364,7 @@ export const DirectoryPanel: React.FC = () => {
       await api.request(`/users/${editingUser.id}/reset-password`, { method: 'POST', body: JSON.stringify({ newPassword }) });
       setNewPassword('');
       setNotice(`Password reset for ${editingUser.displayName}.`);
-      loadUsers();
+      void loadUsers();
     } catch (err: any) {
       setError(`Failed to reset password. ${userMessage(err)}`);
     } finally {
@@ -379,7 +379,7 @@ export const DirectoryPanel: React.FC = () => {
     try {
       await api.request(`/users/${editingUser.id}/unlock`, { method: 'POST' });
       setNotice(`${editingUser.displayName}'s account unlocked — password unchanged.`);
-      loadUsers();
+      void loadUsers();
     } catch (err: any) {
       setError(`Failed to unlock account. ${userMessage(err)}`);
     } finally {

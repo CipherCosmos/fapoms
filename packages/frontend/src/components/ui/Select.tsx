@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Check, ChevronDown, Search, X } from 'lucide-react';
 
@@ -79,16 +79,16 @@ export const Select: React.FC<{
 
   const effectiveSearchable = searchable ?? options.length > 7;
 
-  const filterOptions = (q: string) => {
+  const filterOptions = useCallback((q: string) => {
     if (!effectiveSearchable || !q.trim()) return options;
     const needle = q.trim().toLowerCase();
     return options.filter((o) => {
       const text = o.searchText ?? (typeof o.label === 'string' ? o.label : '');
       return text.toLowerCase().includes(needle);
     });
-  };
+  }, [options, effectiveSearchable]);
 
-  const filtered = useMemo(() => filterOptions(query), [options, query, effectiveSearchable]);
+  const filtered = useMemo(() => filterOptions(query), [filterOptions, query]);
 
   const selected = options.find((o) => o.value === value);
 

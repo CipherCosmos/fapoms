@@ -88,7 +88,7 @@ export const PinCoordinateControl: React.FC<{
           autoFocus
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') setOpen(false); }}
+          onKeyDown={(e) => { if (e.key === 'Enter') void submit(); if (e.key === 'Escape') setOpen(false); }}
           placeholder="18.520430, 73.856744"
           aria-label="Exact coordinate as latitude, longitude"
           style={{ flex: 1, minWidth: '170px', fontSize: '11.5px', fontFamily: 'monospace', padding: '5px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none' }}
@@ -96,7 +96,7 @@ export const PinCoordinateControl: React.FC<{
         <input
           value={note}
           onChange={(e) => setNote(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') submit(); if (e.key === 'Escape') setOpen(false); }}
+          onKeyDown={(e) => { if (e.key === 'Enter') void submit(); if (e.key === 'Escape') setOpen(false); }}
           placeholder="Note (optional) — e.g. front door"
           style={{ flex: 1, minWidth: '150px', fontSize: '11.5px', padding: '5px 8px', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', color: 'var(--text-primary)', outline: 'none' }}
         />

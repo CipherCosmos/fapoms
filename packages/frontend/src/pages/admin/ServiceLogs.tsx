@@ -200,10 +200,11 @@ export const ServiceLogs: React.FC = () => {
       },
     });
     return () => {
-      // eslint-disable-next-line react-hooks/exhaustive-deps -- the rule assumes a ref holds a DOM
-      // node whose identity may have moved on. This one is a generation counter, and advancing it
-      // here IS the mechanism: it retires the stream this effect opened so that its late onClose
-      // cannot switch following off underneath whichever stream replaced it.
+      // The rule assumes a ref points at a DOM node whose identity may have moved on by the time
+      // cleanup runs. This one is a generation counter, and reading it late is the whole point:
+      // advancing it here retires the stream this effect opened, so a late onClose from that
+      // stream cannot switch following off underneath whichever stream replaced it.
+      // eslint-disable-next-line react-hooks/exhaustive-deps
       streamGen.current++;
       if (reconnectTimer.current !== null) {
         clearTimeout(reconnectTimer.current);

@@ -89,7 +89,7 @@ export const PdfRegionViewer: React.FC<Props> = ({ fileUrl, focus, viewOnly = fa
       docRef.current?.destroy?.();
       docRef.current = null;
     };
-  }, [fileUrl]);
+  }, [fileUrl, viewOnly]);
 
   // ── Render the current page ─────────────────────────────────────────────
   const render = useCallback(async () => {
@@ -123,7 +123,7 @@ export const PdfRegionViewer: React.FC<Props> = ({ fileUrl, focus, viewOnly = fa
     }
   }, [page, scale]);
 
-  useEffect(() => { render(); }, [render]);
+  useEffect(() => { void render(); }, [render]);
 
   // ── Follow an anchored message ──────────────────────────────────────────
   useEffect(() => {

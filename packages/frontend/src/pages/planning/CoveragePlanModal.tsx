@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { X, Loader2, CheckCircle2, AlertTriangle, Rocket } from 'lucide-react';
 import {
   getCoveragePlanPreview,
@@ -73,7 +73,7 @@ export const CoveragePlanModal: React.FC<{
   })();
   const [scheduledDate, setScheduledDate] = useState<string>(tomorrow);
 
-  const loadPreview = async () => {
+  const loadPreview = useCallback(async () => {
     setLoadingPreview(true);
     setPreviewError(null);
     try {
@@ -83,9 +83,9 @@ export const CoveragePlanModal: React.FC<{
     } finally {
       setLoadingPreview(false);
     }
-  };
+  }, [projectId]);
 
-  useEffect(() => { void loadPreview(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [projectId]);
+  useEffect(() => { void loadPreview(); }, [loadPreview]);
 
   // onClose is an inline arrow at the call site (a new reference every render of the parent, the
   // busiest-re-rendering page in the app) — held in a ref, as Modal.tsx/DetailDrawer.tsx do, so

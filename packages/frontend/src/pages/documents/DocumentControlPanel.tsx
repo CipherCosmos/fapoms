@@ -131,7 +131,7 @@ export const DocumentControlPanel: React.FC<{
 
   const selectable = rows.filter((r) => r.status === 'UPLOADED');
   const toggle = (id: string) =>
-    setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+    setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
   // What "Send to assayers" will really send: ticked AND still listed under the current search and
   // pipeline stage. The button used to post the raw ticked set, so narrowing the search after
@@ -219,7 +219,7 @@ export const DocumentControlPanel: React.FC<{
             onClick={() => setSelected((prev) => {
               const next = new Set(prev);
               const allShownTicked = selectable.every((r) => prev.has(r.id));
-              for (const r of selectable) allShownTicked ? next.delete(r.id) : next.add(r.id);
+              for (const r of selectable) { if (allShownTicked) next.delete(r.id); else next.add(r.id); }
               return next;
             })}
             className="btn btn-secondary" style={{ fontSize: 12, padding: '7px 12px' }}

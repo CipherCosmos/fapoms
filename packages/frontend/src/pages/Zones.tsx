@@ -78,7 +78,7 @@ export const Zones: React.FC = () => {
     // A state can be deselected while its request is in flight; only the newest result wins.
     let cancelled = false;
     setDistrictOptions(null);
-    Promise.all(ids.map((id) =>
+    void Promise.all(ids.map((id) =>
       api.request<{ name: string }[]>(`/geo/states/${id}/districts`).catch(() => [] as { name: string }[]),
     )).then((lists) => {
       if (cancelled) return;
@@ -145,7 +145,7 @@ export const Zones: React.FC = () => {
         setSuccess('Zone created.');
       }
       setShowModal(false);
-      refetch();
+      void refetch();
     } catch (err: any) {
       setError(`Could not save the zone. ${userMessage(err)}`);
     } finally {
@@ -209,7 +209,7 @@ export const Zones: React.FC = () => {
     try {
       await api.request(`/zones/${z.id}`, { method: 'DELETE' });
       setSuccess('Zone deleted.');
-      refetch();
+      void refetch();
     } catch (err: any) {
       setError(`Delete failed. ${userMessage(err)}`);
     }

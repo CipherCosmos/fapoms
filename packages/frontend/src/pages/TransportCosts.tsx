@@ -273,7 +273,7 @@ export const TransportCostsSection: React.FC = () => {
       setShowModal(false);
       // Prefix invalidation reaches the estimator too — its query key starts with
       // 'transport-rates', and a stale estimate after a rate edit is a wrong number on screen.
-      queryClient.invalidateQueries({ queryKey: ['transport-rates'] });
+      void queryClient.invalidateQueries({ queryKey: ['transport-rates'] });
     } catch (err: any) {
       setError(`Could not save the rate. ${userMessage(err)}`);
     } finally {
@@ -295,7 +295,7 @@ export const TransportCostsSection: React.FC = () => {
     try {
       await api.request(`/transport-rates/${r.id}`, { method: 'DELETE' });
       setSuccess('Rate retired. Past offers priced by it are unaffected.');
-      queryClient.invalidateQueries({ queryKey: ['transport-rates'] });
+      void queryClient.invalidateQueries({ queryKey: ['transport-rates'] });
     } catch (err: any) {
       setError(`Could not retire the rate. ${userMessage(err)}`);
     }

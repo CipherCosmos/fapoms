@@ -160,7 +160,7 @@ export const DangerZoneSection: React.FC = () => {
 
   const withdraw = useMutation({
     mutationFn: (id: string) => api.request(`/admin/data-reset/requests/${id}/cancel`, { method: 'POST' }),
-    onSuccess: () => { toast('success', 'Request withdrawn.'); refreshRequests(); },
+    onSuccess: () => { toast('success', 'Request withdrawn.'); void refreshRequests(); },
     onError: (err) => toast({ type: 'error', title: 'Could not withdraw the request', message: userMessage(err) }),
   });
 
@@ -170,10 +170,10 @@ export const DangerZoneSection: React.FC = () => {
   const onWiped = () => {
     setModal(null);
     setSelectedKeys([]);
-    queryClient.invalidateQueries({ queryKey: ['data-reset'] });
+    void queryClient.invalidateQueries({ queryKey: ['data-reset'] });
     // The rest of the app is reading data this may have just removed — a stale Clients list or
     // Operations Inbox after a wipe is the one place "trust the cache" is actively wrong.
-    queryClient.invalidateQueries();
+    void queryClient.invalidateQueries();
   };
 
   /**
@@ -382,7 +382,7 @@ export const DangerZoneSection: React.FC = () => {
             setModal(null);
             setSelectedKeys([]);
             setDismissedId(null);
-            refreshRequests();
+            void refreshRequests();
           }}
           onWiped={onWiped}
         />

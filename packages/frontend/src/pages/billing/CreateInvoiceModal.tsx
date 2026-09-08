@@ -35,7 +35,7 @@ export const CreateInvoiceModal: React.FC<{ client: InvoiceableClient; onClose: 
   const tds = chosen.reduce((s, l) => s + l.tdsAmount, 0);
   const total = chosen.reduce((s, l) => s + l.totalAmount, 0);
 
-  const toggle = (id: string) => setSelected((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggle = (id: string) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();

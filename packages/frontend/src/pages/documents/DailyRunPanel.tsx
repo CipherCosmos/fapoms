@@ -125,7 +125,7 @@ export const DailyRunPanel: React.FC<{
     }
   }, [projectId, auditDate, onError]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { void load(); }, [load]);
 
   const withActing = async (key: string, fn: () => Promise<void>) => {
     setActing((s) => new Set(s).add(key));
@@ -359,7 +359,7 @@ export const DailyRunPanel: React.FC<{
                     refused. One oversized packet in a batch fails only that packet. */}
                 <span style={{ fontWeight: 500, color: 'var(--text-muted)' }}>· {UPLOAD_LIMIT_HINT}</span>
                 <input type="file" multiple accept=".pdf" style={{ display: 'none' }} disabled={acting.has('bulk')}
-                  onChange={(e) => { const f = e.target.files; if (f?.length) uploadGeneratedBatch(f); e.target.value = ''; }} />
+                  onChange={(e) => { const f = e.target.files; if (f?.length) void uploadGeneratedBatch(f); e.target.value = ''; }} />
               </label>
             )}
           </div>

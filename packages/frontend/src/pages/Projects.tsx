@@ -333,13 +333,13 @@ export const Projects: React.FC = () => {
 
   // Reloads whenever the header's scope changes. A project is in scope when it has at least one
   // branch there — see ProjectQueryService.findAll.
-  useEffect(() => { loadProjects(); }, [scopeKey]);
+  useEffect(() => { void loadProjects(); }, [scopeKey]);
 
   useEffect(() => {
-    loadProjects();
-    loadClients();
+    void loadProjects();
+    void loadClients();
     const socket = connectSocket();
-    const refresh = () => { loadProjects(); loadClients(); };
+    const refresh = () => { void loadProjects(); void loadClients(); };
     socket?.on('ProjectPlanningStarted', refresh);
     socket?.on('ProjectSchedulingReady', refresh);
     socket?.on('ProjectExecutionStarted', refresh);
@@ -364,11 +364,13 @@ export const Projects: React.FC = () => {
 
   useEffect(() => {
     if (selectedId) {
-      loadDetail(selectedId);
+      void loadDetail(selectedId);
     } else {
       setDetail(null);
       setProjectBranches([]);
     }
+    // `loadDetail` is declared below this effect. Keyed on the selected id alone by design.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedId]);
 
   const loadProjects = async () => {
@@ -463,7 +465,7 @@ export const Projects: React.FC = () => {
       const branchesResponse = await api.request<any>(`/projects/${id}/branches`, { method: 'GET' });
       setProjectBranches(branchesResponse || []);
       if (response && response.clientId) {
-        loadClientBranches(response.clientId);
+        void loadClientBranches(response.clientId);
       }
     } catch {
       console.error('Failed to load project detail');
@@ -484,7 +486,7 @@ export const Projects: React.FC = () => {
         body: JSON.stringify({ branchIds: [branchId] })
       });
       setMessage({ type: 'success', text: 'Branch associated successfully!' });
-      loadDetail(detail.id);
+      void loadDetail(detail.id);
     } catch (err: any) {
       setMessage({ type: 'error', text: `Failed to add branch. ${userMessage(err)}` });
     } finally {
@@ -509,7 +511,7 @@ export const Projects: React.FC = () => {
         method: 'DELETE'
       });
       setMessage({ type: 'success', text: 'Branch removed successfully!' });
-      loadDetail(detail.id);
+      void loadDetail(detail.id);
     } catch (err: any) {
       setMessage({ type: 'error', text: `Failed to remove branch. ${userMessage(err)}` });
     } finally {
@@ -547,7 +549,7 @@ export const Projects: React.FC = () => {
       setMessage({ type: 'success', text: `Project "${response.name}" (${response.projectNumber}) successfully created!` });
       setShowCreateModal(false);
       setForm(getInitialProjectForm());
-      loadProjects();
+      void loadProjects();
     } catch (err: any) {
       setMessage({ type: 'error', text: `Failed to create project. ${userMessage(err)}` });
     } finally {
@@ -573,7 +575,7 @@ export const Projects: React.FC = () => {
       setMessage({ type: 'success', text: `Project "${response.name}" (${response.projectNumber}) created. Add branches and details whenever you're ready.` });
       setShowQuickModal(false);
       setQuickForm({ name: '', clientId: clients[0]?.id || '', priority: Priority.MEDIUM });
-      loadProjects();
+      void loadProjects();
     } catch (err: any) {
       setMessage({ type: 'error', text: `Could not create the project. ${userMessage(err)}` });
     } finally {
@@ -623,8 +625,8 @@ export const Projects: React.FC = () => {
       });
       setMessage({ type: 'success', text: `Project "${response.name}" successfully updated!` });
       setShowEditModal(false);
-      loadProjects();
-      if (selectedId) loadDetail(selectedId);
+      void loadProjects();
+      if (selectedId) void loadDetail(selectedId);
     } catch (err: any) {
       setMessage({ type: 'error', text: `Failed to update project. ${userMessage(err)}` });
     } finally {
@@ -640,7 +642,7 @@ export const Projects: React.FC = () => {
       setMessage({ type: 'success', text: `Project "${detail.name}" deleted.` });
       setShowDeleteConfirm(false);
       setSelectedId(null);
-      loadProjects();
+      void loadProjects();
     } catch (err: any) {
       setMessage({ type: 'error', text: `Failed to delete project. ${userMessage(err)}` });
     }
@@ -674,8 +676,8 @@ export const Projects: React.FC = () => {
         body: JSON.stringify({ targetStatus }),
       });
       setMessage({ type: 'success', text: `Project moved to ${projectStatusLabel(targetStatus)}` });
-      loadProjects();
-      if (selectedId) loadDetail(selectedId);
+      void loadProjects();
+      if (selectedId) void loadDetail(selectedId);
     } catch (err: any) {
       setMessage({ type: 'error', text: `Transition failed. ${userMessage(err)}` });
     }
@@ -705,7 +707,7 @@ export const Projects: React.FC = () => {
    * file was applied.
    */
   useEffect(() => {
-    if (branchImport.state.phase === 'done' && detail?.id) loadDetail(detail.id);
+    if (branchImport.state.phase === 'done' && detail?.id) void loadDetail(detail.id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [branchImport.state.phase, detail?.id]);
 
@@ -1029,7 +1031,7 @@ export const Projects: React.FC = () => {
                   </td></tr>
                 ) : (
                   filteredProjects.map((p) => (
-                    <tr key={p.id} onClick={() => { setSelectedId(selectedId === p.id ? null : p.id); navigate(`/projects?id=${p.id}`, { replace: true }); }}
+                    <tr key={p.id} onClick={() => { setSelectedId(selectedId === p.id ? null : p.id); void navigate(`/projects?id=${p.id}`, { replace: true }); }}
                       style={{ cursor: 'pointer', background: selectedId === p.id ? 'rgba(216,174,71,0.08)' : 'transparent', borderLeft: selectedId === p.id ? '3px solid var(--accent-primary)' : '3px solid transparent', transition: 'background 0.15s' }}>
                       <td style={{ textAlign: 'center', padding: '10px 6px' }}>
                         <ChevronRight size={14} style={{ color: selectedId === p.id ? 'var(--accent-primary)' : 'var(--text-muted)', opacity: selectedId === p.id ? 1 : 0.3 }} />
@@ -1339,7 +1341,7 @@ export const Projects: React.FC = () => {
                                       <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{b.name}</span>
                                       <span style={{ color: 'var(--text-muted)', marginLeft: '6px' }}>({b.solId ?? '—'})</span>
                                     </div>
-                                    {canManage && <button type="button" onClick={() => { handleAddBranch(b.id); setBranchSearch(''); }}
+                                    {canManage && <button type="button" onClick={() => { void handleAddBranch(b.id); setBranchSearch(''); }}
                                       style={{ padding: '2px 8px', fontSize: '10px', background: 'var(--accent-primary)', color: 'var(--on-accent)', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }}>
                                       + Add
                                     </button>}

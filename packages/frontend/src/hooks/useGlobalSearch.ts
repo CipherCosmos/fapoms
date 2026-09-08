@@ -61,7 +61,7 @@ export function useGlobalSearch() {
 
   const navigateTo = useCallback((type: string, id: string) => {
     clear();
-    navigate(`${SEARCH_NAV_PATHS[type] ?? '/'}${id}`);
+    void navigate(`${SEARCH_NAV_PATHS[type] ?? '/'}${id}`);
   }, [navigate, clear]);
 
   const totalCount = results

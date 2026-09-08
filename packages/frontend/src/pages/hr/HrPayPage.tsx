@@ -139,7 +139,8 @@ export const HrPayPage: React.FC = () => {
     queryFn: () => api.request<RosterPayRow[]>('/assayers/commercial/roster'),
   });
 
-  const roster = rosterQuery.data?.people ?? [];
+  // Memoised so the `?? []` fallback keeps a stable identity between renders.
+  const roster = useMemo(() => rosterQuery.data?.people ?? [], [rosterQuery.data?.people]);
   const pay = useMemo(
     () => Object.fromEntries((payQuery.data ?? []).map((r) => [r.assayerId, r])),
     [payQuery.data],

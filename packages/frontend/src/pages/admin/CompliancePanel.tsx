@@ -64,8 +64,8 @@ export const CompliancePanel: React.FC = () => {
   const [tab, setTab] = useState<'INCIDENTS' | 'RIGHTS'>('INCIDENTS');
 
   const invalidate = () => {
-    qc.invalidateQueries({ queryKey: ['compliance', 'incidents'] });
-    qc.invalidateQueries({ queryKey: ['compliance', 'health'] });
+    void qc.invalidateQueries({ queryKey: ['compliance', 'incidents'] });
+    void qc.invalidateQueries({ queryKey: ['compliance', 'health'] });
   };
 
   const raise = useMutation({
@@ -221,8 +221,8 @@ const RightsRequestsSection: React.FC = () => {
   const [form, setForm] = useState({ requestType: 'ACCESS', subjectRef: '', requesterName: '', details: '' });
   const [show, setShow] = useState(false);
   const invalidate = () => {
-    qc.invalidateQueries({ queryKey: ['compliance', 'rights'] });
-    qc.invalidateQueries({ queryKey: ['compliance', 'health'] });
+    void qc.invalidateQueries({ queryKey: ['compliance', 'rights'] });
+    void qc.invalidateQueries({ queryKey: ['compliance', 'health'] });
   };
   const log = useMutation({
     mutationFn: () => logRightsRequest(form),
