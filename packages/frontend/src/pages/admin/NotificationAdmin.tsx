@@ -129,7 +129,7 @@ export const NotificationAdmin: React.FC = () => {
     setError(null);
     try {
       await api.request(`/notification-admin/catalog/${type}`, { method: 'PUT', body: JSON.stringify(patch) });
-      refresh();
+      void refresh();
       return true;
     } catch (err: any) {
       setError(userMessage(err));
@@ -171,7 +171,7 @@ export const NotificationAdmin: React.FC = () => {
     try {
       await api.request(`/notification-admin/catalog/${t.type}`, { method: 'DELETE' });
       toast('success', 'Reset to the shipped default.');
-      refresh();
+      void refresh();
     } catch (err: any) {
       toast({ type: 'error', title: 'Could not reset', message: userMessage(err) });
     } finally {
@@ -325,7 +325,7 @@ export const NotificationAdmin: React.FC = () => {
         <TemplateEditor
           type={editing}
           onClose={() => setEditing(null)}
-          onSaved={() => { setEditing(null); refresh(); }}
+          onSaved={() => { setEditing(null); void refresh(); }}
           allRoles={catalog?.roles ?? []}
           priorities={catalog?.priorities ?? []}
         />

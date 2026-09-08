@@ -1,6 +1,6 @@
-import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In, Between, MoreThanOrEqual, LessThanOrEqual } from 'typeorm';
+import { Repository, Between, MoreThanOrEqual, LessThanOrEqual } from 'typeorm';
 import { DEFAULT_WEEKLY_CAPACITY } from '../assignment/assignment-workload';
 import { branchScopeWhere } from '../../infrastructure/scope/apply-scope';
 import { GlobalScope, assertClientAllowed } from '../../infrastructure/scope/global-scope';
@@ -269,7 +269,7 @@ export class SchedulingService {
               userId,
               'Completed via schedule dispatch',
             );
-          } catch (err) {
+          } catch {
             /**
              * Refuse the whole transition rather than persist half of it. The message names the
              * missing step, because the usual cause is a visit marked complete before anyone

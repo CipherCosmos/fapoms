@@ -1,6 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull } from 'typeorm';
+import { Repository } from 'typeorm';
 
 import { ClientConfigurationEntity } from '../client/client-configuration.entity';
 import { AssayerCommercialProfileEntity } from '../assayer/assayer-commercial-profile.entity';

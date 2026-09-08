@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ForbiddenException, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository } from 'typeorm';
 
 import { ExpenseEntity, ExpenseCategory, ExpenseStatus } from './expense.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';

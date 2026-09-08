@@ -197,7 +197,7 @@ export class UserController {
   // must show the change screen. Blocking it would trap the user before they could comply.
   @PasswordChangeExempt()
   @ApiOperation({ summary: 'Get current user profile' })
-  async getMe(@Req() req: any) {
+  getMe(@Req() req: any) {
     return {
       success: true,
       data: this.sanitizeUser(req.user),

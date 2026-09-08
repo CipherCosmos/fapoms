@@ -65,7 +65,7 @@ export const AssayerQualificationTab: React.FC<{
     } catch (e) { setErr(userMessage(e)); }
   }, [assayerId]);
 
-  React.useEffect(() => { load(); }, [load]);
+  React.useEffect(() => { void load(); }, [load]);
 
   const setOverride = async (dimension: string, clientId?: string) => {
     const { confirmed, reason } = await confirmWithReason({

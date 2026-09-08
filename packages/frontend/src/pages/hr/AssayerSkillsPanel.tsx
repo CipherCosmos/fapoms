@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { daysUntilExpiry } from '@fapoms/shared';
 
@@ -66,11 +66,11 @@ export const AssayerSkillsPanel: React.FC<{
 
   const who = assayerName ?? 'this assayer';
 
-  const load = () => api.request<Attribute[]>(`/assayers/${assayerId}/workforce-attribute`)
+  const load = useCallback(() => api.request<Attribute[]>(`/assayers/${assayerId}/workforce-attribute`)
     .then((d) => setRows(Array.isArray(d) ? d : []))
-    .catch((e) => { setRows([]); setErr(userMessage(e)); });
+    .catch((e) => { setRows([]); setErr(userMessage(e)); }), [assayerId]);
 
-  useEffect(() => { setRows(null); setErr(null); load(); }, [assayerId]);
+  useEffect(() => { setRows(null); setErr(null); void load(); }, [load]);
 
   // The shared list of names, so two people do not end up with "Hindi" and "hindi".
   useEffect(() => {

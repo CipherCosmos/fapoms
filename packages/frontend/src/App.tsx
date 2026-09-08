@@ -247,6 +247,9 @@ export const App: React.FC = () => {
     } else {
       setIsLoadingUser(false);
     }
+  // `handleLogout` is declared below this effect, so naming it here would read it before
+  // initialisation during render. The effect deliberately runs on a token change alone.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
   /**
@@ -350,7 +353,7 @@ export const App: React.FC = () => {
      * matched a catch-all and was bounced before the real /billing route existed. Resolving the
      * destination inside the authenticated tree — once roles are known — removes the race.
      */
-    navigate('/');
+    void navigate('/');
   };
 
   const handleLogout = () => {
@@ -365,7 +368,7 @@ export const App: React.FC = () => {
     void endSession();
     setToken(null);
     setCurrentUser(null);
-    navigate('/login');
+    void navigate('/login');
   };
 
   if (!token) {

@@ -12,24 +12,9 @@ import { diffFields } from '../../core/audit/diff-fields';
 import { COMMITTED_ASSIGNMENT_STATUSES, DEFAULT_WEEKLY_CAPACITY } from '../assignment/assignment-workload';
 import { DATA_INTEGRITY_SHEET } from './data-integrity.service';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
-import { geocodeIndia, pincodeAuthority } from '../geo/india-geocoder';
+import { pincodeAuthority } from '../geo/india-geocoder';
 import { resolveCoordinates, needsBetterFix, isPlausibleIndianCoord, GeoFields } from '../geo/coordinate-resolution';
 import { reverseFreely } from '../geo/osm-geocoder';
-
-/**
- * Resolves an assayer's home coordinates using ONLY the shared Google geocoder.
- * Returns null when nothing resolves (no key, error, or no sane in-state hit) —
- * the caller must treat that as "unknown" rather than inventing a location.
- */
-async function geocodeAddress(
-  address: string,
-  city: string,
-  district: string,
-  state: string,
-  pincode?: string | null,
-): Promise<{ lat: number; lng: number; accuracyMeters: number } | null> {
-  return geocodeIndia(address, city, district, state, pincode);
-}
 
 /**
  * Returns the authoritative state and district a 6-digit Indian pincode belongs
@@ -1720,7 +1705,7 @@ export class AssayerService implements OnModuleInit {
         : `Updated assayer profile: ${saved.displayName}`,
       metadata: fieldChanges.length ? { changes: fieldChanges } : undefined,
     });
-    await this.eventPublisher.publish('assayer:updated', {
+    this.eventPublisher.publish('assayer:updated', {
       eventType: 'assayer:updated',
       aggregateId: saved.id,
       userId,
@@ -2134,7 +2119,7 @@ export class AssayerService implements OnModuleInit {
         { manager },
       )));
 
-    await this.eventPublisher.publish('assayer:deleted', {
+    this.eventPublisher.publish('assayer:deleted', {
       eventType: 'assayer:deleted',
       aggregateId: id,
       userId,

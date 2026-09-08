@@ -7,10 +7,9 @@ import { AssessmentEntity } from '../project/assessment.entity';
 import { ProjectService } from '../project/project.service';
 import { ProjectQueryService } from '../project/project-query.service';
 import { ValidationStateMachine } from './validation.state-machine';
-import { ProjectBranchEntity } from '../project/project-branch.entity';
 import { AuditService } from '../../core/audit/audit.service';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
-import { EventCategory, ValidationStatus, ProjectBranchStatus, SystemRole, VALIDATION_TRANSITIONS, isValidTransition, ValidationQueryStatus, toWorkflowTransitions } from '@fapoms/shared';
+import { EventCategory, ValidationStatus, SystemRole, VALIDATION_TRANSITIONS, ValidationQueryStatus, toWorkflowTransitions } from '@fapoms/shared';
 import { WorkflowEngine } from '../platform/workflow/workflow.engine';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 

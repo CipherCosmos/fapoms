@@ -39,7 +39,7 @@ import { Transform } from 'class-transformer';
 import { ProjectService, CreateProjectDto } from './project.service';
 import { ImportJobService } from '../import/import-job.service';
 import type { ImportScope } from '../import/import.contract';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole, Priority, ProjectStatus } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';

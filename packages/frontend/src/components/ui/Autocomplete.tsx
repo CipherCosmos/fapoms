@@ -36,6 +36,11 @@ export const Autocomplete: React.FC<{
   filterType?: (r: IndiaPlaceResult) => boolean;
   minChars?: number;
 }> = ({ value, onChange, onSelect, onBlur, placeholder, filterType, minChars = 2 }) => {
+  // `filterType` arrives as an inline arrow from the parent, so its identity changes every
+  // render. Read through a ref: listing it as a dependency would tear down and restart the
+  // debounced lookup on every keystroke of the parent's own state.
+  const filterTypeRef = useRef(filterType);
+  filterTypeRef.current = filterType;
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState(false);
@@ -53,7 +58,8 @@ export const Autocomplete: React.FC<{
       setBusy(true); setErr(false);
       try {
         const res = await api.request<IndiaPlaceResult[]>(`/geo/autocomplete?q=${encodeURIComponent(q)}`);
-        const list = (Array.isArray(res) ? res : []).filter((r) => !filterType || filterType(r));
+        const ft = filterTypeRef.current;
+        const list = (Array.isArray(res) ? res : []).filter((r) => !ft || ft(r));
         setOpts(list);
         setOpen(list.length > 0);
       } catch {
@@ -63,6 +69,7 @@ export const Autocomplete: React.FC<{
     }, 350);
     return () => { if (deb.current) clearTimeout(deb.current); };
   }, [value, minChars]);
+
 
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {

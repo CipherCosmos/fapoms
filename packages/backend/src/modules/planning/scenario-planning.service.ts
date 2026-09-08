@@ -1,6 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { ProjectQueryService } from '../project/project-query.service';
-import { BranchQueryService } from '../branch/branch-query.service';
 import { ClientEntity } from '../client/client.entity';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';

@@ -84,7 +84,7 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // of the connection's life — access the user no longer possesses. Disconnecting forces a
       // reconnect, which re-runs handleConnection's gates and re-rooms against current authority.
       if (AUTH_CHANGE_EVENTS.has(eventName) || AUTH_CHANGE_EVENTS.has(payload?.eventType)) {
-        this.disconnectUserForReauth(payload?.userId, eventName);
+        this.disconnectUserForReauth(payload?.userId);
         return;
       }
       this.broadcastEvent(eventName, payload);
@@ -95,7 +95,7 @@ export class EventsGateway implements OnGatewayConnection, OnGatewayDisconnect {
    * Drop every live socket for a user whose authorization just changed, so their next request
    * re-authenticates. Bounded and cheap: one map lookup, disconnect the handful of sockets.
    */
-  private disconnectUserForReauth(userId: string | undefined, reason: string): void {
+  private disconnectUserForReauth(userId: string | undefined): void {
     if (!userId || !this.server) return;
     const socketIds = this.userSockets.get(userId);
     if (!socketIds || socketIds.size === 0) return;

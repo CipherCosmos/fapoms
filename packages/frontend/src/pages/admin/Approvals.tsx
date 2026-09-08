@@ -119,7 +119,7 @@ export const Approvals: React.FC = () => {
 
   const approve = useMutation({
     mutationFn: (id: string) => api.request(`/admin/data-reset/requests/${id}/approve`, { method: 'POST', body: JSON.stringify({}) }),
-    onSuccess: () => { toast('success', 'Approved — the requesting developer can now execute it.'); refresh(); },
+    onSuccess: () => { toast('success', 'Approved — the requesting developer can now execute it.'); void refresh(); },
     onError: (err) => toast({ type: 'error', title: 'Could not approve it', message: userMessage(err) }),
   });
 
@@ -130,7 +130,7 @@ export const Approvals: React.FC = () => {
       toast('success', 'Rejected — the developer sees your reason.');
       setRejectingId(null);
       setRejectReason('');
-      refresh();
+      void refresh();
     },
     onError: (err) => toast({ type: 'error', title: 'Could not reject it', message: userMessage(err) }),
   });

@@ -1,7 +1,7 @@
 import {
   Controller, Get, Post, Delete, Body, Query, Req, HttpCode, HttpStatus, UseGuards, BadRequestException,
 } from '@nestjs/common';
-import { IsString, IsNotEmpty, IsOptional, IsEmail, IsIn } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsEmail } from 'class-validator';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard, AnyAuthenticated } from './guards';

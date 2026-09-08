@@ -86,7 +86,7 @@ export const Notifications: React.FC = () => {
   const [prefsReloadKey, setPrefsReloadKey] = useState(0);
 
   const load = async (nextOffset = 0) => {
-    nextOffset === 0 ? setLoading(true) : setLoadingMore(true);
+    if (nextOffset === 0) setLoading(true); else setLoadingMore(true);
     setError(null);
     try {
       const page = await api.getNotificationPage({
@@ -127,7 +127,7 @@ export const Notifications: React.FC = () => {
    */
   useEffect(() => {
     if (tab === 'inbox') {
-      load(0);
+      void load(0);
     } else {
       // Preferences still needs the header's "N unread" line, but not the page of rows behind it.
       // This is the same number for a fraction of the work: a COUNT the server answers from an
@@ -159,7 +159,7 @@ export const Notifications: React.FC = () => {
       setUnreadCount((prev) => Math.max(0, prev - 1));
       api.markNotificationRead(n.id).catch(() => {});
     }
-    if (n.link) navigate(n.link);
+    if (n.link) void navigate(n.link);
   };
 
   const handleMarkAllRead = async () => {
@@ -294,7 +294,7 @@ export const Notifications: React.FC = () => {
                           </div>
                           {!n.isRead && (
                             <button
-                              onClick={(e) => { e.stopPropagation(); handleOpen({ ...n, link: null }); }}
+                              onClick={(e) => { e.stopPropagation(); void handleOpen({ ...n, link: null }); }}
                               className="btn btn-secondary" style={{ padding: '6px 10px', fontSize: '11px', flexShrink: 0 }}
                               title="Mark as read"
                             >

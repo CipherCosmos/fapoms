@@ -137,7 +137,12 @@ describe('RuleBypassController — enable/disable resist the custom-role permiss
      */
     const decoratorsAbove = (handlerName: string): string => {
       const lines = source.split('\n');
-      const target = lines.findIndex((l) => l.includes(`async ${handlerName}(`));
+      // Matched without `async`: whether a handler is asynchronous is unrelated to which
+      // decorators sit above it, and hardcoding it made this guard fail the moment a handler
+      // with no await in it dropped the keyword.
+      const target = lines.findIndex((l) =>
+        new RegExp(`^\\s*(async\\s+)?${handlerName}\\s*\\(`).test(l),
+      );
       expect(target).toBeGreaterThan(-1); // the handler must exist at all
 
       let start = 0;

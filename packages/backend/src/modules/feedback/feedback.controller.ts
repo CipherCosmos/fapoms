@@ -154,7 +154,7 @@ export class FeedbackController {
   @UseInterceptors(FilesInterceptor('files', MAX_FEEDBACK_ATTACHMENTS, feedbackMulterOptions), FileScanInterceptor)
   @ApiConsumes('multipart/form-data')
   @ApiOperation({ summary: 'Upload files to attach to a report or a reply' })
-  async uploadAttachments(@UploadedFiles() files: Express.Multer.File[], @Req() req: any) {
+  async uploadAttachments(@UploadedFiles() files: Express.Multer.File[], @Req() _req: any) {
     if (!files?.length) throw new BadRequestException('No file was uploaded.');
 
     const saved = await Promise.all(

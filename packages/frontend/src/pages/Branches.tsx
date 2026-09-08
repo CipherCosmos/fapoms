@@ -327,11 +327,11 @@ export const Branches: React.FC = () => {
   scopeParamsRef.current = scopeParams;
 
   useEffect(() => {
-    loadClients();
+    void loadClients();
     const socket = connectSocket();
     const refresh = () => {
-      loadClients();
-      if (selectedClientIdRef.current) loadBranches(selectedClientIdRef.current);
+      void loadClients();
+      if (selectedClientIdRef.current) void loadBranches(selectedClientIdRef.current);
     };
     socket?.on('ProjectPlanningStarted', refresh);
     socket?.on('ProjectBranchAssignmentConfirmed', refresh);
@@ -343,6 +343,9 @@ export const Branches: React.FC = () => {
       socket?.off('branch:created', refresh);
       socket?.off('branch:updated', refresh);
     };
+  // `loadBranches`/`loadClients` are declared below this effect. Mount-only on purpose: this
+  // wires socket listeners once, and the refetching is the debounced effect underneath.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   /**
    * Refetch when the window over the list moves.
@@ -356,8 +359,11 @@ export const Branches: React.FC = () => {
     selectedClientIdRef.current = selectedClientId;
     // No client to list yet — stop waiting, or the skeleton runs forever on an empty account.
     if (!selectedClientId && !scopeParams.clientId) { setIsLoading(false); return; }
-    const t = setTimeout(() => { loadBranches(selectedClientId); }, 250);
+    const t = setTimeout(() => { void loadBranches(selectedClientId); }, 250);
     return () => clearTimeout(t);
+  // `loadBranches` is declared below this effect. The list is keyed on the query inputs above,
+  // not on the loader's identity, which changes every render.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedClientId, scopeKey, page, searchTerm, riskFilter]);
 
   // Any change to what is being looked for invalidates the page number.
@@ -366,7 +372,7 @@ export const Branches: React.FC = () => {
   useEffect(() => {
     if (branchIdParam && branches.length > 0) {
       const found = branches.find(b => b.id === branchIdParam);
-      if (found) loadBranchDetail(found);
+      if (found) void loadBranchDetail(found);
     }
   }, [branchIdParam, branches]);
 
@@ -375,7 +381,7 @@ export const Branches: React.FC = () => {
       const response = await api.request<ClientOption[]>('/clients');
       setClients(response);
       if (response.length > 0 && !selectedClientId) setSelectedClientId(response[0].id);
-    } catch (err) { console.error('Failed to load clients'); }
+    } catch { console.error('Failed to load clients'); }
   };
 
   /** One screenful. The server caps anything larger at 200, so this is the real ceiling too. */
@@ -409,7 +415,7 @@ export const Branches: React.FC = () => {
       setBranches(rows);
       setBranchesTotal(response?.meta?.pagination?.total ?? rows.length);
       setSummary(summary);
-    } catch (err) { console.error('Failed to load branches'); }
+    } catch { console.error('Failed to load branches'); }
     finally { setIsLoading(false); }
   };
 
@@ -418,7 +424,7 @@ export const Branches: React.FC = () => {
     try {
       const detail = await api.request<BranchDetail>(`/branches/${branch.id}`);
       setBranchDetail(detail);
-    } catch (err) { console.error('Failed to load branch details'); }
+    } catch { console.error('Failed to load branch details'); }
   };
 
   const handleDelete = async (branch: Branch) => {
@@ -442,7 +448,7 @@ export const Branches: React.FC = () => {
       await api.request(`/branches/${id}`, { method: 'DELETE' });
       setMessage({ type: 'success', text: 'Branch deleted.' });
       if (selectedBranch?.id === id) { setSelectedBranch(null); setBranchDetail(null); }
-      loadBranches(selectedClientId);
+      void loadBranches(selectedClientId);
     } catch (err) { toast({ type: 'error', title: 'Could not delete branch', message: userMessage(err) }); }
   };
 
@@ -464,7 +470,7 @@ export const Branches: React.FC = () => {
    * file was applied.
    */
   useEffect(() => {
-    if (branchImport.state.phase === 'done' && selectedClientId) loadBranches(selectedClientId);
+    if (branchImport.state.phase === 'done' && selectedClientId) void loadBranches(selectedClientId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [branchImport.state.phase, selectedClientId]);
 
@@ -601,7 +607,7 @@ export const Branches: React.FC = () => {
                     <tr><td colSpan={8} style={{ textAlign: 'center', padding: '24px', color: 'var(--text-secondary)' }}>No branches to show. Branches come from a client’s branch list — clear your search and filters if you expected to see some.</td></tr>
                   ) : filteredBranches.map((b) => (
                     <tr key={b.id || b.solId || ''}
-                      onClick={() => { loadBranchDetail(b); selectBranch(b.id); }}
+                      onClick={() => { void loadBranchDetail(b); selectBranch(b.id); }}
                       style={{ cursor: 'pointer', background: selectedBranch?.id === b.id ? 'rgba(216,174,71,0.08)' : undefined }}>
                       <td style={{ fontSize: '12px', color: 'var(--text-secondary)', fontFamily: 'monospace' }}>
                         {b.solId ?? '—'}
@@ -699,7 +705,7 @@ export const Branches: React.FC = () => {
                       <PinCoordinateControl
                         target="branch"
                         id={branchDetail.id}
-                        onPinned={() => { loadBranchDetail(branchDetail); loadBranches(selectedClientId); }}
+                        onPinned={() => { void loadBranchDetail(branchDetail); void loadBranches(selectedClientId); }}
                       />
                     )}
                   </div>
@@ -800,8 +806,8 @@ export const Branches: React.FC = () => {
           clientOptions={clients}
           onClose={() => { setShowEditModal(false); setEditingBranch(null); }}
           onSaved={() => {
-            loadBranches(selectedClientId);
-            if (selectedBranch?.id === editingBranch.id) loadBranchDetail(editingBranch);
+            void loadBranches(selectedClientId);
+            if (selectedBranch?.id === editingBranch.id) void loadBranchDetail(editingBranch);
           }}
         />
       )}
@@ -809,7 +815,7 @@ export const Branches: React.FC = () => {
       {confirmDialog}
 
       {showContactModal && selectedBranch && (
-        <AddBranchContactModal branchId={selectedBranch.id} onClose={() => setShowContactModal(false)} onAdded={() => { setShowContactModal(false); loadBranchDetail(selectedBranch); }} />
+        <AddBranchContactModal branchId={selectedBranch.id} onClose={() => setShowContactModal(false)} onAdded={() => { setShowContactModal(false); void loadBranchDetail(selectedBranch); }} />
       )}
     </div>
   );

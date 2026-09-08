@@ -5,7 +5,7 @@ import { Throttle } from '@nestjs/throttler';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { BILLING_READ_ROLES } from '../billing-engine/billing-roles';
-import { SystemRole, BillingState } from '@fapoms/shared';
+import { BillingState } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { rolesOf } from '../assayer/assayer-visibility';
 import { ReportsService } from './reports.service';

@@ -152,7 +152,7 @@ export const Holidays: React.FC = () => {
         setSuccess('Holiday registered.');
       }
       setShowModal(false);
-      refetch();
+      void refetch();
     } catch (err: any) {
       setError(`Operation failed. ${userMessage(err)}`);
     } finally {
@@ -176,7 +176,7 @@ export const Holidays: React.FC = () => {
     try {
       await api.request(`/holidays/${h.id}`, { method: 'DELETE' });
       setSuccess('Holiday deleted.');
-      refetch();
+      void refetch();
     } catch (err: any) {
       setError(`Delete failed. ${userMessage(err)}`);
     }
@@ -383,7 +383,7 @@ export const Holidays: React.FC = () => {
           onDone={(msg, tone) => {
             if (tone === 'error') setError(msg); else setSuccess(msg);
             setShowCopy(false);
-            refetch();
+            void refetch();
           }}
         />
       )}

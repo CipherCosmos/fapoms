@@ -787,7 +787,7 @@ export class DocumentController {
   @RequirePermissions('document:create:organization')
   @UseInterceptors(FileInterceptor('file', documentUploadMulterOptions), FileScanInterceptor)
   @ApiOperation({ summary: 'Validate Customer Master Excel file' })
-  async validateCustomerExcel(@UploadedFile() file: any) {
+  validateCustomerExcel(@UploadedFile() file: any) {
     // A submitted form with no file attached reaches here as `undefined`, and reading
     // `.buffer` off it threw a TypeError the caller saw as "Internal server error". Ops
     // needs to be told to pick a file, not shown a crash.

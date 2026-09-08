@@ -5,7 +5,6 @@ import { EventCategory } from '@fapoms/shared';
 
 import { AuditService } from '../../core/audit/audit.service';
 import { NOT_A_RECORD_ENTITY_ID } from '../../core/audit/audit-event';
-import { rowsAffected } from '../retention/retention.service';
 import { FkGraphService, FkEdge, cascadeClosure, restrictConflicts, setNullEffects, topologicalOrder } from './fk-graph.service';
 import { WIPE_DOMAINS, WipeDomain, NEVER_WIPEABLE_TABLES, findDomain, tableToDomain } from './wipe-domains.registry';
 import { BackupOnDemandService, OnDemandBackup } from './backup-on-demand.service';

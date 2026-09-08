@@ -234,7 +234,7 @@ export const FeedbackLauncher: React.FC = () => {
                 </div>
                 <div style={{ display: 'flex', gap: '8px', marginTop: '6px' }}>
                   {canOpenChannel && (
-                    <button className="btn btn-secondary" onClick={() => { const id = doneId; close(); navigate(`/feedback?id=${id}`); }}>View my support requests</button>
+                    <button className="btn btn-secondary" onClick={() => { const id = doneId; close(); void navigate(`/feedback?id=${id}`); }}>View my support requests</button>
                   )}
                   <button className="btn btn-primary" onClick={reset}>Send another</button>
                 </div>

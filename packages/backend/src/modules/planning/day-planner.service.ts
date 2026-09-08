@@ -321,7 +321,6 @@ export class DayPlannerService {
     // averaged or taken from whichever project happened to be listed first.
     const minutesPerPacketForProject = (pid: string) =>
       Number(clientForProject(pid)?.planningPreferences?.minutesPerPacket) || DEFAULT_MINUTES_PER_PACKET;
-    const minutesPerPacket = minutesPerPacketForProject(project.id);
 
     // 1. Get unassigned project branches with branch details, across every project in scope
     const projectBranches = await this.projectBranchRepository.find({

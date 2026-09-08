@@ -38,11 +38,27 @@ export default tseslint.config(
       // Awaiting a non-Promise is harmless (resolves immediately) — advisory, not a build-breaker.
       '@typescript-eslint/await-thenable': 'warn',
       'require-await': 'off',
-      '@typescript-eslint/require-await': 'warn',
+      // Off, after auditing every site it flagged. All 17 that survived the cleanup are the rule's
+      // known blind spot: a method whose Promise-returning signature is fixed by a contract it does
+      // not control -- `StorageEngine.getFileStream`, `RoutingProvider.calculateRoute`, the planning
+      // engine's `calculate(...): Promise<number>` criteria, a ThrottlerGuard override -- whose body
+      // happens to be synchronous. Marking those `async` is the idiomatic way to satisfy the
+      // signature; the alternative is wrapping every return in `Promise.resolve` for a linter.
+      //
+      // The bug people actually mean by this rule -- "meant to await, forgot" -- is caught by
+      // `no-floating-promises` above, which is an error, not a warning: a forgotten await leaves a
+      // floating promise and fails the build. Nothing is lost by switching this one off.
+      '@typescript-eslint/require-await': 'off',
 
       // ── Calm the noise the existing code would otherwise generate ──
       '@typescript-eslint/no-explicit-any': 'off',
-      '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+      // `ignoreRestSiblings`: `const { passwordHash, ...safe } = user` is how this codebase drops a
+      // field it must not return. The named binding is deliberately unused -- that IS the removal --
+      // so flagging it would push people to rename the very thing being excluded.
+      '@typescript-eslint/no-unused-vars': [
+        'warn',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_', ignoreRestSiblings: true },
+      ],
       '@typescript-eslint/no-empty-object-type': 'off',
       'no-empty': ['warn', { allowEmptyCatch: true }],
       'no-constant-condition': ['error', { checkLoops: false }],

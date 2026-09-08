@@ -1,6 +1,5 @@
 import { Entity, Column, OneToOne, OneToMany, Index } from 'typeorm';
 import { BaseEntity } from '../../core/entities/base.entity';
-import type { ClientConfigurationEntity } from './client-configuration.entity';
 import type { ClientContactEntity } from './client-contact.entity';
 import type { ClientContractEntity } from './client-contract.entity';
 import type { ClientBillingEntity } from './client-billing.entity';

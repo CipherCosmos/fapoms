@@ -10,30 +10,13 @@ import {
   UseGuards,
   Req,
   ParseUUIDPipe,
-  UseInterceptors,
-  UploadedFile,
-  BadRequestException,
 } from '@nestjs/common';
-import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes, ApiBody, ApiQuery } from '@nestjs/swagger';
+import { ApiTags, ApiOperation, ApiBearerAuth, ApiQuery } from '@nestjs/swagger';
 import { Region } from '@fapoms/shared';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
-import { FileInterceptor } from '@nestjs/platform-express';
-import { memoryStorage } from 'multer';
-import { FileScanInterceptor } from '../../infrastructure/security/file-scan.interceptor';
-import { MAX_UPLOAD_BYTES } from '../document/upload-validation';
 import { ParseLimitPipe } from '../../infrastructure/http/parse-limit.pipe';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean, Min, IsObject, IsUUID } from 'class-validator';
-
-/**
- * Same shape as `documentUploadMulterOptions` in document.controller.ts: multer's own `limits`
- * enforced at the streaming layer, capped to the same `MAX_UPLOAD_BYTES` the app-level checks use,
- * so a request this large is rejected mid-stream rather than fully buffered into memory first.
- */
-const branchUploadMulterOptions = {
-  storage: memoryStorage(),
-  limits: { fileSize: MAX_UPLOAD_BYTES },
-};
 import { BranchService, CreateBranchDto, UpdateBranchDto, CreateContactDto, UpdateContactDto, CreateDocumentDto } from './branch.service';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';

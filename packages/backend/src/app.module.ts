@@ -43,7 +43,6 @@ import { CustomerMasterModule } from './modules/customer-master/customer-master.
 import { ValidationQueryModule } from './modules/validation-query/validation-query.module';
 import { QueueModule } from './infrastructure/queue/queue.module';
 import { SlaScannerModule } from './infrastructure/scheduler/sla-scanner.module';
-import { SlaScannerWorker } from './infrastructure/scheduler/sla-scanner.worker';
 import { RealtimeModule } from './modules/realtime/realtime.module';
 import { BillingEngineModule } from './modules/billing-engine/billing-engine.module';
 import { RedisClientModule } from './infrastructure/redis/redis-client.module';

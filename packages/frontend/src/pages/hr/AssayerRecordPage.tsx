@@ -33,7 +33,7 @@ export const AssayerRecordPage: React.FC = () => {
         onClick={(e) => {
           if (window.history.state && window.history.state.idx > 0) {
             e.preventDefault();
-            navigate(-1);
+            void navigate(-1);
           }
         }}
         style={{
@@ -49,9 +49,9 @@ export const AssayerRecordPage: React.FC = () => {
         canManage={canManage}
         onClose={() => {
           if (window.history.state && window.history.state.idx > 0) {
-            navigate(-1);
+            void navigate(-1);
           } else {
-            navigate('/hr/roster');
+            void navigate('/hr/roster');
           }
         }}
         onChanged={() => setVersion((v) => v + 1)}

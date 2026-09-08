@@ -76,7 +76,7 @@ export class RuleEngine {
   }
 
   private evaluateSingleRule(rule: BusinessRuleEntity, context: RuleEvaluationContext): RuleResult {
-    const { subject, target, scheduledDate, activeWorkload } = context;
+    const { subject, scheduledDate, activeWorkload } = context;
     const cond = rule.conditions || {};
     const action = rule.actions || {};
     const actionType = (action.type as 'BLOCK' | 'SCORE_ADJUSTMENT' | 'ALERT') || 'BLOCK';

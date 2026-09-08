@@ -47,7 +47,7 @@ export const TerritoryTable: React.FC<{
 }> = ({ territories, selectedState, onSelectState }) => {
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const toggle = (s: string) =>
-    setExpanded((p) => { const n = new Set(p); n.has(s) ? n.delete(s) : n.add(s); return n; });
+    setExpanded((p) => { const n = new Set(p); if (n.has(s)) n.delete(s); else n.add(s); return n; });
 
   const maxPackets = Math.max(1, ...territories.map((t) => t.packets));
 

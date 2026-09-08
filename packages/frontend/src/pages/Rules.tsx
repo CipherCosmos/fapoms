@@ -158,7 +158,7 @@ export const RulesSection: React.FC = () => {
     finally { setLoading(false); }
   };
 
-  React.useEffect(() => { fetchRules(); }, []);
+  React.useEffect(() => { void fetchRules(); }, []);
 
   const openCreate = () => { setEditingId(null); setForm(emptyForm); setShowModal(true); };
 
@@ -214,7 +214,7 @@ export const RulesSection: React.FC = () => {
         await api.request('/planning/rules', { method: 'POST', body: JSON.stringify(payload) });
       }
       setShowModal(false);
-      fetchRules();
+      void fetchRules();
     } catch (e) {
       setErr(e instanceof Error ? e.message : 'Failed to save rule');
     } finally {
@@ -232,7 +232,7 @@ export const RulesSection: React.FC = () => {
       reversible: false,
     });
     if (!ok) return;
-    try { await api.request(`/planning/rules/${id}`, { method: 'DELETE' }); fetchRules(); }
+    try { await api.request(`/planning/rules/${id}`, { method: 'DELETE' }); void fetchRules(); }
     catch (e) { setErr(e instanceof Error ? e.message : 'Failed to delete rule'); }
   };
 

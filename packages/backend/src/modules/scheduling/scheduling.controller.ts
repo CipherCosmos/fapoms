@@ -1,8 +1,8 @@
-import { Controller, Get, Post, Put, Body, Param, Query, UseGuards, ParseUUIDPipe, Req } from '@nestjs/common';
+import { Controller, Get, Post, Body, Param, Query, UseGuards, ParseUUIDPipe, Req } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { IsString, IsNotEmpty, IsOptional, IsUUID, IsDateString } from 'class-validator';
-import { SchedulingService, CreateScheduleDto, UpdateScheduleDto } from './scheduling.service';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
+import { SchedulingService, CreateScheduleDto } from './scheduling.service';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { SystemRole, ScheduleStatus } from '@fapoms/shared';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';

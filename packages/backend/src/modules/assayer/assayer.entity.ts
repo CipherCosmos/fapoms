@@ -1,4 +1,4 @@
-import { Entity, Column, Index, ManyToOne, JoinColumn, BeforeInsert, BeforeUpdate } from 'typeorm';
+import { Entity, Column, Index, BeforeInsert, BeforeUpdate } from 'typeorm';
 import { BaseEntity } from '../../core/entities/base.entity';
 import {
   AssayerStatus, AssayerLifecycleStatus,

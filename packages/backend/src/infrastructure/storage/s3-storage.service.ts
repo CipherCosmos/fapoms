@@ -228,7 +228,7 @@ export class S3StorageService implements StorageEngine, OnModuleInit {
     fileName: string,
     content: Buffer | Readable,
     mimeType?: string,
-    contentLength?: number,
+    _contentLength?: number,
   ): Promise<string> {
     const safeFileName = fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
     const key = `uploads/${Date.now()}-${safeFileName}`;

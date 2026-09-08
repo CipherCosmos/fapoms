@@ -618,7 +618,7 @@ export const RegistrationWizard: React.FC<{
       });
       if (!ok) return;
     }
-    navigate(`/hr/roster/${match.id}`);
+    void navigate(`/hr/roster/${match.id}`);
   };
 
   /** What a field needs beyond its own value — the wizard's attempt flag, and its own duplicate card. */

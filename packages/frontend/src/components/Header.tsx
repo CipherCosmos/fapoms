@@ -570,7 +570,7 @@ export const Header: React.FC<HeaderProps> = ({ user, onLogout, onToggleSidebar,
                 role="menuitem"
                 onClick={() => {
                   setProfileMenuOpen(false);
-                  navigate('/settings');
+                  void navigate('/settings');
                 }}
                 style={{
                   display: 'flex',

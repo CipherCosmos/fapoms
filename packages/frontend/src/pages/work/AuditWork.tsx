@@ -178,7 +178,7 @@ export const AuditWork: React.FC = () => {
       next.delete('assignmentId');
     }
     const qs = next.toString();
-    navigate(qs ? `${resolvedTab}?${qs}` : resolvedTab, { replace: true });
+    void navigate(qs ? `${resolvedTab}?${qs}` : resolvedTab, { replace: true });
   }, [shouldHandOver, resolvedTab, searchParams, navigate]);
 
   /**

@@ -15,7 +15,7 @@ import {
   UseGuards,
   Req,
   ParseUUIDPipe,
-  BadRequestException, ForbiddenException, NotFoundException, ConflictException } from '@nestjs/common';
+  BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 
 import { SystemRole, ASSIGNMENT_ISSUE_CATEGORIES, AssignmentStatus } from '@fapoms/shared';
@@ -26,7 +26,7 @@ import { RegionGuardService } from '../../infrastructure/scope/region-guard.serv
 import { AssignmentService, CreateAssignmentDto, UpdateAssignmentDetailsDto } from './assignment.service';
 import { OperationsInboxService, SUGGEST_NEXT_AFTER_ATTEMPTS } from './operations-inbox.service';
 import { OperationalIntegrityService } from './operational-integrity.service';
-import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions, Public } from '../auth/guards';
+import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
 import { STAFF_ROLES } from '../auth/staff-roles';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsUUID, IsBoolean, IsDateString, IsIn, Min, MaxLength } from 'class-validator';
 

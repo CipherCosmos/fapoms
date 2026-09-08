@@ -440,7 +440,7 @@ export class NotificationDispatchService {
       : { emailStatus: null };
 
     const rows: Partial<NotificationEntity>[] = [
-      ...[...userIds].map((userId, i) => ({
+      ...[...userIds].map((userId) => ({
         ...base,
         ...emailBirth,
         userId,

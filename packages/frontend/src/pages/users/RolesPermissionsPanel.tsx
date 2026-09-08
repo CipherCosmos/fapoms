@@ -84,7 +84,11 @@ export const RolesPermissionsPanel: React.FC = () => {
   });
 
   const roles: RoleRow[] = (Array.isArray(rolesRes) ? rolesRes : (rolesRes as any)?.data) || [];
-  const catalogue: Permission[] = (Array.isArray(permsRes) ? permsRes : (permsRes as any)?.data) || [];
+  // Memoised so the `|| []` fallback keeps a stable identity between renders.
+  const catalogue: Permission[] = useMemo(
+    () => (Array.isArray(permsRes) ? permsRes : (permsRes as any)?.data) || [],
+    [permsRes],
+  );
   const users = useMemo(() => (Array.isArray(usersRes?.data) ? usersRes.data : []), [usersRes]);
   /** The server's own count, for the shortfall banner below — not `users.length`, which is only
    *  ever the page that arrived. */
@@ -160,7 +164,7 @@ export const RolesPermissionsPanel: React.FC = () => {
         (holders ? ` — this applies to ${holders} ${holders === 1 ? 'person' : 'people'} within seconds.` : '.'),
       );
       setOpenRole(null);
-      refetch();
+      void refetch();
     } catch (err: any) {
       setError(`Could not save permissions. ${userMessage(err)}`);
     } finally {
@@ -199,7 +203,7 @@ export const RolesPermissionsPanel: React.FC = () => {
       setSuccess('Role created. Open it to choose what it can do.');
       setShowCreate(false);
       setNewName(''); setNewDisplay(''); setNewDesc(''); setNewNameEdited(false);
-      refetch();
+      void refetch();
     } catch (err: any) {
       setError(`Could not create the role. ${userMessage(err)}`);
     } finally {
@@ -225,7 +229,7 @@ export const RolesPermissionsPanel: React.FC = () => {
     try {
       await api.request(`/users/roles/${role.id}`, { method: 'DELETE' });
       setSuccess('Role deleted.');
-      refetch();
+      void refetch();
     } catch (err: any) {
       setError(`Could not delete the role. ${userMessage(err)}`);
     }
@@ -234,7 +238,7 @@ export const RolesPermissionsPanel: React.FC = () => {
   const toggleMany = (perms: Permission[], on: boolean) =>
     setDraft((prev) => {
       const next = new Set(prev);
-      for (const p of perms) (on ? next.add(p.id) : next.delete(p.id));
+      for (const p of perms) { if (on) next.add(p.id); else next.delete(p.id); }
       return next;
     });
 
@@ -444,7 +448,7 @@ export const RolesPermissionsPanel: React.FC = () => {
                                   title={p.description || undefined}
                                   onClick={() => setDraft((prev) => {
                                     const next = new Set(prev);
-                                    next.has(p.id) ? next.delete(p.id) : next.add(p.id);
+                                    if (next.has(p.id)) next.delete(p.id); else next.add(p.id);
                                     return next;
                                   })}
                                   style={{

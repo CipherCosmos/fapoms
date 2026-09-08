@@ -50,8 +50,6 @@ export class BranchQueryService {
     scope: Partial<GlobalScope> = {},
     filters: { search?: string; risk?: string; type?: string } = {},
   ): Promise<{ branches: BranchEntity[]; total: number }> {
-    const { clientId, zoneId, state, regions } = scope;
-
     const query = this.branchRepository.createQueryBuilder('branch')
       .leftJoinAndSelect('branch.contacts', 'contacts', 'contacts.isActive = true');
     BranchQueryService.applyBranchFilters(query, scope, filters);

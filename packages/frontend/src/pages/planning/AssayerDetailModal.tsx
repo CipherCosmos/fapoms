@@ -91,7 +91,7 @@ export const AssayerDetailModal: React.FC<{
     setSnapshot(null);
     setLoadingExtra(true);
     let cancelled = false;
-    Promise.all([
+    void Promise.all([
       api.request<AssayerQualificationView>(`/assayers/${assayerId}/qualification`).catch(() => null),
       api.request<PartnerQualificationView[]>(`/assayers/${assayerId}/qualification/partners`).catch(() => null),
       api.request<{ workload: { activeCount: number; maxWeeklyCapacity: number; remaining: number }; riskFlags: Array<{ reason: string; rawValue: string; createdAt: string }> }>(`/assayers/${assayerId}/planning-snapshot`).catch(() => null),
@@ -102,7 +102,6 @@ export const AssayerDetailModal: React.FC<{
       setSnapshot(s);
     }).finally(() => { if (!cancelled) setLoadingExtra(false); });
     return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, assayerId]);
 
   if (!open) return null;

@@ -100,7 +100,7 @@ export const BranchDocumentPanel: React.FC<{
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
   const toggle = (id: string) =>
-    setExpanded((s) => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+    setExpanded((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>

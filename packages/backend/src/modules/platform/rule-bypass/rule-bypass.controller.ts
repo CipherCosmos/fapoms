@@ -47,7 +47,7 @@ export class RuleBypassController {
   @AllowPermissionFallback()
   @RequirePermissions('configuration:view:platform')
   @ApiOperation({ summary: 'The rules that can be suspended, and what each one protects' })
-  async catalogue() {
+  catalogue() {
     return { success: true, data: { rules: BYPASSABLE_RULES, defaultHours: DEFAULT_BYPASS_HOURS } };
   }
 

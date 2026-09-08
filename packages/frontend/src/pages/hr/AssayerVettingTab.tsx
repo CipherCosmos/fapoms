@@ -295,17 +295,22 @@ const Attachments: React.FC<{
 }> = ({ documentId, filePaths, canManage, onRemoved, onError, documentLabel }) => {
   const [urls, setUrls] = useState<(string | null)[]>([]);
 
+  // Keyed on the joined paths rather than the array: the parent rebuilds `filePaths` every
+  // render, so depending on its identity would refetch every blob on every render.
+  const filePathsKey = filePaths.join('|');
   useEffect(() => {
     if (!documentId || filePaths.length === 0) { setUrls([]); return undefined; }
     let live = true;
     const made: string[] = [];
-    Promise.all(filePaths.map((_, i) =>
+    void Promise.all(filePaths.map((_, i) =>
       api.request<Blob>(`/assayers/document/${documentId}/file/${i}`, { raw: true })
         .then((b) => { const u = URL.createObjectURL(b); made.push(u); return u; })
         .catch(() => null),
     )).then((list) => { if (live) setUrls(list); });
     return () => { live = false; made.forEach((u) => URL.revokeObjectURL(u)); };
-  }, [documentId, filePaths.join('|')]);
+  // see filePathsKey above
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [documentId, filePathsKey]);
 
   const isImage = (key: string) => /\.(jpe?g|png|webp|heic|heif)$/i.test(key);
 
