@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { ProjectBranchStatus, BRANCH_DONE_STATUSES, AssignmentStatus } from '@fapoms/shared';
+import { coverageBucketOf, coverageFromStatuses } from '@fapoms/shared';
+import { ASSIGNED_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
 import { AssignmentService } from '../assignment/assignment.service';
 import { BillingEngineService } from '../billing-engine/billing-engine.service';
 import { CommandCenterService } from '../planning/command-center.service';
@@ -89,24 +90,18 @@ export class ReportsService {
       await this.projectQueryService.findOne(projectId);
     }
 
-    /**
-     * Coverage as the client reads it, from the shared status sets rather than a hand-written
-     * list.
-     *
-     * `AUDIT_COMPLETED` was missing here, and it is the status a branch holds between the audit
-     * being done and validation finishing — so delivered work was exported to the client as
-     * REMAINING, i.e. as if we had not been. Reading `BRANCH_DONE_STATUSES` means the next
-     * status added to that set cannot silently fall through to "not started" again.
-     */
-    const classify = (status: string | undefined): 'COMPLETED' | 'SCHEDULED' | 'CONFIRMED' | 'REMAINING' => {
-      if (BRANCH_DONE_STATUSES.includes(status as ProjectBranchStatus)) return 'COMPLETED';
-      if (status === ProjectBranchStatus.SCHEDULED) return 'SCHEDULED';
-      if (status === ProjectBranchStatus.ASSIGNMENT_CONFIRMED) return 'CONFIRMED';
-      return 'REMAINING';
-    };
-
     const rows = branches.map((pb) => {
-      const coverage = classify(pb.status);
+      /**
+       * Coverage as the client reads it, from `@fapoms/shared` rather than a hand-written list.
+       *
+       * `AUDIT_COMPLETED` was missing from the list that used to sit here, and it is the status a
+       * branch holds between the audit being done and validation finishing — so delivered work
+       * was exported to the client as REMAINING, i.e. as if we had not been. That was fixed here
+       * and nowhere else, which left `GET /planning/projects/:id/coverage` reporting 9.1% on the
+       * project this workbook reported as 45.5%. `coverageBucketOf` is now the only copy of the
+       * rule, and the planning endpoint reads it too.
+       */
+      const coverage = coverageBucketOf(pb.status);
       /**
        * Who is actually on this branch — not merely which rows survive `is_active`.
        *
@@ -117,13 +112,13 @@ export class ReportsService {
        * a REJECTED branch reported "Assigned 1" and named the assayer who turned it down.
        *
        * COMPLETED is included on purpose — a delivered audit is genuinely covered, and the row
-       * should say who did it. What must not appear is work that ended without being done.
+       * should say who did it. What must not appear is work that ended without being done. That
+       * is exactly `ASSIGNED_ASSIGNMENT_STATUSES`, so this reads the shared set rather than
+       * naming CANCELLED and REJECTED again; the Command Centre and the project branch list ask
+       * the same question and used to answer it with their own copies of the same two names.
        */
       const assigned = (pb.assignments ?? []).filter(
-        (a) =>
-          a.isActive !== false &&
-          a.status !== AssignmentStatus.CANCELLED &&
-          a.status !== AssignmentStatus.REJECTED,
+        (a) => a.isActive !== false && ASSIGNED_ASSIGNMENT_STATUSES.includes(a.status),
       );
       return [
         pb.branch?.solId ?? '',
@@ -138,15 +133,12 @@ export class ReportsService {
       ];
     });
 
-    const completed = rows.filter((r) => r[5] === 'COMPLETED').length;
-    const scheduled = rows.filter((r) => r[5] === 'SCHEDULED').length;
-    const confirmed = rows.filter((r) => r[5] === 'CONFIRMED').length;
-    const remaining = rows.filter((r) => r[5] === 'REMAINING').length;
-    const total = rows.length;
     // Delivered work counts as covered. It previously fell into REMAINING, which both
-    // understated the client's coverage and overstated what was still outstanding.
-    const coveragePercentage =
-      total > 0 ? parseFloat((((completed + scheduled + confirmed) / total) * 100).toFixed(1)) : 0;
+    // understated the client's coverage and overstated what was still outstanding. The summing
+    // is `coverageFromStatuses`' job, not this method's, so the workbook's totals and the
+    // planning endpoint's cannot drift the way the bucketing above already had.
+    const { total, completed, scheduled, confirmed, remaining, coveragePercentage } =
+      coverageFromStatuses(branches.map((pb) => pb.status));
 
     return buildWorkbook([
       {

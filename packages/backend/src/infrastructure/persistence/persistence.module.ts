@@ -7,6 +7,8 @@ import { TypeOrmUnitOfWork } from './typeorm-unit-of-work';
 import { OutboxEntity } from './outbox.entity';
 import { OutboxRelay } from './outbox.relay';
 import { OutboxWorker } from './outbox.worker';
+import { OutboxDeadLetterService } from './outbox-dead-letter.service';
+import { OutboxController } from './outbox.controller';
 import { ensureRepeatableSchedules } from '../queue/repeatable-schedules';
 
 /**
@@ -17,12 +19,17 @@ import { ensureRepeatableSchedules } from '../queue/repeatable-schedules';
 @Global()
 @Module({
   imports: [TypeOrmModule.forFeature([OutboxEntity]), BullModule.registerQueue({ name: 'outbox' })],
+  // The outbox's own operational surface lives with the outbox. Putting it in a separate admin
+  // module would mean the terminal state, the relay that writes it and the route that reads it
+  // could drift apart in three files nobody looks at together.
+  controllers: [OutboxController],
   providers: [
     { provide: UnitOfWork, useClass: TypeOrmUnitOfWork },
     OutboxRelay,
     OutboxWorker,
+    OutboxDeadLetterService,
   ],
-  exports: [UnitOfWork],
+  exports: [UnitOfWork, OutboxDeadLetterService],
 })
 export class PersistenceModule implements OnModuleInit {
   private readonly logger = new Logger(PersistenceModule.name);

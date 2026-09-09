@@ -13,6 +13,9 @@ const row = (over: Partial<OutboxEntity> = {}): OutboxEntity =>
     dispatchedAt: null,
     attempts: 0,
     lastError: null,
+    failedAt: null,
+    replayedAt: null,
+    replayedBy: null,
     ...over,
   }) as OutboxEntity;
 
@@ -135,6 +138,8 @@ describe('OutboxRelay', () => {
       // that may have rotated is not a diagnosis path.
       expect(updates[0].patch).toEqual({ attempts: 3, lastError: 'subscriber exploded' });
       expect(updates[0].patch.dispatchedAt).toBeUndefined();
+      // Not terminal yet, so nothing claims it has been abandoned.
+      expect(updates[0].patch.failedAt).toBeUndefined();
       expect(result).toEqual({ dispatched: 0, failed: 1 });
     });
 
@@ -155,7 +160,54 @@ describe('OutboxRelay', () => {
 
       // Bounded by the query, not by a check inside the loop — an event nothing can process
       // would otherwise consume a batch slot on every pass forever.
-      expect(findArgs.where.attempts).toBeDefined();
+      //
+      // The filter is now the terminal STATE rather than the attempt count. They exclude the
+      // same rows; only one of them leaves a record that the event was abandoned. Selecting on
+      // `attempts < MAX_ATTEMPTS` meant nothing could list an abandoned event without knowing
+      // the constant, and retention never removed it either — see `OutboxEntity.failedAt`.
+      expect(findArgs.where.failedAt).toBeDefined();
+      expect(findArgs.where.attempts).toBeUndefined();
+    });
+
+    it('writes the terminal state in the same update as the attempt that caused it', async () => {
+      due = [row({ attempts: 14 })];
+      (publisher.publish as jest.Mock).mockImplementation(() => {
+        throw new Error('subscriber exploded');
+      });
+
+      const result = await relay.drain();
+
+      // One UPDATE, not two: a crash between "attempts = 15" and "failed_at = now()" would
+      // otherwise leave a row out of retries and not marked as such — invisible to the relay
+      // (which skips it) and to the dead-letter view (which does not know about it).
+      expect(updates).toHaveLength(1);
+      expect(updates[0].patch.attempts).toBe(15);
+      expect(updates[0].patch.lastError).toBe('subscriber exploded');
+      expect(updates[0].patch.failedAt).toBeInstanceOf(Date);
+      expect(result).toEqual({ dispatched: 0, failed: 1 });
+    });
+
+    it('counts a dead letter on the metric that makes it alertable', async () => {
+      const inc = jest.fn();
+      const metrics = { outboxDeadLettered: { inc } } as any;
+      const counted = new OutboxRelay(
+        {
+          find: jest.fn(async () => [row({ attempts: 14, eventName: 'assignment:status-changed' })]),
+          update: jest.fn(async () => undefined),
+        } as unknown as Repository<OutboxEntity>,
+        publisher,
+        { withLock: jest.fn((_k: string, _t: number, fn: () => any) => fn()) } as unknown as CacheService,
+        metrics,
+      );
+      (publisher.publish as jest.Mock).mockImplementation(() => {
+        throw new Error('subscriber exploded');
+      });
+
+      await counted.drain();
+
+      // Until this existed the only signal was one logger.error at the instant of the fifteenth
+      // failure, in a log that rotates.
+      expect(inc).toHaveBeenCalledWith({ event: 'assignment:status-changed' });
     });
   });
 });

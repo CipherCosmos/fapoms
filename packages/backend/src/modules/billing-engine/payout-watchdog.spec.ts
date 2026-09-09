@@ -1,4 +1,5 @@
 import { BillingEngineService } from './billing-engine.service';
+import { COMMITTED_ASSIGNMENT_STATUSES, sqlStatusList } from '../assignment/assignment-workload';
 
 /**
  * The money chain's watchdog.
@@ -65,7 +66,10 @@ describe('BillingEngineService — money-chain watchdog', () => {
       const { service, query } = makeService([{ count: '0', oldest: null }]);
       await service.attendedButNotClosed(2);
       const sql = query.mock.calls[0][0] as string;
-      expect(sql).toContain("status IN ('CHECKED_IN', 'IN_PROGRESS', 'ACCEPTED')");
+      // Reads the shared committed set — this query used to spell the three names out itself.
+      // The set's own contents are pinned in `assignment/assignment-status-sets.spec.ts`; what
+      // matters here is that a visit closed on purpose cannot appear in this alarm.
+      expect(sql).toContain(`status IN (${sqlStatusList(COMMITTED_ASSIGNMENT_STATUSES)})`);
       expect(sql).not.toContain('CANCELLED');
       expect(sql).not.toContain('COMPLETED');
     });

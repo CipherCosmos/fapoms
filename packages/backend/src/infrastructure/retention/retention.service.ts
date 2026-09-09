@@ -266,6 +266,14 @@ export class RetentionService {
    * so there is no way for this statement to touch an event that has not been delivered, even if
    * the retention window were misconfigured to zero.
    *
+   * That is deliberate and is now load-bearing rather than incidental: a dead-lettered event
+   * (`failed_at` set, `dispatched_at` still NULL — see `OutboxEntity.failedAt`) is the only record
+   * that something the database committed was never told to anyone, and
+   * `GET /admin/outbox/dead-letters` is the queue an operator works from. Abandoning an event
+   * silently was the defect; deleting the evidence on a timer would be the same defect with a
+   * schedule. A dead letter leaves this table when it is replayed and delivered, or when a person
+   * removes it deliberately — never because it got old.
+   *
    * Written to match `IDX_e58bf63cc50ef5e4503d6836df (dispatched_at, occurred_at)`, which already
    * exists: verified as a 110-buffer index scan against 2,000,000 rows.
    */

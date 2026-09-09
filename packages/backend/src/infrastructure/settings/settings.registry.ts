@@ -95,6 +95,15 @@ export const SETTINGS_GROUPS = [
   { key: 'qualification', label: 'Assayer qualification', audience: 'business', description: 'How the qualification scores on an assayer\'s profile weigh their verification, background, credentials and track record. Weights are relative — they are normalized over whichever dimensions have data.' },
 ] as const;
 
+/**
+ * The payout maker-checker key, named once.
+ *
+ * `BillingEngineService` reads this key and falls back to its shipped default when the settings
+ * store cannot answer, so the string and the default must not be able to drift apart into a
+ * service that quietly asks for a key nobody defines.
+ */
+export const SEGREGATION_OF_DUTIES_SETTING_KEY = 'security.segregationOfDuties.mode';
+
 export const SETTINGS_REGISTRY: SettingDef[] = [
   // ── Company & tax identity ────────────────────────────────────────────────
   //
@@ -753,12 +762,36 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
     // billing-roles.ts — so this is the only technical control standing between "one person books
     // an audit, approves the resulting payout, and pays it" and that not being possible.
     //
-    // Defaults OFF, deliberately, and should stay off until there are enough people holding these
-    // roles that a real maker-checker split doesn't just stop payouts from happening. With two
-    // people on the roles today, Enforce would mean neither could ever pay the other's work.
-    key: 'security.segregationOfDuties.mode',
+    // ENFORCE by default, since 2026-09-09. It shipped 'off', and because no row was ever written
+    // to `platform_settings` the check was simply not running anywhere: certification had one
+    // OPERATIONS account approve a payable and then pay it, 122 ms apart, both HTTP 201.
+    //
+    // The comment that stood here justified the 'off' default like this: "With two people on the
+    // roles today, Enforce would mean neither could ever pay the other's work." That is the wrong
+    // way round, and it is the whole reason the control was never switched on.
+    // `assertSegregationOfDuties` refuses one thing: the SAME account id on both sides. Two people
+    // is exactly the number Enforce needs — A approves, B pays, and each may pay the other's work.
+    // What Enforce refuses is one person doing both. (The premise was also out of date: four
+    // active accounts hold ADMIN or OPERATIONS on this deployment, five counting the developer who
+    // reaches them through the ADMIN implication in role-hierarchy.ts.)
+    //
+    // Three things settle the default, all of them already in the codebase:
+    //  • `expense.service.ts` refuses the raiser of an expense claim their own approval —
+    //    unconditionally, no setting — because "approving writes an assayer_payables row — money
+    //    out". Payout approval writes the same row for the same reason and was the one left
+    //    configurable.
+    //  • `security.regionScope.mode` above shipped 'log', ran its observation phase and moved to
+    //    'enforce' on the stated principle that "a fail-open access boundary must not be the
+    //    default a fresh deployment inherits". This is that same class of boundary, over money.
+    //  • `security-defaults.spec.ts` opens by saying TWO security settings are boundaries whose
+    //    absence is silent and that it pins their safe defaults; it pinned one. This is the other.
+    //
+    // 'warn' and 'off' remain for the deployment genuinely run by one person, where a maker-checker
+    // split would stop payouts altogether — but that is now a deliberate, recorded change by a
+    // Developer on the settings screen, not the posture every installation silently inherits.
+    key: SEGREGATION_OF_DUTIES_SETTING_KEY,
     label: 'Payout maker-checker: rollout mode',
-    description: 'One person can currently book a completed audit, approve its payout, and pay it — the same technical gap "Log" for regions closes for reads, this closes for money leaving the business. "Warn" records every same-person approval/disbursement without blocking it, so you can see how often it would actually bite before anyone is locked out. "Enforce" refuses it: the account that booked the assignment cannot approve its payout, and the approver cannot also be the one who marks it paid. Leave this off until enough people hold these roles that enforcing it does not simply stop payouts.',
+    description: 'Stops one person booking a completed audit, approving its payout and paying it — the separation expense claims already enforce for the same act (the raiser of a claim cannot approve it). "Enforce" (the DEFAULT) refuses the same account on both sides: whoever booked the assignment cannot approve its payout, and whoever approved a payout cannot be the one who marks it paid. It does not need a big team — two accounts are enough, each approving the other\'s work — and every refusal is written to the audit trail. "Warn" records the same-person cases and lets them through, for watching real traffic before tightening. "Off" skips the check entirely: appropriate only where one person genuinely runs the whole payout process alone, and it means nothing stands between that person and paying themselves.',
     group: 'security',
     type: 'select',
     options: [
@@ -766,7 +799,7 @@ export const SETTINGS_REGISTRY: SettingDef[] = [
       { value: 'warn', label: 'Warn — record same-person approvals, block nothing' },
       { value: 'enforce', label: 'Enforce — actually refuse' },
     ],
-    default: 'off',
+    default: 'enforce',
     envVar: 'SEGREGATION_OF_DUTIES_MODE',
     applies: 'immediately',
   },

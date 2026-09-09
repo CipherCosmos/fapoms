@@ -23,6 +23,7 @@ import { CacheService } from '../../infrastructure/cache/cache.service';
 import { NotificationDispatchService } from '../notifications/notification-dispatch.service';
 import { BillingState, AssayerPayableStatus, PaymentMethod, PaymentDirection, InvoiceStatus, AssignmentStatus, EventCategory, OnboardingDocument, DocumentVerification } from '@fapoms/shared';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
+import { SETTING_BY_KEY } from '../../infrastructure/settings/settings.registry';
 
 /**
  * The billing engine: the assignment is the ledger line.
@@ -679,11 +680,100 @@ describe('BillingEngineService', () => {
   });
 
   /**
-   * Segregation of duties (staged) — see security.segregationOfDuties.mode in settings.registry.ts.
+   * The payout destination snapshot — see `payout-destination.ts`.
+   *
+   * `destination_verified_at` asserts that somebody verified the account this money is going to.
+   * Both writers ended `?? new Date()`, so an assayer with no passbook document and no
+   * established identity was stamped "verified, this second" at the instant of approval, and the
+   * payment row copied it. Certification found five such payables, all covering money that had
+   * already left the business.
+   */
+  describe('Payout destination: a verification timestamp is an assertion, not a formality', () => {
+    /** No documents at all, and identity never established — the shape of all five found rows. */
+    const unevidenced = () => {
+      documentRepo.findOne.mockImplementation(async () => null);
+      assayerRepo.findOne.mockImplementation(async () => ({
+        id: 'assayer-1', bankAccountNumber: '9876543210', ifscCode: 'HDFC0001234',
+        bankName: 'HDFC Bank', displayName: 'Assayer One', panNumber: 'ABCDE1234F',
+        identityVerifiedAt: null,
+      }));
+    };
+
+    it('approving with no evidence at all leaves the claim NULL — it does not stamp the approval instant', async () => {
+      unevidenced();
+      payableRepo.findOne.mockImplementation(async () => payable({ destinationVerifiedAt: null }));
+      const r = await service.approvePayouts(['payable-1'], 'finance-1');
+      expect(r).toEqual({ done: ['payable-1'], refused: [] });
+      const approved = committed.find((row: any) => row.id === 'payable-1');
+      expect(approved.status).toBe(AssayerPayableStatus.APPROVED);
+      expect(approved.destinationVerifiedAt).toBeNull();
+      expect(approved.destinationVerifiedSource).toBeNull();
+      expect(approved.payoutEvidenceVersionId).toBeNull();
+      // The destination itself is still frozen: an unverified payout is a decision the business
+      // may take; an unfounded claim that it was verified is not.
+      expect(approved.destinationIfsc).toBe('HDFC0001234');
+    });
+
+    it('approving on a verified passbook records the DOCUMENT\'s moment and names it', async () => {
+      const verifiedAt = new Date('2026-01-15T10:00:00Z');
+      assayerRepo.findOne.mockImplementation(async () => ({
+        id: 'assayer-1', bankAccountNumber: '9876543210', ifscCode: 'HDFC0001234',
+        bankName: 'HDFC Bank', legalName: 'Deepak Sharma', panNumber: 'ABCDE1234F', identityVerifiedAt: null,
+      }));
+      documentRepo.findOne.mockImplementation(async () => ({
+        id: 'doc-1', assayerId: 'assayer-1', requirement: OnboardingDocument.BANK_PASSBOOK,
+        verificationStatus: DocumentVerification.VERIFIED, verifiedAt, currentVersionId: 'ver-bank-1', isActive: true,
+      }));
+      payableRepo.findOne.mockImplementation(async () => payable({ destinationVerifiedAt: null }));
+      await service.approvePayouts(['payable-1'], 'finance-1');
+      const approved = committed.find((row: any) => row.id === 'payable-1');
+      expect(approved.destinationVerifiedAt).toEqual(verifiedAt);
+      expect(approved.destinationVerifiedSource).toBe('BANK_PASSBOOK');
+      expect(approved.payoutEvidenceVersionId).toBe('ver-bank-1');
+    });
+
+    it('approving on identity alone records when identity was established, not now', async () => {
+      const identityVerifiedAt = new Date('2025-06-01T00:00:00Z');
+      documentRepo.findOne.mockImplementation(async () => null);
+      assayerRepo.findOne.mockImplementation(async () => ({
+        id: 'assayer-1', bankAccountNumber: '9876543210', ifscCode: 'HDFC0001234',
+        bankName: 'HDFC Bank', displayName: 'Assayer One', panNumber: 'ABCDE1234F', identityVerifiedAt,
+      }));
+      payableRepo.findOne.mockImplementation(async () => payable({ destinationVerifiedAt: null }));
+      await service.approvePayouts(['payable-1'], 'finance-1');
+      const approved = committed.find((row: any) => row.id === 'payable-1');
+      expect(approved.destinationVerifiedAt).toEqual(identityVerifiedAt);
+      expect(approved.destinationVerifiedSource).toBe('IDENTITY_DOCUMENT');
+    });
+
+    it('the payment row repeats the payable\'s frozen claim and nothing more', async () => {
+      unevidenced();
+      // A payable frozen before this rule existed: destination columns unset, so
+      // recordDisbursement re-freezes them under lock. It carried its own copy of the fallback.
+      payableRepo.findOne.mockImplementation(async () => payable({
+        status: AssayerPayableStatus.APPROVED, approvedBy: 'finance-9',
+        destinationBankAccountNumber: null, destinationIfsc: null, destinationVerifiedAt: null,
+      }));
+      totalsRow = { ...totalsRow, outstanding: 0 };
+      const payment = await service.recordDisbursement(
+        { payableId: 'payable-1', paymentReference: 'UTR-1', method: PaymentMethod.NEFT }, 'finance-1',
+      );
+      expect(payment.destinationVerifiedAt).toBeNull();
+      expect(payment.destinationVerifiedSource).toBeNull();
+      expect(payment.destinationIfsc).toBe('HDFC0001234');
+    });
+  });
+
+  /**
+   * Segregation of duties — see security.segregationOfDuties.mode in settings.registry.ts.
    * approvePayouts compares the approver against whoever booked the ASSIGNMENT, not the payable's
    * own (almost always automated) createdBy; recordDisbursement compares the disburser against
-   * approvedBy, already on the row. Off is the shipped default — every case below sets a mode
-   * explicitly so it never depends on that default silently staying off.
+   * approvedBy, already on the row.
+   *
+   * Every case below sets a mode explicitly. That was written when 'off' was the shipped default
+   * and reads as prudence, but it is also why the defect survived a full suite: no test here ever
+   * asked what happens when NOBODY sets a mode, which is the only configuration that has ever run
+   * in production — `platform_settings` had zero rows. The block after this one asks exactly that.
    */
   describe('Segregation of duties (staged)', () => {
     describe('approvePayouts vs. the assignment booker', () => {
@@ -776,6 +866,119 @@ describe('BillingEngineService', () => {
         const payment = await service.recordDisbursement({ payableId: 'payable-1', paymentReference: 'UTR-1', method: PaymentMethod.NEFT }, 'finance-1');
         expect(payment).toMatchObject({ payableId: 'payable-1' });
       });
+    });
+  });
+
+  /**
+   * THE SHIPPED DEFAULT — the configuration every fresh deployment actually runs.
+   *
+   * `platform_settings` had no row for this key, the registry default was 'off', so `sodMode()`
+   * answered 'off' on every call and both `assertSegregationOfDuties` sites were skipped
+   * entirely. Certification had one OPERATIONS account approve payable PY-MTU924ZC-242007 and
+   * pay it 122 ms later, HTTP 201 both times, with a payment row to show for it.
+   *
+   * These tests resolve the setting the way a deployment with no saved row resolves it — through
+   * `SETTING_BY_KEY[...].default` — rather than pinning a mode. Flip the registry default back to
+   * 'off' and every one of them fails.
+   */
+  describe('Segregation of duties: the default a deployment with no saved setting inherits', () => {
+    beforeEach(() => {
+      settingsGet.mockImplementation(async (key: string) =>
+        settingsValues[key] ?? SETTING_BY_KEY[key]?.default ?? null,
+      );
+    });
+    afterEach(() => {
+      settingsGet.mockImplementation(async (key: string) => settingsValues[key] ?? null);
+    });
+
+    it('the same account cannot approve a payout and then pay it', async () => {
+      payableRepo.findOne.mockImplementation(async () =>
+        payable({ status: AssayerPayableStatus.APPROVED, approvedBy: 'ops-1' }));
+      totalsRow = { ...totalsRow, outstanding: 0 };
+      await expect(service.recordDisbursement(
+        { payableId: 'payable-1', paymentReference: 'FC-SOD-1', method: PaymentMethod.NEFT }, 'ops-1',
+      )).rejects.toThrow(ConflictException);
+      expect(committed).toHaveLength(0);
+      expect(paymentRepo.save).not.toHaveBeenCalled();
+    });
+
+    it('a DIFFERENT account may pay a payout somebody else approved — two people is enough', async () => {
+      // The 'off' default was justified by "with two people on the roles today, Enforce would mean
+      // neither could ever pay the other's work". This is that claim, tested: it is the reverse.
+      payableRepo.findOne.mockImplementation(async () =>
+        payable({ status: AssayerPayableStatus.APPROVED, approvedBy: 'ops-1' }));
+      totalsRow = { ...totalsRow, outstanding: 0 };
+      const payment = await service.recordDisbursement(
+        { payableId: 'payable-1', paymentReference: 'FC-SOD-2', method: PaymentMethod.NEFT }, 'ops-2',
+      );
+      expect(payment).toMatchObject({ payableId: 'payable-1' });
+    });
+
+    it('the account that booked the assignment cannot approve its payout', async () => {
+      payableRepo.findOne.mockImplementation(async () => payable());
+      assignmentRepo.findOne.mockImplementation(async () => ({ id: 'asn-1', createdBy: 'ops-1' }));
+      const r = await service.approvePayouts(['payable-1'], 'ops-1');
+      expect(r.done).toEqual([]);
+      expect(r.refused).toEqual([{ id: 'payable-1', reason: expect.stringContaining('Segregation of duties') }]);
+    });
+
+    it('a different account may approve it', async () => {
+      payableRepo.findOne.mockImplementation(async () => payable());
+      assignmentRepo.findOne.mockImplementation(async () => ({ id: 'asn-1', createdBy: 'ops-1' }));
+      const r = await service.approvePayouts(['payable-1'], 'ops-2');
+      expect(r).toEqual({ done: ['payable-1'], refused: [] });
+    });
+
+    /**
+     * The refusal has to outlive the request. Before this it was a 409 in one browser and nothing
+     * else: "who tried to approve and pay their own payout" — the question the control exists to
+     * answer — had no answer anywhere.
+     */
+    it('writes the refused attempt to the audit trail, naming both sides', async () => {
+      payableRepo.findOne.mockImplementation(async () =>
+        payable({ status: AssayerPayableStatus.APPROVED, approvedBy: 'ops-1' }));
+      totalsRow = { ...totalsRow, outstanding: 0 };
+      await expect(service.recordDisbursement(
+        { payableId: 'payable-1', paymentReference: 'FC-SOD-3', method: PaymentMethod.NEFT }, 'ops-1',
+      )).rejects.toThrow(ConflictException);
+      expect(recordEvent).toHaveBeenCalledWith(expect.objectContaining({
+        eventType: 'SEGREGATION_OF_DUTIES_REFUSED',
+        entityType: 'PAYABLE',
+        entityId: 'payable-1',
+        userId: 'ops-1',
+        outcome: 'DENIED',
+        metadata: expect.objectContaining({ mode: 'enforce', actorId: 'ops-1', otherPartyId: 'ops-1' }),
+      }));
+    });
+
+    /**
+     * No exception for anybody. `assertSegregationOfDuties` compares two account ids and is never
+     * given a role — there is no admin or developer bypass to test for, and adding one would put
+     * the exemption in the same account that already holds every other capability.
+     * `DISBURSEMENT_ROLES` names ADMIN so a payout CAN be approved by someone other than the
+     * booker, which is the opposite of an exemption.
+     */
+    it('has no role-shaped exception: the check sees account ids and nothing else', async () => {
+      payableRepo.findOne.mockImplementation(async () =>
+        payable({ status: AssayerPayableStatus.APPROVED, approvedBy: 'the-super-administrator' }));
+      totalsRow = { ...totalsRow, outstanding: 0 };
+      await expect(service.recordDisbursement(
+        { payableId: 'payable-1', paymentReference: 'FC-SOD-4', method: PaymentMethod.NEFT }, 'the-super-administrator',
+      )).rejects.toThrow(ConflictException);
+    });
+
+    /**
+     * The other fail-open. `sodMode()` used to answer 'off' when the settings read threw, so a
+     * settings store that could not be reached switched the money control off.
+     */
+    it('a settings read that fails falls back to the shipped default, not to off', async () => {
+      settingsGet.mockImplementation(async () => { throw new Error('settings store unreachable'); });
+      payableRepo.findOne.mockImplementation(async () =>
+        payable({ status: AssayerPayableStatus.APPROVED, approvedBy: 'ops-1' }));
+      totalsRow = { ...totalsRow, outstanding: 0 };
+      await expect(service.recordDisbursement(
+        { payableId: 'payable-1', paymentReference: 'FC-SOD-5', method: PaymentMethod.NEFT }, 'ops-1',
+      )).rejects.toThrow(ConflictException);
     });
   });
 

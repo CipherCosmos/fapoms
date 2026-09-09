@@ -18,8 +18,22 @@ import { BillingPaymentEntity } from './payment.entity';
 import { AssayerPayableEntity } from './payable.entity';
 import { AssayerInvoiceEntity } from './assayer-invoice.entity';
 import { ASSAYER_INVOICE_ELIGIBLE_SQL } from './assayer-invoice-eligibility';
+import {
+  BillingRegionFilters,
+  billingRegionFilters,
+  BILLING_OUT_OF_SCOPE_COUNTS_SQL,
+} from './billing-region-scope';
+import { resolvePayoutDestination } from './payout-destination';
 import { BillingHistoryEntity } from './history.entity';
 import { AssignmentEntity } from '../assignment/assignment.entity';
+import { COMMITTED_ASSIGNMENT_STATUSES, sqlStatusList } from '../assignment/assignment-workload';
+import {
+  HELD_RECEIVABLE_SQL,
+  REVENUE_TAXABLE_SQL,
+  UNBILLED_RECEIVABLE_SQL,
+  revenueTaxableSql,
+  unbilledReceivableSql,
+} from './billing-metrics';
 import { ProjectEntity } from '../project/project.entity';
 import { AssayerEntity } from '../assayer/assayer.entity';
 import { AssayerDocumentEntity } from '../assayer/assayer-document.entity';
@@ -56,6 +70,8 @@ import {
   DocumentVerification,
 } from '@fapoms/shared';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
+import { SETTING_BY_KEY, SEGREGATION_OF_DUTIES_SETTING_KEY } from '../../infrastructure/settings/settings.registry';
+import { NOT_A_RECORD_ENTITY_ID } from '../../core/audit/audit-event';
 import {
   assignmentFee,
   assignmentMoney,
@@ -559,7 +575,7 @@ export class BillingEngineService implements OnModuleInit {
            FROM assignments
           WHERE is_active = true
             AND checked_in_at IS NOT NULL
-            AND status IN ('CHECKED_IN', 'IN_PROGRESS', 'ACCEPTED')
+            AND status IN (${sqlStatusList(COMMITTED_ASSIGNMENT_STATUSES)})
             AND checked_in_at < now() - ($1 || ' days')::interval`,
         [String(minDays)],
       );
@@ -965,7 +981,12 @@ export class BillingEngineService implements OnModuleInit {
     // an extra query on every single approval.
     if (p.assignmentId && !p.expenseId && (await this.sodMode()) !== 'off') {
       const assignment = await m.findOne(AssignmentEntity, { where: { id: p.assignmentId } });
-      await this.assertSegregationOfDuties(userId, assignment?.createdBy, `book assignment ${p.assignmentId} and also approve its payout`);
+      await this.assertSegregationOfDuties(
+        userId,
+        assignment?.createdBy,
+        `book assignment ${p.assignmentId} and also approve its payout`,
+        { entityType: 'PAYABLE', entityId: p.id, payableNumber: p.payableNumber },
+      );
     }
 
     // Freeze immutable payout banking destination snapshot BEFORE approval commits
@@ -995,15 +1016,17 @@ export class BillingEngineService implements OnModuleInit {
         },
       });
 
-      const isVerifiedDoc = bankDoc?.verificationStatus === DocumentVerification.VERIFIED;
-      p.destinationBankAccountNumber = assayer.bankAccountNumber.trim();
-      p.destinationIfsc = assayer.ifscCode.trim().toUpperCase();
-      p.destinationBankName = assayer.bankName?.trim() ?? null;
-      p.destinationAccountHolderName = assayer.legalName?.trim() || assayer.displayName?.trim() || null;
-      p.payoutEvidenceVersionId = isVerifiedDoc ? (bankDoc.currentVersionId ?? null) : null;
-      p.destinationVerifiedAt = isVerifiedDoc
-        ? (bankDoc.verifiedAt ?? new Date())
-        : (assayer.identityVerifiedAt ?? new Date());
+      // ONE definition of what may be claimed here — see payout-destination.ts. This used to end
+      // `?? new Date()` on both branches, so an assayer with no passbook and no established
+      // identity was stamped "verified, just now" at the moment of approval.
+      const snapshot = resolvePayoutDestination(assayer, bankDoc);
+      p.destinationBankAccountNumber = snapshot.destinationBankAccountNumber;
+      p.destinationIfsc = snapshot.destinationIfsc;
+      p.destinationBankName = snapshot.destinationBankName;
+      p.destinationAccountHolderName = snapshot.destinationAccountHolderName;
+      p.payoutEvidenceVersionId = snapshot.payoutEvidenceVersionId;
+      p.destinationVerifiedAt = snapshot.destinationVerifiedAt;
+      p.destinationVerifiedSource = snapshot.destinationVerifiedSource;
     }
 
     p.status = AssayerPayableStatus.APPROVED;
@@ -1391,6 +1414,7 @@ export class BillingEngineService implements OnModuleInit {
         destinationAccountHolderName: payable.destinationAccountHolderName ?? null,
         payoutEvidenceVersionId: payable.payoutEvidenceVersionId ?? null,
         destinationVerifiedAt: payable.destinationVerifiedAt ?? null,
+        destinationVerifiedSource: payable.destinationVerifiedSource ?? null,
       };
 
       // If payable was approved prior to frozen schema, freeze snapshot under lock now
@@ -1421,20 +1445,10 @@ export class BillingEngineService implements OnModuleInit {
               },
             });
 
-            const isVerifiedDoc = bankDoc?.verificationStatus === DocumentVerification.VERIFIED;
-            const payoutEvidenceVersionId = isVerifiedDoc ? (bankDoc.currentVersionId ?? null) : null;
-            const destinationVerifiedAt = isVerifiedDoc
-              ? (bankDoc.verifiedAt ?? new Date())
-              : (assayer.identityVerifiedAt ?? new Date());
-
-            destinationSnapshot = {
-              destinationBankAccountNumber: assayer.bankAccountNumber.trim(),
-              destinationIfsc: assayer.ifscCode.trim().toUpperCase(),
-              destinationBankName: assayer.bankName?.trim() ?? null,
-              destinationAccountHolderName: assayer.legalName?.trim() || assayer.displayName?.trim() || null,
-              payoutEvidenceVersionId,
-              destinationVerifiedAt,
-            };
+            // The same one definition the approval path uses — see payout-destination.ts. This
+            // branch carried its own copy of the `?? new Date()` fabrication, so the payment row
+            // repeated a claim nothing had ever backed.
+            destinationSnapshot = resolvePayoutDestination(assayer, bankDoc);
 
             // Freeze onto payable record
             payable.destinationBankAccountNumber = destinationSnapshot.destinationBankAccountNumber;
@@ -1443,12 +1457,18 @@ export class BillingEngineService implements OnModuleInit {
             payable.destinationAccountHolderName = destinationSnapshot.destinationAccountHolderName;
             payable.payoutEvidenceVersionId = destinationSnapshot.payoutEvidenceVersionId;
             payable.destinationVerifiedAt = destinationSnapshot.destinationVerifiedAt;
+            payable.destinationVerifiedSource = destinationSnapshot.destinationVerifiedSource;
             await m.save(payable);
           }
         }
       }
 
-      await this.assertSegregationOfDuties(userId, payable.approvedBy, `approve payout ${payable.payableNumber} and also pay it`);
+      await this.assertSegregationOfDuties(
+        userId,
+        payable.approvedBy,
+        `approve payout ${payable.payableNumber} and also pay it`,
+        { entityType: 'PAYABLE', entityId: payable.id, payableNumber: payable.payableNumber },
+      );
       const outstanding = round2(Number(payable.totalAmount) - Number(payable.paidAmount));
       if (outstanding <= 0) throw new ConflictException(`${payable.payableNumber} is already fully paid.`);
       const amount = round2(dto.amount ?? outstanding);
@@ -1489,6 +1509,7 @@ export class BillingEngineService implements OnModuleInit {
         destinationAccountHolderName: destinationSnapshot.destinationAccountHolderName,
         payoutEvidenceVersionId: destinationSnapshot.payoutEvidenceVersionId,
         destinationVerifiedAt: destinationSnapshot.destinationVerifiedAt,
+        destinationVerifiedSource: destinationSnapshot.destinationVerifiedSource,
         createdBy: userId,
         updatedBy: userId,
       });
@@ -2933,10 +2954,43 @@ export class BillingEngineService implements OnModuleInit {
   /**
    * The finance overview — every headline figure, from one endpoint, off one set of rows. Each
    * figure is one grouped pass in Postgres; the attention list is derived, never stored.
+   *
+   * ## Region scoping
+   *
+   * This route used to take no parameters at all, so a region-assigned operations account read
+   * the whole organisation's book here — every other client's revenue, cost, outstanding and
+   * cash, by client name — while the very tabs this screen heads (`listPayouts`,
+   * `listClientLines`, `listInvoiceable`, `findInvoicesPage`) narrowed correctly. Confirmed
+   * live: a NORTH-only account received a payload byte-identical to ADMIN's.
+   *
+   * `scope` is the same staged ceiling the list methods take, handled the same way — an
+   * unrestricted caller, or the rollout in `off` mode, runs the original unfiltered SQL with no
+   * predicate spliced in at all, so the national figures are exactly what they always were.
+   * A restricted caller in `enforce` mode gets a region predicate on every one of the eight
+   * queries (fifteen statements, counting the three grouped sub-selects inside `byClient` and
+   * the six inside `attentionItems`), all built from `billing-region-scope.ts` so no two of
+   * them can drift into disagreeing about what "in my region" means. `log` mode leaves the
+   * figures national and reports what `enforce` would have removed.
+   *
+   * The one rule, stated in full in that file: a row counts when its region attribution
+   * resolves and every region it resolves to is one the caller holds. So a payable on an
+   * assignment with no project branch, a line whose branch has a null region, an invoice with
+   * no lines and a payment settling neither a payable nor an invoice are all excluded for a
+   * scoped caller and visible only to an unrestricted one — the alternative, counting them for
+   * everybody, would put the same rupees in every region's total at once.
    */
-  async overview(): Promise<BillingOverview> {
+  async overview(scope?: Partial<GlobalScope>): Promise<BillingOverview> {
     const mgr = this.entryRepository.manager;
     const n = (v: any) => round2(Number(v ?? 0));
+
+    const regionScopeMode = await this.regionGuard.stagedMode();
+    const restrictedRegions = scope?.regions?.length ? scope.regions : null;
+    // Log mode reports, it does not narrow: only `enforce` puts the predicate in the WHERE.
+    const enforced = restrictedRegions && regionScopeMode === 'enforce' ? restrictedRegions : null;
+    const rg = billingRegionFilters(enforced);
+    // `[]` for an unrestricted caller: the SQL below carries no placeholder to bind in that case.
+    const rgp: unknown[] = enforced ? [enforced] : [];
+
     const [payRows, entryRows, invRows, ageRows, cashRows, clientRows, history, attention] = await Promise.all([
       mgr.query(`
         SELECT COALESCE(SUM(total_amount - paid_amount) FILTER (WHERE status = 'PENDING'  AND on_hold = false), 0) AS due,
@@ -2948,24 +3002,28 @@ export class BillingEngineService implements OnModuleInit {
                COUNT(*) FILTER (WHERE on_hold = true)::int                                                       AS held_count,
                COALESCE(SUM(base_amount + travel_amount), 0)                                                     AS gross_cost,
                COALESCE(SUM(tds_amount), 0)                                                                      AS tds_from_assayers
-          FROM assayer_payables WHERE is_active = true`),
+          FROM assayer_payables${rg.as('p')} WHERE is_active = true${rg.payable('p')}`, rgp),
       mgr.query(`
-        SELECT COALESCE(SUM(total_amount) FILTER (WHERE state = 'UNBILLED' AND on_hold = false), 0) AS unbilled,
-               COALESCE(SUM(total_amount) FILTER (WHERE on_hold = true AND state <> 'CANCELLED'), 0) AS held,
-               COALESCE(SUM(taxable_amount) FILTER (WHERE state <> 'CANCELLED'), 0)                AS revenue,
+        SELECT ${UNBILLED_RECEIVABLE_SQL} AS unbilled,
+               ${HELD_RECEIVABLE_SQL}       AS held,
+               ${REVENUE_TAXABLE_SQL}       AS revenue,
                COALESCE(SUM(tax_amount) FILTER (WHERE state <> 'CANCELLED'), 0)                    AS gst,
                COALESCE(SUM(tds_amount) FILTER (WHERE state <> 'CANCELLED'), 0)                    AS tds_by_clients
-          FROM billing_entries WHERE is_active = true`),
+          FROM billing_entries${rg.as('e')} WHERE is_active = true${rg.entry('e')}`, rgp),
       mgr.query(`
         SELECT COALESCE(SUM(total) FILTER (WHERE status IN ('ISSUED','PAID')), 0)            AS invoiced,
                COALESCE(SUM(paid_amount) FILTER (WHERE status <> 'CANCELLED'), 0)            AS collected,
                COALESCE(SUM(outstanding_amount) FILTER (WHERE status = 'ISSUED'), 0)         AS outstanding
-          FROM billing_invoices WHERE is_active = true`),
-      mgr.query(`SELECT ${BillingEngineService.AGEING_SELECT} FROM billing_invoices WHERE is_active = true AND status = 'ISSUED'`),
+          FROM billing_invoices${rg.as('i')} WHERE is_active = true${rg.invoice('i')}`, rgp),
+      mgr.query(
+        `SELECT ${BillingEngineService.AGEING_SELECT} FROM billing_invoices${rg.as('i')} WHERE is_active = true AND status = 'ISSUED'${rg.invoice('i')}`, rgp),
       mgr.query(`
         SELECT COALESCE(SUM(amount) FILTER (WHERE direction = 'INBOUND'), 0)  AS cash_in,
                COALESCE(SUM(amount) FILTER (WHERE direction = 'OUTBOUND'), 0) AS cash_out
-          FROM billing_payments WHERE is_active = true`),
+          FROM billing_payments${rg.as('pm')} WHERE is_active = true${rg.payment('pm')}`, rgp),
+      // The three grouped sub-selects are narrowed rather than the outer query, so a client
+      // with no in-region rows produces no group at all and drops out of `byClient` entirely —
+      // rather than appearing with zeros, which would still disclose that the client exists.
       mgr.query(`
         SELECT c.id AS client_id, c.name AS client_name,
                (SELECT cc.default_base_fee FROM client_configurations cc
@@ -2977,22 +3035,26 @@ export class BillingEngineService implements OnModuleInit {
                COALESCE(i.invoiced, 0) AS invoiced, COALESCE(i.outstanding, 0) AS outstanding,
                COALESCE(p.cost, 0) AS cost
           FROM clients c
-          LEFT JOIN (SELECT client_id,
-                            SUM(total_amount) FILTER (WHERE state = 'UNBILLED' AND on_hold = false) AS unbilled,
-                            SUM(taxable_amount) FILTER (WHERE state <> 'CANCELLED') AS revenue,
+          LEFT JOIN (SELECT be.client_id,
+                            ${unbilledReceivableSql('be')} AS unbilled,
+                            ${revenueTaxableSql('be')}     AS revenue,
                             COUNT(*) AS assignment_count
-                       FROM billing_entries WHERE is_active = true GROUP BY client_id) e ON e.client_id = c.id
-          LEFT JOIN (SELECT client_id,
-                            SUM(total) FILTER (WHERE status IN ('ISSUED','PAID')) AS invoiced,
-                            SUM(outstanding_amount) FILTER (WHERE status = 'ISSUED') AS outstanding
-                       FROM billing_invoices WHERE is_active = true GROUP BY client_id) i ON i.client_id = c.id
-          LEFT JOIN (SELECT client_id, SUM(base_amount + travel_amount) AS cost
-                       FROM assayer_payables WHERE is_active = true GROUP BY client_id) p ON p.client_id = c.id
+                       FROM billing_entries be WHERE be.is_active = true${rg.entry('be')} GROUP BY be.client_id) e ON e.client_id = c.id
+          LEFT JOIN (SELECT bi.client_id,
+                            SUM(bi.total) FILTER (WHERE bi.status IN ('ISSUED','PAID')) AS invoiced,
+                            SUM(bi.outstanding_amount) FILTER (WHERE bi.status = 'ISSUED') AS outstanding
+                       FROM billing_invoices bi WHERE bi.is_active = true${rg.invoice('bi')} GROUP BY bi.client_id) i ON i.client_id = c.id
+          LEFT JOIN (SELECT ap.client_id, SUM(ap.base_amount + ap.travel_amount) AS cost
+                       FROM assayer_payables ap WHERE ap.is_active = true${rg.payable('ap')} GROUP BY ap.client_id) p ON p.client_id = c.id
          WHERE c.is_active = true AND (e.client_id IS NOT NULL OR i.client_id IS NOT NULL OR p.client_id IS NOT NULL)
-         ORDER BY c.name`),
-      this.historyRepository.find({ order: { createdAt: 'DESC' }, take: 30 }),
-      this.attentionItems(),
+         ORDER BY c.name`, rgp),
+      this.recentBillingActivity(rg.history('h'), rgp),
+      this.attentionItems(rg, rgp),
     ]);
+
+    if (restrictedRegions && regionScopeMode === 'log') {
+      await this.warnOverviewOutOfScope(restrictedRegions);
+    }
     const p = payRows[0] ?? {};
     const e = entryRows[0] ?? {};
     const inv = invRows[0] ?? {};
@@ -3022,22 +3084,100 @@ export class BillingEngineService implements OnModuleInit {
         revenue: n(r.revenue), cost: n(r.cost), margin: round2(n(r.revenue) - n(r.cost)),
         assignmentCount: Number(r.assignment_count ?? 0),
       })),
-      recentActivity: history.map((h) => ({
+      recentActivity: history,
+    };
+  }
+
+  /**
+   * The last 30 billing events, narrowed to the caller's regions when they have any.
+   *
+   * A history row reaches a region exactly the way a payable or a client line does — through
+   * its `assignment_id`. Rows carrying none (a client-level or invoice-level event) are
+   * unattributable and follow the same rule as every other unattributable row: national
+   * callers only.
+   *
+   * The unrestricted path is the original repository call, untouched, so nothing about the
+   * national view depends on this method having been written.
+   */
+  private async recentBillingActivity(
+    regionFilter: string,
+    params: unknown[],
+  ): Promise<BillingOverview['recentActivity']> {
+    if (!regionFilter) {
+      const rows = await this.historyRepository.find({ order: { createdAt: 'DESC' }, take: 30 });
+      return rows.map((h) => ({
         id: h.id, action: h.action, entityType: h.entityType, entityId: h.entityId,
         fromState: h.fromState, toState: h.toState, reason: h.reason,
         occurredAt: h.createdAt as unknown as string, userName: h.userName,
-      })),
-    };
+      }));
+    }
+    const rows = await this.historyRepository.manager.query(
+      `SELECT h.id, h.action, h.entity_type, h.entity_id, h.from_state, h.to_state, h.reason,
+              h.created_at, h.user_name
+         FROM billing_history h
+        WHERE true${regionFilter}
+        ORDER BY h.created_at DESC
+        LIMIT 30`,
+      params,
+    );
+    return rows.map((r: any) => ({
+      id: r.id, action: r.action, entityType: r.entity_type, entityId: r.entity_id,
+      fromState: r.from_state, toState: r.to_state, reason: r.reason,
+      occurredAt: r.created_at, userName: r.user_name,
+    }));
+  }
+
+  /**
+   * Log mode's report for the overview.
+   *
+   * A list endpoint counts what it would have dropped from the page it already holds. An
+   * aggregate holds one number and no rows, so the count has to be asked for — one statement
+   * over the five base tables, run only for a restricted caller and only in Log mode.
+   */
+  private async warnOverviewOutOfScope(regions: readonly string[]): Promise<void> {
+    try {
+      const rows = await this.entryRepository.manager.query(BILLING_OUT_OF_SCOPE_COUNTS_SQL, [regions]);
+      const r = rows?.[0] ?? {};
+      const parts = ['payables', 'entries', 'invoices', 'payments', 'history']
+        .map((k) => [k, Number(r[k] ?? 0)] as const)
+        .filter(([, count]) => count > 0)
+        .map(([k, count]) => `${count} ${k}`);
+      if (parts.length === 0) return;
+      this.logger.warn(
+        `[region-scope:billing-engine:overview] would exclude ${parts.join(', ')} from the totals — ` +
+          `outside [${regions.join(', ')}]. Currently in Log mode: organisation-wide figures returned.`,
+      );
+    } catch (err) {
+      this.logger.warn(`[region-scope:billing-engine:overview] could not compute the Log-mode count: ${err}`);
+    }
   }
 
   /**
    * What finance should look at. Each kind is a query over the live rows — there is no
    * "conflict" object to raise, resolve, or forget. Fix the cause and the item disappears.
+   *
+   * Every item names an assignment, a client, an assayer or an invoice, so the list is narrowed
+   * by the same rule as the figures above it: each of the six queries anchors on whichever of
+   * those it selects from, through `billingRegionFilters`. `rg` is inert for an unrestricted
+   * caller, which leaves all six statements exactly as they were.
    */
-  private async attentionItems(): Promise<BillingAttentionItem[]> {
+  private async attentionItems(
+    rg: BillingRegionFilters = billingRegionFilters(null),
+    params: unknown[] = [],
+  ): Promise<BillingAttentionItem[]> {
     const mgr = this.entryRepository.manager;
+    /**
+     * Each kind fails soft — one broken query must not take the whole overview down. It now
+     * says so in the log instead of vanishing silently, which is what made a malformed
+     * predicate here indistinguishable from "nothing needs attention".
+     */
+    const q = (sql: string, kind: string): Promise<any[]> =>
+      mgr.query(sql, params).catch((err) => {
+        this.logger.warn(`[billing-engine:attention:${kind}] query failed, this kind omitted: ${err}`);
+        return [] as any[];
+      });
     const [unbooked, unsettled, feeChanged, heldPayables, heldLines, overdue] = await Promise.all([
-      mgr.query(`
+      q(`
         SELECT a.id, a.assignment_number, c.name AS client_name, s.display_name AS assayer_name,
                (e.id IS NULL) AS no_entry, (p.id IS NULL) AS no_payable,
                CASE WHEN a.agreed_fee > 0 THEN a.agreed_fee WHEN a.proposed_fee > 0 THEN a.proposed_fee ELSE 0 END AS fee
@@ -3049,16 +3189,16 @@ export class BillingEngineService implements OnModuleInit {
           LEFT JOIN assayers s ON s.id = a.assayer_id
          -- No a.is_active filter, matching unbookedAssignmentIds: a deleted assayer's cascade
          -- deactivates their assignments, but a COMPLETED audit still needs billing regardless.
-         WHERE a.status = 'COMPLETED' AND (e.id IS NULL OR p.id IS NULL)
-         ORDER BY a.completion_date DESC NULLS LAST LIMIT ${ATTENTION_LIMIT}`).catch(() => []),
-      mgr.query(`
+         WHERE a.status = 'COMPLETED' AND (e.id IS NULL OR p.id IS NULL)${rg.assignment('a')}
+         ORDER BY a.completion_date DESC NULLS LAST LIMIT ${ATTENTION_LIMIT}`, 'unbooked'),
+      q(`
         SELECT p.id, p.assignment_id, a.assignment_number, s.display_name AS assayer_name, p.total_amount
           FROM assayer_payables p
           JOIN assignments a ON a.id = p.assignment_id
           LEFT JOIN assayers s ON s.id = p.assayer_id
-         WHERE p.is_active = true AND p.expense_id IS NULL AND (p.rate_snapshot->>'settled') = 'false'
-         ORDER BY p.created_at DESC LIMIT ${ATTENTION_LIMIT}`).catch(() => []),
-      mgr.query(`
+         WHERE p.is_active = true AND p.expense_id IS NULL AND (p.rate_snapshot->>'settled') = 'false'${rg.payable('p')}
+         ORDER BY p.created_at DESC LIMIT ${ATTENTION_LIMIT}`, 'unsettled'),
+      q(`
         SELECT p.id, p.assignment_id, a.assignment_number, s.display_name AS assayer_name,
                (p.rate_snapshot->>'feeAmount')::numeric AS booked_fee,
                CASE WHEN a.agreed_fee > 0 THEN a.agreed_fee WHEN a.proposed_fee > 0 THEN a.proposed_fee ELSE 0 END AS current_fee
@@ -3068,29 +3208,29 @@ export class BillingEngineService implements OnModuleInit {
          WHERE p.is_active = true AND p.expense_id IS NULL
            AND (p.rate_snapshot->>'feeAmount') IS NOT NULL
            AND (p.rate_snapshot->>'feeAmount')::numeric <>
-               CASE WHEN a.agreed_fee > 0 THEN a.agreed_fee WHEN a.proposed_fee > 0 THEN a.proposed_fee ELSE 0 END
-         ORDER BY p.created_at DESC LIMIT ${ATTENTION_LIMIT}`).catch(() => []),
-      mgr.query(`
+               CASE WHEN a.agreed_fee > 0 THEN a.agreed_fee WHEN a.proposed_fee > 0 THEN a.proposed_fee ELSE 0 END${rg.payable('p')}
+         ORDER BY p.created_at DESC LIMIT ${ATTENTION_LIMIT}`, 'fee-changed'),
+      q(`
         SELECT p.id, p.assignment_id, a.assignment_number, s.display_name AS assayer_name, p.total_amount - p.paid_amount AS amount, p.hold_reason
           FROM assayer_payables p
           LEFT JOIN assignments a ON a.id = p.assignment_id
           LEFT JOIN assayers s ON s.id = p.assayer_id
-         WHERE p.is_active = true AND p.on_hold = true
-         ORDER BY p.updated_at DESC LIMIT ${ATTENTION_LIMIT}`).catch(() => []),
-      mgr.query(`
+         WHERE p.is_active = true AND p.on_hold = true${rg.payable('p')}
+         ORDER BY p.updated_at DESC LIMIT ${ATTENTION_LIMIT}`, 'held-payable'),
+      q(`
         SELECT e.id, e.assignment_id, a.assignment_number, c.name AS client_name, e.total_amount, e.hold_reason
           FROM billing_entries e
           LEFT JOIN assignments a ON a.id = e.assignment_id
           LEFT JOIN clients c ON c.id = e.client_id
-         WHERE e.is_active = true AND e.on_hold = true
-         ORDER BY e.updated_at DESC LIMIT ${ATTENTION_LIMIT}`).catch(() => []),
-      mgr.query(`
+         WHERE e.is_active = true AND e.on_hold = true${rg.entry('e')}
+         ORDER BY e.updated_at DESC LIMIT ${ATTENTION_LIMIT}`, 'held-line'),
+      q(`
         SELECT i.id, i.invoice_number, c.name AS client_name, i.outstanding_amount, i.due_date,
                (${BUSINESS_TODAY_SQL} - i.due_date) AS days_overdue
           FROM billing_invoices i
           LEFT JOIN clients c ON c.id = i.client_id
-         WHERE i.is_active = true AND i.status = 'ISSUED' AND i.due_date < ${BUSINESS_TODAY_SQL} AND i.outstanding_amount > 0
-         ORDER BY i.due_date ASC LIMIT ${ATTENTION_LIMIT}`).catch(() => []),
+         WHERE i.is_active = true AND i.status = 'ISSUED' AND i.due_date < ${BUSINESS_TODAY_SQL} AND i.outstanding_amount > 0${rg.invoice('i')}
+         ORDER BY i.due_date ASC LIMIT ${ATTENTION_LIMIT}`, 'overdue'),
     ]);
     const items: BillingAttentionItem[] = [];
     for (const r of unbooked) {
@@ -3239,16 +3379,57 @@ export class BillingEngineService implements OnModuleInit {
   // already on the row. Both share this one check — only the two actor ids being compared differ.
   // -----------------------------------------------------------------------
 
+  /**
+   * The mode in force, never fail-open.
+   *
+   * The `.catch()` used to answer 'off' — so a settings store that could not be read silently
+   * switched the money control off, which is the one failure mode a maker-checker gate must not
+   * have. `PlatformSettingsService.get` already degrades to environment-then-shipped-default on
+   * its own (`load()` swallows a read failure and returns no saved rows), so the only way here
+   * is an unknown key, and the honest answer to that is what this build ships — read from the
+   * registry rather than repeated as a literal, so the default lives in exactly one place.
+   */
   private async sodMode(): Promise<'off' | 'warn' | 'enforce'> {
-    const mode = await this.settings.get<string>('security.segregationOfDuties.mode').catch(() => 'off');
-    return mode === 'warn' || mode === 'enforce' ? mode : 'off';
+    const mode = await this.settings
+      .get<string>(SEGREGATION_OF_DUTIES_SETTING_KEY)
+      .catch(() => SETTING_BY_KEY[SEGREGATION_OF_DUTIES_SETTING_KEY]?.default ?? 'enforce');
+    return mode === 'warn' || mode === 'off' ? mode : 'enforce';
   }
 
-  /** Refuses (Enforce) or logs (Warn) when `actorId` is the same account as `otherPartyId`. */
-  private async assertSegregationOfDuties(actorId: string, otherPartyId: string | null | undefined, context: string): Promise<void> {
+  /**
+   * Refuses (Enforce) or records (Warn) when `actorId` is the same account as `otherPartyId`.
+   *
+   * Every same-person attempt reaches `audit_events`, refused or not. A control that only threw
+   * an exception left nothing behind: the refusal was a 409 in one operator's browser and the
+   * Warn-mode pass-through was a log line that rotates. "Who tried to approve and pay their own
+   * payout, and when" is precisely the question this control exists to be able to answer, and it
+   * has to survive the request. Recorded with `recordEventSafe` so a failure to write the trail
+   * can never turn a refusal into a permission.
+   */
+  private async assertSegregationOfDuties(
+    actorId: string,
+    otherPartyId: string | null | undefined,
+    context: string,
+    subject?: { entityType: 'PAYABLE'; entityId: string; payableNumber?: string | null },
+  ): Promise<void> {
     if (!otherPartyId || otherPartyId !== actorId) return;
     const mode = await this.sodMode();
     if (mode === 'off') return;
+
+    await this.auditService.recordEventSafe({
+      category: EventCategory.SYSTEM,
+      eventType: mode === 'enforce' ? 'SEGREGATION_OF_DUTIES_REFUSED' : 'SEGREGATION_OF_DUTIES_WARNED',
+      entityType: subject?.entityType ?? 'PAYABLE',
+      entityId: subject?.entityId ?? NOT_A_RECORD_ENTITY_ID,
+      userId: actorId,
+      outcome: mode === 'enforce' ? 'DENIED' : 'SUCCESS',
+      remarks:
+        mode === 'enforce'
+          ? `Refused: the same account cannot ${context}.`
+          : `Allowed under Warn mode: the same account would not be permitted to ${context}.`,
+      metadata: { mode, context, actorId, otherPartyId, payableNumber: subject?.payableNumber ?? null },
+    });
+
     if (mode === 'enforce') {
       throw new ConflictException(`Segregation of duties: the same account cannot ${context}.`);
     }

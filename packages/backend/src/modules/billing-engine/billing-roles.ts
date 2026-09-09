@@ -37,6 +37,20 @@ export const BILLING_READ_ROLES = [...BILLING_ROLES, SystemRole.AUDITOR];
  * ADMIN stays on this list for that reason. It is the only remaining way to have a payout
  * approved by someone other than the person who scheduled the work, and if this business ever
  * wants that check back, this constant is where it goes.
+ *
+ * ── 2026-09-09: the check IS back, and it is not this constant that carries it. ──
+ *
+ * This comment says the separation was deliberate and that folding finance into OPERATIONS gave
+ * it up. It has been read since as an argument that one person approving and then paying is
+ * therefore intended. It is not: it laments a ROLE-level separation being lost, and says nothing
+ * about the same PERSON being both sides of a payout. The two are different controls.
+ *
+ * Role membership cannot express "not the same person" — a role list only says which accounts may
+ * perform an act, never which account already performed the other half of it. That is
+ * `security.segregationOfDuties.mode`, which now ships as 'enforce'
+ * (`BillingEngineService.assertSegregationOfDuties`): whoever booked an assignment cannot approve
+ * its payout, and whoever approved a payout cannot mark it paid. Widening this list is still a
+ * decision made here; who may be on both ends of one payout is decided there.
  */
 export const DISBURSEMENT_ROLES = [
   SystemRole.ADMIN,

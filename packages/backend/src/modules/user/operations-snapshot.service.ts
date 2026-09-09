@@ -4,6 +4,12 @@ import { DataSource } from 'typeorm';
 import { branchStatusLabel, ProjectBranchStatus, BUSINESS_TODAY_SQL } from '@fapoms/shared';
 import { CacheService } from '../../infrastructure/cache/cache.service';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
+import {
+  ENGAGED_ASSIGNMENT_STATUSES,
+  IN_FLIGHT_ASSIGNMENT_STATUSES,
+  sqlStatusList,
+} from '../assignment/assignment-workload';
+import { UNBILLED_RECEIVABLE_SQL } from '../billing-engine/billing-metrics';
 
 /**
  * The operational home view: what is stuck, what is due, and what it is worth.
@@ -162,7 +168,7 @@ export class OperationsSnapshotService {
     // whole country regardless of any operator's territory — deliberately NOT scoped, and
     // therefore cacheable under one org-wide key shared by every viewer.
     const [docRows, moneyRows, activityRows] =
-      await this.cache.wrap('dash:snapshot:orgwide:v2', DASH_TTL, () => Promise.all([
+      await this.cache.wrap('dash:snapshot:orgwide:v3', DASH_TTL, () => Promise.all([
       this.dataSource.query(`
         SELECT
           COUNT(*) FILTER (WHERE type='PRE_FIELD_AUDIT_PDF' AND status='UPLOADED')::int      AS packets_unsent,
@@ -171,9 +177,15 @@ export class OperationsSnapshotService {
           COUNT(*) FILTER (WHERE type='AUDITED_RETURN_PDF'  AND status='SENT_TO_EXTERNAL_OCR')::int AS in_ocr
           FROM documents WHERE is_active = true`),
 
+      // "Unbilled" is the receivable — what the client owes for delivered work that is not yet
+      // invoiced — so it is comparable with the outstanding and collected figures beside it and
+      // with the same word on the finance overview. This selected `SUM(taxable_amount)` instead,
+      // which is the ex-GST revenue basis, so the two dashboards showed different numbers under
+      // one label (3200 here against 3456 there) and this block's own bar chart compared unlike
+      // quantities. `UNBILLED_RECEIVABLE_SQL` is the single definition both now read.
       this.dataSource.query(`
         SELECT
-          COALESCE(SUM(taxable_amount) FILTER (WHERE state = 'UNBILLED' AND on_hold = false),0) AS unbilled,
+          ${UNBILLED_RECEIVABLE_SQL}          AS unbilled,
           COALESCE(SUM(outstanding_amount),0) AS outstanding,
           COALESCE(SUM(paid_amount),0)        AS collected
           FROM billing_entries WHERE is_active = true`),
@@ -210,7 +222,7 @@ export class OperationsSnapshotService {
                (pb.scheduled_date - ${BUSINESS_TODAY_SQL})::int AS days_away,
                EXISTS (SELECT 1 FROM assignments a
                         WHERE a.project_branch_id = pb.id AND a.is_active = true
-                          AND a.status IN ('ACCEPTED','CHECKED_IN','IN_PROGRESS','COMPLETED')) AS has_assayer,
+                          AND a.status IN (${sqlStatusList(ENGAGED_ASSIGNMENT_STATUSES)})) AS has_assayer,
                EXISTS (SELECT 1 FROM documents d
                         JOIN assessments asm ON asm.id = d.assessment_id
                        WHERE asm.project_id = pb.project_id AND asm.branch_id = pb.branch_id
@@ -236,7 +248,7 @@ export class OperationsSnapshotService {
             SELECT a.id, a.max_daily_workload,
                    (SELECT COUNT(*) FROM assignments asg
                      WHERE asg.assayer_id = a.id AND asg.is_active = true
-                       AND asg.status IN ('PENDING','ACCEPTED','CHECKED_IN','IN_PROGRESS')) AS open_count
+                       AND asg.status IN (${sqlStatusList(IN_FLIGHT_ASSIGNMENT_STATUSES)})) AS open_count
               FROM assayers a
              WHERE a.is_active = true AND a.status = 'ACTIVE'${capacityAssayerRegionFrag}
           ) s`, capacityParams),
@@ -346,8 +358,11 @@ export class OperationsSnapshotService {
       {
         key: 'UNBILLED', severity: 'medium',
         count: Math.round(n(money.unbilled)),
-        label: 'Unbilled revenue',
-        detail: 'Work delivered or in progress that is not yet on an invoice.',
+        // Not "Unbilled revenue": revenue is this product's word for the ex-GST figure
+        // (`BillingOverview.margin.revenue`), and this is the receivable — what the client will
+        // actually pay. Same number, same words as the finance overview's own tile.
+        label: 'Unbilled work to invoice',
+        detail: 'Delivered but not yet on an invoice — what clients owe us for it.',
         link: '/billing',
         isMoney: true,
       },

@@ -8,6 +8,7 @@ import { Layout } from './components/Layout';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { TelemetryTracker } from './components/TelemetryTracker';
 import { ProtectedRoute } from './components/ProtectedRoute';
+import { PostLoginRedirect, RETURN_TO_KEY } from './components/PostLoginRedirect';
 import { api } from './services/api';
 import { AppError } from './services/errors';
 import { clearSession, endSession } from './services/session';
@@ -87,50 +88,16 @@ const ClarificationsPage = React.lazy(() => import('./pages/dataentry/Clarificat
 const ViewMark = React.lazy(() => import('./pages/ViewMark').then((m) => ({ default: m.ViewMark })));
 
 /**
- * Where an unauthenticated visitor was trying to go, held until they have signed in.
- *
- * sessionStorage rather than localStorage: it belongs to this tab and this attempt, and must not
- * outlive the browser session or leak between tabs.
- */
-const RETURN_TO_KEY = 'fapoms_return_to';
-
-/**
  * Records the requested path, then sends the visitor to sign in.
  *
  * A component rather than an inline `<Navigate>` because the write has to happen as an effect —
  * doing it during render would be a side effect in the render phase.
- */
-/**
- * Sends a just-signed-in person to wherever they were originally headed, or to their role's home.
  *
- * The destination is captured once, in a `useState` initialiser, and cleared in an effect — never
- * read-and-cleared inline in the element expression. React StrictMode double-invokes render in
- * development, so an inline consume returned the path on the first pass and `null` on the second,
- * and it was the second result the router actually used. Reading once fixes that, and clearing in
- * an effect keeps the render itself free of side effects.
+ * Its counterpart — `PostLoginRedirect`, which spends what this saves — moved out to
+ * components/PostLoginRedirect.tsx so it can be tested: this file cannot be mounted in jest at
+ * all (Login.tsx uses `import.meta`), which for a long time meant the rule deciding where every
+ * signed-in person lands was the one rule no test could reach.
  */
-const PostLoginRedirect: React.FC<{ fallback: string }> = ({ fallback }) => {
-  const [returnTo] = useState<string | null>(() => {
-    try {
-      const target = sessionStorage.getItem(RETURN_TO_KEY);
-      return target && target !== '/login' ? target : null;
-    } catch {
-      return null;
-    }
-  });
-
-  useEffect(() => {
-    try {
-      sessionStorage.removeItem(RETURN_TO_KEY);
-    } catch {
-      // Non-fatal: the worst case is landing on the role's home page.
-    }
-  }, []);
-
-  // ProtectedRoute still guards the destination, so a deep link into a section this role may not
-  // open is refused exactly as it would be if they had clicked through to it.
-  return <Navigate to={returnTo ?? fallback} replace />;
-};
 
 /**
  * Turns `/assayers/:id` into the roster's own deep link, so the record opens where it lives.
@@ -415,6 +382,18 @@ export const App: React.FC = () => {
     );
   }
 
+  /**
+   * Where a signed-in person goes when the URL names no page of its own.
+   *
+   * Rendered by both `/` and `/login` below. Held in one binding rather than written out twice
+   * because the two must not be allowed to disagree: the wait on `isLoadingUser` is what stops an
+   * admin being flashed the auditor's default before roles resolve, and a second copy of this
+   * expression is a second place for that guard to be forgotten.
+   */
+  const homeForSignedInUser = isLoadingUser && userRoles.length === 0
+    ? <RouteFallback />
+    : <PostLoginRedirect fallback={defaultRouteFor(userRoles, userPermissions)} />;
+
   return (
     <CallProvider>
     <TelemetryTracker />
@@ -435,14 +414,25 @@ export const App: React.FC = () => {
       <Routes>
         {/* Root sends each role to the first screen of their actual work. Wait for the profile
             so an admin is not flashed the auditor's default before roles resolve. */}
-        <Route
-          path="/"
-          element={
-            isLoadingUser && userRoles.length === 0
-              ? <RouteFallback />
-              : <PostLoginRedirect fallback={defaultRouteFor(userRoles, userPermissions)} />
-          }
-        />
+        <Route path="/" element={homeForSignedInUser} />
+        {/*
+          Signing in is not something a signed-in person can do, so `/login` is not a page here —
+          but it was not a redirect either, and it is the one URL in this application that
+          everybody has bookmarked. It fell through to the catch-all below and told an operator
+          with a perfectly good session that "That page doesn't exist", which is both false and
+          alarming: the page plainly does exist, they were on it this morning.
+
+          Sending them home instead, through the very same element `/` renders, so there is one
+          definition of where a signed-in person belongs rather than two that can drift. That also
+          means a sign-in still interrupted by a remembered destination lands on the destination —
+          `PostLoginRedirect` reads it once and clears it — and lands on the role's own home when
+          there is none.
+
+          Outside the ProtectedRoute wrapper below, exactly like the other redirect-only routes:
+          there is nothing here to protect, and gating a redirect would put a permission check
+          between somebody and their own home page.
+        */}
+        <Route path="/login" element={homeForSignedInUser} />
         {/*
           One ProtectedRoute guards every authenticated screen below, the same pathless-layout
           pattern /data-entry and /hr already used one level down for their own child routes.

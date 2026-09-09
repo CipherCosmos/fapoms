@@ -261,7 +261,21 @@ export class AssignmentController {
   @Post(':id/check-in')
   @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'GPS Check-in with SyncToken Conflict Check for Assayer Mobile App' })
-  async checkIn(@Param('id') id: string, @Body() dto: any, @Req() req: any) {
+  async checkIn(
+    @Param('id') id: string,
+    @Body() dto: any,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    /**
+     * Free for the assayer this route exists for — an external principal carries no regions, so
+     * this returns on its first line — and the ceiling for the ADMIN/OPERATIONS half of the
+     * `@Roles` list, who reach `recordCheckIn`'s staff override and are then checked against
+     * nothing at all. Without it an out-of-region operator learned an assignment's state from the
+     * refusal text ("It is currently pending"), which is the same oracle the ownership fix closed
+     * for assayers.
+     */
+    await this.regionGuard.assertAssignmentInScope(id, scope);
     const body = dto || {};
 
     /**
@@ -315,7 +329,14 @@ export class AssignmentController {
   @Post(':id/check-out')
   @Roles(SystemRole.ASSAYER, SystemRole.ADMIN, SystemRole.OPERATIONS)
   @ApiOperation({ summary: 'GPS check-out — records when and where the assayer left the branch' })
-  async checkOut(@Param('id') id: string, @Body() dto: any, @Req() req: any) {
+  async checkOut(
+    @Param('id') id: string,
+    @Body() dto: any,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
+    // Same ceiling as check-in above, for the same reason and with the same no-op for assayers.
+    await this.regionGuard.assertAssignmentInScope(id, scope);
     const body = dto || {};
     const { lat, lng } = requireRealCoordinate(body, 'Check-out');
     const accuracy = Number.isFinite(Number(body.accuracy)) ? Number(body.accuracy) : undefined;
@@ -533,7 +554,18 @@ export class AssignmentController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateAssignmentDetailsRequestDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    /**
+     * The same ceiling `transition`, `reopen` and `escalate` below already assert, and that
+     * `GET :id` above asserts for the read.
+     *
+     * This is the plain edit route and it was the one left out. Verified live: a NORTH-scoped
+     * OPERATIONS account refused `GET /assignments/<west id>` with 403 "That record belongs to a
+     * region your account is not assigned to" changed that assignment's `remarks` through this
+     * route one second later — 200, `updated_by` its own id, `entity_version` 2 → 3.
+     */
+    await this.regionGuard.assertAssignmentInScope(id, scope);
     const userId = req?.user?.id || '00000000-0000-0000-0000-000000000000';
     const assignment = await this.assignmentService.update(id, dto, userId);
     return {
@@ -1003,7 +1035,12 @@ export class AssignmentController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: ReportIssueRequestDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    // A no-op for the assayer this route is written for — an external principal carries no
+    // regions — and the ceiling the staff half of `@Roles(...STAFF_ROLES, ASSAYER)` needs, since
+    // `isStaff` below skips the ownership check entirely for them.
+    await this.regionGuard.assertAssignmentInScope(id, scope);
     const userId = req.user.id;
 
     // An assayer may only flag an assignment that is theirs; staff may flag any.
@@ -1046,7 +1083,16 @@ export class AssignmentController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: AddCommentRequestDto,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    /**
+     * The staff half of `@Roles(...STAFF_ROLES, ASSAYER)` gets no ownership check — only the
+     * assayer branch below does — so without this a region-restricted staff account could write
+     * onto an assignment it is refused a read of. Verified live: 403 on `GET /assignments/<west
+     * id>`, 201 on this route with the comment row stamped `created_by` the NORTH-only operator.
+     * The assayer branch is unaffected: an external principal carries no regions.
+     */
+    await this.regionGuard.assertAssignmentInScope(id, scope);
     const roles: string[] = (req.user?.roles ?? [])
       .map((r: any) => (typeof r === 'string' ? r : r?.name))
       .filter(Boolean);

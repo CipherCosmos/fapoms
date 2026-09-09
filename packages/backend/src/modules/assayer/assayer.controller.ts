@@ -45,7 +45,7 @@ const assayerUploadMulterOptions = {
   limits: { fileSize: MAX_UPLOAD_BYTES },
 };
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiConsumes } from '@nestjs/swagger';
-import { IsString, IsNotEmpty, IsOptional, IsNumber, IsEmail, IsArray, IsInt, IsObject, IsEnum, IsDateString, IsUUID, IsBoolean, IsIn, MinLength, MaxLength, Min, ArrayMinSize, ValidateNested, ArrayMaxSize, Matches, ValidateBy, ValidationOptions } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional, IsNumber, IsEmail, IsArray, IsInt, IsObject, IsEnum, IsDateString, IsUUID, IsBoolean, IsIn, MinLength, MaxLength, Min, ArrayMinSize, ValidateNested, ArrayMaxSize, Matches } from 'class-validator';
 import { Type } from 'class-transformer';
 
 /**
@@ -86,7 +86,6 @@ import {
   isValidIfsc,
   isValidAadhaar,
   isPlaceholderAadhaar,
-  normalisePhone,
   pincodeFromAddress,
   AADHAAR_PATTERN,
   ASSAYER_ERROR_CODES,
@@ -2555,6 +2554,50 @@ export class AssayerController {
     stream.pipe(res);
   }
 
+  /**
+   * One version's scan, addressed by the attestation that depends on it.
+   *
+   * `document/:id/file/:index` reaches only what is currently attached. An object kept alive
+   * because a VERIFIED version still cites it is, by definition, no longer attached — so without
+   * this route the evidence retained for audit would be evidence nobody could look at, and the
+   * retention would be a storage bill rather than a control. Same roles, same permission and the
+   * same opaque-download headers as the route above: it is the same page of the same personnel
+   * record, reached by a different index.
+   */
+  @Get('document/:id/version/:versionId/file')
+  @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.AUDITOR)
+  @RequirePermissions('assayer:view:organization')
+  @ApiOperation({ summary: 'Fetch the scan a particular version was verified against' })
+  async getDocumentVersionFile(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Param('versionId', ParseUUIDPipe) versionId: string,
+    @Res() res: any,
+  ): Promise<void> {
+    const found = await this.rosterRecords.versionFileKey(id, versionId);
+    if (!found) throw new NotFoundException('No such file on this document version.');
+    const stream = await this.storage.getFileStream(found.key);
+    res.setHeader('Content-Type', 'application/octet-stream');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Content-Disposition', `inline; filename="${found.requirement}-v${found.version}"`);
+    stream.on('error', () => { if (!res.headersSent) res.status(500).end(); else res.destroy(); });
+    res.on('close', () => stream.destroy());
+    stream.pipe(res);
+  }
+
+  /**
+   * Remove an attached scan from the record.
+   *
+   * Still 204, and still unconditional as far as the caller is concerned: the thing they asked
+   * for — this scan off this record — happens either way. What is NOT unconditional any more is
+   * destroying the stored object. `detachFile` is the single place that answers "may this object
+   * be erased", and it says no while any `assayer_document_versions` row still reads VERIFIED
+   * against it. This route used to hold the opposite assumption in one line of its own — the key
+   * came back, so delete the file — which is how a signature came to point at nothing.
+   *
+   * The two outcomes are distinguished in the audit trail rather than in the status code, because
+   * they are the same answer to the operator ("it is off the record") and a different answer to
+   * records retention.
+   */
   @Delete('document/:id/file/:index')
   @HttpCode(204)
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS)
@@ -2565,10 +2608,10 @@ export class AssayerController {
     @Param('index') index: string,
     @Req() req: any,
   ): Promise<void> {
-    const key = await this.rosterRecords.detachFile(id, Number(index), req.user.id);
+    const detached = await this.rosterRecords.detachFile(id, Number(index), req.user.id);
     // The reference is gone whether or not the object was; a storage failure must not leave the
     // record pointing at something nobody can fetch.
-    if (key) await this.storage.deleteFile(key).catch(() => undefined);
+    if (detached?.mayDestroy) await this.storage.deleteFile(detached.key).catch(() => undefined);
   }
 
   /**

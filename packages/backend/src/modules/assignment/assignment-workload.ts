@@ -71,6 +71,25 @@ export const DAY_EXCLUSIVE_ASSIGNMENT_STATUSES: AssignmentStatus[] = [
 ];
 
 /**
+ * The statuses that make a BRANCH exclusive — the application half of
+ * `idx_assignments_single_active_branch`, a partial unique index on `(project_branch_id)` with
+ * the same four statuses.
+ *
+ * Identical to `DAY_EXCLUSIVE_ASSIGNMENT_STATUSES` today, and written out separately anyway,
+ * because they are two rules over two different columns enforced by two different indexes. One
+ * shared constant would mean narrowing the day index silently narrowed the branch rule too, and
+ * an integrity scan whose predicate no longer matches the index it is auditing reports zero
+ * violations for the best possible reason and the worst possible one alike.
+ * `assignment-status-sets.spec.ts` pins each constant to its own index definition.
+ */
+export const BRANCH_EXCLUSIVE_ASSIGNMENT_STATUSES: AssignmentStatus[] = [
+  AssignmentStatus.PENDING,
+  AssignmentStatus.ACCEPTED,
+  AssignmentStatus.CHECKED_IN,
+  AssignmentStatus.IN_PROGRESS,
+];
+
+/**
  * Reached the end of its life. Expressed by status alone — `isActive` means "not deleted",
  * never "finished".
  */
@@ -83,6 +102,66 @@ export const TERMINAL_ASSIGNMENT_STATUSES: AssignmentStatus[] = [
 export function isTerminalAssignmentStatus(status: AssignmentStatus): boolean {
   return TERMINAL_ASSIGNMENT_STATUSES.includes(status);
 }
+
+/**
+ * Work that ended without being done. The two ways an assignment can fall through: the assayer
+ * said no, or we took it back.
+ *
+ * `TERMINAL_ASSIGNMENT_STATUSES` minus COMPLETED, and the distinction matters everywhere a
+ * screen asks "is this branch covered?" — a delivered audit is the best possible answer to that
+ * question and a declined offer is the worst, so a set that lumps the two together answers it
+ * wrongly whichever way it is read.
+ */
+export const ABANDONED_ASSIGNMENT_STATUSES: AssignmentStatus[] = TERMINAL_ASSIGNMENT_STATUSES.filter(
+  (s) => s !== AssignmentStatus.COMPLETED,
+);
+
+/**
+ * The branch is spoken for: somebody holds this work and has not walked away from it.
+ *
+ * Every status except the abandoned two — an unanswered offer counts, because it is the branch's
+ * live state and nobody else should be offered it, and COMPLETED counts, because a delivered
+ * audit is the strongest form of "this branch was covered".
+ *
+ * Written out as `NOT IN ('CANCELLED','REJECTED')` in the Command Centre's branch query, in the
+ * project branch list and in the coverage workbook's "Assigned / Assayer(s)" columns, each time
+ * as a literal. Derived from `ABANDONED_ASSIGNMENT_STATUSES` here rather than listed, so a status
+ * added to the enum joins this set by default — the safe direction, because being wrongly counted
+ * as assigned is visible on a screen, while being wrongly counted as free double-books an assayer.
+ *
+ * Not the same question as `IN_FLIGHT_ASSIGNMENT_STATUSES`, which excludes COMPLETED: that one
+ * asks what is on someone's plate now, this one asks whether the branch has an owner at all.
+ */
+export const ASSIGNED_ASSIGNMENT_STATUSES: AssignmentStatus[] = Object.values(AssignmentStatus).filter(
+  (s) => !ABANDONED_ASSIGNMENT_STATUSES.includes(s),
+);
+
+/**
+ * An assayer said yes to this work: accepted, under way, or delivered.
+ *
+ * This is the set for "does this branch actually have an assayer?" — the dashboard's readiness
+ * check on the coming week's diary, and `create()`'s "Branch Busy" refusal. Both had it written
+ * out as a literal and there was no shared constant to reach for, which is why it is being added
+ * rather than folded into an existing one.
+ *
+ * It is deliberately none of the three sets above:
+ *  - `COMMITTED_ASSIGNMENT_STATUSES` drops COMPLETED, because an obligation ends when the job is
+ *    done. Here COMPLETED is the whole point: a finished audit certainly had an assayer.
+ *  - `IN_FLIGHT_ASSIGNMENT_STATUSES` adds PENDING, and PENDING is exactly what this question must
+ *    exclude. An offer nobody has answered is the case the dashboard exists to warn about —
+ *    "a date in the diary with no assayer confirmed is the thing that fails on the morning".
+ *  - `ASSIGNED_ASSIGNMENT_STATUSES` also includes PENDING, because "the branch has an owner" and
+ *    "someone has agreed to go" are different facts, and the difference is the one that shows up
+ *    at 9 a.m. on the day of the audit.
+ *
+ * Getting this wrong in either direction is worse than the literal it replaces: fold PENDING in
+ * and the dashboard stops flagging unconfirmed audits; drop COMPLETED and `create()` starts
+ * handing out branches that have already been audited.
+ */
+export const ENGAGED_ASSIGNMENT_STATUSES: AssignmentStatus[] = [
+  ...COMMITTED_ASSIGNMENT_STATUSES,
+  AssignmentStatus.COMPLETED,
+];
 
 /**
  * The same sets as a SQL literal, for the raw-query readers. Keeping these derived from the

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { Compass, Check, X, AlertTriangle, CheckCircle, Search, Briefcase, MapPin, Phone, Mail, Clock, DollarSign, Calendar, TrendingUp, Building2, Route, Users, Layers, Smartphone, Package, Car, Flame, BarChart3, Zap, ClipboardList, Send, Bus, Download, Eye, MessageCircle, Map as MapIcon, Home, Hourglass } from 'lucide-react';
 import { ProjectBranchStatus, roleLabel, formatDateOnly, formatRouteDistance, formatTravelTime, type RouteSource, callOutcomeLabel, CALL_OUTCOME_LABELS } from '@fapoms/shared';
-import { branchStatusLabel, BRANCH_COVERED_STATUSES, localDateKey, todayDateKey } from '../utils/statusLabels';
+import { branchStatusLabel, isBranchCovered, coverageFromStatuses, localDateKey, todayDateKey } from '../utils/statusLabels';
 import { api } from '../services/api';
 import { userMessage } from '../services/errors';
 import { queryKeys } from '../hooks/queryKeys';
@@ -1575,7 +1575,7 @@ export const PlanningWorkspace: React.FC = () => {
       'Priority': b.priority || '',
       'Zone ID': b.zoneId || '',
       'Status': b.status,
-      'Audit Coverage Possible': BRANCH_COVERED_STATUSES.includes(b.status as ProjectBranchStatus) ? 'YES' : 'NO (Uncovered)',
+      'Audit Coverage Possible': isBranchCovered(b.status) ? 'YES' : 'NO (Uncovered)',
       'Assigned Assayer': b.assignment?.assayer?.displayName || 'Unassigned',
       'Assignment Status': b.assignment?.status || '—',
       'Proposed Fee (₹)': b.assignment?.proposedFee ?? '—',
@@ -1698,9 +1698,11 @@ export const PlanningWorkspace: React.FC = () => {
     [filteredBranches, selectedProjectClientId],
   );
 
-  const totalCount = branches.length;
-  const confirmedCount = branches.filter(b => BRANCH_COVERED_STATUSES.includes(b.status as ProjectBranchStatus)).length;
-  const coveragePct = totalCount > 0 ? Number(((confirmedCount / totalCount) * 100).toFixed(1)) : 0;
+  // The header badge is the same coverage figure `GET /planning/projects/:id/coverage` and the
+  // client workbook report. It used to be a third hand-rolled copy of the arithmetic; the two
+  // server-side copies had already drifted from each other by 36 percentage points.
+  const { total: totalCount, covered: confirmedCount, coveragePercentage: coveragePct } =
+    coverageFromStatuses(branches.map(b => b.status));
 
   const layoutMode = localStorage.getItem('planning_layout') || 'default';
   const [layout, setLayout] = useState(layoutMode);

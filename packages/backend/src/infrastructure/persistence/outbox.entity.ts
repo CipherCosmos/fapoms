@@ -58,4 +58,32 @@ export class OutboxEntity {
    */
   @Column({ name: 'last_error', type: 'text', nullable: true })
   lastError: string | null;
+
+  /**
+   * When this event stopped being retried — the dead letter.
+   *
+   * ## Why a column and not just `attempts >= MAX_ATTEMPTS`
+   *
+   * The relay used to select `attempts < MAX_ATTEMPTS`, so a row that reached 15 simply stopped
+   * matching the query. That is a terminal state expressed as the absence of a match: nothing
+   * recorded that the event had been abandoned, nothing could list the abandoned ones without
+   * knowing the constant, and `RetentionService.purgeDispatchedOutboxEvents` only ever deletes
+   * rows with a `dispatched_at`, so the row sat there for the life of the database. The single
+   * signal that a domain event had been given up on was one `logger.error` at the moment of the
+   * fifteenth failure, in a log that rotates.
+   *
+   * Non-null means: this event was never delivered, we are no longer trying, and a person has to
+   * decide. It is what `GET /admin/outbox/dead-letters` lists and what
+   * `POST /admin/outbox/dead-letters/:id/replay` clears. Retention still never touches these rows
+   * — abandoning an event silently is bad; deleting the evidence of it afterwards is worse.
+   */
+  @Column({ name: 'failed_at', type: 'timestamptz', nullable: true })
+  failedAt: Date | null;
+
+  /** When an operator last returned this event to the relay, and who. Null if never replayed. */
+  @Column({ name: 'replayed_at', type: 'timestamptz', nullable: true })
+  replayedAt: Date | null;
+
+  @Column({ name: 'replayed_by', type: 'uuid', nullable: true })
+  replayedBy: string | null;
 }

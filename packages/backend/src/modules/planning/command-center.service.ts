@@ -17,7 +17,11 @@ import { GlobalScope } from '../../infrastructure/scope/global-scope';
 // exact same canonicalisation when matching a state-scoped holiday against a
 // branch's state — re-exported here so existing imports keep working.
 import { canonicalState } from '@fapoms/shared';
-import { IN_FLIGHT_ASSIGNMENT_STATUSES, sqlStatusList } from '../assignment/assignment-workload';
+import {
+  ASSIGNED_ASSIGNMENT_STATUSES,
+  IN_FLIGHT_ASSIGNMENT_STATUSES,
+  sqlStatusList,
+} from '../assignment/assignment-workload';
 import { PROFILE_IN_FORCE_SQL, PROFILE_IN_FORCE_ORDER } from '../pricing/profile-in-force';
 export { canonicalState };
 
@@ -283,11 +287,14 @@ export class CommandCenterService {
                 ${BRANCH_GEOG_SQL} AS geog
            ${SCOPED_FROM}
        ),
+       -- "Is this branch spoken for?" — the shared set, not a local NOT IN ('CANCELLED','REJECTED').
+       -- Same question the coverage workbook's Assigned column and the project branch list ask,
+       -- and all three used to answer it with their own copy of the same two status names.
        asg AS (
          SELECT a.project_branch_id, COUNT(*) AS assignment_count
            FROM assignments a
            JOIN scoped s ON s.project_branch_id = a.project_branch_id
-          WHERE a.is_active = true AND a.status NOT IN ('CANCELLED','REJECTED')
+          WHERE a.is_active = true AND a.status IN (${sqlStatusList(ASSIGNED_ASSIGNMENT_STATUSES)})
           GROUP BY a.project_branch_id
        ),
        rev AS (

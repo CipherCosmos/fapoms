@@ -145,6 +145,12 @@ export interface FrozenPayableItem {
   destinationAccountHolderName?: string | null;
   payoutEvidenceVersionId?: string | null;
   destinationVerifiedAt?: string | null;
+  /**
+   * What backed `destinationVerifiedAt`: 'BANK_PASSBOOK', 'IDENTITY_DOCUMENT', or null when the
+   * destination is unverified. Null with a non-null timestamp is impossible — the database
+   * refuses it — so this is what makes "verified" on screen mean something.
+   */
+  destinationVerifiedSource?: string | null;
 }
 
 export interface AssayerStatement {

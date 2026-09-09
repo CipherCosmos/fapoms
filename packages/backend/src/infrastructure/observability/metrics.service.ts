@@ -108,6 +108,25 @@ export class MetricsService {
    * A rate that stays above zero is the trigger, and now it is a number on a dashboard rather than
    * an archaeology exercise.
    */
+  /**
+   * Domain events the outbox relay gave up on.
+   *
+   * An outbox row that reached `MAX_ATTEMPTS` used to leave exactly one trace: a single
+   * `logger.error` at the instant of the fifteenth failure. The row then stopped matching the
+   * relay's query forever and was never purged (retention only deletes DISPATCHED rows), so a
+   * permanently undelivered event — a payable that was booked but whose notification, realtime
+   * push or downstream job never fired — was invisible to everything except someone reading logs
+   * at the right minute. This is the alertable version of that line: any value above zero means
+   * the database and the rest of the system disagree about something, and
+   * `GET /admin/outbox/dead-letters` says about what.
+   */
+  readonly outboxDeadLettered: Counter<'event'> = new Counter({
+    name: 'outbox_events_dead_lettered_total',
+    help: 'Outbox domain events abandoned after exhausting their retries, by event name',
+    labelNames: ['event'],
+    registers: [this.registry],
+  });
+
   readonly retentionSaturated: Counter<'table'> = new Counter({
     name: 'retention_batches_saturated_total',
     help: 'Retention passes that exhausted their batch ceiling with rows still to delete, by table',

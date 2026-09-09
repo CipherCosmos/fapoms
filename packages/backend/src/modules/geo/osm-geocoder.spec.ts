@@ -185,8 +185,76 @@ describe('politely — how lookups are scheduled per host', () => {
   beforeAll(() => { process.env.GEOCODER_ALLOW_NETWORK_IN_TESTS = 'true'; });
   afterAll(() => { process.env.GEOCODER_ALLOW_NETWORK_IN_TESTS = original; });
 
-  /** Records the highest number of calls that were ever in flight together. */
+  /**
+   * Records the highest number of calls that were ever in flight together.
+   *
+   * Each call parks on a gate the test opens, rather than on a short sleep. That matters: the
+   * sleep version measured overlap by wall-clock coincidence, so when the machine was busy — a
+   * full `jest -w 2` run, say — the timers could fire in sequence, nothing ever overlapped, and
+   * `peak` came back as 1 against an assertion of "greater than 1". The suite passed alone and
+   * failed in the full run, which is the signature of a test that measures the scheduler instead
+   * of the code.
+   *
+   * `withHostLimit` uses no timers at all, so overlap here is structural: either the limiter
+   * starts a second call while the first is parked, or it does not. Holding every call open until
+   * the test releases it turns that into something the CPU cannot influence.
+   */
   const overlapProbe = () => {
+    const state = { inFlight: 0, peak: 0 };
+    const gates: Array<() => void> = [];
+    const call = async () => {
+      state.inFlight += 1;
+      state.peak = Math.max(state.peak, state.inFlight);
+      await new Promise<void>((resolve) => gates.push(resolve));
+      state.inFlight -= 1;
+    };
+    const releaseAll = () => { while (gates.length) gates.pop()!(); };
+    return { state, call, releaseAll };
+  };
+
+  /**
+   * Turn the event loop until the limiter has started everything it is going to start.
+   *
+   * Deterministic because it counts loop turns, not milliseconds: a slow machine takes longer in
+   * real time and performs exactly the same number of turns. `setImmediate` rather than a
+   * microtask so anything the limiter defers to a macrotask still gets its chance.
+   */
+  const settle = async (turns = 50) => {
+    for (let i = 0; i < turns; i++) await new Promise<void>((r) => setImmediate(r));
+  };
+
+  it('runs several at once against a host with no rate limit', async () => {
+    const { state, call, releaseAll } = overlapProbe();
+    const all = Promise.all(Array.from({ length: 6 }, () => politely('self-hosted-test', 0, call)));
+    await settle();
+    expect(state.peak).toBeGreaterThan(1);
+    releaseAll();
+    await all;
+    expect(state.inFlight).toBe(0);
+  });
+
+  it('never exceeds the bound, so one machine is not flooded', async () => {
+    const { state, call, releaseAll } = overlapProbe();
+    const all = Promise.all(Array.from({ length: 40 }, () => politely('bounded-host-test', 0, call)));
+    await settle();
+    // The default is 6; the assertion is on the bound existing, not on its exact value.
+    expect(state.peak).toBeLessThanOrEqual(6);
+    releaseAll();
+    // Releasing the first wave lets the next start, so drain until all forty have gone through.
+    for (let i = 0; i < 40 && state.inFlight >= 0; i++) { await settle(5); releaseAll(); }
+    await all;
+    expect(state.inFlight).toBe(0);
+  });
+
+  /**
+   * The rate-limited path keeps the original short sleep, deliberately.
+   *
+   * It chains through a real `sleep()`, so a gate would have to be opened from outside a call that
+   * has not started yet. And the assertion here is not timing-sensitive in the way the other two
+   * were: a serialised chain cannot overlap however slowly the machine runs, so `peak === 1` holds
+   * under any scheduling. Only "greater than 1" needed the coincidence, and only that flaked.
+   */
+  it('still runs one at a time against a rate-limited host', async () => {
     const state = { inFlight: 0, peak: 0 };
     const call = async () => {
       state.inFlight += 1;
@@ -194,27 +262,9 @@ describe('politely — how lookups are scheduled per host', () => {
       await new Promise((r) => setTimeout(r, 5));
       state.inFlight -= 1;
     };
-    return { state, call };
-  };
-
-  it('runs several at once against a host with no rate limit', async () => {
-    const { state, call } = overlapProbe();
-    await Promise.all(Array.from({ length: 6 }, () => politely('self-hosted-test', 0, call)));
-    expect(state.peak).toBeGreaterThan(1);
-  });
-
-  it('never exceeds the bound, so one machine is not flooded', async () => {
-    const { state, call } = overlapProbe();
-    await Promise.all(Array.from({ length: 40 }, () => politely('bounded-host-test', 0, call)));
-    // The default is 6; the assertion is on the bound existing, not on its exact value.
-    expect(state.peak).toBeLessThanOrEqual(6);
-    expect(state.inFlight).toBe(0);
-  });
-
-  it('still runs one at a time against a rate-limited host', async () => {
-    const { state, call } = overlapProbe();
     await Promise.all(Array.from({ length: 3 }, () => politely('rate-limited-test', 1, call)));
     expect(state.peak).toBe(1);
+    expect(state.inFlight).toBe(0);
   });
 
   it('releases a waiting caller when the one ahead of it throws', async () => {

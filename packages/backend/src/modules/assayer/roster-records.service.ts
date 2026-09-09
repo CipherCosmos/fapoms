@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, IsNull, SelectQueryBuilder } from 'typeorm';
+import { Repository, In, IsNull, SelectQueryBuilder } from 'typeorm';
 import type { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { assertTenantOwns, tenantFilterId, tenantWhere } from '../../infrastructure/tenancy/ambient-tenant-context';
 import {
@@ -67,6 +67,27 @@ import { AuditService } from '../../core/audit/audit.service';
  * Documents with no column of their own — passport, driving licence, voter ID — keep their
  * number on the document record, where it is the only copy.
  */
+/**
+ * The outcome of detaching one scan, and the only authority on whether the object may be erased.
+ *
+ * `detachFile` used to return the bare key, which the controller read as "delete this". The key
+ * alone cannot answer the question: the same object is referenced from two tables, and only one
+ * of them was ever consulted. So the answer travels with it now.
+ */
+export interface DetachedFile {
+  /** The storage key the removed reference pointed at. */
+  key: string;
+  /**
+   * May the caller destroy the stored object? False while any version row still reads VERIFIED
+   * against it — that row is somebody's signature, and it must stay checkable.
+   */
+  mayDestroy: boolean;
+  /** The version rows keeping the object alive, for the audit trail and for the caller's message. */
+  retainedBy: Array<{ versionId: string; version: number }>;
+  /** Whether the parent row's own verification was withdrawn because its evidence was removed. */
+  withdrewVerification: boolean;
+}
+
 /** Where the identity gate stands for one person: what is verified, absent, or refused. */
 export interface IdentityStanding {
   verified: OnboardingDocument[];
@@ -1025,14 +1046,65 @@ export class RosterRecordsService {
   }
 
   /**
-   * Detach a scan.
+   * The object one VERSION cites, whether or not it is still attached to the record.
    *
-   * The stored object is deleted by the caller, which owns the storage engine. This only forgets
-   * the reference — and does *not* clear `softCopyReceived`, because somebody may have removed a
-   * bad scan of a document that did genuinely arrive, and quietly retracting that is a second
-   * decision nobody made.
+   * Retaining evidence that nobody can fetch is not retaining evidence. Once a scan is detached
+   * from `file_paths`, `fileKey` above can no longer reach it — the index it was at is gone — so
+   * the object kept alive by a VERIFIED version row would be unreachable through the API, and the
+   * verification would be as unauditable as if the object had actually been deleted. This is the
+   * way back to it: address the evidence by the attestation that depends on it.
+   *
+   * Same ownership check and the same null-for-everything as `fileKey`, for the same reason — a
+   * foreign document id and a nonexistent one must be indistinguishable from outside.
    */
-  async detachFile(documentId: string, index: number, actorId: string): Promise<string | null> {
+  async versionFileKey(
+    documentId: string,
+    versionId: string,
+  ): Promise<{ key: string; requirement: string; version: number } | null> {
+    if (!this.docVersions) return null;
+    const row = await this.onboarding.findOne({ where: { id: documentId } });
+    if (!row) return null;
+    if (tenantFilterId()) {
+      const owner = await this.assayers.findOne({
+        where: { id: row.assayerId },
+        select: { id: true, organizationId: true },
+        withDeleted: true,
+      });
+      if ((owner?.organizationId ?? null) !== tenantFilterId()) return null;
+    }
+    const version = await this.docVersions.findOne({ where: { id: versionId, documentId } });
+    if (!version?.filePath) return null;
+    // The object really was destroyed — before this rule existed, or because nothing attested to
+    // it. Saying so is honest; streaming a 500 out of the storage engine is not.
+    if (version.evidenceReleasedAt) return null;
+    return { key: version.filePath, requirement: row.requirement, version: version.version };
+  }
+
+  /**
+   * Detach a scan — and say whether the stored object behind it may be destroyed.
+   *
+   * The reference always goes: somebody removing a bad scan is an editorial act on the CURRENT
+   * record and must keep working. It does *not* clear `softCopyReceived`, because the document
+   * may genuinely have arrived, and quietly retracting that is a second decision nobody made.
+   *
+   * What changed is the second half. The stored object is destroyed by the caller, which owns the
+   * storage engine, and the caller used to destroy it unconditionally — because `file_paths` was
+   * treated as the object's only reference. It is not. Every upload also writes an
+   * `assayer_document_versions` row carrying its own `file_path`, and a version reading VERIFIED
+   * is a person's signature saying they held that scan beside the original. Detaching the
+   * reference and destroying the object left that signature pointing at nothing: certification
+   * reproduced exactly that, a VERIFIED v1 citing a PAN scan no longer in the bucket.
+   *
+   * So the rule, and this method is its one home: **an object is destroyed only when nothing
+   * still attests to it.** Detach or retire freely; the evidence under a verification stays.
+   *
+   * Refusing the detach outright was the other candidate and is worse. It conflates the record's
+   * current state with its history — the two things this data model deliberately keeps in
+   * separate tables — and would make an illegible scan permanently unremovable from a live
+   * record. It also fixes only half the problem: see `undoVerification` below, which closes the
+   * other half.
+   */
+  async detachFile(documentId: string, index: number, actorId: string): Promise<DetachedFile | null> {
     const row = await this.onboarding.findOne({ where: { id: documentId } });
     if (!row) throw new NotFoundException('No such document.');
     // Keyed by the document, like `fileKey` — and this one goes on to delete the stored object and
@@ -1040,9 +1112,64 @@ export class RosterRecordsService {
     await this.assertOwnedAssayer(row.assayerId, 'No such document.');
     const key = row.filePaths?.[index];
     if (!key) return null;
-    row.filePaths = row.filePaths.filter((_, i) => i !== index);
+
+    /**
+     * Every version row that points at this same object.
+     *
+     * Matched on `filePath` OR `storageObjectId`, because both columns hold a key and
+     * `attachFile` writes the second from `metadata.storageObjectId` — which a future storage
+     * engine could legitimately make differ from the path. Missing a reference here is how the
+     * object gets destroyed anyway, so the match is deliberately generous.
+     */
+    const versions = this.docVersions
+      ? await this.docVersions.find({ where: { documentId: row.id } })
+      : [];
+    const citing = versions.filter((v) => v.filePath === key || v.storageObjectId === key);
+    const retainedBy = citing.filter((v) => v.verificationStatus === DocumentVerification.VERIFIED);
+    const mayDestroy = retainedBy.length === 0;
+
+    /**
+     * Did the parent row's own verification rest on the scan being removed?
+     *
+     * `verifyDocument` refuses to mark a document VERIFIED while `file_paths` is empty — "there
+     * is nothing to have checked against the original". Detaching used to walk straight past that
+     * rule: remove the only scan from a VERIFIED PAN row and it stayed VERIFIED with
+     * `file_paths = []`, a state the verification path itself will not create. Same fix as
+     * everywhere else the grounds for a verification move — the one `undoVerification` — rather
+     * than a second opinion written here.
+     *
+     * The version row is NOT touched: it is the history, and `attachFile` already says in as many
+     * words that a superseded version keeps its historical verification. Withdrawing that would
+     * erase the attestation this whole method exists to protect.
+     */
+    const remaining = row.filePaths.filter((_, i) => i !== index);
+    const currentVersion = versions.find((v) => v.id === row.currentVersionId) ?? null;
+    const wasTheEvidence = currentVersion
+      ? (currentVersion.filePath === key || currentVersion.storageObjectId === key)
+      : remaining.length === 0;
+    const withdrew = (wasTheEvidence || remaining.length === 0)
+      ? this.undoVerification(row, 'the scan it was checked against was removed')
+      : false;
+
+    row.filePaths = remaining;
     row.updatedBy = actorId;
     await this.onboarding.save(row);
+
+    /**
+     * Record the release BEFORE the object is destroyed, never after.
+     *
+     * A crash between the two then leaves an unreferenced object in the bucket, which costs
+     * storage and nothing else. The other order leaves a row citing an object that is gone, which
+     * is the defect. The database refuses this write on a VERIFIED row (see the
+     * VerifiedDocumentEvidenceRetention migration), so the rule above holds even against a caller
+     * that has not read it.
+     */
+    if (mayDestroy && this.docVersions && citing.length > 0) {
+      await this.docVersions.update(
+        { id: In(citing.map((v) => v.id)) },
+        { evidenceReleasedAt: new Date() },
+      );
+    }
 
     // The header must not go on pointing at a file that is gone. Falls back to whatever else is
     // still attached rather than blanking a record that still has a photograph in it.
@@ -1052,6 +1179,8 @@ export class RosterRecordsService {
         { photograph: row.filePaths[row.filePaths.length - 1] ?? null, updatedBy: actorId },
       );
     }
+    // The name of record follows the verifications, so withdrawing one has to re-derive it.
+    if (withdrew) await this.deriveLegalName(row.assayerId, actorId);
     /**
      * Removing a scan is audited, because attaching one is.
      *
@@ -1061,6 +1190,10 @@ export class RosterRecordsService {
      * detached a scan that a VERIFIED version row still pointed at: the row went on asserting
      * somebody had checked that PAN card against its original, the object was gone, and the
      * eleven audit events on that assayer said nothing about it.
+     *
+     * The trail now also says which of the two things happened — destroyed, or kept because a
+     * verification still cites it — because a bucket holding objects nothing references is only
+     * explicable if the reason is written down somewhere.
      *
      * `recordEventSafe`, not `recordEvent`: the rows above are already saved and not inside a
      * transaction with this call, so a failing audit write must not turn a completed detach into
@@ -1072,17 +1205,29 @@ export class RosterRecordsService {
       entityType: 'ASSAYER',
       entityId: row.assayerId,
       userId: actorId,
-      remarks: `Removed a ${row.requirement} scan. The stored object is deleted; any version row referencing it keeps its verification status.`,
+      remarks: mayDestroy
+        ? `Removed a ${row.requirement} scan. Nothing attests to it, so the stored object is deleted.`
+        : `Removed a ${row.requirement} scan from the record. The stored object is KEPT: `
+          + `${retainedBy.length} verified version row(s) still cite it as the evidence that was `
+          + 'checked against the original.',
       metadata: {
         requirement: row.requirement,
         documentId: row.id,
         removedObjectKey: key,
         remainingFileCount: row.filePaths.length,
         currentVersionId: row.currentVersionId ?? null,
+        objectDestroyed: mayDestroy,
+        retainedByVersionIds: retainedBy.map((v) => v.id),
+        withdrewVerification: withdrew,
       },
     });
 
-    return key;
+    return {
+      key,
+      mayDestroy,
+      retainedBy: retainedBy.map((v) => ({ versionId: v.id, version: v.version })),
+      withdrewVerification: withdrew,
+    };
   }
 
   /**
@@ -1333,6 +1478,24 @@ export class RosterRecordsService {
       if (targetVersionRecord.supersededByVersionId || (row.currentVersionId && row.currentVersionId !== targetVersionId)) {
         throw new ConflictException(
           `CANNOT_VERIFY_SUPERSEDED_VERSION: Document version v${targetVersionRecord.version} has been superseded by a newer upload. Only the current version can be verified.`,
+        );
+      }
+
+      /**
+       * The scan this version cites has been destroyed, so there is nothing left to check.
+       *
+       * The same rule as the `file_paths` check further down — a verification that compares
+       * nothing attests to nothing — asked of the version rather than of the parent, because the
+       * two can disagree: a document with two scans still has a non-empty `file_paths` after the
+       * one this version cites was released. The database refuses this write as well (the CHECK
+       * in VerifiedDocumentEvidenceRetention), so without this the reviewer would get a 500 from
+       * a constraint violation instead of a sentence telling them to upload the card again.
+       */
+      if (verdict === DocumentVerification.VERIFIED && targetVersionRecord.evidenceReleasedAt) {
+        throw new BadRequestException(
+          `The scan filed as v${targetVersionRecord.version} of this `
+          + `${ONBOARDING_DOCUMENT_LABELS[row.requirement]} has been deleted, so there is nothing `
+          + 'to have checked against the original. Upload the document again and verify the new scan.',
         );
       }
 

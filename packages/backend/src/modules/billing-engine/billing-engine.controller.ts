@@ -167,12 +167,20 @@ export class BillingEngineController {
 
   // ── Overview ──────────────────────────────────────────────────────────────
 
+  /**
+   * `@GlobalScopeFilter()` was the one thing every other billing read on this controller had and
+   * this route did not, so a region-assigned account read the whole organisation's book from the
+   * screen that heads the tabs it could not read from. The decorator resolves the ceiling from
+   * `users.regions` before the handler runs, so `?region=` can only ever narrow: naming a region
+   * the account does not hold is a 403, and `?organizationId=` / `?scope=` are not parameters
+   * this system has and are ignored.
+   */
   @Get('overview')
   @Roles(...BILLING_READ_ROLES)
   @RequirePermissions('billing:view:organization')
   @ApiOperation({ summary: 'The finance overview: payouts, receivables, margin, tax, cash, attention, by client' })
-  async overview() {
-    return { success: true, data: await this.service.overview() };
+  async overview(@GlobalScopeFilter() scope?: GlobalScope) {
+    return { success: true, data: await this.service.overview(scope) };
   }
 
   // ── Payouts ───────────────────────────────────────────────────────────────

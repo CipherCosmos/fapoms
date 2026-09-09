@@ -1,5 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { DataSource } from 'typeorm';
+import {
+  BRANCH_EXCLUSIVE_ASSIGNMENT_STATUSES,
+  DAY_EXCLUSIVE_ASSIGNMENT_STATUSES,
+  IN_FLIGHT_ASSIGNMENT_STATUSES,
+  sqlStatusList,
+} from './assignment-workload';
 
 export interface IntegrityViolation {
   rule: string;
@@ -73,7 +79,7 @@ export class OperationalIntegrityService {
              array_agg(id) as assignment_ids, array_agg(assignment_number) as assignment_numbers
       FROM assignments
       WHERE is_active = true
-        AND status IN ('PENDING', 'ACCEPTED', 'CHECKED_IN', 'IN_PROGRESS')
+        AND status IN (${sqlStatusList(DAY_EXCLUSIVE_ASSIGNMENT_STATUSES)})
         AND scheduled_date IS NOT NULL
         AND assayer_id IS NOT NULL
       GROUP BY assayer_id, scheduled_date
@@ -96,7 +102,7 @@ export class OperationalIntegrityService {
              array_agg(id) as assignment_ids, array_agg(assignment_number) as assignment_numbers
       FROM assignments
       WHERE is_active = true
-        AND status IN ('PENDING', 'ACCEPTED', 'CHECKED_IN', 'IN_PROGRESS')
+        AND status IN (${sqlStatusList(BRANCH_EXCLUSIVE_ASSIGNMENT_STATUSES)})
         AND project_branch_id IS NOT NULL
       GROUP BY project_branch_id
       HAVING count(*) > 1
@@ -156,7 +162,7 @@ export class OperationalIntegrityService {
       FROM assignments a
       INNER JOIN assayers ass ON a.assayer_id = ass.id
       WHERE a.is_active = true
-        AND a.status IN ('PENDING', 'ACCEPTED', 'CHECKED_IN', 'IN_PROGRESS')
+        AND a.status IN (${sqlStatusList(IN_FLIGHT_ASSIGNMENT_STATUSES)})
         AND (ass.status != 'ACTIVE' OR ass.is_active = false)
     `);
 
@@ -241,7 +247,7 @@ export class OperationalIntegrityService {
       LEFT JOIN project_branches pb ON a.project_branch_id = pb.id
       WHERE a.is_active = true
         AND (pb.id IS NULL OR pb.is_active = false)
-        AND a.status IN ('PENDING', 'ACCEPTED', 'CHECKED_IN', 'IN_PROGRESS')
+        AND a.status IN (${sqlStatusList(IN_FLIGHT_ASSIGNMENT_STATUSES)})
     `);
 
     for (const row of orphanAssignments) {

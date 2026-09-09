@@ -34,6 +34,10 @@ export * from './state-machines';
 // Canonical display labels for every status enum
 export * from './labels';
 
+// What "coverage" means, and the one calculation the planning screen, the planning endpoint and
+// the client-facing workbook all report from
+export * from './coverage';
+
 // Shared utilities
 export * from './utils';
 

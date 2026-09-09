@@ -59,6 +59,23 @@ export class AssayerDocumentVersionEntity {
   @Column({ name: 'rejection_reason', type: 'varchar', length: 40, nullable: true })
   rejectionReason: string | null;
 
+  /**
+   * When the stored object this row cites was destroyed — null while it still exists.
+   *
+   * Null covers two situations and deliberately does not distinguish them, because nothing needs
+   * to: the scan is still attached to the parent record, or it was detached and the object was
+   * KEPT because this row attests to it. Either way the bytes are there to be re-examined.
+   *
+   * Writing this is what authorises the destroy, and it is written BEFORE the object is removed
+   * from storage. A database CHECK refuses the write while `verificationStatus` is VERIFIED, so a
+   * signature can never be left pointing at nothing — which is precisely what
+   * `DELETE /assayers/document/:id/file/:index` used to do, because it consulted
+   * `assayer_documents.file_paths` and never this second, independent reference to the same
+   * object. See the VerifiedDocumentEvidenceRetention migration.
+   */
+  @Column({ name: 'evidence_released_at', type: 'timestamptz', nullable: true })
+  evidenceReleasedAt: Date | null;
+
   @Column({ name: 'superseded_by_version_id', type: 'uuid', nullable: true })
   supersededByVersionId: string | null;
 

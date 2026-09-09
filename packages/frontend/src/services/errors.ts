@@ -590,3 +590,30 @@ export function classifyError(err: unknown): ClassifiedError {
 export function userMessage(err: unknown): string {
   return translateError(err).message;
 }
+
+/**
+ * Did a lookup fail because the identifier addresses nothing, rather than because the request
+ * itself went wrong?
+ *
+ * Only ever ask this of a request whose ENTIRE input is an identifier in its path —
+ * `GET /assayers/:id`, `GET /assayers/:id/dossier`. For those, two statuses mean the same thing:
+ *
+ * - **404** is the plain answer: the store was asked and holds no such row.
+ * - **400** is the same answer arriving earlier. Every one of these routes is guarded by
+ *   `ParseUUIDPipe`, which refuses a malformed id ("Validation failed (uuid is expected)")
+ *   before the handler runs — so the id is not one the store could ever hold. Rendering that as
+ *   a validation failure would be nonsense: there is no form and no field to correct.
+ *
+ * Everything else is a statement about the REQUEST, not about the record. A 401 is a session, a
+ * 403 is a permission, a 500 is a server, a timeout is a network — and a screen that renders any
+ * of those as "no such thing" tells the operator a record was deleted when it was not. That is a
+ * worse bug than the perpetual spinner this replaces, so the list stays exactly two statuses long.
+ *
+ * A `400` on a request that also carries a BODY means something completely different (the body
+ * is invalid), which is why this is not folded into `translateError`'s categories: the same
+ * status is genuinely two different answers depending on what was sent.
+ */
+export function isAbsentById(err: unknown): boolean {
+  const status = err instanceof AppError ? err.status : undefined;
+  return status === 404 || status === 400;
+}

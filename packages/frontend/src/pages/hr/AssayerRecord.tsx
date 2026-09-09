@@ -29,7 +29,7 @@ import {
   type FieldDef, type IfscInfo,
 } from './AssayerForms';
 import { fmtDate, fmtWhen } from '../../utils/dates';
-import { userMessage } from '../../services/errors';
+import { isAbsentById, userMessage } from '../../services/errors';
 import { CommercialProfileModal, type CommercialProfile } from './CommercialProfileModal';
 import { AssayerRemarks } from '../../components/AssayerRemarks';
 import {
@@ -136,14 +136,40 @@ interface SensitiveContextValue {
 }
 const SensitiveCtx = React.createContext<SensitiveContextValue | null>(null);
 
+/**
+ * What the profile fetch has actually told us — which is not the same question as "is `a` null?".
+ *
+ * `a === null` used to mean both "the answer has not arrived" and "the answer was that there is
+ * no such person", and the screen rendered the first of those for both. So a record that does not
+ * exist showed loading skeletons for ever: the API answered 404 in 40 ms, the console logged it,
+ * and the page went on pretending to wait. A mistyped or stale link therefore looked identical to
+ * a slow network, which is exactly the distinction an operator needs in order to know whether
+ * waiting will help.
+ *
+ * Four states, because collapsing any two of them reintroduces the bug in a different place:
+ * `failed` must not read as `absent` (a 500 does not mean the person was deleted), and `loading`
+ * must not read as `failed` (a slow response is not an error).
+ */
+type ProfileLoad = 'loading' | 'ready' | 'absent' | 'failed';
+
 export const AssayerRecord: React.FC<{
   assayerId: string;
   canManage: boolean;
   onClose: () => void;
   onChanged: () => void;
   reloadKey?: number;
-}> = ({ assayerId, canManage, onClose, onChanged, reloadKey = 0 }) => {
+  /**
+   * There is no such person. Raised once per id, so the ROUTE can answer with the application's
+   * own not-found page rather than this component inventing a second dialect of "missing" — see
+   * AssayerRecordPage. Optional: mounted anywhere else, the component still renders its own
+   * "no such record" panel below rather than skeletons.
+   */
+  onMissing?: (assayerId: string) => void;
+}> = ({ assayerId, canManage, onClose, onChanged, reloadKey = 0, onMissing }) => {
   const [a, setA] = useState<Assayer | null>(null);
+  const [profileLoad, setProfileLoad] = useState<ProfileLoad>('loading');
+  /** Bumped by the retry button on the failure panel; re-runs the loader below. */
+  const [attempt, setAttempt] = useState(0);
   const [tab, setTab] = useState<TabKey>('summary');
   const [dossier, setDossier] = useState<AssayerDossier | null>(null);
   const [frozenPayables, setFrozenPayables] = useState<FrozenPayableItem[]>([]);
@@ -194,10 +220,38 @@ export const AssayerRecord: React.FC<{
   // Parallel data loading
   useEffect(() => {
     let cancelled = false;
-    // 1. Assayer Profile
+    /**
+     * A different person: forget the previous one before the new answer arrives.
+     *
+     * Without this the screen keeps rendering the record it already had while the next id loads —
+     * and if that id turns out to be missing, it keeps rendering somebody else's name and PAN
+     * right up until the 404 lands. A functional update rather than a plain `setA(null)` because
+     * a `reloadKey` bump re-runs this effect for the SAME person after a save, and blanking the
+     * record to skeletons on every save is the flicker this component was built to avoid.
+     */
+    setA((prev) => (prev && prev.id !== assayerId ? null : prev));
+    setProfileLoad('loading');
+    // 1. Assayer Profile — the one request that decides whether this screen has a subject at all.
     api.request<Assayer>(`/assayers/${assayerId}`)
-      .then((fresh) => { if (!cancelled) setA(fresh); })
-      .catch((e) => { if (!cancelled) setErr(userMessage(e)); });
+      .then((fresh) => { if (!cancelled) { setA(fresh); setProfileLoad('ready'); } })
+      .catch((e) => {
+        if (cancelled) return;
+        /**
+         * Absent, not broken. `isAbsentById` is the single place that decides which statuses mean
+         * "this id addresses nothing" (404, and the 400 a malformed uuid earns from
+         * ParseUUIDPipe) — see services/errors.ts. An ARCHIVED assayer is NOT absent: reads
+         * resolve one and answer 200, so it lands on the `ready` branch above and renders like
+         * anybody else, which is the whole reason this cannot key off lifecycle state.
+         */
+        if (isAbsentById(e)) {
+          setA(null);
+          setProfileLoad('absent');
+          onMissing?.(assayerId);
+          return;
+        }
+        setErr(userMessage(e));
+        setProfileLoad('failed');
+      });
 
     // 2. Dossier
     api.request<AssayerDossier>(`/assayers/${assayerId}/dossier`)
@@ -237,7 +291,11 @@ export const AssayerRecord: React.FC<{
       .catch(() => { if (!cancelled) setTimelineEvents([]); });
 
     return () => { cancelled = true; };
-  }, [assayerId, reloadKey]);
+    // `onMissing` is the parent's callback and is deliberately not a dependency: it is an
+    // identity-less arrow in AssayerRecordPage, so listing it would re-fire all five requests on
+    // every parent render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assayerId, reloadKey, attempt]);
 
   // Tab per-content caching
   useEffect(() => {
@@ -526,8 +584,50 @@ export const AssayerRecord: React.FC<{
   };
 
   if (!a) {
+    /**
+     * Three different answers, and the screen has to say which one it is.
+     *
+     * The route above renders the application's own not-found page for `absent` (see
+     * AssayerRecordPage), so reaching this branch means either nobody is listening for it or the
+     * component is mounted outside a route — in which case saying so here still beats skeletons.
+     */
+    if (profileLoad === 'absent') {
+      return (
+        <div data-testid="assayer-record-missing" style={{ padding: '24px', background: 'var(--bg-card)', borderRadius: '12px', color: 'var(--text-secondary)', fontSize: '13.5px' }}>
+          <strong style={{ display: 'block', marginBottom: '6px', color: 'var(--text-primary)', fontSize: '15px' }}>No such person</strong>
+          There is no record on this roster with that reference. It may have been removed, or the
+          link may have been mistyped or gone stale.
+        </div>
+      );
+    }
+    /**
+     * A failure is not an absence and must not be rendered as one — the record may be perfectly
+     * intact behind a server that is having a bad minute. So this says the load failed, keeps the
+     * server's own sentence, and offers the one action that can actually help.
+     */
+    if (profileLoad === 'failed') {
+      return (
+        <div data-testid="assayer-record-failed" style={{ padding: '24px', background: 'var(--bg-card)', borderRadius: '12px' }}>
+          <AlertBanner
+            type="error"
+            message={err ?? 'This record could not be loaded.'}
+          />
+          <button
+            type="button"
+            onClick={() => { setErr(null); setAttempt((n) => n + 1); }}
+            style={{
+              marginTop: '12px', padding: '7px 14px', fontSize: '13px', cursor: 'pointer',
+              background: 'var(--bg-secondary)', color: 'var(--text-primary)',
+              border: '1px solid var(--border-color)', borderRadius: '7px',
+            }}
+          >
+            Try again
+          </button>
+        </div>
+      );
+    }
     return (
-      <div style={{ padding: '24px', background: 'var(--bg-card)', borderRadius: '12px' }}>
+      <div data-testid="assayer-record-loading" style={{ padding: '24px', background: 'var(--bg-card)', borderRadius: '12px' }}>
         <SkeletonList rows={5} height={40} />
       </div>
     );

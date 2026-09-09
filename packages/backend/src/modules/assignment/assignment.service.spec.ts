@@ -215,6 +215,7 @@ const mockNotificationService = {
    */
   let lastSavedInTx: any = null;
 
+
   const mockUnitOfWork = {
     run: jest.fn(async (work: any) =>
       work(
@@ -223,11 +224,23 @@ const mockNotificationService = {
             if (arg?.assayerId !== undefined || arg?.status !== undefined) lastSavedInTx = arg;
             return Promise.resolve(arg);
           }),
-          // The assignment-number sequence returns a fixed value so the number is deterministic.
-          // The transition path's `SELECT … FOR UPDATE` compare-and-swap re-reads the row inside
-          // the transaction; here it is served from whatever the repository's findOne last
-          // resolved for that id — the same object the service holds, whose status has already
-          // been advanced to the target, which the guard accepts as "the same transition".
+          // The transition engine re-reads the row when a command turns out to be already
+          // achieved, so it can answer with committed state rather than its own scratch object.
+          findOne: jest.fn(async (_target: any, opts: any) =>
+            mockAssignmentRepo.findOne(opts)),
+          /**
+           * The assignment-number sequence returns a fixed value so the number is deterministic.
+           *
+           * The transition path's `SELECT … FOR UPDATE` compare-and-swap re-reads the row inside
+           * the transaction. It is served from whatever the repository's `findOne` last resolved
+           * for that id — the same object the service holds, which the state machine has already
+           * advanced to the target before the transaction opens. So this fake reports the row as
+           * already at the target where a real database would report the prior status.
+           *
+           * That inaccuracy is why the already-achieved shortcut in the service keys on the
+           * ENTITY VERSION rather than on the status alone: a rival that genuinely got there first
+           * has bumped the version, and this fake has not. See the comment on that guard.
+           */
           query: jest.fn(async (sql: string, params?: any[]) => {
             if (/nextval\('assignment_number_seq'\)/.test(sql)) return [{ n: '42' }];
             if (/FOR UPDATE/.test(sql)) {
@@ -236,10 +249,10 @@ const mockNotificationService = {
               for (let i = results.length - 1; i >= 0; i--) {
                 const v = await Promise.resolve(results[i]?.value).catch(() => null);
                 if (!v) continue;
-                if (params?.[0] != null && v.id === params[0]) return [{ status: v.status }];
+                if (params?.[0] != null && v.id === params[0]) return [{ status: v.status, entity_version: 1 }];
                 fallback = fallback ?? v;
               }
-              return fallback ? [{ status: fallback.status }] : [];
+              return fallback ? [{ status: fallback.status, entity_version: 1 }] : [];
             }
             /**
              * The read-back `create()` performs after its save, to confirm the row is really

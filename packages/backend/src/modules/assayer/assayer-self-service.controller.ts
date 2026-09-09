@@ -38,6 +38,8 @@ import {
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, OnboardingAllowed } from '../auth/guards';
 import { assertSelfOrPrivileged } from './assayer-visibility';
 import { RosterRecordsService } from './roster-records.service';
+import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
+import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { AssayerDocumentEntity } from './assayer-document.entity';
 import { AssayerEntity } from './assayer.entity';
 import { tenantFilterId } from '../../infrastructure/tenancy/ambient-tenant-context';
@@ -104,6 +106,18 @@ export class AssayerSelfServiceController {
     @InjectRepository(AssayerEntity)
     private readonly assayers: Repository<AssayerEntity>,
     @Inject('StorageEngine') private readonly storage: StorageEngine,
+    /**
+     * The region ceiling, which this controller did not have.
+     *
+     * `getOwnDocumentFile`'s own note below says it plainly: "This controller injects no
+     * `RegionGuardService` at all, so there was nothing else here to notice." That was true, and
+     * what went unnoticed was that `assertSelfOrPrivileged` admits ANY administrator or operations
+     * account for ANY assayer id — including one whose region the account is not assigned to.
+     * Verified live: a NORTH-scoped OPERATIONS account refused `GET /assayers/<west id>` with 403
+     * streamed that same person's PAN card scan through this controller, byte-identical to what an
+     * administrator receives. `ScopeModule` is `@Global()`, so this needs no module change.
+     */
+    private readonly regionGuard: RegionGuardService,
   ) {}
 
   /**
@@ -129,8 +143,14 @@ export class AssayerSelfServiceController {
   async registrationChecklist(
     @Param('assayerId', ParseUUIDPipe) assayerId: string,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     assertSelfOrPrivileged(req.user, assayerId, 'view this checklist');
+    // The ceiling `GET /assayers/:id` enforces, on the same record. Without it a region-scoped
+    // operator refused the roster row still read that person's whole KYC position — which
+    // documents are held, which are missing, what is verified and what has expired.
+    // A no-op for the assayer reading their own: an external principal carries no regions.
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
 
     const dossier = await this.rosterRecords.dossier(assayerId);
     const byRequirement = new Map(
@@ -212,8 +232,12 @@ export class AssayerSelfServiceController {
     @Param('index') index: string,
     @Req() req: any,
     @Res() res: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ): Promise<void> {
     assertSelfOrPrivileged(req.user, assayerId, 'view these documents');
+    // The same ceiling, before the scan is located. See the constructor note: this is an identity
+    // document, and `assertSelfOrPrivileged` alone lets every staff account reach every one.
+    await this.regionGuard.assertAssayerInScope(assayerId, scope);
 
     if (!Object.values(OnboardingDocument).includes(requirement as OnboardingDocument)) {
       throw withCode(

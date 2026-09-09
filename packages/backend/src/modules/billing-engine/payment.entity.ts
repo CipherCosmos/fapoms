@@ -4,6 +4,7 @@ import { BillingInvoiceEntity } from './invoice.entity';
 import { AssayerPayableEntity } from './payable.entity';
 import { PaymentMethod, PaymentDirection } from '@fapoms/shared';
 import { encryptedColumn } from '../../infrastructure/security/field-encryption';
+import { PayoutDestinationEvidence } from './payout-destination';
 
 /**
  * Every real movement of money, in either direction.
@@ -85,6 +86,14 @@ export class BillingPaymentEntity extends BaseEntity {
 
   @Column({ name: 'destination_verified_at', type: 'timestamptz', nullable: true })
   destinationVerifiedAt: Date | null;
+
+  /**
+   * Which evidence produced `destinationVerifiedAt`, copied from the payable's frozen snapshot.
+   * See `payable.entity.ts` and `payout-destination.ts`; `chk_billing_payments_destination_evidence`
+   * refuses a timestamp with no source and a source with no timestamp.
+   */
+  @Column({ name: 'destination_verified_source', type: 'varchar', length: 30, nullable: true })
+  destinationVerifiedSource: PayoutDestinationEvidence | null;
 
   // Nullable because an OUTBOUND disbursement has no client invoice behind it.
   @ManyToOne(() => BillingInvoiceEntity, (inv) => inv.payments, { onDelete: 'CASCADE', nullable: true })

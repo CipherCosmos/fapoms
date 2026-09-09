@@ -38,16 +38,15 @@ import {
   type OverrideOutcome,
 } from './assignment-target-eligibility.policy';
 import { ProjectEntity } from '../project/project.entity';
-import { DAY_EXCLUSIVE_ASSIGNMENT_STATUSES } from './assignment-workload';
+import { DAY_EXCLUSIVE_ASSIGNMENT_STATUSES, ENGAGED_ASSIGNMENT_STATUSES } from './assignment-workload';
 import { throwMappedUniqueViolation, throwIfRetryable } from './assignment-constraint-errors';
 import { RoutingService, RouteResult } from '../geo/routing.provider';
 import { ValidationService } from '../validation/validation.service';
 import { DocumentService } from '../document/document.service';
 import { FeePolicyService } from '../pricing/fee-policy.service';
 import { withCode } from '../../infrastructure/http/api-error';
-import { EventCategory, ScheduleStatus, AssignmentStatus, AssayerStatus, ProjectBranchStatus, CustomerMasterStatus, Priority, SystemRole, calculateHaversineDistance, assignmentIssueCategoryLabel, isAssignmentTerminal, BypassableRule, businessDateKey, businessTodayDateKey, standingAllowsPlanning, expandRoles,
+import { EventCategory, ScheduleStatus, AssignmentStatus, AssayerStatus, ProjectBranchStatus, CustomerMasterStatus, Priority, SystemRole, calculateHaversineDistance, assignmentIssueCategoryLabel, isAssignmentTerminal, BypassableRule, businessDateKey, businessTodayDateKey, expandRoles,
   AssignmentRule, canOverrideAssignmentRule, overrideAdviceFor, ASSIGNMENT_ERROR_CODES } from '@fapoms/shared';
-import { NO_EMPANELMENT_ROW_SETTING } from '../planning/recommendation.engine';
 import { applyBranchScope, branchScopeWhere, needsBranchJoin } from '../../infrastructure/scope/apply-scope';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { CacheService } from '../../infrastructure/cache/cache.service';
@@ -490,15 +489,10 @@ export class AssignmentService {
       order: { createdAt: 'DESC' },
     });
 
-    if (
-      existingAssignment &&
-      [
-        AssignmentStatus.ACCEPTED,
-        AssignmentStatus.CHECKED_IN,
-        AssignmentStatus.IN_PROGRESS,
-        AssignmentStatus.COMPLETED,
-      ].includes(existingAssignment.status)
-    ) {
+    // An assayer already said yes to this branch and has not walked away — the shared
+    // `ENGAGED_ASSIGNMENT_STATUSES`, the same question the dashboard's "has this audit got an
+    // assayer?" check asks. Both used to spell the four names out separately.
+    if (existingAssignment && ENGAGED_ASSIGNMENT_STATUSES.includes(existingAssignment.status)) {
       throw new ConflictException(
         `Branch Busy: An active/completed assignment (${existingAssignment.assignmentNumber}) already exists for this branch in state ${existingAssignment.status}.`
       );
@@ -1153,6 +1147,22 @@ export class AssignmentService {
         },
       });
 
+      /**
+       * The same cached-counter refresh every transition performs, on the one path that skipped it.
+       *
+       * `scheduleStatsRefresh` had exactly one call site — inside `transitionStatus` — so creating
+       * an assignment never updated `total_assignments` or `last_assignment_date`. Verified live:
+       * an assayer given exactly one PENDING assignment still read `total_assignments = 0` and
+       * appeared in the HR "never assigned" tile and the roster export, until somebody happened to
+       * open their profile, which recomputes on read. Retention reporting therefore depended on
+       * who had browsed what.
+       *
+       * Deliberately the existing mechanism and not a second one: it is fire-and-forget, off the
+       * critical path, and self-correcting on read, which is the behaviour the transition path
+       * already relies on.
+       */
+      this.assayerService.scheduleStatsRefresh(saved.assayerId);
+
       if (!dto.acceptOnBehalf) {
         notifyOffered();
         return saved;
@@ -1370,6 +1380,12 @@ export class AssignmentService {
       throw new ForbiddenException('You are not assigned to this assignment.');
     }
     const prevStatus = assignment.status;
+    /**
+     * The version the row carried when we read it, before anything in this method touches it.
+     * The already-achieved shortcut inside the transaction compares against this to tell a rival's
+     * committed write apart from our own in-memory one.
+     */
+    const preLockVersion = Number(assignment.entityVersion || 1);
 
     if (prevStatus === targetStatus && fee === undefined) {
       const trimmed = reason?.trim();
@@ -1508,6 +1524,51 @@ export class AssignmentService {
           throw new ConflictException(
             `This assignment changed while you were acting on it — it is now '${lockedStatus}'. Refresh and try again.`,
           );
+        }
+
+        /**
+         * The row is already where the caller wants it, and the state machine does not allow it to
+         * go there again. That is a command that has already been achieved, not a command to run.
+         *
+         * This fell through and performed the whole write a second time: a new version, a fresh
+         * save, the schedule sync, an audit event and an outbox event. Six simultaneous
+         * `POST :id/complete` calls on one assignment therefore returned six successes, wrote six
+         * `ASSIGNMENT_COMPLETED` audit rows, advanced the version by five and emitted six events.
+         * No money moved — the booking path is defended by a deterministic job id, a read guard and
+         * a unique index — but the compliance trail said the audit was completed six times, and one
+         * click amplified six-fold onto the event bus.
+         *
+         * `canTransition` is what decides, rather than a list of statuses written out here, because
+         * the state machine already answers exactly this question. ACCEPTED, CHECKED_IN and
+         * IN_PROGRESS declare themselves as their own successors on purpose — a field check-in is
+         * retried after a flaky connection and must still update the GPS fix — so those keep
+         * running. COMPLETED, CANCELLED, REJECTED and PENDING do not, and re-applying one of those
+         * has nothing left to do.
+         *
+         * The version comparison is what distinguishes a rival's committed write from this
+         * method's own in-memory one. By the time the transaction opens, the state machine has
+         * already advanced the entity we hold to the target status — so the status alone cannot
+         * say who put the row there. A rival that got there first also bumped `entity_version`
+         * past the value we read before taking the lock; our own unwritten change did not. The
+         * sequential duplicate is caught earlier and more cheaply, before the transaction opens.
+         *
+         * Returned as `alreadyAchieved`, which is the shape the idempotency-record path above
+         * already uses: the caller gets the committed state and no second history is written.
+         */
+        if (
+          lockedStatus === targetStatus
+          && lockedVersion !== preLockVersion
+          && !AssignmentStateMachine.canTransition(lockedStatus, targetStatus)
+        ) {
+          const current = await manager.findOne(AssignmentEntity, {
+            where: { id },
+            relations: ['assayer', 'projectBranch', 'projectBranch.branch'],
+          });
+          return {
+            assignment: (current ?? assignment) as AssignmentEntity,
+            autoScheduleResult: null,
+            alreadyAchieved: true,
+          };
         }
 
         assignment.entityVersion = lockedVersion + 1;
@@ -3988,6 +4049,34 @@ export class AssignmentService {
     } as any);
   }
 
+  /**
+   * May this caller act on the attendance of an assignment owned by `ownerAssayerId`?
+   *
+   * The single authoritative answer for both `recordCheckIn` and `recordCheckOut`. It was written
+   * out twice, once in each method, and that is why the first repair only half-landed: the rule
+   * was moved above the fast paths in the copy that reads the hydrated entity while the copy that
+   * reads the locked row stayed where it was. One definition, called from both places, in both
+   * methods, before anything else answers.
+   *
+   * `false` for an anonymous or unknown principal: a missing `userId` cannot own anything, and
+   * `findOne({ id: undefined })` is not a question worth asking the database.
+   */
+  private async actorMayRecordAttendance(
+    ownerAssayerId: string | null | undefined,
+    userId?: string,
+  ): Promise<boolean> {
+    if (!userId) return false;
+    if (ownerAssayerId && userId === ownerAssayerId) return true;
+    const actor = await this.dataSource
+      .getRepository(UserEntity)
+      .findOne({ where: { id: userId }, relations: ['roles'] })
+      .catch(() => null);
+    const actorRoles: string[] = (actor?.roles ?? []).map((r: any) => r?.name).filter(Boolean);
+    return expandRoles(actorRoles).some((r) =>
+      [SystemRole.ADMIN, SystemRole.OPERATIONS].includes(r as SystemRole),
+    );
+  }
+
   async recordCheckIn(
     id: string,
     lat: number,
@@ -4015,6 +4104,27 @@ export class AssignmentService {
         : [];
 
       const lockedRow = lockedRows?.[0];
+
+      /**
+       * Ownership before ANY fast path, including the three that read the locked row.
+       *
+       * The first repair moved the ownership check above the shortcuts that read the *hydrated*
+       * entity and left these three — which read the locked row and return earlier still —
+       * exactly where they were. So the defect it was written to close stayed open: re-verified
+       * live after that fix, the same non-owning assayer POSTing to the same assignment id still
+       * received 201 and the whole 49-field record, including the assigned assayer's home
+       * coordinates, phone and email, seconds after `GET` on that id answered 403. Half a fix on
+       * an authorization ordering bug is no fix; the question has to be asked before the first
+       * statement that can answer it, not before the second.
+       */
+      if (lockedRow && !(await this.actorMayRecordAttendance(lockedRow.assayer_id, userId))) {
+        return {
+          success: false,
+          assignment: null as any,
+          error: 'NOT_YOUR_ASSIGNMENT',
+          message: 'You can only check in to an assignment that is assigned to you.',
+        };
+      }
 
       // Quick-reject if cancelled or completed
       if (lockedRow?.status === AssignmentStatus.CANCELLED) {
@@ -4093,17 +4203,9 @@ export class AssignmentService {
       const actorIsAssignedAssayer = !!userId && userId === assignment.assayerId;
       let staffOverride = false;
       if (!actorIsAssignedAssayer) {
-        const actor = await this.dataSource
-          .getRepository(UserEntity)
-          .findOne({ where: { id: userId }, relations: ['roles'] })
-          .catch(() => null);
-        const actorRoles: string[] = (actor?.roles ?? []).map((r: any) => r?.name).filter(Boolean);
-        staffOverride = expandRoles(actorRoles).some((r) =>
-          [
-            SystemRole.ADMIN,
-            SystemRole.OPERATIONS,
-          ].includes(r as SystemRole),
-        );
+        // Same rule, one definition — `actorMayRecordAttendance`. Reached only when the caller is
+        // not the assignee, so a `true` here can only mean the staff override.
+        staffOverride = await this.actorMayRecordAttendance(assignment.assayerId, userId);
         if (!staffOverride) {
           // `assignment: null`, not the record. A caller who may not read this assignment must not
           // receive it as a consolation prize for being refused.
@@ -4344,6 +4446,19 @@ export class AssignmentService {
 
       const lockedRow = lockedRows?.[0];
 
+      // Ownership before ANY fast path, for the reason set out on `recordCheckIn` above: the
+      // already-checked-out shortcut a few lines below answers `success: true` with the whole
+      // record, and the cancelled/completed ones answer about an assignment the caller may not
+      // read. All three run off the locked row, so all three had to move behind this.
+      if (lockedRow && !(await this.actorMayRecordAttendance(lockedRow.assayer_id, userId))) {
+        return {
+          success: false,
+          assignment: null as any,
+          error: 'NOT_YOUR_ASSIGNMENT',
+          message: 'You can only check out of an assignment that is assigned to you.',
+        };
+      }
+
       if (lockedRow?.status === AssignmentStatus.CANCELLED) {
         return { success: false, assignment: null as any, error: 'ASSIGNMENT_CANCELLED', message: 'Cannot check out of a cancelled assignment.' };
       }
@@ -4400,14 +4515,7 @@ export class AssignmentService {
       // cancelled/completed paths answer about an assignment the caller may not read.
       const actorIsAssignedAssayer = !!userId && userId === assignment.assayerId;
       if (!actorIsAssignedAssayer) {
-        const actor = await this.dataSource
-          .getRepository(UserEntity)
-          .findOne({ where: { id: userId }, relations: ['roles'] })
-          .catch(() => null);
-        const actorRoles: string[] = (actor?.roles ?? []).map((r: any) => r?.name).filter(Boolean);
-        const staffOverride = expandRoles(actorRoles).some((r) =>
-          [SystemRole.ADMIN, SystemRole.OPERATIONS].includes(r as SystemRole),
-        );
+        const staffOverride = await this.actorMayRecordAttendance(assignment.assayerId, userId);
         if (!staffOverride) {
           return {
             success: false,

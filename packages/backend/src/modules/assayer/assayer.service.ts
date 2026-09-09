@@ -10,7 +10,11 @@ import { withCode } from '../../infrastructure/http/api-error';
 import { UnitOfWork } from '../../infrastructure/persistence/unit-of-work';
 import type { EntityManager } from 'typeorm';
 import { diffFields } from '../../core/audit/diff-fields';
-import { COMMITTED_ASSIGNMENT_STATUSES, DEFAULT_WEEKLY_CAPACITY } from '../assignment/assignment-workload';
+import {
+  COMMITTED_ASSIGNMENT_STATUSES,
+  DEFAULT_WEEKLY_CAPACITY,
+  IN_FLIGHT_ASSIGNMENT_STATUSES,
+} from '../assignment/assignment-workload';
 import { DATA_INTEGRITY_SHEET } from './data-integrity.service';
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import {
@@ -2042,12 +2046,11 @@ export class AssayerService implements OnModuleInit {
   /**
    * Assignment states in which an assayer is actively holding work: they have committed to a job
    * and have not finished it. COMPLETED is excluded on purpose — the obligation ends with the job.
+   *
+   * That is `COMMITTED_ASSIGNMENT_STATUSES` verbatim. It was a private copy under a different
+   * name, which is how a shared set stops being shared.
    */
-  private static readonly HOLDS_ACTIVE_WORK: AssignmentStatus[] = [
-    AssignmentStatus.ACCEPTED,
-    AssignmentStatus.CHECKED_IN,
-    AssignmentStatus.IN_PROGRESS,
-  ];
+  private static readonly HOLDS_ACTIVE_WORK: AssignmentStatus[] = [...COMMITTED_ASSIGNMENT_STATUSES];
 
   /** Does this assayer currently hold work they have accepted and not yet completed? */
   async hasActiveAssignment(assayerId: string): Promise<boolean> {
@@ -2438,12 +2441,7 @@ export class AssayerService implements OnModuleInit {
    * always right about this — it filters on an explicit set of open standings, which is why it
    * was idempotent while this was not.
    */
-  private static readonly OPEN_ASSIGNMENT_STATUSES: string[] = [
-    AssignmentStatus.PENDING,
-    AssignmentStatus.ACCEPTED,
-    AssignmentStatus.CHECKED_IN,
-    AssignmentStatus.IN_PROGRESS,
-  ];
+  private static readonly OPEN_ASSIGNMENT_STATUSES: string[] = [...IN_FLIGHT_ASSIGNMENT_STATUSES];
 
   /**
    * Every lifecycle move goes through here, so the cached principal is dropped in one place.
@@ -4606,7 +4604,11 @@ export class AssayerService implements OnModuleInit {
               destination_bank_account_number as "destinationBankAccountNumber",
               destination_account_holder_name as "destinationAccountHolderName",
               payout_evidence_version_id as "payoutEvidenceVersionId",
-              destination_verified_at as "destinationVerifiedAt"
+              destination_verified_at as "destinationVerifiedAt",
+              -- Returned beside the timestamp deliberately: a verification date with no named
+              -- evidence is exactly the claim that turned out to be fabricated. NULL here means
+              -- the destination is unverified, which the timestamp alone could not say.
+              destination_verified_source as "destinationVerifiedSource"
        FROM assayer_payables
        WHERE assayer_id = $1
        ORDER BY created_at DESC`,

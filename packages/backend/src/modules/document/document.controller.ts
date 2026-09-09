@@ -1157,9 +1157,37 @@ export class DocumentController {
   }
 
   /**
+   * The region ceiling for one document id, for the write routes.
+   *
+   * The reads in this file each spell this out inline — `findOne`, `trail` and the download token
+   * all resolve `doc.assessment?.branch?.region` and stage it. Dispatch spelled it out nowhere,
+   * on either the single route or the batch, so the release of a packet was outside a boundary
+   * its own metadata read was inside. Written once here because the batch needs it per id and the
+   * single route needs the identical line; the three read sites above do the same thing inline and
+   * should adopt this the next time one of them is touched.
+   *
+   * A document that cannot be loaded is passed over rather than thrown on: it has no region to
+   * breach, `dispatchMany` already reports an unknown id as a per-id failure, and a 404 raised
+   * here would turn one bad id into a whole-batch refusal.
+   */
+  private async assertDocumentRegion(
+    documentId: string,
+    scope: GlobalScope | undefined,
+    context: string,
+  ): Promise<void> {
+    const doc = await this.documentService.findOne(documentId).catch(() => null);
+    if (!doc) return;
+    await this.regionGuard.assertRegionAllowedStaged(doc.assessment?.branch?.region ?? null, scope, context);
+  }
+
+  /**
    * `branchEmail` sends the packet to the bank branch instead of telling the assayer to download
    * it — how several clients work, with the assayer collecting it there. Absent, this behaves
    * exactly as it always has.
+   *
+   * It is also why the region ceiling below matters more here than on a metadata read: the
+   * address is supplied by the caller, so an unguarded dispatch would email another region's bank
+   * paperwork wherever the caller asked.
    */
   @Post(':id/dispatch')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
@@ -1168,7 +1196,9 @@ export class DocumentController {
     @Param('id', ParseUUIDPipe) id: string,
     @Body() body: { branchEmail?: string } | undefined,
     @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    await this.assertDocumentRegion(id, scope, 'document:dispatch');
     const userId = req?.user?.id || id;
     const doc = await this.documentService.dispatchDocument(id, userId, DispatchMethod.MANUAL, {
       branchEmail: body?.branchEmail,
@@ -1311,12 +1341,30 @@ export class DocumentController {
     @Query('auditDate') auditDate: string,
     @Req() req: any,
     @Query('customerMasterVersionId') customerMasterVersionId?: string,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
     if (!files?.length) throw new BadRequestException('No files received.');
     if (!auditDate) throw new BadRequestException('auditDate is required.');
 
     const { matches, unmatched, branchesWithoutFile } =
       await this.documentService.matchPdfsToBranches(projectId, auditDate, files.map((f) => f.originalname));
+
+    /**
+     * The region ceiling, per matched branch, before the first file is filed.
+     *
+     * `GET /documents/project/:projectId` narrows what a region-scoped desk may READ of a
+     * project's packets, and the three project-branch reads in this file each assert the same
+     * boundary — this route, which CREATES those packets, asserted nothing. Matched branches
+     * rather than the project as a whole (`assertProjectInScope`) because the day's filing is a
+     * per-branch operation: a national project legitimately spans regions, and refusing it
+     * wholesale would stop the in-region filing this route exists to do. Staged, like every other
+     * document boundary — see `region-guard.service.ts` on why these six roll out behind
+     * `security.regionScope.mode`.
+     */
+    for (const m of matches) {
+      const region = await this.documentService.resolveProjectBranchRegion(m.projectBranchId);
+      await this.regionGuard.assertRegionAllowedStaged(region, scope, 'document:uploadGeneratedBatch');
+    }
 
     const byName = new Map(files.map((f) => [f.originalname, f]));
     const created: Array<{ documentId: string; fileName: string; branchName: string }> = [];
@@ -1371,9 +1419,18 @@ export class DocumentController {
   @Post('dispatch-batch')
   @Roles(SystemRole.ADMIN, SystemRole.OPERATIONS, SystemRole.DESK)
   @ApiOperation({ summary: 'Release several documents to their assayers in one action' })
-  async dispatchBatch(@Body() body: DispatchBatchRequestDto, @Req() req: any) {
+  async dispatchBatch(
+    @Body() body: DispatchBatchRequestDto,
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
+  ) {
     if (!body?.documentIds?.length) {
       throw new BadRequestException('documentIds is required.');
+    }
+    // Every id before any of them is released, so a batch holding one out-of-region document is
+    // refused whole rather than half-dispatched — the shape `assayer.bulkTransitionLifecycle` uses.
+    for (const documentId of body.documentIds) {
+      await this.assertDocumentRegion(documentId, scope, 'document:dispatchBatch');
     }
     const result = await this.documentService.dispatchMany(body.documentIds, req.user.id, body.branchEmail);
     return {

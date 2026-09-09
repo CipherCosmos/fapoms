@@ -2,6 +2,7 @@ import { Entity, Column, Index } from 'typeorm';
 import { BaseEntity } from '../../core/entities/base.entity';
 import { AssayerPayableStatus } from '@fapoms/shared';
 import { encryptedColumn } from '../../infrastructure/security/field-encryption';
+import { PayoutDestinationEvidence } from './payout-destination';
 
 /**
  * What we owe an assayer for one assignment — the assayer-side line.
@@ -144,4 +145,19 @@ export class AssayerPayableEntity extends BaseEntity {
 
   @Column({ name: 'destination_verified_at', type: 'timestamptz', nullable: true })
   destinationVerifiedAt: Date | null;
+
+  /**
+   * WHICH evidence produced `destinationVerifiedAt` — never a guess, and never invented.
+   *
+   * The timestamp alone could not be checked, and both writers used to end `?? new Date()`, so
+   * "no evidence at all" and "verified this second" were written identically. `BANK_PASSBOOK`
+   * means `payoutEvidenceVersionId` points at the verified document version;
+   * `IDENTITY_DOCUMENT` means `assayers.identity_verified_at` (which a bank-detail edit clears).
+   * NULL means unverified, and `destinationVerifiedAt` must then be NULL too —
+   * `chk_assayer_payables_destination_evidence` refuses any other combination.
+   *
+   * See `payout-destination.ts` for the ladder and why it is the rule.
+   */
+  @Column({ name: 'destination_verified_source', type: 'varchar', length: 30, nullable: true })
+  destinationVerifiedSource: PayoutDestinationEvidence | null;
 }

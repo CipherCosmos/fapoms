@@ -37,6 +37,7 @@ const projectBranchUploadMulterOptions = {
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsArray, IsObject, ArrayNotEmpty, IsUUID, IsDateString, IsEnum, MaxLength, Min, Validate, ValidatorConstraint, ValidatorConstraintInterface, ValidationArguments } from 'class-validator';
 import { Transform } from 'class-transformer';
 import { ProjectService, CreateProjectDto } from './project.service';
+import { ASSIGNED_ASSIGNMENT_STATUSES } from '../assignment/assignment-workload';
 import { ImportJobService } from '../import/import-job.service';
 import type { ImportScope } from '../import/import.contract';
 import { JwtAuthGuard, RolesGuard, PermissionsGuard, Roles, RequirePermissions } from '../auth/guards';
@@ -324,7 +325,9 @@ export class ProjectController {
       branches.map(b => [
         b.id,
         b.assignments
-          ?.filter(a => a.status !== 'CANCELLED' && a.status !== 'REJECTED')
+          // "Whose branch is this?" — the shared set. The Command Centre's branch query and the
+          // coverage workbook ask the same question and used to carry their own copies of it.
+          ?.filter(a => (ASSIGNED_ASSIGNMENT_STATUSES as string[]).includes(a.status))
           ?.sort((a, b2) => new Date(b2.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime())
           ?.[0],
       ]),
@@ -383,8 +386,29 @@ export class ProjectController {
   async associateBranches(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: AddProjectBranchesRequestDto,
-    @Req() req: any
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    /**
+     * The region ceiling, per branch id, exactly as `getBranchHistory` above enforces it for a
+     * read of one branch.
+     *
+     * This route took neither `@GlobalScopeFilter()` nor an assertion, and it is the write half
+     * of a boundary whose read half has always been closed. Verified live: a NORTH-scoped
+     * OPERATIONS account refused `GET /branches/<west id>` with 403 "That record belongs to a
+     * region your account is not assigned to" put that same branch into a project one second
+     * later — a `project_branches` row and an `assessments` row, both stamped `created_by` with
+     * the out-of-region caller — and then could still not see the link it had just made, because
+     * `GET /projects/:id/branches` filters by the same ceiling the write ignored. A boundary that
+     * one verb honours and its neighbour does not is not a boundary.
+     *
+     * Asserted for every id before any of them is associated, so a list containing one
+     * out-of-scope branch is refused whole rather than half-applied — the shape
+     * `assayer.bulkTransitionLifecycle` already uses.
+     */
+    for (const branchId of dto.branchIds) {
+      await this.regionGuard.assertBranchInScope(branchId, scope);
+    }
     const list = await this.projectService.associateBranches(id, dto.branchIds, req.user.id);
     return {
       success: true,
@@ -555,8 +579,18 @@ export class ProjectController {
   async removeBranch(
     @Param('id', ParseUUIDPipe) id: string,
     @Param('pbId', ParseUUIDPipe) pbId: string,
-    @Req() req: any
+    @Req() req: any,
+    @GlobalScopeFilter() scope?: GlobalScope,
   ) {
+    /**
+     * The destructive mirror of `associateBranches`, and it had the same hole.
+     *
+     * `getBranchHistory` above asserts this exact ceiling on the exact same id for a READ.
+     * Verified live: a NORTH-scoped OPERATIONS account got 403 from
+     * `GET /projects/branches/<pbId>/history` and then removed that same WEST project branch
+     * through this route — 200, `is_active` true → false, `updated_by` its own id.
+     */
+    await this.regionGuard.assertProjectBranchInScope(pbId, scope);
     const list = await this.projectService.removeProjectBranch(id, pbId, req.user.id);
     return {
       success: true,

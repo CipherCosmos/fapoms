@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { getRepositoryToken, getDataSourceToken } from '@nestjs/typeorm';
-import { DataSource } from 'typeorm';
+import { DataSource, FindOperator } from 'typeorm';
 import { BillingEngineService } from './billing-engine.service';
 import { BillingJobsWorker } from './billing-jobs.worker';
 import { BillingJobsService } from './billing-jobs.service';
@@ -22,6 +22,7 @@ import { NotificationDispatchService } from '../notifications/notification-dispa
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 import { OutboxEntity } from '../../infrastructure/persistence/outbox.entity';
 import { OutboxRelay } from '../../infrastructure/persistence/outbox.relay';
+import { OutboxDeadLetterService } from '../../infrastructure/persistence/outbox-dead-letter.service';
 import { AssignmentStatus, AssayerPayableStatus, BillingState } from '@fapoms/shared';
 
 /**
@@ -115,8 +116,36 @@ describe('Phase 0.1 Financial Durability — End-to-End Boundary & Idempotency V
     },
   };
 
+  /**
+   * Enough of a repository for the relay AND the dead-letter service to run against the same
+   * rows, with the TypeORM operators actually evaluated.
+   *
+   * `IsNull()` and `Not(IsNull())` on `failed_at` are what separate "still being retried" from
+   * "abandoned"; a fake that treated both as "the key is present" would let a dead letter be
+   * re-delivered by the relay and would report an empty dead-letter list, passing the tests below
+   * for the wrong reason.
+   */
+  const matchesOperator = (value: any, criterion: any): boolean => {
+    if (criterion instanceof FindOperator) {
+      switch (criterion.type) {
+        case 'isNull': return value === null || value === undefined;
+        case 'not': return !matchesOperator(value, criterion.child ?? criterion.value);
+        case 'moreThan': return value > criterion.value;
+        case 'lessThan': return value < criterion.value;
+        default: throw new Error(`unsupported operator in fake repository: ${criterion.type}`);
+      }
+    }
+    return value === criterion;
+  };
+  const matchesWhere = (row: any, where: any): boolean =>
+    Object.entries(where ?? {}).every(([key, criterion]) => matchesOperator(row[key], criterion));
+  const outboxRows = (opts?: any) =>
+    Array.from(outboxStore.values()).filter((r) => matchesWhere(r, opts?.where));
+
   const outboxRepo: any = {
-    find: jest.fn(async () => Array.from(outboxStore.values()).filter((r) => r.dispatchedAt === null)),
+    find: jest.fn(async (opts?: any) => outboxRows(opts)),
+    findOne: jest.fn(async (opts: any) => outboxRows(opts)[0] ?? null),
+    count: jest.fn(async (opts?: any) => outboxRows(opts).length),
     update: jest.fn(async (id: any, patch: any) => {
       const ids = Array.isArray(id) ? id : [id];
       for (const singleId of ids) {
@@ -309,6 +338,9 @@ describe('Phase 0.1 Financial Durability — End-to-End Boundary & Idempotency V
       dispatchedAt: null,
       attempts: 0,
       lastError: null,
+      failedAt: null,
+      replayedAt: null,
+      replayedBy: null,
     };
     outboxStore.set(outboxRow.id, outboxRow);
 
@@ -340,6 +372,9 @@ describe('Phase 0.1 Financial Durability — End-to-End Boundary & Idempotency V
       dispatchedAt: null,
       attempts: 0,
       lastError: null,
+      failedAt: null,
+      replayedAt: null,
+      replayedBy: null,
     };
     outboxStore.set(outboxRow.id, outboxRow);
 
@@ -825,6 +860,179 @@ describe('Phase 0.1 Financial Durability — End-to-End Boundary & Idempotency V
         { assignmentId: 'asn-entry-only', hasEntry: true, hasPayable: false },
         { assignmentId: 'asn-payable-only', hasEntry: false, hasPayable: true },
       ]);
+    });
+  });
+
+  /**
+   * THE OUTBOX DEAD LETTER, END TO END.
+   *
+   * The relay used to select `attempts < MAX_ATTEMPTS`. A row that reached 15 stopped matching
+   * that query and that was the whole of "abandoned": no state said so, no route listed it, no
+   * metric moved, and `RetentionService.purgeDispatchedOutboxEvents` only deletes rows that HAVE
+   * a `dispatched_at`, so it was never cleaned up either. One `logger.error` at the moment of the
+   * fifteenth failure was the only trace an event had been given up on, forever.
+   *
+   * Both halves of the fix are exercised here against the same rows the relay reads:
+   * the lifecycle 0 attempts -> retry -> retry -> exhausted -> visible, and a real replay of an
+   * exhausted `assignment:status-changed` producing exactly ONE payable.
+   */
+  describe('Outbox dead letters — terminal, visible, replayable', () => {
+    let deadLetters: OutboxDeadLetterService;
+
+    const completionEvent = (id: string): OutboxEntity => ({
+      id,
+      eventName: 'assignment:status-changed',
+      payload: {
+        assignmentId: 'asn-fail-test-1',
+        newState: AssignmentStatus.COMPLETED,
+        userId: 'admin-1',
+        outboxEventId: id,
+      },
+      occurredAt: new Date(Date.now() - 60_000),
+      dispatchedAt: null,
+      attempts: 0,
+      lastError: null,
+      failedAt: null,
+      replayedAt: null,
+      replayedBy: null,
+    } as OutboxEntity);
+
+    beforeEach(() => {
+      deadLetters = new OutboxDeadLetterService(outboxRepo);
+      // Re-establish the assignment this block books. Earlier tests in this file queue one-shot
+      // `mockResolvedValueOnce` answers on the same repository double; inheriting a leftover from
+      // one of them would make these tests pass or fail for a reason that has nothing to do with
+      // the outbox.
+      assignmentRepo.findOne.mockReset();
+      assignmentRepo.findOne.mockImplementation(async () => ({
+        id: 'asn-fail-test-1',
+        assignmentNumber: 'ASN-FAIL-001',
+        status: AssignmentStatus.COMPLETED,
+        projectId: 'project-1',
+        assayerId: 'assayer-1',
+        agreedFee: '2000.00',
+        quotedTravelFee: '300.00',
+        completionDate: new Date('2026-08-10T10:00:00Z'),
+      }));
+      mockQueue.add.mockReset();
+      mockQueue.getJob.mockReset();
+    });
+
+    it('0 attempts -> retry -> retry -> exhausted -> visible in the operational view', async () => {
+      const row = completionEvent('outbox-dead-1');
+      outboxStore.set(row.id, row);
+      // Every delivery fails. `publishAsync` rethrows precisely so the relay does not mark the
+      // row dispatched — that is the mechanism being driven to exhaustion here.
+      mockQueue.add.mockRejectedValue(new Error('billing queue unreachable'));
+
+      expect(outboxStore.get(row.id)!.attempts).toBe(0);
+      expect(await deadLetters.list()).toHaveLength(0);
+
+      await outboxRelay.drain();
+      expect(outboxStore.get(row.id)!.attempts).toBe(1);
+      expect(outboxStore.get(row.id)!.failedAt).toBeNull();
+      // Still being retried, so NOT a dead letter — a replay here would be refused.
+      expect(await deadLetters.list()).toHaveLength(0);
+      await expect(deadLetters.replay(row.id, 'operator-1')).rejects.toThrow(/has not been abandoned/);
+
+      await outboxRelay.drain();
+      expect(outboxStore.get(row.id)!.attempts).toBe(2);
+      expect(await deadLetters.list()).toHaveLength(0);
+
+      // ... to the ceiling.
+      for (let i = 2; i < 15; i++) await outboxRelay.drain();
+
+      const exhausted = outboxStore.get(row.id)!;
+      expect(exhausted.attempts).toBe(15);
+      expect(exhausted.dispatchedAt).toBeNull();
+      expect(exhausted.failedAt).toBeInstanceOf(Date);
+      expect(exhausted.lastError).toContain('billing queue unreachable');
+
+      // Visible — the whole point. Before this the row simply stopped matching a query.
+      const listed = await deadLetters.list();
+      expect(listed).toHaveLength(1);
+      expect(listed[0]).toMatchObject({
+        id: 'outbox-dead-1',
+        eventName: 'assignment:status-changed',
+        attempts: 15,
+      });
+      expect(listed[0].lastError).toContain('billing queue unreachable');
+      // And it carries what the event was ABOUT, so an operator can act on it.
+      expect(listed[0].subject).toMatchObject({ assignmentId: 'asn-fail-test-1', outboxEventId: 'outbox-dead-1' });
+
+      const health = await deadLetters.health();
+      expect(health.deadLettered).toBe(1);
+      expect(health.pending).toBe(0);
+
+      // Terminal means terminal: the relay does not pick it up again on its own.
+      const callsBefore = (mockQueue.add as jest.Mock).mock.calls.length;
+      await outboxRelay.drain();
+      expect((mockQueue.add as jest.Mock).mock.calls.length).toBe(callsBefore);
+      expect(outboxStore.get(row.id)!.attempts).toBe(15);
+
+      mockQueue.add.mockReset();
+    });
+
+    it('replay an exhausted event -> exactly ONE business effect', async () => {
+      // The event is delivered normally first: this assignment IS booked, one entry, one payable.
+      const first = completionEvent('outbox-replay-first');
+      outboxStore.set(first.id, first);
+      mockQueue.add.mockImplementation(async (_name: string, data: any) => {
+        await billingWorker.bookAssignment({
+          id: `book-assignment:${data.assignmentId}`,
+          data,
+          attemptsMade: 0,
+          opts: { attempts: 5 },
+        } as any);
+        return { id: `book-assignment:${data.assignmentId}` };
+      });
+
+      await outboxRelay.drain();
+      expect(savedEntries.filter((e) => e.assignmentId === 'asn-fail-test-1')).toHaveLength(1);
+      expect(savedPayables.filter((p) => p.assignmentId === 'asn-fail-test-1')).toHaveLength(1);
+      const payableIdAfterFirstDelivery = savedPayables[0].id;
+
+      // A SECOND copy of the same completion event — the shape of a redelivery — is dead-lettered
+      // by fifteen failures, then replayed by an operator once the cause is fixed.
+      const stuck = completionEvent('outbox-replay-dead');
+      outboxStore.set(stuck.id, stuck);
+      const workingQueue = (mockQueue.add as jest.Mock).getMockImplementation()!;
+      mockQueue.add.mockRejectedValue(new Error('billing queue unreachable'));
+      for (let i = 0; i < 15; i++) await outboxRelay.drain();
+      expect(outboxStore.get(stuck.id)!.failedAt).toBeInstanceOf(Date);
+      expect(await deadLetters.list()).toHaveLength(1);
+
+      const replayed = await deadLetters.replay(stuck.id, 'operator-1');
+      expect(replayed.failedAt).toBeNull();
+      expect(replayed.attempts).toBe(0);
+      expect(replayed.replayedBy).toBe('operator-1');
+      // Who put it back, on the row, because a replay re-publishes to every subscriber.
+      expect(outboxStore.get(stuck.id)!.replayedAt).toBeInstanceOf(Date);
+      // It is no longer a dead letter, so a second press is refused rather than silently ignored.
+      expect(await deadLetters.list()).toHaveLength(0);
+      await expect(deadLetters.replay(stuck.id, 'operator-1')).rejects.toThrow(/has not been abandoned/);
+
+      // The cause is fixed and the ordinary relay tick delivers it — the same path as any other
+      // delivery, never a second one.
+      mockQueue.add.mockImplementation(workingQueue);
+      await outboxRelay.drain();
+      expect(outboxStore.get(stuck.id)!.dispatchedAt).toBeInstanceOf(Date);
+
+      // EXACTLY ONE business effect. The deterministic job id, `bookAssignment`'s already-booked
+      // read guard and the two unique indexes each stand behind this; the replay path adds no
+      // route around them.
+      expect(savedEntries.filter((e) => e.assignmentId === 'asn-fail-test-1')).toHaveLength(1);
+      expect(savedPayables.filter((p) => p.assignmentId === 'asn-fail-test-1')).toHaveLength(1);
+      expect(savedPayables[0].id).toBe(payableIdAfterFirstDelivery);
+
+      mockQueue.add.mockReset();
+    });
+
+    it('refuses to replay an event that was actually delivered — that would be a deliberate duplicate', async () => {
+      const delivered = completionEvent('outbox-delivered');
+      delivered.dispatchedAt = new Date();
+      outboxStore.set(delivered.id, delivered);
+      await expect(deadLetters.replay(delivered.id, 'operator-1')).rejects.toThrow(/nothing to replay/);
     });
   });
 });

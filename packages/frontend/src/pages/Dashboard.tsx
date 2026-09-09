@@ -45,6 +45,12 @@ interface Snapshot {
   funnel: Array<{ key: string; label: string; count: number; packets: number }> | null;
   due: DueItem[] | null;
   documents: { packetsUnsent: number; awaitingReturn: number; awaitingOcr: number; inOcr: number } | null;
+  /**
+   * All three on the receivable basis — what clients owe, what they have paid, and what is not
+   * yet invoiced. `unbilled` used to arrive ex-GST while its two neighbours were gross, so the
+   * bar chart below compared unlike quantities and the figure disagreed with the finance
+   * overview's tile of the same name. See `billing-metrics.ts` for the definition.
+   */
   money: { unbilled: number; outstanding: number; collected: number } | null;
   capacity: { assayers: number; idle: number; dailyCapacity: number } | null;
   validation: Validation | null;

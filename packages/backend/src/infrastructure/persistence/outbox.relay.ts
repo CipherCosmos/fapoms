@@ -1,9 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, IsNull, LessThan, In } from 'typeorm';
+import { Optional } from '@nestjs/common';
 import { OutboxEntity } from './outbox.entity';
 import { DomainEventPublisher } from '../../core/events/domain-event.publisher';
 import { CacheService } from '../cache/cache.service';
+import { MetricsService } from '../observability/metrics.service';
 
 /** How long an undispatched row is left alone before the relay claims it. */
 const FAST_PATH_GRACE_MS = 30_000;
@@ -15,8 +17,11 @@ const BATCH_SIZE = 200;
  * Retries before a row is left for a human. Roughly 15 minutes at a one-minute tick — long
  * enough to ride out a subscriber restart, short enough that a genuinely poisoned event stops
  * consuming a batch slot on every pass forever.
+ *
+ * Reaching it is now a state on the row (`failed_at`), not merely the point at which the row
+ * stops matching this query. See `OutboxEntity.failedAt`.
  */
-const MAX_ATTEMPTS = 15;
+export const MAX_ATTEMPTS = 15;
 
 @Injectable()
 export class OutboxRelay {
@@ -27,6 +32,9 @@ export class OutboxRelay {
     private readonly outbox: Repository<OutboxEntity>,
     private readonly eventPublisher: DomainEventPublisher,
     private readonly cache: CacheService,
+    // Optional so the many unit tests that construct this relay by hand keep working, and so a
+    // metrics registry that is not wired can never stop an event being relayed.
+    @Optional() private readonly metrics?: MetricsService,
   ) {}
 
   /**
@@ -47,11 +55,20 @@ export class OutboxRelay {
   }
 
   private async drainOnce(): Promise<{ dispatched: number; failed: number }> {
+    /**
+     * `failedAt: IsNull()` rather than `attempts: LessThan(MAX_ATTEMPTS)`.
+     *
+     * They exclude the same rows, but only one of them says so. Selecting on the attempt count
+     * meant "abandoned" was invisible — no column held it, nothing could list it, and a replay
+     * had to know the constant to undo it. Selecting on the terminal state means a replay is
+     * `failed_at = NULL` and the relay picks the row up again on its next tick, with no other
+     * mechanism involved.
+     */
     const due = await this.outbox.find({
       where: {
         dispatchedAt: IsNull(),
+        failedAt: IsNull(),
         occurredAt: LessThan(new Date(Date.now() - FAST_PATH_GRACE_MS)),
-        attempts: LessThan(MAX_ATTEMPTS),
       },
       order: { occurredAt: 'ASC' },
       take: BATCH_SIZE,
@@ -73,15 +90,26 @@ export class OutboxRelay {
       } catch (err) {
         const message = (err as Error).message;
         const attempts = row.attempts + 1;
-        await this.outbox.update(row.id, { attempts, lastError: message });
+        const exhausted = attempts >= MAX_ATTEMPTS;
+        // The terminal state is written in the SAME update as the attempt that caused it, so a
+        // crash between the two cannot leave a row that is out of retries and not marked as such.
+        await this.outbox.update(row.id, {
+          attempts,
+          lastError: message,
+          ...(exhausted ? { failedAt: new Date() } : {}),
+        });
         failed++;
 
-        if (attempts >= MAX_ATTEMPTS) {
+        if (exhausted) {
           // Stops being retried from here. Said at error level because an event that never
           // reached its subscribers is a silent divergence between what the database records
-          // and what the rest of the system believes.
+          // and what the rest of the system believes — but the log line is no longer the ONLY
+          // trace: `failed_at` is now on the row, the row is listed by GET
+          // /admin/outbox/dead-letters, and this counter makes it alertable.
+          this.metrics?.outboxDeadLettered.inc({ event: row.eventName });
           this.logger.error(
-            `Outbox event ${row.id} (${row.eventName}) abandoned after ${attempts} attempts: ${message}`,
+            `Outbox event ${row.id} (${row.eventName}) abandoned after ${attempts} attempts and dead-lettered: ` +
+              `${message}. Replay it from Administration -> Outbox once the cause is fixed.`,
           );
         }
       }

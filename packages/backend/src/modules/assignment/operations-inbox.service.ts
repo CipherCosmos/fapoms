@@ -5,6 +5,7 @@ import { applyBranchScope, branchScopeWhere } from '../../infrastructure/scope/a
 import { GlobalScope } from '../../infrastructure/scope/global-scope';
 import { AssignmentEntity } from './assignment.entity';
 import { AssignmentStatus, ProjectBranchStatus, businessTodayDateKey } from '@fapoms/shared';
+import { IN_FLIGHT_ASSIGNMENT_STATUSES, sqlStatusList } from './assignment-workload';
 import { FEE_FLAG_MULTIPLIER } from '../pricing/fee-policy.service';
 import { PlatformSettingsService } from '../../infrastructure/settings/platform-settings.service';
 
@@ -164,8 +165,11 @@ export class OperationsInboxService {
       .andWhere('pb.status = :pbst', { pbst: ProjectBranchStatus.CANDIDATE_SEARCH })
       .andWhere(`a.updatedAt > NOW() - INTERVAL '${REPLACEMENT_WINDOW_DAYS} days'`)
       .andWhere(
+        // "Is there a newer offer already running on this branch?" — anything in flight, an
+        // unanswered offer included, means a replacement is not owed. The shared set, not a
+        // fourth transcription of the same four names.
         `NOT EXISTS (SELECT 1 FROM assignments a2 WHERE a2.project_branch_id = a.project_branch_id
-           AND a2.is_active = true AND a2.status IN ('PENDING','ACCEPTED','CHECKED_IN','IN_PROGRESS')
+           AND a2.is_active = true AND a2.status IN (${sqlStatusList(IN_FLIGHT_ASSIGNMENT_STATUSES)})
            AND a2.created_at > a.updated_at)`,
       );
 

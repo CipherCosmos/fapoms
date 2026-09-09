@@ -22,6 +22,11 @@ export {
   BRANCH_DONE_STATUSES,
   BRANCH_PENDING_STATUSES,
   BRANCH_ACTIVE_COVERED_STATUSES,
+  // The coverage calculation itself, so the planning header reports the same percentage the
+  // planning endpoint and the client workbook do rather than a third hand-rolled copy.
+  coverageFromStatuses,
+  coverageBucketOf,
+  isBranchCovered,
   localDateKey,
   todayDateKey,
   formatDateOnly,

@@ -776,7 +776,15 @@ export interface BillingOverview {
     heldCount: number;
   };
   receivables: {
-    /** Σ total on UNBILLED, un-held client lines. */
+    /**
+     * **Unbilled** — Σ `total_amount` on UNBILLED, un-held client lines: money owed to us for
+     * delivered work that is not yet on an invoice.
+     *
+     * The receivable basis (taxable + GST − TDS), the same basis as `invoiced`, `collected` and
+     * `outstanding` below, so the block adds up. The operations dashboard's `money.unbilled`
+     * showed the taxable basis under the same word and the two screens disagreed; both now read
+     * `UNBILLED_RECEIVABLE_SQL`. The ex-GST figure is `margin.revenue`, and it is called revenue.
+     */
     unbilled: number;
     /** Σ invoice totals on sent (ISSUED) and PAID invoices. */
     invoiced: number;
