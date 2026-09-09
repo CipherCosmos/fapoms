@@ -209,11 +209,20 @@ const mockNotificationService = {
     create: jest.fn((arg: any) => arg),
   };
 
+  /**
+   * The last assignment-shaped entity `manager.save()` was handed, so the read-back below can
+   * answer from it. The service saves through the transaction's manager, not the repository.
+   */
+  let lastSavedInTx: any = null;
+
   const mockUnitOfWork = {
     run: jest.fn(async (work: any) =>
       work(
         {
-          save: jest.fn((arg: any) => Promise.resolve(arg)),
+          save: jest.fn((arg: any) => {
+            if (arg?.assayerId !== undefined || arg?.status !== undefined) lastSavedInTx = arg;
+            return Promise.resolve(arg);
+          }),
           // The assignment-number sequence returns a fixed value so the number is deterministic.
           // The transition path's `SELECT … FOR UPDATE` compare-and-swap re-reads the row inside
           // the transaction; here it is served from whatever the repository's findOne last
@@ -231,6 +240,32 @@ const mockNotificationService = {
                 fallback = fallback ?? v;
               }
               return fallback ? [{ status: fallback.status }] : [];
+            }
+            /**
+             * The read-back `create()` performs after its save, to confirm the row is really
+             * there and really belongs to the assayer it was written for.
+             *
+             * Answered from the entity the repository just saved, so the fake behaves like a
+             * database rather than like a promise that resolves. A stub returning `[]` here would
+             * make every create look like a write that silently did not take — which is exactly
+             * what the production check is for.
+             */
+            if (/SELECT assayer_id, entity_version, status FROM assignments/.test(sql)) {
+              if (!lastSavedInTx) return [];
+              /**
+               * `assayerId` falls back to the argument the service handed
+               * `assignmentRepository.create()`, because most fixtures in this file stub that
+               * method with a small literal that omits it. The argument is what the service asked
+               * to persist, so answering from it is what a database would do — and it keeps the
+               * check honest: a test that made the service ask for the wrong assayer would still
+               * fail here.
+               */
+              const asked = mockAssignmentRepo.create.mock.calls.at(-1)?.[0] ?? {};
+              return [{
+                assayer_id: lastSavedInTx.assayerId ?? lastSavedInTx.assayer?.id ?? asked.assayerId ?? null,
+                entity_version: lastSavedInTx.entityVersion ?? 1,
+                status: lastSavedInTx.status,
+              }];
             }
             return [];
           }),

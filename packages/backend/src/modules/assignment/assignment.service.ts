@@ -941,12 +941,39 @@ export class AssignmentService {
       }
       const savedAssignment = await manager.save(assignment);
 
+      /**
+       * Read the row back before recording anything, for the same reason the dedicated
+       * reassignment command does.
+       *
+       * This branch reassigns too — an existing assignment for the branch, moved to a different
+       * assayer — and it was building its lineage row from `dto.assayerId` and its audit event
+       * from the in-memory entity, so a write that silently did something else would have
+       * produced the same confident, wrong history here that it did there. Found by the audit
+       * invariant sweep after the reassignment command was fixed: this sibling path had the same
+       * defect and no test that would have noticed.
+       */
+      const [createPersisted] = await manager.query(
+        'SELECT assayer_id, entity_version, status FROM assignments WHERE id = $1',
+        [savedAssignment.id],
+      ) as Array<{ assayer_id: string; entity_version: number; status: string }>;
+
+      if (!createPersisted || createPersisted.assayer_id !== dto.assayerId) {
+        throw new ConflictException(
+          `ASSIGNMENT_NOT_PERSISTED: the assignment was not written to ${dto.assayerId} `
+          + `(row now holds ${createPersisted?.assayer_id ?? 'no row'}). Nothing has been recorded; retry.`,
+        );
+      }
+
+      const createdAssayerId = createPersisted.assayer_id;
+      const createdVersion = Number(createPersisted.entity_version);
+      const createdStatus = createPersisted.status as AssignmentStatus;
+
       // Record reassignment lineage if assayer changed on an existing record
-      if (isReassignment && previousAssayerId && previousAssayerId !== dto.assayerId) {
+      if (isReassignment && previousAssayerId && previousAssayerId !== createdAssayerId) {
         const lineage = manager.create(AssignmentReassignmentEntity, {
           assignmentId: savedAssignment.id,
           previousAssayerId,
-          newAssayerId: dto.assayerId,
+          newAssayerId: createdAssayerId,
           reassignedBy: userId,
           reason: dto.remarks ?? 'Reassigned through assignment creation',
           requestId: null,
@@ -968,6 +995,19 @@ export class AssignmentService {
         remarks: isReassignment
           ? `Reassigned branch ${projectBranch.branch.name} to assayer ${assayer.displayName}. Proposed fee: ₹${resolvedProposedFee}, Date: ${targetDateStr}.`
           : `Created assignment offer for branch ${projectBranch.branch.name}. Fee: ₹${resolvedProposedFee}, Date: ${targetDateStr}.`,
+        newState: createdStatus,
+        /**
+         * Carried so this event can be cross-checked the way the dedicated command's can.
+         * It previously had no metadata at all, which meant an audit sweep could not tell a
+         * truthful reassignment record from an invented one — the row named an assignment and a
+         * timestamp and nothing an invariant could test.
+         */
+        metadata: {
+          previousAssayerId,
+          newAssayerId: createdAssayerId,
+          entityVersion: createdVersion,
+          viaCommand: isReassignment ? 'CREATE_REASSIGN' : 'CREATE',
+        },
       }, { manager });
 
       if (eligibilityOverride) {
