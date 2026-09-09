@@ -58,3 +58,16 @@ tmp/
 # Gemini agent
 .agents/
 .gemini/
+
+# Secrets must never enter the build context.
+#
+# Nothing copies them today — every COPY in the Dockerfiles names a specific path — so this is a
+# guard against the ordinary future edit, a `COPY . .` or a new `COPY packages/x packages/x` that
+# sweeps up a sibling `.env`. A secret baked into an image layer stays in that layer even if a
+# later step deletes it, and the image gets pushed to a registry.
+#
+# `.env` and `deploy/.env` are the symlinks setup.sh creates so compose resolves ${VAR}; .env.docker
+# is the one real file, holding JWT_SECRET, PII_ENCRYPTION_KEY and both database and MinIO passwords.
+**/.env
+**/.env.*
+!**/.env.production.example
