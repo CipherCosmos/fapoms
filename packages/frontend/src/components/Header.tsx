@@ -57,6 +57,18 @@ const BREADCRUMBS: { prefix: string; category: string; label: string }[] = [
    */
   { prefix: '/settings', category: 'My Account', label: 'Profile & Preferences' },
   // The org-wide pages, so the header names them instead of falling back to the brand text.
+  /**
+   * The three pages that had no entry here and so fell back to the brand text.
+   *
+   * Every other destination in the sidebar names itself in the header; these did not, so the one
+   * line telling you where you are read "FAPOMS" on an incident register, on a queue of pending
+   * destructive-action approvals, and on the list of work that has slipped. Category and label are
+   * taken from the sidebar rows that lead here (Sidebar.tsx), so the header and the navigation
+   * call each page the same thing rather than two things.
+   */
+  { prefix: '/falling-behind', category: 'Operations', label: 'Falling Behind' },
+  { prefix: '/admin/approvals', category: 'Administration', label: 'Approvals' },
+  { prefix: '/admin/compliance', category: 'Administration', label: 'Security & Compliance' },
   { prefix: '/admin/settings', category: 'Administration', label: 'Platform Settings' },
   { prefix: '/admin/logs', category: 'Administration', label: 'Service Logs' },
   { prefix: '/admin/notifications', category: 'Administration', label: 'Notification Rules' },
