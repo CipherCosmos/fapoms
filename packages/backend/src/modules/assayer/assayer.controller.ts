@@ -95,6 +95,7 @@ import {
   EmpanelmentStatus,
 } from '@fapoms/shared';
 import { withCode } from '../../infrastructure/http/api-error';
+import { deriveFileIntegrity } from '../document/document-integrity';
 import { AuditRead } from '../../core/audit/audit-read.decorator';
 import { GlobalScopeFilter, GlobalScope } from '../../infrastructure/scope/global-scope';
 import { RegionGuardService } from '../../infrastructure/scope/region-guard.service';
@@ -2445,8 +2446,36 @@ export class AssayerController {
       allowed: SCAN_UPLOAD_TYPES,
       hint: 'Photograph the document in better light rather than at higher resolution.',
     });
+    /**
+     * Derive the integrity of an identity scan from its bytes, like every other buffered upload.
+     *
+     * `attachFile` has taken an optional `metadata` argument since it was written, and writes
+     * `contentSha256`, `fileChecksum`, `fileSize` and `mimeType` from it onto the version row.
+     * Nothing ever passed it. So every Aadhaar, PAN and passport scan in the system — the actual
+     * KYC evidence, and the only documents carrying a formal verification signature — had all
+     * four columns null.
+     *
+     * Two consequences, and the second is the sharper one. Nothing on the row could say whether
+     * the scan on disk is the scan that was uploaded. And `verifyDocument` contains a check that
+     * verification must bind to an exact content hash, written as
+     * `versionHash && versionHash !== attested.expectedContentHash` — with `versionHash` always
+     * null, that condition could never be true, so the invariant its own comment describes was
+     * unreachable code. Feeding the metadata is what makes it reachable.
+     *
+     * The same derivation the document pipeline uses, so a scan and an audit packet are described
+     * the same way. The sniffed type is recorded but the stored `mimeType` keeps the declared
+     * value here: `assertUploadAllowed` above has already refused anything that is not a picture
+     * or a PDF, and the version row has no column to hold the two separately.
+     */
+    const integrity = deriveFileIntegrity(file.buffer, file.mimetype);
     const key = await this.storage.saveFile(file.originalname, file.buffer, file.mimetype, file.size);
-    const data = await this.rosterRecords.attachFile(assayerId, requirement as any, key, req.user.id);
+    const data = await this.rosterRecords.attachFile(assayerId, requirement as any, key, req.user.id, {
+      contentSha256: integrity.sha256,
+      checksum: integrity.sha256,
+      fileSize: integrity.byteLength,
+      mimeType: integrity.effectiveMimeType,
+      storageObjectId: key,
+    });
     return { success: true, data };
   }
 

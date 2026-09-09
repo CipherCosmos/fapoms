@@ -363,11 +363,24 @@ export class DocumentController {
     // Malware-scan the object the client PUT straight to storage — the presigned upload bypassed the
     // API, so this is the first point the bytes can be inspected. Delete + reject on a hit (or when a
     // required scan can't run), so an infected object is never registered as a document.
+    /**
+     * The presigned PUT bypassed the API, so these bytes did not arrive through it — but the
+     * malware scan reads the whole object back to inspect it, and that buffer is as good a source
+     * of truth as an upload buffer. It attests to what storage holds at registration time, which
+     * is precisely what a document's integrity metadata should say.
+     *
+     * The earlier position was that this route cannot hash what it never receives. That is true
+     * of the PUT and false of finalize as implemented: the object is already fully in memory
+     * here, and the cost is already being paid by the scan.
+     */
+    let integrity: ReturnType<typeof deriveFileIntegrity> | undefined;
     try {
       const stream = await this.storage.getFileStream(body.objectKey);
       const parts: Buffer[] = [];
       for await (const chunk of stream as any) parts.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      await this.fileScanner.scanOrThrow(Buffer.concat(parts), body.fileName);
+      const stored = Buffer.concat(parts);
+      await this.fileScanner.scanOrThrow(stored, body.fileName);
+      integrity = deriveFileIntegrity(stored, body.contentType);
     } catch (err) {
       await this.storage.deleteFile(body.objectKey).catch(() => undefined);
       throw err;
@@ -378,10 +391,13 @@ export class DocumentController {
         assessmentId: body.assessmentId,
         fileName: body.fileName,
         filePath: body.objectKey,
-        fileSize: size,
+        // `size` comes from a real HeadObject, so it was already trustworthy; the derived count
+        // is used anyway so one source describes every field.
+        fileSize: integrity?.byteLength ?? size,
         mimeType: body.contentType,
         type: body.type,
         customerMasterVersionId: body.customerMasterVersionId,
+        integrity,
       },
       req?.user?.id || '00000000-0000-0000-0000-000000000000',
     );
@@ -434,15 +450,25 @@ export class DocumentController {
     // and the data-entry pipeline unscanned. `scanOrThrow` fails closed when scanning is required.
     await this.fileScanner.scanOrThrow(buffer, fileName);
 
-    const savedFilePath = await this.storage.saveFile(fileName, buffer, 'application/pdf');
+    /**
+     * The JSON sibling of `mobile-upload-binary`, and it must describe its bytes the same way.
+     *
+     * Both routes produce an `AUDITED_RETURN_PDF`, both mark it RECEIVED, both feed the data-entry
+     * queue. Only the binary one derived integrity, so a client that preferred no digest on its
+     * audit evidence could simply post base64 to this one instead. The bytes are fully in hand
+     * either way — `Buffer.from(body.fileData, 'base64')` above.
+     */
+    const integrity = deriveFileIntegrity(buffer, 'application/pdf');
+    const savedFilePath = await this.storage.saveFile(fileName, buffer, integrity.effectiveMimeType);
 
     let doc = await this.documentService.create({
       assessmentId: targetId,
       fileName,
       filePath: savedFilePath,
-      fileSize: buffer.length,
+      fileSize: integrity.byteLength,
       mimeType: 'application/pdf',
       type: DocumentType.AUDITED_RETURN_PDF,
+      integrity,
     }, req?.user?.id || '00000000-0000-0000-0000-000000000000');
 
     // Marks the assayer's paperwork as returned, which is what puts it into the Data Entry
@@ -698,11 +724,19 @@ export class DocumentController {
 
     // Scan the assembled object before registering it. Chunks are meaningless individually, so this
     // is the correct point to inspect the whole file; reject + delete on a hit.
+    /**
+     * The scan already reads the whole object back into this process, so the bytes to describe
+     * are right here. Derived from the same buffer the scanner sees, which is the assembled
+     * object as stored — not as the client described it.
+     */
+    let integrity: ReturnType<typeof deriveFileIntegrity> | undefined;
     try {
       const stream = await this.storage.getFileStream(s3Key);
       const parts: Buffer[] = [];
       for await (const chunk of stream as any) parts.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-      await this.fileScanner.scanOrThrow(Buffer.concat(parts), session.fileName);
+      const assembled = Buffer.concat(parts);
+      await this.fileScanner.scanOrThrow(assembled, session.fileName);
+      integrity = deriveFileIntegrity(assembled, 'application/pdf');
     } catch (err) {
       await this.storage.deleteFile(s3Key).catch(() => undefined);
       await this.chunkedUploadService.discard(uploadId).catch(() => undefined);
@@ -714,9 +748,17 @@ export class DocumentController {
         assessmentId: session.assessmentId,
         fileName: session.fileName,
         filePath: s3Key,        // store the S3 object key, not a filesystem path
-        fileSize: session.fileSize,
+        /**
+         * `session.fileSize` is the number the client announced when it opened the upload
+         * session, and it was being stored as fact. Verified in certification: a session that
+         * declared 1,000 bytes and then uploaded 4,194,320 produced a row reading `file_size =
+         * 1000`, while the download route served the real 4 MB. `integrity.byteLength` is counted
+         * from the assembled object; the declaration is only ever a hint for chunk planning.
+         */
+        fileSize: integrity?.byteLength ?? session.fileSize,
         mimeType: 'application/pdf',
         type,
+        integrity,
       },
       req.user.id,
     );

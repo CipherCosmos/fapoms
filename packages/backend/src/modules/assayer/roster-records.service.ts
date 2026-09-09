@@ -1052,6 +1052,36 @@ export class RosterRecordsService {
         { photograph: row.filePaths[row.filePaths.length - 1] ?? null, updatedBy: actorId },
       );
     }
+    /**
+     * Removing a scan is audited, because attaching one is.
+     *
+     * `attachFile` writes `IDENTITY_DOCUMENT_FILE_ATTACHED`; this method wrote nothing at all,
+     * while doing strictly more damage — it rewrites `file_paths`, can rewrite
+     * `assayers.photograph`, and the caller then deletes the object from storage. Certification
+     * detached a scan that a VERIFIED version row still pointed at: the row went on asserting
+     * somebody had checked that PAN card against its original, the object was gone, and the
+     * eleven audit events on that assayer said nothing about it.
+     *
+     * `recordEventSafe`, not `recordEvent`: the rows above are already saved and not inside a
+     * transaction with this call, so a failing audit write must not turn a completed detach into
+     * a 500 that tells the caller nothing happened.
+     */
+    await this.auditService?.recordEventSafe({
+      category: EventCategory.OPERATIONAL,
+      eventType: 'IDENTITY_DOCUMENT_FILE_DETACHED',
+      entityType: 'ASSAYER',
+      entityId: row.assayerId,
+      userId: actorId,
+      remarks: `Removed a ${row.requirement} scan. The stored object is deleted; any version row referencing it keeps its verification status.`,
+      metadata: {
+        requirement: row.requirement,
+        documentId: row.id,
+        removedObjectKey: key,
+        remainingFileCount: row.filePaths.length,
+        currentVersionId: row.currentVersionId ?? null,
+      },
+    });
+
     return key;
   }
 

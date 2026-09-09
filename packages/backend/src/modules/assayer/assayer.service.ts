@@ -2292,12 +2292,42 @@ export class AssayerService implements OnModuleInit {
        * `is_active=false` row that is still sitting in a non-terminal status and keeps treating
        * the branch as occupied indefinitely.
        */
+      /**
+       * Two statements, because "not completed" is not the same question as "still open".
+       *
+       * This was one statement with `status != COMPLETED`, which swept up assignments that had
+       * already reached a terminal state and rewrote them. Verified live: an assignment cancelled
+       * with a stated reason had that reason replaced by "Assayer profile soft deleted" when the
+       * assayer was deleted — a CANCELLED to CANCELLED self-transition the state machine does not
+       * permit, performed in raw SQL that never consults it, bumping `entity_version` with no
+       * audit event to say anything had changed. A REJECTED assignment got the same treatment,
+       * replacing "the assayer declined" with "the work was cancelled", which is a different and
+       * untrue fact.
+       *
+       * `OPEN_ASSIGNMENT_STATUSES` is the predicate the sibling cascade
+       * (`cancelOpenAssignmentsOnDeparture`) already uses, and the reasoning is written out
+       * beside its definition above. The two paths cancel the same work for the same reason and
+       * had no business disagreeing about which work that is.
+       */
+      // 1. Genuinely open work is cancelled, and says why.
       .then(() => manager.query(
         `UPDATE assignments SET is_active = false, status = $1,
             cancel_reason = 'Assayer profile soft deleted', updated_by = $2,
             entity_version = COALESCE(entity_version, 1) + 1, updated_at = NOW()
-          WHERE assayer_id = $3 AND is_active = true AND status != $4`,
-        [AssignmentStatus.CANCELLED, userId, id, AssignmentStatus.COMPLETED],
+          WHERE assayer_id = $3 AND is_active = true AND status = ANY($4)`,
+        [AssignmentStatus.CANCELLED, userId, id, AssayerService.OPEN_ASSIGNMENT_STATUSES],
+      ))
+      /**
+       * 2. Work that already ended — REJECTED or CANCELLED — is only deactivated, so the branch's
+       * busy check stops seeing it as occupied. Its status and its stated reason are left exactly
+       * as they were, because they record something that actually happened. COMPLETED is not
+       * touched at all: billing filters on `is_active`, and clearing it would drop a delivered
+       * audit off every invoice it belongs on.
+       */
+      .then(() => manager.query(
+        `UPDATE assignments SET is_active = false, updated_by = $1, updated_at = NOW()
+          WHERE assayer_id = $2 AND is_active = true AND status = ANY($3)`,
+        [userId, id, [AssignmentStatus.REJECTED, AssignmentStatus.CANCELLED]],
       ))
       /*
        * And the scheduled visits those assignments carry.

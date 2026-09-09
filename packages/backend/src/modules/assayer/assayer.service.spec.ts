@@ -802,22 +802,67 @@ describe('AssayerService', () => {
 
     /**
      * A COMPLETED assignment is a billable fact and must stay `is_active=true` so billing keeps
-     * finding it. Everything else gets deactivated AND a terminal CANCELLED status, so the
+     * finding it. Open work is deactivated AND given a terminal CANCELLED status, so the
      * assignment `create()` busy-check (which reads status, not just is_active) does not treat
-     * the branch as occupied forever. The pre-fix statement had no status filter and no status
-     * column in its SET clause at all — it deactivated every assignment unconditionally and
-     * never touched `status` — so both assertions below fail against that code.
+     * the branch as occupied forever.
+     *
+     * This test used to assert `status != $4` — the pre-fix predicate — and so pinned a defect
+     * in place. `!= COMPLETED` also matches REJECTED and CANCELLED, which are already terminal,
+     * and the statement rewrote them: verified live, an assignment cancelled with a stated reason
+     * had that reason replaced by "Assayer profile soft deleted" when its assayer was deleted, in
+     * a CANCELLED-to-CANCELLED write the state machine does not permit, bumping `entity_version`
+     * with no audit event to record it. A REJECTED assignment lost "the assayer declined" the
+     * same way.
+     *
+     * The cascade is now two statements against the explicit open set — the predicate the sibling
+     * `cancelOpenAssignmentsOnDeparture` has always used, for the reasons written beside
+     * `OPEN_ASSIGNMENT_STATUSES`.
      */
-    it('excludes COMPLETED assignments from deactivation and cancels the rest with a terminal status', async () => {
+    it('cancels only genuinely open assignments, and only deactivates work that already ended', async () => {
       await service.remove('a-1', 'user-1', 'Duplicate record created in error.');
-      const assignmentsCall = mockDataSource.query.mock.calls.find(
+      const assignmentCalls = mockDataSource.query.mock.calls.filter(
         ([sql]: [string]) => /UPDATE\s+assignments\b/i.test(sql),
       );
-      expect(assignmentsCall).toBeDefined();
-      const [sql, params] = assignmentsCall as [string, unknown[]];
-      expect(sql).toMatch(/status\s*!=\s*\$4/);
-      expect(sql).toMatch(/SET\s+is_active\s*=\s*false,\s*status\s*=\s*\$1/);
-      expect(params).toEqual([AssignmentStatus.CANCELLED, 'user-1', 'a-1', AssignmentStatus.COMPLETED]);
+      expect(assignmentCalls).toHaveLength(2);
+
+      // 1. Open work: cancelled, with a reason, and deactivated.
+      const [openSql, openParams] = assignmentCalls[0] as [string, unknown[]];
+      expect(openSql).toMatch(/status\s*=\s*ANY\(\$4\)/);
+      expect(openSql).toMatch(/SET\s+is_active\s*=\s*false,\s*status\s*=\s*\$1/);
+      expect(openSql).toMatch(/cancel_reason\s*=/);
+      expect(openParams).toEqual([
+        AssignmentStatus.CANCELLED,
+        'user-1',
+        'a-1',
+        [
+          AssignmentStatus.PENDING,
+          AssignmentStatus.ACCEPTED,
+          AssignmentStatus.CHECKED_IN,
+          AssignmentStatus.IN_PROGRESS,
+        ],
+      ]);
+
+      // 2. Work that already ended: deactivated only. Its status and stated reason survive.
+      const [endedSql, endedParams] = assignmentCalls[1] as [string, unknown[]];
+      expect(endedSql).toMatch(/SET\s+is_active\s*=\s*false/);
+      expect(endedSql).not.toMatch(/status\s*=\s*\$/);
+      expect(endedSql).not.toMatch(/cancel_reason/);
+      expect(endedParams).toEqual([
+        'user-1',
+        'a-1',
+        [AssignmentStatus.REJECTED, AssignmentStatus.CANCELLED],
+      ]);
+    });
+
+    it('never writes COMPLETED into either cascade statement', async () => {
+      await service.remove('a-1', 'user-1', 'Duplicate record created in error.');
+      const assignmentCalls = mockDataSource.query.mock.calls.filter(
+        ([sql]: [string]) => /UPDATE\s+assignments\b/i.test(sql),
+      );
+      for (const [, params] of assignmentCalls as Array<[string, unknown[]]>) {
+        const statuses = params.flat();
+        expect(statuses).not.toContain(AssignmentStatus.COMPLETED);
+      }
     });
 
     /**
