@@ -112,6 +112,34 @@ export class UserService {
       });
     }
 
+    /**
+     * The new account joins the organisation of whoever created it.
+     *
+     * This was missing entirely, and the omission was not cosmetic: `tenantScope()`
+     * (ambient-tenant-context.ts) refuses every organisation-scoped read for a principal whose
+     * `organizationId` is null, for any role outside ADMIN/DEVELOPER. So an administrator creating
+     * an ordinary OPERATIONS, DESK, AUDITOR or CLIENT_USER account got a 201, a working password,
+     * a successful login — and an account that answered 403 "Your account is not linked to an
+     * organisation" to every screen thereafter, with no way to repair it through the product.
+     * Ten such accounts already existed on this database before the fault was identified.
+     *
+     * Derived from the creator's own record, never from the request body: `CreateUserDto` has no
+     * `organizationId` field and must not gain one — the validation pipe runs
+     * `forbidNonWhitelisted`, so a client that sends one is refused outright, and that is the
+     * property worth keeping. FAPOMS runs one organisation per installation (see the architecture
+     * audit), so "the creator's organisation" and "the installation's organisation" are the same
+     * answer; deriving it from the creator rather than from configuration keeps the rule correct
+     * without introducing a second source of truth about which organisation is current.
+     *
+     * A creator with no organisation of their own leaves the new user with none either, rather
+     * than inventing one. That case is the pre-existing orphan set above, and it is being
+     * repaired by migration rather than silently propagated: this method's job is not to guess.
+     */
+    const creator = await this.userRepository.findOne({
+      where: { id: createdById },
+      select: { id: true, organizationId: true },
+    });
+
     const user = this.userRepository.create({
       username: dto.username,
       email: dto.email,
@@ -122,6 +150,7 @@ export class UserService {
       phone: dto.phone ?? null,
       departmentId: dto.departmentId ?? null,
       clientId: dto.clientId ?? null,
+      organizationId: creator?.organizationId ?? null,
       status: UserStatus.ACTIVE,
       /**
        * Whoever set this password, the account holder did not choose it — an admin typed it or
