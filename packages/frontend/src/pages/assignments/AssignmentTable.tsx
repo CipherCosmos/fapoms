@@ -8,6 +8,8 @@ import {
   Flame,
 } from 'lucide-react';
 import { StatusBadge, EmptyState } from '../../components/ui';
+import { useCurrentRoles, useCurrentPermissions } from '../../hooks/useCurrentRoles';
+import { canAccessRoute } from '../../config/route-permissions';
 import { assignmentFee } from '../../utils/money';
 import {
   computeAssignmentAttention,
@@ -67,6 +69,17 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
   const pageStart = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
   const pageEnd = Math.min(page * PAGE_SIZE, total);
 
+  /**
+   * Whether this reader can actually open Planning, asked of the same function the router uses.
+   *
+   * Only the empty state below reads it, but it is computed here because hooks cannot be called
+   * conditionally, and the answer must not be duplicated as a role list — a second copy of "who
+   * may plan" is a second thing to keep in step with route-permissions.ts.
+   */
+  const roles = useCurrentRoles();
+  const permissions = useCurrentPermissions();
+  const canPlan = canAccessRoute(roles, permissions, '/planning');
+
   const formatRelativeTime = (ts: string): string => {
     const diff = Date.now() - new Date(ts).getTime();
     const mins = Math.floor(diff / 60000);
@@ -107,14 +120,33 @@ export const AssignmentTable: React.FC<AssignmentTableProps> = ({
             meaning="NO_DATA"
             icon={<ClipboardList size={28} />}
             title="Nobody has been given a branch to audit yet"
+            /*
+             * Two messages, because the useful next step is not the same for everyone.
+             *
+             * This said "Choose one in Planning" with a link, to every reader. Planning is
+             * restricted to ADMIN and OPERATIONS holding PLANNING:VIEW:ORGANIZATION, so for a
+             * desk operator, an auditor or a validator that was an instruction they could not
+             * carry out attached to a link that would bounce them straight back out — the empty
+             * state told them the queue was empty and then wasted the one action it offered.
+             *
+             * `canAccessRoute` is the same function ProtectedRoute consults, so this cannot drift
+             * from what the router will actually allow: change who may plan and this follows.
+             */
             message={
-              <span>
-                A branch appears here once an assayer has been chosen for it. Choose one in{' '}
-                <Link to="/planning" style={{ color: 'var(--accent-primary)' }}>
-                  Planning
-                </Link>{' '}
-                and it will show up on this tab.
-              </span>
+              canPlan ? (
+                <span>
+                  A branch appears here once an assayer has been chosen for it. Choose one in{' '}
+                  <Link to="/planning" style={{ color: 'var(--accent-primary)' }}>
+                    Planning
+                  </Link>{' '}
+                  and it will show up on this tab.
+                </span>
+              ) : (
+                <span>
+                  A branch appears here once someone in Planning has chosen an assayer for it.
+                  Nothing is waiting on you.
+                </span>
+              )
             }
           />
         ) : (
