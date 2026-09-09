@@ -39,7 +39,7 @@ import {
 } from './assignment-target-eligibility.policy';
 import { ProjectEntity } from '../project/project.entity';
 import { DAY_EXCLUSIVE_ASSIGNMENT_STATUSES } from './assignment-workload';
-import { throwMappedUniqueViolation } from './assignment-constraint-errors';
+import { throwMappedUniqueViolation, throwIfRetryable } from './assignment-constraint-errors';
 import { RoutingService, RouteResult } from '../geo/routing.provider';
 import { ValidationService } from '../validation/validation.service';
 import { DocumentService } from '../document/document.service';
@@ -505,6 +505,32 @@ export class AssignmentService {
     }
 
     /**
+     * A cancelled assignment is not a free slot on the branch. It is a decision.
+     *
+     * The list above deliberately omits CANCELLED, so a cancelled row fell straight through to
+     * the reuse path below — which sets `status = PENDING`, nulls `cancelReason`, hands the work
+     * to a different assayer and keeps the SAME assignment number. Verified live: ASN-2026-000054
+     * was cancelled with a stated reason, and one ordinary `POST /assignments` for its branch
+     * brought it back as a live offer under a new owner with the reason erased, `entity_version`
+     * unchanged, and an `ASSIGNMENT_REASSIGNED` event whose `previousState` was null — so the
+     * trail did not record that the work had ever been cancelled.
+     *
+     * This is the same defect the dedicated reassign command refuses, reached through the door
+     * that command's own error message recommends: "create a new assignment for the branch
+     * instead". That advice is right, and this is what makes it true — the branch gets a NEW
+     * assignment rather than its cancelled one resurrected.
+     *
+     * Deliberately checked separately from the list above rather than by adding CANCELLED to it:
+     * the message has to say something different. "Branch Busy" is wrong here — the branch is
+     * free, and the caller is entitled to place new work on it. What they may not do is reuse the
+     * cancelled record.
+     */
+    const reusableExisting =
+      existingAssignment && existingAssignment.status === AssignmentStatus.CANCELLED
+        ? null
+        : existingAssignment;
+
+    /**
      * What day this assignment is for: what the caller asked for, else the branch's own audit
      * date, else today.
      *
@@ -771,16 +797,18 @@ export class AssignmentService {
     const slaDueDate = new Date();
     slaDueDate.setHours(slaDueDate.getHours() + maxResponseTimeHours);
 
-    const isReassignment = Boolean(existingAssignment);
-    const previousAssayerId = existingAssignment ? existingAssignment.assayerId : null;
-    const previousOwnershipStartedAt = existingAssignment
-      ? (existingAssignment.updatedAt || existingAssignment.createdAt || new Date())
+    // `reusableExisting`, not `existingAssignment`: a cancelled row is deliberately not reusable.
+    // See the guard above for what that prevents.
+    const isReassignment = Boolean(reusableExisting);
+    const previousAssayerId = reusableExisting ? reusableExisting.assayerId : null;
+    const previousOwnershipStartedAt = reusableExisting
+      ? (reusableExisting.updatedAt || reusableExisting.createdAt || new Date())
       : null;
 
     let assignment: AssignmentEntity;
-    if (existingAssignment) {
+    if (reusableExisting) {
       // Reuse existing assignment record for this branch to preserve single unified timeline
-      assignment = existingAssignment;
+      assignment = reusableExisting;
       assignment.assayerId = dto.assayerId;
       assignment.status = AssignmentStatus.PENDING;
       assignment.proposedFee = resolvedProposedFee ?? null;
@@ -1085,6 +1113,8 @@ export class AssignmentService {
       }
       // Named constraint, named message. This arm used to answer "Branch Busy" for every 23505,
       // including duplicate assignment numbers and replayed idempotency keys.
+      // Contention first: a deadlock or serialization failure is a retryable 409, never a 500.
+      throwIfRetryable(err);
       throwMappedUniqueViolation(err);
     }).then(async (saved) => {
       const branchName = projectBranch.branch?.name ?? 'the branch';
@@ -1585,6 +1615,8 @@ export class AssignmentService {
           if (recoveryErr instanceof ConflictException) throw recoveryErr;
         }
       }
+      // Contention first: a deadlock or serialization failure is a retryable 409, never a 500.
+      throwIfRetryable(err);
       throwMappedUniqueViolation(err);
     }
 
@@ -2061,8 +2093,20 @@ export class AssignmentService {
       }
       assayerIdsToLock.sort();
 
+      /**
+       * No `.catch()` here, and that is the point.
+       *
+       * This used to swallow every lock failure. When Postgres aborted the transaction — a
+       * deadlock, a serialization failure — the error vanished and the method carried on issuing
+       * statements into a transaction that was already dead, so the caller eventually received
+       * "current transaction is aborted, commands ignored until end of transaction block" as an
+       * HTTP 500. The real cause was two statements earlier and had been discarded.
+       *
+       * A lock we cannot take is a reason to stop. The `.catch` in the unit of work's rejection
+       * path turns contention into a retryable 409; anything else surfaces as itself.
+       */
       for (const aId of assayerIdsToLock) {
-        await manager.query('SELECT id FROM assayers WHERE id = $1 FOR UPDATE', [aId]).catch(() => null);
+        await manager.query('SELECT id FROM assayers WHERE id = $1 FOR UPDATE', [aId]);
       }
 
       const lockedRows: Array<{ status: string; assayer_id: string; entity_version: number }> =
@@ -2096,14 +2140,21 @@ export class AssignmentService {
         }
       }
 
-      if (locked.assayer_id === newAssayerId) {
-        const existing = await manager.findOne(AssignmentEntity, {
-          where: { id },
-          relations: ['assayer', 'projectBranch', 'projectBranch.branch'],
-        });
-        return existing!;
-      }
-
+      /**
+       * The caller's stated precondition is checked BEFORE the no-op shortcut, not after.
+       *
+       * These two blocks used to sit the other way round, and the ordering was a hole in the
+       * optimistic concurrency control. A client that read the assignment at version 7 and sent
+       * "move it to X, expectedVersion 7" was told 201 whenever the row already happened to be on
+       * X — even at version 12, because somebody else had moved it there in the meantime. The
+       * client's precondition was false and it was told success, so it went on believing nothing
+       * had changed underneath it. Verified live: same target with a five-version-stale
+       * precondition returned 201, while a different target with the identical stale precondition
+       * correctly returned 409.
+       *
+       * A version the caller asserts is a claim about the whole row, not about the assayer column.
+       * If it is wrong the answer is 409 whatever the target happens to be.
+       */
       if (options?.expectedVersion !== undefined) {
         if (options.expectedVersion !== lockedVersion) {
           if (options.expectedVersion < lockedVersion) {
@@ -2116,6 +2167,16 @@ export class AssignmentService {
             );
           }
         }
+      }
+
+      // Already where the caller wants it, and the caller's view of the row was current. Nothing
+      // to do, and nothing to record — a reassignment that moves no work is not history.
+      if (locked.assayer_id === newAssayerId) {
+        const existing = await manager.findOne(AssignmentEntity, {
+          where: { id },
+          relations: ['assayer', 'projectBranch', 'projectBranch.branch'],
+        });
+        return existing!;
       }
 
       /**
@@ -2441,6 +2502,8 @@ export class AssignmentService {
           return rec.response_payload as AssignmentEntity;
         }
       }
+      // Contention first: a deadlock or serialization failure is a retryable 409, never a 500.
+      throwIfRetryable(err);
       throwMappedUniqueViolation(err);
     });
   }

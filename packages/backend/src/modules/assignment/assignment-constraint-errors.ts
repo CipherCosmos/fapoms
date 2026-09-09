@@ -56,3 +56,44 @@ export function throwMappedUniqueViolation(err: any): never {
   if (!message) throw err;
   throw new ConflictException(message);
 }
+
+/**
+ * Postgres SQLSTATEs that mean "the database refused this transaction; try again".
+ *
+ * 40P01 is a deadlock the server broke by aborting one party. 40001 is a serialization failure.
+ * Neither is a fault in the request and neither leaves anything behind — the transaction rolled
+ * back whole. What they are is *retryable*, and the caller has to be able to tell that apart from
+ * a server that is broken.
+ *
+ * Ten concurrent reassignments of one assignment produced three HTTP 500 "Internal server error"
+ * responses in certification: two reading "current transaction is aborted, commands ignored" and
+ * one "deadlock detected". No data was corrupted — the ownership chain stayed coherent and
+ * exactly one interval was open — but a client cannot retry a 500 with any confidence, and an
+ * operator reading the log sees an application fault where there was a contention event.
+ */
+export const RETRYABLE_SQLSTATES = new Set(['40P01', '40001']);
+
+export function isRetryableTransactionError(err: any): boolean {
+  const code = err?.code ?? err?.driverError?.code;
+  if (code && RETRYABLE_SQLSTATES.has(String(code))) return true;
+  // A transaction aborted by an earlier failed statement reports 25P02 on every subsequent
+  // statement. The original cause is already lost by then, but the outcome is the same: nothing
+  // committed, and retrying is the right move.
+  if (String(code) === '25P02') return true;
+  const text = String(err?.message ?? '');
+  return /deadlock detected|current transaction is aborted/i.test(text);
+}
+
+/**
+ * Raise a contention failure as the conflict it is.
+ *
+ * Deliberately 409 rather than 503: the request was well-formed and the service is healthy — it
+ * lost a race for a row. `RETRY_CONTENTION` is a stable prefix so a client can match on it.
+ */
+export function throwIfRetryable(err: any): void {
+  if (!isRetryableTransactionError(err)) return;
+  throw new ConflictException(
+    'RETRY_CONTENTION: this assignment was being modified concurrently and the transaction was '
+    + 'rolled back. Nothing was changed. Retry the request.',
+  );
+}
