@@ -12,6 +12,7 @@ import { api } from './services/api';
 import { AppError } from './services/errors';
 import { clearSession, endSession } from './services/session';
 import ForcePasswordChange from './pages/ForcePasswordChange';
+import { NotFound } from './pages/NotFound';
 import { CallProvider } from './components/calls/CallProvider';
 import { useToast } from './components/ui/Toast';
 
@@ -141,6 +142,7 @@ const AssayerDeepLink: React.FC = () => {
   const { search } = useLocation();
   return <Navigate to={id ? `/hr/roster/${encodeURIComponent(id)}${search}` : '/hr/roster'} replace />;
 };
+
 
 const RememberAndRedirectToLogin: React.FC = () => {
   const location = useLocation();
@@ -544,7 +546,7 @@ export const App: React.FC = () => {
           */}
         <Route path="/assayers/:id" element={<AssayerDeepLink />} />
 
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<NotFound landing={defaultRouteFor(userRoles, userPermissions)} />} />
       </Routes>
       </Suspense>
       </RouteErrorBoundary>
