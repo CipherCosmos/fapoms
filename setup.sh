@@ -19,12 +19,14 @@
 #
 #   2. Remember `--env-file .env.docker` on EVERY compose command, for ever. Compose resolves
 #      `${VAR}` from the shell or `--env-file`, never from a service's own `env_file:` entry. Miss
-#      it once and Postgres is recreated with the healthcheck `pg_isready -U` and no username,
-#      which fails for ever, which blocks every container that waits on it. That is not a
-#      hypothetical: it happened on this deployment and took the API down until it was diagnosed.
-#      This script removes the trap instead of documenting it — compose auto-loads `.env` from the
-#      directory holding the compose file, so `deploy/.env` is linked to the real env file and
-#      plain `docker compose up` becomes correct by construction.
+#      it once against the prod file and Postgres is recreated with the healthcheck `pg_isready -U`
+#      and no username, which fails for ever, which blocks every container that waits on it. That
+#      is not a hypothetical: it happened on this deployment and took the API down until it was
+#      diagnosed. Miss it against the DEV file and nothing complains at all — that one has
+#      fallbacks, so it comes up silently on the two credentials in this repository's git history.
+#      This script removes both traps instead of documenting them: compose auto-loads `.env` from
+#      the directory holding the compose file, so `.env` and `deploy/.env` are linked to the one
+#      real file and plain `docker compose up` is correct by construction in either directory.
 #
 #   3. `npm run seed:prod` — which TRUNCATES twenty-one tables. Told to a new operator as step
 #      three of a first install, one mistyped `DB_HOST` away from emptying a live system. The seed
@@ -53,7 +55,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --public-url) PUBLIC_URL="${2:?--public-url needs a value}"; shift 2 ;;
     --dev)        MODE="development"; shift ;;
-    -h|--help)    sed -n '2,10p' "$0" | sed 's/^# \?//'; exit 0 ;;
+    -h|--help)    sed -n '3,8p' "$0" | sed 's/^# \?//'; exit 0 ;;
     *) echo "Unknown option: $1 (try --help)" >&2; exit 2 ;;
   esac
 done
